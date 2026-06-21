@@ -1,0 +1,113 @@
+{
+  "theme": "DARK",
+  "archetype": "Archetype 4: Swiss & High-Contrast (Dark Theme)",
+  "vibe": "Bloomberg Terminal meets modern fintech (dYdX, Hyperliquid). Confident, professional, high-density data UI.",
+  "typography": {
+    "headings": {
+      "family": "Cabinet Grotesk, sans-serif",
+      "weight": "font-bold",
+      "tracking": "tracking-tight",
+      "instruction": "Use Cabinet Grotesk for main page/section headings to provide an unexpected, sharp display feel."
+    },
+    "body": {
+      "family": "IBM Plex Sans, sans-serif",
+      "weight": "font-normal",
+      "tracking": "tracking-normal",
+      "instruction": "Use IBM Plex Sans for general UI text, labels, and descriptions."
+    },
+    "monospace": {
+      "family": "JetBrains Mono, monospace",
+      "weight": "font-medium",
+      "instruction": "CRITICAL: Use JetBrains Mono exclusively for all numbers, prices, P&L, dates, tabular data, and ticker symbols (e.g., BTCUSD)."
+    }
+  },
+  "color_palette": {
+    "background": {
+      "main": "#050505",
+      "surface": "#0A0A0A",
+      "surface_elevated": "#121212"
+    },
+    "borders": {
+      "default": "#1F1F1F",
+      "focus": "#333333"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#52525B"
+    },
+    "brand": {
+      "primary": "#00FF41",
+      "primary_hover": "#00E53A",
+      "primary_glow": "rgba(0, 255, 65, 0.2)"
+    },
+    "trading": {
+      "buy_up": "#00FF41",
+      "sell_down": "#FF3B30",
+      "warning_amber": "#FFB000",
+      "hold_neutral": "#A1A1AA"
+    }
+  },
+  "layout_and_spacing": {
+    "strategy": "Control Room Grid",
+    "grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4",
+    "density": "High density, compact spacing for data. Parent containers use p-6.",
+    "borders_and_radius": "Sharp edges. Use `rounded-none` or max `rounded-sm`. Emphasize 1px solid borders over shadows.",
+    "surface_treatment": "Grid Borders (Technical Look) - prefer `border-collapse` style layouts. Minimize floating cards, prefer docked panels separated by 1px borders."
+  },
+  "components": {
+    "buttons": {
+      "style": "Flat, sharp corners, high-contrast text. No heavy shadows.",
+      "primary": "bg-[#00FF41] text-black hover:bg-[#00E53A] rounded-none font-medium",
+      "secondary": "bg-transparent border border-[#1F1F1F] text-white hover:border-[#333333] rounded-none"
+    },
+    "cards": {
+      "style": "Flat surface (#0A0A0A), 1px subtle border (#1F1F1F), no drop shadow. Do not overuse standard Shadcn Card; strip its padding if needed for data tables."
+    },
+    "tables": {
+      "style": "Dense tabular layout. JetBrains Mono for all data cells. Subtle row highlight on hover (#121212). Align numbers to the right.",
+      "library": "Shadcn Table"
+    },
+    "charts": {
+      "library": "Recharts (Shadcn Charts)",
+      "style": "Transparent backgrounds. Use #00FF41 for uptrends/equity curve, #FF3B30 for downtrends. Faint 5% opacity grid lines."
+    },
+    "navigation": {
+      "style": "Stark, functional left sidebar or top bar. Active states marked with a 2px border of #00FF41."
+    }
+  },
+  "motion": {
+    "philosophy": "Minimal and instant. Traders value speed over decorative motion.",
+    "hover_states": "Instant color swaps or fast opacity changes. No bouncy transforms.",
+    "transitions": "transition-colors duration-150 ease-out"
+  },
+  "assets": {
+    "icons": {
+      "library": "@phosphor-icons/react",
+      "style": "Regular or Light weight. Keep them sharp and professional.",
+      "installation": "yarn add @phosphor-icons/react"
+    },
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1640552435845-d65c23b75934?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODh8MHwxfHNlYXJjaHwyfHx0cmFkaW5nJTIwdGVybWluYWwlMjBkYXJrfGVufDB8fHx8MTc4MjAxOTYxOXww&ixlib=rb-4.1.0&q=85",
+        "category": "hero_background",
+        "description": "Trading terminal data background for login/auth page. Apply a heavy black overlay (bg-black/80) to ensure form visibility."
+      },
+      {
+        "url": "https://images.pexels.com/photos/7599718/pexels-photo-7599718.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "abstract_texture",
+        "description": "Abstract dark wire mesh pattern. Can be used as a subtle texture in the sidebar footer or behind the backtest summary."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "You are working with .js / .jsx files, NOT .tsx. Adjust your syntax accordingly.",
+    "Ensure all interactive elements and key information displays have data-testid attributes (e.g., data-testid='login-button', data-testid='live-price-btc', data-testid='risk-level-high').",
+    "Prioritize data density. Do not waste space with huge paddings inside data tables or control panels.",
+    "Use JetBrains Mono exclusively for numerical data, prices, risk percentages, and tickers.",
+    "Apply Archetype 4 rules: monochrome base with bright terminal green/amber for accents/status only. Avoid 'muddy' or generic soft UI.",
+    "Do NOT use card components everywhere. Prefer cardless rectangular sections separated by 1px borders (Grid Borders style).",
+    "Use Phosphor Icons for a clean, dense dashboard look.",
+    "Never use purple, teal, or soft glassmorphism. This is a serious financial tool."
+  ]
+}
