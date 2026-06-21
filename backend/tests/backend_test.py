@@ -115,12 +115,27 @@ class TestMarket:
 
     def test_quote_xauusd(self, admin_session):
         r = admin_session.get(f"{API}/market/quote/XAUUSD", timeout=30)
-        # Alpha Vantage can rate limit; allow 502 with rate limit msg but log
-        assert r.status_code in (200, 502), r.text
-        if r.status_code == 200:
-            data = r.json()
-            assert data["symbol"] == "XAUUSD"
-            assert isinstance(data["price"], (int, float))
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["symbol"] == "XAUUSD"
+        assert isinstance(data["price"], (int, float))
+        assert data["price"] > 0, f"XAUUSD price is non-positive: {data['price']}"
+
+    def test_quote_btcusd(self, admin_session):
+        r = admin_session.get(f"{API}/market/quote/BTCUSD", timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["symbol"] == "BTCUSD"
+        assert isinstance(data["price"], (int, float))
+        assert data["price"] > 0
+
+    def test_quote_eurusd(self, admin_session):
+        r = admin_session.get(f"{API}/market/quote/EURUSD", timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["symbol"] == "EURUSD"
+        assert isinstance(data["price"], (int, float))
+        assert data["price"] > 0
 
     def test_quotes_multi(self, admin_session):
         r = admin_session.get(f"{API}/market/quotes?symbols=XAUUSD,BTCUSD", timeout=60)
@@ -130,14 +145,15 @@ class TestMarket:
         syms = {q.get("symbol") for q in quotes}
         assert syms == {"XAUUSD", "BTCUSD"}
 
-    def test_history_with_indicators(self, admin_session):
-        r = admin_session.get(f"{API}/market/history/XAUUSD", timeout=60)
-        assert r.status_code in (200, 502), r.text
-        if r.status_code == 200:
-            data = r.json()
-            assert data["symbol"] == "XAUUSD"
-            assert isinstance(data["history"], list)
-            assert isinstance(data["indicators"], dict)
+    @pytest.mark.parametrize("symbol", ["XAUUSD", "BTCUSD", "EURUSD"])
+    def test_history_with_indicators(self, admin_session, symbol):
+        r = admin_session.get(f"{API}/market/history/{symbol}", timeout=60)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["symbol"] == symbol
+        assert isinstance(data["history"], list)
+        assert len(data["history"]) > 100, f"{symbol} history only has {len(data['history'])} points"
+        assert isinstance(data["indicators"], dict)
 
 
 # ---------- Bot Config ----------
@@ -283,6 +299,8 @@ class TestTradeBridge:
         email = f"TEST_trd_{uuid.uuid4().hex[:6]}@example.com"
         r = s.post(f"{API}/auth/register", json={"email": email, "password": "testpass123"}, timeout=15)
         assert r.status_code == 200
+        me = s.get(f"{API}/auth/me", timeout=10).json()
+        user_id = me["id"]
 
         # Create account
         acc = s.post(f"{API}/accounts", json={
@@ -294,11 +312,42 @@ class TestTradeBridge:
             "base_currency": "USD",
         }, timeout=10).json()
 
-        # Generate signal (one symbol, may take time)
-        sig_resp = s.post(f"{API}/signals/generate", json={"symbol": "BTCUSD"}, timeout=120)
-        assert sig_resp.status_code == 200, sig_resp.text
-        sig = sig_resp.json()
-        # If action is HOLD, generate again with a different symbol — but to save tokens, only try once
+        # Try to generate a non-HOLD signal up to 2 times across BTCUSD/XAUUSD;
+        # if still HOLD, deterministically insert a BUY signal directly into Mongo.
+        sig = None
+        for sym in ("BTCUSD", "XAUUSD"):
+            sig_resp = s.post(f"{API}/signals/generate", json={"symbol": sym}, timeout=120)
+            assert sig_resp.status_code == 200, sig_resp.text
+            candidate = sig_resp.json()
+            if candidate.get("action") in ("BUY", "SELL"):
+                sig = candidate
+                break
+
+        if sig is None or sig.get("action") == "HOLD":
+            # Inject synthetic non-HOLD signal directly via Mongo
+            from pymongo import MongoClient
+            mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+            db_name = os.environ.get("DB_NAME", "ai_trading_bot")
+            client = MongoClient(mongo_url)
+            db = client[db_name]
+            doc = {
+                "user_id": user_id,
+                "symbol": "BTCUSD",
+                "action": "BUY",
+                "confidence": 80.0,
+                "entry_price": 65000.0,
+                "stop_loss": 64000.0,
+                "take_profit": 67000.0,
+                "lot_size": 0.01,
+                "reasoning": "test synthetic signal",
+                "risk_level": "medium",
+                "consumed": False,
+                "created_at": datetime_utcnow_iso(),
+            }
+            inserted = db.signals.insert_one(doc)
+            sig = {**doc, "id": str(inserted.inserted_id)}
+            client.close()
+
         return {"session": s, "account": acc, "signal": sig}
 
     def test_bridge_heartbeat(self, setup_ctx):
@@ -324,8 +373,7 @@ class TestTradeBridge:
         acc = setup_ctx["account"]
         sig = setup_ctx["signal"]
 
-        if sig.get("action") == "HOLD":
-            pytest.skip("Signal was HOLD — cannot execute trade. Re-run for non-HOLD signal.")
+        assert sig.get("action") in ("BUY", "SELL"), f"Expected non-HOLD signal, got {sig.get('action')}"
 
         # Execute trade
         r = s.post(f"{API}/trades/execute/{sig['id']}", json={"account_id": acc["id"]}, timeout=15)
@@ -356,7 +404,7 @@ class TestTradeBridge:
             "trade_id": trade_id,
             "status": "closed",
             "mt5_ticket": 123456,
-            "exit_price": trade["entry_price"] * 1.01,
+            "exit_price": (trade["entry_price"] or 65000) * 1.01,
             "pnl": 12.5,
         }, timeout=10)
         assert r3.status_code == 200
@@ -366,3 +414,8 @@ class TestTradeBridge:
         assert stats["total_trades"] >= 1
         assert stats["wins"] >= 1
         assert stats["total_pnl"] >= 12.5 - 0.01
+
+
+def datetime_utcnow_iso():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()

@@ -73,7 +73,7 @@ export default function Accounts() {
                 }
             />
 
-            <div className="p-4 md:p-8 space-y-4">
+            <div className="p-4 md:p-8 space-y-4" data-testid="accounts-page">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
 
