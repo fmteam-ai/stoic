@@ -1,0 +1,55 @@
+{
+  "summary": "Full E2E backend + frontend test of AI Trading Bot. 17/22 backend tests pass. Core blocker: Alpha Vantage market data integration fails for XAUUSD (invalid API call for CURRENCY_EXCHANGE_RATE with XAU) and free-tier rate limit (25 req/day) is exhausted, which in turn breaks AI signal generation (depends on get_quote + get_history). Frontend renders cleanly, login/navigation/sidebar/mobile responsiveness all work; price tiles and chart show 'NO DATA AVAILABLE' due to backend market data failures.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/market/quote/XAUUSD", "issue": "Alpha Vantage returns 'Invalid API call' for CURRENCY_EXCHANGE_RATE with from_currency=XAU. XAU/gold is no longer supported on this endpoint — must use a different AV function (e.g. FX_DAILY with appropriate mapping or a different gold source). Causes 502 on /api/market/quote/XAUUSD and /api/market/history/XAUUSD, cascading to signal generation and the entire dashboard chart.", "priority": "CRITICAL"},
+      {"endpoint": "/api/market/quote/*  &  /api/market/history/*", "issue": "Alpha Vantage free tier rate limit (25 req/day) exhausted. BTCUSD and others return 502. With only 25 req/day shared across all symbols + history + quotes, this app is not viable without (a) a paid AV key, or (b) much more aggressive caching, or (c) a fallback data provider.", "priority": "CRITICAL"},
+      {"endpoint": "/api/signals/generate", "issue": "Returns 502 because it transitively calls get_quote + get_history which fail (see above). Claude API call itself never gets to execute. Signal generation, trade execute, and bridge poll-flow are therefore untestable end-to-end.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "/api/auth/register", "issue": "Pydantic EmailStr rejects @test.local and other RFC reserved TLDs (422). Not a bug per se, but documenting that test data must use real-looking TLDs (e.g. @example.com)."},
+      {"endpoint": "/api/bridge/poll-trades", "issue": "Untested end-to-end because signal generation fails. Endpoint structure looks correct from code review."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Accounts page", "issue": "data-testid='account-form' is conditional — only mounted after clicking 'ADD ACCOUNT'. Tests/automation expecting the form on initial render will miss it. Suggest always rendering or adding data-testid on the toggle button.", "selector": "[data-testid='account-form']", "priority": "LOW"},
+      {"component": "Dashboard chart + price tiles", "issue": "Shows '+0.00%' and 'NO DATA AVAILABLE' because backend market endpoints are 502. Functionality of UI itself is correct — symptom of backend issue.", "selector": "n/a", "priority": "BLOCKED_BY_BACKEND"}
+    ],
+    "integration_issues": [
+      {"flow": "Signals generation", "issue": "Generate Signals button can be clicked but POST /api/signals/generate returns 502 due to AV chain failure. UI shows error toast.", "affected_selectors": ["[data-testid='signals-generate-button']"]}
+    ],
+    "design_issues": [
+      {"screen": "All pages", "issues": ["Clean dark theme with sufficient contrast (green accent on near-black background, white body text). No alignment / spacing issues observed at 1920x1080 or 375x800."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix XAUUSD quote/history: Alpha Vantage CURRENCY_EXCHANGE_RATE no longer accepts XAU. Either (a) switch XAUUSD to a different AV endpoint (e.g. FX_DAILY isn't supported for XAU either — consider using a metals-specific provider or scraping XAU through a different symbol mapping), or (b) use FX_INTRADAY/COMMODITIES endpoint, or (c) add a non-AV fallback for gold.",
+    "Address Alpha Vantage 25 req/day rate limit: increase cache TTL (current quote=60s, history=6h is ok), upgrade to paid AV key, or add a secondary data provider (Twelve Data, Polygon, CoinGecko for crypto).",
+    "Make data-testid='account-form' present in DOM at all times (or move testid to the 'Add Account' button) so deterministic E2E selectors work.",
+    "Cloudflare ingress is converting backend 502 responses into a full HTML Cloudflare error page (clients lose the JSON detail). Consider returning a different status (e.g. 503 with retry-after, or 200 + error envelope) so the frontend can display useful messages.",
+    "Re-run /api/signals/generate end-to-end after market data is fixed — Claude wiring itself was not exercised in this iteration."
+  ],
+  "critical_code_review_comments": [
+    "market.py: XAU treated as currency in CURRENCY_EXCHANGE_RATE — Alpha Vantage rejects this. Needs a dedicated commodities path or third-party metals API.",
+    "market.py: history cache is 6h but quote cache is 60s. With 25 req/day cap and 13 supported symbols, even 60s caching guarantees burn-through. Recommend extending quote cache to 5-15min or shared per-minute throttle.",
+    "ai_signals.py: silently swallows JSON parse errors and returns HOLD with confidence=0. OK behaviour, but log the raw response when parse fails for debugging.",
+    "auth.py + routes: cookie SameSite='None' + Secure is correct for cross-site usage. httpOnly is set. bcrypt hash format ($2b$) confirmed via working login. Brute-force lockout is NOT implemented — security gap (not in current scope but flagging).",
+    "bridge_routes.py + trade_routes.py: account_id is stored as the string form of ObjectId — works, but consistency-wise consider validating that incoming account_id is a valid ObjectId before find_one to avoid 500s on malformed input.",
+    "signal_routes.py /generate-all: not exercised (per agent_to_agent_context_note). When AV is healthy, this will burn 2 quote + 2 history requests per call = 4/25 daily budget per click. Consider gating behind a debounce or active-bot loop only."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "77% (17/22 tests)", "frontend": "85% (login + nav + responsive OK; data display blocked by backend)"},
+  "test_credentials": "admin@trading.bot / admin123 (works). Test users created via /api/auth/register must use @example.com (not @test.local — Pydantic EmailStr rejects reserved TLDs).",
+  "seed_data_creation": "None — used registration to create per-test users. All test users use 'test_' prefix in email local-part.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Backend tests live in /app/backend/tests/backend_test.py with classes TestHealth, TestAuth, TestMarket, TestBotConfig, TestAccounts, TestEAScript, TestSignals, TestTradeBridge. Signals + trade-bridge classes will only pass once Alpha Vantage XAUUSD + rate-limit issues are resolved (Claude call itself is gated behind market data). Frontend account form testid is conditional — click the toggle button first. Mobile responsiveness verified at 375px width.",
+  "rca of the issue": "Alpha Vantage's CURRENCY_EXCHANGE_RATE endpoint stopped accepting XAU as from_currency on the free tier (returns 'Invalid API call'). Combined with the 25 req/day cap which was hit during this test run (multiple quote + history calls for XAUUSD/BTCUSD/multi-symbol tests), all market endpoints for these two symbols now 502. Because ai_signals.analyze_symbol awaits get_quote and get_history before calling Claude, every /api/signals/generate request raises before reaching the LLM and returns 502. The frontend dashboard tiles, chart, and signals page therefore all show empty/error states even though the FastAPI routes and DB persistence are themselves correct."
+}

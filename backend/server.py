@@ -1,89 +1,104 @@
-from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from pathlib import Path
+load_dotenv(Path(__file__).parent / ".env")
+
 import os
 import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
+from fastapi import FastAPI, APIRouter
+from fastapi.responses import FileResponse
+from starlette.middleware.cors import CORSMiddleware
 
+from database import close_client, get_db
+from seed import seed_admin, ensure_indexes
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+# Routers
+from routes.auth_routes import router as auth_router
+from routes.market_routes import router as market_router
+from routes.bot_routes import router as bot_router
+from routes.signal_routes import router as signal_router
+from routes.account_routes import router as account_router
+from routes.trade_routes import router as trade_router
+from routes.bridge_routes import router as bridge_router
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("trading-bot")
 
-# Create the main app without a prefix
-app = FastAPI()
+app = FastAPI(title="AI Trading Bot API", version="1.0.0")
 
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class StatusCheckCreate(BaseModel):
-    client_name: str
-
-# Add your routes to the router instead of directly to app
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"service": "ai-trading-bot", "status": "ok"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+@api_router.get("/health")
+async def health():
+    db = get_db()
+    try:
+        await db.command("ping")
+        return {"status": "ok", "db": "connected"}
+    except Exception as e:
+        return {"status": "degraded", "error": str(e)}
 
-# Include the router in the main app
+
+@api_router.get("/ea-script")
+async def ea_script():
+    """Serve the MT5 Expert Advisor source code for download."""
+    path = Path(__file__).parent / "static" / "EmergentTradingBridge.mq5"
+    if not path.exists():
+        return {"error": "EA file missing"}
+    return FileResponse(
+        path,
+        media_type="text/plain",
+        filename="EmergentTradingBridge.mq5",
+    )
+
+
+# Mount routers
+api_router.include_router(auth_router)
+api_router.include_router(market_router)
+api_router.include_router(bot_router)
+api_router.include_router(signal_router)
+api_router.include_router(account_router)
+api_router.include_router(trade_router)
+api_router.include_router(bridge_router)
+
 app.include_router(api_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS — allow credentials with explicit origin from env, fallback to wildcard list.
+cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
+if cors_origins_env.strip() == "*":
+    # When credentials=True, browsers reject "*" — use regex catch-all instead.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=".*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in cors_origins_env.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def on_startup():
+    try:
+        await ensure_indexes()
+        await seed_admin()
+        logger.info("Startup: indexes ensured, admin seeded.")
+    except Exception as e:
+        logger.exception("Startup error: %s", e)
+
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+async def on_shutdown():
+    await close_client()
