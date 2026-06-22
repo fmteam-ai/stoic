@@ -185,7 +185,7 @@ function ProgressBar({ label, pct, hit, bigPips, smallPips }) {
 function TradeProgressRow({ t }) {
     const pnl = t.unrealised_pnl;
     const pnlColor = pnl == null ? "text-[#A1A1AA]" : (pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]");
-    const pnlSign = pnl == null ? "" : (pnl >= 0 ? "+" : "");
+    const pnlText = pnl == null ? "—" : `${pnl >= 0 ? "+$" : "-$"}${Math.abs(pnl).toFixed(2)}`;
     const inProfit = (t.pips_in_profit ?? 0) > 0;
     const ActionIcon = t.action === "BUY" ? TrendingUp : TrendingDown;
     const actionColor = t.action === "BUY" ? "#00FF41" : "#FF3B30";
@@ -213,7 +213,7 @@ function TradeProgressRow({ t }) {
                 </div>
                 <div className="text-right">
                     <div className={`font-mono text-lg font-medium ${pnlColor}`} data-testid={`tt-pnl-${t.id}`}>
-                        {pnl != null ? `${pnlSign}${pnl}` : "—"}
+                        {pnlText}
                     </div>
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest">UNREALISED P&L</div>
                 </div>
@@ -393,7 +393,7 @@ export default function Dashboard() {
                             />
                             <StatCell
                                 label="TOTAL P&L"
-                                value={`${stats.total_pnl >= 0 ? "+" : ""}${stats.total_pnl}`}
+                                value={`${stats.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(stats.total_pnl).toFixed(2)}`}
                                 accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}
                             />
                         </div>

@@ -12,6 +12,22 @@ const STATUS_STYLE = {
     failed: "border-[#FF3B30]/40 text-[#FF3B30]",
 };
 
+function fmtDateTime(iso) {
+    if (!iso) return "—";
+    try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return "—";
+        // e.g. "22 Jun · 16:23"
+        return d.toLocaleString(undefined, {
+            day: "2-digit", month: "short",
+            hour: "2-digit", minute: "2-digit",
+            hour12: false,
+        }).replace(",", " ·");
+    } catch {
+        return "—";
+    }
+}
+
 function Stat({ label, value, accent }) {
     return (
         <div className="p-4 border border-[#1F1F1F] bg-[#0A0A0A]">
@@ -76,7 +92,7 @@ export default function Trades() {
                         <Stat label="TOTAL" value={stats.total_trades} />
                         <Stat label="WIN RATE" value={`${stats.win_rate}%`} accent="text-[#00FF41]" />
                         <Stat label="WINS / LOSSES" value={`${stats.wins} / ${stats.losses}`} />
-                        <Stat label="TOTAL P&L" value={`${stats.total_pnl >= 0 ? "+" : ""}${stats.total_pnl}`} accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
+                        <Stat label="TOTAL P&L" value={`${stats.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(stats.total_pnl).toFixed(2)}`} accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
                     </div>
                 )}
 
@@ -104,7 +120,7 @@ export default function Trades() {
                         <table className="w-full text-sm" data-testid="trades-table">
                             <thead>
                                 <tr className="border-b border-[#1F1F1F]">
-                                    {["SYMBOL", "SIDE", "LOTS", "ENTRY", "SL", "TP", "EXIT", "P&L", "STATUS", ""].map(h => (
+                                    {["SYMBOL", "SIDE", "LOTS", "ENTRY", "SL", "TP", "EXIT", "P&L", "OPENED", "CLOSED", "STATUS", ""].map(h => (
                                         <th key={h} className="px-3 py-2 text-left font-mono text-[10px] text-[#52525B] tracking-widest whitespace-nowrap">{h}</th>
                                     ))}
                                 </tr>
@@ -128,7 +144,15 @@ export default function Trades() {
                                         <td className="px-3 py-2 font-mono text-[#00FF41]">{t.take_profit}</td>
                                         <td className="px-3 py-2 font-mono">{t.exit_price ?? "—"}</td>
                                         <td className={`px-3 py-2 font-mono ${(t.pnl ?? 0) >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
-                                            {t.pnl ? (t.pnl >= 0 ? "+" : "") + t.pnl.toFixed(2) : "—"}
+                                            {t.pnl != null && t.pnl !== 0
+                                                ? `${t.pnl >= 0 ? "+$" : "-$"}${Math.abs(t.pnl).toFixed(2)}`
+                                                : "—"}
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-[#A1A1AA] whitespace-nowrap" data-testid={`opened-${t.id}`}>
+                                            {fmtDateTime(t.opened_at)}
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-[#A1A1AA] whitespace-nowrap" data-testid={`closed-${t.id}`}>
+                                            {fmtDateTime(t.closed_at)}
                                         </td>
                                         <td className="px-3 py-2">
                                             <span className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border inline-block ${STATUS_STYLE[t.status] || "border-[#1F1F1F]"}`}>
