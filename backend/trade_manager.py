@@ -1,48 +1,59 @@
-"""Trade Manager — Profit Protection Suite
+"""Trade Manager — Profit Protection Suite (pip-based, 3-tier partial close)
 
-Runs every TRADE_MANAGER_INTERVAL_SEC (default 15s) and decides whether to:
-  1. Move SL to break-even after price moves +N R-multiples
-  2. Take partial profit (close X% of lot) at TP1
-  3. Trail stop-loss behind price after trailing trigger
-  4. Trip the daily drawdown circuit breaker
+Runs every TRADE_MANAGER_INTERVAL_SEC (default 15s) and for each open trade:
+  1. At +100 pips profit  → close 50% AND move SL to entry (break-even)
+  2. At +200 pips profit  → close another 25% (now 25% remains)
+  3. At +300 pips profit  → close the last 25%
+  4. Tracks daily realised drawdown and trips the circuit breaker if breached
 
 Modifications are written to the trade doc as a `pending_modification` block.
 The MT5 EA picks them up via /api/bridge/poll-trades and applies on its next tick,
-then reports back via /api/bridge/report to clear the pending_modification flag.
+then reports back via /api/bridge/modification-ack to clear the flag.
 """
 import os
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from bson import ObjectId
 
 from database import get_db
 from market import get_quote
 from ws_manager import manager as ws_manager
+from pip_utils import price_to_pips
 from notifier import (
     notify_breakeven, notify_partial_close, notify_trail, notify_circuit_breaker
 )
 
 logger = logging.getLogger("trade-manager")
 
+# Default pip targets (override per-trade if signal provided them)
+DEFAULT_SL_PIPS = 150
+DEFAULT_TP_PIPS = (100, 200, 300)   # (TP1, TP2, TP3)
+DEFAULT_BE_TRIGGER_PIPS = 100        # move SL to entry at +100 pips
+
 
 def _interval() -> int:
     return int(os.environ.get("TRADE_MANAGER_INTERVAL_SEC", "15"))
 
 
-def _r_distance(entry: float, stop: float) -> float:
-    """Initial R distance (absolute) used to compute R-multiples."""
-    return abs(entry - stop)
+def _pips_in_profit(entry: float, current: float, action: str, symbol: str) -> float:
+    """How many pips price has moved in favour of the trade."""
+    diff = (current - entry) if action == "BUY" else (entry - current)
+    return price_to_pips(symbol, diff)
 
 
-def _r_multiple(entry: float, current: float, stop: float, action: str) -> float:
-    """How many R has price moved in favor of the trade."""
-    r = _r_distance(entry, stop)
-    if r <= 0:
-        return 0.0
-    if action == "BUY":
-        return (current - entry) / r
-    return (entry - current) / r
+def _trade_targets(trade: dict) -> tuple:
+    """Resolve (sl_pips, tp1_pips, tp2_pips, tp3_pips) for a trade.
+
+    Uses values stored on the trade doc; falls back to module defaults.
+    """
+    sl_pips = trade.get("sl_pips") or DEFAULT_SL_PIPS
+    tp_pips = trade.get("tp_pips") or list(DEFAULT_TP_PIPS)
+    tp1, tp2, tp3 = (tp_pips + [None, None, None])[:3]
+    tp1 = tp1 or DEFAULT_TP_PIPS[0]
+    tp2 = tp2 or DEFAULT_TP_PIPS[1]
+    tp3 = tp3 or DEFAULT_TP_PIPS[2]
+    return float(sl_pips), float(tp1), float(tp2), float(tp3)
 
 
 async def _manage_one_trade(trade: dict, cfg: dict) -> None:
@@ -52,15 +63,14 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     symbol = trade["symbol"]
     action = trade["action"]
     entry = float(trade.get("entry_price") or 0)
-    original_sl = float(trade.get("original_stop_loss") or trade.get("stop_loss") or 0)
-    current_sl = float(trade.get("stop_loss") or 0)
     original_lot = float(trade.get("original_lot_size") or trade.get("lot_size") or 0)
-    if entry <= 0 or original_sl <= 0 or original_lot <= 0:
+    current_lot = float(trade.get("lot_size") or 0)
+    if entry <= 0 or original_lot <= 0:
         return
     if trade.get("pending_modification"):
         return  # waiting for EA to apply previous modification
 
-    # Skip paper trades — they're managed by execution.settle_paper_trades_against_price
+    # Skip paper trades — they're settled by execution.settle_paper_trades_against_price
     mode = (trade.get("mode") or "live").lower()
     if mode == "paper":
         return
@@ -76,14 +86,43 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     if current <= 0:
         return
 
-    r_mult = _r_multiple(entry, current, original_sl, action)
+    _, tp1_pips, tp2_pips, tp3_pips = _trade_targets(trade)
+    pips_up = _pips_in_profit(entry, current, action, symbol)
 
-    # 1. Partial close at TP1 — close X% of lot once 1R hit
-    if (cfg.get("partial_close_enabled", True)
-            and not trade.get("partial_closed", False)
-            and r_mult >= cfg.get("partial_close_trigger_r", 1.0)):
-        fraction = float(cfg.get("partial_close_fraction", 0.5))
-        new_lot = round(original_lot * (1 - fraction), 2)
+    # Tier 3 — close remaining at +tp3 pips
+    if (not trade.get("tp3_closed")
+            and trade.get("tp2_closed")
+            and pips_up >= tp3_pips):
+        new_lot = 0.0  # Full close requested via close_requested flag
+        await db.trades.update_one(
+            {"_id": trade_id},
+            {"$set": {
+                "close_requested": True,
+                "tp3_closed": True,
+                "pending_modification": {
+                    "type": "FULL_CLOSE",
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }},
+        )
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {
+            "trade_id": str(trade_id),
+            "action": "FULL_CLOSE_TP3",
+            "from_lot": current_lot,
+            "to_lot": new_lot,
+            "pips": round(pips_up, 1),
+        })
+        try:
+            await notify_partial_close(trade["user_id"], str(trade_id), current_lot, new_lot, pips_up / max(1, tp1_pips))
+        except Exception:
+            pass
+        return
+
+    # Tier 2 — close another 25% at +tp2 pips (remaining = 25% of original)
+    if (not trade.get("tp2_closed")
+            and trade.get("tp1_closed")
+            and pips_up >= tp2_pips):
+        new_lot = round(original_lot * 0.25, 2)
         if new_lot >= 0.01:
             await db.trades.update_one(
                 {"_id": trade_id},
@@ -93,83 +132,53 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                         "new_volume": new_lot,
                         "requested_at": datetime.now(timezone.utc).isoformat(),
                     },
-                    "partial_close_target_lot": new_lot,
+                    "tp2_target_lot": new_lot,
                 }},
             )
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
-                "action": "PARTIAL_CLOSE",
-                "from_lot": original_lot,
+                "action": "PARTIAL_CLOSE_TP2",
+                "from_lot": current_lot,
                 "to_lot": new_lot,
-                "r_multiple": round(r_mult, 2),
+                "pips": round(pips_up, 1),
             })
             try:
-                await notify_partial_close(trade["user_id"], str(trade_id), original_lot, new_lot, round(r_mult, 2))
+                await notify_partial_close(trade["user_id"], str(trade_id), current_lot, new_lot, pips_up / max(1, tp1_pips))
             except Exception:
                 pass
-            return  # Don't stack modifications
+            return
 
-    # 2. Break-even SL shift — once 1R hit, move SL to entry
-    if (cfg.get("breakeven_enabled", True)
-            and not trade.get("breakeven_set", False)
-            and r_mult >= cfg.get("breakeven_trigger_r", 1.0)):
-        be_buffer = 0.0  # exactly at entry; could add small buffer for commission
-        new_sl = entry + be_buffer if action == "BUY" else entry - be_buffer
-        await db.trades.update_one(
-            {"_id": trade_id},
-            {"$set": {
-                "pending_modification": {
-                    "type": "MODIFY_SL",
-                    "new_sl": round(new_sl, 5),
-                    "requested_at": datetime.now(timezone.utc).isoformat(),
-                },
-            }},
-        )
-        await ws_manager.broadcast(trade["user_id"], "trade_management", {
-            "trade_id": str(trade_id),
-            "action": "BREAKEVEN",
-            "new_sl": round(new_sl, 5),
-            "r_multiple": round(r_mult, 2),
-        })
-        try:
-            await notify_breakeven(trade["user_id"], str(trade_id), round(new_sl, 5), round(r_mult, 2))
-        except Exception:
-            pass
-        return
-
-    # 3. Trailing stop — once trailing_start_r, trail at trailing_distance_r behind price
-    if (cfg.get("trailing_enabled", True)
-            and r_mult >= cfg.get("trailing_start_r", 1.5)):
-        r_dist = _r_distance(entry, original_sl)
-        trail_dist = r_dist * float(cfg.get("trailing_distance_r", 0.7))
-        new_sl = (current - trail_dist) if action == "BUY" else (current + trail_dist)
-        # Only update if new SL is strictly better than current
-        is_better = (new_sl > current_sl) if action == "BUY" else (new_sl < current_sl)
-        # Step gate: don't churn — only trail in 0.2R steps
-        step_threshold = r_dist * 0.2
-        sl_delta_ok = abs(new_sl - current_sl) >= step_threshold
-        if is_better and sl_delta_ok:
+    # Tier 1 — close 50% AND move SL to entry at +tp1 pips
+    if not trade.get("tp1_closed") and pips_up >= tp1_pips:
+        new_lot = round(original_lot * 0.5, 2)
+        if new_lot >= 0.01:
             await db.trades.update_one(
                 {"_id": trade_id},
                 {"$set": {
                     "pending_modification": {
-                        "type": "MODIFY_SL",
-                        "new_sl": round(new_sl, 5),
+                        "type": "PARTIAL_CLOSE",
+                        "new_volume": new_lot,
+                        "new_sl": round(entry, 5),  # also move SL to entry on the EA modification
                         "requested_at": datetime.now(timezone.utc).isoformat(),
                     },
-                    "trail_active": True,
+                    "tp1_target_lot": new_lot,
+                    "be_target_sl": round(entry, 5),
                 }},
             )
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
-                "action": "TRAIL",
-                "new_sl": round(new_sl, 5),
-                "r_multiple": round(r_mult, 2),
+                "action": "PARTIAL_CLOSE_TP1_AND_BE",
+                "from_lot": current_lot,
+                "to_lot": new_lot,
+                "new_sl": round(entry, 5),
+                "pips": round(pips_up, 1),
             })
             try:
-                await notify_trail(trade["user_id"], str(trade_id), round(new_sl, 5), round(r_mult, 2))
+                await notify_partial_close(trade["user_id"], str(trade_id), current_lot, new_lot, 1.0)
+                await notify_breakeven(trade["user_id"], str(trade_id), round(entry, 5), 1.0)
             except Exception:
                 pass
+            return
 
 
 async def _check_daily_drawdown(user_id: str, cfg: dict) -> None:

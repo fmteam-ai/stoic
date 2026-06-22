@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock, Bot, Pause, CheckCircle2, AlertCircle, Clock } from "lucide-react";
+import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock, Bot, Pause, CheckCircle2, AlertCircle, Clock, Target, TrendingUp, TrendingDown } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -144,6 +144,93 @@ function BotStatusStrip({ status }) {
     );
 }
 
+function TimeToTargetPanel({ trades }) {
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="time-to-target-panel">
+            <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                    <Target className="w-4 h-4 text-[#FFD700]" />
+                    <span className="font-display font-bold text-sm tracking-tight">TIME TO TARGET</span>
+                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest">{trades.length} OPEN</span>
+                </div>
+                <span className="font-mono text-[10px] text-[#52525B] tracking-widest">REFRESH 5s · LIVE P&L</span>
+            </div>
+            <div className="divide-y divide-[#1F1F1F]">
+                {trades.map(t => <TradeProgressRow key={t.id} t={t} />)}
+            </div>
+        </div>
+    );
+}
+
+function ProgressBar({ label, pct, hit, bigPips, smallPips }) {
+    return (
+        <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                <span className={`tracking-widest ${hit ? "text-[#00FF41]" : "text-[#52525B]"}`}>
+                    {label} {hit && "✓"}
+                </span>
+                <span className={`${hit ? "text-[#00FF41]" : "text-[#A1A1AA]"}`}>
+                    {bigPips != null ? `${bigPips}p` : "—"}
+                    {smallPips != null && <span className="text-[#52525B] ml-1">({smallPips}p left)</span>}
+                </span>
+            </div>
+            <div className="h-1.5 bg-[#121212] border border-[#1F1F1F] overflow-hidden">
+                <div className={hit ? "bg-[#00FF41]" : "bg-[#FFD700]"}
+                    style={{ width: `${Math.min(100, pct ?? 0)}%`, height: "100%", transition: "width 0.5s ease" }} />
+            </div>
+        </div>
+    );
+}
+
+function TradeProgressRow({ t }) {
+    const pnl = t.unrealised_pnl;
+    const pnlColor = pnl == null ? "text-[#A1A1AA]" : (pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]");
+    const pnlSign = pnl == null ? "" : (pnl >= 0 ? "+" : "");
+    const inProfit = (t.pips_in_profit ?? 0) > 0;
+    const ActionIcon = t.action === "BUY" ? TrendingUp : TrendingDown;
+    const actionColor = t.action === "BUY" ? "#00FF41" : "#FF3B30";
+
+    return (
+        <div className="px-5 py-4 hover:bg-[#121212]" data-testid={`tt-row-${t.id}`}>
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+                <div className="flex items-center gap-3 min-w-0">
+                    <ActionIcon className="w-4 h-4 shrink-0" style={{ color: actionColor }} />
+                    <div>
+                        <div className="font-mono text-sm">
+                            <span style={{ color: actionColor }}>{t.action}</span>
+                            <span className="text-[#A1A1AA] mx-2">·</span>
+                            <span>{t.symbol}</span>
+                            <span className="text-[#A1A1AA] mx-2">·</span>
+                            <span className="text-[#A1A1AA]">{t.lot_size} lot</span>
+                            {t.tp1_closed && <span className="ml-2 font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1">TP1✓</span>}
+                            {t.tp2_closed && <span className="ml-1 font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1">TP2✓</span>}
+                            {t.breakeven_set && <span className="ml-1 font-mono text-[9px] tracking-widest text-[#FFD700] border border-[#FFD700]/40 bg-[#FFD700]/10 px-1">BE</span>}
+                        </div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-0.5">
+                            Entry {t.entry_price} · Now {t.current_price || "—"} · {t.pips_in_profit != null ? `${inProfit ? "+" : ""}${t.pips_in_profit} pips` : "no quote"}
+                        </div>
+                    </div>
+                </div>
+                <div className="text-right">
+                    <div className={`font-mono text-lg font-medium ${pnlColor}`} data-testid={`tt-pnl-${t.id}`}>
+                        {pnl != null ? `${pnlSign}${pnl}` : "—"}
+                    </div>
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">UNREALISED P&L</div>
+                </div>
+            </div>
+            <div className="flex gap-3">
+                <ProgressBar label="SL"
+                    pct={t.pips_in_profit < 0 ? Math.min(100, Math.abs(t.pips_in_profit) / Math.max(1, t.pips_to_sl + Math.abs(t.pips_in_profit)) * 100) : 0}
+                    bigPips={t.pips_to_sl}
+                    hit={false} />
+                <ProgressBar label="TP1" pct={t.progress_to_tp1_pct} hit={t.tp1_closed} bigPips={t.pips_to_tp1} />
+                <ProgressBar label="TP2" pct={t.progress_to_tp2_pct} hit={t.tp2_closed} bigPips={t.pips_to_tp2} />
+                <ProgressBar label="TP3" pct={t.progress_to_tp3_pct} hit={t.tp3_closed} bigPips={t.pips_to_tp3} />
+            </div>
+        </div>
+    );
+}
+
 export default function Dashboard() {
     const [quotes, setQuotes] = useState({});
     const [selected, setSelected] = useState("XAUUSD");
@@ -153,6 +240,7 @@ export default function Dashboard() {
     const [macro, setMacro] = useState({ events: [], freeze: null });
     const [stats, setStats] = useState(null);
     const [botStatus, setBotStatus] = useState(null);
+    const [liveTrades, setLiveTrades] = useState([]);
     const [loading, setLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [err, setErr] = useState("");
@@ -218,12 +306,22 @@ export default function Dashboard() {
         }
     }, []);
 
+    const loadLiveTrades = useCallback(async () => {
+        try {
+            const { data } = await api.get("/trades/live");
+            setLiveTrades(data || []);
+        } catch (e) {
+            console.warn("[dashboard] live trades load failed", e?.message);
+        }
+    }, []);
+
     useEffect(() => {
-        loadQuotes(); loadStats(); loadBotStatus();
-        const id = setInterval(() => { loadQuotes(); loadBotStatus(); }, 60_000);
-        const tickId = setInterval(loadBotStatus, 10_000); // refresh status every 10s
-        return () => { clearInterval(id); clearInterval(tickId); };
-    }, [loadQuotes, loadStats, loadBotStatus]);
+        loadQuotes(); loadStats(); loadBotStatus(); loadLiveTrades();
+        const id = setInterval(() => { loadQuotes(); loadBotStatus(); loadLiveTrades(); loadStats(); }, 60_000);
+        const tickId = setInterval(loadBotStatus, 10_000);
+        const liveId = setInterval(loadLiveTrades, 5_000); // 5s refresh for time-to-target
+        return () => { clearInterval(id); clearInterval(tickId); clearInterval(liveId); };
+    }, [loadQuotes, loadStats, loadBotStatus, loadLiveTrades]);
 
     useEffect(() => { loadHistory(selected); loadSentiment(selected); loadMacro(selected); }, [selected, loadHistory, loadSentiment, loadMacro]);
 
@@ -304,6 +402,9 @@ export default function Dashboard() {
 
                 {/* Bot Status Strip */}
                 {botStatus && <BotStatusStrip status={botStatus} />}
+
+                {/* Time-to-Target — open positions live */}
+                {liveTrades.length > 0 && <TimeToTargetPanel trades={liveTrades} />}
 
                 {/* Quote tiles */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

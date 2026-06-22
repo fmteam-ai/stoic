@@ -199,10 +199,27 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         )
         final_action = "HOLD"
 
-    # SL/TP from ATR-like proxy — use regime-adapted profile
-    vol_pct = indicators.get("volatility_30d_pct") or 1.0
-    atr_proxy = (vol_pct / 100.0) * current_price
-    sl, tp = derive_sl_tp(final_action, current_price, atr_proxy, adapted_profile)
+    # SL/TP — pip-based fixed targets (150 SL, 100/200/300 TP tiers)
+    from pip_utils import pips_to_price
+    sl_pips_target = 150
+    tp1_pips_target = 100
+    tp2_pips_target = 200
+    tp3_pips_target = 300
+    sl_distance_price = pips_to_price(symbol, sl_pips_target)
+    if final_action == "BUY":
+        sl = round(current_price - sl_distance_price, 5)
+        tp1 = round(current_price + pips_to_price(symbol, tp1_pips_target), 5)
+        tp2 = round(current_price + pips_to_price(symbol, tp2_pips_target), 5)
+        tp3 = round(current_price + pips_to_price(symbol, tp3_pips_target), 5)
+    elif final_action == "SELL":
+        sl = round(current_price + sl_distance_price, 5)
+        tp1 = round(current_price - pips_to_price(symbol, tp1_pips_target), 5)
+        tp2 = round(current_price - pips_to_price(symbol, tp2_pips_target), 5)
+        tp3 = round(current_price - pips_to_price(symbol, tp3_pips_target), 5)
+    else:
+        # HOLD — no actionable targets; derive defaults from current price
+        sl, tp1, tp2, tp3 = current_price, current_price, current_price, current_price
+    tp = tp3  # legacy `take_profit` field points to the furthest target
 
     # Kelly-modified position sizing — use regime-adapted profile
     sl_distance = abs(current_price - sl) or 0.0001
@@ -234,6 +251,11 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "entry_price": round(current_price, 5),
         "stop_loss": sl,
         "take_profit": tp,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "sl_pips": sl_pips_target,
+        "tp_pips": [tp1_pips_target, tp2_pips_target, tp3_pips_target],
         "lot_size": sizing["lot_size"],
         "kelly_f": sizing["kelly_f"],
         "effective_risk_pct": sizing["effective_risk_pct"],

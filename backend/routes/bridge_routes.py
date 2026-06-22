@@ -129,6 +129,19 @@ async def modification_ack(payload: BridgeModificationAck):
         elif payload.type == "PARTIAL_CLOSE" and payload.new_volume is not None:
             update["lot_size"] = float(payload.new_volume)
             update["partial_closed"] = True
+            # If this PC also carried a new_sl (Tier-1 combo move), apply it
+            mod = trade.get("pending_modification") or {}
+            mod_new_sl = mod.get("new_sl")
+            if mod_new_sl is not None:
+                update["stop_loss"] = float(mod_new_sl)
+                update["breakeven_set"] = True
+            # Mark tier progression
+            if not trade.get("tp1_closed"):
+                update["tp1_closed"] = True
+            elif not trade.get("tp2_closed"):
+                update["tp2_closed"] = True
+        elif payload.type == "FULL_CLOSE":
+            update["tp3_closed"] = True
     else:
         update["last_modification_error"] = payload.error or "unknown EA error"
 

@@ -156,6 +156,23 @@
 - **Empty state** with clear guidance below 5 closed trades — sets expectations rather than hiding the feature.
 - Sidebar: new `nav-analytics` entry (BarChart3 icon) between Trades and Symbols.
 
+## CHANGELOG · Jun 22, 2026 — Pip-Based Targets + Time-to-Target Widget
+- **Pip-based SL/TP** — all NEW signals now compute targets in pips, not ATR multiples:
+  - SL = 150 pips from entry
+  - TP1 = 100 pips · TP2 = 200 pips · TP3 = 300 pips
+  - `pip_utils.py` defines pip size per symbol (XAUUSD=0.10, BTCUSD=1.00, FX=0.0001, etc).
+- **3-Tier Partial Close + Break-Even** — replaced R-multiple logic in `trade_manager.py`:
+  - Tier 1 @ +100 pips: close 50% **AND** move SL to entry (combined modification on one EA tick)
+  - Tier 2 @ +200 pips: close another 25%
+  - Tier 3 @ +300 pips: close remaining 25% (full close)
+  - Tracks `tp1_closed`/`tp2_closed`/`tp3_closed` on trade docs to prevent double-firing.
+- **EA v1.20** — accepts `new_sl` alongside `PARTIAL_CLOSE` for the combined Tier-1 move. User must re-download EA from `/api/bridge/download-ea` and recompile in MetaEditor.
+- **New `GET /api/trades/live` endpoint** — open trades enriched with: current price (from market feed), pips_in_profit, unrealised P&L (USD), pips_to_sl, pips_to_tp1/2/3, progress_to_tp{1,2,3}_pct, tp*_closed flags, breakeven_set flag.
+- **New Dashboard widget — `TimeToTargetPanel`** — pinned below Bot Status, lists every open trade with live unrealised P&L (5-second refresh), 4 progress bars (SL · TP1 · TP2 · TP3) showing pips-remaining and % covered, tier-hit badges (TP1✓ / TP2✓ / BE).
+- **Manual Trade modal** also updated to use pip inputs (`sl_pips`, `tp1_pips`, `tp2_pips`, `tp3_pips`).
+- Execution + Paper engines persist `tp1`, `tp2`, `tp3`, `sl_pips`, `tp_pips`, `tp{1,2,3}_closed` on every trade.
+- `bridge_routes.modification_ack` handles PARTIAL_CLOSE with combined new_sl (Tier-1 combo), tracks tier progression, and recognizes FULL_CLOSE acks.
+
 ## Backlog Updates (P1/P2 still pending)
 - **P1** — Spread/Slippage filter (reject signals when spread > 2× 24h median).
 - **P1** — Multi-timeframe confluence (require H4 trend to match H1 signal direction).

@@ -17,7 +17,7 @@
 //|         partial-close at TP1.                                     |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 
 input string ServerUrl   = "https://your-app.preview.emergentagent.com";
@@ -142,6 +142,8 @@ void ParseModificationsBlock(string resp) {
          ApplyModifySL(trade_id, ticket, new_sl);
       } else if (mod_type == "PARTIAL_CLOSE" && ticket > 0 && new_vol > 0) {
          ApplyPartialClose(trade_id, ticket, new_vol);
+         // Combo: Tier-1 move also carries new_sl
+         if (new_sl > 0) ApplyModifySL(trade_id, ticket, new_sl);
       }
 
       idx = brace_pos + 1;
