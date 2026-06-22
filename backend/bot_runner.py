@@ -108,6 +108,28 @@ async def _process_user(db, cfg: dict):
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
     spread_filter_enabled = bool(cfg.get("spread_filter_enabled", False))
     max_spread_pips = cfg.get("max_spread_pips") or {}
+    anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
+    anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3))
+    anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4))
+    trade_of_day_cap = int(cfg.get("trade_of_day_cap", 1) or 0)
+    asia_skip_xau = bool(cfg.get("asia_session_skip_xau", True))
+
+    # === Anti-tilt: freeze auto-execute if last N closed trades all lost ===
+    anti_tilt_active = False
+    if anti_tilt_enabled and anti_tilt_n > 0:
+        recent = await db.trades.find(
+            {"user_id": user_id, "status": "closed"}
+        ).sort("closed_at", -1).limit(anti_tilt_n).to_list(length=anti_tilt_n)
+        if len(recent) == anti_tilt_n and all(float(r.get("pnl") or 0) <= 0 for r in recent):
+            last_close = recent[0].get("closed_at")
+            try:
+                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) - lc < timedelta(hours=anti_tilt_hours):
+                    anti_tilt_active = True
+                    logger.warning("Anti-tilt active for user=%s — last %d trades lost, freezing auto-exec",
+                                   user_id, anti_tilt_n)
+            except Exception:
+                pass
 
     # Count current open + pending trades to respect max_concurrent
     inflight = await db.trades.count_documents({
@@ -118,6 +140,27 @@ async def _process_user(db, cfg: dict):
     for sym in symbols:
         if _on_cooldown(user_id, sym):
             continue
+
+        # Capital-preservation guards (skip BEFORE expensive AI analysis)
+        # 1. Asia-session skip for XAU (00:00-07:00 UTC = chop graveyard for gold)
+        if asia_skip_xau and sym.upper() == "XAUUSD":
+            now_h = datetime.now(timezone.utc).hour
+            if now_h < 7:
+                logger.info("Asia-session skip user=%s sym=%s hour=%d", user_id, sym, now_h)
+                continue
+
+        # 2. Trade-of-the-day cap: max N new trades per symbol per UTC day
+        if trade_of_day_cap > 0:
+            day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_count = await db.trades.count_documents({
+                "user_id": user_id,
+                "symbol": sym,
+                "created_at": {"$gte": day_start.isoformat()},
+            })
+            if today_count >= trade_of_day_cap:
+                logger.info("Trade-of-day cap reached user=%s sym=%s count=%d/%d",
+                            user_id, sym, today_count, trade_of_day_cap)
+                continue
 
         try:
             signal = await analyze_symbol(sym, risk_level)

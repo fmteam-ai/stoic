@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar } from "lucide-react";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -56,6 +56,11 @@ export default function BotConfig() {
                 auto_tune_enabled: cfg.auto_tune_enabled,
                 slippage_veto_enabled: cfg.slippage_veto_enabled,
                 max_slippage_pips: cfg.max_slippage_pips || {},
+                anti_tilt_enabled: cfg.anti_tilt_enabled,
+                anti_tilt_consecutive_losses: cfg.anti_tilt_consecutive_losses,
+                anti_tilt_freeze_hours: cfg.anti_tilt_freeze_hours,
+                trade_of_day_cap: cfg.trade_of_day_cap,
+                asia_session_skip_xau: cfg.asia_session_skip_xau,
             });
             setCfg(data); setMsg("Configuration saved.");
         } catch (e) { setErr(formatApiError(e)); }
@@ -231,6 +236,9 @@ export default function BotConfig() {
                 {/* Section 05 — Trading Intelligence */}
                 <TradingIntelligenceSection cfg={cfg} setCfg={setCfg} />
 
+                {/* Section 06 — Capital Preservation Guards */}
+                <CapitalGuardsSection cfg={cfg} setCfg={setCfg} />
+
                 <div className="flex justify-end">
                     <button onClick={save} disabled={saving}
                         data-testid="bot-save-button"
@@ -240,6 +248,54 @@ export default function BotConfig() {
                 </div>
             </div>
         </AppLayout>
+    );
+}
+
+function CapitalGuardsSection({ cfg, setCfg }) {
+    return (
+        <div className="border border-[#FF3B30]/30 bg-[#0A0A0A]" data-testid="capital-guards-section">
+            <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                <Snowflake className="w-4 h-4 text-[#FF3B30]" />
+                <div>
+                    <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest">SECTION 06 · CAPITAL PRESERVATION</div>
+                    <div className="font-display font-bold text-lg tracking-tight">Anti-tilt · trade caps · session filters</div>
+                </div>
+            </div>
+            <div className="p-5 space-y-4">
+                {/* Anti-tilt */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="anti_tilt_enabled" label="Anti-Tilt Freeze" icon={Snowflake} color="#FF3B30"
+                        desc="Auto-pause bot execution after N consecutive losing trades. Prevents revenge-trading and over-leveraging in chop. Bot resumes after the freeze window expires." />
+                    {cfg.anti_tilt_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="anti_tilt_consecutive_losses" label="CONSECUTIVE LOSSES" suffix="trades" step={1} min={1} max={10} />
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="anti_tilt_freeze_hours" label="FREEZE WINDOW" suffix="hours" step={1} min={1} max={48} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Trade-of-day cap */}
+                <div>
+                    <div className="border border-[#1F1F1F] p-4 bg-[#050505]">
+                        <div className="flex items-center gap-2 mb-2">
+                            <CalendarClock className="w-4 h-4 text-[#FFD700]" />
+                            <span className="font-display font-bold text-sm">Trade-of-the-Day Cap</span>
+                        </div>
+                        <p className="text-xs text-[#A1A1AA] leading-relaxed mb-3">
+                            Max new trades per symbol per UTC day. Forces selectivity — bot waits for the A-grade
+                            setup instead of churning. Set to <span className="text-[#52525B]">0</span> for unlimited.
+                        </p>
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="trade_of_day_cap" label="MAX TRADES PER SYMBOL / DAY" suffix="trades" step={1} min={0} max={20} />
+                    </div>
+                </div>
+
+                {/* Asia-session skip XAU */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="asia_session_skip_xau" label="Skip Asia-Session Gold (XAU)" icon={MoonStar} color="#FFD700"
+                        desc="XAUUSD chops sideways during the Asia session (00:00–07:00 UTC) with razor-thin moves and wide spreads. Toggle ON to skip new XAU entries during this window." />
+                </div>
+            </div>
+        </div>
     );
 }
 

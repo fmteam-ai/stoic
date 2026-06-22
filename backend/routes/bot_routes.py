@@ -38,6 +38,11 @@ async def _get_or_create_config(db, user_id: str) -> dict:
         "auto_tune_enabled": True,
         "slippage_veto_enabled": True,
         "max_slippage_pips": {"XAUUSD": 20.0, "BTCUSD": 80.0},
+        "anti_tilt_enabled": True,
+        "anti_tilt_consecutive_losses": 3,
+        "anti_tilt_freeze_hours": 4,
+        "trade_of_day_cap": 1,
+        "asia_session_skip_xau": True,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.bot_configs.insert_one(new_cfg)
@@ -69,6 +74,11 @@ def _serialize(cfg: dict) -> dict:
         "auto_tune_enabled": cfg.get("auto_tune_enabled", True),
         "slippage_veto_enabled": cfg.get("slippage_veto_enabled", True),
         "max_slippage_pips": cfg.get("max_slippage_pips") or {"XAUUSD": 20.0, "BTCUSD": 80.0},
+        "anti_tilt_enabled": cfg.get("anti_tilt_enabled", True),
+        "anti_tilt_consecutive_losses": cfg.get("anti_tilt_consecutive_losses", 3),
+        "anti_tilt_freeze_hours": cfg.get("anti_tilt_freeze_hours", 4),
+        "trade_of_day_cap": cfg.get("trade_of_day_cap", 1),
+        "asia_session_skip_xau": cfg.get("asia_session_skip_xau", True),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -104,6 +114,11 @@ async def update_config(payload: BotConfigUpdate, user=Depends(get_current_user)
         "auto_tune_enabled": payload.auto_tune_enabled,
         "slippage_veto_enabled": payload.slippage_veto_enabled,
         "max_slippage_pips": {str(k).upper(): float(v) for k, v in (payload.max_slippage_pips or {}).items()},
+        "anti_tilt_enabled": payload.anti_tilt_enabled,
+        "anti_tilt_consecutive_losses": payload.anti_tilt_consecutive_losses,
+        "anti_tilt_freeze_hours": payload.anti_tilt_freeze_hours,
+        "trade_of_day_cap": payload.trade_of_day_cap,
+        "asia_session_skip_xau": payload.asia_session_skip_xau,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.bot_configs.update_one(

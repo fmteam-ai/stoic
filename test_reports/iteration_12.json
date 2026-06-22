@@ -1,0 +1,45 @@
+{
+  "summary": "Iter-12 QA of Settings page (Profile/ChangePassword/2FA), 2FA-gated login, and Capital-Preservation Guards persistence. New pytest suite (test_iter12_settings_2fa.py) = 18/19 PASS — 1 real backend bug found: TOTPDisableRequest.code has max_length=8 in models.py so 10-char recovery codes cannot be used for /api/auth/2fa/disable (returns 422). Full backend regression = 188/188 PASS (no regression). Frontend E2E (Settings flow + 2FA enroll + login-with-2FA + 2FA disable) all green via Playwright on a fresh qa_2fa_ user.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/auth/2fa/disable", "issue": "TOTPDisableRequest.code field has max_length=8 in /app/backend/models.py:38, but recovery codes are 10 hex chars (token_hex(5).upper() in /app/backend/totp.py:50). Passing a recovery code returns Pydantic 422 BEFORE reaching the route logic, so the documented 'recovery code can be used in place of TOTP code on disable' path is unreachable. Fix: raise max_length to 16 (or remove the cap). TOTPVerifyRequest.code has the same max_length=8 cap but is only used for verify-enroll which does not accept recovery codes, so functionally fine — still worth widening for symmetry.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter12_settings_2fa.py",
+    "/app/test_reports/pytest/iter12_settings_2fa.xml",
+    "/app/test_reports/pytest/iter12_regression.xml"
+  ],
+  "action_items": [
+    "[HIGH] /app/backend/models.py line 38: change TOTPDisableRequest.code Field(min_length=6, max_length=8) -> max_length=16 (or 32). Recovery codes are 10 chars and currently get rejected with HTTP 422 before the route can fall back to consume_recovery_code(). Repro: enroll 2FA, then POST /api/auth/2fa/disable with current_password + 10-char recovery code -> 422 Unprocessable Entity (expected 200).",
+    "[POLISH] Same widening recommended for TOTPVerifyRequest.code (line 33) for symmetry, though not user-facing today."
+  ],
+  "critical_code_review_comments": [
+    "auth_routes.py is clean and well-segmented (252 lines). Plain-text recovery codes returned exactly once from /2fa/verify-enroll, bcrypt-hashed on disk via hash_recovery_codes — correct.",
+    "totp.py uses constant-time verify with ±1 step window (valid_window=1) — good UX/clock-skew tolerance without weakening security materially.",
+    "Login endpoint correctly emits detail='2FA code required' (case-insensitive) when 2FA enrolled and totp_code missing; the frontend treats that exact string as the trigger to reveal login-2fa-input. Verified end-to-end.",
+    "Recovery-code consumption on login works and decrements recovery_codes_remaining by 1 (verified). Single-shot semantics held.",
+    "BotConfigUpdate now exposes anti_tilt_enabled, anti_tilt_consecutive_losses, anti_tilt_freeze_hours, trade_of_day_cap, asia_session_skip_xau — persistence verified via PUT/GET round-trip on a fresh user.",
+    "Pydantic max_length=8 on TOTPDisableRequest.code is the only real bug — see action_items.",
+    "Frontend Settings page renders Profile/Password/2FA sections with all promised testids (settings-header, profile-name-input, save-profile-button, pw-current/new/confirm, enable-2fa-button, twofa-qr, twofa-secret, twofa-verify-input, twofa-verify-button, twofa-recovery-codes, disable-2fa-button, disable-2fa-password, disable-2fa-code, confirm-disable-2fa-button). Status pill correctly flips ENABLED <-> DISABLED."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter12_settings_2fa.py (NEW — 19 tests)"
+  ],
+  "success_rate": {
+    "backend": "94.7% — 18/19 new tests pass; 188/188 regression pass",
+    "frontend": "100% — Settings nav, Profile save, 2FA enroll, login-with-2FA, 2FA disable all verified end-to-end"
+  },
+  "test_credentials": "admin@trading.bot / admin123 verified — admin has no 2FA, as expected. QA users created with prefix qa_2fa_* (cleaned up at session end).",
+  "seed_data_creation": "Test users with email prefix 'qa_2fa_' created and deleted in module-level autouse fixture. No persistent seed.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend baseline is now 188 (regression) + 19 (iter-12) = 207 tests. The one failing test — TestTwoFactorDisable::test_disable_with_recovery_code_succeeds — will turn green as soon as max_length=8 on TOTPDisableRequest.code is widened (models.py:38). Frontend Settings UI is fully wired with the testids listed in the brief. pyotp 2.10.0 installed. The QA pattern: register fresh user -> /2fa/enroll returns secret -> compute pyotp.TOTP(secret).now() -> /2fa/verify-enroll returns 8 recovery codes (plaintext, ONCE). For login, the frontend reveals login-2fa-input only after server replies 401 'detail: 2FA code required' — this string match is intentional, preserve it.",
+  "rca of the issue": "ROOT CAUSE: /app/backend/models.py line 38 — TOTPDisableRequest defines `code: str = Field(min_length=6, max_length=8)`. Recovery codes are generated as `secrets.token_hex(5).upper()` (totp.py:50), producing 10-character strings. Pydantic v2 rejects 10-char inputs against max_length=8 BEFORE the request body reaches the route handler, returning 422. The recovery-code fallback path in auth_routes.py:241 (consume_recovery_code) is therefore unreachable from the disable endpoint. MITIGATION: bump max_length to 16 (or 32) on both TOTPDisableRequest.code and TOTPVerifyRequest.code; the latter doesn't currently accept recovery codes but widening the constraint guards against the same regression if the policy ever changes. REPRO: 1) register user; 2) POST /2fa/enroll -> note secret; 3) POST /2fa/verify-enroll with TOTP -> capture recovery_codes[0] (10 chars); 4) POST /2fa/disable {current_password, code: recovery_codes[0]} -> observe 422 (expected 200)."
+}

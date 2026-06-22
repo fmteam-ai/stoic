@@ -17,6 +17,25 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    totp_code: Optional[str] = None  # required if user has 2FA enabled
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6)
+
+
+class TOTPVerifyRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=8)
+
+
+class TOTPDisableRequest(BaseModel):
+    current_password: str
+    code: str = Field(min_length=6, max_length=8)
 
 
 class UserOut(BaseModel):
@@ -25,6 +44,7 @@ class UserOut(BaseModel):
     name: Optional[str] = None
     role: str = "user"
     created_at: Optional[datetime] = None
+    two_factor_enabled: bool = False
 
 
 # ---------- Symbols ----------
@@ -113,6 +133,12 @@ class BotConfigUpdate(BaseModel):
     max_slippage_pips: Dict[str, float] = Field(
         default_factory=lambda: {"XAUUSD": 20.0, "BTCUSD": 80.0}
     )
+    # Capital-preservation guards
+    anti_tilt_enabled: bool = True
+    anti_tilt_consecutive_losses: int = 3
+    anti_tilt_freeze_hours: int = 4
+    trade_of_day_cap: int = 1   # max NEW trades per symbol per UTC day; 0 = unlimited
+    asia_session_skip_xau: bool = True
 
 
 class BotConfigOut(BotConfigUpdate):

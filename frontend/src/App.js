@@ -19,6 +19,7 @@ import BrandingGallery from "@/pages/BrandingGallery";
 import Affiliate from "@/pages/Affiliate";
 import Notifications from "@/pages/Notifications";
 import Analytics from "@/pages/Analytics";
+import Settings from "@/pages/Settings";
 
 function App() {
     return (
@@ -41,6 +42,7 @@ function App() {
                         <Route path="/affiliate" element={<ProtectedRoute><Affiliate /></ProtectedRoute>} />
                         <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
                         <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
+                        <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
-import { Mail as EnvelopeSimple, Lock as LockKey } from "lucide-react";
+import { Mail as EnvelopeSimple, Lock as LockKey, ShieldCheck } from "lucide-react";
 import { StoicMark } from "@/components/StoicLogo";
 
 export default function Login() {
@@ -10,6 +10,8 @@ export default function Login() {
     const { login } = useAuth();
     const [email, setEmail] = useState("admin@trading.bot");
     const [password, setPassword] = useState("admin123");
+    const [totpCode, setTotpCode] = useState("");
+    const [needs2fa, setNeeds2fa] = useState(false);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
 
@@ -18,10 +20,17 @@ export default function Login() {
         setError("");
         setLoading(true);
         try {
-            await login(email, password);
+            await login(email, password, needs2fa ? totpCode : undefined);
             navigate("/");
         } catch (err) {
-            setError(formatApiError(err));
+            const msg = formatApiError(err);
+            // Backend returns 401 + detail "2FA code required" → show TOTP input
+            if (!needs2fa && msg && msg.toLowerCase().includes("2fa code required")) {
+                setNeeds2fa(true);
+                setError("");
+            } else {
+                setError(msg);
+            }
         } finally { setLoading(false); }
     };
 
@@ -109,6 +118,29 @@ export default function Login() {
                             </div>
                         </div>
 
+                        {needs2fa && (
+                            <div data-testid="login-2fa-block">
+                                <label className="font-mono text-[10px] text-[#00FF41] tracking-widest block mb-2 flex items-center gap-1.5">
+                                    <ShieldCheck className="w-3 h-3" /> 2FA CODE
+                                </label>
+                                <input
+                                    type="text"
+                                    value={totpCode}
+                                    onChange={e => setTotpCode(e.target.value.replace(/\s/g, "").slice(0, 12))}
+                                    inputMode="numeric"
+                                    autoComplete="one-time-code"
+                                    autoFocus
+                                    required
+                                    data-testid="login-2fa-input"
+                                    placeholder="123456 or recovery code"
+                                    className="w-full bg-[#0A0A0A] border border-[#00FF41]/40 focus:border-[#00FF41] outline-none px-3 py-3 text-lg font-mono tracking-[0.3em] transition-colors duration-150"
+                                />
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-1.5">
+                                    ENTER THE CODE FROM YOUR AUTHENTICATOR APP
+                                </div>
+                            </div>
+                        )}
+
                         {error && (
                             <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 px-3 py-2 text-xs text-[#FF3B30]" data-testid="login-error">
                                 {error}
@@ -121,7 +153,7 @@ export default function Login() {
                             data-testid="login-submit-button"
                             className="w-full bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium py-3 text-sm transition-colors duration-150"
                         >
-                            {loading ? "AUTHENTICATING..." : "SIGN IN →"}
+                            {loading ? "AUTHENTICATING..." : (needs2fa ? "VERIFY &amp; SIGN IN →" : "SIGN IN →")}
                         </button>
                     </form>
 
