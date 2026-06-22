@@ -4,7 +4,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     Bell, Send, Save as FloppyDisk, CheckCircle2, ExternalLink, KeyRound,
-    AlertTriangle, MessageSquare,
+    AlertTriangle, MessageSquare, Webhook, Power,
 } from "lucide-react";
 
 const EVENT_LABELS = {
@@ -24,13 +24,19 @@ export default function Notifications() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
+    const [webhook, setWebhook] = useState(null);
+    const [webhookBusy, setWebhookBusy] = useState(false);
     const [err, setErr] = useState("");
 
     const load = async () => {
         try {
-            const { data } = await api.get("/notifications/telegram");
-            setCfg(data);
-            setChatId(data.telegram_chat_id || "");
+            const [a, b] = await Promise.all([
+                api.get("/notifications/telegram"),
+                api.get("/telegram/webhook/status"),
+            ]);
+            setCfg(a.data);
+            setChatId(a.data.telegram_chat_id || "");
+            setWebhook(b.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
     };
@@ -64,6 +70,31 @@ export default function Notifications() {
 
     const toggleAlert = (key) => {
         setCfg({ ...cfg, alerts: { ...cfg.alerts, [key]: !cfg.alerts[key] } });
+    };
+
+    const enableWebhook = async () => {
+        setWebhookBusy(true); setErr("");
+        try {
+            const baseUrl = process.env.REACT_APP_BACKEND_URL;
+            const { data } = await api.post("/telegram/webhook/enable", { base_url: baseUrl });
+            setWebhook({ enabled: true, webhook_url: data.webhook_url });
+            toast.success("2-way Telegram control activated", {
+                description: "Try sending /help from Telegram",
+                duration: 6000,
+            });
+        } catch (e) { setErr(formatApiError(e)); }
+        finally { setWebhookBusy(false); }
+    };
+
+    const disableWebhook = async () => {
+        if (!window.confirm("Disable 2-way Telegram control? You'll still receive push alerts.")) return;
+        setWebhookBusy(true); setErr("");
+        try {
+            await api.post("/telegram/webhook/disable");
+            setWebhook({ enabled: false });
+            toast("2-way control disabled");
+        } catch (e) { setErr(formatApiError(e)); }
+        finally { setWebhookBusy(false); }
     };
 
     if (loading) return <AppLayout><div className="p-8 font-mono text-xs text-[#52525B] tracking-widest">LOADING…</div></AppLayout>;
@@ -191,6 +222,69 @@ export default function Notifications() {
                                 </button>
                             );
                         })}
+                    </div>
+                </div>
+
+                {/* Section 04 — 2-way control */}
+                <div className="border border-[#FFD700]/30 bg-[#0A0A0A]" data-testid="section-2way">
+                    <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                        <Webhook className="w-4 h-4 text-[#FFD700]" />
+                        <div className="flex-1">
+                            <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">SECTION 04 · 2-WAY CONTROL</div>
+                            <div className="font-display font-bold text-lg tracking-tight">Control the bot from Telegram</div>
+                        </div>
+                        <div className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border ${
+                            webhook?.enabled ? "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10" : "border-[#1F1F1F] text-[#52525B]"
+                        }`} data-testid="webhook-status-pill">
+                            {webhook?.enabled ? "● ACTIVE" : "○ INACTIVE"}
+                        </div>
+                    </div>
+                    <div className="p-5 space-y-4">
+                        <p className="text-sm text-[#A1A1AA] leading-relaxed">
+                            Activate this and you can send commands to your bot directly from Telegram —
+                            perfect for reacting to news on the go without opening the dashboard.
+                        </p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                            {[
+                                ["/status", "Bot state, last signal, next tick"],
+                                ["/pnl", "Today's & cumulative P&L"],
+                                ["/trades", "List open trades"],
+                                ["/balance", "Account balances"],
+                                ["/run", "Start the bot"],
+                                ["/stop", "Stop the bot"],
+                                ["/close XAUUSD", "Close trades on a symbol"],
+                                ["/panic", "Emergency stop + close all"],
+                            ].map(([cmd, desc]) => (
+                                <div key={cmd} className="flex items-center gap-2 bg-[#050505] border border-[#1F1F1F] px-3 py-2">
+                                    <code className="font-mono text-xs text-[#FFD700]">{cmd}</code>
+                                    <span className="text-[#A1A1AA] text-xs">— {desc}</span>
+                                </div>
+                            ))}
+                        </div>
+
+                        {webhook?.enabled && webhook?.webhook_url && (
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-wider bg-[#050505] border border-[#1F1F1F] px-3 py-2 break-all" data-testid="webhook-url">
+                                <span className="text-[#FFD700] mr-1">WEBHOOK URL ·</span>{webhook.webhook_url}
+                            </div>
+                        )}
+
+                        <div className="flex justify-end gap-2">
+                            {webhook?.enabled ? (
+                                <button onClick={disableWebhook} disabled={webhookBusy}
+                                    data-testid="webhook-disable-button"
+                                    className="px-4 py-2 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 disabled:opacity-40 text-xs tracking-widest flex items-center gap-2">
+                                    <Power className="w-3.5 h-3.5" /> {webhookBusy ? "DISABLING…" : "DISABLE 2-WAY CONTROL"}
+                                </button>
+                            ) : (
+                                <button onClick={enableWebhook} disabled={webhookBusy || !cfg?.has_token}
+                                    data-testid="webhook-enable-button"
+                                    title={!cfg?.has_token ? "Save a bot token first" : "Register webhook with Telegram"}
+                                    className="bg-[#FFD700] hover:bg-[#FFC700] disabled:opacity-40 text-black font-medium px-4 py-2 text-xs tracking-widest flex items-center gap-2 transition-colors">
+                                    <Webhook className="w-3.5 h-3.5" /> {webhookBusy ? "ACTIVATING…" : "ACTIVATE 2-WAY CONTROL"}
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
 

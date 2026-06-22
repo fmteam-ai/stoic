@@ -142,6 +142,14 @@
 - **Frontend**: `/notifications` page with 3 sections (Setup guide with deep links to @BotFather + @userinfobot, encrypted token + chat ID + master enable, per-event toggle grid). Sidebar entry `nav-notifications` (Bell icon). Security note explains encryption + token revocation.
 - **Bridge protocol**: `notified_opened` flag on trades prevents duplicate "Trade Opened" pings if EA re-reports.
 
+## CHANGELOG · Jun 22, 2026 — 2-Way Telegram Control Plane
+- **New: Inbound Telegram commands** (`routes/telegram_routes.py`) — Telegram webhook at `POST /api/telegram/incoming/{secret}` receives Update objects, dispatches to command handlers, replies via sendMessage. Per-user 32-byte URL-safe `webhook_secret` stored in `notifications` collection.
+- **Security**: Two-layer auth — (1) webhook URL contains per-user secret, (2) handler verifies `message.chat.id` matches the user's configured chat_id (prevents impersonation if URL leaks). Bad/unknown updates always return 200 to avoid Telegram retry storms.
+- **Commands**: `/start /help /status /pnl /trades /balance /run /stop /panic /close [SYMBOL]`. All Markdown-V2 escaped, formatted nicely with emojis. `/close XAUUSD` marks all open trades on that symbol for close (EA picks up close_requested=True). `/panic` mirrors `/api/panic` logic inline (stops bot, cancels pending, marks open for close).
+- **Activation endpoints**: `POST /api/telegram/webhook/enable` (calls Telegram setWebhook with our URL), `POST /api/telegram/webhook/disable` (calls deleteWebhook, clears secret), `GET /api/telegram/webhook/status`.
+- **Route ordering**: webhook is at `/incoming/{secret}` (not `/webhook/{secret}`) to avoid clashing with `/webhook/enable|disable|status` literal paths.
+- **Frontend**: New Section 04 on `/notifications` page — command reference grid (8 commands), ACTIVATE/DISABLE button, status pill, webhook URL display when active. Disabled until a bot token is saved.
+
 ## Backlog Updates (P1/P2 still pending)
 - **P1** — Spread/Slippage filter (reject signals when spread > 2× 24h median).
 - **P1** — Multi-timeframe confluence (require H4 trend to match H1 signal direction).
