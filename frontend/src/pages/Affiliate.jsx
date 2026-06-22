@@ -68,7 +68,10 @@ export default function Affiliate() {
             await navigator.clipboard.writeText(link);
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
-        } catch { /* ignored */ }
+        } catch (e) {
+            console.warn("[affiliate] clipboard copy failed", e?.message);
+            toast.error("Couldn't copy — please copy manually");
+        }
     };
 
     if (loading) {
