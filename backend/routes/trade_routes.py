@@ -99,7 +99,11 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
     }
     result = await db.trades.insert_one(trade_doc)
     trade_doc["_id"] = result.inserted_id
-    await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {"consumed": True}})
+    # Mark signal as consumed (re-scope by user_id as defense in depth)
+    await db.signals.update_one(
+        {"_id": ObjectId(signal_id), "user_id": user["id"]},
+        {"$set": {"consumed": True}},
+    )
     return _serialize(trade_doc)
 
 
