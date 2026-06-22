@@ -8,6 +8,16 @@ import { toast } from "sonner";
 
 const PRIMARY_SYMBOLS = ["XAUUSD", "BTCUSD"];
 
+// Recharts inline styles hoisted to module scope — stable references prevent
+// child re-renders triggered by new object identities on every Dashboard render.
+const CHART_TICK = { fill: "#52525B", fontSize: 10, fontFamily: "JetBrains Mono" };
+const CHART_AXIS_LINE = { stroke: "#1F1F1F" };
+const CHART_TOOLTIP_CONTENT = {
+    background: "#0A0A0A", border: "1px solid #1F1F1F", borderRadius: 0,
+    fontFamily: "JetBrains Mono", fontSize: 11,
+};
+const CHART_TOOLTIP_LABEL = { color: "#A1A1AA" };
+
 function PriceTile({ quote, selected, onClick }) {
     if (!quote) return null;
     const positive = (quote.change_pct || 0) >= 0;
@@ -200,9 +210,9 @@ export default function Dashboard() {
                                         </linearGradient>
                                     </defs>
                                     <CartesianGrid stroke="#1F1F1F" strokeDasharray="0" vertical={false} />
-                                    <XAxis dataKey="date" stroke="#52525B" tick={{ fill: "#52525B", fontSize: 10, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={{ stroke: "#1F1F1F" }} minTickGap={32} />
-                                    <YAxis stroke="#52525B" tick={{ fill: "#52525B", fontSize: 10, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={{ stroke: "#1F1F1F" }} domain={["auto", "auto"]} width={70} />
-                                    <Tooltip contentStyle={{ background: "#0A0A0A", border: "1px solid #1F1F1F", borderRadius: 0, fontFamily: "JetBrains Mono", fontSize: 11 }} labelStyle={{ color: "#A1A1AA" }} />
+                                    <XAxis dataKey="date" stroke="#52525B" tick={CHART_TICK} tickLine={false} axisLine={CHART_AXIS_LINE} minTickGap={32} />
+                                    <YAxis stroke="#52525B" tick={CHART_TICK} tickLine={false} axisLine={CHART_AXIS_LINE} domain={["auto", "auto"]} width={70} />
+                                    <Tooltip contentStyle={CHART_TOOLTIP_CONTENT} labelStyle={CHART_TOOLTIP_LABEL} />
                                     <Area type="monotone" dataKey="close" stroke="#00FF41" strokeWidth={1.5} fill="url(#priceFill)" />
                                 </AreaChart>
                             </ResponsiveContainer>

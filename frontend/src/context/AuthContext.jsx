@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
 import api, { formatApiError } from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -20,26 +20,31 @@ export function AuthProvider({ children }) {
 
     useEffect(() => { refresh(); }, [refresh]);
 
-    const login = async (email, password) => {
+    const login = useCallback(async (email, password) => {
         const { data } = await api.post("/auth/login", { email, password });
         setUser(data);
         return data;
-    };
+    }, []);
 
-    const register = async (email, password, name) => {
+    const register = useCallback(async (email, password, name) => {
         const { data } = await api.post("/auth/register", { email, password, name });
         setUser(data);
         return data;
-    };
+    }, []);
 
-    const logout = async () => {
+    const logout = useCallback(async () => {
         try { await api.post("/auth/logout"); }
         catch (err) { console.warn("[auth] logout network error (ignored)", err?.message); }
         setUser(false);
-    };
+    }, []);
+
+    const value = useMemo(
+        () => ({ user, login, register, logout, refresh, formatApiError }),
+        [user, login, register, logout, refresh],
+    );
 
     return (
-        <AuthContext.Provider value={{ user, login, register, logout, refresh, formatApiError }}>
+        <AuthContext.Provider value={value}>
             {children}
         </AuthContext.Provider>
     );
