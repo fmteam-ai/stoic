@@ -55,6 +55,17 @@ function computeLivePnl(trade, currentPrice) {
     return diff * lot * cs;
 }
 
+// Distance (in $) from current price to a SL/TP level, in account currency,
+// using MT5 contract size math. Sign agnostic — always positive.
+function dollarDistance(trade, currentPrice, levelPrice) {
+    if (!currentPrice || !levelPrice) return null;
+    const lvl = parseFloat(levelPrice);
+    const lot = parseFloat(trade.lot_size);
+    const cs = CONTRACT_SIZE[trade.symbol] ?? 1;
+    if (!lvl || !lot || Number.isNaN(lvl) || Number.isNaN(lot)) return null;
+    return Math.abs(currentPrice - lvl) * lot * cs;
+}
+
 const CLOSE_REASON_BADGE = {
     take_profit:     { label: "TP",       cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]",         icon: "🎯" },
     stop_loss:       { label: "SL",       cls: "border-[#FF3B30]/40 bg-[#FF3B30]/10 text-[#FF3B30]",         icon: "🛑" },
@@ -87,6 +98,39 @@ function Stat({ label, value, accent, testid }) {
         <div className="p-4 border border-[#1F1F1F] bg-[#0A0A0A]" data-testid={testid}>
             <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">{label}</div>
             <div className={`font-mono font-medium text-base ${accent || "text-white"}`}>{value}</div>
+        </div>
+    );
+}
+
+function RiskThermometer({ openLive, hasAnyLive, liveAccent, closestSL, closestTP }) {
+    return (
+        <div className="p-4 border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="stat-open-live-pnl">
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">OPEN LIVE P&L</div>
+            <div className={`font-mono font-medium text-base ${liveAccent || "text-white"}`}>
+                {hasAnyLive ? fmtPnl(openLive) : "—"}
+            </div>
+            {(closestSL || closestTP) && (
+                <div className="mt-2 pt-2 border-t border-[#1F1F1F] space-y-1">
+                    {closestSL && (
+                        <div className="flex items-center justify-between gap-2 font-mono text-[10px]" data-testid="closest-sl">
+                            <span className="text-[#52525B] tracking-widest">SL ←</span>
+                            <span className="text-[#FF3B30]" title={`${closestSL.symbol} @ ${closestSL.level}`}>
+                                ${closestSL.dist.toFixed(2)}
+                                <span className="text-[#52525B] ml-1">{closestSL.symbol}</span>
+                            </span>
+                        </div>
+                    )}
+                    {closestTP && (
+                        <div className="flex items-center justify-between gap-2 font-mono text-[10px]" data-testid="closest-tp">
+                            <span className="text-[#52525B] tracking-widest">TP →</span>
+                            <span className="text-[#00FF41]" title={`${closestTP.symbol} @ ${closestTP.level}`}>
+                                ${closestTP.dist.toFixed(2)}
+                                <span className="text-[#52525B] ml-1">{closestTP.symbol}</span>
+                            </span>
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }
@@ -194,12 +238,35 @@ export default function Trades() {
                     const liveAccent = hasAnyLive
                         ? (openLive >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]")
                         : undefined;
+
+                    // Closest SL & TP across all open positions (smallest $-distance).
+                    let closestSL = null;     // {$dist, symbol, level}
+                    let closestTP = null;
+                    for (const t of trades) {
+                        if (t.status !== "open") continue;
+                        const px = quotes[t.symbol];
+                        if (!px) continue;
+                        const dSL = dollarDistance(t, px, t.stop_loss);
+                        if (dSL != null && (closestSL == null || dSL < closestSL.dist)) {
+                            closestSL = { dist: dSL, symbol: t.symbol, level: parseFloat(t.stop_loss) };
+                        }
+                        const tpLevel = t.tp1 || t.take_profit;
+                        const dTP = dollarDistance(t, px, tpLevel);
+                        if (dTP != null && (closestTP == null || dTP < closestTP.dist)) {
+                            closestTP = { dist: dTP, symbol: t.symbol, level: parseFloat(tpLevel) };
+                        }
+                    }
+
                     return (
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-3" data-testid="trades-stats">
                         <Stat label="OPEN" value={stats.open_trades} />
-                        <Stat label="OPEN LIVE P&L" testid="stat-open-live-pnl"
-                            value={hasAnyLive ? fmtPnl(openLive) : "—"}
-                            accent={liveAccent} />
+                        <RiskThermometer
+                            openLive={openLive}
+                            hasAnyLive={hasAnyLive}
+                            liveAccent={liveAccent}
+                            closestSL={closestSL}
+                            closestTP={closestTP}
+                        />
                         <Stat label="TOTAL" value={stats.total_trades} />
                         <Stat label="WIN RATE" value={`${stats.win_rate}%`} accent="text-[#00FF41]" />
                         <Stat label="WINS / LOSSES" value={`${stats.wins} / ${stats.losses}`} />
