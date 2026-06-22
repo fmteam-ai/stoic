@@ -24,11 +24,8 @@ async def list_trades(limit: int = 100, status: str = None, user=Depends(get_cur
     return [_serialize(d) for d in docs]
 
 
-@router.get("/stats")
-async def trade_stats(user=Depends(get_current_user)):
-    db = get_db()
-    cursor = db.trades.find({"user_id": user["id"], "status": "closed"})
-    closed = await cursor.to_list(length=1000)
+def _aggregate_stats(closed: list) -> dict:
+    """Compute aggregate P&L stats from a list of closed trade docs."""
     total = len(closed)
     wins = [t for t in closed if (t.get("pnl") or 0) > 0]
     losses = [t for t in closed if (t.get("pnl") or 0) < 0]
@@ -36,13 +33,8 @@ async def trade_stats(user=Depends(get_current_user)):
     win_rate = (len(wins) / total * 100) if total else 0
     avg_win = (sum(t["pnl"] for t in wins) / len(wins)) if wins else 0
     avg_loss = (sum(t["pnl"] for t in losses) / len(losses)) if losses else 0
-
-    open_cursor = db.trades.find({"user_id": user["id"], "status": "open"})
-    open_count = len(await open_cursor.to_list(length=100))
-
     return {
         "total_trades": total,
-        "open_trades": open_count,
         "win_rate": round(win_rate, 2),
         "total_pnl": round(total_pnl, 2),
         "avg_win": round(avg_win, 2),
@@ -50,6 +42,18 @@ async def trade_stats(user=Depends(get_current_user)):
         "wins": len(wins),
         "losses": len(losses),
     }
+
+
+@router.get("/stats")
+async def trade_stats(user=Depends(get_current_user)):
+    db = get_db()
+    closed = await db.trades.find(
+        {"user_id": user["id"], "status": "closed"}
+    ).to_list(length=1000)
+    open_trades = await db.trades.find(
+        {"user_id": user["id"], "status": "open"}
+    ).to_list(length=100)
+    return {**_aggregate_stats(closed), "open_trades": len(open_trades)}
 
 
 @router.post("/execute/{signal_id}")

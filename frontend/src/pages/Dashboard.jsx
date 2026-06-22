@@ -63,7 +63,7 @@ export default function Dashboard() {
             setErr("");
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
-    }, []);
+    }, []); // deps: stable imports + setters only
 
     const loadHistory = useCallback(async (sym) => {
         setHistoryLoading(true);
@@ -73,11 +73,11 @@ export default function Dashboard() {
             setIndicators(data.indicators || {});
         } catch (e) { setErr(formatApiError(e)); }
         finally { setHistoryLoading(false); }
-    }, []);
+    }, []); // deps: stable imports + setters only
 
     const loadStats = useCallback(async () => {
-        try { const { data } = await api.get("/trades/stats"); setStats(data); } catch {}
-    }, []);
+        try { const { data } = await api.get("/trades/stats"); setStats(data); } catch { /* ignore */ }
+    }, []); // deps: stable imports + setters only
 
     useEffect(() => {
         loadQuotes(); loadStats();

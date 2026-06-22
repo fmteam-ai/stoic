@@ -83,7 +83,7 @@ export default function Accounts() {
                     <div className="text-sm text-[#A1A1AA] space-y-2">
                         <div className="font-display font-bold text-white">How the MT5 Bridge works</div>
                         <ol className="list-decimal list-inside space-y-1 text-xs leading-relaxed">
-                            <li>Add your MT5 account here — you'll receive a unique <em>bridge token</em>.</li>
+                            <li>Add your MT5 account here — you&apos;ll receive a unique <em>bridge token</em>.</li>
                             <li>Download <code className="font-mono text-[#00FF41]">EmergentTradingBridge.mq5</code> and copy it to your MT5 <em>MQL5/Experts</em> folder.</li>
                             <li>In MT5: <em>Tools → Options → Expert Advisors</em> — enable WebRequest and add this server URL.</li>
                             <li>Attach the EA to any chart and paste your bridge token in the EA inputs.</li>

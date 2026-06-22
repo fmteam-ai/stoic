@@ -46,7 +46,7 @@ export default function Login() {
                             Trade gold & crypto<br/>with an <span className="text-[#00FF41]">AI co-pilot</span>.
                         </h1>
                         <p className="text-[#A1A1AA] text-sm leading-relaxed max-w-sm">
-                            Claude-powered market analysis, four risk profiles, live MT5 execution. Built for traders who don't sleep on opportunity.
+                            Claude-powered market analysis, four risk profiles, live MT5 execution. Built for traders who don&apos;t sleep on opportunity.
                         </p>
                     </div>
 
