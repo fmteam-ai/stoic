@@ -27,10 +27,10 @@ export function Sidebar({ onNavigate }) {
         <aside className="w-full md:w-60 md:h-screen bg-[#0A0A0A] border-r border-[#1F1F1F] flex md:flex-col flex-row md:fixed md:left-0 md:top-0 z-30">
             <div className="p-5 border-b border-[#1F1F1F] hidden md:block">
                 <div className="flex items-center gap-2.5">
-                    <StoicMark size={28} />
+                    <StoicMark size={36} />
                     <div>
                         <div className="font-display font-bold text-sm tracking-[0.18em]">STOIC</div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">DISCIPLINED AI · v1.0</div>
+                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest">STEADY WEALTH · v1.0</div>
                     </div>
                 </div>
             </div>

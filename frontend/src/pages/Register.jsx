@@ -29,11 +29,11 @@ export default function Register() {
     return (
         <div className="min-h-screen flex items-center justify-center bg-[#050505] p-6">
             <div className="w-full max-w-sm">
-                <div className="flex items-center gap-2.5 mb-10">
-                    <StoicMark size={28} />
+                <div className="flex items-center gap-3 mb-10">
+                    <StoicMark size={40} />
                     <div>
                         <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">DISCIPLINED AI · TRADING</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SMART TRADING · STEADY WEALTH</div>
                     </div>
                 </div>
 

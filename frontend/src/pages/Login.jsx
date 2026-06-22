@@ -31,11 +31,11 @@ export default function Login() {
             <div className="hidden lg:flex lg:w-1/2 relative border-r border-[#1F1F1F] grid-bg">
                 <div className="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-[#050505]" />
                 <div className="relative z-10 flex flex-col justify-between p-12 w-full">
-                    <div className="flex items-center gap-2.5">
-                        <StoicMark size={32} />
+                    <div className="flex items-center gap-3">
+                        <StoicMark size={48} />
                         <div>
                             <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">DISCIPLINED AI · TRADING</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SMART TRADING · STEADY WEALTH</div>
                         </div>
                     </div>
 
