@@ -2052,8 +2052,8 @@ class TestSubscriptionCheckout:
         )
         assert r.status_code == 400
 
-    def test_checkout_happy_path_monthly(self, admin_session):
-        r = admin_session.post(
+    def test_checkout_happy_path_monthly(self, fresh_user_session):
+        r = fresh_user_session.post(
             f"{API}/subscription/checkout",
             json={"plan_id": "monthly", "origin": ORIGIN},
             timeout=30,
@@ -2066,6 +2066,15 @@ class TestSubscriptionCheckout:
         assert body["plan"]["id"] == "monthly"
         assert body["plan"]["amount_usd"] == 49.0
 
+    def test_admin_cannot_subscribe(self, admin_session):
+        r = admin_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly", "origin": ORIGIN},
+            timeout=15,
+        )
+        assert r.status_code == 400
+        assert "grandfather" in r.text.lower() or "admin" in r.text.lower()
+
 
 class TestSubscriptionPoll:
     def test_poll_nonexistent_session_returns_404(self, admin_session):
@@ -2076,16 +2085,16 @@ class TestSubscriptionPoll:
         assert r.status_code == 404
 
     def test_poll_foreign_session_returns_404(self, admin_session, fresh_user_session):
-        # admin creates a checkout session
-        r = admin_session.post(
+        # fresh_user creates a checkout session (admin can't subscribe)
+        r = fresh_user_session.post(
             f"{API}/subscription/checkout",
             json={"plan_id": "monthly", "origin": ORIGIN},
             timeout=30,
         )
         assert r.status_code == 200
         sid = r.json()["session_id"]
-        # fresh_user tries to poll admin's session
-        r2 = fresh_user_session.get(f"{API}/subscription/poll/{sid}", timeout=15)
+        # admin tries to poll fresh_user's session
+        r2 = admin_session.get(f"{API}/subscription/poll/{sid}", timeout=15)
         assert r2.status_code == 404
 
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
-import { Zap as Lightning } from "lucide-react";
+import { StoicMark } from "@/components/StoicLogo";
 
 export default function Register() {
     const navigate = useNavigate();
@@ -29,15 +29,16 @@ export default function Register() {
     return (
         <div className="min-h-screen flex items-center justify-center bg-[#050505] p-6">
             <div className="w-full max-w-sm">
-                <div className="flex items-center gap-2 mb-10">
-                    <div className="w-7 h-7 bg-[#00FF41] flex items-center justify-center">
-                        <Lightning className="w-4 h-4 text-black" />
+                <div className="flex items-center gap-2.5 mb-10">
+                    <StoicMark size={28} />
+                    <div>
+                        <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">DISCIPLINED AI · TRADING</div>
                     </div>
-                    <div className="font-display font-bold tracking-tight">EMERGENT</div>
                 </div>
 
                 <div className="font-mono text-[11px] text-[#00FF41] tracking-widest mb-3">// CREATE ACCOUNT</div>
-                <h2 className="font-display font-bold text-3xl tracking-tight mb-2">New terminal</h2>
+                <h2 className="font-display font-bold text-3xl tracking-tight mb-2">Join the discipline</h2>
                 <p className="text-sm text-[#A1A1AA] mb-8">Spin up your AI trading workspace.</p>
 
                 <form onSubmit={handleSubmit} className="space-y-4" data-testid="register-form">

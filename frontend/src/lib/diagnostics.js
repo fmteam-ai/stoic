@@ -66,7 +66,7 @@ export async function captureViewport() {
             cacheBust: true,
             pixelRatio: 1,
             backgroundColor: "#050505",
-            // skip cross-origin images we can't read
+            skipFonts: true,  // avoid SecurityError on cross-origin Google Fonts
             filter: (n) => !(n.tagName === "IFRAME"),
         });
         return dataUrl;

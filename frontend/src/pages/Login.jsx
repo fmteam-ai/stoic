@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
-import { Zap as Lightning, Mail as EnvelopeSimple, Lock as LockKey } from "lucide-react";
+import { Mail as EnvelopeSimple, Lock as LockKey } from "lucide-react";
+import { StoicMark } from "@/components/StoicLogo";
 
 export default function Login() {
     const navigate = useNavigate();
@@ -30,23 +31,21 @@ export default function Login() {
             <div className="hidden lg:flex lg:w-1/2 relative border-r border-[#1F1F1F] grid-bg">
                 <div className="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-[#050505]" />
                 <div className="relative z-10 flex flex-col justify-between p-12 w-full">
-                    <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 bg-[#00FF41] flex items-center justify-center">
-                            <Lightning className="w-5 h-5 text-black" />
-                        </div>
+                    <div className="flex items-center gap-2.5">
+                        <StoicMark size={32} />
                         <div>
-                            <div className="font-display font-bold tracking-tight">EMERGENT</div>
-                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">AI TRADING TERMINAL</div>
+                            <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">DISCIPLINED AI · TRADING</div>
                         </div>
                     </div>
 
                     <div className="space-y-6 max-w-md">
                         <div className="font-mono text-[11px] text-[#00FF41] tracking-widest">// SYSTEM READY</div>
                         <h1 className="font-display font-bold text-5xl tracking-tighter leading-[1.05]">
-                            Trade gold & crypto<br/>with an <span className="text-[#00FF41]">AI co-pilot</span>.
+                            Trade gold &amp; crypto<br/>like a <span className="text-[#00FF41]">Stoic</span>.
                         </h1>
                         <p className="text-[#A1A1AA] text-sm leading-relaxed max-w-sm">
-                            Claude-powered market analysis, four risk profiles, live MT5 execution. Built for traders who don&apos;t sleep on opportunity.
+                            Multi-engine AI consensus. Four risk profiles. Veto-first execution. Built for traders who refuse to panic.
                         </p>
                     </div>
 
@@ -68,11 +67,9 @@ export default function Login() {
             {/* Right panel - login form */}
             <div className="flex-1 flex items-center justify-center p-6">
                 <div className="w-full max-w-sm">
-                    <div className="lg:hidden flex items-center gap-2 mb-10">
-                        <div className="w-7 h-7 bg-[#00FF41] flex items-center justify-center">
-                            <Lightning className="w-4 h-4 text-black" />
-                        </div>
-                        <div className="font-display font-bold tracking-tight">EMERGENT</div>
+                    <div className="lg:hidden flex items-center gap-2.5 mb-10">
+                        <StoicMark size={28} />
+                        <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
                     </div>
 
                     <div className="font-mono text-[11px] text-[#00FF41] tracking-widest mb-3">// AUTHENTICATE</div>

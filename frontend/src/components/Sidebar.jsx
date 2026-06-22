@@ -1,8 +1,9 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { StoicMark } from "@/components/StoicLogo";
 import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
-    DollarSign as CurrencyCircleDollar, LogOut as SignOut, Zap as Lightning,
+    DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles
 } from "lucide-react";
 
@@ -25,13 +26,11 @@ export function Sidebar({ onNavigate }) {
     return (
         <aside className="w-full md:w-60 md:h-screen bg-[#0A0A0A] border-r border-[#1F1F1F] flex md:flex-col flex-row md:fixed md:left-0 md:top-0 z-30">
             <div className="p-5 border-b border-[#1F1F1F] hidden md:block">
-                <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 bg-[#00FF41] flex items-center justify-center">
-                        <Lightning className="w-4 h-4 text-black" />
-                    </div>
+                <div className="flex items-center gap-2.5">
+                    <StoicMark size={28} />
                     <div>
-                        <div className="font-display font-bold text-sm tracking-tight">EMERGENT</div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">AI TRADING v1.0</div>
+                        <div className="font-display font-bold text-sm tracking-[0.18em]">STOIC</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">DISCIPLINED AI · v1.0</div>
                     </div>
                 </div>
             </div>

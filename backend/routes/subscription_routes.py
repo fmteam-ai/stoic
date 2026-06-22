@@ -49,6 +49,12 @@ async def status(user=Depends(get_current_user)):
 
 @sub_router.post("/checkout")
 async def create_checkout(payload: dict, request: Request, user=Depends(get_current_user)):
+    # Admin grandfather is permanent — block them from accidentally subscribing.
+    if user.get("role") == "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Admin accounts have grandfathered access and cannot subscribe.",
+        )
     plan_id = payload.get("plan_id")
     origin = payload.get("origin")
     if not origin or not origin.startswith(("http://", "https://")):
@@ -79,8 +85,11 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
     try:
         session = await stripe.create_checkout_session(req)
     except Exception as e:
-        logger.exception("Stripe checkout create failed")
-        raise HTTPException(status_code=502, detail=f"Stripe error: {e}")
+        logger.exception("Stripe checkout create failed for user=%s", user["id"])
+        raise HTTPException(
+            status_code=502,
+            detail="Could not start Stripe checkout. Please try again shortly.",
+        ) from e
 
     await record_transaction(
         user_id=user["id"],
@@ -116,8 +125,11 @@ async def poll_session(session_id: str, request: Request, user=Depends(get_curre
     try:
         status = await stripe.get_checkout_status(session_id)
     except Exception as e:
-        logger.exception("Stripe poll failed")
-        raise HTTPException(status_code=502, detail=f"Stripe error: {e}")
+        logger.exception("Stripe poll failed for session=%s", session_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not verify payment with Stripe right now.",
+        ) from e
 
     if status.payment_status == "paid":
         sub = await apply_successful_payment(session_id)
@@ -142,7 +154,7 @@ async def stripe_webhook(request: Request):
         event = await stripe.handle_webhook(body, sig)
     except Exception as e:
         logger.exception("Stripe webhook handle failed")
-        raise HTTPException(status_code=400, detail=f"webhook error: {e}")
+        raise HTTPException(status_code=400, detail="webhook signature invalid") from e
     # Only act on terminal payment events
     if event.payment_status == "paid" and event.session_id:
         await apply_successful_payment(event.session_id)

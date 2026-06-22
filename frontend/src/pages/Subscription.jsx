@@ -133,17 +133,17 @@ export default function Subscription() {
                                     </div>
                                     <div className="flex items-baseline gap-1 mb-1">
                                         <span className="font-display font-bold text-4xl tracking-tight">
-                                            ${p.effective_monthly_usd}
+                                            ${p.effective_monthly_usd.toFixed(2)}
                                         </span>
                                         <span className="text-xs text-[#A1A1AA] font-mono">/mo</span>
                                     </div>
                                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-4">
-                                        ${p.amount_usd} billed every {p.duration_months}
+                                        ${p.amount_usd.toFixed(2)} billed every {p.duration_months}
                                         {p.duration_months === 1 ? " month" : " months"}
                                     </div>
                                     {p.savings_usd > 0 && (
                                         <div className="font-mono text-[10px] text-[#00FF41] tracking-widest mb-4">
-                                            SAVE ${p.savings_usd}
+                                            SAVE ${p.savings_usd.toFixed(2)}
                                         </div>
                                     )}
                                     <p className="text-xs text-[#A1A1AA] leading-relaxed mb-4 flex-1">

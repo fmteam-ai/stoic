@@ -75,6 +75,22 @@
 - **P3** — Native Android shell via Capacitor / React Native (PWA already works).
 - **P3** — True Mamba SSM inference (requires GPU host) — replace current numpy O(N) compressor.
 
+## CHANGELOG · Feb 22, 2026 — Stripe Subscriptions + Bug Reports
+- **New: Screenshot Bug Reports via Co-Pilot** — `BUG_INTENT` regex in `CoPilotWidget.jsx` detects bug-report intent (e.g. "file me a screenshot bug report"). Captures viewport via `html-to-image` (`skipFonts: true`) + global console log buffer (50-event ring installed in `index.js`) + URL + UA. Shows a draft form (`bug-draft`) with screenshot preview, description textarea, cancel/submit. POST to `/api/bugs`. Admin-only `GET /api/bugs`, `GET /api/bugs/{id}`, `PATCH /api/bugs/{id}/status`.
+- **New: Stripe Subscriptions (prepaid model)** — 4 plans:
+  - Monthly: $49 / 1 month (no discount)
+  - Quarterly: $132.30 / 3 months (10% off, ~$44.10/mo)
+  - Semi-annual: $235.20 / 6 months (20% off, ~$39.20/mo)
+  - Annual: $352.80 / 12 months (40% off, ~$29.40/mo)
+- Implemented as prepaid plans rather than true Stripe recurring (emergentintegrations StripeCheckout wrapper is one-time payment). Each successful payment extends `valid_until` by `duration_months * 30 days`. Idempotent via `applied` flag on `payment_transactions`. No surprise auto-renew — users explicitly renew.
+- **Admin grandfathered**: admin role gets `valid_until` set ~10 years out at first request; `/api/subscription/checkout` returns 400 for admin to prevent foot-gun.
+- **30-day grace period** for pre-existing non-admin users (`LEGACY_GRACE_DAYS=30` in `subscription_service.py`).
+- **Bot runner entitlement gate**: when `subscription_active()` returns inactive, `_process_user` filters accounts to paper-mode only; if no paper accounts, returns early.
+- **Endpoints**: `GET /api/subscription/plans|status`, `POST /api/subscription/checkout`, `GET /api/subscription/poll/{sid}`, `POST /api/webhook/stripe`.
+- **Frontend**: `/subscription` page (4-card pricing grid with savings badges, admin grandfather banner, prices formatted as 2dp), `/subscription/success` (polls /poll every 2s up to 10×), top-bar `SubscriptionBanner` nag (hidden for admin / grace > 7d / active > 7d), `nav-subscription` sidebar link.
+- **Hardened**: Stripe errors now return sanitised 502s ("Could not start Stripe checkout. Please try again shortly.") with full server-side exception logs.
+- **Tests**: 144/144 backend pytest (26 new across TestBugReports, TestSubscription* — including TestAdminCannotSubscribe regression). 100% frontend on /subscription render + Co-Pilot bug-report end-to-end.
+
 ## CHANGELOG · Feb 22, 2026 — AI Co-Pilot (Live Help Agent)
 - **New: In-app AI Co-Pilot** (`copilot.py` + `routes/copilot_routes.py` + `CoPilotWidget.jsx`) — floating chat widget on every authenticated page. Grounded in the user's live state: bot config, accounts, last 5 signals, open + recent trades, panic state, active triggers. Each request fresh-snapshots MongoDB and stuffs the JSON into Claude's system prompt.
 - **Multi-turn sessions** persisted in `db.copilot_sessions` keyed by (user_id, session_id). Frontend caches session_id in localStorage so conversation resumes across page reloads.
