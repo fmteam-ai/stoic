@@ -56,7 +56,27 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
 
             <ConfBar value={s.confidence || 0} threshold={s.min_confidence_required || 65} />
 
-            {s.veto_applied && (
+            {s.veto_applied && s.reasoning?.includes("VETO (macro)") && (
+                <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 px-3 py-2 flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-[#FF3B30] shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                        <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-0.5">MACRO FREEZE VETO</div>
+                        <div className="text-[#A1A1AA]">{s.macro?.reason || "High-impact economic event window — bot is frozen."}</div>
+                    </div>
+                </div>
+            )}
+
+            {s.veto_applied && s.reasoning?.includes("VETO (regime)") && !s.reasoning?.includes("VETO (macro)") && (
+                <div className="bg-[#FFB000]/10 border border-[#FFB000]/30 px-3 py-2 flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-[#FFB000] shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                        <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-0.5">REGIME VETO · CHOP</div>
+                        <div className="text-[#A1A1AA]">Market is choppy — bot prefers to wait for clean direction.</div>
+                    </div>
+                </div>
+            )}
+
+            {s.veto_applied && s.reasoning?.includes("VETO (news)") && !s.reasoning?.includes("VETO (macro)") && !s.reasoning?.includes("VETO (regime)") && (
                 <div className="bg-[#FFB000]/10 border border-[#FFB000]/30 px-3 py-2 flex items-start gap-2">
                     <ShieldCheck className="w-4 h-4 text-[#FFB000] shrink-0 mt-0.5" />
                     <div className="text-xs">

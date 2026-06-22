@@ -972,3 +972,376 @@ class TestSignalPayloadNewFieldsLive:
         assert sig["lot_size"] >= 0.01
         # Reasoning non-empty
         assert isinstance(sig.get("reasoning"), str) and len(sig["reasoning"]) > 0
+
+
+
+# ========================================================================
+# ITER-5: Economic Calendar + Macro Veto
+# ========================================================================
+
+# ---------- Calendar API endpoints ----------
+class TestCalendarEndpoints:
+    """Forex Factory-based /api/calendar routes (auth-required)."""
+
+    def test_calendar_requires_auth(self):
+        r = requests.get(f"{API}/calendar", timeout=15)
+        assert r.status_code in (401, 403), f"expected auth error, got {r.status_code}"
+
+    def test_calendar_upcoming_requires_auth(self):
+        r = requests.get(f"{API}/calendar/upcoming/XAUUSD", timeout=15)
+        assert r.status_code in (401, 403)
+
+    def test_calendar_freeze_requires_auth(self):
+        r = requests.get(f"{API}/calendar/freeze/XAUUSD", timeout=15)
+        assert r.status_code in (401, 403)
+
+    def test_calendar_all_events_returns_list(self, admin_session):
+        r = admin_session.get(f"{API}/calendar", timeout=30)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "events" in body
+        assert isinstance(body["events"], list)
+        # If list is non-empty, validate per-event shape
+        if body["events"]:
+            ev = body["events"][0]
+            for k in ("title", "country", "impact", "when", "when_ts",
+                      "forecast", "previous"):
+                assert k in ev, f"event missing field {k}"
+            assert isinstance(ev["when_ts"], (int, float))
+            assert isinstance(ev["title"], str)
+
+    def test_calendar_upcoming_xauusd(self, admin_session):
+        r = admin_session.get(f"{API}/calendar/upcoming/XAUUSD?hours=48", timeout=30)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["symbol"] == "XAUUSD"
+        assert body["hours"] == 48
+        assert isinstance(body["events"], list)
+        # All returned events should be high/medium impact only
+        for ev in body["events"]:
+            assert ev["impact"] in ("high", "medium"), f"unexpected impact {ev['impact']}"
+
+    def test_calendar_upcoming_eurusd_only_eur_usd(self, admin_session):
+        r = admin_session.get(f"{API}/calendar/upcoming/EURUSD?hours=168", timeout=30)
+        assert r.status_code == 200
+        for ev in r.json()["events"]:
+            assert ev["country"] in ("EUR", "USD"), \
+                f"EURUSD got irrelevant country {ev['country']}"
+
+    def test_calendar_freeze_shape(self, admin_session):
+        r = admin_session.get(f"{API}/calendar/freeze/XAUUSD", timeout=30)
+        assert r.status_code == 200
+        body = r.json()
+        for k in ("frozen", "reason", "event"):
+            assert k in body, f"freeze response missing {k}"
+        assert isinstance(body["frozen"], bool)
+
+
+# ---------- Pure-function tests on economic_calendar.py ----------
+class TestRelevantEventsFor:
+    """relevant_events_for() filters by SYMBOL_CURRENCIES."""
+
+    def _evts(self):
+        return [
+            {"title": "FOMC", "country": "USD", "impact": "high",
+             "when": "x", "when_ts": 0, "forecast": "", "previous": ""},
+            {"title": "ECB", "country": "EUR", "impact": "high",
+             "when": "x", "when_ts": 0, "forecast": "", "previous": ""},
+            {"title": "BoJ", "country": "JPY", "impact": "high",
+             "when": "x", "when_ts": 0, "forecast": "", "previous": ""},
+            {"title": "BoE", "country": "GBP", "impact": "medium",
+             "when": "x", "when_ts": 0, "forecast": "", "previous": ""},
+        ]
+
+    def test_xauusd_all_currency_returns_everything(self):
+        from economic_calendar import relevant_events_for
+        out = relevant_events_for("XAUUSD", self._evts())
+        # XAUUSD has {'USD','ALL'} -> ALL means everything
+        assert len(out) == 4
+
+    def test_btcusd_all_returns_everything(self):
+        from economic_calendar import relevant_events_for
+        out = relevant_events_for("BTCUSD", self._evts())
+        assert len(out) == 4
+
+    def test_eurusd_only_eur_usd(self):
+        from economic_calendar import relevant_events_for
+        out = relevant_events_for("EURUSD", self._evts())
+        countries = sorted(e["country"] for e in out)
+        assert countries == ["EUR", "USD"]
+
+    def test_usdjpy_only_usd_jpy(self):
+        from economic_calendar import relevant_events_for
+        out = relevant_events_for("USDJPY", self._evts())
+        countries = sorted(e["country"] for e in out)
+        assert countries == ["JPY", "USD"]
+
+    def test_unknown_symbol_defaults_to_usd(self):
+        from economic_calendar import relevant_events_for
+        out = relevant_events_for("ZZZUSD", self._evts())
+        assert len(out) == 1 and out[0]["country"] == "USD"
+
+
+class TestMacroFreezeCheck:
+    """macro_freeze_check freeze-window logic (synthetic events, no network)."""
+
+    def _patch_events(self, events):
+        from unittest.mock import patch, AsyncMock
+        import economic_calendar
+        return patch.object(economic_calendar, "get_events",
+                            new=AsyncMock(return_value=events))
+
+    def test_freeze_true_within_before_window(self):
+        import asyncio, time as _t
+        from economic_calendar import macro_freeze_check
+        # Event 5 min from now, BEFORE window default = 15 min -> should freeze
+        now = _t.time()
+        evt = {"title": "FOMC Rate Decision", "country": "USD", "impact": "high",
+               "when": "x", "when_ts": now + 5 * 60, "forecast": "", "previous": ""}
+        with self._patch_events([evt]):
+            res = asyncio.run(macro_freeze_check("XAUUSD"))
+        assert res["frozen"] is True
+        assert "USD" in res["reason"]
+        assert res["event"] is not None
+        assert "when_human" in res["event"]
+
+    def test_freeze_true_within_after_window(self):
+        import asyncio, time as _t
+        from economic_calendar import macro_freeze_check
+        # Event 5 min ago, AFTER window default = 10 min -> should freeze
+        now = _t.time()
+        evt = {"title": "NFP", "country": "USD", "impact": "high",
+               "when": "x", "when_ts": now - 5 * 60, "forecast": "", "previous": ""}
+        with self._patch_events([evt]):
+            res = asyncio.run(macro_freeze_check("XAUUSD"))
+        assert res["frozen"] is True
+        assert "settle" in res["reason"].lower() or "ago" in res["reason"].lower()
+
+    def test_no_freeze_far_future(self):
+        import asyncio, time as _t
+        from economic_calendar import macro_freeze_check
+        now = _t.time()
+        evt = {"title": "CPI", "country": "USD", "impact": "high",
+               "when": "x", "when_ts": now + 6 * 3600, "forecast": "", "previous": ""}
+        with self._patch_events([evt]):
+            res = asyncio.run(macro_freeze_check("XAUUSD"))
+        assert res["frozen"] is False
+        assert res["event"] is None
+
+    def test_no_freeze_far_past(self):
+        import asyncio, time as _t
+        from economic_calendar import macro_freeze_check
+        now = _t.time()
+        evt = {"title": "CPI", "country": "USD", "impact": "high",
+               "when": "x", "when_ts": now - 3600, "forecast": "", "previous": ""}
+        with self._patch_events([evt]):
+            res = asyncio.run(macro_freeze_check("XAUUSD"))
+        assert res["frozen"] is False
+
+    def test_medium_impact_does_not_freeze(self):
+        import asyncio, time as _t
+        from economic_calendar import macro_freeze_check
+        now = _t.time()
+        evt = {"title": "Retail Sales", "country": "USD", "impact": "medium",
+               "when": "x", "when_ts": now + 60, "forecast": "", "previous": ""}
+        with self._patch_events([evt]):
+            res = asyncio.run(macro_freeze_check("XAUUSD"))
+        # Spec: macro_freeze_check ONLY uses high-impact events
+        assert res["frozen"] is False
+
+    def test_event_for_different_currency_does_not_freeze_eurusd(self):
+        import asyncio, time as _t
+        from economic_calendar import macro_freeze_check
+        now = _t.time()
+        evt = {"title": "BoJ", "country": "JPY", "impact": "high",
+               "when": "x", "when_ts": now + 60, "forecast": "", "previous": ""}
+        with self._patch_events([evt]):
+            res = asyncio.run(macro_freeze_check("EURUSD"))
+        # JPY event must not freeze EURUSD
+        assert res["frozen"] is False
+
+    def test_jpy_event_freezes_xauusd_due_to_all_flag(self):
+        import asyncio, time as _t
+        from economic_calendar import macro_freeze_check
+        now = _t.time()
+        evt = {"title": "BoJ", "country": "JPY", "impact": "high",
+               "when": "x", "when_ts": now + 60, "forecast": "", "previous": ""}
+        with self._patch_events([evt]):
+            res = asyncio.run(macro_freeze_check("XAUUSD"))
+        assert res["frozen"] is True
+
+
+# ---------- Macro veto integration in analyze_symbol ----------
+class TestMacroVetoIntegration:
+    """analyze_symbol() must force HOLD when macro_freeze_check returns frozen=True."""
+
+    def test_macro_veto_forces_hold(self):
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+        import ai_signals
+
+        os.environ.setdefault("EMERGENT_LLM_KEY", "test-dummy")
+
+        class FakeChat:
+            def with_model(self, *a, **k):
+                return self
+            async def send_message(self, msg):
+                return '{"action":"BUY","confidence":85,"reasoning":"chart bullish","key_factors":["a"]}'
+
+        # Neutral indicators -> no regime veto
+        neutral_indicators = {
+            "current_price": 2000.0,
+            "sma_20": 2000.0, "sma_50": 2000.0, "sma_200": 2000.0,
+            "rsi_14": 55, "volatility_30d_pct": 1.0,
+        }
+
+        frozen_event = {
+            "title": "FOMC Rate Decision", "country": "USD", "impact": "high",
+            "when": "2026-01-01T00:00:00+00:00", "when_ts": 1.0,
+            "forecast": "", "previous": "", "when_human": "2026-01-01 00:00 UTC",
+        }
+        frozen_macro = {"frozen": True,
+                        "reason": "HIGH-impact USD event 'FOMC' in 5min — bot frozen.",
+                        "event": frozen_event}
+
+        async def run():
+            with patch.object(ai_signals, "LlmChat", return_value=FakeChat()), \
+                 patch.object(ai_signals, "get_quote", new=AsyncMock(return_value={"price": 2000.0, "bid": 1999.9, "ask": 2000.1, "change_pct": 0.0})), \
+                 patch.object(ai_signals, "get_history", new=AsyncMock(return_value=[])), \
+                 patch.object(ai_signals, "compute_indicators", return_value=neutral_indicators), \
+                 patch.object(ai_signals, "score_sentiment", new=AsyncMock(return_value={"score": 0.0, "label": "neutral", "summary": "", "article_count": 0, "key_drivers": []})), \
+                 patch.object(ai_signals, "macro_freeze_check", new=AsyncMock(return_value=frozen_macro)), \
+                 patch.object(ai_signals, "upcoming_for", new=AsyncMock(return_value=[frozen_event])):
+                return await ai_signals.analyze_symbol("XAUUSD", "medium")
+
+        sig = asyncio.run(run())
+        assert sig["chart_action"] == "BUY"
+        assert sig["action"] == "HOLD"
+        assert sig["veto_applied"] is True
+        assert "VETO (macro)" in (sig["reasoning"] or "")
+        assert sig["macro"]["frozen"] is True
+        assert isinstance(sig["upcoming_macro"], list)
+        assert len(sig["upcoming_macro"]) >= 1
+
+    def test_no_macro_veto_when_not_frozen(self):
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+        import ai_signals
+
+        os.environ.setdefault("EMERGENT_LLM_KEY", "test-dummy")
+
+        class FakeChat:
+            def with_model(self, *a, **k):
+                return self
+            async def send_message(self, msg):
+                return '{"action":"BUY","confidence":80,"reasoning":"bullish trend","key_factors":["a"]}'
+
+        # Trending up indicators -> LOW_VOL_TREND or HIGH_VOL_TREND (not CHOP)
+        trending_indicators = {
+            "current_price": 2050.0,
+            "sma_20": 2040.0, "sma_50": 2020.0, "sma_200": 1900.0,
+            "rsi_14": 60, "volatility_30d_pct": 1.0,
+        }
+
+        async def run():
+            with patch.object(ai_signals, "LlmChat", return_value=FakeChat()), \
+                 patch.object(ai_signals, "get_quote", new=AsyncMock(return_value={"price": 2050.0, "bid": 2049.9, "ask": 2050.1, "change_pct": 0.5})), \
+                 patch.object(ai_signals, "get_history", new=AsyncMock(return_value=[])), \
+                 patch.object(ai_signals, "compute_indicators", return_value=trending_indicators), \
+                 patch.object(ai_signals, "score_sentiment", new=AsyncMock(return_value={"score": 0.0, "label": "neutral", "summary": "", "article_count": 0, "key_drivers": []})), \
+                 patch.object(ai_signals, "macro_freeze_check", new=AsyncMock(return_value={"frozen": False, "reason": "", "event": None})), \
+                 patch.object(ai_signals, "upcoming_for", new=AsyncMock(return_value=[])):
+                return await ai_signals.analyze_symbol("XAUUSD", "medium")
+
+        sig = asyncio.run(run())
+        assert sig["chart_action"] == "BUY"
+        # No vetoes applied: action should still be BUY
+        assert sig["action"] == "BUY"
+        assert sig["veto_applied"] is False
+        assert "VETO (macro)" not in (sig["reasoning"] or "")
+        assert sig["macro"]["frozen"] is False
+
+
+# ---------- Veto stacking: sentiment + regime + macro ----------
+class TestVetoStacking:
+    def test_all_three_vetoes_stack(self):
+        """When sentiment, regime CHOP, AND macro all veto, reasoning must
+        contain all three markers and veto_applied=True."""
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+        import ai_signals
+
+        os.environ.setdefault("EMERGENT_LLM_KEY", "test-dummy")
+
+        class FakeChat:
+            def with_model(self, *a, **k):
+                return self
+            async def send_message(self, msg):
+                # BUY action -> conflicts with strongly bearish sentiment (news veto)
+                return '{"action":"BUY","confidence":75,"reasoning":"trend up","key_factors":["a"]}'
+
+        # Indicators that force CHOP
+        chop_indicators = {
+            "current_price": 100.0,
+            "sma_20": 100.0, "sma_50": 100.05, "sma_200": 99.95,
+            "rsi_14": 75, "volatility_30d_pct": 5.0,
+        }
+
+        # Strongly negative sentiment -> news veto fires on BUY
+        bearish_sentiment = {"score": -0.8, "label": "bearish", "summary": "",
+                             "article_count": 5, "key_drivers": []}
+
+        frozen_event = {"title": "FOMC", "country": "USD", "impact": "high",
+                        "when": "x", "when_ts": 1.0, "forecast": "",
+                        "previous": "", "when_human": "x"}
+        frozen_macro = {"frozen": True, "reason": "HIGH-impact USD event imminent.",
+                        "event": frozen_event}
+
+        async def run():
+            with patch.object(ai_signals, "LlmChat", return_value=FakeChat()), \
+                 patch.object(ai_signals, "get_quote", new=AsyncMock(return_value={"price": 100.0, "bid": 99.9, "ask": 100.1, "change_pct": 0.0})), \
+                 patch.object(ai_signals, "get_history", new=AsyncMock(return_value=[])), \
+                 patch.object(ai_signals, "compute_indicators", return_value=chop_indicators), \
+                 patch.object(ai_signals, "score_sentiment", new=AsyncMock(return_value=bearish_sentiment)), \
+                 patch.object(ai_signals, "macro_freeze_check", new=AsyncMock(return_value=frozen_macro)), \
+                 patch.object(ai_signals, "upcoming_for", new=AsyncMock(return_value=[])):
+                return await ai_signals.analyze_symbol("BTCUSD", "medium")
+
+        sig = asyncio.run(run())
+        assert sig["chart_action"] == "BUY"
+        assert sig["action"] == "HOLD"
+        assert sig["veto_applied"] is True
+        reasoning = sig["reasoning"] or ""
+        assert "VETO (news)" in reasoning, f"missing news veto marker: {reasoning}"
+        assert "VETO (regime)" in reasoning, f"missing regime veto marker: {reasoning}"
+        assert "VETO (macro)" in reasoning, f"missing macro veto marker: {reasoning}"
+
+
+# ---------- Live signal smoke test for new iter-5 fields ----------
+class TestSignalPayloadIter5Live:
+    @pytest.fixture(scope="class")
+    def sig_user(self):
+        s = requests.Session()
+        email = f"TEST_iter5_{uuid.uuid4().hex[:6]}@example.com"
+        r = s.post(f"{API}/auth/register",
+                   json={"email": email, "password": "testpass123"}, timeout=15)
+        assert r.status_code == 200
+        return s
+
+    def test_signal_has_macro_and_upcoming_macro_fields(self, sig_user):
+        r = sig_user.post(f"{API}/signals/generate",
+                          json={"symbol": "BTCUSD"}, timeout=180)
+        assert r.status_code == 200, r.text
+        sig = r.json()
+        assert "macro" in sig, "signal missing 'macro' field"
+        assert "upcoming_macro" in sig, "signal missing 'upcoming_macro' field"
+
+        macro = sig["macro"]
+        assert isinstance(macro, dict)
+        for k in ("frozen", "reason", "event"):
+            assert k in macro, f"macro missing {k}"
+        assert isinstance(macro["frozen"], bool)
+
+        assert isinstance(sig["upcoming_macro"], list)
+        # capped at 5 in analyze_symbol
+        assert len(sig["upcoming_macro"]) <= 5

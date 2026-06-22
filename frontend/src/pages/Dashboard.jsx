@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert } from "lucide-react";
+import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -52,6 +52,7 @@ export default function Dashboard() {
     const [history, setHistory] = useState([]);
     const [indicators, setIndicators] = useState({});
     const [sentiment, setSentiment] = useState({});
+    const [macro, setMacro] = useState({ events: [], freeze: null });
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -86,6 +87,16 @@ export default function Dashboard() {
         } catch { /* ignore */ }
     }, []);
 
+    const loadMacro = useCallback(async (sym) => {
+        try {
+            const [upcoming, freeze] = await Promise.all([
+                api.get(`/calendar/upcoming/${sym}?hours=48`),
+                api.get(`/calendar/freeze/${sym}`),
+            ]);
+            setMacro({ events: upcoming.data.events || [], freeze: freeze.data });
+        } catch { /* ignore */ }
+    }, []);
+
     const loadStats = useCallback(async () => {
         try { const { data } = await api.get("/trades/stats"); setStats(data); } catch { /* ignore */ }
     }, []); // deps: stable imports + setters only
@@ -96,7 +107,7 @@ export default function Dashboard() {
         return () => clearInterval(id);
     }, [loadQuotes, loadStats]);
 
-    useEffect(() => { loadHistory(selected); loadSentiment(selected); }, [selected, loadHistory, loadSentiment]);
+    useEffect(() => { loadHistory(selected); loadSentiment(selected); loadMacro(selected); }, [selected, loadHistory, loadSentiment, loadMacro]);
 
     // Live stream reactions
     useEffect(() => {
@@ -198,6 +209,53 @@ export default function Dashboard() {
                         )}
                     </div>
                 </div>
+
+                {/* Macro freeze banner */}
+                {macro.freeze?.frozen && (
+                    <div className="border border-[#FF3B30]/40 bg-[#FF3B30]/10 p-4 flex items-start gap-3" data-testid="macro-freeze-banner">
+                        <ShieldAlert className="w-5 h-5 text-[#FF3B30] shrink-0 mt-0.5" />
+                        <div>
+                            <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-1">MACRO FREEZE · BOT WILL NOT TRADE</div>
+                            <div className="text-sm">{macro.freeze.reason}</div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Upcoming macro events */}
+                {macro.events?.length > 0 && (
+                    <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="macro-events-panel">
+                        <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                            <CalendarClock className="w-4 h-4 text-[#FFB000]" />
+                            <span className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                                UPCOMING ECONOMIC EVENTS · {selected} · NEXT 48H · {macro.events.length} TOTAL
+                            </span>
+                        </div>
+                        <div className="divide-y divide-[#1F1F1F]">
+                            {macro.events.slice(0, 6).map((e, i) => {
+                                const impact = e.impact?.toLowerCase();
+                                const impactClass = impact === "high"
+                                    ? "text-[#FF3B30] border-[#FF3B30]/40"
+                                    : impact === "medium"
+                                        ? "text-[#FFB000] border-[#FFB000]/40"
+                                        : "text-[#A1A1AA] border-[#1F1F1F]";
+                                const when = new Date(e.when);
+                                const hoursAway = Math.max(0, Math.round((when.getTime() - Date.now()) / 3600000));
+                                return (
+                                    <div key={i} className="px-5 py-2.5 flex items-center gap-3 hover:bg-[#121212] transition-colors">
+                                        <span className={`font-mono text-[10px] tracking-widest px-1.5 py-0.5 border ${impactClass}`}>
+                                            {impact?.toUpperCase()}
+                                        </span>
+                                        <span className="font-mono text-xs text-[#A1A1AA] w-12">{e.country}</span>
+                                        <span className="font-mono text-xs flex-1 truncate">{e.title}</span>
+                                        <span className="font-mono text-[10px] text-[#52525B] tracking-widest whitespace-nowrap">
+                                            {hoursAway < 1 ? "<1h" : `${hoursAway}h`}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
 
                 {/* News Sentiment for selected symbol */}
                 {sentiment[selected] && (
