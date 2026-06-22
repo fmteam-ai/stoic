@@ -152,6 +152,11 @@ async def stripe_webhook(request: Request):
     sig = request.headers.get("Stripe-Signature", "")
     try:
         event = await stripe.handle_webhook(body, sig)
+    except (KeyError, ValueError) as e:
+        # Malformed body / bad signature — expected on synthetic test calls.
+        # Log at WARNING (no stack-trace) instead of polluting err.log.
+        logger.warning("Stripe webhook rejected (malformed/invalid sig): %s", e)
+        raise HTTPException(status_code=400, detail="webhook signature invalid") from e
     except Exception as e:
         logger.exception("Stripe webhook handle failed")
         raise HTTPException(status_code=400, detail="webhook signature invalid") from e
