@@ -30,6 +30,8 @@ from routes.calendar_routes import router as calendar_router
 from routes.panic_routes import router as panic_router
 from routes.nl_routes import router as nl_router
 from routes.copilot_routes import router as copilot_router
+from routes.bugs_routes import router as bugs_router
+from routes.subscription_routes import router as subscription_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -77,6 +79,8 @@ api_router.include_router(calendar_router)
 api_router.include_router(panic_router)
 api_router.include_router(nl_router)
 api_router.include_router(copilot_router)
+api_router.include_router(bugs_router)
+api_router.include_router(subscription_router)
 
 
 # ---------- WebSocket ----------

@@ -22,6 +22,7 @@ from rate_limiter import check_and_record as rl_check
 from execution import for_account as engine_for_account
 from execution import settle_paper_trades_against_price
 from trigger_sweeper import sweep_once as sweep_triggers
+from subscription_service import is_active as subscription_active
 
 logger = logging.getLogger("bot-runner")
 
@@ -74,6 +75,9 @@ async def _process_user(db, cfg: dict):
     if not symbols:
         return
 
+    # 0. Subscription gate — paper accounts always allowed; live execution requires active sub
+    entitlement = await subscription_active(user_id)
+
     all_accounts = await db.accounts.find({"user_id": user_id}).to_list(length=50)
 
     # 1. Circuit breaker check first — never analyse if tripped
@@ -82,6 +86,13 @@ async def _process_user(db, cfg: dict):
         await ws_manager.broadcast(user_id, "circuit_breaker_tripped", cb)
         logger.warning("Circuit breaker tripped for user=%s: %s", user_id, cb["reason"])
         return
+
+    # Paper-mode-only fallback when subscription is inactive
+    if not entitlement["active"]:
+        all_accounts = [a for a in all_accounts if (a.get("mode") or "live") == "paper"]
+        if not all_accounts:
+            # No paper account either → skip silently. UI banner will prompt to subscribe.
+            return
 
     connected = [a for a in all_accounts
                  if (a.get("mode") or "live") == "paper"

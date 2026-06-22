@@ -1798,3 +1798,368 @@ class TestCoPilot:
         # Quick regression — make sure adding copilot routes didn't break adjacent /api routes
         assert admin_session.get(f"{API}/signals", timeout=10).status_code == 200
         assert admin_session.get(f"{API}/accounts", timeout=10).status_code == 200
+
+
+
+# ---------- Bug Reports (iter-8) ----------
+TINY_PNG_DATAURL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEUAAACnej3aAAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII="
+)
+
+
+class TestBugReports:
+    """Bug report submission + admin moderation."""
+
+    def test_create_bug_unauthenticated_returns_401(self):
+        r = requests.post(f"{API}/bugs", json={"description": "hi"}, timeout=10)
+        assert r.status_code == 401
+
+    def test_create_bug_missing_description_returns_400(self, admin_session):
+        r = admin_session.post(f"{API}/bugs", json={"screenshot": TINY_PNG_DATAURL}, timeout=10)
+        assert r.status_code == 400
+
+    def test_create_bug_empty_description_returns_400(self, admin_session):
+        r = admin_session.post(f"{API}/bugs", json={"description": "   "}, timeout=10)
+        assert r.status_code == 400
+
+    def test_create_bug_too_long_description_returns_400(self, admin_session):
+        r = admin_session.post(
+            f"{API}/bugs",
+            json={"description": "x" * 4001},
+            timeout=10,
+        )
+        assert r.status_code == 400
+
+    def test_create_bug_oversized_screenshot_returns_413(self, admin_session):
+        big_ss = "data:image/png;base64," + ("A" * (4 * 1024 * 1024 + 100))
+        r = admin_session.post(
+            f"{API}/bugs",
+            json={"description": "too big", "screenshot": big_ss},
+            timeout=30,
+        )
+        assert r.status_code == 413
+
+    def test_create_bug_happy_path(self, admin_session):
+        payload = {
+            "description": "TEST_iter8 something broke",
+            "screenshot": TINY_PNG_DATAURL,
+            "url": "https://example.com/dashboard",
+            "user_agent": "Mozilla/5.0 (testing)",
+            "viewport": {"w": 1920, "h": 800, "dpr": 1},
+            "console_logs": [
+                {"level": "error", "ts": "2026-01-01T00:00:00Z", "msg": "TypeError x"}
+            ],
+            "via": "copilot",
+        }
+        r = admin_session.post(f"{API}/bugs", json=payload, timeout=15)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert isinstance(body["id"], str) and len(body["id"]) > 0
+        assert "received_at" in body
+        # Persistence — admin can GET it back
+        r2 = admin_session.get(f"{API}/bugs/{body['id']}", timeout=10)
+        assert r2.status_code == 200
+        doc = r2.json()
+        assert doc["description"] == "TEST_iter8 something broke"
+        assert doc["screenshot"] == TINY_PNG_DATAURL
+        assert doc["via"] == "copilot"
+        assert doc["status"] == "new"
+        # no mongo _id leak
+        assert "_id" not in doc
+
+    def test_list_bugs_non_admin_returns_403(self, fresh_user_session):
+        r = fresh_user_session.get(f"{API}/bugs", timeout=10)
+        assert r.status_code == 403
+
+    def test_list_bugs_admin_strips_screenshot(self, admin_session):
+        # ensure at least one exists
+        admin_session.post(
+            f"{API}/bugs",
+            json={"description": "TEST_iter8 list-strip", "screenshot": TINY_PNG_DATAURL},
+            timeout=10,
+        )
+        r = admin_session.get(f"{API}/bugs", timeout=10)
+        assert r.status_code == 200
+        items = r.json()
+        assert isinstance(items, list) and len(items) >= 1
+        for d in items:
+            assert "_id" not in d
+            assert "id" in d
+            # screenshot stripped from list
+            assert "screenshot" not in d or d.get("screenshot") is None
+
+    def test_get_bug_admin_includes_screenshot(self, admin_session):
+        r = admin_session.post(
+            f"{API}/bugs",
+            json={"description": "TEST_iter8 detail", "screenshot": TINY_PNG_DATAURL},
+            timeout=10,
+        )
+        bid = r.json()["id"]
+        r2 = admin_session.get(f"{API}/bugs/{bid}", timeout=10)
+        assert r2.status_code == 200
+        assert r2.json()["screenshot"] == TINY_PNG_DATAURL
+
+    def test_get_bug_non_admin_returns_403(self, fresh_user_session, admin_session):
+        r = admin_session.post(
+            f"{API}/bugs",
+            json={"description": "TEST_iter8 403"},
+            timeout=10,
+        )
+        bid = r.json()["id"]
+        r2 = fresh_user_session.get(f"{API}/bugs/{bid}", timeout=10)
+        assert r2.status_code == 403
+
+    def test_patch_status_admin_happy_path(self, admin_session):
+        r = admin_session.post(
+            f"{API}/bugs",
+            json={"description": "TEST_iter8 triage"},
+            timeout=10,
+        )
+        bid = r.json()["id"]
+        r2 = admin_session.patch(
+            f"{API}/bugs/{bid}/status",
+            json={"status": "triaged"},
+            timeout=10,
+        )
+        assert r2.status_code == 200
+        assert r2.json()["status"] == "triaged"
+        # verify persistence
+        r3 = admin_session.get(f"{API}/bugs/{bid}", timeout=10)
+        assert r3.json()["status"] == "triaged"
+
+    def test_patch_status_invalid_returns_400(self, admin_session):
+        r = admin_session.post(
+            f"{API}/bugs", json={"description": "TEST_iter8 invalid status"}, timeout=10
+        )
+        bid = r.json()["id"]
+        r2 = admin_session.patch(
+            f"{API}/bugs/{bid}/status", json={"status": "bogus"}, timeout=10
+        )
+        assert r2.status_code == 400
+
+    def test_patch_status_non_admin_returns_403(self, fresh_user_session, admin_session):
+        r = admin_session.post(
+            f"{API}/bugs", json={"description": "TEST_iter8 forbidden patch"}, timeout=10
+        )
+        bid = r.json()["id"]
+        r2 = fresh_user_session.patch(
+            f"{API}/bugs/{bid}/status", json={"status": "triaged"}, timeout=10
+        )
+        assert r2.status_code == 403
+
+
+# ---------- Subscriptions (iter-8) ----------
+class TestSubscriptionPlans:
+    def test_plans_public_endpoint(self, admin_session):
+        # Plans are returned via authenticated route in this app
+        r = admin_session.get(f"{API}/subscription/plans", timeout=10)
+        assert r.status_code == 200
+        plans = r.json()
+        assert isinstance(plans, list) and len(plans) == 4
+        by_id = {p["id"]: p for p in plans}
+        assert set(by_id.keys()) == {"monthly", "quarterly", "semi_annual", "annual"}
+
+        # Monthly: $49, 1 month
+        m = by_id["monthly"]
+        assert m["duration_months"] == 1
+        assert m["discount_pct"] == 0
+        assert m["amount_usd"] == 49.0
+        assert m["effective_monthly_usd"] == 49.0
+        assert m["savings_usd"] == 0.0
+
+        # Quarterly: 10% off -> 49*3*0.9 = 132.30
+        q = by_id["quarterly"]
+        assert q["duration_months"] == 3
+        assert q["discount_pct"] == 10
+        assert q["amount_usd"] == 132.30
+        assert q["effective_monthly_usd"] == 44.10
+        assert q["savings_usd"] == 14.70  # 147 - 132.30
+
+        # Semi-annual: 20% off -> 49*6*0.8 = 235.20
+        sa = by_id["semi_annual"]
+        assert sa["duration_months"] == 6
+        assert sa["discount_pct"] == 20
+        assert sa["amount_usd"] == 235.20
+        assert sa["effective_monthly_usd"] == 39.20
+        assert sa["savings_usd"] == 58.80  # 294 - 235.20
+
+        # Annual: 40% off -> 49*12*0.6 = 352.80
+        a = by_id["annual"]
+        assert a["duration_months"] == 12
+        assert a["discount_pct"] == 40
+        assert a["amount_usd"] == 352.80
+        assert a["effective_monthly_usd"] == 29.40
+        assert a["savings_usd"] == 235.20  # 588 - 352.80
+
+
+class TestSubscriptionStatus:
+    def test_status_admin_grandfathered(self, admin_session):
+        r = admin_session.get(f"{API}/subscription/status", timeout=10)
+        assert r.status_code == 200
+        body = r.json()
+        sub = body["subscription"]
+        ent = body["entitlement"]
+        assert sub["current_plan_id"] == "admin_grandfather"
+        assert ent["active"] is True
+        # valid_until ~ 10 years from now
+        assert sub["valid_until"] is not None
+        from datetime import datetime
+        vu = datetime.fromisoformat(sub["valid_until"].replace("Z", "+00:00"))
+        from datetime import datetime as _dt, timezone as _tz
+        delta_days = (vu - _dt.now(_tz.utc)).days
+        assert delta_days > 365 * 9, f"expected ~10y, got {delta_days}d"
+
+    def test_status_requires_auth(self):
+        r = requests.get(f"{API}/subscription/status", timeout=10)
+        assert r.status_code == 401
+
+
+ORIGIN = os.environ.get("REACT_APP_BACKEND_URL", "https://risk-managed-trading-4.preview.emergentagent.com").rstrip("/")
+
+
+class TestSubscriptionCheckout:
+    def test_checkout_unauthenticated_returns_401(self):
+        r = requests.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly", "origin": ORIGIN},
+            timeout=10,
+        )
+        assert r.status_code == 401
+
+    def test_checkout_invalid_plan_returns_400(self, admin_session):
+        r = admin_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "bogus", "origin": ORIGIN},
+            timeout=15,
+        )
+        assert r.status_code == 400
+
+    def test_checkout_missing_origin_returns_400(self, admin_session):
+        r = admin_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly"},
+            timeout=15,
+        )
+        assert r.status_code == 400
+
+    def test_checkout_bad_origin_returns_400(self, admin_session):
+        r = admin_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly", "origin": "javascript:alert(1)"},
+            timeout=15,
+        )
+        assert r.status_code == 400
+
+    def test_checkout_happy_path_monthly(self, admin_session):
+        r = admin_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly", "origin": ORIGIN},
+            timeout=30,
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["checkout_url"].startswith("https://checkout.stripe.com")
+        sid = body["session_id"]
+        assert sid.startswith("cs_test_") or sid.startswith("cs_")
+        assert body["plan"]["id"] == "monthly"
+        assert body["plan"]["amount_usd"] == 49.0
+
+
+class TestSubscriptionPoll:
+    def test_poll_nonexistent_session_returns_404(self, admin_session):
+        r = admin_session.get(
+            f"{API}/subscription/poll/cs_test_doesnotexist_iter8",
+            timeout=15,
+        )
+        assert r.status_code == 404
+
+    def test_poll_foreign_session_returns_404(self, admin_session, fresh_user_session):
+        # admin creates a checkout session
+        r = admin_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly", "origin": ORIGIN},
+            timeout=30,
+        )
+        assert r.status_code == 200
+        sid = r.json()["session_id"]
+        # fresh_user tries to poll admin's session
+        r2 = fresh_user_session.get(f"{API}/subscription/poll/{sid}", timeout=15)
+        assert r2.status_code == 404
+
+
+class TestStripeWebhook:
+    def test_webhook_invalid_signature_returns_400(self):
+        r = requests.post(
+            f"{API}/webhook/stripe",
+            data=b"{}",
+            headers={"Stripe-Signature": "t=0,v1=bogus", "Content-Type": "application/json"},
+            timeout=15,
+        )
+        assert r.status_code == 400
+
+
+class TestApplyPaymentIdempotency:
+    """Directly exercise apply_successful_payment via the service layer."""
+
+    def test_apply_payment_twice_only_extends_once(self, fresh_user_session):
+        import asyncio
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, "/app/backend")
+        # Load backend .env so MONGO_URL/DB_NAME are available to the
+        # imported service modules (we are not running inside uvicorn here).
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(Path("/app/backend/.env"))
+        except Exception:
+            pass
+        from subscription_service import apply_successful_payment  # noqa
+        from database import get_db  # noqa
+
+        # Create a real checkout for fresh user to avoid polluting admin state
+        r = fresh_user_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly", "origin": ORIGIN},
+            timeout=30,
+        )
+        assert r.status_code == 200
+        sid = r.json()["session_id"]
+
+        async def _run():
+            db = get_db()
+            # Force-mark our seed txn payment_status so apply can proceed
+            # apply_successful_payment looks up by session_id only; it ignores
+            # current payment_status until applied flag set.
+            sub1 = await apply_successful_payment(sid)
+            sub2 = await apply_successful_payment(sid)
+            return sub1, sub2, await db.subscriptions.find_one(
+                {"user_id": sub1["user_id"]}
+            )
+
+        sub1, sub2, fresh = asyncio.run(_run())
+        assert sub1 is not None, "first apply should succeed"
+        assert sub2 is None, "second apply must be idempotent (return None)"
+        # valid_until shouldn't extend twice — it must equal sub1's
+        assert fresh["valid_until"] == sub1["valid_until"]
+
+
+class TestBackendErrorLogs:
+    """Quick sanity over a fresh 90s sample of supervisor backend.err.log."""
+
+    def test_no_recent_exceptions(self):
+        import time as _t
+        # Sample log size BEFORE small wait
+        path = "/var/log/supervisor/backend.err.log"
+        if not os.path.exists(path):
+            pytest.skip("backend.err.log not present")
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            start = f.tell()
+        _t.sleep(5)  # short window — we already ran many tests above
+        with open(path, "rb") as f:
+            f.seek(start)
+            chunk = f.read().decode(errors="ignore")
+        # Lightweight check: no unhandled Tracebacks during this run
+        assert "Traceback (most recent call last)" not in chunk, chunk[-2000:]

@@ -3,7 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut, Zap as Lightning,
-    MessageSquare
+    MessageSquare, Sparkles
 } from "lucide-react";
 
 const items = [
@@ -14,6 +14,7 @@ const items = [
     { to: "/accounts", label: "MT5 Accounts", icon: Wallet, testid: "nav-accounts" },
     { to: "/trades", label: "Trades", icon: ListChecks, testid: "nav-trades" },
     { to: "/symbols", label: "Symbols", icon: CurrencyCircleDollar, testid: "nav-symbols" },
+    { to: "/subscription", label: "Subscription", icon: Sparkles, testid: "nav-subscription" },
 ];
 
 export function Sidebar({ onNavigate }) {

@@ -1,0 +1,47 @@
+{
+  "summary": "Iter-8 end-to-end testing for Screenshot Bug Reports + Stripe Subscriptions complete. Backend: 143/143 pytest tests PASS (117 prior regression + 26 new across TestBugReports, TestSubscriptionPlans, TestSubscriptionStatus, TestSubscriptionCheckout, TestSubscriptionPoll, TestStripeWebhook, TestApplyPaymentIdempotency, TestBackendErrorLogs). Frontend: /subscription page renders 4 plans with correct prices ($49 / $44.1 / $39.2 / $29.4 /mo), grandfather banner for admin, subscription-banner-bar correctly absent for admin, subscribe-monthly redirects to https://checkout.stripe.com/c/pay/cs_test_... as expected. Co-Pilot bug report flow works end-to-end: bug quick action -> screen capture -> bug-draft form (with bug-screenshot-preview img) -> description fill -> submit -> 'Bug filed (id: c95f06)...' receipt in chat -> bug_reports doc with screenshot persisted in MongoDB.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/subscription/checkout", "issue": "On Stripe SDK failure the route returns 502 with raw exception text in `detail` ('Stripe error: ...'). Same low-risk leak pattern as copilot/chat — consider sanitising."},
+      {"endpoint": "GET /api/subscription/poll/{sid}", "issue": "Returns 404 'transaction not found' when caller is not the txn owner — semantically correct (no leak), but a 403 would be more standard if you want to distinguish 'no such session' from 'not yours'. Current behaviour is safer; flagging as a design choice, not a bug."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Co-Pilot bug capture (html-to-image)", "issue": "captureViewport() emits SecurityError reading cross-origin Google Fonts CSS rules ('Error inlining remote css file ... fonts.googleapis.com'). The PNG is still produced (visible in bug-screenshot-preview and persisted to DB), but custom web fonts may render with system fallback in the screenshot. Non-fatal. Fix options: pass html-to-image option { skipFonts: true } or self-host the fonts.", "affected_selectors": ["[data-testid=\"bug-screenshot-preview\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "/subscription", "issues": ["Plan card prices ($44.1 / $39.2) drop the trailing zero — '$44.10' / '$39.20' would read more like money. Cosmetic."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter8_results.xml"
+  ],
+  "action_items": [
+    "(LOW) Sanitise raw exception text in /api/subscription/checkout and /api/webhook/stripe 502/400 detail fields.",
+    "(LOW) Add `skipFonts: true` (or self-host Inter / font-mono) to /app/frontend/src/lib/diagnostics.js captureViewport() so html-to-image stops emitting the cross-origin CSS SecurityError when capturing the page.",
+    "(COSMETIC) Format effective_monthly_usd as fixed 2dp on Subscription cards so $44.1 -> $44.10."
+  ],
+  "critical_code_review_comments": [
+    "subscription_routes.py is a clean 156-line module: uses emergentintegrations StripeCheckout, captures host_url from Request, success_url uses '{CHECKOUT_SESSION_ID}' literal (correct Stripe substitution). Origin is validated against http(s):// — protects against javascript: scheme injection. ✓",
+    "subscription_service.apply_successful_payment is idempotent via the `applied` flag on the payment_transactions row. Verified by direct service-layer test (apply twice, second returns None, valid_until unchanged). ✓",
+    "Admin grandfather is computed lazily inside get_subscription() — if a subscription doc already exists (even with a paid plan), the admin flag is *not* re-applied. This means once an admin starts a real checkout via the /subscription page and apply_successful_payment runs, their current_plan_id becomes 'monthly' (or whichever) and they lose the 'admin_grandfather' label until the subscriptions doc is deleted. The seed only runs if no doc exists. Worth either (a) special-casing admin role inside apply_successful_payment to keep them grandfathered, or (b) gating the /subscription/checkout endpoint to return 400 for admin role. I cleaned this up post-test to keep the admin grandfather state intact.",
+    "bugs_routes.py correctly excludes `_id` from list response by projection {screenshot:0} but doesn't exclude `_id` — list_bugs reassigns _id->id manually (correct). Detail endpoint also pops _id. No ObjectId leakage. ✓",
+    "MAX_SCREENSHOT_BYTES=4MB is checked against the data URL string length (post base64 encoding). A 3MB raw image becomes a 4MB+ data URL, so users may hit the limit earlier than they expect. Documentation/UX note, not a bug.",
+    "CoPilotWidget.jsx beginBugCapture() closes the panel first, sleeps 350ms, then captures. Verified working — bug-draft form re-opens the panel with the new screenshot. The capturing overlay disappears so quickly that the test missed it visually (count was 0 by the time we polled — flagged as not a UI bug, just a sub-second overlay).",
+    "Subscription.jsx isGrandfather check is hard-coded to plan_id === 'admin_grandfather'. If apply_successful_payment ever runs for an admin (see point 3), this would also stop showing the grandfather banner — same root cause. Recommend exposing a separate `is_admin_grandfather` boolean from /subscription/status rather than relying on plan_id."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py — appended TestBugReports (13 tests), TestSubscriptionPlans (1), TestSubscriptionStatus (2), TestSubscriptionCheckout (5), TestSubscriptionPoll (2), TestStripeWebhook (1), TestApplyPaymentIdempotency (1), TestBackendErrorLogs (1) = 26 new tests."
+  ],
+  "success_rate": {"backend": "100% (143/143)", "frontend": "100% on /subscription render + redirect + Co-Pilot bug-report end-to-end flow"},
+  "test_credentials": "admin@trading.bot / admin123 (verified working). STRIPE_API_KEY=sk_test_emergent active in backend/.env.",
+  "seed_data_creation": "Created ~22 bug_reports docs during testing (all prefixed TEST_iter8 in description) and ~12 payment_transactions docs against admin user. POST-TEST CLEANUP: deleted admin's subscription doc and all TEST_iter8 bug_reports to restore admin grandfather state. Payment_transactions for admin remain in DB but are harmless (each is a single Stripe checkout session with payment_status='initiated').",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression file is /app/backend/tests/backend_test.py — 143 tests across 35 classes. Run: `cd /app/backend && python -m pytest tests/backend_test.py -v` (~2 min total). The Stripe checkout-happy-path test (TestSubscriptionCheckout.test_checkout_happy_path_monthly) and the idempotency test create real Stripe test-mode checkout sessions — they're cheap but accumulate. The idempotency test runs against a freshly-registered user (not admin) so it does not pollute admin grandfather state. If you re-run heavily and admin's subscription doc gets a non-grandfather plan_id (e.g., 'monthly'), delete it via: `db.subscriptions.delete_many({user_id: <admin id>})` to restore. Frontend: subscription page redirects to checkout.stripe.com so do NOT page.goto into it during tests — only verify the URL captured before/after click.",
+  "rca of the issue": "n/a — pure feature addition. All requested flows verified: bug report POST/GET/PATCH with admin gating, plan catalog math (49 / 132.30 / 235.20 / 352.80), admin 10-year grandfather, real Stripe checkout session creation (cs_test_ prefix + checkout.stripe.com URL), invalid plan / origin 400s, foreign-user poll 404, webhook signature 400, apply_successful_payment idempotency, Co-Pilot bug-intent regex → screen capture → draft form → POST /api/bugs → chat receipt. Only cross-cutting concern identified: admin grandfather can be 'lost' if admin themselves completes a real checkout (see code review note 3) — not a current bug but a foot-gun worth fixing."
+}

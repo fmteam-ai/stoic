@@ -1,11 +1,13 @@
 import { Sidebar } from "@/components/Sidebar";
 import { CoPilotWidget } from "@/components/CoPilotWidget";
+import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 
 export function AppLayout({ children }) {
     return (
         <div className="min-h-screen bg-[#050505] text-white">
             <Sidebar />
             <main className="md:ml-60 min-h-screen">
+                <SubscriptionBanner />
                 {children}
             </main>
             <CoPilotWidget />
