@@ -3050,12 +3050,108 @@ class TestBacktester:
         sys.path.insert(0, "/app/backend")
         from backtester.engine import backward_adjusted_stitch, BarEvent
         t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        # Old contract ends at 100. New contract starts at 120 — artificial $20 gap.
         old = [BarEvent(ts=t0 + timedelta(days=i), symbol="GC", open=100, high=100,
                         low=100, close=100, volume=0) for i in range(3)]
         new = [BarEvent(ts=t0 + timedelta(days=3 + i), symbol="GC", open=120, high=120,
                         low=120, close=120, volume=0) for i in range(3)]
         stitched = backward_adjusted_stitch([old, new])
-        # Old prices should have been bumped UP by 20 to align with new contract
         assert stitched[0].close == 120
-        assert stitched[3].close == 120  # new contract unchanged
+        assert stitched[3].close == 120
+
+
+class TestLearnedMeta:
+    """Local logistic-regression P(win|features) classifier."""
+
+    @staticmethod
+    def _load_env():
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            load_dotenv(Path("/app/backend/.env"))
+        except Exception:
+            pass
+
+    def test_features_extracted_correctly(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from learned_meta import _features_from_signal
+        sig = {
+            "action": "BUY", "confidence": 70.0, "entry_price": 4000.0,
+            "kalman_filter": {"k_velocity": 8.0},
+            "cot_positioning": {"overcrowded_long": True, "overcrowded_short": False},
+            "real_yield_10y": {"regime": "bullish_gold"},
+            "mtf_gate": {"aligned": True},
+            "upcoming_macro": [{"title": "CPI"}],
+        }
+        f = _features_from_signal(sig)
+        assert f is not None
+        assert f[0] == 0.7        # confidence_norm
+        assert f[1] == 1.0        # is_buy
+        assert abs(f[2] - 0.002) < 1e-6  # kalman_vel_norm (8/4000)
+        assert f[3] == 1.0        # cot_against (BUY + overcrowded_long)
+        assert f[4] == 0.0        # cot_with
+        assert f[5] == 1.0        # tips_aligned (BUY + bullish_gold)
+        assert f[6] == 1.0        # mtf_aligned
+        assert f[7] == 1.0        # macro_event_24h
+
+    def test_hold_signal_returns_none(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from learned_meta import _features_from_signal
+        sig = {"action": "HOLD", "confidence": 30.0, "entry_price": 100.0}
+        assert _features_from_signal(sig) is None
+
+    def test_train_with_synthetic_data_learns_separable(self):
+        """Synthetic linearly-separable dataset → AUC > 0.85."""
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from learned_meta import _train_logreg
+        import numpy as np
+        rng = np.random.default_rng(0)
+        # Class 1: high confidence + bullish kalman + tips_aligned → wins
+        n = 100
+        X_win = rng.normal(0, 0.1, (n, 8))
+        X_win[:, 0] += 0.8   # confidence_norm high
+        X_win[:, 2] += 0.005 # kalman_vel positive
+        X_win[:, 5] += 1.0   # tips aligned
+        # Class 0: low confidence + bearish kalman + tips_misaligned → losses
+        X_lose = rng.normal(0, 0.1, (n, 8))
+        X_lose[:, 0] += 0.3
+        X_lose[:, 2] -= 0.005
+        X_lose[:, 5] -= 1.0
+        X = np.vstack([X_win, X_lose])
+        y = np.array([1] * n + [0] * n, dtype=float)
+        w, mu, sd, auc = _train_logreg(X, y)
+        assert auc > 0.85, f"expected AUC>0.85 on separable data, got {auc}"
+
+    def test_retrain_with_insufficient_data_skips(self):
+        self._load_env()
+        import asyncio, sys
+        sys.path.insert(0, "/app/backend")
+        import database as _db_mod
+        _db_mod._client = None; _db_mod._db = None
+        from learned_meta import retrain, MIN_SAMPLES
+        # Just call retrain — current DB may or may not have enough samples.
+        # We only assert the shape: either 'trained:False reason ...' or 'trained:True'.
+        res = asyncio.run(retrain())
+        assert "trained" in res
+        if res["trained"] is False:
+            assert "reason" in res
+            assert res["n_samples"] < MIN_SAMPLES
+        else:
+            assert res["n_samples"] >= MIN_SAMPLES
+
+    def test_endpoint_get_returns_artifact_shape(self, admin_session):
+        r = admin_session.get(f"{API}/analytics/learned-meta", timeout=10)
+        assert r.status_code == 200
+        body = r.json()
+        assert "trained" in body
+        if body["trained"]:
+            for k in ("n_samples", "train_auc", "threshold", "feature_names"):
+                assert k in body
+
+    def test_endpoint_retrain(self, admin_session):
+        r = admin_session.post(f"{API}/analytics/learned-meta/retrain", timeout=20)
+        assert r.status_code == 200
+        body = r.json()
+        assert "trained" in body

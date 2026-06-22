@@ -146,6 +146,10 @@ async def _process_user(db, cfg: dict):
             mtf_gate = signal.get("mtf_gate") or {}
             if mtf_gate.get("checked") and mtf_gate.get("aligned") is False:
                 await inc_intel_counter(user_id, "mtf_veto")
+            # Count Learned Meta-Classifier vetoes
+            lm = signal.get("learned_meta") or {}
+            if lm.get("verdict") == "REJECT":
+                await inc_intel_counter(user_id, "learned_meta_veto")
         except Exception:
             pass
 

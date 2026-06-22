@@ -27,6 +27,7 @@ from mtf_check import multi_timeframe_gate
 from kalman import kalman_features
 from macro.cot import get_gold_positioning
 from macro.tips import get_real_yield
+from learned_meta import predict_p_win as learned_predict_p_win
 
 SYSTEM_PROMPT = """You are an institutional-grade quantitative trading analyst.
 Inputs: live quote, 12-month indicator snapshot, current news sentiment score,
@@ -248,6 +249,33 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         mtf_veto = mtf["reason"]
         final_action = "HOLD"
 
+    # 7. Learned Meta-Classifier — local logistic regression P(win | features).
+    #    Only fires once we have a trained artifact (≥30 closed trades).
+    learned_meta = None
+    learned_veto = ""
+    try:
+        # Build a snapshot view the classifier can read
+        learned_input = {
+            "action": action, "confidence": confidence,
+            "entry_price": current_price,
+            "kalman_filter": kalman_feat,
+            "cot_positioning": cot_feat,
+            "real_yield_10y": tips_feat,
+            "mtf_gate": mtf,
+            "upcoming_macro": upcoming_macro,
+        }
+        learned_meta = await learned_predict_p_win(learned_input)
+    except Exception:
+        learned_meta = None
+    if learned_meta and action != "HOLD" and learned_meta["verdict"] == "REJECT":
+        learned_veto = (
+            f"Learned classifier: p_win={learned_meta['p_win']:.2f} "
+            f"< {learned_meta['threshold']:.2f} "
+            f"(trained on {learned_meta['n_samples']} trades, "
+            f"AUC={learned_meta['train_auc']:.2f}). Trade vetoed."
+        )
+        final_action = "HOLD"
+
     # SL/TP — pip-based fixed targets (150 SL, 100/200/300 TP tiers)
     from pip_utils import pips_to_price
     sl_pips_target = 150
@@ -293,6 +321,8 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         reasoning = f"{reasoning}\n\nVETO (meta-labeler): {meta_veto}"
     if mtf_veto:
         reasoning = f"{reasoning}\n\nVETO (multi-timeframe): {mtf_veto}"
+    if learned_veto:
+        reasoning = f"{reasoning}\n\nVETO (learned-meta): {learned_veto}"
 
     return {
         "symbol": symbol,
@@ -325,12 +355,13 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "regime_execution_mode": regime_meta,
         "meta_label": meta_label,
         "mtf_gate": mtf,
+        "learned_meta": learned_meta,
         "kalman_filter": kalman_feat,
         "cot_positioning": cot_feat,
         "real_yield_10y": tips_feat,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto),
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto),
         "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

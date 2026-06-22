@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { BarChart3, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Target, Gauge } from "lucide-react";
+import { BarChart3, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Target, Gauge, Cpu } from "lucide-react";
 
 function pnlColor(v) {
     if (v > 0) return "text-[#00FF41]";
@@ -75,21 +75,33 @@ function SliceTable({ title, rows, subtitle, testid }) {
 export default function Analytics() {
     const [data, setData] = useState(null);
     const [tune, setTune] = useState(null);
+    const [learned, setLearned] = useState(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
 
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
-            const [attr, autoTune] = await Promise.all([
+            const [attr, autoTune, learned] = await Promise.all([
                 api.get("/analytics/attribution"),
                 api.get("/analytics/auto-tune").catch(() => ({ data: null })),
+                api.get("/analytics/learned-meta").catch(() => ({ data: null })),
             ]);
             setData(attr.data);
             setTune(autoTune.data);
+            setLearned(learned.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
     }, []);
+
+    const retrainLearned = async () => {
+        try {
+            const { data } = await api.post("/analytics/learned-meta/retrain");
+            setLearned({ ...(data.trained ? data : {}), trained: data.trained, reason: data.reason });
+        } catch (e) {
+            setErr(formatApiError(e));
+        }
+    };
     useEffect(() => { load(); }, [load]);
 
     const overall = data?.overall;
@@ -161,13 +173,65 @@ export default function Analytics() {
                             <div className="text-sm text-[#A1A1AA] leading-relaxed">
                                 Attribution analytics need at least <strong>5 closed trades</strong> to start surfacing patterns.
                                 Right now you have {totalTrades}. Once the bot trades for a few days, this page will become genuinely useful —
-                                spotting things like "XAUUSD BUY at London Open with confidence ≥70% wins 78% of the time".
+                                spotting things like &ldquo;XAUUSD BUY at London Open with confidence ≥70% wins 78% of the time&rdquo;.
                             </div>
                         </div>
                     </div>
                 )}
 
-                {/* Auto-Tune Thresholds */}
+                {/* Learned Meta Classifier */}
+                <div className="border border-[#0099FF]/30 bg-[#0A0A0A]" data-testid="learned-meta-card">
+                    <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-[#0099FF]" />
+                        <div className="flex-1">
+                            <div className="font-display font-bold text-sm tracking-tight">Learned Meta-Classifier</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-0.5">
+                                {learned?.trained ? "● TRAINED" : "○ NOT TRAINED"} · local logistic regression · p(win | features)
+                            </div>
+                        </div>
+                        <button onClick={retrainLearned}
+                            data-testid="learned-meta-retrain"
+                            className="px-3 py-1.5 text-[10px] font-mono tracking-widest border border-[#0099FF]/40 text-[#0099FF] hover:bg-[#0099FF]/10">
+                            RETRAIN
+                        </button>
+                    </div>
+                    <div className="p-4">
+                        {!learned?.trained && (
+                            <div className="text-xs text-[#A1A1AA]">
+                                {learned?.reason || "Classifier not yet trained. Needs at least 30 closed trades joined with their signals. Click RETRAIN to attempt training now."}
+                            </div>
+                        )}
+                        {learned?.trained && (
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-[11px]">
+                                <div>
+                                    <div className="text-[#52525B] text-[10px] tracking-widest">SAMPLES</div>
+                                    <div className="text-white text-lg">{learned.n_samples}</div>
+                                </div>
+                                <div>
+                                    <div className="text-[#52525B] text-[10px] tracking-widest">WIN RATE</div>
+                                    <div className="text-[#00FF41] text-lg">{learned.n_wins != null ? `${Math.round(100 * learned.n_wins / learned.n_samples)}%` : "—"}</div>
+                                </div>
+                                <div>
+                                    <div className="text-[#52525B] text-[10px] tracking-widest">TRAIN AUC</div>
+                                    <div className={`text-lg ${learned.train_auc >= 0.7 ? "text-[#00FF41]" : learned.train_auc >= 0.6 ? "text-[#FFB000]" : "text-[#FF3B30]"}`}>
+                                        {learned.train_auc?.toFixed(3)}
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="text-[#52525B] text-[10px] tracking-widest">VETO THRESHOLD</div>
+                                    <div className="text-[#0099FF] text-lg">p &lt; {learned.threshold?.toFixed(2)}</div>
+                                </div>
+                                {learned.feature_names && (
+                                    <div className="col-span-2 md:col-span-4 mt-1 text-[10px] text-[#52525B]">
+                                        features: {learned.feature_names.join(", ")}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+
                 {tune && tune.thresholds && tune.thresholds.length > 0 && (
                     <div className="border border-[#0099FF]/30 bg-[#0A0A0A]" data-testid="auto-tune-card">
                         <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
