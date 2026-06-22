@@ -14,11 +14,16 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserOut)
-async def register(payload: RegisterRequest, response: Response):
+async def register(payload: RegisterRequest, request: Request, response: Response):
     db = get_db()
     email = payload.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Pick up affiliate attribution from cookie (set by /api/r/{code})
+    ref_code = request.cookies.get("stoic_ref")
+    ref_at = request.cookies.get("stoic_ref_at")
+
     user_doc = {
         "email": email,
         "password_hash": hash_password(payload.password),
@@ -26,6 +31,9 @@ async def register(payload: RegisterRequest, response: Response):
         "role": "user",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if ref_code:
+        user_doc["referred_by_code"] = ref_code.upper()
+        user_doc["referred_at"] = ref_at or datetime.now(timezone.utc).isoformat()
     result = await db.users.insert_one(user_doc)
     uid = str(result.inserted_id)
 

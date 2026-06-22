@@ -164,6 +164,19 @@ async def apply_successful_payment(session_id: str) -> Optional[dict]:
             "new_valid_until": new_vu.isoformat(),
         }},
     )
+
+    # Affiliate commission hook — fire-and-forget, never block payment
+    try:
+        from affiliate_service import record_commission_if_referred
+        await record_commission_if_referred(
+            user_id=txn["user_id"],
+            plan_id=plan.id,
+            amount_usd=float(txn.get("amount_usd") or plan.amount_usd),
+            session_id=session_id,
+        )
+    except Exception:
+        pass  # commissioning failure must never roll back a paid subscription
+
     out = await db.subscriptions.find_one({"user_id": txn["user_id"]})
     out["id"] = str(out.pop("_id"))
     return out
