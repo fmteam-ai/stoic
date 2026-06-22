@@ -1,20 +1,11 @@
-"""MT5 Expert Advisor bridge endpoints.
-
-The downloadable MT5 EA polls these endpoints with its bridge_token to:
-  - send heartbeat / account snapshot
-  - fetch pending trades to execute
-  - report trade execution results / P&L
-
-No JWT auth — auth happens via the per-account bridge_token.
-"""
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from bson import ObjectId
-from typing import Optional
 from pydantic import BaseModel
 
 from database import get_db
 from models import BridgeHeartbeat, BridgeTradeReport
+from ws_manager import manager as ws_manager
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
 
@@ -42,6 +33,13 @@ async def heartbeat(payload: BridgeHeartbeat):
             "last_heartbeat": now_iso,
         }},
     )
+    await ws_manager.broadcast(acc["user_id"], "account_heartbeat", {
+        "account_id": str(acc["_id"]),
+        "balance": payload.balance,
+        "equity": payload.equity,
+        "open_positions": payload.open_positions,
+        "last_heartbeat": now_iso,
+    })
     return {"ok": True, "server_time": now_iso}
 
 
@@ -51,13 +49,9 @@ class PollRequest(BaseModel):
 
 @router.post("/poll-trades")
 async def poll_trades(payload: PollRequest):
-    """EA polls for pending trades on this account."""
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
-    cursor = db.trades.find({
-        "account_id": str(acc["_id"]),
-        "status": "pending",
-    })
+    cursor = db.trades.find({"account_id": str(acc["_id"]), "status": "pending"})
     pending = await cursor.to_list(length=20)
     out = []
     for t in pending:
@@ -98,4 +92,8 @@ async def report_trade(payload: BridgeTradeReport):
         update["closed_at"] = datetime.now(timezone.utc).isoformat()
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    await ws_manager.broadcast(acc["user_id"], "trade_updated", {
+        "trade_id": payload.trade_id,
+        **update,
+    })
     return {"ok": True}

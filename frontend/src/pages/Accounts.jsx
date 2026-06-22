@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info } from "lucide-react";
+import { useLiveStream } from "@/lib/useLiveStream";
 
 const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD" };
 
@@ -22,6 +23,18 @@ export default function Accounts() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+
+    // Live heartbeat updates from the EA bridge
+    const { lastEvent } = useLiveStream();
+    useEffect(() => {
+        if (!lastEvent) return;
+        if (lastEvent.type === "account_heartbeat") {
+            const p = lastEvent.payload;
+            setAccounts(prev => prev.map(a => a.id === p.account_id
+                ? { ...a, balance: p.balance, equity: p.equity, last_heartbeat: p.last_heartbeat, status: "connected" }
+                : a));
+        }
+    }, [lastEvent]);
 
     const create = async (e) => {
         e.preventDefault(); setErr(""); setMsg("");

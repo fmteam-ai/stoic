@@ -96,10 +96,10 @@ async def _cg_quote(cg_id: str) -> dict:
         }
 
 
-async def _cg_history(cg_id: str) -> list:
-    """6-month daily history from CoinGecko."""
+async def _cg_history(cg_id: str, days: int = 365) -> list:
+    """1-year daily history from CoinGecko."""
     url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart"
-    params = {"vs_currency": "usd", "days": "180", "interval": "daily"}
+    params = {"vs_currency": "usd", "days": str(days), "interval": "daily"}
     async with httpx.AsyncClient(timeout=20.0, headers=UA, follow_redirects=True) as c:
         r = await c.get(url, params=params)
         r.raise_for_status()
@@ -158,7 +158,7 @@ async def _fx_quote(base: str, quote: str) -> dict:
 async def _fx_history(base: str, quote: str) -> list:
     """Frankfurter ECB rates — supports common FX pairs."""
     end = datetime.now(timezone.utc).date()
-    start = end - timedelta(days=200)
+    start = end - timedelta(days=400)
     url = f"https://api.frankfurter.dev/v1/{start.isoformat()}..{end.isoformat()}"
     params = {"base": base, "symbols": quote}
     async with httpx.AsyncClient(timeout=20.0, headers=UA, follow_redirects=True) as c:
@@ -175,7 +175,7 @@ async def _fx_history(base: str, quote: str) -> list:
                 "date": date_str,
                 "open": price, "high": price, "low": price, "close": price, "volume": 0,
             })
-        return history[-180:]
+        return history[-365:]
 
 
 # ---------- Public API ----------

@@ -2,7 +2,9 @@ import { useEffect, useState, useCallback } from "react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp } from "lucide-react";
+import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert } from "lucide-react";
+import { useLiveStream } from "@/lib/useLiveStream";
+import { toast } from "sonner";
 
 const PRIMARY_SYMBOLS = ["XAUUSD", "BTCUSD"];
 
@@ -49,10 +51,12 @@ export default function Dashboard() {
     const [selected, setSelected] = useState("XAUUSD");
     const [history, setHistory] = useState([]);
     const [indicators, setIndicators] = useState({});
+    const [sentiment, setSentiment] = useState({});
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [err, setErr] = useState("");
+    const { lastEvent, connected: wsConnected } = useLiveStream();
 
     const loadQuotes = useCallback(async () => {
         try {
@@ -75,6 +79,13 @@ export default function Dashboard() {
         finally { setHistoryLoading(false); }
     }, []); // deps: stable imports + setters only
 
+    const loadSentiment = useCallback(async (sym) => {
+        try {
+            const { data } = await api.get(`/sentiment/${sym}`);
+            setSentiment(s => ({ ...s, [sym]: data }));
+        } catch { /* ignore */ }
+    }, []);
+
     const loadStats = useCallback(async () => {
         try { const { data } = await api.get("/trades/stats"); setStats(data); } catch { /* ignore */ }
     }, []); // deps: stable imports + setters only
@@ -85,7 +96,29 @@ export default function Dashboard() {
         return () => clearInterval(id);
     }, [loadQuotes, loadStats]);
 
-    useEffect(() => { loadHistory(selected); }, [selected, loadHistory]);
+    useEffect(() => { loadHistory(selected); loadSentiment(selected); }, [selected, loadHistory, loadSentiment]);
+
+    // Live stream reactions
+    useEffect(() => {
+        if (!lastEvent) return;
+        if (lastEvent.type === "circuit_breaker_tripped") {
+            toast.error("Circuit breaker tripped", {
+                description: lastEvent.payload?.reason || "Bot disabled — daily drawdown limit exceeded.",
+            });
+        } else if (lastEvent.type === "signal_created") {
+            const p = lastEvent.payload || {};
+            toast(`New ${p.action} signal · ${p.symbol}`, {
+                description: `Confidence ${p.confidence}% · auto-generated`,
+            });
+        } else if (lastEvent.type === "trade_created") {
+            const p = lastEvent.payload || {};
+            toast.success(`Trade queued · ${p.symbol} ${p.action}`, { description: `Lots: ${p.lot_size}` });
+        } else if (lastEvent.type === "trade_updated" && lastEvent.payload?.status === "closed") {
+            const p = lastEvent.payload;
+            const pnl = p.pnl ?? 0;
+            toast(`Trade closed · P&L ${pnl >= 0 ? "+" : ""}${pnl}`, { description: `Ticket ${p.trade_id}` });
+        }
+    }, [lastEvent]);
 
     return (
         <AppLayout>
@@ -94,11 +127,17 @@ export default function Dashboard() {
                 subtitle="Live markets, AI insights and portfolio snapshot."
                 testid="dashboard-header"
                 action={
-                    <button onClick={() => { loadQuotes(); loadHistory(selected); }}
-                        data-testid="dashboard-refresh-button"
-                        className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors duration-150">
-                        <ArrowsClockwise className="w-3.5 h-3.5" /> REFRESH
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <span className={`flex items-center gap-1.5 font-mono text-[10px] tracking-widest ${wsConnected ? "text-[#00FF41]" : "text-[#52525B]"}`} data-testid="ws-status">
+                            <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-[#00FF41] pulse-dot" : "bg-[#52525B]"}`} />
+                            {wsConnected ? "LIVE" : "OFFLINE"}
+                        </span>
+                        <button onClick={() => { loadQuotes(); loadHistory(selected); }}
+                            data-testid="dashboard-refresh-button"
+                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors duration-150">
+                            <ArrowsClockwise className="w-3.5 h-3.5" /> REFRESH
+                        </button>
+                    </div>
                 }
             />
 
@@ -123,7 +162,7 @@ export default function Dashboard() {
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A]">
                     <div className="px-5 py-4 border-b border-[#1F1F1F] flex items-center justify-between">
                         <div>
-                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">CHART · 6 MONTHS · DAILY</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">CHART · 12 MONTHS · DAILY</div>
                             <div className="flex items-center gap-2">
                                 <ChartLineUp className="w-4 h-4 text-[#00FF41]" />
                                 <span className="font-display font-bold text-lg tracking-tight" data-testid="chart-symbol">{selected}</span>
@@ -131,7 +170,7 @@ export default function Dashboard() {
                         </div>
                         {indicators?.six_month_return_pct != null && (
                             <div className={`font-mono text-sm ${indicators.six_month_return_pct >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
-                                {indicators.six_month_return_pct >= 0 ? "+" : ""}{indicators.six_month_return_pct}% / 6M
+                                {indicators.six_month_return_pct >= 0 ? "+" : ""}{indicators.six_month_return_pct}% / 12M
                             </div>
                         )}
                     </div>
@@ -160,17 +199,52 @@ export default function Dashboard() {
                     </div>
                 </div>
 
+                {/* News Sentiment for selected symbol */}
+                {sentiment[selected] && (
+                    <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-5" data-testid="sentiment-card">
+                        <div className="flex items-start gap-3 mb-3">
+                            <Newspaper className="w-4 h-4 text-[#FFB000] mt-0.5" />
+                            <div className="flex-1">
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">
+                                    NEWS SENTIMENT · {selected} · {sentiment[selected].article_count} HEADLINES (24H)
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <span className="font-display font-bold text-xl tracking-tight">
+                                        {sentiment[selected].label?.replace("_", " ").toUpperCase()}
+                                    </span>
+                                    <span className={`font-mono text-sm ${
+                                        sentiment[selected].score > 0.2 ? "text-[#00FF41]" :
+                                        sentiment[selected].score < -0.2 ? "text-[#FF3B30]" : "text-[#A1A1AA]"
+                                    }`}>
+                                        SCORE {sentiment[selected].score >= 0 ? "+" : ""}{sentiment[selected].score}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        {sentiment[selected].summary && (
+                            <p className="text-sm text-[#A1A1AA] leading-relaxed mb-2">{sentiment[selected].summary}</p>
+                        )}
+                        {sentiment[selected].key_drivers?.length > 0 && (
+                            <ul className="flex flex-wrap gap-1.5 mt-2">
+                                {sentiment[selected].key_drivers.map((d, i) => (
+                                    <li key={i} className="font-mono text-[10px] text-[#A1A1AA] bg-[#121212] border border-[#1F1F1F] px-2 py-0.5">{d}</li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                )}
+
                 {/* Indicators */}
                 {indicators && Object.keys(indicators).length > 0 && (
                     <div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-3">TECHNICAL INDICATORS · 6M ANALYSIS</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-3">TECHNICAL INDICATORS · 12M ANALYSIS</div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="indicators-grid">
                             <StatCell label="RSI (14)" value={indicators.rsi_14 ?? "—"} accent={indicators.rsi_14 > 70 ? "text-[#FF3B30]" : indicators.rsi_14 < 30 ? "text-[#00FF41]" : "text-white"} />
                             <StatCell label="SMA 20" value={indicators.sma_20 ?? "—"} />
                             <StatCell label="SMA 50" value={indicators.sma_50 ?? "—"} />
                             <StatCell label="SMA 200" value={indicators.sma_200 ?? "—"} />
-                            <StatCell label="6M HIGH" value={indicators.high_180d ?? "—"} />
-                            <StatCell label="6M LOW" value={indicators.low_180d ?? "—"} />
+                            <StatCell label="12M HIGH" value={indicators.high_180d ?? "—"} />
+                            <StatCell label="12M LOW" value={indicators.low_180d ?? "—"} />
                             <StatCell label="% from High" value={`${indicators.pct_from_high ?? 0}%`} accent="text-[#FFB000]" />
                             <StatCell label="30D Volatility" value={`${indicators.volatility_30d_pct ?? 0}%`} />
                         </div>

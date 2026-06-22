@@ -3,13 +3,18 @@ from pathlib import Path
 load_dotenv(Path(__file__).parent / ".env")
 
 import os
+import asyncio
 import logging
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
+from bson import ObjectId
 
 from database import close_client, get_db
 from seed import seed_admin, ensure_indexes
+from auth import decode_token
+from ws_manager import manager as ws_manager
+import bot_runner
 
 # Routers
 from routes.auth_routes import router as auth_router
@@ -19,12 +24,13 @@ from routes.signal_routes import router as signal_router
 from routes.account_routes import router as account_router
 from routes.trade_routes import router as trade_router
 from routes.bridge_routes import router as bridge_router
+from routes.sentiment_routes import router as sentiment_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("trading-bot")
 
-app = FastAPI(title="AI Trading Bot API", version="1.0.0")
+app = FastAPI(title="AI Trading Bot API", version="1.1.0")
 
 api_router = APIRouter(prefix="/api")
 
@@ -46,15 +52,11 @@ async def health():
 
 @api_router.get("/ea-script")
 async def ea_script():
-    """Serve the MT5 Expert Advisor source code for download."""
     path = Path(__file__).parent / "static" / "EmergentTradingBridge.mq5"
     if not path.exists():
         return {"error": "EA file missing"}
-    return FileResponse(
-        path,
-        media_type="text/plain",
-        filename="EmergentTradingBridge.mq5",
-    )
+    return FileResponse(path, media_type="text/plain",
+                        filename="EmergentTradingBridge.mq5")
 
 
 # Mount routers
@@ -65,13 +67,54 @@ api_router.include_router(signal_router)
 api_router.include_router(account_router)
 api_router.include_router(trade_router)
 api_router.include_router(bridge_router)
+api_router.include_router(sentiment_router)
+
+
+# ---------- WebSocket ----------
+@api_router.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    """Authenticated WS: reads access_token cookie OR ?token=... query param."""
+    token = websocket.cookies.get("access_token")
+    if not token:
+        token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4401)
+        return
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "access":
+            await websocket.close(code=4401)
+            return
+        user_id = payload["sub"]
+        db = get_db()
+        if not await db.users.find_one({"_id": ObjectId(user_id)}):
+            await websocket.close(code=4401)
+            return
+    except Exception:
+        await websocket.close(code=4401)
+        return
+
+    await ws_manager.connect(user_id, websocket)
+    try:
+        await websocket.send_json({"type": "connected", "payload": {"user_id": user_id}})
+        while True:
+            # Keep the socket alive; we ignore client messages but consume them
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await ws_manager.disconnect(user_id, websocket)
+
 
 app.include_router(api_router)
 
-# CORS — allow credentials with explicit origin from env, fallback to wildcard list.
+
+# CORS
 cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
 if cors_origins_env.strip() == "*":
-    # When credentials=True, browsers reject "*" — use regex catch-all instead.
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=".*",
@@ -89,16 +132,31 @@ else:
     )
 
 
+_bot_runner_task = None
+
+
 @app.on_event("startup")
 async def on_startup():
+    global _bot_runner_task
     try:
         await ensure_indexes()
         await seed_admin()
         logger.info("Startup: indexes ensured, admin seeded.")
+        # Launch the autonomous bot loop
+        _bot_runner_task = asyncio.create_task(bot_runner.loop())
+        logger.info("Bot runner task scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    global _bot_runner_task
+    if _bot_runner_task and not _bot_runner_task.done():
+        _bot_runner_task.cancel()
+        try:
+            await _bot_runner_task
+        except (asyncio.CancelledError, Exception):
+            pass
     await close_client()
+

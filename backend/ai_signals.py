@@ -1,4 +1,4 @@
-"""AI-driven signal generation using Claude Sonnet 4.5 via emergentintegrations."""
+"""AI-driven signal generation: dual-AI (technical + news sentiment) with veto."""
 import os
 import json
 import uuid
@@ -8,54 +8,60 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 from market import get_quote, get_history, compute_indicators, asset_type_of
 from risk import get_profile, derive_sl_tp, compute_position_size
+from news import score_sentiment
 
 SYSTEM_PROMPT = """You are an institutional-grade quantitative trading analyst.
-You analyse market data (6-month history + live quote + technical indicators) and emit one trading signal per symbol.
+Inputs you receive: live quote, 12 months of daily history-derived indicators, and current news sentiment score.
 
 Rules:
 - Output STRICT JSON only — no prose, no markdown, no code fences.
 - Schema: {"action":"BUY"|"SELL"|"HOLD","confidence":0-100,"reasoning":"...","key_factors":["...","..."]}
-- Reasoning: 2-3 concise sentences citing the indicators that drove the decision.
+- Reasoning: 2-3 concise sentences citing both indicators AND sentiment that drove the decision.
 - key_factors: 2-4 short bullets (max 8 words each).
 - Confidence reflects your conviction; HOLD typically <50.
-- Consider trend (SMA20/50/200), momentum (RSI), volatility, and distance from 6-month high/low.
+- Consider trend (SMA20/50/200), momentum (RSI), volatility, distance from 12-month high/low, AND news sentiment.
 - Be conservative: prefer HOLD when signals are mixed.
 """
 
 
 def _parse_ai_json(text: str) -> dict:
-    """Robustly extract JSON from a model response."""
     text = (text or "").strip()
-    # Strip ```json fences if any
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
-    # Find first { ... } block
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        text = match.group(0)
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
+        text = m.group(0)
     try:
         return json.loads(text)
     except Exception:
-        return {
-            "action": "HOLD",
-            "confidence": 0,
-            "reasoning": "Failed to parse model response.",
-            "key_factors": [],
-        }
+        return {"action": "HOLD", "confidence": 0,
+                "reasoning": "Failed to parse model response.", "key_factors": []}
+
+
+def _apply_dual_veto(action: str, confidence: float, sentiment: dict) -> tuple:
+    """Hard veto rule: if Chart AI and News AI strongly disagree, force HOLD.
+
+    'Strongly' means sentiment score has magnitude >= 0.5 AND opposes the action.
+    Returns (final_action, veto_reason or '').
+    """
+    score = float(sentiment.get("score") or 0)
+    if abs(score) < 0.5:
+        return action, ""
+    if action == "BUY" and score <= -0.5:
+        return "HOLD", f"News sentiment is strongly bearish ({score}); chart BUY vetoed."
+    if action == "SELL" and score >= 0.5:
+        return "HOLD", f"News sentiment is strongly bullish ({score}); chart SELL vetoed."
+    return action, ""
 
 
 async def analyze_symbol(symbol: str, risk_level: str) -> dict:
-    """Generate an AI trading signal for one symbol.
-
-    Returns full signal payload ready for storage (no DB write here).
-    """
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
     indicators = compute_indicators(history) or {}
+    sentiment = await score_sentiment(symbol)
     current_price = quote.get("price") or indicators.get("current_price") or 0.0
 
-    # Build a compact, factual prompt
     user_text = json.dumps({
         "symbol": symbol,
         "asset_type": asset_type_of(symbol),
@@ -65,7 +71,13 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
             "ask": quote.get("ask"),
             "change_pct": quote.get("change_pct"),
         },
-        "indicators_6mo": indicators,
+        "indicators_12mo": indicators,
+        "news_sentiment": {
+            "score": sentiment.get("score"),
+            "label": sentiment.get("label"),
+            "summary": sentiment.get("summary"),
+            "article_count": sentiment.get("article_count"),
+        },
         "risk_profile": {
             "level": risk_level,
             "min_confidence_to_trade": profile["min_confidence"],
@@ -87,31 +99,40 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         action = "HOLD"
     confidence = float(parsed.get("confidence") or 0)
 
-    # Derive SL / TP using ATR proxy (volatility * price)
+    # Dual-AI veto: chart x sentiment alignment check
+    final_action, veto_reason = _apply_dual_veto(action, confidence, sentiment)
+
+    # Derive SL / TP using ATR-like proxy
     vol_pct = indicators.get("volatility_30d_pct") or 1.0
     atr_proxy = (vol_pct / 100.0) * current_price
-    sl, tp = derive_sl_tp(action, current_price, atr_proxy, profile)
+    sl, tp = derive_sl_tp(final_action, current_price, atr_proxy, profile)
 
-    # Lot sizing — assumes microcent equity of 1000 (refined by EA on execute)
     sl_distance = abs(current_price - sl) or 0.0001
     lot_size = compute_position_size(equity=1000.0,
                                      risk_pct=profile["risk_pct"],
                                      sl_pips=sl_distance,
                                      pip_value=1.0)
 
+    reasoning = parsed.get("reasoning", "")
+    if veto_reason:
+        reasoning = f"{reasoning}\n\nVETO: {veto_reason}"
+
     return {
         "symbol": symbol,
-        "action": action,
+        "action": final_action,
+        "chart_action": action,
         "confidence": round(confidence, 1),
         "entry_price": round(current_price, 5),
         "stop_loss": sl,
         "take_profit": tp,
         "lot_size": lot_size,
         "risk_level": risk_level,
-        "reasoning": parsed.get("reasoning", ""),
+        "reasoning": reasoning,
         "indicators": indicators,
+        "sentiment": sentiment,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": profile["min_confidence"],
-        "tradeable": action != "HOLD" and confidence >= profile["min_confidence"],
+        "veto_applied": bool(veto_reason),
+        "tradeable": final_action != "HOLD" and confidence >= profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

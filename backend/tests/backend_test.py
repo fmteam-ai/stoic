@@ -419,3 +419,255 @@ class TestTradeBridge:
 def datetime_utcnow_iso():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+# =====================================================================
+# ITERATION 3: News sentiment, dual-AI veto, WebSocket, 1y history,
+# circuit breakers, bot runner.
+# =====================================================================
+
+# ---------- 1-year history ----------
+class TestOneYearHistory:
+    @pytest.mark.parametrize("symbol", ["BTCUSD", "XAUUSD"])
+    def test_history_has_300_plus_points(self, admin_session, symbol):
+        r = admin_session.get(f"{API}/market/history/{symbol}", timeout=60)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # Was ~180 before; now should be > 300 (1y daily)
+        assert len(data["history"]) > 300, f"{symbol} history only has {len(data['history'])} points (want > 300)"
+
+
+# ---------- News sentiment ----------
+class TestSentiment:
+    @pytest.mark.parametrize("symbol", ["BTCUSD", "XAUUSD"])
+    def test_sentiment_shape(self, admin_session, symbol):
+        r = admin_session.get(f"{API}/sentiment/{symbol}", timeout=60)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # required shape
+        assert data["symbol"] == symbol
+        assert isinstance(data.get("score"), (int, float))
+        assert -1.0 <= float(data["score"]) <= 1.0
+        assert data.get("label") in (
+            "very_bearish", "bearish", "neutral", "bullish", "very_bullish"
+        )
+        assert isinstance(data.get("summary"), str)
+        assert isinstance(data.get("key_drivers"), list)
+        assert isinstance(data.get("article_count"), int)
+        # should NOT 500 even if 0 articles
+        assert data["article_count"] >= 0
+
+    def test_sentiment_unknown_symbol_does_not_500(self, admin_session):
+        r = admin_session.get(f"{API}/sentiment/UNKNOWNSYM", timeout=60)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "score" in data and "label" in data
+
+    def test_sentiment_requires_auth(self):
+        r = requests.get(f"{API}/sentiment/BTCUSD", timeout=10)
+        assert r.status_code == 401
+
+
+# ---------- AI signal new fields (dual-AI veto shape) ----------
+class TestSignalDualAIShape:
+    @pytest.fixture(scope="class")
+    def sig_user(self):
+        s = requests.Session()
+        email = f"TEST_dual_{uuid.uuid4().hex[:6]}@example.com"
+        r = s.post(f"{API}/auth/register",
+                   json={"email": email, "password": "testpass123"}, timeout=15)
+        assert r.status_code == 200
+        return s
+
+    def test_signal_has_new_fields(self, sig_user):
+        r = sig_user.post(f"{API}/signals/generate", json={"symbol": "BTCUSD"}, timeout=180)
+        assert r.status_code == 200, r.text
+        sig = r.json()
+        # New iter-3 fields
+        for fld in ("sentiment", "chart_action", "veto_applied", "action"):
+            assert fld in sig, f"missing field {fld} in signal payload"
+        assert sig["action"] in ("BUY", "SELL", "HOLD")
+        assert sig["chart_action"] in ("BUY", "SELL", "HOLD")
+        assert isinstance(sig["veto_applied"], bool)
+        # sentiment sub-shape
+        sent = sig["sentiment"]
+        assert "score" in sent and -1 <= float(sent["score"]) <= 1
+        assert "label" in sent
+        # If a veto was applied, reasoning should contain VETO marker
+        if sig["veto_applied"]:
+            assert "VETO" in (sig.get("reasoning") or "")
+
+
+# ---------- WebSocket ----------
+class TestWebSocket:
+    def _ws_url(self):
+        # Convert https -> wss, http -> ws
+        url = BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+        return f"{url}/api/ws"
+
+    def test_ws_rejects_without_token(self):
+        import asyncio
+        import websockets
+
+        async def run():
+            try:
+                async with websockets.connect(self._ws_url(), open_timeout=10) as _:
+                    return "connected_unexpectedly"
+            except websockets.exceptions.InvalidStatus as e:
+                # HTTP-level rejection (e.g., 403) is also acceptable as "rejected"
+                return f"http_reject:{e.response.status_code}"
+            except websockets.exceptions.ConnectionClosed as e:
+                return f"closed:{e.code}"
+            except Exception as e:
+                return f"err:{type(e).__name__}:{e}"
+
+        result = asyncio.run(run())
+        # Either close-code 4401 OR an HTTP-level reject is acceptable; what we
+        # must NOT see is a fully successful connection.
+        assert result != "connected_unexpectedly", f"WS accepted unauth connection: {result}"
+
+    def test_ws_accepts_with_token_and_emits_connected(self, admin_session):
+        import asyncio
+        import json
+        import websockets
+
+        token = admin_session.cookies.get("access_token")
+        assert token, "admin_session missing access_token cookie"
+        url = f"{self._ws_url()}?token={token}"
+
+        async def run():
+            async with websockets.connect(url, open_timeout=15) as ws:
+                raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                return json.loads(raw)
+
+        msg = asyncio.run(run())
+        assert msg.get("type") == "connected"
+        assert "user_id" in (msg.get("payload") or {})
+
+
+# ---------- Circuit breaker logic (unit-level on the module) ----------
+class TestCircuitBreaker:
+    def test_drawdown_limits_table(self):
+        from circuit_breakers import drawdown_limit_for, DEFAULT_DAILY_DRAWDOWN_PCT
+        assert DEFAULT_DAILY_DRAWDOWN_PCT["low"] == 2.0
+        assert DEFAULT_DAILY_DRAWDOWN_PCT["medium"] == 4.0
+        assert DEFAULT_DAILY_DRAWDOWN_PCT["high"] == 7.0
+        assert DEFAULT_DAILY_DRAWDOWN_PCT["extreme"] == 12.0
+        assert drawdown_limit_for("medium") == 4.0
+        assert drawdown_limit_for("nonexistent") == 4.0
+
+    def test_check_and_trip_disables_bot_on_breach(self):
+        """Insert losing trade today, set equity, run check_and_trip,
+        verify bot_config gets disabled + tripped_reason set."""
+        import asyncio
+        from pymongo import MongoClient
+        from circuit_breakers import check_and_trip
+        from motor.motor_asyncio import AsyncIOMotorClient
+
+        mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+        db_name = os.environ.get("DB_NAME", "ai_trading_bot")
+        sync = MongoClient(mongo_url)[db_name]
+
+        user_id = f"TEST_CB_USER_{uuid.uuid4().hex[:6]}"
+        # Seed an active bot_config and an account with equity 1000
+        sync.bot_configs.insert_one({
+            "user_id": user_id, "risk_level": "low", "symbols": ["BTCUSD"],
+            "active": True, "max_concurrent_trades": 3, "auto_execute": True,
+        })
+        # Closed losing trade -> -50 USD against 1000 equity = -5% > 2% (low limit)
+        sync.trades.insert_one({
+            "user_id": user_id, "account_id": "TEST_ACC", "symbol": "BTCUSD",
+            "action": "BUY", "lot_size": 0.01, "entry_price": 60000,
+            "stop_loss": 59000, "take_profit": 61000, "exit_price": 59500,
+            "pnl": -50.0, "status": "closed",
+            "opened_at": datetime_utcnow_iso(),
+            "closed_at": datetime_utcnow_iso(),
+        })
+
+        async def run():
+            client = AsyncIOMotorClient(mongo_url)
+            db = client[db_name]
+            cfg = await db.bot_configs.find_one({"user_id": user_id})
+            accounts = [{"equity": 1000.0, "balance": 1000.0}]
+            res = await check_and_trip(db, user_id, cfg, accounts)
+            cfg_after = await db.bot_configs.find_one({"user_id": user_id})
+            client.close()
+            return res, cfg_after
+
+        try:
+            res, cfg_after = asyncio.run(run())
+            assert res["tripped"] is True, f"Expected trip, got {res}"
+            assert cfg_after["active"] is False
+            assert cfg_after.get("tripped_reason"), "tripped_reason should be set"
+        finally:
+            sync.bot_configs.delete_many({"user_id": user_id})
+            sync.trades.delete_many({"user_id": user_id})
+
+    def test_check_and_trip_no_breach_below_limit(self):
+        """Small loss within limit -> bot stays active."""
+        import asyncio
+        from pymongo import MongoClient
+        from circuit_breakers import check_and_trip
+        from motor.motor_asyncio import AsyncIOMotorClient
+
+        mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+        db_name = os.environ.get("DB_NAME", "ai_trading_bot")
+        sync = MongoClient(mongo_url)[db_name]
+
+        user_id = f"TEST_CB_USER_{uuid.uuid4().hex[:6]}"
+        sync.bot_configs.insert_one({
+            "user_id": user_id, "risk_level": "medium", "symbols": ["BTCUSD"],
+            "active": True, "max_concurrent_trades": 3, "auto_execute": True,
+        })
+        # -10 USD out of 1000 = -1%, below medium 4% limit
+        sync.trades.insert_one({
+            "user_id": user_id, "account_id": "TEST_ACC", "symbol": "BTCUSD",
+            "action": "BUY", "lot_size": 0.01, "entry_price": 60000,
+            "stop_loss": 59000, "take_profit": 61000, "exit_price": 59900,
+            "pnl": -10.0, "status": "closed",
+            "opened_at": datetime_utcnow_iso(),
+            "closed_at": datetime_utcnow_iso(),
+        })
+
+        async def run():
+            client = AsyncIOMotorClient(mongo_url)
+            db = client[db_name]
+            cfg = await db.bot_configs.find_one({"user_id": user_id})
+            accounts = [{"equity": 1000.0}]
+            res = await check_and_trip(db, user_id, cfg, accounts)
+            client.close()
+            return res
+
+        try:
+            res = asyncio.run(run())
+            assert res["tripped"] is False
+        finally:
+            sync.bot_configs.delete_many({"user_id": user_id})
+            sync.trades.delete_many({"user_id": user_id})
+
+
+# ---------- Dual-AI veto logic (pure function) ----------
+class TestDualAIVeto:
+    def test_buy_vetoed_by_bearish_sentiment(self):
+        from ai_signals import _apply_dual_veto
+        action, reason = _apply_dual_veto("BUY", 80.0, {"score": -0.7})
+        assert action == "HOLD"
+        assert "vetoed" in reason.lower()
+
+    def test_sell_vetoed_by_bullish_sentiment(self):
+        from ai_signals import _apply_dual_veto
+        action, reason = _apply_dual_veto("SELL", 70.0, {"score": 0.7})
+        assert action == "HOLD"
+        assert "vetoed" in reason.lower()
+
+    def test_no_veto_when_sentiment_weak(self):
+        from ai_signals import _apply_dual_veto
+        action, reason = _apply_dual_veto("BUY", 60.0, {"score": 0.2})
+        assert action == "BUY"
+        assert reason == ""
+
+    def test_no_veto_when_aligned(self):
+        from ai_signals import _apply_dual_veto
+        action, reason = _apply_dual_veto("BUY", 60.0, {"score": 0.8})
+        assert action == "BUY"
+        assert reason == ""

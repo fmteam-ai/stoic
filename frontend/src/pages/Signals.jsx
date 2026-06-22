@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Brain, ArrowUp, ArrowDown, Pause, Zap as Lightning, Trash2 as Trash } from "lucide-react";
+import { Brain, ArrowUp, ArrowDown, Pause, Zap as Lightning, Trash2 as Trash, ShieldCheck } from "lucide-react";
+import { useLiveStream } from "@/lib/useLiveStream";
+import { toast } from "sonner";
 
 function ActionPill({ action }) {
     if (action === "BUY") return <span className="font-mono text-[10px] tracking-widest px-2 py-1 bg-[#00FF41]/10 text-[#00FF41] border border-[#00FF41]/30 inline-flex items-center gap-1"><ArrowUp className="w-3 h-3" /> BUY</span>;
@@ -30,6 +32,9 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
     const [accId, setAccId] = useState(accounts[0]?.id || "");
     useEffect(() => { if (!accId && accounts[0]) setAccId(accounts[0].id); }, [accounts, accId]);
     const tradeable = s.tradeable;
+    const sentScore = s.sentiment?.score ?? 0;
+    const sentLabel = s.sentiment?.label;
+    const sentClass = sentScore > 0.2 ? "text-[#00FF41]" : sentScore < -0.2 ? "text-[#FF3B30]" : "text-[#A1A1AA]";
 
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-5 space-y-3" data-testid={`signal-card-${s.symbol}`}>
@@ -37,6 +42,9 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
                 <div className="flex items-center gap-3">
                     <ActionPill action={s.action} />
                     <span className="font-mono text-sm tracking-widest">{s.symbol}</span>
+                    {s.origin === "auto" && (
+                        <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 bg-[#FFB000]/10 text-[#FFB000] border border-[#FFB000]/30">AUTO</span>
+                    )}
                 </div>
                 <div className="flex items-center gap-2">
                     <span className="font-mono text-[10px] text-[#52525B] tracking-widest">RISK · {s.risk_level?.toUpperCase()}</span>
@@ -47,6 +55,16 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
             </div>
 
             <ConfBar value={s.confidence || 0} threshold={s.min_confidence_required || 65} />
+
+            {s.veto_applied && (
+                <div className="bg-[#FFB000]/10 border border-[#FFB000]/30 px-3 py-2 flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-[#FFB000] shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                        <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-0.5">DUAL-AI VETO APPLIED</div>
+                        <div className="text-[#A1A1AA]">Chart said {s.chart_action} but news sentiment disagreed — forced to HOLD.</div>
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-cols-3 gap-2 pt-2">
                 <div>
@@ -63,10 +81,20 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
                 </div>
             </div>
 
+            {sentLabel && (
+                <div className="pt-2 border-t border-[#1F1F1F]">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">NEWS SENTIMENT</div>
+                    <div className="flex items-center gap-2 text-xs">
+                        <span className={`font-mono ${sentClass}`}>{sentLabel.replace("_", " ").toUpperCase()} · {sentScore >= 0 ? "+" : ""}{sentScore}</span>
+                        <span className="text-[#52525B] font-mono">· {s.sentiment.article_count} articles</span>
+                    </div>
+                </div>
+            )}
+
             {s.reasoning && (
                 <div className="pt-2 border-t border-[#1F1F1F]">
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1.5">AI REASONING</div>
-                    <p className="text-xs text-[#A1A1AA] leading-relaxed">{s.reasoning}</p>
+                    <p className="text-xs text-[#A1A1AA] leading-relaxed whitespace-pre-wrap">{s.reasoning}</p>
                 </div>
             )}
 
@@ -121,6 +149,22 @@ export default function Signals() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+
+    // Live stream: auto-add new signals + toast on auto-trades
+    const { lastEvent } = useLiveStream();
+    useEffect(() => {
+        if (!lastEvent) return;
+        if (lastEvent.type === "signal_created") {
+            setSignals(prev => [lastEvent.payload, ...prev].slice(0, 50));
+        } else if (lastEvent.type === "trade_created" && lastEvent.payload?.origin === "auto") {
+            toast.success(`Auto-trade · ${lastEvent.payload.symbol} ${lastEvent.payload.action}`, {
+                description: `${lastEvent.payload.lot_size} lots queued for MT5`,
+            });
+            // Mark signal as consumed
+            const sigId = lastEvent.payload.signal_id;
+            if (sigId) setSignals(prev => prev.map(s => s.id === sigId ? { ...s, consumed: true } : s));
+        }
+    }, [lastEvent]);
 
     const handleGenerate = async () => {
         setGenerating(true); setErr(""); setMsg("");

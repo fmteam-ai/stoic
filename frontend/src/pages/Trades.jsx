@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { RefreshCw as ArrowsClockwise, X } from "lucide-react";
+import { useLiveStream } from "@/lib/useLiveStream";
 
 const STATUS_STYLE = {
     pending: "border-[#FFB000]/40 text-[#FFB000]",
@@ -39,6 +40,13 @@ export default function Trades() {
     }, [filter]);
 
     useEffect(() => { load(); }, [load]);
+
+    // Live: refresh on any trade event
+    const { lastEvent } = useLiveStream();
+    useEffect(() => {
+        if (!lastEvent) return;
+        if (lastEvent.type === "trade_created" || lastEvent.type === "trade_updated") load();
+    }, [lastEvent, load]);
 
     const close = async (id) => {
         if (!window.confirm("Send close instruction to MT5 EA?")) return;
