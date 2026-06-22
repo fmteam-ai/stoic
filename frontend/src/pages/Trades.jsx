@@ -66,6 +66,30 @@ function dollarDistance(trade, currentPrice, levelPrice) {
     return Math.abs(currentPrice - lvl) * lot * cs;
 }
 
+// Median of an array of numbers — robust to outliers (small spike won't skew ETA).
+function median(arr) {
+    if (!arr || arr.length === 0) return 0;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : 0.5 * (s[mid - 1] + s[mid]);
+}
+
+// Format a number of seconds into "3m", "2h 14m", "imminent", etc.
+// Returns "—" for null/no data (still calibrating), "stalled" only when
+// a velocity was measurable but came back as 0.
+function formatEta(seconds) {
+    if (seconds == null) return "—";
+    if (!Number.isFinite(seconds) || seconds < 0) return "stalled";
+    if (seconds < 60) return "imminent";
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    if (seconds < 86400) {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.round((seconds % 3600) / 60);
+        return m ? `${h}h ${m}m` : `${h}h`;
+    }
+    return `${Math.round(seconds / 86400)}d`;
+}
+
 const CLOSE_REASON_BADGE = {
     take_profit:     { label: "TP",       cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]",         icon: "🎯" },
     stop_loss:       { label: "SL",       cls: "border-[#FF3B30]/40 bg-[#FF3B30]/10 text-[#FF3B30]",         icon: "🛑" },
@@ -117,6 +141,7 @@ function RiskThermometer({ openLive, hasAnyLive, liveAccent, closestSL, closestT
                             <span className="text-[#FF3B30]" title={`${closestSL.symbol} @ ${closestSL.level}`}>
                                 ${closestSL.dist.toFixed(2)}
                                 <span className="text-[#52525B] ml-1">{closestSL.symbol}</span>
+                                <span className="text-[#FF3B30]/70 ml-1" data-testid="closest-sl-eta">· {formatEta(closestSL.eta)}</span>
                             </span>
                         </div>
                     )}
@@ -126,6 +151,7 @@ function RiskThermometer({ openLive, hasAnyLive, liveAccent, closestSL, closestT
                             <span className="text-[#00FF41]" title={`${closestTP.symbol} @ ${closestTP.level}`}>
                                 ${closestTP.dist.toFixed(2)}
                                 <span className="text-[#52525B] ml-1">{closestTP.symbol}</span>
+                                <span className="text-[#00FF41]/70 ml-1" data-testid="closest-tp-eta">· {formatEta(closestTP.eta)}</span>
                             </span>
                         </div>
                     )}
@@ -142,6 +168,8 @@ export default function Trades() {
     const [err, setErr] = useState("");
     const [filter, setFilter] = useState("");
     const [quotes, setQuotes] = useState({}); // {SYMBOL: price}
+    const quoteHistoryRef = useRef({}); // {SYMBOL: [{ts, price}]}
+    const [velocities, setVelocities] = useState({}); // {SYMBOL: priceUnitsPerSec}
 
     const load = useCallback(async () => {
         try {
@@ -189,12 +217,42 @@ export default function Trades() {
                 const { data } = await api.get(`/market/quotes?symbols=${symbolsKey}`);
                 if (cancelled) return;
                 const next = {};
+                const hist = quoteHistoryRef.current;
                 for (const q of data.quotes || []) {
                     if (q.symbol && q.price != null && !q.error) {
-                        next[q.symbol] = parseFloat(q.price);
+                        const p = parseFloat(q.price);
+                        next[q.symbol] = p;
+                        // Sample by UPSTREAM timestamp (not local poll time) so
+                        // cached responses don't pollute the velocity buffer.
+                        // Backend caches quotes for 60-120s, so we only add a
+                        // new sample when the upstream timestamp advances.
+                        const ts = q.timestamp ? Date.parse(q.timestamp) : Date.now();
+                        if (Number.isNaN(ts)) continue;
+                        const buf = hist[q.symbol] || [];
+                        const last = buf[buf.length - 1];
+                        if (!last || last.ts !== ts) {
+                            buf.push({ ts, price: p });
+                            if (buf.length > 20) buf.shift();
+                            hist[q.symbol] = buf;
+                        }
                     }
                 }
                 setQuotes(next);
+                // Recompute velocities: median |Δp|/Δt across consecutive pairs.
+                const vel = {};
+                for (const sym of Object.keys(hist)) {
+                    const buf = hist[sym];
+                    if (!buf || buf.length < 2) continue;
+                    const rates = [];
+                    for (let i = 1; i < buf.length; i++) {
+                        const dt = (buf[i].ts - buf[i - 1].ts) / 1000;
+                        if (dt <= 0) continue;
+                        rates.push(Math.abs(buf[i].price - buf[i - 1].price) / dt);
+                    }
+                    // Need at least 2 samples (1 rate) to claim a velocity.
+                    if (rates.length >= 1) vel[sym] = median(rates);
+                }
+                setVelocities(vel);
             } catch {
                 /* keep stale quote on transient errors */
             } finally {
@@ -240,20 +298,26 @@ export default function Trades() {
                         : undefined;
 
                     // Closest SL & TP across all open positions (smallest $-distance).
-                    let closestSL = null;     // {$dist, symbol, level}
+                    let closestSL = null;     // {dist, symbol, level, eta?}
                     let closestTP = null;
                     for (const t of trades) {
                         if (t.status !== "open") continue;
                         const px = quotes[t.symbol];
                         if (!px) continue;
-                        const dSL = dollarDistance(t, px, t.stop_loss);
+                        const vel = velocities[t.symbol]; // price units / second
+                        const slLevel = parseFloat(t.stop_loss);
+                        const tpLevel = parseFloat(t.tp1 || t.take_profit);
+                        const dSL = dollarDistance(t, px, slLevel);
                         if (dSL != null && (closestSL == null || dSL < closestSL.dist)) {
-                            closestSL = { dist: dSL, symbol: t.symbol, level: parseFloat(t.stop_loss) };
+                            const priceDist = Math.abs(px - slLevel);
+                            const eta = (vel != null && vel > 0) ? priceDist / vel : null;
+                            closestSL = { dist: dSL, symbol: t.symbol, level: slLevel, eta };
                         }
-                        const tpLevel = t.tp1 || t.take_profit;
                         const dTP = dollarDistance(t, px, tpLevel);
                         if (dTP != null && (closestTP == null || dTP < closestTP.dist)) {
-                            closestTP = { dist: dTP, symbol: t.symbol, level: parseFloat(tpLevel) };
+                            const priceDist = Math.abs(px - tpLevel);
+                            const eta = (vel != null && vel > 0) ? priceDist / vel : null;
+                            closestTP = { dist: dTP, symbol: t.symbol, level: tpLevel, eta };
                         }
                     }
 
