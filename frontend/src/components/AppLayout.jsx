@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/Sidebar";
+import { CoPilotWidget } from "@/components/CoPilotWidget";
 
 export function AppLayout({ children }) {
     return (
@@ -7,6 +8,7 @@ export function AppLayout({ children }) {
             <main className="md:ml-60 min-h-screen">
                 {children}
             </main>
+            <CoPilotWidget />
         </div>
     );
 }

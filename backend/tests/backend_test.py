@@ -1689,3 +1689,112 @@ class TestPriorEndpointsRegression:
     def test_signals_list(self, admin_session):
         r = admin_session.get(f"{API}/signals", timeout=10)
         assert r.status_code == 200
+
+
+
+# ---------- Iter-7: AI Co-Pilot (Claude Sonnet 4.5, grounded chat) ----------
+class TestCoPilot:
+    """Test the AI Co-Pilot endpoints: /api/copilot/chat and /api/copilot/sessions"""
+
+    def test_chat_unauthenticated(self):
+        # No auth cookie -> 401
+        r = requests.post(f"{API}/copilot/chat", json={"message": "hi"}, timeout=15)
+        assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
+
+    def test_chat_empty_message_returns_400(self, admin_session):
+        r = admin_session.post(f"{API}/copilot/chat", json={"message": "   "}, timeout=15)
+        assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
+
+    def test_chat_too_long_message_returns_400(self, admin_session):
+        long_msg = "a" * 2001
+        r = admin_session.post(f"{API}/copilot/chat", json={"message": long_msg}, timeout=15)
+        assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
+
+    def test_chat_basic_returns_snapshot_and_answer(self, admin_session):
+        r = admin_session.post(
+            f"{API}/copilot/chat",
+            json={"message": "Why is my bot in HOLD?"},
+            timeout=60,
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        data = r.json()
+        assert "session_id" in data and isinstance(data["session_id"], str) and len(data["session_id"]) > 0
+        assert "answer" in data and isinstance(data["answer"], str) and len(data["answer"]) > 0
+        assert "snapshot" in data and isinstance(data["snapshot"], dict)
+        snap = data["snapshot"]
+        for key in ["accounts", "recent_signals", "open_trades", "recent_trades", "panic", "active_triggers"]:
+            assert key in snap, f"snapshot missing key: {key}"
+        # bot_config may be absent if user has no bot config, but admin should have one — accept either
+        # Stash session id for next test
+        TestCoPilot._session_id = data["session_id"]
+
+    def test_chat_multi_turn_continuity(self, admin_session):
+        sid = getattr(TestCoPilot, "_session_id", None)
+        assert sid, "Previous test must set session_id"
+        r = admin_session.post(
+            f"{API}/copilot/chat",
+            json={"message": "What's my drawdown today?", "session_id": sid},
+            timeout=60,
+        )
+        assert r.status_code == 200, f"Got {r.status_code}: {r.text}"
+        data = r.json()
+        assert data["session_id"] == sid, "Session id should be preserved"
+        assert isinstance(data["answer"], str) and len(data["answer"]) > 0
+        # Now verify message count via GET /sessions/{sid}
+        r2 = admin_session.get(f"{API}/copilot/sessions/{sid}", timeout=15)
+        assert r2.status_code == 200
+        body = r2.json()
+        assert body["session_id"] == sid
+        msgs = body.get("messages", [])
+        # 2 turns x (user+assistant) = at least 4
+        assert len(msgs) >= 4, f"Expected >=4 messages, got {len(msgs)}"
+        # Verify role alternation: first user, then assistant, etc.
+        assert msgs[0]["role"] == "user"
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[2]["role"] == "user"
+        assert msgs[3]["role"] == "assistant"
+
+    def test_list_sessions(self, admin_session):
+        r = admin_session.get(f"{API}/copilot/sessions", timeout=15)
+        assert r.status_code == 200
+        sessions = r.json()
+        assert isinstance(sessions, list)
+        assert len(sessions) >= 1
+        s0 = sessions[0]
+        for key in ["session_id", "created_at", "last_used_at", "message_count", "preview"]:
+            assert key in s0, f"Session missing key: {key}"
+        assert s0["message_count"] >= 2
+
+    def test_session_detail_not_found_returns_404(self, admin_session):
+        r = admin_session.get(f"{API}/copilot/sessions/nonexistent_xyz_999", timeout=15)
+        assert r.status_code == 404
+
+    def test_grounding_recent_signal_appears_in_snapshot(self, admin_session):
+        # Generate fresh BTCUSD signal first
+        gen = admin_session.post(f"{API}/signals/generate", json={"symbol": "BTCUSD"}, timeout=60)
+        assert gen.status_code == 200, f"Signal generate failed: {gen.status_code} {gen.text}"
+        sig = gen.json()
+        sig_symbol = sig.get("symbol")
+        sig_action = sig.get("action")
+        # Now ask Co-Pilot about it — its snapshot should include this signal
+        r = admin_session.post(
+            f"{API}/copilot/chat",
+            json={"message": "Tell me about my latest BTC signal"},
+            timeout=60,
+        )
+        assert r.status_code == 200
+        snap = r.json()["snapshot"]
+        recent = snap.get("recent_signals", [])
+        assert len(recent) > 0, "recent_signals should be populated"
+        latest = recent[0]
+        assert latest["symbol"] == sig_symbol
+        assert latest["action"] == sig_action
+        # meta_verdict from the signal we just generated
+        expected_verdict = (sig.get("meta_label") or {}).get("verdict")
+        if expected_verdict is not None:
+            assert latest.get("meta_verdict") == expected_verdict
+
+    def test_no_route_conflict_existing_endpoints_still_work(self, admin_session):
+        # Quick regression — make sure adding copilot routes didn't break adjacent /api routes
+        assert admin_session.get(f"{API}/signals", timeout=10).status_code == 200
+        assert admin_session.get(f"{API}/accounts", timeout=10).status_code == 200

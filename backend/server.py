@@ -29,6 +29,7 @@ from routes.sentiment_routes import router as sentiment_router
 from routes.calendar_routes import router as calendar_router
 from routes.panic_routes import router as panic_router
 from routes.nl_routes import router as nl_router
+from routes.copilot_routes import router as copilot_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -75,6 +76,7 @@ api_router.include_router(sentiment_router)
 api_router.include_router(calendar_router)
 api_router.include_router(panic_router)
 api_router.include_router(nl_router)
+api_router.include_router(copilot_router)
 
 
 # ---------- WebSocket ----------
