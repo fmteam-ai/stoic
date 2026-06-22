@@ -23,22 +23,32 @@ async def heartbeat(payload: BridgeHeartbeat):
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
     now_iso = datetime.now(timezone.utc).isoformat()
-    await db.accounts.update_one(
-        {"_id": acc["_id"]},
-        {"$set": {
-            "balance": payload.balance,
-            "equity": payload.equity,
-            "open_positions": payload.open_positions,
-            "status": "connected",
-            "last_heartbeat": now_iso,
-        }},
-    )
+    set_doc = {
+        "balance": payload.balance,
+        "equity": payload.equity,
+        "open_positions": payload.open_positions,
+        "status": "connected",
+        "last_heartbeat": now_iso,
+    }
+    if payload.spreads:
+        # Normalise keys + clamp to non-negative floats
+        clean = {}
+        for sym, sp in payload.spreads.items():
+            try:
+                clean[str(sym).upper()] = max(0.0, float(sp))
+            except Exception:
+                continue
+        if clean:
+            set_doc["current_spreads"] = clean
+            set_doc["spreads_updated_at"] = now_iso
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$set": set_doc})
     await ws_manager.broadcast(acc["user_id"], "account_heartbeat", {
         "account_id": str(acc["_id"]),
         "balance": payload.balance,
         "equity": payload.equity,
         "open_positions": payload.open_positions,
         "last_heartbeat": now_iso,
+        "spreads": set_doc.get("current_spreads"),
     })
     return {"ok": True, "server_time": now_iso}
 

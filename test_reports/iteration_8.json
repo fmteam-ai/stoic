@@ -1,0 +1,39 @@
+{
+  "summary": "Iter-8 verification of the three new Trading Intelligence features: (1) Auto-tune confidence threshold from analytics, (2) MT5 Spread filter, (3) Multi-Timeframe (MTF) trend gate. Full backend regression: 156/156 pytest tests PASS in 117s including 12 new tests in TestMtfGate (5), TestAutoTune (4), TestSpreadFilter (3). Live signal payload for XAUUSD confirmed to carry the new 'mtf_gate' envelope with all 5 keys (aligned, htf_trend, votes, reason, checked). Frontend /bot Section-05 'TRADING INTELLIGENCE' renders correctly with trading-intelligence-section, toggle-auto_tune_enabled, toggle-spread_filter_enabled; toggling spread_filter ON reveals spread-cap-XAUUSD (BTCUSD cap correctly omitted because only XAUUSD is in active symbols list). Value 4.5 persists across reload. Frontend /analytics renders auto-tune-card with auto-tune-XAUUSD tile showing EFFECTIVE 75% / SUGGESTED — / SAMPLES 1 plus the 9-bucket histogram (50-90 in steps of 5). Zero JavaScript console errors on either page.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter8_new_features.xml",
+    "/app/test_reports/pytest/iter8_full.xml"
+  ],
+  "action_items": [
+    "(INFO ONLY) The review-request item 'spread-cap-BTCUSD input visible when spread_filter is ON' was not directly observable in this run because the admin user's active symbol list contains only XAUUSD. The cap UI renders one input per active symbol — this is correct behaviour. If the spec really wants BOTH caps always visible regardless of active symbols, decide explicitly and document.",
+    "(CARRY-OVER, LOW) From iter-7: still open — (a) sanitise raw Stripe SDK exception text leaked in /api/subscription/checkout 502 detail; (b) html-to-image SecurityError on cross-origin Google Fonts in diagnostics.js captureViewport(). Not in scope of this round."
+  ],
+  "critical_code_review_comments": [
+    "All 12 new tests (TestMtfGate ×5, TestAutoTune ×4, TestSpreadFilter ×3) pass on first run. _compute_threshold logic verified: picks LOWEST qualifying bucket and floors at profile_min via max(suggested, profile_min). Cache refresh endpoint (POST /api/analytics/auto-tune/refresh) returns {refreshed:true, thresholds:[...]}.",
+    "Live POST /api/signals/generate {symbol:'XAUUSD'} returns mtf_gate={aligned, htf_trend, votes:{sma20_slope, sma50_vs_200, price_vs_sma50}, reason, checked} as documented. In current market conditions all 3 votes were FLAT → checked=false (soft-pass) which is correct behaviour for an undecided HTF trend.",
+    "BotConfig PUT roundtrip persists spread_filter_enabled, max_spread_pips dict (per-symbol pip caps), and auto_tune_enabled. Frontend saves the value 4.5 on XAUUSD and reads it back unchanged after page reload — full DB persistence confirmed.",
+    "/api/bridge/heartbeat accepts optional 'spreads' field, stores it as current_spreads on accounts, and a heartbeat WITHOUT spreads still returns 200 (backward-compat preserved). New test test_heartbeat_persists_spreads round-trips the value via GET /api/accounts.",
+    "Frontend /analytics auto-tune-card renders fine with the seeded 1-trade dataset: 'PROFILE DEFAULT' badge appears because samples=1 (< MIN_SAMPLES so source='profile_default'), histogram tiles visible 50..90 in 5-pt steps with the 65 bucket highlighted green for the single closed XAUUSD trade. UX is honest about insufficient data ('Not enough data yet — need 5 closed trades').",
+    "No JS console errors during navigation across /bot and /analytics. Bot Config UI is dense but readable; layout/contrast OK at 1920×1080.",
+    "Note: login redirected to '/' (not '/dashboard') — both routes render the dashboard, so this is just a router default; not a bug, but consider redirecting explicitly to /dashboard after login for cleaner URL.",
+    "Backend regression untouched: all earlier-iter features (calendar veto, regime adapter, meta-labeler, dual-AI veto, Kelly sizing, paper trading, WebSocket, rate limits) still pass."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (156/156)", "frontend": "100% on /bot and /analytics with zero console errors"},
+  "test_credentials": "admin@trading.bot / admin123 — verified working.",
+  "seed_data_creation": "Created ~3 throwaway test users (compat_*, TEST_iter*) via /api/auth/register during pytest runs (auto-cleaned by class teardown where applicable). Set admin's bot_config briefly to {spread_filter_enabled:true, max_spread_pips:{XAUUSD:4.5}, auto_tune_enabled:false} via frontend then reset to {spread_filter_enabled:false, auto_tune_enabled:true} at end of frontend test. The pytest TestSpreadFilter::test_bot_config_roundtrip_spread_fields also resets admin config at end.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression entry point: /app/backend/tests/backend_test.py — 156 tests, ~2 min runtime. New iter-8 test classes are TestMtfGate, TestAutoTune, TestSpreadFilter (lines 2177-2378). Key endpoints added this round: GET /api/analytics/auto-tune (returns list with per-symbol suggested/profile_min/effective thresholds, source flag, breakdown histogram), POST /api/analytics/auto-tune/refresh (clears cache, returns refreshed:true). BotConfig now has 3 new fields: spread_filter_enabled (bool, default false), max_spread_pips (dict[str,float]), auto_tune_enabled (bool, default true). BridgeHeartbeat accepts optional 'spreads' dict; persisted on accounts as current_spreads. Signal payload now includes 'mtf_gate' envelope (aligned/htf_trend/votes/reason/checked). MTF gate veto kicks in on direction mismatch with strong HTF trend (verified via test_buy_counter_trend_vetoed and test_sell_counter_trend_vetoed pure-function tests). Frontend testids: trading-intelligence-section, toggle-auto_tune_enabled, toggle-spread_filter_enabled, spread-cap-{SYMBOL}, auto-tune-card, auto-tune-{SYMBOL}.",
+  "rca of the issue": "n/a — feature-add verification pass. All three features (auto-tune, spread filter, MTF gate) work end-to-end at API + UI + DB persistence level. The mtf_gate.checked=false outcome on live XAUUSD signal is expected (FLAT HTF trend → soft-pass, no veto)."
+}

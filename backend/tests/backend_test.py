@@ -2172,3 +2172,206 @@ class TestBackendErrorLogs:
             chunk = f.read().decode(errors="ignore")
         # Lightweight check: no unhandled Tracebacks during this run
         assert "Traceback (most recent call last)" not in chunk, chunk[-2000:]
+
+
+class TestMtfGate:
+    """Multi-Timeframe trend gate — pure-function tests."""
+
+    def _setup(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from mtf_check import multi_timeframe_gate
+        return multi_timeframe_gate
+
+    def test_buy_aligned_with_uptrend(self):
+        fn = self._setup()
+        # 70-day climbing series — clear uptrend on all 3 checks
+        history = [{"close": 100 + i * 1.5} for i in range(70)]
+        indicators = {"current_price": history[-1]["close"], "sma_50": 120, "sma_200": 110}
+        out = fn("BUY", history, indicators)
+        assert out["aligned"] is True
+        assert out["htf_trend"] == "UP"
+        assert out["reason"] == ""
+
+    def test_buy_counter_trend_vetoed(self):
+        fn = self._setup()
+        # Falling series — BUY should be vetoed
+        history = [{"close": 200 - i * 1.5} for i in range(70)]
+        indicators = {"current_price": history[-1]["close"], "sma_50": 100, "sma_200": 150}
+        out = fn("BUY", history, indicators)
+        assert out["aligned"] is False
+        assert out["htf_trend"] == "DOWN"
+        assert "MTF" in out["reason"]
+
+    def test_sell_counter_trend_vetoed(self):
+        fn = self._setup()
+        history = [{"close": 100 + i * 1.5} for i in range(70)]
+        indicators = {"current_price": history[-1]["close"], "sma_50": 150, "sma_200": 100}
+        out = fn("SELL", history, indicators)
+        assert out["aligned"] is False
+        assert out["htf_trend"] == "UP"
+
+    def test_hold_is_noop(self):
+        fn = self._setup()
+        history = [{"close": 100 + i * 1.5} for i in range(70)]
+        indicators = {"current_price": 200, "sma_50": 150, "sma_200": 100}
+        out = fn("HOLD", history, indicators)
+        assert out["aligned"] is True
+        assert out["checked"] is False
+
+    def test_short_history_passes(self):
+        fn = self._setup()
+        # too few candles → soft pass
+        history = [{"close": 100 + i} for i in range(10)]
+        indicators = {"current_price": 110}
+        out = fn("BUY", history, indicators)
+        assert out["aligned"] is True
+        assert out["checked"] is False
+
+
+class TestAutoTune:
+    """Auto-tune confidence threshold from analytics."""
+
+    def test_get_endpoint_returns_per_symbol(self, admin_session):
+        r = admin_session.get(f"{API}/analytics/auto-tune", timeout=15)
+        assert r.status_code == 200
+        body = r.json()
+        assert "thresholds" in body
+        assert "enabled" in body
+        assert isinstance(body["thresholds"], list)
+        for t in body["thresholds"]:
+            assert "suggested_threshold" in t
+            assert "profile_min" in t
+            assert "effective_threshold" in t
+            assert "source" in t
+            assert t["source"] in ("auto_tuned", "profile_default")
+            assert "breakdown" in t
+
+    def test_refresh_endpoint(self, admin_session):
+        r = admin_session.post(f"{API}/analytics/auto-tune/refresh", timeout=15)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["refreshed"] is True
+        assert isinstance(body["thresholds"], list)
+
+    def test_compute_threshold_picks_lowest_qualifying_bucket(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from auto_tune import _compute_threshold
+        # Bucket 60: 6 trades, 4 wins → 66.7% wr (qualifies)
+        # Bucket 70: 6 trades, 5 wins → 83% wr (qualifies)
+        rows = (
+            [{"confidence": 62, "pnl": 10} for _ in range(4)]
+            + [{"confidence": 62, "pnl": -5} for _ in range(2)]
+            + [{"confidence": 72, "pnl": 10} for _ in range(5)]
+            + [{"confidence": 72, "pnl": -5} for _ in range(1)]
+        )
+        out = _compute_threshold(rows, profile_min=65.0)
+        # Lowest qualifying is 60
+        assert out["suggested_threshold"] == 60
+        # Effective is max(60, profile_min=65) = 65
+        assert out["effective_threshold"] == 65.0
+        assert out["source"] == "auto_tuned"
+
+    def test_compute_threshold_falls_back_to_profile(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from auto_tune import _compute_threshold
+        # Only 2 trades total — below MIN_SAMPLES
+        rows = [{"confidence": 75, "pnl": 5}, {"confidence": 80, "pnl": 10}]
+        out = _compute_threshold(rows, profile_min=65.0)
+        assert out["suggested_threshold"] is None
+        assert out["source"] == "profile_default"
+        assert out["effective_threshold"] == 65.0
+
+
+class TestSpreadFilter:
+    """Bridge heartbeat carries spreads; bot config persists threshold; gate applied."""
+
+    def test_bot_config_roundtrip_spread_fields(self, admin_session):
+        r = admin_session.get(f"{API}/bot/config", timeout=10)
+        assert r.status_code == 200
+        cfg = r.json()
+        # New fields exist with sane defaults
+        assert "spread_filter_enabled" in cfg
+        assert "max_spread_pips" in cfg
+        assert "auto_tune_enabled" in cfg
+        # Update + read back
+        cfg["spread_filter_enabled"] = True
+        cfg["max_spread_pips"] = {"XAUUSD": 3.5, "BTCUSD": 80.0}
+        cfg["auto_tune_enabled"] = False
+        r2 = admin_session.put(f"{API}/bot/config", json=cfg, timeout=10)
+        assert r2.status_code == 200
+        back = r2.json()
+        assert back["spread_filter_enabled"] is True
+        assert back["max_spread_pips"]["XAUUSD"] == 3.5
+        assert back["max_spread_pips"]["BTCUSD"] == 80.0
+        assert back["auto_tune_enabled"] is False
+        # Reset for other tests
+        cfg["spread_filter_enabled"] = False
+        cfg["auto_tune_enabled"] = True
+        admin_session.put(f"{API}/bot/config", json=cfg, timeout=10)
+
+    def test_heartbeat_persists_spreads(self, admin_session):
+        # Need an account with a bridge token
+        accs = admin_session.get(f"{API}/accounts", timeout=10).json()
+        live = [a for a in accs if (a.get("mode") or "live") == "live"]
+        if not live:
+            # Create a live account to test
+            r = admin_session.post(
+                f"{API}/accounts",
+                json={
+                    "label": "spread-test", "broker": "Test", "server": "Test-Demo",
+                    "account_number": "999111", "account_type": "demo",
+                    "base_currency": "USD", "mode": "live",
+                },
+                timeout=15,
+            )
+            assert r.status_code == 200
+            token = r.json()["bridge_token"]
+            acc_id = r.json()["id"]
+        else:
+            token = live[0]["bridge_token"]
+            acc_id = live[0]["id"]
+        # Send a heartbeat carrying spreads
+        r = requests.post(
+            f"{API}/bridge/heartbeat",
+            json={
+                "bridge_token": token, "balance": 1000.0, "equity": 1000.0,
+                "open_positions": 0,
+                "spreads": {"XAUUSD": 4.2, "BTCUSD": 70.5},
+            },
+            timeout=15,
+        )
+        assert r.status_code == 200, r.text
+        # Pull accounts back — current_spreads must be present
+        accs2 = admin_session.get(f"{API}/accounts", timeout=10).json()
+        match = [a for a in accs2 if a["id"] == acc_id][0]
+        assert match.get("current_spreads", {}).get("XAUUSD") == 4.2
+        assert match.get("current_spreads", {}).get("BTCUSD") == 70.5
+
+    def test_heartbeat_without_spreads_still_works(self):
+        # Backward-compat: old EA without spreads field should not crash
+        # Use a known-good account by registering a fresh one
+        s = requests.Session()
+        import uuid as _u
+        email = f"compat_{_u.uuid4().hex[:8]}@example.com"
+        s.post(f"{API}/auth/register", json={"email": email, "password": "pw123456"}, timeout=15)
+        r = s.post(
+            f"{API}/accounts",
+            json={
+                "label": "compat", "broker": "B", "server": "X",
+                "account_number": "12345", "account_type": "demo",
+                "mode": "live",
+            },
+            timeout=15,
+        )
+        assert r.status_code == 200, r.text
+        token = r.json()["bridge_token"]
+        # No spreads field at all — must still 200
+        r2 = requests.post(
+            f"{API}/bridge/heartbeat",
+            json={"bridge_token": token, "balance": 500.0, "equity": 500.0, "open_positions": 0},
+            timeout=15,
+        )
+        assert r2.status_code == 200, r2.text

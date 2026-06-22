@@ -32,6 +32,9 @@ async def _get_or_create_config(db, user_id: str) -> dict:
         "trailing_distance_r": 0.7,
         "daily_drawdown_pct": 3.0,
         "daily_drawdown_enabled": True,
+        "spread_filter_enabled": False,
+        "max_spread_pips": {"XAUUSD": 50.0, "BTCUSD": 100.0},
+        "auto_tune_enabled": True,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.bot_configs.insert_one(new_cfg)
@@ -58,6 +61,9 @@ def _serialize(cfg: dict) -> dict:
         "trailing_distance_r": cfg.get("trailing_distance_r", 0.7),
         "daily_drawdown_pct": cfg.get("daily_drawdown_pct", 3.0),
         "daily_drawdown_enabled": cfg.get("daily_drawdown_enabled", True),
+        "spread_filter_enabled": cfg.get("spread_filter_enabled", False),
+        "max_spread_pips": cfg.get("max_spread_pips") or {"XAUUSD": 50.0, "BTCUSD": 100.0},
+        "auto_tune_enabled": cfg.get("auto_tune_enabled", True),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -88,6 +94,9 @@ async def update_config(payload: BotConfigUpdate, user=Depends(get_current_user)
         "trailing_distance_r": payload.trailing_distance_r,
         "daily_drawdown_pct": payload.daily_drawdown_pct,
         "daily_drawdown_enabled": payload.daily_drawdown_enabled,
+        "spread_filter_enabled": payload.spread_filter_enabled,
+        "max_spread_pips": {str(k).upper(): float(v) for k, v in (payload.max_spread_pips or {}).items()},
+        "auto_tune_enabled": payload.auto_tune_enabled,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.bot_configs.update_one(

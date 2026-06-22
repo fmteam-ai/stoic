@@ -23,6 +23,7 @@ from execution import for_account as engine_for_account
 from execution import settle_paper_trades_against_price
 from trigger_sweeper import sweep_once as sweep_triggers
 from subscription_service import is_active as subscription_active
+from auto_tune import get_auto_threshold
 
 logger = logging.getLogger("bot-runner")
 
@@ -102,6 +103,9 @@ async def _process_user(db, cfg: dict):
     risk_level = cfg.get("risk_level", "medium")
     auto_exec = bool(cfg.get("auto_execute", True))
     max_concurrent = int(cfg.get("max_concurrent_trades", 3))
+    auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
+    spread_filter_enabled = bool(cfg.get("spread_filter_enabled", False))
+    max_spread_pips = cfg.get("max_spread_pips") or {}
 
     # Count current open + pending trades to respect max_concurrent
     inflight = await db.trades.count_documents({
@@ -118,6 +122,22 @@ async def _process_user(db, cfg: dict):
         except Exception as e:
             logger.exception("analyze_symbol failed user=%s sym=%s: %s", user_id, sym, e)
             continue
+
+        # Auto-Tune: raise the min-confidence threshold using historical analytics
+        auto_tune_block_reason = None
+        if auto_tune_enabled:
+            try:
+                tune = await get_auto_threshold(user_id, sym, risk_level)
+                signal["auto_tune"] = tune
+                eff = float(tune.get("effective_threshold") or 0)
+                if (signal.get("confidence") or 0) < eff:
+                    auto_tune_block_reason = (
+                        f"Auto-tune raised threshold to {eff:.0f}% "
+                        f"(source={tune.get('source')}, samples={tune.get('total_samples')}); "
+                        f"signal {signal.get('confidence')}% — auto-execute skipped."
+                    )
+            except Exception as e:
+                logger.exception("auto_tune failed user=%s sym=%s: %s", user_id, sym, e)
 
         signal["user_id"] = user_id
         signal["consumed"] = False
@@ -141,6 +161,9 @@ async def _process_user(db, cfg: dict):
         # Auto-execute decision
         if not (auto_exec and signal["tradeable"]):
             continue
+        if auto_tune_block_reason:
+            logger.info("Auto-tune block user=%s sym=%s: %s", user_id, sym, auto_tune_block_reason)
+            continue
         if inflight >= max_concurrent:
             logger.info("Max concurrent (%s) reached for user=%s; skipping execute", max_concurrent, user_id)
             continue
@@ -153,6 +176,26 @@ async def _process_user(db, cfg: dict):
                            user_id, rl["count_60s"], rl["limit"])
             continue
         target_account = connected[0]
+
+        # Spread filter — block auto-execution when MT5 spread > configured cap
+        if spread_filter_enabled and (target_account.get("mode") or "live") == "live":
+            spreads = target_account.get("current_spreads") or {}
+            current_sp = spreads.get(sym)
+            cap = max_spread_pips.get(sym)
+            if current_sp is not None and cap is not None and current_sp > float(cap):
+                logger.info(
+                    "Spread filter block user=%s sym=%s spread=%.1fp cap=%.1fp",
+                    user_id, sym, current_sp, cap,
+                )
+                await db.signals.update_one(
+                    {"_id": result.inserted_id},
+                    {"$set": {"spread_filter_block": {
+                        "spread_pips": current_sp,
+                        "cap_pips": cap,
+                        "account_id": str(target_account["_id"]),
+                    }}},
+                )
+                continue
         engine = engine_for_account(target_account)
         trade_doc = await engine.execute(
             user_id=user_id,

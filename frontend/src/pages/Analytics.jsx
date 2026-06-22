@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { BarChart3, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Target } from "lucide-react";
+import { BarChart3, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Target, Gauge } from "lucide-react";
 
 function pnlColor(v) {
     if (v > 0) return "text-[#00FF41]";
@@ -74,14 +74,19 @@ function SliceTable({ title, rows, subtitle, testid }) {
 
 export default function Analytics() {
     const [data, setData] = useState(null);
+    const [tune, setTune] = useState(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
 
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
-            const { data } = await api.get("/analytics/attribution");
-            setData(data);
+            const [attr, autoTune] = await Promise.all([
+                api.get("/analytics/attribution"),
+                api.get("/analytics/auto-tune").catch(() => ({ data: null })),
+            ]);
+            setData(attr.data);
+            setTune(autoTune.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
     }, []);
@@ -158,6 +163,71 @@ export default function Analytics() {
                                 Right now you have {totalTrades}. Once the bot trades for a few days, this page will become genuinely useful —
                                 spotting things like "XAUUSD BUY at London Open with confidence ≥70% wins 78% of the time".
                             </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Auto-Tune Thresholds */}
+                {tune && tune.thresholds && tune.thresholds.length > 0 && (
+                    <div className="border border-[#0099FF]/30 bg-[#0A0A0A]" data-testid="auto-tune-card">
+                        <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                            <Gauge className="w-4 h-4 text-[#0099FF]" />
+                            <div className="flex-1">
+                                <div className="font-display font-bold text-sm tracking-tight">Auto-Tuned Confidence Thresholds</div>
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-0.5">
+                                    {tune.enabled ? "● ACTIVE" : "○ DISABLED"} · risk {tune.risk_level}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
+                            {tune.thresholds.map((t) => (
+                                <div key={t.symbol} className="border border-[#1F1F1F] bg-[#050505] p-3" data-testid={`auto-tune-${t.symbol}`}>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="font-mono text-sm font-medium">{t.symbol}</div>
+                                        <div className={`font-mono text-[10px] px-2 py-0.5 border ${
+                                            t.source === "auto_tuned"
+                                                ? "border-[#0099FF]/40 text-[#0099FF] bg-[#0099FF]/10"
+                                                : "border-[#52525B]/40 text-[#52525B]"
+                                        }`}>
+                                            {t.source === "auto_tuned" ? "AUTO-TUNED" : "PROFILE DEFAULT"}
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
+                                        <div>
+                                            <div className="text-[#52525B] text-[10px] tracking-widest">EFFECTIVE</div>
+                                            <div className="text-[#0099FF] text-lg">{t.effective_threshold}%</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[#52525B] text-[10px] tracking-widest">SUGGESTED</div>
+                                            <div className="text-white text-lg">{t.suggested_threshold ?? "—"}{t.suggested_threshold ? "%" : ""}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[#52525B] text-[10px] tracking-widest">SAMPLES</div>
+                                            <div className="text-white text-lg">{t.total_samples}</div>
+                                        </div>
+                                    </div>
+                                    {/* Bucket breakdown */}
+                                    <div className="mt-3 grid grid-cols-9 gap-px">
+                                        {t.breakdown.map((b) => (
+                                            <div key={b.bucket} className="text-center" title={`${b.bucket}+: ${b.count} trades · ${b.win_rate}% win · ${b.total_pnl} P&L`}>
+                                                <div className={`h-6 flex items-end justify-center ${
+                                                    b.count === 0 ? "bg-[#0A0A0A]"
+                                                    : b.win_rate >= 55 ? "bg-[#00FF41]/20"
+                                                    : b.win_rate >= 45 ? "bg-[#FFB000]/20"
+                                                    : "bg-[#FF3B30]/20"
+                                                }`}>
+                                                    <div className={`w-full ${
+                                                        b.win_rate >= 55 ? "bg-[#00FF41]"
+                                                        : b.win_rate >= 45 ? "bg-[#FFB000]"
+                                                        : "bg-[#FF3B30]"
+                                                    }`} style={{ height: `${Math.min(100, b.win_rate)}%` }} />
+                                                </div>
+                                                <div className="font-mono text-[9px] text-[#52525B] mt-0.5">{b.bucket}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     </div>
                 )}

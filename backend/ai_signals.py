@@ -23,6 +23,7 @@ from entropy_filter import classify_noise
 from regime_adapter import adapt_profile_for_regime
 from meta_labeler import predict_true_signal_probability
 from feature_compressor import compress_history
+from mtf_check import multi_timeframe_gate
 
 SYSTEM_PROMPT = """You are an institutional-grade quantitative trading analyst.
 Inputs: live quote, 12-month indicator snapshot, current news sentiment score,
@@ -199,6 +200,13 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         )
         final_action = "HOLD"
 
+    # 6. Multi-Timeframe trend confluence gate
+    mtf = multi_timeframe_gate(action, history, indicators)
+    mtf_veto = ""
+    if action != "HOLD" and not mtf["aligned"]:
+        mtf_veto = mtf["reason"]
+        final_action = "HOLD"
+
     # SL/TP — pip-based fixed targets (150 SL, 100/200/300 TP tiers)
     from pip_utils import pips_to_price
     sl_pips_target = 150
@@ -242,6 +250,8 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         reasoning = f"{reasoning}\n\nVETO (entropy): {entropy_veto}"
     if meta_veto:
         reasoning = f"{reasoning}\n\nVETO (meta-labeler): {meta_veto}"
+    if mtf_veto:
+        reasoning = f"{reasoning}\n\nVETO (multi-timeframe): {mtf_veto}"
 
     return {
         "symbol": symbol,
@@ -273,9 +283,10 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "compressed_features": compressed_features,
         "regime_execution_mode": regime_meta,
         "meta_label": meta_label,
+        "mtf_gate": mtf,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto),
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto),
         "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity } from "lucide-react";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -51,6 +51,9 @@ export default function BotConfig() {
                 trailing_distance_r: cfg.trailing_distance_r,
                 daily_drawdown_pct: cfg.daily_drawdown_pct,
                 daily_drawdown_enabled: cfg.daily_drawdown_enabled,
+                spread_filter_enabled: cfg.spread_filter_enabled,
+                max_spread_pips: cfg.max_spread_pips || {},
+                auto_tune_enabled: cfg.auto_tune_enabled,
             });
             setCfg(data); setMsg("Configuration saved.");
         } catch (e) { setErr(formatApiError(e)); }
@@ -223,6 +226,9 @@ export default function BotConfig() {
                 {/* Section 04 — Profit Protection Suite */}
                 <ProfitProtectionSection cfg={cfg} setCfg={setCfg} />
 
+                {/* Section 05 — Trading Intelligence */}
+                <TradingIntelligenceSection cfg={cfg} setCfg={setCfg} />
+
                 <div className="flex justify-end">
                     <button onClick={save} disabled={saving}
                         data-testid="bot-save-button"
@@ -324,6 +330,72 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="daily_drawdown_pct" label="DAILY LOSS LIMIT" suffix="% of equity" step={0.5} min={0.5} max={20} />
                         </div>
                     )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function TradingIntelligenceSection({ cfg, setCfg }) {
+    const spreadMap = cfg.max_spread_pips || {};
+    const setSpread = (sym, val) => {
+        const next = { ...spreadMap, [sym]: parseFloat(val) || 0 };
+        setCfg({ ...cfg, max_spread_pips: next });
+    };
+    return (
+        <div className="border border-[#0099FF]/30 bg-[#0A0A0A]" data-testid="trading-intelligence-section">
+            <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                <Activity className="w-4 h-4 text-[#0099FF]" />
+                <div>
+                    <div className="font-mono text-[10px] text-[#0099FF] tracking-widest">SECTION 05 · TRADING INTELLIGENCE</div>
+                    <div className="font-display font-bold text-lg tracking-tight">Adaptive thresholds · spread guard · trend confluence</div>
+                </div>
+            </div>
+            <div className="p-5 space-y-4">
+                {/* Auto-Tune */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="auto_tune_enabled" label="Auto-Tune Confidence Threshold" icon={Gauge} color="#0099FF"
+                        desc="Raises the minimum confidence to trade based on your historical win-rate per confidence bucket. Lower-performing buckets are silently skipped. Tuned per-symbol from closed trades." />
+                    <div className="mt-2 font-mono text-[10px] text-[#52525B] tracking-widest">
+                        VIEW LIVE THRESHOLDS · /analytics/auto-tune
+                    </div>
+                </div>
+
+                {/* Spread Filter */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="spread_filter_enabled" label="MT5 Spread Filter" icon={Activity} color="#0099FF"
+                        desc="Skips auto-execution on LIVE accounts when the broker's current spread (in pips) exceeds your cap for that symbol. EA v1.21+ required — re-download from Accounts." />
+                    {cfg.spread_filter_enabled && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3" data-testid="spread-caps">
+                            {(cfg.symbols || []).map(sym => (
+                                <div key={sym}>
+                                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{sym} · MAX SPREAD (PIPS)</label>
+                                    <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#0099FF]">
+                                        <input type="number" step="0.1" min="0" value={spreadMap[sym] ?? ""}
+                                            onChange={e => setSpread(sym, e.target.value)}
+                                            data-testid={`spread-cap-${sym}`}
+                                            placeholder="e.g. 5"
+                                            className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />
+                                        <span className="font-mono text-[10px] text-[#52525B] tracking-widest px-2">PIPS</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* MTF Gate — informational (always-on) */}
+                <div className="border border-[#1F1F1F] p-4 bg-[#050505]">
+                    <div className="flex items-center gap-2 mb-2">
+                        <TrendingUp className="w-4 h-4 text-[#0099FF]" />
+                        <span className="font-display font-bold text-sm">Multi-Timeframe Trend Gate</span>
+                        <div className="font-mono text-[10px] px-2 py-0.5 border border-[#0099FF]/40 text-[#0099FF] bg-[#0099FF]/10">● ALWAYS ON</div>
+                    </div>
+                    <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                        Every BUY/SELL signal is veto-checked against three trend confluence rules
+                        (SMA20 slope, SMA50 vs SMA200, price vs SMA50). Counter-trend setups are
+                        silently held. Look for <span className="text-[#0099FF]">mtf_gate</span> on the Signals page.
+                    </p>
                 </div>
             </div>
         </div>

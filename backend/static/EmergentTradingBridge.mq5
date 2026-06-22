@@ -15,23 +15,26 @@
 //|                                                                  |
 //| v1.10 — Adds Profit Protection: break-even SL, trailing SL,      |
 //|         partial-close at TP1.                                     |
+//| v1.21 — Heartbeat now reports current symbol spread (pips) for   |
+//|         server-side spread filter.                               |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.20"
+#property version   "1.21"
 #property strict
 
-input string ServerUrl   = "https://your-app.preview.emergentagent.com";
-input string BridgeToken = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
-input int    PollSeconds = 5;
-input int    Slippage    = 10;
-input int    MagicNumber = 901234;
+input string ServerUrl       = "https://your-app.preview.emergentagent.com";
+input string BridgeToken     = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
+input string TrackedSymbols  = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
+input int    PollSeconds     = 5;
+input int    Slippage        = 10;
+input int    MagicNumber     = 901234;
 
 datetime lastPoll = 0;
 
 //+------------------------------------------------------------------+
 int OnInit() {
    EventSetTimer(PollSeconds);
-   Print("STOIC Bridge EA v1.10 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.21 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -57,12 +60,51 @@ string HttpPost(string url, string body) {
    return CharArrayToString(result, 0, ArraySize(result), CP_UTF8);
 }
 
+// Pip size lookup (must mirror backend pip_utils.PIP_SIZE for XAU/BTC/JPY)
+double SymbolPipSize(string sym) {
+   if (sym == "XAUUSD") return 0.10;
+   if (sym == "XAGUSD") return 0.01;
+   if (sym == "BTCUSD") return 1.00;
+   if (sym == "ETHUSD") return 0.10;
+   if (StringFind(sym, "JPY") >= 0) return 0.01;
+   return 0.0001;
+}
+
+// Build {"XAUUSD":3.2,"BTCUSD":85.0} from the comma list, using current symbol spread
+string BuildSpreadsJson() {
+   string out = "{";
+   string list = TrackedSymbols;
+   bool first = true;
+   int start = 0;
+   for (int i = 0; i <= StringLen(list); i++) {
+      if (i == StringLen(list) || StringGetCharacter(list, i) == ',') {
+         string sym = StringSubstr(list, start, i - start);
+         StringTrimLeft(sym); StringTrimRight(sym);
+         if (StringLen(sym) > 0) {
+            MqlTick tick;
+            if (SymbolInfoTick(sym, tick) && tick.ask > 0 && tick.bid > 0) {
+               double pip = SymbolPipSize(sym);
+               double spread_pips = (pip > 0) ? (tick.ask - tick.bid) / pip : 0.0;
+               if (!first) out += ",";
+               out += StringFormat("\"%s\":%.2f", sym, spread_pips);
+               first = false;
+            }
+         }
+         start = i + 1;
+      }
+   }
+   out += "}";
+   return out;
+}
+
 void SendHeartbeat() {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
    int    openPos = PositionsTotal();
-   string body = StringFormat("{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"open_positions\":%d}",
-                              BridgeToken, balance, equity, openPos);
+   string spreads = BuildSpreadsJson();
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"open_positions\":%d,\"spreads\":%s}",
+      BridgeToken, balance, equity, openPos, spreads);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 
