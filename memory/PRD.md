@@ -63,12 +63,28 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 - Encrypted Broker Password Vault (AES-256-GCM).
 - Stripe subscriptions + Affiliate program (gated).
 
+- 2026-06-22 (iter-12) — **Settings page + Capital-Preservation Guards** (this fork):
+  - **Capital Guards** (`bot_runner.py`): Anti-Tilt freeze (pause after N
+    consecutive losses for X hours), Trade-of-Day Cap (per-symbol, per-UTC-day),
+    Asia-Session Skip for XAU (00:00–07:00 UTC chop graveyard).
+    UI controls in BotConfig Section 06 (`capital-guards-section`).
+  - **Settings page** (`/settings`, sidebar `nav-settings`): Profile update,
+    Change Password (bcrypt re-hash), TOTP 2FA enroll (`pyotp` + `qrcode[pil]`)
+    with QR data-URL + 8 single-shot recovery codes (bcrypt-hashed at rest,
+    plaintext shown ONCE).
+  - **Login 2FA gate**: `/api/auth/login` now accepts optional `totp_code`.
+    When 2FA is enabled and code missing, returns 401 `"2FA code required"`;
+    `Login.jsx` reveals `login-2fa-input` on that signal. Recovery codes work
+    in place of TOTP and are single-use.
+  - **New deps**: `pyotp==2.10.0`, `qrcode==8.2`.
+  - **Tests**: +19 (`test_iter12_settings_2fa.py`). **Suite: 207/207 passing.**
+
 ## Roadmap (priority order)
-- **P0** Settings page (Profile + Password + TOTP 2FA) — playbook fetched.
 - **P1** Binance live BTC execution via CCXT.
 - **P2** Surface `mtf_veto` / `auto_tune_block` block reasons inline on the
   Signals page (turn the gate into a teaching tool).
 - **P2** Per-user slippage analytics widget (avg slippage by symbol/time).
+- **P2** Trusted-device "remember this browser for 30 days" for 2FA.
 
 ## Test credentials
 See `/app/memory/test_credentials.md`.

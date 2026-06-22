@@ -30,12 +30,12 @@ class ChangePasswordRequest(BaseModel):
 
 
 class TOTPVerifyRequest(BaseModel):
-    code: str = Field(min_length=6, max_length=8)
+    code: str = Field(min_length=6, max_length=16)
 
 
 class TOTPDisableRequest(BaseModel):
     current_password: str
-    code: str = Field(min_length=6, max_length=8)
+    code: str = Field(min_length=6, max_length=16)
 
 
 class UserOut(BaseModel):
