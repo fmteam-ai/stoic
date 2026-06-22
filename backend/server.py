@@ -58,6 +58,7 @@ async def health():
 
 
 @api_router.get("/ea-script")
+@api_router.get("/bridge/download-ea")
 async def ea_script():
     path = Path(__file__).parent / "static" / "EmergentTradingBridge.mq5"
     if not path.exists():

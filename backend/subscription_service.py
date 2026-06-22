@@ -102,6 +102,8 @@ async def apply_successful_payment(session_id: str) -> Optional[dict]:
     """Idempotent: extend the user's `valid_until` by the plan's duration.
 
     Returns the updated subscription doc or None if already applied / not found.
+    Admin users are short-circuited so a stray payment never demotes them out
+    of the grandfather state.
     """
     db = get_db()
     txn = await db.payment_transactions.find_one({"session_id": session_id})
@@ -109,6 +111,21 @@ async def apply_successful_payment(session_id: str) -> Optional[dict]:
         return None
     if txn.get("payment_status") == "paid" and txn.get("applied"):
         return None  # already processed — idempotency guard
+
+    # Admin grandfather protection — never overwrite admin entitlement
+    from bson import ObjectId
+    try:
+        user_doc = await db.users.find_one({"_id": ObjectId(txn["user_id"])})
+    except Exception:
+        user_doc = None
+    if user_doc and user_doc.get("role") == "admin":
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {"payment_status": "paid", "applied": True,
+                      "applied_at": _now().isoformat(),
+                      "skipped_reason": "admin_grandfather"}},
+        )
+        return await get_subscription(txn["user_id"])
 
     plan = get_plan(txn["plan_id"])
     if not plan:
