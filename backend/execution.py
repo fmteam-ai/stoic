@@ -91,6 +91,11 @@ class PaperEngine(ExecutionEngine):
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
         await ws_manager.broadcast(user_id, "trade_created", trade_doc)
+        try:
+            from notifier import notify_trade_opened
+            await notify_trade_opened(user_id, trade_doc)
+        except Exception:
+            pass
         return trade_doc
 
 
@@ -160,6 +165,11 @@ async def settle_paper_trades_against_price() -> int:
             "pnl": pnl,
             "close_reason": "stop_loss" if hit_sl else "take_profit",
         })
+        try:
+            from notifier import notify_trade_closed
+            await notify_trade_closed(t["user_id"], {**t, "exit_price": round(price, 5), "pnl": pnl})
+        except Exception:
+            pass
         closed += 1
     return closed
 

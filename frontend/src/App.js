@@ -17,6 +17,7 @@ import Subscription from "@/pages/Subscription";
 import SubscriptionSuccess from "@/pages/SubscriptionSuccess";
 import BrandingGallery from "@/pages/BrandingGallery";
 import Affiliate from "@/pages/Affiliate";
+import Notifications from "@/pages/Notifications";
 
 function App() {
     return (
@@ -37,6 +38,7 @@ function App() {
                         <Route path="/subscription/success" element={<ProtectedRoute><SubscriptionSuccess /></ProtectedRoute>} />
                         <Route path="/branding" element={<ProtectedRoute><BrandingGallery /></ProtectedRoute>} />
                         <Route path="/affiliate" element={<ProtectedRoute><Affiliate /></ProtectedRoute>} />
+                        <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>

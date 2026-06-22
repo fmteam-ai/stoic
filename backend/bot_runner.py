@@ -130,6 +130,14 @@ async def _process_user(db, cfg: dict):
         await ws_manager.broadcast(user_id, "signal_created", broadcast_payload)
         _mark_cooldown(user_id, sym)
 
+        # Telegram alert on high-confidence non-HOLD signals
+        try:
+            if signal.get("action") in ("BUY", "SELL") and (signal.get("confidence") or 0) >= 75:
+                from notifier import notify_high_conf_signal
+                await notify_high_conf_signal(user_id, broadcast_payload)
+        except Exception:
+            pass
+
         # Auto-execute decision
         if not (auto_exec and signal["tradeable"]):
             continue

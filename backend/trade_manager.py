@@ -19,6 +19,9 @@ from bson import ObjectId
 from database import get_db
 from market import get_quote
 from ws_manager import manager as ws_manager
+from notifier import (
+    notify_breakeven, notify_partial_close, notify_trail, notify_circuit_breaker
+)
 
 logger = logging.getLogger("trade-manager")
 
@@ -100,6 +103,10 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                 "to_lot": new_lot,
                 "r_multiple": round(r_mult, 2),
             })
+            try:
+                await notify_partial_close(trade["user_id"], str(trade_id), original_lot, new_lot, round(r_mult, 2))
+            except Exception:
+                pass
             return  # Don't stack modifications
 
     # 2. Break-even SL shift — once 1R hit, move SL to entry
@@ -124,6 +131,10 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             "new_sl": round(new_sl, 5),
             "r_multiple": round(r_mult, 2),
         })
+        try:
+            await notify_breakeven(trade["user_id"], str(trade_id), round(new_sl, 5), round(r_mult, 2))
+        except Exception:
+            pass
         return
 
     # 3. Trailing stop — once trailing_start_r, trail at trailing_distance_r behind price
@@ -155,6 +166,10 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                 "new_sl": round(new_sl, 5),
                 "r_multiple": round(r_mult, 2),
             })
+            try:
+                await notify_trail(trade["user_id"], str(trade_id), round(new_sl, 5), round(r_mult, 2))
+            except Exception:
+                pass
 
 
 async def _check_daily_drawdown(user_id: str, cfg: dict) -> None:
@@ -203,6 +218,15 @@ async def _check_daily_drawdown(user_id: str, cfg: dict) -> None:
             "today_pnl": round(today_pnl, 2),
             "equity": round(equity, 2),
         })
+        try:
+            await notify_circuit_breaker(
+                user_id,
+                f"Daily drawdown {drawdown_pct:.2f}% breached -{limit_pct:.2f}% limit",
+                round(today_pnl, 2),
+                round(equity, 2),
+            )
+        except Exception:
+            pass
         logger.warning("circuit breaker tripped for user=%s drawdown=%.2f%%", user_id, drawdown_pct)
 
 

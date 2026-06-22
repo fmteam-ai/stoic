@@ -134,6 +134,14 @@
 - **Dashboard polish**: Portfolio Performance (open trades / total / win rate / total P&L) moved to top of page above quote tiles. WS toast for trade_management events (BE/TRAIL/PC).
 - **Fix: webpack-dev-server v5/CRA 5.0.1 incompat** — pinned `webpack-dev-server: 4.15.2` in `resolutions` (frontend was crashing on start because v5 dropped `onAfterSetupMiddleware` and `https` config options CRA still emits).
 
+## CHANGELOG · Jun 22, 2026 — Telegram Push Notifications
+- **New: Telegram Bot Integration** — per-user push alerts to a personal Telegram chat. Direct httpx calls to `api.telegram.org/bot{token}/sendMessage` (no SDK, no webhooks). Bot tokens stored AES-256-GCM encrypted via existing `secrets_vault.py`.
+- **Events**: `trade_opened`, `trade_closed`, `breakeven`, `partial_close`, `trail` (opt-in default off due to frequency), `circuit_breaker`, `high_conf_signal` (≥75%). Per-event opt-in/out.
+- **Wiring**: `notifier.py` module with `notify_*` helpers; hooked into `bridge_routes.report` (live open/close), `execution.PaperEngine.execute` + `settle_paper_trades_against_price` (paper lifecycle), `trade_manager._manage_one_trade` (BE/PC/TRAIL), `_check_daily_drawdown` (circuit breaker), `bot_runner._process_user` (high-conf signal). All call sites use try/except to never block trade execution.
+- **Endpoints**: `GET/PUT /api/notifications/telegram`, `POST /api/notifications/telegram/test` (sends a Markdown-V2 formatted test message + surfaces Telegram API errors as 400s with the description field).
+- **Frontend**: `/notifications` page with 3 sections (Setup guide with deep links to @BotFather + @userinfobot, encrypted token + chat ID + master enable, per-event toggle grid). Sidebar entry `nav-notifications` (Bell icon). Security note explains encryption + token revocation.
+- **Bridge protocol**: `notified_opened` flag on trades prevents duplicate "Trade Opened" pings if EA re-reports.
+
 ## Backlog Updates (P1/P2 still pending)
 - **P1** — Spread/Slippage filter (reject signals when spread > 2× 24h median).
 - **P1** — Multi-timeframe confluence (require H4 trend to match H1 signal direction).

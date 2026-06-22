@@ -167,4 +167,20 @@ async def report_trade(payload: BridgeTradeReport):
         "trade_id": payload.trade_id,
         **update,
     })
+
+    # Telegram alerts — fire-and-forget
+    try:
+        full_trade = await db.trades.find_one({"_id": ObjectId(payload.trade_id)})
+        if full_trade:
+            from notifier import notify_trade_opened, notify_trade_closed
+            if payload.status == "open" and not trade.get("notified_opened"):
+                await notify_trade_opened(acc["user_id"], full_trade)
+                await db.trades.update_one(
+                    {"_id": ObjectId(payload.trade_id)}, {"$set": {"notified_opened": True}}
+                )
+            elif payload.status == "closed":
+                await notify_trade_closed(acc["user_id"], full_trade)
+    except Exception:
+        pass
+
     return {"ok": True}
