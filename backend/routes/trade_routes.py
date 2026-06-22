@@ -5,6 +5,7 @@ from bson import ObjectId
 from auth import get_current_user
 from database import get_db
 from rate_limiter import check_and_record
+from execution import for_account as engine_for_account
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -88,32 +89,27 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
             detail=f"Rate limit: max {rl['limit']} orders/min reached. Retry in {rl['retry_in_s']}s.",
         )
 
-    trade_doc = {
-        "user_id": user["id"],
-        "account_id": account_id,
-        "signal_id": signal_id,
-        "symbol": signal["symbol"],
-        "action": signal["action"],
-        "lot_size": signal.get("lot_size", 0.01),
-        "entry_price": signal.get("entry_price", 0),
-        "stop_loss": signal.get("stop_loss", 0),
-        "take_profit": signal.get("take_profit", 0),
-        "exit_price": None,
-        "pnl": 0.0,
-        "status": "pending",
-        "mt5_ticket": None,
-        "opened_at": datetime.now(timezone.utc).isoformat(),
-        "closed_at": None,
-        "error": None,
-    }
-    result = await db.trades.insert_one(trade_doc)
-    trade_doc["_id"] = result.inserted_id
-    # Mark signal as consumed (re-scope by user_id as defense in depth)
+    # Execution Factory — paper vs live engine
+    engine = engine_for_account(account)
+    trade_doc = await engine.execute(
+        user_id=user["id"],
+        account=account,
+        signal={
+            "signal_id": signal_id,
+            "symbol": signal["symbol"],
+            "action": signal["action"],
+            "lot_size": signal.get("lot_size", 0.01),
+            "entry_price": signal.get("entry_price", 0),
+            "stop_loss": signal.get("stop_loss", 0),
+            "take_profit": signal.get("take_profit", 0),
+            "origin": "manual",
+        },
+    )
     await db.signals.update_one(
         {"_id": ObjectId(signal_id), "user_id": user["id"]},
         {"$set": {"consumed": True}},
     )
-    return _serialize(trade_doc)
+    return trade_doc
 
 
 @router.post("/{trade_id}/close")

@@ -51,6 +51,8 @@ class AccountCreate(BaseModel):
     account_number: str
     account_type: Literal["microcent", "cent", "standard", "demo"] = "microcent"
     base_currency: str = "USD"
+    mode: Literal["live", "paper"] = "live"
+    initial_balance: float = 10000.0  # only used for paper accounts
 
 
 class AccountOut(BaseModel):

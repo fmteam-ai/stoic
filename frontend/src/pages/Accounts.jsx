@@ -4,7 +4,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 
-const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD" };
+const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000 };
 
 export default function Accounts() {
     const [accounts, setAccounts] = useState([]);
@@ -108,11 +108,24 @@ export default function Accounts() {
                 {/* Create form */}
                 {showForm && (
                     <form onSubmit={create} className="border border-[#00FF41]/40 bg-[#0A0A0A] p-5 grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="account-form">
+                        <div className="md:col-span-2 flex gap-2 mb-2">
+                            {["paper", "live"].map(m => (
+                                <button type="button" key={m} onClick={() => setForm({ ...form, mode: m })}
+                                    data-testid={`account-mode-${m}`}
+                                    className={`flex-1 px-3 py-2 text-xs font-mono tracking-widest border transition-colors ${
+                                        form.mode === m ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]" : "border-[#1F1F1F] text-[#A1A1AA]"
+                                    }`}>
+                                    {m === "paper" ? "● PAPER · zero-risk simulation" : "● LIVE · real MT5 broker"}
+                                </button>
+                            ))}
+                        </div>
                         {[
-                            ["label", "Label", "My Microcent #1"],
-                            ["broker", "Broker", "RoboForex"],
-                            ["server", "Server", "RoboForex-ECN"],
-                            ["account_number", "Account #", "12345678"],
+                            ["label", "Label", form.mode === "paper" ? "Paper Sandbox #1" : "My Microcent #1"],
+                            ...(form.mode === "live" ? [
+                                ["broker", "Broker", "RoboForex"],
+                                ["server", "Server", "RoboForex-ECN"],
+                            ] : []),
+                            ["account_number", form.mode === "paper" ? "Sandbox ID" : "Account #", "12345678"],
                         ].map(([k, l, ph]) => (
                             <div key={k}>
                                 <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{l.toUpperCase()}</label>
@@ -121,17 +134,27 @@ export default function Accounts() {
                                     className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm outline-none transition-colors" placeholder={ph} />
                             </div>
                         ))}
-                        <div>
-                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ACCOUNT TYPE</label>
-                            <select value={form.account_type} onChange={e => setForm({ ...form, account_type: e.target.value })}
-                                data-testid="account-type-select"
-                                className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm outline-none">
-                                <option value="microcent">Microcent</option>
-                                <option value="cent">Cent</option>
-                                <option value="standard">Standard</option>
-                                <option value="demo">Demo</option>
-                            </select>
-                        </div>
+                        {form.mode === "paper" ? (
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">STARTING VIRTUAL BALANCE</label>
+                                <input type="number" min="100" step="100" value={form.initial_balance}
+                                    onChange={e => setForm({ ...form, initial_balance: parseFloat(e.target.value) || 10000 })}
+                                    data-testid="account-balance-input"
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+                            </div>
+                        ) : (
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ACCOUNT TYPE</label>
+                                <select value={form.account_type} onChange={e => setForm({ ...form, account_type: e.target.value })}
+                                    data-testid="account-type-select"
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm outline-none">
+                                    <option value="microcent">Microcent</option>
+                                    <option value="cent">Cent</option>
+                                    <option value="standard">Standard</option>
+                                    <option value="demo">Demo</option>
+                                </select>
+                            </div>
+                        )}
                         <div>
                             <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">BASE CURRENCY</label>
                             <input value={form.base_currency} onChange={e => setForm({ ...form, base_currency: e.target.value.toUpperCase() })}
@@ -206,6 +229,19 @@ export default function Accounts() {
                                             <button onClick={() => remove(a.id)} data-testid={`delete-account-${a.account_number}`}
                                                 className="px-3 py-2 border border-[#FF3B30]/30 text-[#FF3B30] hover:bg-[#FF3B30]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
                                                 <Trash className="w-3.5 h-3.5" /> DELETE
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+        </AppLayout>
+    );
+}
+5 h-3.5" /> DELETE
                                             </button>
                                         </div>
                                     </div>

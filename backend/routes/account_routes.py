@@ -25,19 +25,23 @@ async def list_accounts(user=Depends(get_current_user)):
 @router.post("")
 async def create_account(payload: AccountCreate, user=Depends(get_current_user)):
     db = get_db()
+    is_paper = payload.mode == "paper"
+    starting = float(payload.initial_balance) if is_paper else 0.0
     doc = {
         "user_id": user["id"],
         "label": payload.label,
-        "broker": payload.broker,
-        "server": payload.server,
+        "broker": "INTERNAL_PAPER" if is_paper else payload.broker,
+        "server": "paper-virtual" if is_paper else payload.server,
         "account_number": payload.account_number,
         "account_type": payload.account_type,
         "base_currency": payload.base_currency,
-        "bridge_token": generate_bridge_token(),
-        "status": "disconnected",
-        "balance": 0.0,
-        "equity": 0.0,
-        "last_heartbeat": None,
+        "mode": payload.mode,
+        "bridge_token": generate_bridge_token(),  # unused for paper but harmless
+        "status": "connected" if is_paper else "disconnected",
+        "balance": starting,
+        "equity": starting,
+        "initial_balance": starting,
+        "last_heartbeat": datetime.now(timezone.utc).isoformat() if is_paper else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.accounts.insert_one(doc)

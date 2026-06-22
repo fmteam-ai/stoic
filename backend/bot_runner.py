@@ -19,6 +19,7 @@ from ai_signals import analyze_symbol
 from circuit_breakers import check_and_trip
 from ws_manager import manager as ws_manager
 from rate_limiter import check_and_record as rl_check
+from execution import for_account as engine_for_account
 
 logger = logging.getLogger("bot-runner")
 
@@ -46,12 +47,19 @@ def _mark_cooldown(user_id: str, symbol: str):
 
 
 async def _connected_accounts(db, user_id: str) -> list:
-    """Return list of accounts whose EA has sent a heartbeat in the last 5 min."""
+    """Return list of accounts ready to accept trades.
+
+    - PAPER accounts are always "connected" (virtual)
+    - LIVE accounts must have an EA heartbeat in the last 5 minutes
+    """
     cursor = db.accounts.find({"user_id": user_id})
     accs = await cursor.to_list(length=50)
     fresh = []
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
     for a in accs:
+        if (a.get("mode") or "live") == "paper":
+            fresh.append(a)
+            continue
         hb = a.get("last_heartbeat") or ""
         if hb and hb >= cutoff:
             fresh.append(a)
@@ -74,8 +82,9 @@ async def _process_user(db, cfg: dict):
         return
 
     connected = [a for a in all_accounts
-                 if a.get("last_heartbeat") and
-                 a["last_heartbeat"] >= (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()]
+                 if (a.get("mode") or "live") == "paper"
+                 or (a.get("last_heartbeat") and
+                     a["last_heartbeat"] >= (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat())]
 
     risk_level = cfg.get("risk_level", "medium")
     auto_exec = bool(cfg.get("auto_execute", True))
@@ -123,30 +132,22 @@ async def _process_user(db, cfg: dict):
                            user_id, rl["count_60s"], rl["limit"])
             continue
         target_account = connected[0]
-        trade_doc = {
-            "user_id": user_id,
-            "account_id": str(target_account["_id"]),
-            "signal_id": signal_id,
-            "symbol": signal["symbol"],
-            "action": signal["action"],
-            "lot_size": signal["lot_size"],
-            "entry_price": signal["entry_price"],
-            "stop_loss": signal["stop_loss"],
-            "take_profit": signal["take_profit"],
-            "exit_price": None,
-            "pnl": 0.0,
-            "status": "pending",
-            "mt5_ticket": None,
-            "opened_at": datetime.now(timezone.utc).isoformat(),
-            "closed_at": None,
-            "error": None,
-            "origin": "auto",
-        }
-        tr = await db.trades.insert_one(trade_doc)
+        engine = engine_for_account(target_account)
+        trade_doc = await engine.execute(
+            user_id=user_id,
+            account=target_account,
+            signal={
+                "signal_id": signal_id,
+                "symbol": signal["symbol"],
+                "action": signal["action"],
+                "lot_size": signal["lot_size"],
+                "entry_price": signal["entry_price"],
+                "stop_loss": signal["stop_loss"],
+                "take_profit": signal["take_profit"],
+                "origin": "auto",
+            },
+        )
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {"consumed": True}})
-        trade_doc["id"] = str(tr.inserted_id)
-        trade_doc.pop("_id", None)
-        await ws_manager.broadcast(user_id, "trade_created", trade_doc)
         inflight += 1
 
 

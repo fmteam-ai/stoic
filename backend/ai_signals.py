@@ -11,6 +11,7 @@ from risk import get_profile, derive_sl_tp, compute_kelly_position_size
 from news import score_sentiment
 from microstructure import current_session, session_bias_for, classify_regime
 from economic_calendar import macro_freeze_check, upcoming_for
+from entropy_filter import classify_noise
 
 SYSTEM_PROMPT = """You are an institutional-grade quantitative trading analyst.
 Inputs: live quote, 12-month indicator snapshot, current news sentiment score,
@@ -74,6 +75,10 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
     regime = classify_regime(indicators)
     macro = await macro_freeze_check(symbol)
     upcoming_macro = await upcoming_for(symbol, hours=24)
+    # Shannon entropy noise filter — closes used for distribution analysis
+    entropy = classify_noise([c["close"] for c in history]) if history else {
+        "entropy": 0, "label": "ORGANIZED", "traffic_light": "green", "tradeable": True, "threshold": 0.9
+    }
     current_price = quote.get("price") or indicators.get("current_price") or 0.0
 
     user_text = json.dumps({
@@ -94,6 +99,11 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         },
         "session": {**session, **session_bias},
         "regime": regime,
+        "upcoming_macro_events_24h": [
+            {"title": e["title"], "country": e["country"], "impact": e["impact"], "when": e["when"]}
+            for e in upcoming_macro[:5]
+        ],
+        "noise_filter": entropy,
         "risk_profile": {
             "level": risk_level,
             "min_confidence_to_trade": profile["min_confidence"],
@@ -160,6 +170,8 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         reasoning = f"{reasoning}\n\nVETO (regime): {regime_veto}"
     if macro_veto:
         reasoning = f"{reasoning}\n\nVETO (macro): {macro_veto}"
+    if entropy_veto:
+        reasoning = f"{reasoning}\n\nVETO (entropy): {entropy_veto}"
 
     return {
         "symbol": symbol,
@@ -182,9 +194,10 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "regime": regime,
         "macro": macro,
         "upcoming_macro": upcoming_macro[:5],
+        "noise_filter": entropy,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto),
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto),
         "tradeable": final_action != "HOLD" and confidence >= profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

@@ -13,6 +13,7 @@ import logging
 
 from economic_calendar import _fetch_events, _cache as cal_cache
 from market import get_history, SYMBOL_MAP
+from execution import settle_paper_trades_against_price
 import time
 
 logger = logging.getLogger("warmer")
@@ -56,6 +57,13 @@ async def loop():
     while True:
         await asyncio.sleep(60)
         now = time.time()
+        # Continuously settle paper trades against live mid-price
+        try:
+            closed = await settle_paper_trades_against_price()
+            if closed:
+                logger.info("Settled %d paper trades", closed)
+        except Exception as e:
+            logger.warning("Paper settlement failed: %s", e)
         if now >= cal_next:
             await _warm_calendar_once()
             cal_next = now + CALENDAR_INTERVAL_SEC
