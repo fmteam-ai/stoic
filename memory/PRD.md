@@ -75,6 +75,21 @@
 - **P3** — Native Android shell via Capacitor / React Native (PWA already works).
 - **P3** — True Mamba SSM inference (requires GPU host) — replace current numpy O(N) compressor.
 
+## CHANGELOG · Feb 22, 2026 — AI Co-Pilot (Live Help Agent)
+- **New: In-app AI Co-Pilot** (`copilot.py` + `routes/copilot_routes.py` + `CoPilotWidget.jsx`) — floating chat widget on every authenticated page. Grounded in the user's live state: bot config, accounts, last 5 signals, open + recent trades, panic state, active triggers. Each request fresh-snapshots MongoDB and stuffs the JSON into Claude's system prompt.
+- **Multi-turn sessions** persisted in `db.copilot_sessions` keyed by (user_id, session_id). Frontend caches session_id in localStorage so conversation resumes across page reloads.
+- **Endpoints**: `POST /api/copilot/chat`, `GET /api/copilot/sessions`, `GET /api/copilot/sessions/{id}`.
+- **Hardening**: per-user sliding-window rate limit (30 chats / 5 min), sanitised 502 error message so upstream exception strings can't leak, full server-side exception logging.
+- **Frontend**: `<CoPilotWidget />` mounted in `AppLayout` — floating bottom-24 right-6 launcher with pulsing badge, 600px panel with empty-state greeting + 5 quick actions, auto-scroll, Enter-to-send, NEW session reset, X close.
+- **Tests**: 117/117 backend pytest (9 new in TestCoPilot — auth-guard, validation 400s, basic chat, multi-turn continuity, list sessions, 404, grounding via /signals/generate, route-conflict regression). Frontend: 100% on widget flows incl. session persistence across reload.
+
+## CHANGELOG · Feb 22, 2026 — Code Review Triage
+- **Fixed**: WebSocket reconnect race in `useLiveStream.js` (added `closedRef` guard + retry timer cleanup + onclose null-out on teardown).
+- **Fixed**: silent catches in `useLiveStream.js` and `AuthContext.jsx` now log via `console.warn`.
+- **Fixed**: array-index keys → stable content-based keys in Dashboard.jsx (macro calendar + key drivers) and Signals.jsx (key factors).
+- **Cleaned**: unused imports in `execution.py`, `nl_commander.py`, `models.py`, `server.py`.
+- **Declined (with reasoning)**: cyclomatic-complexity refactors of working, fully-tested code; `is None/True/False` "fixes" in tests (PEP-8 recommends them); append-only chat index keys.
+
 ## CHANGELOG · Feb 22, 2026 — 2026 Architecture Upgrade
 - **Fixed P0**: `entropy_veto is not defined` NameError in `ai_signals.analyze_symbol` — entropy veto block was missing.
 - **New: Multi-Engine Consensus + Meta-Labeler** (`meta_labeler.py`) — third-tier classifier on top of Quant + Semantic engines outputs p_true ∈ [0,1] + verdict (TRUE_SIGNAL / FAKE_OUT / NEUTRAL). FAKE_OUT vetoes execution. Logistic regression over 8 explainable features.
