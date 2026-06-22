@@ -1,13 +1,25 @@
 from datetime import datetime, timezone
+from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
+from pydantic import BaseModel, Field
 
 from auth import get_current_user
 from database import get_db
+from market import get_quote
 from rate_limiter import check_and_record
 from execution import for_account as engine_for_account
 
 router = APIRouter(prefix="/trades", tags=["trades"])
+
+
+class ManualTradeRequest(BaseModel):
+    account_id: str
+    symbol: str
+    action: Literal["BUY", "SELL"]
+    lot_size: float = Field(0.01, gt=0, le=100)
+    stop_loss_pct: Optional[float] = Field(1.0, gt=0, le=20)
+    take_profit_pct: Optional[float] = Field(2.0, gt=0, le=50)
 
 
 def _serialize(doc: dict) -> dict:
@@ -108,6 +120,59 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
     await db.signals.update_one(
         {"_id": ObjectId(signal_id), "user_id": user["id"]},
         {"$set": {"consumed": True}},
+    )
+    return trade_doc
+
+
+@router.post("/manual")
+async def execute_manual_trade(payload: ManualTradeRequest, user=Depends(get_current_user)):
+    """Place a manual paper trade — bypasses AI signal/confidence gating.
+
+    Allowed ONLY for paper-mode accounts; live accounts must execute via AI signals
+    so that the EA bridge + risk vetoes apply.
+    """
+    db = get_db()
+    account = await db.accounts.find_one({"_id": ObjectId(payload.account_id), "user_id": user["id"]})
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if (account.get("mode") or "live").lower() != "paper":
+        raise HTTPException(status_code=400, detail="Manual trades are only allowed on paper accounts")
+
+    rl = check_and_record(user["id"])
+    if not rl["allowed"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit: max {rl['limit']} orders/min reached. Retry in {rl['retry_in_s']}s.",
+        )
+
+    quote = await get_quote(payload.symbol)
+    price = quote.get("price")
+    if not price or price <= 0:
+        raise HTTPException(status_code=502, detail=f"Could not get live quote for {payload.symbol}")
+
+    sl_dist = price * (payload.stop_loss_pct / 100.0)
+    tp_dist = price * (payload.take_profit_pct / 100.0)
+    if payload.action == "BUY":
+        stop_loss = round(price - sl_dist, 5)
+        take_profit = round(price + tp_dist, 5)
+    else:
+        stop_loss = round(price + sl_dist, 5)
+        take_profit = round(price - tp_dist, 5)
+
+    engine = engine_for_account(account)
+    trade_doc = await engine.execute(
+        user_id=user["id"],
+        account=account,
+        signal={
+            "signal_id": None,
+            "symbol": payload.symbol,
+            "action": payload.action,
+            "lot_size": payload.lot_size,
+            "entry_price": price,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "origin": "manual_test",
+        },
     )
     return trade_doc
 

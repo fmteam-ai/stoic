@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Brain, ArrowUp, ArrowDown, Pause, Zap as Lightning, Trash2 as Trash, ShieldCheck } from "lucide-react";
+import { Brain, ArrowUp, ArrowDown, Pause, Zap as Lightning, Trash2 as Trash, ShieldCheck, Wand2, X } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -24,6 +24,146 @@ function ConfBar({ value, threshold }) {
                 <div className={`absolute top-0 left-0 h-full ${meets ? "bg-[#00FF41]" : "bg-[#FFB000]"}`} style={{ width: `${v}%` }} />
                 <div className="absolute top-0 h-full w-px bg-white/40" style={{ left: `${threshold}%` }} />
             </div>
+        </div>
+    );
+}
+
+function ManualTradeModal({ accounts, onClose, onSuccess }) {
+    const [form, setForm] = useState({
+        account_id: accounts[0]?.id || "",
+        symbol: "XAUUSD",
+        action: "BUY",
+        lot_size: 0.01,
+        stop_loss_pct: 1.0,
+        take_profit_pct: 2.0,
+    });
+    const [supportedSymbols, setSupportedSymbols] = useState(["XAUUSD", "BTCUSD"]);
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        api.get("/market/symbols").then(({ data }) => {
+            const syms = Array.isArray(data) ? data.map(d => d.symbol || d).filter(Boolean) : [];
+            if (syms.length) setSupportedSymbols(syms);
+        }).catch(() => { /* keep defaults */ });
+    }, []);
+
+    const submit = async (e) => {
+        e.preventDefault();
+        setSubmitting(true); setError("");
+        try {
+            const { data } = await api.post("/trades/manual", form);
+            onSuccess(data);
+        } catch (e2) {
+            setError(formatApiError(e2));
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    if (accounts.length === 0) {
+        return (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" data-testid="manual-trade-modal">
+                <div className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-md w-full p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div className="font-display font-bold text-lg text-[#FFD700]">Manual Test Trade</div>
+                        <button onClick={onClose} className="text-[#52525B] hover:text-white" data-testid="manual-trade-close"><X className="w-4 h-4" /></button>
+                    </div>
+                    <div className="text-sm text-[#A1A1AA]">
+                        Manual trades are only allowed on <span className="text-[#FFD700]">paper accounts</span>. Add one in the <em>Accounts</em> page first.
+                    </div>
+                    <button onClick={onClose} className="w-full py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs tracking-widest">CLOSE</button>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" data-testid="manual-trade-modal">
+            <form onSubmit={submit} className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-md w-full p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <div className="font-display font-bold text-lg text-[#FFD700]">Manual Test Trade</div>
+                        <div className="text-xs text-[#A1A1AA] mt-0.5">Paper-only · fills instantly at live mid-price</div>
+                    </div>
+                    <button type="button" onClick={onClose} className="text-[#52525B] hover:text-white" data-testid="manual-trade-close"><X className="w-4 h-4" /></button>
+                </div>
+
+                {error && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-3 py-2 text-xs text-[#FF3B30] font-mono" data-testid="manual-trade-error">{error}</div>}
+
+                <div>
+                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ACCOUNT</label>
+                    <select value={form.account_id} onChange={e => setForm({ ...form, account_id: e.target.value })}
+                        required data-testid="manual-trade-account"
+                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm outline-none">
+                        {accounts.map(a => <option key={a.id} value={a.id}>{a.label} · ${a.balance?.toFixed(2)}</option>)}
+                    </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">SYMBOL</label>
+                        <select value={form.symbol} onChange={e => setForm({ ...form, symbol: e.target.value })}
+                            data-testid="manual-trade-symbol"
+                            className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none">
+                            {supportedSymbols.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">DIRECTION</label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                            {["BUY", "SELL"].map(a => (
+                                <button key={a} type="button" onClick={() => setForm({ ...form, action: a })}
+                                    data-testid={`manual-trade-action-${a.toLowerCase()}`}
+                                    className={`py-2 text-xs font-mono tracking-widest border transition-colors ${
+                                        form.action === a
+                                            ? a === "BUY" ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]" : "border-[#FF3B30] bg-[#FF3B30]/10 text-[#FF3B30]"
+                                            : "border-[#1F1F1F] text-[#A1A1AA]"
+                                    }`}>{a}</button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">LOT SIZE</label>
+                        <input type="number" step="0.01" min="0.01" max="100" value={form.lot_size}
+                            onChange={e => setForm({ ...form, lot_size: parseFloat(e.target.value) || 0.01 })}
+                            data-testid="manual-trade-lot"
+                            className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                    </div>
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">SL %</label>
+                        <input type="number" step="0.1" min="0.1" max="20" value={form.stop_loss_pct}
+                            onChange={e => setForm({ ...form, stop_loss_pct: parseFloat(e.target.value) || 1 })}
+                            data-testid="manual-trade-sl"
+                            className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                    </div>
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">TP %</label>
+                        <input type="number" step="0.1" min="0.1" max="50" value={form.take_profit_pct}
+                            onChange={e => setForm({ ...form, take_profit_pct: parseFloat(e.target.value) || 2 })}
+                            data-testid="manual-trade-tp"
+                            className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                    </div>
+                </div>
+
+                <div className="text-[10px] text-[#52525B] font-mono leading-relaxed border-t border-[#1F1F1F] pt-3">
+                    SL/TP are computed as percentage distance from the live mid-price at fill time.
+                    Trade auto-closes when SL or TP is hit (settled every ~60s).
+                </div>
+
+                <div className="flex gap-2">
+                    <button type="button" onClick={onClose}
+                        className="flex-1 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs tracking-widest">CANCEL</button>
+                    <button type="submit" disabled={submitting}
+                        data-testid="manual-trade-submit"
+                        className="flex-1 py-2 bg-[#FFD700] hover:bg-[#FFC700] disabled:opacity-50 text-black font-bold text-xs tracking-widest transition-colors">
+                        {submitting ? "PLACING…" : "PLACE TRADE"}
+                    </button>
+                </div>
+            </form>
         </div>
     );
 }
@@ -244,6 +384,7 @@ export default function Signals() {
     const [generating, setGenerating] = useState(false);
     const [err, setErr] = useState("");
     const [msg, setMsg] = useState("");
+    const [showManual, setShowManual] = useState(false);
 
     const load = useCallback(async () => {
         try {
@@ -302,13 +443,33 @@ export default function Signals() {
                 subtitle="Claude-generated trading signals across your configured symbols."
                 testid="signals-header"
                 action={
-                    <button onClick={handleGenerate} disabled={generating}
-                        data-testid="signals-generate-button"
-                        className="flex items-center gap-2 px-4 py-2 bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium text-xs tracking-widest transition-colors duration-150">
-                        <Brain className="w-4 h-4" /> {generating ? "ANALYSING…" : "GENERATE SIGNALS"}
-                    </button>
+                    <div className="flex gap-2">
+                        <button onClick={() => setShowManual(true)}
+                            data-testid="manual-trade-open-button"
+                            className="flex items-center gap-2 px-3 py-2 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 font-medium text-xs tracking-widest transition-colors duration-150">
+                            <Wand2 className="w-3.5 h-3.5" /> MANUAL TRADE
+                        </button>
+                        <button onClick={handleGenerate} disabled={generating}
+                            data-testid="signals-generate-button"
+                            className="flex items-center gap-2 px-4 py-2 bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium text-xs tracking-widest transition-colors duration-150">
+                            <Brain className="w-4 h-4" /> {generating ? "ANALYSING…" : "GENERATE SIGNALS"}
+                        </button>
+                    </div>
                 }
             />
+
+            {showManual && (
+                <ManualTradeModal
+                    accounts={accounts.filter(a => (a.mode || "live").toLowerCase() === "paper")}
+                    onClose={() => setShowManual(false)}
+                    onSuccess={(trade) => {
+                        setShowManual(false);
+                        setMsg(`Manual ${trade.action} ${trade.symbol} placed @ ${trade.entry_price} on paper account.`);
+                        toast.success(`Paper trade opened · ${trade.symbol} ${trade.action}`, { description: `Entry ${trade.entry_price} · ${trade.lot_size} lots` });
+                        load();
+                    }}
+                />
+            )}
 
             <div className="p-4 md:p-8 space-y-4">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="signals-error">{err}</div>}
