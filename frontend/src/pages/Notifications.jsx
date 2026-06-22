@@ -15,6 +15,7 @@ const EVENT_LABELS = {
     trail: { label: "SL Trailed", desc: "Each time trailing SL moves (can be frequent — opt-in)", color: "#A1A1AA" },
     circuit_breaker: { label: "Circuit Breaker Tripped", desc: "When daily drawdown limit auto-stops the bot", color: "#FF3B30" },
     high_conf_signal: { label: "High-Confidence Signal", desc: "When AI generates a BUY/SELL with confidence ≥75%", color: "#FFD700" },
+    sl_imminent: { label: "SL Imminent (≤5min)", desc: "When an open trade's stop-loss ETA drops below 5 minutes at current market velocity", color: "#FF3B30" },
 };
 
 export default function Notifications() {
@@ -69,7 +70,9 @@ export default function Notifications() {
     };
 
     const toggleAlert = (key) => {
-        setCfg({ ...cfg, alerts: { ...cfg.alerts, [key]: !cfg.alerts[key] } });
+        // Match the display logic — undefined ≡ ON, so flipping undefined → OFF.
+        const current = cfg.alerts[key] !== false;
+        setCfg({ ...cfg, alerts: { ...cfg.alerts, [key]: !current } });
     };
 
     const enableWebhook = async () => {
@@ -204,7 +207,9 @@ export default function Notifications() {
                     </div>
                     <div className="p-5 space-y-2">
                         {Object.entries(EVENT_LABELS).map(([key, meta]) => {
-                            const on = cfg.alerts[key];
+                            // Backend defaults missing keys to True — mirror that here so
+                            // newly-added alert types (e.g. sl_imminent) show ON by default.
+                            const on = cfg.alerts[key] !== false;
                             return (
                                 <button key={key} onClick={() => toggleAlert(key)}
                                     data-testid={`alert-toggle-${key}`}

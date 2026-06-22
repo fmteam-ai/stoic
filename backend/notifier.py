@@ -11,6 +11,7 @@ Events that fire alerts (configurable per user):
   - trail          — when trailing SL adjusts
   - circuit_breaker — when daily drawdown trips the killswitch
   - high_conf_signal — when a non-HOLD signal with conf >= 75% generates
+  - sl_imminent    — when an open trade's SL ETA drops below 5 minutes
 """
 import os
 import logging

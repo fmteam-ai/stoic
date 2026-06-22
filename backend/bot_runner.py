@@ -22,6 +22,7 @@ from rate_limiter import check_and_record as rl_check
 from execution import for_account as engine_for_account
 from execution import settle_paper_trades_against_price
 from trigger_sweeper import sweep_once as sweep_triggers
+from sl_watcher import sweep_once as sweep_sl_imminent
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
@@ -253,6 +254,14 @@ async def loop():
                     logger.info("Trigger sweep fired=%d", sweep["fired"])
             except Exception as e:
                 logger.exception("Trigger sweep failed: %s", e)
+            # SL-imminent Telegram alerts (ETA < 5 min)
+            try:
+                sl_sweep = await sweep_sl_imminent()
+                if sl_sweep.get("fired"):
+                    logger.info("SL-imminent sweep fired=%d checked=%d",
+                                sl_sweep["fired"], sl_sweep["checked"])
+            except Exception as e:
+                logger.exception("SL-imminent sweep failed: %s", e)
         except Exception as e:
             logger.exception("Bot runner tick failed: %s", e)
         await asyncio.sleep(interval)

@@ -51,9 +51,11 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 - Multi-Timeframe trend gate (always-on).
 - Auto-Tune min-confidence threshold (per user, per symbol).
 - MT5 Spread filter (per-symbol pip cap; needs EA v1.21+).
-- **NEW** Server-side Slippage Veto (per-symbol max-pip cap, force-close).
-- **NEW** Affiliate Program gated behind active paid subscription.
-- **NEW** Intelligence counters exposed under `/api/bot/status.intelligence`.
+- Server-side Slippage Veto (per-symbol max-pip cap, force-close).
+- Affiliate Program gated behind active paid subscription.
+- Intelligence counters exposed under `/api/bot/status.intelligence`.
+- **NEW** Live current price + Live P&L + Risk Thermometer on /trades.
+- **NEW** SL-imminent Telegram alerts when ETA drops below 5 minutes.
 - Profit Protection (BE shift, trailing, partial close at TP1/TP2/TP3).
 - Daily Drawdown Circuit Breaker.
 - Telegram push + 2-way bot (`/close`, `/panic`, `/trades`).

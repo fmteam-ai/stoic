@@ -2688,3 +2688,202 @@ class TestSlippageVeto:
         assert t["slippage_pips"] == 5.0
         assert t.get("close_reason") != "slippage_veto"
         assert t.get("pending_modification") is None
+
+
+
+class TestSLImminentWatcher:
+    """Telegram alert when an open trade's SL ETA drops below 5 minutes."""
+
+    @staticmethod
+    def _load_env():
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            load_dotenv(Path("/app/backend/.env"))
+        except Exception:
+            pass
+
+    def test_velocity_zero_returns_no_fire(self):
+        """If we have only 1 sample (or no measurable velocity), no alert."""
+        self._load_env()
+        import asyncio, sys
+        sys.path.insert(0, "/app/backend")
+        import database as _db_mod
+        _db_mod._client = None; _db_mod._db = None
+        from database import get_db
+        from sl_watcher import _recent_velocity
+
+        async def _run():
+            db = get_db()
+            sym = f"TESTVZ_{int(time.time())}"
+            # Insert just 1 tick — velocity must be 0
+            from datetime import datetime, timezone
+            await db.price_ticks.insert_one({
+                "ts": datetime.now(timezone.utc),
+                "symbol": sym, "price": 100.0, "bid": 100.0, "ask": 100.0,
+            })
+            v = await _recent_velocity(db, sym)
+            assert v == 0.0
+
+        asyncio.run(_run())
+
+    def test_velocity_from_recent_ticks(self):
+        """Inject 3 ticks 10s apart with $1 jumps → velocity = 0.1 price/sec."""
+        self._load_env()
+        import asyncio, sys
+        sys.path.insert(0, "/app/backend")
+        import database as _db_mod
+        _db_mod._client = None; _db_mod._db = None
+        from database import get_db
+        from sl_watcher import _recent_velocity
+
+        async def _run():
+            db = get_db()
+            sym = f"TESTV_{int(time.time())}"
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone.utc)
+            for i, p in enumerate([100.0, 101.0, 102.0]):
+                await db.price_ticks.insert_one({
+                    "ts": now - timedelta(seconds=20 - i * 10),
+                    "symbol": sym, "price": p, "bid": p, "ask": p,
+                })
+            v = await _recent_velocity(db, sym)
+            # Median of {0.1, 0.1} = 0.1
+            assert abs(v - 0.1) < 1e-6
+
+        asyncio.run(_run())
+
+    def test_sweep_fires_when_eta_under_5min(self, admin_session):
+        """End-to-end: seed a fast-moving symbol + an open BUY trade with SL
+        ~30s away → sweep_once should call notify, mark sl_alert_sent_at,
+        and report fired>=1."""
+        self._load_env()
+        import asyncio, sys
+        sys.path.insert(0, "/app/backend")
+        import database as _db_mod
+        _db_mod._client = None; _db_mod._db = None
+        from database import get_db
+        from datetime import datetime, timezone, timedelta
+        from bson import ObjectId
+
+        # We monkey-patch notifier.send_telegram so we don't need a real bot
+        import sl_watcher
+        captured = []
+        async def _fake_send(user_id, event_type, title, lines):
+            captured.append({"user_id": user_id, "event_type": event_type,
+                             "title": title, "lines": lines})
+            return True
+        sl_watcher.send_telegram = _fake_send
+
+        async def _run():
+            db = get_db()
+            sym = "XAUUSD"
+            now = datetime.now(timezone.utc)
+            # Snapshot + clear any recent XAU ticks so OUR injected velocity wins.
+            since = now - timedelta(minutes=30)
+            saved = await db.price_ticks.find(
+                {"symbol": sym, "ts": {"$gte": since}}
+            ).to_list(length=2000)
+            await db.price_ticks.delete_many({"symbol": sym, "ts": {"$gte": since}})
+            # Insert recent ticks giving velocity = 1.0 price/sec
+            for i, p in enumerate([2400.0, 2410.0, 2420.0]):
+                await db.price_ticks.insert_one({
+                    "ts": now - timedelta(seconds=20 - i * 10),
+                    "symbol": sym, "price": p, "bid": p, "ask": p,
+                })
+            # Force the get_quote cache to return our latest price
+            import market as _m
+            _m._cache_set(f"quote:{sym}",
+                          {"symbol": sym, "price": 2420.0,
+                           "bid": 2420.0, "ask": 2420.0,
+                           "timestamp": now.isoformat()},
+                          ttl=10)
+            # Seed an open SELL trade with SL just $30 away → at 1.0/sec → 30s ETA
+            me = admin_session.get(f"{API}/auth/me", timeout=10).json()
+            trade = {
+                "user_id": me["id"],
+                "account_id": "test-acc",
+                "signal_id": None,
+                "symbol": sym, "action": "SELL",
+                "lot_size": 0.01,
+                "entry_price": 2400.0,
+                "stop_loss": 2450.0,     # SELL → SL above current 2420 → 30 away
+                "take_profit": 2380.0,
+                "status": "open",
+                "created_at": now.isoformat(),
+            }
+            r = await db.trades.insert_one(trade)
+            try:
+                out = await sl_watcher.sweep_once()
+                assert out["fired"] >= 1, f"expected fire, got {out}"
+                assert any(c["event_type"] == "sl_imminent" for c in captured)
+                doc = await db.trades.find_one({"_id": r.inserted_id})
+                assert doc.get("sl_alert_sent_at") is not None
+                assert doc.get("sl_alert_eta_secs") is not None
+                # Idempotency — second sweep should NOT fire again (cooldown)
+                captured.clear()
+                out2 = await sl_watcher.sweep_once()
+                assert out2["fired"] == 0
+                assert len(captured) == 0
+            finally:
+                await db.trades.delete_one({"_id": r.inserted_id})
+                # Restore the original ticks for the rest of the suite
+                await db.price_ticks.delete_many({"symbol": sym, "ts": {"$gte": since}})
+                if saved:
+                    for d in saved:
+                        d.pop("_id", None)
+                    await db.price_ticks.insert_many(saved)
+
+        asyncio.run(_run())
+
+    def test_buy_past_sl_does_not_fire(self):
+        """A BUY trade whose price is already below SL is already a losing
+        position — broker should be closing it; we don't fire."""
+        self._load_env()
+        import asyncio, sys
+        sys.path.insert(0, "/app/backend")
+        import database as _db_mod
+        _db_mod._client = None; _db_mod._db = None
+        from database import get_db
+        from datetime import datetime, timezone, timedelta
+        import sl_watcher
+        fired = []
+        async def _fake_send(*a, **kw):
+            fired.append(1); return True
+        sl_watcher.send_telegram = _fake_send
+
+        async def _run():
+            db = get_db()
+            sym = "XAUUSD"
+            now = datetime.now(timezone.utc)
+            for i, p in enumerate([2400.0, 2390.0, 2380.0]):
+                await db.price_ticks.insert_one({
+                    "ts": now - timedelta(seconds=20 - i * 10),
+                    "symbol": sym, "price": p, "bid": p, "ask": p,
+                })
+            import market as _m
+            _m._cache_set(f"quote:{sym}",
+                          {"symbol": sym, "price": 2380.0,
+                           "bid": 2380.0, "ask": 2380.0,
+                           "timestamp": now.isoformat()},
+                          ttl=10)
+            trade = {
+                "user_id": "x", "account_id": "y", "signal_id": None,
+                "symbol": sym, "action": "BUY", "lot_size": 0.01,
+                "entry_price": 2400.0, "stop_loss": 2390.0,  # already below
+                "take_profit": 2430.0, "status": "open",
+                "created_at": now.isoformat(),
+            }
+            r = await db.trades.insert_one(trade)
+            try:
+                out = await sl_watcher.sweep_once()
+                # Either skipped (price <= SL) or never met threshold for this
+                # one trade. Must NOT fire because direction-aware guard kicks in.
+                assert len(fired) == 0, "should not fire when BUY price <= SL"
+                # The function should still increment checked for OTHER trades
+                # but for this specific synthetic trade, expect 0 from this one.
+                assert isinstance(out, dict)
+            finally:
+                await db.trades.delete_one({"_id": r.inserted_id})
+
+        asyncio.run(_run())
