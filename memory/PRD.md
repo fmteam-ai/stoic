@@ -18,6 +18,25 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
     bot_runner blocks auto-execute when current spread exceeds per-symbol cap.
   - Multi-Timeframe Trend Gate — new veto in `ai_signals.py` enforcing trend
     confluence (SMA20 slope · SMA50 vs SMA200 · price vs SMA50).
+- 2026-06-22 (iter-9) — **Affiliate gate + Slippage veto + Intelligence counters**:
+  - Affiliate Program is now gated behind an active paid subscription.
+    `/api/affiliate/apply` returns HTTP **402 Payment Required** when the user has
+    no active sub. `/api/affiliate/status` surfaces a new `subscription_required`
+    flag and a `subscription_required` state for fresh, un-subscribed users.
+    Frontend renders a `SubscriptionGate` card with a CTA to `/subscription`.
+  - **Server-side slippage veto** — on first `bridge /report` open, the bot
+    compares `actual_entry` vs the signal's `intended_entry` and computes
+    `slippage_pips`. If above `max_slippage_pips` (per-symbol cap on BotConfig),
+    the trade is force-closed via `pending_modification={type:FULL_CLOSE}` and
+    `close_reason=slippage_veto`.
+  - **Intelligence counters** — daily rolling counts of `mtf_veto`,
+    `auto_tune_block`, `spread_block`, `slippage_veto` exposed under
+    `/api/bot/status.intelligence` (today + yesterday sum). Dashboard Bot
+    Status Strip now shows a "Vetoes Today (24h)" pill row.
+  - Frontend: Bot Config Section 05 gains a Slippage Veto tile + per-symbol
+    pip caps (`slippage-cap-{SYMBOL}`).
+  - Tests: 8 new (TestAffiliateSubGate ×3, TestIntelligenceCounters ×2,
+    TestSlippageVeto ×3). **Full suite: 164/164 passing.**
   - Frontend: Bot Config "Section 05 · Trading Intelligence" + Analytics
     "Auto-Tuned Thresholds" card with 9-bucket histogram.
   - Tests: 12 new (TestMtfGate ×5, TestAutoTune ×4, TestSpreadFilter ×3).
@@ -29,22 +48,25 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 - Dual-AI Claude Sonnet 4.5 + indicators engine.
 - Risk profiles: low/medium/high/extreme.
 - Kelly sizing + Regime Adapter + Macro freeze + Meta-Labeler veto.
-- **NEW** Multi-Timeframe trend gate (always-on).
-- **NEW** Auto-Tune min-confidence threshold (per user, per symbol).
-- **NEW** MT5 Spread filter (per-symbol pip cap; needs EA v1.21+).
+- Multi-Timeframe trend gate (always-on).
+- Auto-Tune min-confidence threshold (per user, per symbol).
+- MT5 Spread filter (per-symbol pip cap; needs EA v1.21+).
+- **NEW** Server-side Slippage Veto (per-symbol max-pip cap, force-close).
+- **NEW** Affiliate Program gated behind active paid subscription.
+- **NEW** Intelligence counters exposed under `/api/bot/status.intelligence`.
 - Profit Protection (BE shift, trailing, partial close at TP1/TP2/TP3).
 - Daily Drawdown Circuit Breaker.
 - Telegram push + 2-way bot (`/close`, `/panic`, `/trades`).
 - Performance Attribution Analytics (multi-dimensional).
 - Encrypted Broker Password Vault (AES-256-GCM).
-- Stripe subscriptions + Affiliate program.
+- Stripe subscriptions + Affiliate program (gated).
 
 ## Roadmap (priority order)
 - **P0** Settings page (Profile + Password + TOTP 2FA) — playbook fetched.
 - **P1** Binance live BTC execution via CCXT.
-- **P1** Gate Affiliate Program behind active paid subscription.
-- **P2** Server-side slippage veto.
-- **P2** Expose MTF veto count + auto-tune effect in `/api/bot/status`.
+- **P2** Surface `mtf_veto` / `auto_tune_block` block reasons inline on the
+  Signals page (turn the gate into a teaching tool).
+- **P2** Per-user slippage analytics widget (avg slippage by symbol/time).
 
 ## Test credentials
 See `/app/memory/test_credentials.md`.
