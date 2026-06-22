@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info } from "lucide-react";
+import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 
-const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000 };
+const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000, investor_password: "", master_password: "" };
 
 export default function Accounts() {
     const [accounts, setAccounts] = useState([]);
@@ -161,6 +161,35 @@ export default function Accounts() {
                                 data-testid="account-currency-input"
                                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
                         </div>
+
+                        {form.mode === "live" && (
+                            <div className="md:col-span-2 border-t border-[#1F1F1F] pt-3 mt-1 space-y-3">
+                                <div className="flex items-start gap-2">
+                                    <Lock className="w-3.5 h-3.5 text-[#FFD700] shrink-0 mt-0.5" />
+                                    <div className="text-[10px] font-mono text-[#A1A1AA] tracking-wide leading-relaxed">
+                                        <span className="text-[#FFD700]">OPTIONAL</span> · Stored encrypted (AES-256-GCM) for your reference only.
+                                        The EA <em>does not need them</em> — it uses your logged-in MT5 session.
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">INVESTOR PASSWORD (read-only)</label>
+                                        <input type="password" autoComplete="new-password" value={form.investor_password}
+                                            onChange={e => setForm({ ...form, investor_password: e.target.value })}
+                                            data-testid="account-investor-pw-input"
+                                            className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" placeholder="(optional)" />
+                                    </div>
+                                    <div>
+                                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">MASTER PASSWORD (trading)</label>
+                                        <input type="password" autoComplete="new-password" value={form.master_password}
+                                            onChange={e => setForm({ ...form, master_password: e.target.value })}
+                                            data-testid="account-master-pw-input"
+                                            className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" placeholder="(optional)" />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="md:col-span-2 flex justify-end gap-2">
                             <button type="button" onClick={() => { setShowForm(false); setForm(empty); }}
                                 className="px-4 py-2 text-xs tracking-widest border border-[#1F1F1F] hover:border-[#333333] transition-colors">
@@ -232,6 +261,10 @@ export default function Accounts() {
                                             </button>
                                         </div>
                                     </div>
+
+                                    {a.mode !== "paper" && (
+                                        <CredentialsPanel account={a} onUpdate={load} onError={(e) => setErr(e)} onMessage={(m) => setMsg(m)} />
+                                    )}
                                 </div>
                             );
                         })}
@@ -239,5 +272,128 @@ export default function Accounts() {
                 )}
             </div>
         </AppLayout>
+    );
+}
+
+function CredentialsPanel({ account, onUpdate, onError, onMessage }) {
+    const [editing, setEditing] = useState(false);
+    const [investor, setInvestor] = useState("");
+    const [master, setMaster] = useState("");
+    const [revealed, setRevealed] = useState(null);
+    const [saving, setSaving] = useState(false);
+
+    const hasAny = account.has_investor_password || account.has_master_password;
+
+    const reveal = async () => {
+        try {
+            const { data } = await api.post(`/accounts/${account.id}/credentials/reveal`);
+            setRevealed(data);
+            setTimeout(() => setRevealed(null), 30_000); // auto-hide after 30s
+        } catch (e) { onError(formatApiError(e)); }
+    };
+
+    const save = async () => {
+        setSaving(true);
+        try {
+            const payload = {};
+            if (investor !== "") payload.investor_password = investor;
+            if (master !== "") payload.master_password = master;
+            if (Object.keys(payload).length === 0) {
+                setEditing(false); setSaving(false); return;
+            }
+            await api.patch(`/accounts/${account.id}/credentials`, payload);
+            onMessage("Credentials saved (encrypted).");
+            setInvestor(""); setMaster(""); setEditing(false);
+            onUpdate();
+        } catch (e) { onError(formatApiError(e)); }
+        finally { setSaving(false); }
+    };
+
+    const clear = async (which) => {
+        if (!window.confirm(`Remove stored ${which} password?`)) return;
+        try {
+            const payload = which === "investor" ? { investor_password: "" } : { master_password: "" };
+            await api.patch(`/accounts/${account.id}/credentials`, payload);
+            onMessage("Credential cleared.");
+            setRevealed(null);
+            onUpdate();
+        } catch (e) { onError(formatApiError(e)); }
+    };
+
+    return (
+        <div className="mt-4 pt-4 border-t border-[#1F1F1F]" data-testid={`credentials-panel-${account.account_number}`}>
+            <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                    <Lock className="w-3.5 h-3.5 text-[#FFD700]" />
+                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest">BROKER PASSWORDS · AES-256-GCM at rest</span>
+                </div>
+                {!editing && (
+                    <button onClick={() => setEditing(true)} data-testid={`credentials-edit-${account.account_number}`}
+                        className="px-3 py-1 border border-[#1F1F1F] hover:border-[#FFD700] text-[10px] font-mono tracking-widest flex items-center gap-1 transition-colors">
+                        <KeyRound className="w-3 h-3" /> {hasAny ? "UPDATE" : "ADD"}
+                    </button>
+                )}
+            </div>
+
+            {!editing && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {["investor", "master"].map((kind) => {
+                        const stored = kind === "investor" ? account.has_investor_password : account.has_master_password;
+                        const value = revealed ? (kind === "investor" ? revealed.investor_password : revealed.master_password) : null;
+                        return (
+                            <div key={kind} className="p-2 bg-[#050505] border border-[#1F1F1F] flex items-center justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">{kind.toUpperCase()} PASSWORD</div>
+                                    <div className="font-mono text-xs truncate" data-testid={`credentials-${kind}-${account.account_number}`}>
+                                        {stored ? (value ?? "••••••••") : <span className="text-[#52525B]">— not stored —</span>}
+                                    </div>
+                                </div>
+                                {stored && (
+                                    <div className="flex items-center gap-1">
+                                        <button onClick={reveal} data-testid={`reveal-${kind}-${account.account_number}`}
+                                            className="p-1.5 border border-[#1F1F1F] hover:border-[#FFD700] text-[#A1A1AA] hover:text-[#FFD700]" title={value ? "Hide" : "Reveal (auto-hides in 30s)"}>
+                                            {value ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                        </button>
+                                        <button onClick={() => clear(kind)} data-testid={`clear-${kind}-${account.account_number}`}
+                                            className="p-1.5 border border-[#FF3B30]/30 text-[#FF3B30] hover:bg-[#FF3B30]/10" title="Remove stored password">
+                                            <Trash className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {editing && (
+                <div className="space-y-2 bg-[#050505] border border-[#FFD700]/30 p-3">
+                    <div className="text-[10px] text-[#A1A1AA] font-mono">
+                        Leave a field blank to keep the existing value. These are never sent to MT5 — they&apos;re stored encrypted for your reference only.
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <input type="password" autoComplete="new-password" value={investor}
+                            onChange={e => setInvestor(e.target.value)}
+                            data-testid={`edit-investor-pw-${account.account_number}`}
+                            placeholder={account.has_investor_password ? "Investor (already stored)" : "Investor password (read-only)"}
+                            className="bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                        <input type="password" autoComplete="new-password" value={master}
+                            onChange={e => setMaster(e.target.value)}
+                            data-testid={`edit-master-pw-${account.account_number}`}
+                            placeholder={account.has_master_password ? "Master (already stored)" : "Master password (trading)"}
+                            className="bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                        <button onClick={() => { setEditing(false); setInvestor(""); setMaster(""); }}
+                            className="px-3 py-1.5 border border-[#1F1F1F] text-[10px] font-mono tracking-widest">CANCEL</button>
+                        <button onClick={save} disabled={saving}
+                            data-testid={`credentials-save-${account.account_number}`}
+                            className="px-3 py-1.5 bg-[#FFD700] text-black font-bold text-[10px] tracking-widest disabled:opacity-50">
+                            {saving ? "SAVING…" : "SAVE ENCRYPTED"}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 }

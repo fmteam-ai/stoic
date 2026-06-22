@@ -53,6 +53,13 @@ class AccountCreate(BaseModel):
     base_currency: str = "USD"
     mode: Literal["live", "paper"] = "live"
     initial_balance: float = 10000.0  # only used for paper accounts
+    investor_password: Optional[str] = None  # encrypted at rest — read-only MT5 password
+    master_password: Optional[str] = None    # encrypted at rest — full-trade MT5 password
+
+
+class AccountCredsUpdate(BaseModel):
+    investor_password: Optional[str] = None
+    master_password: Optional[str] = None
 
 
 class AccountOut(BaseModel):
@@ -69,6 +76,8 @@ class AccountOut(BaseModel):
     equity: float = 0.0
     last_heartbeat: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    has_investor_password: bool = False
+    has_master_password: bool = False
 
 
 # ---------- Bot config ----------
