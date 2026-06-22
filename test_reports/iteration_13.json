@@ -1,0 +1,47 @@
+{
+  "summary": "Iter-13 QA of MT5 broker/account-slot limits (5 brokers x 3 live accounts; paper exempt). New pytest suite test_iter13_broker_limits.py = 10/10 PASS covering: GET /accounts/limits shape, GET /accounts/broker-presets (10 entries), per-broker cap (3 RoboForex live OK, 4th = 403 'Account limit reached for RoboForex'), broker cap (5 distinct brokers OK, 6th = 403 'Broker limit reached'), paper bypass (15 live + paper still allowed and paper NOT counted), case-insensitive matching ('RoboForex','roboforex','ROBOFOREX' share one bucket — 4th in any case = 403), delete frees slot (delete 1 of 3 -> remaining_slots=1, next create succeeds), missing broker on live = 403 with 'Broker name is required'. Backend regression: full /app/backend/tests/ suite = 217/217 PASS (was 207 last iter, +10 new). Frontend Playwright run end-to-end: BrokerUsageCard renders above the accounts list with status pill '○ 5 BROKERS FREE'; ADD ACCOUNT button opens form; LIVE mode reveals BrokerPresetPicker; broker-preset-toggle opens broker-preset-list; clicking broker-preset-roboforex auto-fills broker='RoboForex' and server='RoboForex-ECN' and closes the list; submitting the 4th RoboForex live account renders the exact API 403 detail in the red error banner (no crash); CANCEL then reopen clears broker field (no stale selection).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Live account create 403",
+        "issue": "After a 403 'Account limit reached' response on POST /accounts, the BrokerUsageCard is not refreshed (load() only fires on success). The red error banner shows correctly, but the per-broker tile and 'X / 5 brokers' counter stay at their pre-attempt value. Users do see the banner with the cap info but the visual usage card lags by one click. LOW priority polish — consider calling load() in the catch branch of create() to keep the card in sync.",
+        "affected_selectors": ["[data-testid=\"broker-usage-card\"]", "[data-testid=\"broker-slot-roboforex\"]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter13_broker_limits.py",
+    "/app/test_reports/pytest/iter13_broker_limits.xml",
+    "/app/test_reports/pytest/iter13_full.xml"
+  ],
+  "action_items": [
+    "[OPTIONAL/LOW] Accounts.jsx create() — on catch (403), call await load() so BrokerUsageCard immediately reflects the at-cap state in addition to showing the error banner. Currently the user sees the toast but the usage card still says e.g. '0/5 brokers' until a successful action or refresh."
+  ],
+  "critical_code_review_comments": [
+    "account_limits.py is clean, 80 lines, single source of truth for caps. _norm() strips+lowers correctly; verified 'RoboForex'/'roboforex'/'ROBOFOREX' collapse to one bucket while preserving the display name of the first-seen variant in breakdown.",
+    "Paper exemption is enforced at TWO layers — server-side: get_broker_breakdown() filters mode!=paper AND skips broker==PAPER_BROKER_TAG; route: POST /accounts only invokes check_can_add_live_account when mode != 'paper'. Defense-in-depth is correct.",
+    "broker_presets.py has 10 entries with broker/servers/account_types — matches the 8-min requirement.",
+    "Frontend BrokerUsageCard correctly shows progress bar pct based on count/max_accounts_per_broker, yellow at-cap state, slots-free counter, and the contextual 'NEED MORE? CONTACT SUPPORT' footer.",
+    "BrokerPresetPicker auto-fills server and account_type from the preset — nice DX win. The 'BROKER NOT LISTED? CLOSE THIS MENU' footer keeps the manual-entry path discoverable.",
+    "data-testid coverage is excellent: broker-usage-card, broker-usage-status, broker-usage-breakdown, broker-slot-{lowered-dashed}, broker-preset-picker, broker-preset-toggle, broker-preset-list, broker-preset-{lowered-dashed}, account-mode-live/paper, account-{field}-input — all present and behaving."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter13_broker_limits.py (NEW - 10 tests, module-level cleanup of ^qa_limits_ users and their accounts)"
+  ],
+  "success_rate": {
+    "backend": "100% — 10/10 new tests pass; 217/217 full suite pass (no regression)",
+    "frontend": "100% — all 4 frontend acceptance checks pass (card renders, picker reveals + auto-fills + closes, 403 banner, no stale state after CANCEL+reopen)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 verified. QA users created with prefix qa_limits_* (cleaned up via module-level autouse fixture).",
+  "seed_data_creation": "None persistent. Each test class registers fresh qa_limits_<uuid>@example.com users via /api/auth/register; all users and their accounts are deleted at module teardown by direct mongo cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend baseline is now 217 tests (207 from iter-12 + 10 new). Caps: MAX_BROKERS_PER_USER=5, MAX_ACCOUNTS_PER_BROKER=3 — paper accounts exempt. Bumping these constants in /app/backend/account_limits.py is the canonical way to grant more capacity globally. The 403 error message strings are case-checked in tests as substrings ('account limit reached', 'broker limit reached', 'broker name is required') — preserve these phrases if rewording. Preset endpoint is auth-gated. The frontend BrokerPresetPicker's auto-fill copies p.servers[0] and p.account_types[0] into the form; if any preset is added with empty arrays it would clear those fields — keep arrays non-empty. Open iter-12 action item (TOTPDisableRequest.code max_length=8 blocks 10-char recovery codes) is unrelated to this iter and still pending.",
+  "rca of the issue": "N/A — no failing tests in this iteration. The single minor finding (UI usage-card not auto-refreshing on 403) is a UX polish nit, not a bug: the error banner already conveys the relevant info; the card simply lags by one user action. Fix is a single line: `} catch (e2) { setErr(formatApiError(e2)); await load(); }` in Accounts.jsx create()."
+}

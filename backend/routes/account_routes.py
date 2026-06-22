@@ -6,6 +6,11 @@ from auth import get_current_user, generate_bridge_token
 from database import get_db
 from models import AccountCreate, AccountCredsUpdate
 from secrets_vault import encrypt as vault_encrypt, decrypt as vault_decrypt
+from account_limits import (
+    get_broker_breakdown,
+    check_can_add_live_account,
+)
+from broker_presets import BROKER_PRESETS
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -26,10 +31,35 @@ async def list_accounts(user=Depends(get_current_user)):
     return [_serialize(d) for d in docs]
 
 
+@router.get("/limits")
+async def account_limits(user=Depends(get_current_user)):
+    """Return the user's broker/account-slot usage and the current global caps."""
+    db = get_db()
+    return await get_broker_breakdown(db, user["id"])
+
+
+@router.get("/broker-presets")
+async def broker_presets(user=Depends(get_current_user)):
+    """List of commonly-used MT5 brokers with typical server names.
+
+    `user` dependency is intentional — only authenticated users should be
+    able to enumerate presets (keeps it lightly gated for analytics).
+    """
+    _ = user  # silence linter — auth dependency
+    return {"presets": BROKER_PRESETS}
+
+
 @router.post("")
 async def create_account(payload: AccountCreate, user=Depends(get_current_user)):
     db = get_db()
     is_paper = payload.mode == "paper"
+
+    # Per-user limits — paper accounts are exempt (sandbox).
+    if not is_paper:
+        allowed, err = await check_can_add_live_account(db, user["id"], payload.broker)
+        if not allowed:
+            raise HTTPException(status_code=403, detail=err)
+
     starting = float(payload.initial_balance) if is_paper else 0.0
 
     creds = {}

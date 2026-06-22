@@ -1,13 +1,15 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound } from "lucide-react";
+import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 
 const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000, investor_password: "", master_password: "" };
 
 export default function Accounts() {
     const [accounts, setAccounts] = useState([]);
+    const [limits, setLimits] = useState(null);
+    const [presets, setPresets] = useState([]);
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState(empty);
     const [err, setErr] = useState("");
@@ -16,13 +18,21 @@ export default function Accounts() {
 
     const load = useCallback(async () => {
         try {
-            const { data } = await api.get("/accounts");
-            setAccounts(data);
+            const [a, l] = await Promise.all([api.get("/accounts"), api.get("/accounts/limits")]);
+            setAccounts(a.data);
+            setLimits(l.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
     }, []);
 
     useEffect(() => { load(); }, [load]);
+
+    // Lazy-load broker presets when the form first opens
+    useEffect(() => {
+        if (showForm && presets.length === 0) {
+            api.get("/accounts/broker-presets").then(r => setPresets(r.data.presets || [])).catch(() => {});
+        }
+    }, [showForm, presets.length]);
 
     // Live heartbeat updates from the EA bridge
     const { lastEvent } = useLiveStream();
@@ -105,6 +115,9 @@ export default function Accounts() {
                     </div>
                 </div>
 
+                {/* Broker / account-slot usage */}
+                <BrokerUsageCard limits={limits} />
+
                 {/* Create form */}
                 {showForm && (
                     <form onSubmit={create} className="border border-[#00FF41]/40 bg-[#0A0A0A] p-5 grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="account-form">
@@ -119,6 +132,11 @@ export default function Accounts() {
                                 </button>
                             ))}
                         </div>
+                        {form.mode === "live" && (
+                            <div className="md:col-span-2">
+                                <BrokerPresetPicker presets={presets} form={form} setForm={setForm} />
+                            </div>
+                        )}
                         {[
                             ["label", "Label", form.mode === "paper" ? "Paper Sandbox #1" : "My Microcent #1"],
                             ...(form.mode === "live" ? [
@@ -391,6 +409,118 @@ function CredentialsPanel({ account, onUpdate, onError, onMessage }) {
                             className="px-3 py-1.5 bg-[#FFD700] text-black font-bold text-[10px] tracking-widest disabled:opacity-50">
                             {saving ? "SAVING…" : "SAVE ENCRYPTED"}
                         </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function BrokerUsageCard({ limits }) {
+    if (!limits) return null;
+    const { max_brokers, max_accounts_per_broker, brokers_used, breakdown, total_live_accounts } = limits;
+    const brokerCapReached = brokers_used >= max_brokers;
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="broker-usage-card">
+            <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-[#00FF41]" />
+                    <div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">BROKER USAGE</div>
+                        <div className="font-display font-bold text-base tracking-tight">
+                            {brokers_used} / {max_brokers} brokers · {total_live_accounts} live account{total_live_accounts === 1 ? "" : "s"}
+                        </div>
+                    </div>
+                </div>
+                <div className={`font-mono text-[10px] tracking-widest px-2 py-1 border ${
+                    brokerCapReached ? "border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10" : "border-[#1F1F1F] text-[#A1A1AA]"
+                }`} data-testid="broker-usage-status">
+                    {brokerCapReached ? "● BROKER CAP REACHED" : `○ ${max_brokers - brokers_used} BROKER${(max_brokers - brokers_used) === 1 ? "" : "S"} FREE`}
+                </div>
+            </div>
+            <div className="p-5">
+                {breakdown.length === 0 ? (
+                    <div className="text-xs text-[#52525B] font-mono tracking-widest">
+                        NO LIVE BROKERS CONNECTED · ADD YOUR FIRST MT5 ACCOUNT TO BEGIN
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2" data-testid="broker-usage-breakdown">
+                        {breakdown.map(b => {
+                            const used = b.count;
+                            const pct = Math.min(100, (used / max_accounts_per_broker) * 100);
+                            const full = used >= max_accounts_per_broker;
+                            return (
+                                <div key={b.broker} className="p-3 border border-[#1F1F1F] bg-[#050505]"
+                                    data-testid={`broker-slot-${b.broker.toLowerCase().replace(/\s+/g, "-")}`}>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <div className="font-display font-bold text-sm truncate">{b.broker}</div>
+                                        <div className={`font-mono text-[10px] tracking-widest ${full ? "text-[#FFD700]" : "text-[#A1A1AA]"}`}>
+                                            {used}/{max_accounts_per_broker}
+                                        </div>
+                                    </div>
+                                    <div className="h-1 bg-[#0A0A0A] border border-[#1F1F1F]">
+                                        <div className={`h-full ${full ? "bg-[#FFD700]" : "bg-[#00FF41]"}`} style={{ width: `${pct}%` }} />
+                                    </div>
+                                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1.5">
+                                        {full ? "AT CAP" : `${b.remaining_slots} SLOT${b.remaining_slots === 1 ? "" : "S"} FREE`}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+                <div className="mt-3 pt-3 border-t border-[#1F1F1F] flex items-start gap-2">
+                    <Info className="w-3.5 h-3.5 text-[#52525B] shrink-0 mt-0.5" />
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-wide leading-relaxed">
+                        UP TO {max_brokers} DIFFERENT BROKERS · {max_accounts_per_broker} LIVE ACCOUNTS PER BROKER.
+                        PAPER SANDBOX ACCOUNTS DO NOT COUNT TOWARDS THESE LIMITS.
+                        NEED MORE? CONTACT SUPPORT TO EXTEND.
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function BrokerPresetPicker({ presets, form, setForm }) {
+    const [open, setOpen] = useState(false);
+    if (!presets || presets.length === 0) return null;
+
+    const pickBroker = (p) => {
+        setForm({
+            ...form,
+            broker: p.broker,
+            server: p.servers[0] || "",
+            account_type: p.account_types?.[0] || form.account_type,
+        });
+        setOpen(false);
+    };
+
+    return (
+        <div className="mb-2" data-testid="broker-preset-picker">
+            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">QUICK PICK · COMMON BROKERS</label>
+            <button type="button" onClick={() => setOpen(!open)}
+                data-testid="broker-preset-toggle"
+                className="w-full bg-[#050505] border border-[#1F1F1F] hover:border-[#00FF41]/40 px-3 py-2 text-sm font-mono flex items-center justify-between transition-colors">
+                <span className={form.broker ? "text-white" : "text-[#52525B]"}>
+                    {form.broker ? `▸ ${form.broker} · ${form.server || "(no server)"}` : "Pick a broker preset, or fill the fields below manually"}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+            </button>
+            {open && (
+                <div className="mt-2 border border-[#1F1F1F] bg-[#050505] max-h-72 overflow-y-auto" data-testid="broker-preset-list">
+                    {presets.map(p => (
+                        <button type="button" key={p.broker} onClick={() => pickBroker(p)}
+                            data-testid={`broker-preset-${p.broker.toLowerCase().replace(/\s+/g, "-")}`}
+                            className="w-full text-left px-3 py-2 border-b border-[#1F1F1F] last:border-b-0 hover:bg-[#0A0A0A] transition-colors">
+                            <div className="font-display font-bold text-sm">{p.broker}</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-wide mt-0.5">
+                                {p.servers.join(" · ")}
+                            </div>
+                        </button>
+                    ))}
+                    <div className="px-3 py-2 font-mono text-[10px] text-[#52525B] tracking-wide bg-[#0A0A0A] border-t border-[#1F1F1F]">
+                        BROKER NOT LISTED? CLOSE THIS MENU AND TYPE IT MANUALLY BELOW.
                     </div>
                 </div>
             )}
