@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock } from "lucide-react";
+import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock, Bot, Pause, CheckCircle2, AlertCircle, Clock } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -56,6 +56,94 @@ function StatCell({ label, value, accent }) {
     );
 }
 
+function formatAgo(seconds) {
+    if (seconds == null) return "—";
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    return `${Math.floor(seconds / 3600)}h ago`;
+}
+
+function BotStatusStrip({ status }) {
+    const active = status.active;
+    const isHold = status.last_signal?.action === "HOLD";
+    const hasVeto = !!status.last_signal?.veto_reason;
+    const lastAction = status.last_signal?.action ?? "—";
+    const conf = status.last_signal?.confidence;
+    const minConf = status.min_confidence;
+
+    let stateIcon, stateColor, stateLabel;
+    if (!active) { stateIcon = Pause; stateColor = "#52525B"; stateLabel = "STOPPED"; }
+    else if (hasVeto) { stateIcon = AlertCircle; stateColor = "#FFB000"; stateLabel = "VETOED"; }
+    else if (isHold) { stateIcon = Clock; stateColor = "#FFB000"; stateLabel = "HOLDING"; }
+    else { stateIcon = CheckCircle2; stateColor = "#00FF41"; stateLabel = "TRADING"; }
+    const StateIcon = stateIcon;
+
+    const actionColor = lastAction === "BUY" ? "#00FF41" : lastAction === "SELL" ? "#FF3B30" : "#A1A1AA";
+
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="bot-status-strip">
+            <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-3">
+                    <Bot className="w-4 h-4" style={{ color: stateColor }} />
+                    <span className="font-display font-bold text-sm tracking-tight">BOT STATUS</span>
+                    <span className="font-mono text-[10px] tracking-widest px-2 py-0.5 border"
+                        style={{ color: stateColor, borderColor: `${stateColor}66`, backgroundColor: `${stateColor}11` }}
+                        data-testid="bot-state-label">
+                        <StateIcon className="w-2.5 h-2.5 inline mr-1" style={{ verticalAlign: "-1px" }} />
+                        {stateLabel}
+                    </span>
+                </div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                    {status.risk_level?.toUpperCase()} · {status.symbols?.join(" · ")} · min {minConf}%
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-[#1F1F1F]">
+                <div className="p-4">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">LAST TICK</div>
+                    <div className="font-mono text-sm" data-testid="bot-last-tick">{formatAgo(status.seconds_since_last_tick)}</div>
+                </div>
+                <div className="p-4">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">LAST ACTION</div>
+                    <div className="font-mono text-sm flex items-center gap-1.5" style={{ color: actionColor }} data-testid="bot-last-action">
+                        {lastAction}
+                        {conf != null && <span className="text-[#52525B] text-xs">· {conf}%</span>}
+                    </div>
+                </div>
+                <div className="p-4">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">NEXT TICK</div>
+                    <div className="font-mono text-sm" data-testid="bot-next-tick">
+                        {active ? (status.next_tick_in_seconds != null ? `in ~${status.next_tick_in_seconds}s` : "—") : "paused"}
+                    </div>
+                </div>
+                <div className="p-4">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">AUTO-EXECUTE</div>
+                    <div className={`font-mono text-sm ${status.auto_execute ? "text-[#00FF41]" : "text-[#A1A1AA]"}`} data-testid="bot-autoexec">
+                        {status.auto_execute ? "ON" : "OFF (manual)"}
+                    </div>
+                </div>
+            </div>
+
+            {status.why_no_trade && (
+                <div className="px-5 py-3 border-t border-[#1F1F1F] flex items-start gap-2" data-testid="bot-why-no-trade">
+                    <AlertCircle className="w-3.5 h-3.5 text-[#FFB000] shrink-0 mt-0.5" />
+                    <div className="text-xs text-[#A1A1AA] leading-relaxed">
+                        <span className="font-mono text-[10px] text-[#FFB000] tracking-widest mr-1">WHY NO TRADE ·</span>
+                        {status.why_no_trade}
+                    </div>
+                </div>
+            )}
+
+            {status.last_signal?.reasoning && (
+                <div className="px-5 py-3 border-t border-[#1F1F1F]">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">AI REASONING · {status.last_signal.symbol}</div>
+                    <div className="text-xs text-[#A1A1AA] leading-relaxed line-clamp-2">{status.last_signal.reasoning}</div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function Dashboard() {
     const [quotes, setQuotes] = useState({});
     const [selected, setSelected] = useState("XAUUSD");
@@ -64,6 +152,7 @@ export default function Dashboard() {
     const [sentiment, setSentiment] = useState({});
     const [macro, setMacro] = useState({ events: [], freeze: null });
     const [stats, setStats] = useState(null);
+    const [botStatus, setBotStatus] = useState(null);
     const [loading, setLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [err, setErr] = useState("");
@@ -120,11 +209,21 @@ export default function Dashboard() {
         }
     }, []);
 
+    const loadBotStatus = useCallback(async () => {
+        try {
+            const { data } = await api.get("/bot/status");
+            setBotStatus(data);
+        } catch (e) {
+            console.warn("[dashboard] bot status load failed", e?.message);
+        }
+    }, []);
+
     useEffect(() => {
-        loadQuotes(); loadStats();
-        const id = setInterval(loadQuotes, 60_000);
-        return () => clearInterval(id);
-    }, [loadQuotes, loadStats]);
+        loadQuotes(); loadStats(); loadBotStatus();
+        const id = setInterval(() => { loadQuotes(); loadBotStatus(); }, 60_000);
+        const tickId = setInterval(loadBotStatus, 10_000); // refresh status every 10s
+        return () => { clearInterval(id); clearInterval(tickId); };
+    }, [loadQuotes, loadStats, loadBotStatus]);
 
     useEffect(() => { loadHistory(selected); loadSentiment(selected); loadMacro(selected); }, [selected, loadHistory, loadSentiment, loadMacro]);
 
@@ -194,6 +293,9 @@ export default function Dashboard() {
                         </div>
                     </div>
                 )}
+
+                {/* Bot Status Strip */}
+                {botStatus && <BotStatusStrip status={botStatus} />}
 
                 {/* Quote tiles */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
