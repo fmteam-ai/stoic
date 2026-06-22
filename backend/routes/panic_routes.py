@@ -32,12 +32,13 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
     trade_cancel = await db.trades.update_many(
         {**query, "status": "pending"},
         {"$set": {"status": "cancelled", "error": "panic_lock",
+                  "close_reason": "panic",
                   "closed_at": now_iso}},
     )
     # Request close on all open trades — EA will close on next poll
     open_close = await db.trades.update_many(
         {**query, "status": "open"},
-        {"$set": {"close_requested": True}},
+        {"$set": {"close_requested": True, "close_reason": "panic"}},
     )
     payload = {
         "bots_disabled": bot_result.modified_count,

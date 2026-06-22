@@ -209,12 +209,13 @@ async def _cmd_panic(token, chat_id, user_id) -> None:
     # Cancel pending trades
     cancel_res = await db.trades.update_many(
         {"user_id": user_id, "status": "pending"},
-        {"$set": {"status": "cancelled", "closed_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"status": "cancelled", "closed_at": datetime.now(timezone.utc).isoformat(),
+                  "close_reason": "panic"}},
     )
     # Mark open for close
     close_res = await db.trades.update_many(
         {"user_id": user_id, "status": "open"},
-        {"$set": {"close_requested": True}},
+        {"$set": {"close_requested": True, "close_reason": "panic"}},
     )
     text = (
         "*🚨 PANIC ENGAGED*\n\n"
@@ -231,7 +232,7 @@ async def _cmd_close(token, chat_id, user_id, args: str) -> None:
     query = {"user_id": user_id, "status": "open"}
     if symbol:
         query["symbol"] = symbol
-    res = await db.trades.update_many(query, {"$set": {"close_requested": True}})
+    res = await db.trades.update_many(query, {"$set": {"close_requested": True, "close_reason": "manual_telegram"}})
     if symbol:
         text = f"*✂️ Close Requested*\n\nMarked `{res.modified_count}` open {_esc(symbol)} trade\\(s\\) for close\\."
     else:

@@ -12,6 +12,17 @@ const STATUS_STYLE = {
     failed: "border-[#FF3B30]/40 text-[#FF3B30]",
 };
 
+const CLOSE_REASON_BADGE = {
+    take_profit:     { label: "TP",       cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]",         icon: "🎯" },
+    stop_loss:       { label: "SL",       cls: "border-[#FF3B30]/40 bg-[#FF3B30]/10 text-[#FF3B30]",         icon: "🛑" },
+    manual:          { label: "MANUAL",   cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]",         icon: "✋" },
+    manual_telegram: { label: "TELEGRAM", cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]",         icon: "✋" },
+    nl_command:      { label: "NL CMD",   cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]",         icon: "✋" },
+    panic:           { label: "PANIC",    cls: "border-[#FF3B30]/40 bg-[#FF3B30]/10 text-[#FF3B30]",         icon: "🚨" },
+    circuit_breaker: { label: "BREAKER",  cls: "border-[#FFB000]/40 bg-[#FFB000]/10 text-[#FFB000]",         icon: "🚧" },
+    broker:          { label: "BROKER",   cls: "border-[#1F1F1F] bg-[#0A0A0A] text-[#A1A1AA]",               icon: "·" },
+};
+
 function fmtDateTime(iso) {
     if (!iso) return "—";
     try {
@@ -155,9 +166,19 @@ export default function Trades() {
                                             {fmtDateTime(t.closed_at)}
                                         </td>
                                         <td className="px-3 py-2">
-                                            <span className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border inline-block ${STATUS_STYLE[t.status] || "border-[#1F1F1F]"}`}>
-                                                {t.status?.toUpperCase()}
-                                            </span>
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                <span className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border inline-block ${STATUS_STYLE[t.status] || "border-[#1F1F1F]"}`}>
+                                                    {t.status?.toUpperCase()}
+                                                </span>
+                                                {t.status === "closed" && t.close_reason && CLOSE_REASON_BADGE[t.close_reason] && (
+                                                    <span title={`Closed by: ${t.close_reason}`}
+                                                        data-testid={`close-reason-${t.id}`}
+                                                        className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border inline-flex items-center gap-1 ${CLOSE_REASON_BADGE[t.close_reason].cls}`}>
+                                                        <span>{CLOSE_REASON_BADGE[t.close_reason].icon}</span>
+                                                        {CLOSE_REASON_BADGE[t.close_reason].label}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-3 py-2">
                                             {t.status === "open" && (

@@ -288,7 +288,7 @@ async def close_trade(trade_id: str, user=Depends(get_current_user)):
     db = get_db()
     result = await db.trades.update_one(
         {"_id": ObjectId(trade_id), "user_id": user["id"], "status": "open"},
-        {"$set": {"status": "pending", "close_requested": True}},
+        {"$set": {"status": "pending", "close_requested": True, "close_reason": "manual"}},
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Open trade not found")

@@ -174,6 +174,26 @@ async def report_trade(payload: BridgeTradeReport):
         update["error"] = payload.error
     if payload.status == "closed":
         update["closed_at"] = datetime.now(timezone.utc).isoformat()
+        # Infer close_reason if not already set (manual/panic/telegram set it pre-emptively).
+        if not trade.get("close_reason"):
+            entry = float(trade.get("entry_price") or 0)
+            sl = float(trade.get("stop_loss") or 0)
+            tp3 = float(trade.get("tp3") or trade.get("take_profit") or 0)
+            exit_p = float(payload.exit_price or 0)
+            action = trade.get("action")
+            close_reason = "broker"
+            if exit_p > 0 and entry > 0:
+                # Within 0.1% of SL → SL hit. Within 0.1% of TP → TP hit.
+                tol = max(entry * 0.001, 0.5)
+                if sl > 0 and abs(exit_p - sl) <= tol:
+                    close_reason = "stop_loss"
+                elif tp3 > 0 and abs(exit_p - tp3) <= tol:
+                    close_reason = "take_profit"
+                else:
+                    # Profit direction inference
+                    profit_dir = (action == "BUY" and exit_p > entry) or (action == "SELL" and exit_p < entry)
+                    close_reason = "take_profit" if profit_dir else "stop_loss"
+            update["close_reason"] = close_reason
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
     await ws_manager.broadcast(acc["user_id"], "trade_updated", {
