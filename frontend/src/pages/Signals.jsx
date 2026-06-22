@@ -81,6 +81,29 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
                 </div>
             </div>
 
+            {/* Kelly sizing + regime + session */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-1">
+                <div className="border border-[#1F1F1F] p-2">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-0.5">LOTS · KELLY</div>
+                    <div className="font-mono text-sm">{s.lot_size}</div>
+                    {s.kelly_f != null && (
+                        <div className="font-mono text-[10px] text-[#A1A1AA]">f={s.kelly_f} · {s.effective_risk_pct}% risk</div>
+                    )}
+                </div>
+                <div className="border border-[#1F1F1F] p-2">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-0.5">REGIME</div>
+                    <div className="font-mono text-sm" data-testid={`regime-${s.symbol}`}>{s.regime?.regime || "—"}</div>
+                </div>
+                <div className="border border-[#1F1F1F] p-2">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-0.5">SESSION</div>
+                    <div className="font-mono text-sm uppercase">{s.session?.primary?.replace("_", " ") || "—"}</div>
+                </div>
+                <div className="border border-[#1F1F1F] p-2">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-0.5">STRATEGY HINT</div>
+                    <div className="font-mono text-[11px] uppercase">{s.session_bias?.preferred_strategy?.replace("_", " ") || "—"}</div>
+                </div>
+            </div>
+
             {sentLabel && (
                 <div className="pt-2 border-t border-[#1F1F1F]">
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">NEWS SENTIMENT</div>

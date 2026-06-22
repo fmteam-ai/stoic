@@ -671,3 +671,304 @@ class TestDualAIVeto:
         action, reason = _apply_dual_veto("BUY", 60.0, {"score": 0.8})
         assert action == "BUY"
         assert reason == ""
+
+
+# =====================================================================
+# ITERATION 4: Kelly position sizing, microstructure (session + regime),
+# regime CHOP veto, enhanced signal payload.
+# =====================================================================
+
+# ---------- Kelly position sizing (pure function) ----------
+class TestKellyFraction:
+    def test_returns_zero_below_min_confidence(self):
+        from risk import kelly_fraction
+        assert kelly_fraction(confidence_pct=40, min_conf=65,
+                              profile_kelly_cap=0.5, payoff_ratio=2.0) == 0.0
+
+    def test_monotonic_increasing_with_confidence(self):
+        from risk import kelly_fraction
+        f_low = kelly_fraction(70, 65, 1.0, 2.0)
+        f_mid = kelly_fraction(80, 65, 1.0, 2.0)
+        f_high = kelly_fraction(95, 65, 1.0, 2.0)
+        assert 0 < f_low < f_mid < f_high
+
+    def test_capped_at_profile_kelly_cap(self):
+        from risk import kelly_fraction
+        # At 100% confidence with payoff 2.0, raw Kelly = (1*2 - 0)/2 = 1.0,
+        # but profile cap is 0.25 -> must be capped.
+        f = kelly_fraction(100, 50, profile_kelly_cap=0.25, payoff_ratio=2.0)
+        assert f == 0.25
+
+    def test_negative_f_clamped_to_zero(self):
+        from risk import kelly_fraction
+        # confidence just at min_conf with low payoff -> raw Kelly may be negative
+        f = kelly_fraction(50, 50, profile_kelly_cap=0.5, payoff_ratio=0.5)
+        # p=0.5, b=0.5 -> f*=(0.25-0.5)/0.5=-0.5 -> clamp to 0
+        assert f == 0.0
+
+
+class TestComputeKellyPositionSize:
+    def test_returns_required_keys(self):
+        from risk import compute_kelly_position_size, get_profile
+        profile = get_profile("medium")
+        result = compute_kelly_position_size(
+            equity=1000.0, confidence_pct=80, sl_pips=50.0,
+            profile=profile, pip_value=1.0
+        )
+        for key in ("lot_size", "risk_amount", "kelly_f", "effective_risk_pct"):
+            assert key in result, f"missing key {key}"
+        assert isinstance(result["lot_size"], (int, float))
+        assert result["lot_size"] >= 0.01
+        assert result["risk_amount"] >= 0
+        assert 0 <= result["kelly_f"] <= profile["kelly_cap"]
+        assert result["effective_risk_pct"] >= 0
+
+    def test_zero_when_below_min_confidence(self):
+        from risk import compute_kelly_position_size, get_profile
+        profile = get_profile("low")  # min_confidence=75
+        result = compute_kelly_position_size(
+            equity=1000.0, confidence_pct=50, sl_pips=50.0,
+            profile=profile, pip_value=1.0
+        )
+        assert result["kelly_f"] == 0.0
+        assert result["effective_risk_pct"] == 0
+        # lot_size floors at 0.01 per implementation
+        assert result["lot_size"] == 0.01
+
+    def test_invalid_sl_returns_floor_lot(self):
+        from risk import compute_kelly_position_size, get_profile
+        result = compute_kelly_position_size(
+            equity=1000.0, confidence_pct=80, sl_pips=0,
+            profile=get_profile("medium"), pip_value=1.0
+        )
+        assert result["lot_size"] == 0.01
+        assert result["kelly_f"] == 0.0
+
+    def test_profile_kelly_caps(self):
+        """Iter-4 spec: low=0.25, medium=0.50, high=0.75, extreme=1.00."""
+        from risk import PROFILES
+        assert PROFILES["low"]["kelly_cap"] == 0.25
+        assert PROFILES["medium"]["kelly_cap"] == 0.50
+        assert PROFILES["high"]["kelly_cap"] == 0.75
+        assert PROFILES["extreme"]["kelly_cap"] == 1.00
+
+
+# ---------- Regime classifier (pure function) ----------
+class TestRegimeClassifier:
+    def test_chop_when_high_vol_no_trend(self):
+        from microstructure import classify_regime
+        ind = {
+            "current_price": 100.0,
+            "sma_20": 100.0, "sma_50": 100.05, "sma_200": 99.95,  # tiny spread
+            "rsi_14": 70,  # outside 35-65 -> not RANGE either
+            "volatility_30d_pct": 5.0,  # high vol
+        }
+        result = classify_regime(ind)
+        assert result["regime"] == "CHOP", f"got {result}"
+        assert "reason" in result
+
+    def test_low_vol_trend_when_smas_stacked_low_vol(self):
+        from microstructure import classify_regime
+        ind = {
+            "current_price": 100.0,
+            "sma_20": 102.0, "sma_50": 101.0, "sma_200": 100.0,  # bullish stack
+            "rsi_14": 60,
+            "volatility_30d_pct": 1.0,  # low vol
+        }
+        result = classify_regime(ind)
+        assert result["regime"] == "LOW_VOL_TREND", f"got {result}"
+
+    def test_range_when_tight_and_rsi_mid(self):
+        from microstructure import classify_regime
+        ind = {
+            "current_price": 100.0,
+            "sma_20": 100.0, "sma_50": 100.05, "sma_200": 100.02,
+            "rsi_14": 50,  # mid
+            "volatility_30d_pct": 1.0,
+        }
+        result = classify_regime(ind)
+        assert result["regime"] == "RANGE", f"got {result}"
+
+    def test_high_vol_trend_when_smas_stacked_high_vol(self):
+        from microstructure import classify_regime
+        ind = {
+            "current_price": 100.0,
+            "sma_20": 102.0, "sma_50": 101.0, "sma_200": 100.0,  # bullish stack
+            "rsi_14": 65,
+            "volatility_30d_pct": 4.0,  # high vol
+        }
+        result = classify_regime(ind)
+        assert result["regime"] == "HIGH_VOL_TREND", f"got {result}"
+
+    def test_empty_indicators_returns_unknown(self):
+        from microstructure import classify_regime
+        result = classify_regime({})
+        assert result["regime"] == "unknown"
+
+    def test_regime_dict_has_required_fields(self):
+        from microstructure import classify_regime
+        ind = {"current_price": 100.0, "sma_20": 102, "sma_50": 101,
+               "sma_200": 100, "rsi_14": 60, "volatility_30d_pct": 1.0}
+        result = classify_regime(ind)
+        for fld in ("regime", "reason", "trend_strength", "volatility_pct"):
+            assert fld in result
+
+
+# ---------- Session detection ----------
+class TestSessionDetection:
+    def test_tokyo_session_at_03_utc(self):
+        from datetime import datetime, timezone
+        from microstructure import current_session
+        # Monday 03:00 UTC -> Tokyo only
+        now = datetime(2026, 1, 5, 3, 0, 0, tzinfo=timezone.utc)
+        s = current_session(now=now)
+        assert s["primary"] == "tokyo"
+        assert "tokyo" in s["active_sessions"]
+        assert s["is_weekend"] is False
+        assert s["is_high_volume_window"] is False
+
+    def test_london_ny_overlap_at_14_utc(self):
+        from datetime import datetime, timezone
+        from microstructure import current_session
+        now = datetime(2026, 1, 5, 14, 0, 0, tzinfo=timezone.utc)
+        s = current_session(now=now)
+        assert s["primary"] == "london_ny_overlap"
+        assert "london" in s["active_sessions"] and "ny" in s["active_sessions"]
+        assert s["is_high_volume_window"] is True
+
+    def test_off_hours_at_23_utc(self):
+        from datetime import datetime, timezone
+        from microstructure import current_session
+        now = datetime(2026, 1, 5, 23, 0, 0, tzinfo=timezone.utc)
+        s = current_session(now=now)
+        assert s["primary"] == "off-hours"
+
+    def test_weekend_flag(self):
+        from datetime import datetime, timezone
+        from microstructure import current_session
+        # Saturday 2026-01-03
+        now = datetime(2026, 1, 3, 12, 0, 0, tzinfo=timezone.utc)
+        s = current_session(now=now)
+        assert s["is_weekend"] is True
+
+
+class TestSessionBias:
+    def test_xauusd_tokyo_mean_reversion(self):
+        from microstructure import session_bias_for
+        sess = {"is_high_volume_window": False, "primary": "tokyo", "is_weekend": False}
+        bias = session_bias_for("XAUUSD", sess)
+        assert bias["preferred_strategy"] == "mean_reversion"
+
+    def test_xauusd_overlap_trend_following(self):
+        from microstructure import session_bias_for
+        sess = {"is_high_volume_window": True, "primary": "london_ny_overlap", "is_weekend": False}
+        bias = session_bias_for("XAUUSD", sess)
+        assert bias["preferred_strategy"] == "trend_following"
+
+    def test_btcusd_weekend_counter_trend(self):
+        from microstructure import session_bias_for
+        sess = {"is_high_volume_window": False, "primary": "off-hours", "is_weekend": True}
+        bias = session_bias_for("BTCUSD", sess)
+        assert bias["preferred_strategy"] == "counter_trend"
+
+    def test_btcusd_weekday_trend_following(self):
+        from microstructure import session_bias_for
+        sess = {"is_high_volume_window": True, "primary": "london_ny_overlap", "is_weekend": False}
+        bias = session_bias_for("BTCUSD", sess)
+        assert bias["preferred_strategy"] == "trend_following"
+
+
+# ---------- Regime CHOP veto end-to-end (uses analyze_symbol with mocked LLM) ----------
+class TestRegimeVeto:
+    def test_chop_forces_hold_in_signal_payload(self):
+        """If classify_regime returns CHOP, signal.action must be HOLD even if
+        chart_action was BUY/SELL, and reasoning must contain 'VETO (regime)'."""
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+        import ai_signals
+
+        # Fake LLM chat -> always returns BUY/80%
+        class FakeChat:
+            def with_model(self, *a, **k):
+                return self
+            async def send_message(self, msg):
+                return '{"action":"BUY","confidence":80,"reasoning":"trend up","key_factors":["x"]}'
+
+        # Indicators that force CHOP via classify_regime
+        chop_indicators = {
+            "current_price": 100.0,
+            "sma_20": 100.0, "sma_50": 100.05, "sma_200": 99.95,
+            "rsi_14": 75, "volatility_30d_pct": 5.0,
+        }
+
+        # Ensure EMERGENT_LLM_KEY is set (LlmChat ctor reads it even though we patch the class).
+        os.environ.setdefault("EMERGENT_LLM_KEY", "test-dummy")
+
+        async def run():
+            with patch.object(ai_signals, "LlmChat", return_value=FakeChat()), \
+                 patch.object(ai_signals, "get_quote", new=AsyncMock(return_value={"price": 100.0, "bid": 99.9, "ask": 100.1, "change_pct": 0.0})), \
+                 patch.object(ai_signals, "get_history", new=AsyncMock(return_value=[])), \
+                 patch.object(ai_signals, "compute_indicators", return_value=chop_indicators), \
+                 patch.object(ai_signals, "score_sentiment", new=AsyncMock(return_value={"score": 0.0, "label": "neutral", "summary": "", "article_count": 0, "key_drivers": []})):
+                return await ai_signals.analyze_symbol("BTCUSD", "medium")
+
+        sig = asyncio.run(run())
+        assert sig["regime"]["regime"] == "CHOP", f"setup failed: {sig['regime']}"
+        assert sig["chart_action"] == "BUY"
+        assert sig["action"] == "HOLD"
+        assert sig["veto_applied"] is True
+        assert "VETO (regime)" in (sig["reasoning"] or "")
+
+
+# ---------- Enhanced signal payload smoke test (live AI) ----------
+class TestSignalPayloadNewFieldsLive:
+    @pytest.fixture(scope="class")
+    def sig_user(self):
+        s = requests.Session()
+        email = f"TEST_iter4_{uuid.uuid4().hex[:6]}@example.com"
+        r = s.post(f"{API}/auth/register",
+                   json={"email": email, "password": "testpass123"}, timeout=15)
+        assert r.status_code == 200
+        return s
+
+    def test_signal_has_all_new_iter4_fields(self, sig_user):
+        r = sig_user.post(f"{API}/signals/generate",
+                          json={"symbol": "BTCUSD"}, timeout=180)
+        assert r.status_code == 200, r.text
+        sig = r.json()
+
+        # New Iter-4 scalar fields
+        for fld in ("kelly_f", "effective_risk_pct", "risk_amount",
+                    "regime", "session", "session_bias"):
+            assert fld in sig, f"missing field {fld} in signal payload"
+
+        # Types
+        assert isinstance(sig["kelly_f"], (int, float))
+        assert 0 <= sig["kelly_f"] <= 1.0
+        assert isinstance(sig["effective_risk_pct"], (int, float))
+        assert isinstance(sig["risk_amount"], (int, float))
+
+        # Regime dict shape
+        regime = sig["regime"]
+        for k in ("regime", "reason", "trend_strength", "volatility_pct"):
+            assert k in regime, f"regime missing {k}"
+        assert regime["regime"] in (
+            "HIGH_VOL_TREND", "LOW_VOL_TREND", "RANGE", "CHOP",
+            "TRANSITIONAL", "unknown"
+        )
+
+        # Session dict shape
+        session = sig["session"]
+        for k in ("utc_hour", "primary", "active_sessions",
+                  "is_weekend", "is_high_volume_window"):
+            assert k in session, f"session missing {k}"
+
+        # Session bias shape
+        sb = sig["session_bias"]
+        assert "preferred_strategy" in sb
+        assert "note" in sb
+
+        # Tradeable sanity: lot_size > 0 always (floor 0.01)
+        assert sig["lot_size"] >= 0.01
+        # Reasoning non-empty
+        assert isinstance(sig.get("reasoning"), str) and len(sig["reasoning"]) > 0

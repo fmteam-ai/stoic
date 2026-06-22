@@ -1,0 +1,39 @@
+{
+  "summary": "Iter-4 backend testing complete. 66/66 pytest cases PASS (was 42 in iter-3; added 24 new iter-4 tests). All iter-3 regression preserved. Verified: (1) Kelly position sizing pure-function — zero below min_conf, monotonic w/ confidence, capped at profile.kelly_cap (low=0.25/medium=0.50/high=0.75/extreme=1.00), negative f clamped to 0, returns dict {lot_size, risk_amount, kelly_f, effective_risk_pct}. (2) Regime classifier — CHOP/LOW_VOL_TREND/RANGE/HIGH_VOL_TREND all classified correctly from synthetic indicator dicts; empty input -> 'unknown'; result dict has all 4 required keys. (3) Session detection — Tokyo at 03 UTC, London/NY overlap at 14 UTC (high_volume_window=true), off-hours at 23 UTC, weekend flag correct via `now` arg. (4) Session bias — XAUUSD Tokyo=mean_reversion, XAUUSD overlap=trend_following, BTCUSD weekend=counter_trend, BTCUSD weekday=trend_following. (5) Regime CHOP veto — patched analyze_symbol with mocked LlmChat returning BUY/80% + chop_indicators; result: chart_action=BUY, action=HOLD, veto_applied=true, reasoning contains 'VETO (regime)'. (6) Live AI smoke test (BTCUSD via /api/signals/generate) — 200 OK, includes all new fields (kelly_f, effective_risk_pct, risk_amount, regime{regime,reason,trend_strength,volatility_pct}, session{utc_hour,primary,active_sessions,is_weekend,is_high_volume_window}, session_bias{preferred_strategy,note}); lot_size>=0.01; non-empty reasoning.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "n/a", "issue": "PytestRemovedIn10Warning on 4 class-scoped instance-method fixtures (TestSignals.signal_user, TestSignalDualAIShape.sig_user, TestSignalPayloadNewFieldsLive.sig_user, TestTradeBridge.setup_ctx). Not a bug, but should be migrated to @classmethod for pytest 10 compatibility."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "risk.kelly_fraction implements modified Kelly correctly: f* = (p*b - (1-p))/b, clamped at 0, capped at profile_kelly_cap. Payoff_ratio default 2.0 matches spec.",
+    "risk.compute_kelly_position_size derives payoff from profile (tp_atr_mult/sl_atr_mult) which is consistent — but note effective_risk_pct uses profile['risk_pct'] * (f / profile['kelly_cap']); means at f==kelly_cap the user gets exactly their profile.risk_pct — by-design as a normalisation but worth a docstring note.",
+    "microstructure.classify_regime ordering of branches is correct: trending+high_vol -> HIGH_VOL_TREND; trending+low_vol -> LOW_VOL_TREND; range -> RANGE; high_vol+!trending -> CHOP; else TRANSITIONAL. CHOP correctly requires high_vol AND not is_trending so a high-vol trending market is HIGH_VOL_TREND not CHOP.",
+    "microstructure.current_session() supports optional `now` arg as required for deterministic testing; computes primary='london_ny_overlap' when both london+ny active.",
+    "ai_signals.analyze_symbol applies regime CHOP veto AFTER dual-AI sentiment veto, both stack into reasoning with distinct 'VETO (news)' / 'VETO (regime)' markers — easy to grep. veto_applied=True if either veto fires.",
+    "Signal payload exposes both chart_action (raw model output) and action (post-veto) — good observability.",
+    "Minor: ai_signals.py crashes hard if EMERGENT_LLM_KEY env var is missing (KeyError). server boot loads .env so production is fine, but a `os.environ.get(...)` with a clear ValueError would be more graceful.",
+    "All backend modules remain <250 lines, well-separated concerns; no DRY violations introduced this iter."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py — added 24 new iter-4 tests in 6 new classes: TestKellyFraction(4), TestComputeKellyPositionSize(4), TestRegimeClassifier(6), TestSessionDetection(4), TestSessionBias(4), TestRegimeVeto(1), TestSignalPayloadNewFieldsLive(1). TestRegimeVeto mocks LlmChat/get_quote/get_history/compute_indicators/score_sentiment so it runs deterministically without hitting Claude."
+  ],
+  "success_rate": {"backend": "100% (66/66)", "frontend": "not tested this iter (backend-only request)"},
+  "test_credentials": "admin@trading.bot / admin123 (verified working). Test users registered via /api/auth/register with @example.com TLD and TEST_iter4_/TEST_dual_/TEST_sig_/TEST_trd_ prefixes.",
+  "seed_data_creation": "All test data namespaced TEST_*. CircuitBreaker tests fully self-clean via finally blocks. RegimeVeto test uses no DB (pure mocked async call).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression file at /app/backend/tests/backend_test.py now has 66 tests across 18 classes. To re-run: `cd /app/backend && python -m pytest tests/backend_test.py -v`. Iter-4 additions are in 6 new classes at the bottom (TestKellyFraction onwards). TestRegimeVeto patches ai_signals.LlmChat with a FakeChat — useful pattern for forcing deterministic AI responses. TestSignalPayloadNewFieldsLive is the only iter-4 test that hits the live Claude endpoint; if it ever flakes, the regime/session/kelly fields are all also covered by pure-function tests so coverage is not lost.",
+  "rca of the issue": "n/a — no issues found. One self-introduced test bug (KeyError on EMERGENT_LLM_KEY in TestRegimeVeto when pytest runs from /app/backend without loading .env) was fixed by setting os.environ.setdefault('EMERGENT_LLM_KEY','test-dummy') inside the test since LlmChat is patched anyway."
+}
