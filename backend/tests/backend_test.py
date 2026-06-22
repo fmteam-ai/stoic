@@ -2375,3 +2375,316 @@ class TestSpreadFilter:
             timeout=15,
         )
         assert r2.status_code == 200, r2.text
+
+
+
+class TestAffiliateSubGate:
+    """Affiliate Program must be gated behind an active paid subscription."""
+
+    @staticmethod
+    def _load_env():
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            load_dotenv(Path("/app/backend/.env"))
+        except Exception:
+            pass
+
+    def test_admin_bypass(self, admin_session):
+        # Admin is grandfathered — should always see real status, never gated
+        r = admin_session.get(f"{API}/affiliate/status", timeout=10)
+        assert r.status_code == 200
+        body = r.json()
+        assert body.get("subscription_required") is False
+
+    def test_status_for_expired_user_returns_sub_required(self):
+        # Fresh user, expire grace, status should flip to subscription_required
+        self._load_env()
+        import uuid as _u
+        from motor.motor_asyncio import AsyncIOMotorClient
+        import asyncio
+        s = requests.Session()
+        email = f"subgate_{_u.uuid4().hex[:8]}@example.com"
+        s.post(f"{API}/auth/register", json={"email": email, "password": "pw123456"}, timeout=15)
+        me = s.get(f"{API}/auth/me", timeout=10).json()
+        # Touch status so the subscription doc gets created
+        s.get(f"{API}/affiliate/status", timeout=10)
+
+        # Expire the user's grace + valid_until via direct DB write
+        async def _expire():
+            mongo = os.environ["MONGO_URL"]
+            cli = AsyncIOMotorClient(mongo)
+            db = cli[os.environ["DB_NAME"]]
+            await db.subscriptions.update_one(
+                {"user_id": me["id"]},
+                {"$set": {"grace_until": "2024-01-01T00:00:00+00:00",
+                          "valid_until": None}},
+            )
+            cli.close()
+        asyncio.run(_expire())
+
+        r = s.get(f"{API}/affiliate/status", timeout=10)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["state"] == "subscription_required"
+        assert body["subscription_required"] is True
+        assert body["subscription"]["active"] is False
+
+    def test_apply_blocked_with_402_for_expired(self):
+        self._load_env()
+        import uuid as _u
+        from motor.motor_asyncio import AsyncIOMotorClient
+        import asyncio
+        s = requests.Session()
+        email = f"subgate2_{_u.uuid4().hex[:8]}@example.com"
+        s.post(f"{API}/auth/register", json={"email": email, "password": "pw123456"}, timeout=15)
+        me = s.get(f"{API}/auth/me", timeout=10).json()
+        s.get(f"{API}/affiliate/status", timeout=10)
+
+        async def _expire():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            await db.subscriptions.update_one(
+                {"user_id": me["id"]},
+                {"$set": {"grace_until": "2024-01-01T00:00:00+00:00",
+                          "valid_until": None}},
+            )
+            cli.close()
+        asyncio.run(_expire())
+
+        r = s.post(
+            f"{API}/affiliate/apply",
+            json={"terms_agreed": True, "full_name": "X",
+                  "audience_url": "https://x.com",
+                  "promotion_strategy": "blog",
+                  "payment_method": "PayPal"},
+            timeout=15,
+        )
+        assert r.status_code == 402, r.text
+        detail = r.json().get("detail") or {}
+        assert detail.get("code") == "subscription_required"
+
+
+class TestIntelligenceCounters:
+    """Daily intelligence counters surfaced via /api/bot/status."""
+
+    @staticmethod
+    def _load_env():
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            load_dotenv(Path("/app/backend/.env"))
+        except Exception:
+            pass
+
+    def test_status_returns_intelligence_block(self, admin_session):
+        r = admin_session.get(f"{API}/bot/status", timeout=10)
+        assert r.status_code == 200
+        body = r.json()
+        intel = body.get("intelligence")
+        assert intel is not None
+        for k in ("mtf_veto", "auto_tune_block", "spread_block", "slippage_veto", "total"):
+            assert k in intel
+            assert isinstance(intel[k], int)
+
+    def test_increment_and_read(self):
+        self._load_env()
+        import asyncio, sys
+        sys.path.insert(0, "/app/backend")
+        # Use a fresh client (not the cached module-level one — earlier tests
+        # may have closed it and we want isolation from the running app DB).
+        from motor.motor_asyncio import AsyncIOMotorClient
+        # Patch database._db so intelligence_counters writes to a fresh client
+        import database as _db_mod
+        _db_mod._client = None
+        _db_mod._db = None
+        from intelligence_counters import increment, get_today, get_window_24h
+
+        async def _run():
+            uid = f"test-intel-{int(time.time())}"
+            await increment(uid, "mtf_veto")
+            await increment(uid, "mtf_veto")
+            await increment(uid, "slippage_veto")
+            today = await get_today(uid)
+            assert today["mtf_veto"] == 2
+            assert today["slippage_veto"] == 1
+            assert today["auto_tune_block"] == 0
+            window = await get_window_24h(uid)
+            assert window["mtf_veto"] == 2
+            assert window["total"] == 3
+            await increment(uid, "bogus")
+            today2 = await get_today(uid)
+            assert today2 == today
+
+        asyncio.run(_run())
+
+
+class TestSlippageVeto:
+    """Server-side slippage veto force-closes fills that deviated too much."""
+
+    @staticmethod
+    def _load_env():
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            load_dotenv(Path("/app/backend/.env"))
+        except Exception:
+            pass
+
+    def test_bot_config_roundtrip_slippage(self, admin_session):
+        cfg = admin_session.get(f"{API}/bot/config", timeout=10).json()
+        assert "slippage_veto_enabled" in cfg
+        assert "max_slippage_pips" in cfg
+        # Update
+        cfg["slippage_veto_enabled"] = True
+        cfg["max_slippage_pips"] = {"XAUUSD": 12.0, "BTCUSD": 70.0}
+        r = admin_session.put(f"{API}/bot/config", json=cfg, timeout=10)
+        assert r.status_code == 200, r.text
+        back = r.json()
+        assert back["slippage_veto_enabled"] is True
+        assert back["max_slippage_pips"]["XAUUSD"] == 12.0
+        assert back["max_slippage_pips"]["BTCUSD"] == 70.0
+
+    def test_excess_slippage_triggers_full_close(self, admin_session):
+        """End-to-end: create a live account, simulate fill with 50-pip XAU slippage
+        → trade gets close_reason=slippage_veto and pending_modification=FULL_CLOSE."""
+        self._load_env()
+        # Ensure slippage veto is ON with a tight cap
+        cfg = admin_session.get(f"{API}/bot/config", timeout=10).json()
+        cfg["slippage_veto_enabled"] = True
+        cfg["max_slippage_pips"] = {"XAUUSD": 5.0, "BTCUSD": 80.0}
+        admin_session.put(f"{API}/bot/config", json=cfg, timeout=10)
+
+        # Find or create a live account
+        accs = admin_session.get(f"{API}/accounts", timeout=10).json()
+        live = [a for a in accs if (a.get("mode") or "live") == "live"]
+        if not live:
+            r = admin_session.post(
+                f"{API}/accounts",
+                json={"label": "slip-test", "broker": "B", "server": "S",
+                      "account_number": "55512", "account_type": "demo", "mode": "live"},
+                timeout=15,
+            )
+            assert r.status_code == 200, r.text
+            account = r.json()
+        else:
+            account = live[0]
+        token = account["bridge_token"]
+        account_id = account["id"]
+
+        # Insert a pending trade directly via Mongo so we can control the intended entry
+        import asyncio
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from bson import ObjectId
+        async def _seed():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            doc = {
+                "user_id": account["user_id"],
+                "account_id": account_id,
+                "signal_id": None,
+                "symbol": "XAUUSD",
+                "action": "BUY",
+                "lot_size": 0.01,
+                "entry_price": 2400.00,        # intended
+                "original_stop_loss": 2385.00,
+                "stop_loss": 2385.00,
+                "take_profit": 2430.00,
+                "tp1": 2410.0, "tp2": 2420.0, "tp3": 2430.0,
+                "status": "pending",
+                "created_at": "2026-06-22T17:00:00+00:00",
+            }
+            r = await db.trades.insert_one(doc)
+            cli.close()
+            return str(r.inserted_id)
+        trade_id = asyncio.run(_seed())
+
+        # Now simulate EA reporting an "open" with 10-pip slippage (XAUUSD pip=0.10
+        # → 10 pips of slippage = 1.00 price diff). Intended 2400 → actual 2401.0
+        r = requests.post(
+            f"{API}/bridge/report",
+            json={
+                "bridge_token": token,
+                "trade_id": trade_id,
+                "status": "open",
+                "mt5_ticket": 999111,
+                "entry_price": 2401.00,
+            },
+            timeout=15,
+        )
+        assert r.status_code == 200, r.text
+
+        # Pull the trade — must show slippage fields + veto kicked in (cap was 5p, slip was 10p)
+        async def _read():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            t = await db.trades.find_one({"_id": ObjectId(trade_id)})
+            cli.close()
+            return t
+        t = asyncio.run(_read())
+        assert t is not None
+        assert t.get("slippage_pips") == 10.0
+        assert t.get("intended_entry_price") == 2400.00
+        assert t.get("close_reason") == "slippage_veto"
+        assert (t.get("pending_modification") or {}).get("type") == "FULL_CLOSE"
+        assert t.get("slippage_veto_cap_pips") == 5.0
+
+    def test_acceptable_slippage_does_not_veto(self, admin_session):
+        """Slippage below cap should NOT veto — trade proceeds normally."""
+        self._load_env()
+        cfg = admin_session.get(f"{API}/bot/config", timeout=10).json()
+        cfg["slippage_veto_enabled"] = True
+        cfg["max_slippage_pips"] = {"XAUUSD": 30.0, "BTCUSD": 100.0}
+        admin_session.put(f"{API}/bot/config", json=cfg, timeout=10)
+
+        accs = admin_session.get(f"{API}/accounts", timeout=10).json()
+        live = [a for a in accs if (a.get("mode") or "live") == "live"]
+        assert live, "previous test should have created a live account"
+        account = live[0]
+
+        import asyncio
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from bson import ObjectId
+        async def _seed():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            doc = {
+                "user_id": account["user_id"],
+                "account_id": account["id"],
+                "signal_id": None,
+                "symbol": "XAUUSD",
+                "action": "BUY",
+                "lot_size": 0.01,
+                "entry_price": 2400.00,
+                "stop_loss": 2385.00,
+                "take_profit": 2430.00,
+                "tp1": 2410.0, "tp2": 2420.0, "tp3": 2430.0,
+                "status": "pending",
+                "created_at": "2026-06-22T17:00:00+00:00",
+            }
+            r = await db.trades.insert_one(doc)
+            cli.close()
+            return str(r.inserted_id)
+        trade_id = asyncio.run(_seed())
+
+        # 5-pip slippage = 0.5 price diff on XAU → well under 30-pip cap
+        r = requests.post(
+            f"{API}/bridge/report",
+            json={
+                "bridge_token": account["bridge_token"],
+                "trade_id": trade_id, "status": "open",
+                "mt5_ticket": 999222, "entry_price": 2400.50,
+            },
+            timeout=15,
+        )
+        assert r.status_code == 200, r.text
+        async def _read():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            t = await db.trades.find_one({"_id": ObjectId(trade_id)})
+            cli.close()
+            return t
+        t = asyncio.run(_read())
+        assert t["slippage_pips"] == 5.0
+        assert t.get("close_reason") != "slippage_veto"
+        assert t.get("pending_modification") is None

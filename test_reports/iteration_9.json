@@ -1,0 +1,37 @@
+{
+  "summary": "Iter-9 verification of (P1) Affiliate-program subscription gate and (P2) server-side Slippage Veto + Trading-Intelligence counters surfaced on /api/bot/status. Backend regression: 164/164 pytest tests PASS in 123.76s (8 new tests added: TestAffiliateSubGate x3, TestIntelligenceCounters x2, TestSlippageVeto x3 — all green). Frontend smoke on admin@trading.bot/admin123 across /bot, /affiliate, /dashboard — all expected data-testids present, no JS console/page errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter9_results.xml",
+    "/app/test_reports/pytest/iter9_full.xml"
+  ],
+  "action_items": [
+    "(INFO ONLY, carry-over from iter-8) slippage-cap-BTCUSD is correctly NOT rendered for the admin user because admin's active symbols list contains only XAUUSD; the pip-cap UI renders one input per active symbol. Same intentional pattern as spread-cap inputs from iter-8. If product wants per-symbol caps always visible regardless of active symbols, that is a separate UX decision.",
+    "(INFO ONLY) bot-intelligence-counters strip is correctly hidden on /dashboard for admin because intelligence.total==0 (no vetoes triggered yet). The conditional render works as specified. The dashboard screenshot blacked-out at the very bottom appears to be a lazy-render at the page tail (no functional impact) — strip renders inline above the fold once intel.total>0.",
+    "(CARRY-OVER, LOW) From earlier iters, still open and out of scope: raw Stripe SDK exception leak in /api/subscription/checkout 502 detail; html-to-image SecurityError on cross-origin Google Fonts in diagnostics.js captureViewport()."
+  ],
+  "critical_code_review_comments": [
+    "Affiliate gate logic in routes/affiliate_routes.py:_require_active_subscription is clean: admin role grandfathered → return; otherwise calls subscription_active(user[\"id\"]) and raises HTTP 402 with detail={code:'subscription_required', ...}. Confirmed via TestAffiliateSubGate::test_apply_blocked_with_402_for_expired.",
+    "/affiliate/status correctly differentiates four states: 'approved' (existing affiliate), original application status, 'subscription_required' (no app + lapsed sub), and 'none' (no app + active sub). subscription_required flag + subscription echo always present so frontend can route to /subscription. Existing affiliates whose subs later lapse can still see their dashboard (sub_required is a flag, not a blocker on the status endpoint) — correct policy.",
+    "intelligence_counters.py uses simple per-day Mongo docs with $inc/upsert (idempotent). 24h window = today + yesterday sum. Categories tuple ('mtf_veto','auto_tune_block','spread_block','slippage_veto') correctly matches the counter increments in bridge_routes.py (slippage_veto) and bot_runner.py (other three).",
+    "Slippage veto in bridge_routes.py: pip math is correct (XAU pip=0.10 → 10p slippage when intended 2400 vs actual 2401; BTC pip=1.0). slippage_checked flag prevents re-evaluation on later /report calls. Trade is decorated with close_reason='slippage_veto', pending_modification={type:FULL_CLOSE}, slippage_veto_cap_pips for transparency. Confirmed by TestSlippageVeto::test_excess_slippage_triggers_full_close.",
+    "BotConfig.slippage_veto_enabled defaults TRUE and max_slippage_pips defaults {XAUUSD:20, BTCUSD:80}. Pre-existing user configs auto-get the new fields via _get_or_create_config fallbacks. PUT roundtrip verified by TestSlippageVeto::test_bot_config_roundtrip_slippage.",
+    "Frontend /bot Section 05 'TRADING INTELLIGENCE' has all four pieces (auto-tune, spread filter, MTF gate ALWAYS-ON, slippage veto) consistently styled. Slippage veto toggle currently shows ON (default) with XAUUSD cap = 30 pips visible.",
+    "Frontend /affiliate for admin correctly displays approved state with referral link MI77QK — the SubscriptionGate is correctly absent (admin grandfathered). Counter on the page shows 1 lifetime click already.",
+    "Zero JS console/pageerror events across /bot, /affiliate, /dashboard navigation."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (164/164)", "frontend": "100% on /bot, /affiliate, /dashboard with zero console errors"},
+  "test_credentials": "admin@trading.bot / admin123 — verified working.",
+  "seed_data_creation": "Pytest creates throwaway TEST_* users via /api/auth/register and TestSlippageVeto seeds a test account + sets a synthetic trade through bridge /report. TestAffiliateSubGate::test_status_for_expired_user_returns_sub_required and ::test_apply_blocked_with_402_for_expired forcibly expire a fresh user's subscription via direct Mongo update (grace_until=2024-01-01, valid_until=None) as per the agent_to_agent_context_note; cleanup happens via test isolation (fresh per-test users).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression entry point: /app/backend/tests/backend_test.py — now 164 tests, ~2 min runtime. Iter-9 added: TestAffiliateSubGate (3 tests around /api/affiliate/status + /api/affiliate/apply gating, admin bypass, 402 on expired), TestIntelligenceCounters (2 tests around /api/bot/status.intelligence + bridge-driven increment), TestSlippageVeto (3 tests: PUT/GET roundtrip of slippage_veto_enabled+max_slippage_pips dict, excess slippage triggers FULL_CLOSE pending_modification + close_reason='slippage_veto', within-cap slippage records slippage_pips but does NOT veto). Frontend testids added: toggle-slippage_veto_enabled, slippage-cap-{SYMBOL}, affiliate-sub-gate, affiliate-sub-gate-cta, bot-intelligence-counters, intel-mtf, intel-autotune, intel-spread, intel-slippage. Affiliate gate uses HTTP 402 with detail.code='subscription_required'. Intelligence counters are per-user/per-day Mongo docs in db.intelligence_counters; 24h window = today+yesterday sum. To force-expire a sub in tests: set subscriptions doc grace_until='2024-01-01T00:00:00+00:00' AND valid_until=None.",
+  "rca of the issue": "n/a — feature-add verification pass. Both new features (P1 affiliate sub-gate, P2 slippage veto + intelligence counters) work end-to-end at API, DB persistence, and UI level. The two minor UX notes (BTCUSD slippage-cap input not visible for admin, bot-intelligence-counters strip hidden on dashboard) are correct per-spec conditional renders, NOT bugs."
+}

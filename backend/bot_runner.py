@@ -24,6 +24,7 @@ from execution import settle_paper_trades_against_price
 from trigger_sweeper import sweep_once as sweep_triggers
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
+from intelligence_counters import increment as inc_intel_counter
 
 logger = logging.getLogger("bot-runner")
 
@@ -139,6 +140,14 @@ async def _process_user(db, cfg: dict):
             except Exception as e:
                 logger.exception("auto_tune failed user=%s sym=%s: %s", user_id, sym, e)
 
+        # Count Multi-Timeframe vetoes (gate fired inside ai_signals)
+        try:
+            mtf_gate = signal.get("mtf_gate") or {}
+            if mtf_gate.get("checked") and mtf_gate.get("aligned") is False:
+                await inc_intel_counter(user_id, "mtf_veto")
+        except Exception:
+            pass
+
         signal["user_id"] = user_id
         signal["consumed"] = False
         signal["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -163,6 +172,7 @@ async def _process_user(db, cfg: dict):
             continue
         if auto_tune_block_reason:
             logger.info("Auto-tune block user=%s sym=%s: %s", user_id, sym, auto_tune_block_reason)
+            await inc_intel_counter(user_id, "auto_tune_block")
             continue
         if inflight >= max_concurrent:
             logger.info("Max concurrent (%s) reached for user=%s; skipping execute", max_concurrent, user_id)
@@ -195,6 +205,7 @@ async def _process_user(db, cfg: dict):
                         "account_id": str(target_account["_id"]),
                     }}},
                 )
+                await inc_intel_counter(user_id, "spread_block")
                 continue
         engine = engine_for_account(target_account)
         trade_doc = await engine.execute(

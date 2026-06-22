@@ -6,8 +6,9 @@ import { AFFILIATE_TERMS, AFFILIATE_TERMS_VERSION } from "@/lib/affiliateTerms";
 import { toast } from "sonner";
 import {
     Users, Copy, CheckCircle2, AlertTriangle, Loader2, DollarSign,
-    MousePointerClick, TrendingUp,
+    MousePointerClick, TrendingUp, Lock,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const PAYMENT_METHODS = ["Stripe (debit/credit)", "PayPal", "Bank transfer"];
 
@@ -58,7 +59,12 @@ export default function Affiliate() {
             toast.success("Application submitted — we'll review within 3 business days.");
             await load();
         } catch (e) {
-            setErr(formatApiError(e));
+            // Surface 402 sub gate as friendly message + CTA
+            if (e?.response?.status === 402) {
+                setErr("Active paid subscription required to apply for the affiliate program.");
+            } else {
+                setErr(formatApiError(e));
+            }
         } finally { setSubmitting(false); }
     };
 
@@ -123,6 +129,10 @@ export default function Affiliate() {
                             Decided {new Date(status.application.rejected_at).toLocaleDateString()}
                         </div>
                     </div>
+                )}
+
+                {status?.state === "subscription_required" && (
+                    <SubscriptionGate />
                 )}
 
                 {(status?.state === "none" || !status) && (
@@ -300,6 +310,33 @@ function Field({ label, value, onChange, placeholder, testid }) {
             <input value={value} onChange={e => onChange(e.target.value)}
                 placeholder={placeholder} data-testid={testid}
                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+        </div>
+    );
+}
+
+
+function SubscriptionGate() {
+    return (
+        <div data-testid="affiliate-sub-gate"
+            className="border border-[#0099FF]/40 bg-[#0099FF]/5 p-8 text-center space-y-5">
+            <Lock className="w-10 h-10 mx-auto text-[#0099FF]" />
+            <div>
+                <div className="font-mono text-[10px] text-[#0099FF] tracking-widest mb-1">SUBSCRIPTION REQUIRED</div>
+                <div className="font-display font-bold text-2xl tracking-tight mb-2">Unlock the Affiliate Program</div>
+                <div className="text-sm text-[#A1A1AA] max-w-xl mx-auto leading-relaxed">
+                    Earn 20% recurring commission on every paid referral, with 60-day attribution.
+                    Affiliates must hold an active paid plan — this keeps the program credible
+                    and aligned with users who actually use the product.
+                </div>
+            </div>
+            <div className="flex items-center justify-center gap-3 pt-2">
+                <Link to="/subscription"
+                    data-testid="affiliate-sub-gate-cta"
+                    className="px-5 py-2.5 text-xs font-mono tracking-widest bg-[#0099FF] text-black hover:bg-[#33ADFF] inline-flex items-center gap-2">
+                    <DollarSign className="w-4 h-4" />
+                    VIEW SUBSCRIPTION PLANS
+                </Link>
+            </div>
         </div>
     );
 }

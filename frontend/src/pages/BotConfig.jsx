@@ -54,6 +54,8 @@ export default function BotConfig() {
                 spread_filter_enabled: cfg.spread_filter_enabled,
                 max_spread_pips: cfg.max_spread_pips || {},
                 auto_tune_enabled: cfg.auto_tune_enabled,
+                slippage_veto_enabled: cfg.slippage_veto_enabled,
+                max_slippage_pips: cfg.max_slippage_pips || {},
             });
             setCfg(data); setMsg("Configuration saved.");
         } catch (e) { setErr(formatApiError(e)); }
@@ -396,6 +398,29 @@ function TradingIntelligenceSection({ cfg, setCfg }) {
                         (SMA20 slope, SMA50 vs SMA200, price vs SMA50). Counter-trend setups are
                         silently held. Look for <span className="text-[#0099FF]">mtf_gate</span> on the Signals page.
                     </p>
+                </div>
+
+                {/* Slippage Veto */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="slippage_veto_enabled" label="Server-Side Slippage Veto" icon={OctagonAlert} color="#FF3B30"
+                        desc="When the MT5 EA reports a fill, compare actual entry vs intended. If slippage > cap, the bot force-closes the position immediately. Hard guard against ECN bad-fills during news." />
+                    {cfg.slippage_veto_enabled && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3" data-testid="slippage-caps">
+                            {(cfg.symbols || []).map(sym => (
+                                <div key={sym}>
+                                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{sym} · MAX SLIPPAGE (PIPS)</label>
+                                    <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#FF3B30]">
+                                        <input type="number" step="1" min="0" value={(cfg.max_slippage_pips || {})[sym] ?? ""}
+                                            onChange={e => setCfg({ ...cfg, max_slippage_pips: { ...(cfg.max_slippage_pips || {}), [sym]: parseFloat(e.target.value) || 0 } })}
+                                            data-testid={`slippage-cap-${sym}`}
+                                            placeholder="e.g. 20"
+                                            className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />
+                                        <span className="font-mono text-[10px] text-[#52525B] tracking-widest px-2">PIPS</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

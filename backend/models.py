@@ -106,6 +106,13 @@ class BotConfigUpdate(BaseModel):
     # Auto-Tune — let the bot raise the min-confidence threshold based on
     # historical win-rates per (symbol, confidence-bucket).
     auto_tune_enabled: bool = True
+    # Slippage veto — force-close fills whose actual entry deviated more than
+    # this many pips from the signal's intended entry. Hard guard against
+    # ECN bad-fills during news.
+    slippage_veto_enabled: bool = True
+    max_slippage_pips: Dict[str, float] = Field(
+        default_factory=lambda: {"XAUUSD": 20.0, "BTCUSD": 80.0}
+    )
 
 
 class BotConfigOut(BotConfigUpdate):

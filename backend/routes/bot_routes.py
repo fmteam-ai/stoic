@@ -7,6 +7,7 @@ from auth import get_current_user
 from database import get_db
 from models import BotConfigUpdate, BotConfigOut
 from risk import get_profile
+from intelligence_counters import get_window_24h as intel_window_24h
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 
@@ -35,6 +36,8 @@ async def _get_or_create_config(db, user_id: str) -> dict:
         "spread_filter_enabled": False,
         "max_spread_pips": {"XAUUSD": 50.0, "BTCUSD": 100.0},
         "auto_tune_enabled": True,
+        "slippage_veto_enabled": True,
+        "max_slippage_pips": {"XAUUSD": 20.0, "BTCUSD": 80.0},
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.bot_configs.insert_one(new_cfg)
@@ -64,6 +67,8 @@ def _serialize(cfg: dict) -> dict:
         "spread_filter_enabled": cfg.get("spread_filter_enabled", False),
         "max_spread_pips": cfg.get("max_spread_pips") or {"XAUUSD": 50.0, "BTCUSD": 100.0},
         "auto_tune_enabled": cfg.get("auto_tune_enabled", True),
+        "slippage_veto_enabled": cfg.get("slippage_veto_enabled", True),
+        "max_slippage_pips": cfg.get("max_slippage_pips") or {"XAUUSD": 20.0, "BTCUSD": 80.0},
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -97,6 +102,8 @@ async def update_config(payload: BotConfigUpdate, user=Depends(get_current_user)
         "spread_filter_enabled": payload.spread_filter_enabled,
         "max_spread_pips": {str(k).upper(): float(v) for k, v in (payload.max_spread_pips or {}).items()},
         "auto_tune_enabled": payload.auto_tune_enabled,
+        "slippage_veto_enabled": payload.slippage_veto_enabled,
+        "max_slippage_pips": {str(k).upper(): float(v) for k, v in (payload.max_slippage_pips or {}).items()},
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.bot_configs.update_one(
@@ -177,6 +184,8 @@ async def get_bot_status(user=Depends(get_current_user)):
         "user_id": user["id"], "status": {"$in": ["pending", "open"]}
     })
 
+    intelligence = await intel_window_24h(user["id"])
+
     return {
         "active": cfg.get("active", False),
         "auto_execute": cfg.get("auto_execute", True),
@@ -197,4 +206,5 @@ async def get_bot_status(user=Depends(get_current_user)):
             "created_at": last_tick_iso,
         } if last_signal else None,
         "why_no_trade": why_no_trade,
+        "intelligence": intelligence,
     }

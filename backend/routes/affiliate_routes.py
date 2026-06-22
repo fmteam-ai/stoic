@@ -8,6 +8,7 @@ from auth import get_current_user
 from database import get_db
 from bson import ObjectId
 from datetime import datetime, timezone
+from subscription_service import is_active as subscription_active
 from affiliate_service import (
     submit_application, get_application, get_affiliate, stats_for,
     record_click, approve_application, reject_application, list_applications,
@@ -17,9 +18,32 @@ logger = logging.getLogger("affiliate")
 router = APIRouter(tags=["affiliate"])
 
 
+async def _require_active_subscription(user):
+    """Affiliate program is gated behind an active paid subscription.
+
+    Admins are grandfathered. Users in 30-day legacy grace can still apply
+    (so we don't strand pre-rollout accounts). Everyone else must hold a
+    valid paid plan — we return HTTP 402 Payment Required so the frontend
+    can route them to the Subscription page.
+    """
+    if user.get("role") == "admin":
+        return
+    sub = await subscription_active(user["id"])
+    if not sub.get("active"):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "subscription_required",
+                "message": "Affiliate program requires an active paid subscription.",
+                "valid_until": sub.get("valid_until"),
+            },
+        )
+
+
 # --- Public (logged-in user) endpoints ------------------------------------
 @router.post("/affiliate/apply")
 async def affiliate_apply(payload: dict, user=Depends(get_current_user)):
+    await _require_active_subscription(user)
     if not payload.get("terms_agreed"):
         raise HTTPException(status_code=400, detail="Terms must be accepted to apply")
     required = ("full_name", "audience_url", "promotion_strategy", "payment_method")
@@ -42,13 +66,25 @@ async def affiliate_apply(payload: dict, user=Depends(get_current_user)):
 
 @router.get("/affiliate/status")
 async def affiliate_status(user=Depends(get_current_user)):
+    # Surface subscription gating to the frontend without blocking — existing
+    # affiliates (whose sub later lapsed) still need to see their balance.
+    sub = await subscription_active(user["id"])
+    sub_required = (user.get("role") != "admin") and (not sub.get("active"))
     affiliate = await get_affiliate(user["id"])
     if affiliate:
-        return {"state": "approved", "affiliate": affiliate}
+        return {"state": "approved", "affiliate": affiliate,
+                "subscription_required": sub_required,
+                "subscription": sub}
     app_doc = await get_application(user["id"])
     if app_doc:
-        return {"state": app_doc["status"], "application": app_doc}
-    return {"state": "none"}
+        return {"state": app_doc["status"], "application": app_doc,
+                "subscription_required": sub_required,
+                "subscription": sub}
+    if sub_required:
+        return {"state": "subscription_required", "subscription": sub,
+                "subscription_required": True}
+    return {"state": "none", "subscription_required": False,
+            "subscription": sub}
 
 
 @router.get("/affiliate/stats")

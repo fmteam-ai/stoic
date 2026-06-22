@@ -134,6 +134,34 @@ function BotStatusStrip({ status }) {
                 </div>
             )}
 
+            {status.intelligence && status.intelligence.total > 0 && (
+                <div className="px-5 py-3 border-t border-[#1F1F1F]" data-testid="bot-intelligence-counters">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">VETOES TODAY (24H)</div>
+                    <div className="flex items-center gap-3 flex-wrap text-xs font-mono">
+                        {status.intelligence.mtf_veto > 0 && (
+                            <span className="px-2 py-1 border border-[#0099FF]/40 bg-[#0099FF]/10 text-[#0099FF]" data-testid="intel-mtf">
+                                MTF · {status.intelligence.mtf_veto}
+                            </span>
+                        )}
+                        {status.intelligence.auto_tune_block > 0 && (
+                            <span className="px-2 py-1 border border-[#FFB000]/40 bg-[#FFB000]/10 text-[#FFB000]" data-testid="intel-autotune">
+                                AUTO-TUNE · {status.intelligence.auto_tune_block}
+                            </span>
+                        )}
+                        {status.intelligence.spread_block > 0 && (
+                            <span className="px-2 py-1 border border-[#A1A1AA]/40 bg-[#A1A1AA]/10 text-[#A1A1AA]" data-testid="intel-spread">
+                                SPREAD · {status.intelligence.spread_block}
+                            </span>
+                        )}
+                        {status.intelligence.slippage_veto > 0 && (
+                            <span className="px-2 py-1 border border-[#FF3B30]/40 bg-[#FF3B30]/10 text-[#FF3B30]" data-testid="intel-slippage">
+                                SLIPPAGE · {status.intelligence.slippage_veto}
+                            </span>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {status.last_signal?.reasoning && (
                 <div className="px-5 py-3 border-t border-[#1F1F1F]">
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">AI REASONING · {status.last_signal.symbol}</div>

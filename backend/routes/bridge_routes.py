@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from database import get_db
 from models import BridgeHeartbeat, BridgeTradeReport
 from ws_manager import manager as ws_manager
+from pip_utils import price_to_pips
+from intelligence_counters import increment as inc_intel_counter
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
 
@@ -174,6 +176,32 @@ async def report_trade(payload: BridgeTradeReport):
     update = {"status": payload.status}
     if payload.mt5_ticket is not None:
         update["mt5_ticket"] = payload.mt5_ticket
+
+    # Slippage veto — on first OPEN report, compare actual fill vs intended entry
+    slippage_force_close = False
+    if (
+        payload.status == "open"
+        and payload.entry_price is not None
+        and not trade.get("slippage_checked")
+    ):
+        intended = float(trade.get("entry_price") or 0)
+        actual = float(payload.entry_price)
+        symbol = trade.get("symbol") or ""
+        slip_pips = price_to_pips(symbol, abs(actual - intended)) if intended > 0 else 0.0
+        update["intended_entry_price"] = intended
+        update["slippage_pips"] = round(slip_pips, 2)
+        update["slippage_checked"] = True
+        # Pull bot config for the threshold
+        cfg = await db.bot_configs.find_one({"user_id": acc["user_id"]}) or {}
+        if cfg.get("slippage_veto_enabled", True):
+            caps = cfg.get("max_slippage_pips") or {"XAUUSD": 20.0, "BTCUSD": 80.0}
+            cap = float(caps.get(symbol, caps.get(symbol.upper(), 9999)))
+            if slip_pips > cap:
+                slippage_force_close = True
+                update["pending_modification"] = {"type": "FULL_CLOSE"}
+                update["close_reason"] = "slippage_veto"
+                update["slippage_veto_cap_pips"] = cap
+
     if payload.entry_price is not None:
         update["entry_price"] = payload.entry_price
     if payload.exit_price is not None:
@@ -206,6 +234,11 @@ async def report_trade(payload: BridgeTradeReport):
             update["close_reason"] = close_reason
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    if slippage_force_close:
+        try:
+            await inc_intel_counter(acc["user_id"], "slippage_veto")
+        except Exception:
+            pass
     await ws_manager.broadcast(acc["user_id"], "trade_updated", {
         "trade_id": payload.trade_id,
         **update,
