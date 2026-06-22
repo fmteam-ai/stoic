@@ -4,7 +4,7 @@ import { StoicMark } from "@/components/StoicLogo";
 import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
-    MessageSquare, Sparkles, Users, Bell
+    MessageSquare, Sparkles, Users, Bell, BarChart3
 } from "lucide-react";
 
 const items = [
@@ -14,6 +14,7 @@ const items = [
     { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
     { to: "/accounts", label: "MT5 Accounts", icon: Wallet, testid: "nav-accounts" },
     { to: "/trades", label: "Trades", icon: ListChecks, testid: "nav-trades" },
+    { to: "/analytics", label: "Analytics", icon: BarChart3, testid: "nav-analytics" },
     { to: "/symbols", label: "Symbols", icon: CurrencyCircleDollar, testid: "nav-symbols" },
     { to: "/notifications", label: "Notifications", icon: Bell, testid: "nav-notifications" },
     { to: "/subscription", label: "Subscription", icon: Sparkles, testid: "nav-subscription" },

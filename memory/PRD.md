@@ -150,6 +150,12 @@
 - **Route ordering**: webhook is at `/incoming/{secret}` (not `/webhook/{secret}`) to avoid clashing with `/webhook/enable|disable|status` literal paths.
 - **Frontend**: New Section 04 on `/notifications` page — command reference grid (8 commands), ACTIVATE/DISABLE button, status pill, webhook URL display when active. Disabled until a bot token is saved.
 
+## CHANGELOG · Jun 22, 2026 — Performance Attribution Analytics
+- **New: `/api/analytics/attribution` endpoint** (`analytics.py` + `routes/analytics_routes.py`) — slices every closed trade across 14 dimensions: symbol, action, session (UTC: Asian/London/Overlap/NY/Off-Hours), hour, day-of-week, confidence bucket (<50/50-60/60-70/70-80/80-90/90+), risk_level, market regime, origin (auto/manual), close reason, mode (paper/live), profit-protection mode, and two cross-cuts (symbol×session, symbol×confidence). Trades enriched by joining with their originating `signals` to pull confidence + regime.
+- **New: `/analytics` page** — five-tile overall summary, "YOUR EDGE — Top 5 Profitable Slices" + "STOP DOING — Bottom 5 Losing Slices" cards (mined from all dimensions with ≥3 trades, sorted by total P&L), then a 14-card breakdown grid with sortable win-rate / P&L per slice.
+- **Empty state** with clear guidance below 5 closed trades — sets expectations rather than hiding the feature.
+- Sidebar: new `nav-analytics` entry (BarChart3 icon) between Trades and Symbols.
+
 ## Backlog Updates (P1/P2 still pending)
 - **P1** — Spread/Slippage filter (reject signals when spread > 2× 24h median).
 - **P1** — Multi-timeframe confluence (require H4 trend to match H1 signal direction).
