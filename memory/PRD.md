@@ -64,13 +64,28 @@
 - Iteration 2: 26/26 backend pass, all frontend flows green. End-to-end trade-bridge flow verified.
 
 ## Backlog (next sessions)
-- **P1** — Background scheduler: when bot is `active`, auto-generate signals every N minutes per symbol and (if `auto_execute=true` and tradeable) push to the EA queue.
-- **P1** — Brute-force protection on login (lockout after N failed attempts).
-- **P2** — WebSocket push for live prices and trade updates (instead of 60s polling).
-- **P2** — Custom symbol add (let users register tickers not in the default map).
-- **P2** — Backtest engine — replay 6-month history against the AI signal generator + risk profile to surface historic equity curve.
-- **P2** — Daily P&L email digest (Resend integration).
+- **P1** — Binance live BTC execution via CCXT (blocked: needs user Binance API keys).
+- **P1** — Web push notifications (mobile/desktop) on circuit breakers + high-confidence signals.
+- **P2** — Server-side slippage veto: compare EA-reported entry vs. signal entry, auto-close if delta > X pips.
+- **P2** — Backtest engine — replay 6-month history against the AI signal generator.
+- **P2** — Per-profile Meta-Labeler threshold tuning (currently fixed at 0.55).
+- **P2** — TTL/retention policy on price_ticks time-series collection (currently auto-purges at 7d).
+- **P2** — Add `'paper'` to AccountCreate.account_type Literal (or alias server-side) — currently must pass `account_type='demo' + mode='paper'`.
+- **P2** — Frontend WS retry: ensure access_token cookie/query param reattached on every reconnect.
 - **P3** — Native Android shell via Capacitor / React Native (PWA already works).
+- **P3** — True Mamba SSM inference (requires GPU host) — replace current numpy O(N) compressor.
+
+## CHANGELOG · Feb 22, 2026 — 2026 Architecture Upgrade
+- **Fixed P0**: `entropy_veto is not defined` NameError in `ai_signals.analyze_symbol` — entropy veto block was missing.
+- **New: Multi-Engine Consensus + Meta-Labeler** (`meta_labeler.py`) — third-tier classifier on top of Quant + Semantic engines outputs p_true ∈ [0,1] + verdict (TRUE_SIGNAL / FAKE_OUT / NEUTRAL). FAKE_OUT vetoes execution. Logistic regression over 8 explainable features.
+- **New: Real-Time Regime Swapping** (`regime_adapter.py`) — DEFENSIVE_SCALP vs. DYNAMIC_MOMENTUM modes auto-toggled by live regime; SL/TP/Kelly cap mutate multiplicatively per regime.
+- **New: NL Risk Commander** (`nl_commander.py` + `routes/nl_routes.py` + `trigger_sweeper.py`) — Claude-powered chat translates "if BTC drops 3% disable my high-risk bots" → structured actions executed on the running bot thread. Supports conditional triggers persisted in `db.conditional_triggers`, swept each bot_runner tick.
+- **New: NL Strategy Builder** — Claude compiles user prose into a bot_config JSON, previewable + apply-on-confirm.
+- **New: O(N) Feature Compressor** (`feature_compressor.py`) — numpy-based Mamba/SSM substitute extracts ~25 stats (trend slope, multi-horizon momentum, ACF, spectral bands, drawdown, skew/kurtosis) from 1-year history in <10 ms.
+- **New: MongoDB Time-Series Collections** — `price_ticks` (granularity=seconds, TTL=7d) and `signal_history` (granularity=minutes, TTL=90d). TimescaleDB substitute, zero infra change.
+- **Frontend**: new `/commander` page (Risk Commander chat with COMMAND/STRATEGY modes + active triggers list). Signals page shows 3-card verification stack (Exec Mode / Noise · Entropy / Meta-Labeler) + dedicated entropy/meta-labeler veto banners. Sidebar `nav-commander` link.
+- **Tests**: 108/108 backend pytest cases pass (19 new tests across 8 classes — TestIter6SignalPayload, TestRegimeAdapter, TestMetaLabeler, TestPaperTrading, TestNLStrategy, TestNLCommander, TestTimeSeriesCollections, TestPriorEndpointsRegression).
+- **Bug**: Fixed leftover merge garbage in `Accounts.jsx` (broken parse from prior fork) that was blocking entire frontend compile.
 
 ## Known Limitations
 - The MT5 EA itself requires a Windows MT5 terminal; this is a platform constraint, not ours.
