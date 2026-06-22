@@ -2887,3 +2887,175 @@ class TestSLImminentWatcher:
                 await db.trades.delete_one({"_id": r.inserted_id})
 
         asyncio.run(_run())
+
+
+
+class TestKalmanFilter:
+    """1-D Kalman filter denoising for price series."""
+
+    def test_smooths_noisy_around_constant_signal(self):
+        import sys, random
+        sys.path.insert(0, "/app/backend")
+        from kalman import kalman_smooth, kalman_features
+        random.seed(42)
+        true_price = 2400.0
+        prices = [true_price + random.gauss(0, 2.0) for _ in range(200)]
+        out = kalman_smooth(prices)
+        assert len(out) == len(prices)
+        last = out[-1]
+        # Smoothed must be much closer to truth than the noisy tail values
+        assert abs(last["k_price"] - true_price) < 1.0
+        feats = kalman_features(prices)
+        assert feats["k_price"] is not None
+        assert feats["noise_pct"] is not None
+        assert 0 <= feats["noise_pct"] < 1.0  # < 1% noise on tight noise series
+
+    def test_velocity_tracks_uptrend(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from kalman import kalman_smooth
+        prices = [100.0 + i * 0.5 for i in range(50)]  # +0.5/step
+        out = kalman_smooth(prices)
+        # Velocity at the tail should converge near +0.5
+        assert out[-1]["k_velocity"] > 0.3
+
+    def test_handles_empty_and_single(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from kalman import kalman_smooth
+        assert kalman_smooth([]) == []
+        out = kalman_smooth([100.0])
+        assert len(out) == 1
+        assert out[0]["k_price"] == 100.0
+
+
+class TestCOTFetcher:
+    """Gold COT positioning summariser and percentile classifier."""
+
+    def test_summary_math(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from macro.cot import _summarise, _percentile_rank
+        row = {
+            "m_money_positions_long_all": "120000",
+            "m_money_positions_short_all": "30000",
+            "open_interest_all": "500000",
+            "report_date_as_yyyy_mm_dd": "2026-06-09",
+        }
+        s = _summarise(row)
+        assert s["managed_money_net"] == 90000
+        assert s["managed_money_net_pct"] == 18.0
+        # Percentile rank (rounded to 2dp inside helper)
+        assert _percentile_rank(95, [80, 90, 100]) == 66.67
+        assert _percentile_rank(50, [80, 90, 100]) == 0
+        assert _percentile_rank(100, [80, 90, 100]) == 66.67
+
+
+class TestTipsFetcher:
+    """US Treasury 10Y TIPS real-yield XML parser + regime classifier."""
+
+    def test_xml_parse_extracts_ten_year(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from macro.tips import _parse_xml
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:d="http://schemas.microsoft.com/ado/2007/08/dataservices"
+      xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+  <entry>
+    <content type="application/xml">
+      <m:properties>
+        <d:NEW_DATE>2026-06-18T00:00:00</d:NEW_DATE>
+        <d:TC_10YEAR>2.21</d:TC_10YEAR>
+      </m:properties>
+    </content>
+  </entry>
+  <entry>
+    <content type="application/xml">
+      <m:properties>
+        <d:NEW_DATE>2026-06-17T00:00:00</d:NEW_DATE>
+        <d:TC_10YEAR>2.23</d:TC_10YEAR>
+      </m:properties>
+    </content>
+  </entry>
+</feed>"""
+        rows = _parse_xml(xml)
+        assert len(rows) == 2
+        # Sorted ascending → earlier date first
+        assert rows[0]["date"] == "2026-06-17"
+        assert rows[1]["real_yield_10y"] == 2.21
+
+
+class TestBacktester:
+    """Event-driven backtester: PIT macro delay, no-leak fills, SL/TP exits."""
+
+    def _bar(self, t, o, h, l, c, sym="XAUUSD"):
+        from backtester.engine import BarEvent
+        return BarEvent(ts=t, symbol=sym, open=o, high=h, low=l, close=c, volume=0)
+
+    def test_buy_fills_at_next_bar_open_then_tp(self):
+        import sys
+        from datetime import datetime, timezone, timedelta
+        sys.path.insert(0, "/app/backend")
+        from backtester.engine import Engine, EngineConfig, OrderEvent
+        t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        bars = [
+            self._bar(t0, 2400, 2410, 2395, 2405),
+            self._bar(t0 + timedelta(days=1), 2406, 2415, 2400, 2412),
+            self._bar(t0 + timedelta(days=2), 2412, 2440, 2410, 2438),  # TP @ 2435
+        ]
+        eng = Engine(EngineConfig(starting_equity=10000))
+        fired = {"n": 0}
+
+        def strat(bar, macros, engine):
+            if fired["n"] == 0:
+                fired["n"] = 1
+                return [OrderEvent(ts=bar.ts, symbol="XAUUSD", action="BUY",
+                                   lot_size=0.01, stop_loss=2390, take_profit=2435)]
+            return []
+        res = eng.run(bars, strat)
+        assert res.total_trades == 1
+        assert res.wins == 1
+        # PnL on XAU 0.01 lot from 2406 → 2435 = 29 * 0.01 * 100 = $29
+        assert abs(res.total_pnl - 29.0) < 0.5
+
+    def test_macro_pit_delay_hides_event_until_absorbed(self):
+        import sys
+        from datetime import datetime, timezone, timedelta
+        sys.path.insert(0, "/app/backend")
+        from backtester.engine import Engine, EngineConfig, MacroEvent
+        eng = Engine(EngineConfig(macro_absorption_ms=1500))
+        macro_ts = datetime(2026, 6, 1, 12, 30, 0, tzinfo=timezone.utc)
+        eng.schedule_macro(MacroEvent(ts=macro_ts, name="CPI", impact="high"))
+        # Bar at 12:30:00.500 — still inside absorption window, macro NOT visible
+        bars = [
+            self._bar(macro_ts + timedelta(milliseconds=500), 2400, 2401, 2399, 2400),
+            self._bar(macro_ts + timedelta(milliseconds=2500), 2400, 2401, 2399, 2400),
+        ]
+        seen = {"first": None, "second": None}
+
+        def strat(bar, macros, engine):
+            if seen["first"] is None:
+                seen["first"] = len(macros)
+            else:
+                seen["second"] = len(macros)
+            return []
+        eng.run(bars, strat)
+        assert seen["first"] == 0    # before 1500ms delay
+        assert seen["second"] == 1   # after delay
+
+    def test_backward_adjusted_stitch(self):
+        import sys
+        from datetime import datetime, timezone, timedelta
+        sys.path.insert(0, "/app/backend")
+        from backtester.engine import backward_adjusted_stitch, BarEvent
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        # Old contract ends at 100. New contract starts at 120 — artificial $20 gap.
+        old = [BarEvent(ts=t0 + timedelta(days=i), symbol="GC", open=100, high=100,
+                        low=100, close=100, volume=0) for i in range(3)]
+        new = [BarEvent(ts=t0 + timedelta(days=3 + i), symbol="GC", open=120, high=120,
+                        low=120, close=120, volume=0) for i in range(3)]
+        stitched = backward_adjusted_stitch([old, new])
+        # Old prices should have been bumped UP by 20 to align with new contract
+        assert stitched[0].close == 120
+        assert stitched[3].close == 120  # new contract unchanged

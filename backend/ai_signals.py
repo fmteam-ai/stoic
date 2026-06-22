@@ -24,6 +24,9 @@ from regime_adapter import adapt_profile_for_regime
 from meta_labeler import predict_true_signal_probability
 from feature_compressor import compress_history
 from mtf_check import multi_timeframe_gate
+from kalman import kalman_features
+from macro.cot import get_gold_positioning
+from macro.tips import get_real_yield
 
 SYSTEM_PROMPT = """You are an institutional-grade quantitative trading analyst.
 Inputs: live quote, 12-month indicator snapshot, current news sentiment score,
@@ -45,6 +48,16 @@ Rules:
 - Session guide: respect the symbol-session bias when sizing conviction.
 - Use compressed_history_features (acf, spectral bands, kurtosis) for context.
 - Note: a Meta-Labeler will re-verify your output; conservative is safer.
+- Gold-specific (XAUUSD only): when `kalman_filter`, `cot_positioning`, and
+  `real_yield_10y` are present in the payload, use them as macro context:
+    • kalman_filter.k_velocity > 0  → smoothed price is rising; aligns with BUY.
+    • cot_positioning.overcrowded_long == true → speculative positioning is
+      saturated long; raise the bar on new BUYs (consider HOLD or fade).
+    • cot_positioning.overcrowded_short == true → contrarian BUY setup if
+      other factors align.
+    • real_yield_10y.regime == "bullish_gold" → real yields falling → gold
+      tailwind; bias slightly toward BUY confidence. "bearish_gold" → bias
+      toward SELL / HOLD.
 """
 
 
@@ -96,6 +109,20 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
+    # Gold-specific institutional features (no-op on non-gold or on failure)
+    kalman_feat = kalman_features([c["close"] for c in history]) if history else {}
+    cot_feat = None
+    tips_feat = None
+    if symbol.upper() == "XAUUSD":
+        try:
+            cot_feat = await get_gold_positioning()
+        except Exception:
+            cot_feat = None  # never block signal generation on auxiliary feed
+        try:
+            tips_feat = await get_real_yield()
+        except Exception:
+            tips_feat = None
+
     # --- Regime-Adaptive Risk Modifier — swap execution mode by live regime ---
     adapted_profile, regime_meta = adapt_profile_for_regime(profile, regime)
 
@@ -126,6 +153,20 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "noise_filter": entropy,
         "compressed_history_features": compressed_features,
         "regime_execution_mode": regime_meta,
+        # Gold-specific institutional intel (None on non-gold)
+        "kalman_filter": kalman_feat,
+        "cot_positioning": ({
+            "managed_money_net": cot_feat.get("managed_money_net"),
+            "net_pct": cot_feat.get("managed_money_net_pct"),
+            "percentile_52w": cot_feat.get("net_pct_percentile_52w"),
+            "overcrowded_long": cot_feat.get("overcrowded_long"),
+            "overcrowded_short": cot_feat.get("overcrowded_short"),
+        } if cot_feat else None),
+        "real_yield_10y": ({
+            "value": tips_feat.get("real_yield_10y"),
+            "delta_5d": tips_feat.get("delta_5d"),
+            "regime": tips_feat.get("regime"),
+        } if tips_feat else None),
         "risk_profile": {
             "level": risk_level,
             "min_confidence_to_trade": adapted_profile["min_confidence"],
@@ -284,6 +325,9 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "regime_execution_mode": regime_meta,
         "meta_label": meta_label,
         "mtf_gate": mtf,
+        "kalman_filter": kalman_feat,
+        "cot_positioning": cot_feat,
+        "real_yield_10y": tips_feat,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
         "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto),
