@@ -241,7 +241,7 @@ export default function Dashboard() {
                                 const when = new Date(e.when);
                                 const hoursAway = Math.max(0, Math.round((when.getTime() - Date.now()) / 3600000));
                                 return (
-                                    <div key={i} className="px-5 py-2.5 flex items-center gap-3 hover:bg-[#121212] transition-colors">
+                                    <div key={`${e.country}-${e.when}-${e.title}`} className="px-5 py-2.5 flex items-center gap-3 hover:bg-[#121212] transition-colors">
                                         <span className={`font-mono text-[10px] tracking-widest px-1.5 py-0.5 border ${impactClass}`}>
                                             {impact?.toUpperCase()}
                                         </span>

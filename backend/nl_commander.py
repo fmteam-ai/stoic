@@ -16,7 +16,6 @@ import os
 import json
 import uuid
 import re
-from typing import Optional
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 

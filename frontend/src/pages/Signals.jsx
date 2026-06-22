@@ -206,8 +206,8 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
 
             {Array.isArray(s.key_factors) && s.key_factors.length > 0 && (
                 <ul className="flex flex-wrap gap-1.5">
-                    {s.key_factors.map((f, i) => (
-                        <li key={i} className="font-mono text-[10px] text-[#A1A1AA] bg-[#121212] border border-[#1F1F1F] px-2 py-0.5">{f}</li>
+                    {s.key_factors.map((f) => (
+                        <li key={f} className="font-mono text-[10px] text-[#A1A1AA] bg-[#121212] border border-[#1F1F1F] px-2 py-0.5">{f}</li>
                     ))}
                 </ul>
             )}

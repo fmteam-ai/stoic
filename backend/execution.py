@@ -4,7 +4,6 @@ Paper accounts execute against the local DB (instant fill at live mid-price).
 Live MT5 accounts hand the trade to the bridge queue for the EA to fulfil.
 Future broker engines (Binance/CCXT) plug in here without touching call sites.
 """
-import os
 import logging
 from datetime import datetime, timezone
 from abc import ABC, abstractmethod

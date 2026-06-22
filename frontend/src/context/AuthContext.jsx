@@ -33,7 +33,8 @@ export function AuthProvider({ children }) {
     };
 
     const logout = async () => {
-        try { await api.post("/auth/logout"); } catch { /* ignore network errors during logout */ }
+        try { await api.post("/auth/logout"); }
+        catch (err) { console.warn("[auth] logout network error (ignored)", err?.message); }
         setUser(false);
     };
 

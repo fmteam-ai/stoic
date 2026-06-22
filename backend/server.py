@@ -5,7 +5,7 @@ load_dotenv(Path(__file__).parent / ".env")
 import os
 import asyncio
 import logging
-from fastapi import FastAPI, APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
 from bson import ObjectId

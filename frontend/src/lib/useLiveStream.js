@@ -7,10 +7,6 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "";
  * Live event stream from the backend WebSocket.
  * Auto-reconnects on disconnect. Auth via the access_token cookie (sent automatically
  * by the browser on same-origin upgrade).
- *
- * Usage:
- *   const { lastEvent, connected } = useLiveStream();
- *   useEffect(() => { if (lastEvent?.type === 'trade_updated') ... }, [lastEvent]);
  */
 export function useLiveStream() {
     const { user } = useAuth();
@@ -18,9 +14,11 @@ export function useLiveStream() {
     const [lastEvent, setLastEvent] = useState(null);
     const wsRef = useRef(null);
     const retryRef = useRef(0);
+    const retryTimerRef = useRef(null);
+    const closedRef = useRef(false);
 
     const connect = useCallback(() => {
-        if (!user || !user.id) return;
+        if (!user || !user.id || closedRef.current) return;
         const proto = BACKEND_URL.startsWith("https") ? "wss" : "ws";
         const host = BACKEND_URL.replace(/^https?:\/\//, "");
         const url = `${proto}://${host}/api/ws`;
@@ -32,21 +30,39 @@ export function useLiveStream() {
                 try {
                     const msg = JSON.parse(e.data);
                     setLastEvent({ ...msg, _ts: Date.now() });
-                } catch { /* ignore parse errors */ }
+                } catch (err) {
+                    console.warn("[ws] message parse failed", err);
+                }
             };
             ws.onclose = () => {
                 setConnected(false);
+                if (closedRef.current) return;
                 const delay = Math.min(15000, 1000 * Math.pow(2, retryRef.current++));
-                setTimeout(connect, delay);
+                retryTimerRef.current = setTimeout(connect, delay);
             };
-            ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
-        } catch { /* will retry on close */ }
+            ws.onerror = (err) => {
+                console.warn("[ws] socket error", err?.message || "");
+                try { ws.close(); } catch (e2) { console.warn("[ws] close failed", e2); }
+            };
+        } catch (err) {
+            console.warn("[ws] connect failed, will retry", err);
+        }
     }, [user]);
 
     useEffect(() => {
         if (!user || !user.id) return;
+        closedRef.current = false;
         connect();
-        return () => { try { wsRef.current?.close(); } catch { /* ignore */ } };
+        return () => {
+            closedRef.current = true;
+            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+            const ws = wsRef.current;
+            if (ws) {
+                ws.onclose = null;  // prevent retry storm on intentional teardown
+                ws.onerror = null;
+                try { ws.close(); } catch (err) { console.warn("[ws] teardown close failed", err); }
+            }
+        };
     }, [user, connect]);
 
     return { lastEvent, connected };
