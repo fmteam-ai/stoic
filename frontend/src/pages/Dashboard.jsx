@@ -246,6 +246,14 @@ export default function Dashboard() {
             const p = lastEvent.payload;
             const pnl = p.pnl ?? 0;
             toast(`Trade closed · P&L ${pnl >= 0 ? "+" : ""}${pnl}`, { description: `Ticket ${p.trade_id}` });
+        } else if (lastEvent.type === "trade_management") {
+            const p = lastEvent.payload || {};
+            const labels = { BREAKEVEN: "🛡 Break-Even Set", TRAIL: "📈 SL Trailed", PARTIAL_CLOSE: "✂️ Partial Close" };
+            toast(labels[p.action] || p.action, {
+                description: p.action === "PARTIAL_CLOSE"
+                    ? `Closing ${(p.from_lot - p.to_lot).toFixed(2)} lots @ +${p.r_multiple}R · ${p.to_lot} remaining`
+                    : `New SL ${p.new_sl} · +${p.r_multiple}R`,
+            });
         }
     }, [lastEvent]);
 

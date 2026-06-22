@@ -118,6 +118,31 @@
 - **Tests**: 108/108 backend pytest cases pass (19 new tests across 8 classes — TestIter6SignalPayload, TestRegimeAdapter, TestMetaLabeler, TestPaperTrading, TestNLStrategy, TestNLCommander, TestTimeSeriesCollections, TestPriorEndpointsRegression).
 - **Bug**: Fixed leftover merge garbage in `Accounts.jsx` (broken parse from prior fork) that was blocking entire frontend compile.
 
+## CHANGELOG · Jun 22, 2026 — Profit Protection Suite + Manual Trade + Encrypted Broker Creds + Bot Status
+- **New: Profit Protection Suite** — server-side `trade_manager.py` async loop (15s default) that supervises every open MT5 trade. Three features:
+  1. **Break-Even Auto-Shift**: after +1R, SL moves to entry (zero-risk runner).
+  2. **Partial Close at TP1**: closes 50% of the lot at +1R, runner stays.
+  3. **Trailing Stop-Loss**: after +1.5R, SL trails behind price at 0.7R distance, 0.2R step gate.
+- **New: Daily Drawdown Circuit Breaker** — auto-stops the bot when realised P&L for today crosses -3% (configurable). Broadcasts `circuit_breaker_tripped` WS event.
+- **Bridge protocol v1.10**: `poll-trades` now returns `{trades, modifications}`. EA v1.10 handles `MODIFY_SL` and `PARTIAL_CLOSE` actions and posts back to `/api/bridge/modification-ack`.
+- **BotConfig** gained 11 new fields: breakeven_enabled/_trigger_r, partial_close_enabled/_trigger_r/_fraction, trailing_enabled/_start_r/_distance_r, daily_drawdown_enabled/_pct. Default values match conservative best-practice (1R BE, 1R 50%-close, 1.5R trail start, -3% DD).
+- **Trade model** gained `original_stop_loss`, `original_lot_size`, `breakeven_set`, `partial_closed`, `trail_active`, `pending_modification` fields. Trades page shows BE / PC / TRAIL / SYNC badges per row.
+- **New: `/api/bot/status` endpoint** — rich runtime status (last tick, last action+confidence, next tick ETA, why_no_trade explanation, open_trades count). Polled every 10s by Dashboard.
+- **New: Dashboard BOT STATUS strip** — pinned below Portfolio Performance, shows live state (TRADING / HOLDING / VETOED / STOPPED), last tick ago, last action, next tick countdown, auto-execute status, plain-English "why no trade" reason + AI reasoning excerpt.
+- **New: Manual Test Trade modal** (`/api/trades/manual`) — paper-only manual order placement at live mid-price, bypasses AI confidence gating. Gold button on Signals page.
+- **New: Encrypted Broker Credentials Vault** — optional AES-256-GCM storage of MT5 investor + master passwords on live accounts. Endpoints: `POST/PATCH /api/accounts/{id}/credentials*`, `POST /api/accounts/{id}/credentials/reveal`. Frontend shows ADD/UPDATE/REVEAL/CLEAR per account; reveal auto-hides 30s.
+- **Dashboard polish**: Portfolio Performance (open trades / total / win rate / total P&L) moved to top of page above quote tiles. WS toast for trade_management events (BE/TRAIL/PC).
+- **Fix: webpack-dev-server v5/CRA 5.0.1 incompat** — pinned `webpack-dev-server: 4.15.2` in `resolutions` (frontend was crashing on start because v5 dropped `onAfterSetupMiddleware` and `https` config options CRA still emits).
+
+## Backlog Updates (P1/P2 still pending)
+- **P1** — Spread/Slippage filter (reject signals when spread > 2× 24h median).
+- **P1** — Multi-timeframe confluence (require H4 trend to match H1 signal direction).
+- **P2** — Performance Attribution dashboard (engine × regime × symbol × hour-of-day P&L breakdown).
+- **P2** — Session-aware bias (London / NY overlap / Asian regime detection).
+- **P2** — Telegram / Email daily digest.
+- **P3** — Triple-AI consensus (GPT-5.2 + Claude + Gemini votes).
+- **P3** — Backtesting engine (replay 6m history against AI signal generator).
+
 ## Known Limitations
 - The MT5 EA itself requires a Windows MT5 terminal; this is a platform constraint, not ours.
 - Live free FX feed (`open.er-api.com`) refreshes daily, not intraday. For intraday FX the user can upgrade to a paid FX API.

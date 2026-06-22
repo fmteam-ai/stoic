@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert } from "lucide-react";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -41,6 +41,16 @@ export default function BotConfig() {
                 active: cfg.active,
                 max_concurrent_trades: cfg.max_concurrent_trades,
                 auto_execute: cfg.auto_execute,
+                breakeven_enabled: cfg.breakeven_enabled,
+                breakeven_trigger_r: cfg.breakeven_trigger_r,
+                partial_close_enabled: cfg.partial_close_enabled,
+                partial_close_trigger_r: cfg.partial_close_trigger_r,
+                partial_close_fraction: cfg.partial_close_fraction,
+                trailing_enabled: cfg.trailing_enabled,
+                trailing_start_r: cfg.trailing_start_r,
+                trailing_distance_r: cfg.trailing_distance_r,
+                daily_drawdown_pct: cfg.daily_drawdown_pct,
+                daily_drawdown_enabled: cfg.daily_drawdown_enabled,
             });
             setCfg(data); setMsg("Configuration saved.");
         } catch (e) { setErr(formatApiError(e)); }
@@ -210,6 +220,9 @@ export default function BotConfig() {
                     </div>
                 </div>
 
+                {/* Section 04 — Profit Protection Suite */}
+                <ProfitProtectionSection cfg={cfg} setCfg={setCfg} />
+
                 <div className="flex justify-end">
                     <button onClick={save} disabled={saving}
                         data-testid="bot-save-button"
@@ -219,5 +232,100 @@ export default function BotConfig() {
                 </div>
             </div>
         </AppLayout>
+    );
+}
+
+function PPToggle({ cfg, setCfg, field, label, icon: Icon, desc, color = "#FFD700" }) {
+    return (
+        <div className="border border-[#1F1F1F] p-4 bg-[#050505]">
+            <button onClick={() => setCfg({ ...cfg, [field]: !cfg[field] })}
+                data-testid={`toggle-${field}`}
+                className="w-full flex items-center justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2">
+                    <Icon className="w-4 h-4" style={{ color: cfg[field] ? color : "#52525B" }} />
+                    <span className="font-display font-bold text-sm">{label}</span>
+                </div>
+                <div className={`font-mono text-[10px] px-2 py-0.5 border ${
+                    cfg[field] ? "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10" : "border-[#1F1F1F] text-[#52525B]"
+                }`}>{cfg[field] ? "● ON" : "○ OFF"}</div>
+            </button>
+            <p className="text-xs text-[#A1A1AA] leading-relaxed">{desc}</p>
+        </div>
+    );
+}
+
+function PPNumInput({ cfg, setCfg, field, label, suffix, step = 0.1, min = 0, max = 100 }) {
+    return (
+        <div>
+            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
+            <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#FFD700]">
+                <input type="number" step={step} min={min} max={max} value={cfg[field] ?? 0}
+                    onChange={e => setCfg({ ...cfg, [field]: parseFloat(e.target.value) || 0 })}
+                    data-testid={`input-${field}`}
+                    className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />
+                {suffix && <span className="font-mono text-[10px] text-[#52525B] tracking-widest px-2">{suffix}</span>}
+            </div>
+        </div>
+    );
+}
+
+function ProfitProtectionSection({ cfg, setCfg }) {
+    return (
+        <div className="border border-[#FFD700]/30 bg-[#0A0A0A]" data-testid="profit-protection-section">
+            <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                <Shield className="w-4 h-4 text-[#FFD700]" />
+                <div>
+                    <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">SECTION 04 · PROFIT PROTECTION SUITE</div>
+                    <div className="font-display font-bold text-lg tracking-tight">Lock profits · trim risk · automated</div>
+                </div>
+            </div>
+            <div className="p-5 space-y-4">
+                {/* Break-even */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="breakeven_enabled" label="Break-Even Auto-Shift" icon={Shield}
+                        desc="Once a trade moves +1R in your favor, automatically shift Stop-Loss to entry price. Result: zero risk on the remaining trade." />
+                    {cfg.breakeven_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="TRIGGER (R-multiple)" suffix="R" step={0.1} min={0.5} max={5} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Partial close */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="partial_close_enabled" label="Partial Close at TP1" icon={Scissors} color="#00FF41"
+                        desc="Take 50% of the position off at the first target (1R), let the runner go for the bigger target. Locks in profit and reduces stress." />
+                    {cfg.partial_close_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="partial_close_trigger_r" label="TRIGGER (R-multiple)" suffix="R" step={0.1} min={0.5} max={5} />
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="partial_close_fraction" label="CLOSE FRACTION" suffix="0-1" step={0.05} min={0.1} max={0.9} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Trailing */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="trailing_enabled" label="Trailing Stop-Loss" icon={TrendingUp} color="#00FF41"
+                        desc="After the trade moves +1.5R, SL trails behind price at 0.7R distance. Captures larger trends while locking in gains as they grow." />
+                    {cfg.trailing_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="trailing_start_r" label="START TRAILING AT" suffix="R" step={0.1} min={1.0} max={10} />
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="trailing_distance_r" label="TRAIL DISTANCE" suffix="R" step={0.1} min={0.2} max={5} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Daily drawdown */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="daily_drawdown_enabled" label="Daily Drawdown Circuit Breaker" icon={OctagonAlert} color="#FF3B30"
+                        desc="Bot auto-stops if today's realised P&L drops below the threshold. Prevents the revenge-trading death spiral that kills most retail accounts." />
+                    {cfg.daily_drawdown_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="daily_drawdown_pct" label="DAILY LOSS LIMIT" suffix="% of equity" step={0.5} min={0.5} max={20} />
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
     );
 }

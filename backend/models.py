@@ -87,6 +87,17 @@ class BotConfigUpdate(BaseModel):
     active: bool = False
     max_concurrent_trades: int = 3
     auto_execute: bool = True
+    # Profit Protection Suite
+    breakeven_enabled: bool = True            # move SL to entry after +1R
+    breakeven_trigger_r: float = 1.0          # R-multiple at which SL flips to break-even
+    partial_close_enabled: bool = True        # take 50% off at TP1
+    partial_close_trigger_r: float = 1.0      # R-multiple at which 50% closes (defaults to 1R)
+    partial_close_fraction: float = 0.5       # fraction of lot to close at TP1
+    trailing_enabled: bool = True             # trail SL after partial close
+    trailing_start_r: float = 1.5             # activate trailing after this R-multiple
+    trailing_distance_r: float = 0.7          # distance SL trails behind price (in R)
+    daily_drawdown_pct: float = 3.0           # auto-stop bot if today's P&L drops below -3%
+    daily_drawdown_enabled: bool = True
 
 
 class BotConfigOut(BotConfigUpdate):

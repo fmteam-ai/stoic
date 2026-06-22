@@ -15,6 +15,7 @@ from seed import seed_admin, ensure_indexes
 from auth import decode_token
 from ws_manager import manager as ws_manager
 import bot_runner
+import trade_manager
 import warmer
 
 # Routers
@@ -150,25 +151,27 @@ else:
 
 _bot_runner_task = None
 _warmer_task = None
+_trade_manager_task = None
 
 
 @app.on_event("startup")
 async def on_startup():
-    global _bot_runner_task, _warmer_task
+    global _bot_runner_task, _warmer_task, _trade_manager_task
     try:
         await ensure_indexes()
         await seed_admin()
         logger.info("Startup: indexes ensured, admin seeded.")
         _bot_runner_task = asyncio.create_task(bot_runner.loop())
         _warmer_task = asyncio.create_task(warmer.loop())
-        logger.info("Bot runner + warmer scheduled.")
+        _trade_manager_task = asyncio.create_task(trade_manager.run_loop())
+        logger.info("Bot runner + warmer + trade manager scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    for task in (_bot_runner_task, _warmer_task):
+    for task in (_bot_runner_task, _warmer_task, _trade_manager_task):
         if task and not task.done():
             task.cancel()
             try:

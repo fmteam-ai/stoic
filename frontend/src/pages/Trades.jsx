@@ -112,7 +112,15 @@ export default function Trades() {
                             <tbody>
                                 {trades.map(t => (
                                     <tr key={t.id} className="border-b border-[#1F1F1F] hover:bg-[#121212] transition-colors" data-testid={`trade-row-${t.id}`}>
-                                        <td className="px-3 py-2 font-mono">{t.symbol}</td>
+                                        <td className="px-3 py-2 font-mono">
+                                            <div className="flex items-center gap-1.5">
+                                                <span>{t.symbol}</span>
+                                                {t.partial_closed && <span title="Partial close at TP1 executed" className="font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1" data-testid={`badge-pc-${t.id}`}>PC</span>}
+                                                {t.breakeven_set && <span title="SL moved to break-even" className="font-mono text-[9px] tracking-widest text-[#FFD700] border border-[#FFD700]/40 bg-[#FFD700]/10 px-1" data-testid={`badge-be-${t.id}`}>BE</span>}
+                                                {t.trail_active && <span title="Trailing stop active" className="font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1" data-testid={`badge-trail-${t.id}`}>TRAIL</span>}
+                                                {t.pending_modification && <span title={`Pending: ${t.pending_modification.type}`} className="font-mono text-[9px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-1 animate-pulse" data-testid={`badge-pending-${t.id}`}>SYNC</span>}
+                                            </div>
+                                        </td>
                                         <td className={`px-3 py-2 font-mono ${t.action === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{t.action}</td>
                                         <td className="px-3 py-2 font-mono">{t.lot_size}</td>
                                         <td className="px-3 py-2 font-mono">{t.entry_price}</td>

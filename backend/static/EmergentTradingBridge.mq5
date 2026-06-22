@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                  EmergentTradingBridge.mq5       |
-//|              Polls Emergent AI Trading Bot server for trades.    |
+//|              Polls STOIC AI Trading Bot server for trades.       |
 //|                                                                  |
 //| HOW TO USE:                                                      |
 //| 1. Copy this file to: <MT5 Data Folder>/MQL5/Experts/             |
@@ -12,9 +12,12 @@
 //|       ServerUrl   = https://your-app.preview.emergentagent.com   |
 //|       BridgeToken = (paste from the dashboard > Accounts)         |
 //|       PollSeconds = 5                                             |
+//|                                                                  |
+//| v1.10 — Adds Profit Protection: break-even SL, trailing SL,      |
+//|         partial-close at TP1.                                     |
 //+------------------------------------------------------------------+
-#property copyright "Emergent AI Trading Bot"
-#property version   "1.00"
+#property copyright "STOIC AI Trading"
+#property version   "1.10"
 #property strict
 
 input string ServerUrl   = "https://your-app.preview.emergentagent.com";
@@ -28,7 +31,7 @@ datetime lastPoll = 0;
 //+------------------------------------------------------------------+
 int OnInit() {
    EventSetTimer(PollSeconds);
-   Print("Emergent Bridge EA started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.10 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -68,24 +71,38 @@ void PollPendingTrades() {
    string resp = HttpPost(ServerUrl + "/api/bridge/poll-trades", body);
    if (StringLen(resp) == 0) return;
 
-   // Naive JSON parsing — pulls each trade block.
+   // -------- 1. Process pending NEW trades from "trades":[...] block --------
+   ParseTradesBlock(resp);
+
+   // -------- 2. Process pending modifications from "modifications":[...] block --------
+   ParseModificationsBlock(resp);
+}
+
+// ----- TRADES BLOCK -----
+void ParseTradesBlock(string resp) {
+   int trades_section = StringFind(resp, "\"trades\":[");
+   if (trades_section < 0) return;
+   int section_end = StringFind(resp, "]", trades_section);
+   if (section_end < 0) return;
+   string section = StringSubstr(resp, trades_section, section_end - trades_section);
+
    int idx = 0;
    while (true) {
-      int t_start = StringFind(resp, "\"trade_id\":\"", idx);
+      int t_start = StringFind(section, "\"trade_id\":\"", idx);
       if (t_start < 0) break;
       t_start += 12;
-      int t_end = StringFind(resp, "\"", t_start);
-      string trade_id = StringSubstr(resp, t_start, t_end - t_start);
+      int t_end = StringFind(section, "\"", t_start);
+      string trade_id = StringSubstr(section, t_start, t_end - t_start);
 
-      string symbol = ExtractString(resp, "\"symbol\":\"", t_end);
-      string action = ExtractString(resp, "\"action\":\"", t_end);
-      double lot    = ExtractDouble(resp, "\"lot_size\":", t_end);
-      double sl     = ExtractDouble(resp, "\"stop_loss\":", t_end);
-      double tp     = ExtractDouble(resp, "\"take_profit\":", t_end);
-      bool   close_req = (StringFind(resp, "\"close_requested\":true", t_end) > 0 &&
-                          StringFind(resp, "\"close_requested\":true", t_end) <
-                          StringFind(resp, "}", t_end));
-      long ticket   = (long)ExtractDouble(resp, "\"mt5_ticket\":", t_end);
+      string symbol = ExtractString(section, "\"symbol\":\"", t_end);
+      string action = ExtractString(section, "\"action\":\"", t_end);
+      double lot    = ExtractDouble(section, "\"lot_size\":", t_end);
+      double sl     = ExtractDouble(section, "\"stop_loss\":", t_end);
+      double tp     = ExtractDouble(section, "\"take_profit\":", t_end);
+      int close_pos = StringFind(section, "\"close_requested\":true", t_end);
+      int brace_pos = StringFind(section, "}", t_end);
+      bool   close_req = (close_pos > 0 && close_pos < brace_pos);
+      long ticket   = (long)ExtractDouble(section, "\"mt5_ticket\":", t_end);
 
       if (close_req && ticket > 0) {
          ClosePosition(trade_id, ticket);
@@ -93,7 +110,41 @@ void PollPendingTrades() {
          ExecuteTrade(trade_id, symbol, action, lot, sl, tp);
       }
 
-      idx = StringFind(resp, "}", t_end) + 1;
+      idx = brace_pos + 1;
+      if (idx <= 0) break;
+   }
+}
+
+// ----- MODIFICATIONS BLOCK -----
+void ParseModificationsBlock(string resp) {
+   int section_start = StringFind(resp, "\"modifications\":[");
+   if (section_start < 0) return;
+   int section_end = StringFind(resp, "]", section_start);
+   if (section_end < 0) return;
+   string section = StringSubstr(resp, section_start, section_end - section_start);
+
+   int idx = 0;
+   while (true) {
+      int t_start = StringFind(section, "\"trade_id\":\"", idx);
+      if (t_start < 0) break;
+      t_start += 12;
+      int t_end = StringFind(section, "\"", t_start);
+      string trade_id = StringSubstr(section, t_start, t_end - t_start);
+
+      string mod_type = ExtractString(section, "\"type\":\"", t_end);
+      long ticket = (long)ExtractDouble(section, "\"mt5_ticket\":", t_end);
+      double new_sl = ExtractDouble(section, "\"new_sl\":", t_end);
+      double new_vol = ExtractDouble(section, "\"new_volume\":", t_end);
+
+      int brace_pos = StringFind(section, "}", t_end);
+
+      if (mod_type == "MODIFY_SL" && ticket > 0 && new_sl > 0) {
+         ApplyModifySL(trade_id, ticket, new_sl);
+      } else if (mod_type == "PARTIAL_CLOSE" && ticket > 0 && new_vol > 0) {
+         ApplyPartialClose(trade_id, ticket, new_vol);
+      }
+
+      idx = brace_pos + 1;
       if (idx <= 0) break;
    }
 }
@@ -177,4 +228,68 @@ void ClosePosition(string trade_id, long ticket) {
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"status\":\"closed\",\"exit_price\":%.5f,\"pnl\":%.2f}",
       BridgeToken, trade_id, res.price, pnl);
    HttpPost(ServerUrl + "/api/bridge/report", body);
+}
+
+// ----- v1.10: SL/TP modify -----
+void ApplyModifySL(string trade_id, long ticket, double new_sl) {
+   if (!PositionSelectByTicket(ticket)) return;
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   double current_tp = PositionGetDouble(POSITION_TP);
+
+   MqlTradeRequest req; MqlTradeResult res;
+   ZeroMemory(req); ZeroMemory(res);
+   req.action   = TRADE_ACTION_SLTP;
+   req.position = ticket;
+   req.symbol   = symbol;
+   req.sl       = NormalizeDouble(new_sl, _Digits);
+   req.tp       = current_tp;
+
+   bool ok = OrderSend(req, res);
+   bool success = (ok && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_DONE_PARTIAL));
+   string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
+
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"MODIFY_SL\",\"success\":%s,\"new_sl\":%.5f,\"error\":\"%s\"}",
+      BridgeToken, trade_id, (success ? "true" : "false"), new_sl, err);
+   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   if (success) Print("STOIC: SL modified ticket=", ticket, " new_sl=", new_sl);
+}
+
+// ----- v1.10: Partial close — close (current_vol - new_vol) lots -----
+void ApplyPartialClose(string trade_id, long ticket, double new_vol) {
+   if (!PositionSelectByTicket(ticket)) return;
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   double current_vol = PositionGetDouble(POSITION_VOLUME);
+   double close_vol = current_vol - new_vol;
+   if (close_vol < 0.01) return;
+   close_vol = NormalizeDouble(close_vol, 2);
+
+   ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+   MqlTradeRequest req; MqlTradeResult res;
+   ZeroMemory(req); ZeroMemory(res);
+   req.action    = TRADE_ACTION_DEAL;
+   req.symbol    = symbol;
+   req.volume    = close_vol;
+   req.deviation = Slippage;
+   req.magic     = MagicNumber;
+   req.position  = ticket;
+   req.type_filling = ORDER_FILLING_IOC;
+   if (type == POSITION_TYPE_BUY) {
+      req.type  = ORDER_TYPE_SELL;
+      req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+   } else {
+      req.type  = ORDER_TYPE_BUY;
+      req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   }
+
+   bool ok = OrderSend(req, res);
+   bool success = (ok && res.retcode == TRADE_RETCODE_DONE);
+   string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
+
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":%s,\"new_volume\":%.2f,\"error\":\"%s\"}",
+      BridgeToken, trade_id, (success ? "true" : "false"), new_vol, err);
+   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   if (success) Print("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", new_vol);
 }

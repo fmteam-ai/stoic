@@ -51,8 +51,10 @@ class PollRequest(BaseModel):
 async def poll_trades(payload: PollRequest):
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
-    cursor = db.trades.find({"account_id": str(acc["_id"]), "status": "pending"})
-    pending = await cursor.to_list(length=20)
+
+    # 1. Pending NEW trades (status='pending')
+    new_cursor = db.trades.find({"account_id": str(acc["_id"]), "status": "pending"})
+    pending = await new_cursor.to_list(length=20)
     out = []
     for t in pending:
         out.append({
@@ -66,7 +68,76 @@ async def poll_trades(payload: PollRequest):
             "close_requested": t.get("close_requested", False),
             "mt5_ticket": t.get("mt5_ticket"),
         })
-    return {"trades": out}
+
+    # 2. Open trades with pending modifications (break-even / partial-close / trailing)
+    mod_cursor = db.trades.find({
+        "account_id": str(acc["_id"]),
+        "status": "open",
+        "mt5_ticket": {"$ne": None},
+        "pending_modification": {"$exists": True, "$ne": None},
+    })
+    mods = await mod_cursor.to_list(length=20)
+    modifications = []
+    for t in mods:
+        m = t.get("pending_modification") or {}
+        modifications.append({
+            "trade_id": str(t["_id"]),
+            "mt5_ticket": t.get("mt5_ticket"),
+            "symbol": t["symbol"],
+            "type": m.get("type"),
+            "new_sl": m.get("new_sl"),
+            "new_tp": m.get("new_tp"),
+            "new_volume": m.get("new_volume"),
+        })
+
+    return {"trades": out, "modifications": modifications}
+
+
+class BridgeModificationAck(BaseModel):
+    bridge_token: str
+    trade_id: str
+    type: str   # MODIFY_SL | PARTIAL_CLOSE
+    success: bool = True
+    new_sl: float | None = None
+    new_volume: float | None = None
+    error: str | None = None
+
+
+@router.post("/modification-ack")
+async def modification_ack(payload: BridgeModificationAck):
+    """EA acknowledges it applied a pending_modification on its end."""
+    db = get_db()
+    acc = await _account_by_token(payload.bridge_token)
+    trade = await db.trades.find_one({"_id": ObjectId(payload.trade_id)})
+    if not trade or trade["account_id"] != str(acc["_id"]):
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    update = {"pending_modification": None}
+    if payload.success:
+        if payload.type == "MODIFY_SL" and payload.new_sl is not None:
+            update["stop_loss"] = float(payload.new_sl)
+            if not trade.get("breakeven_set"):
+                # Mark BE only when SL moved to/past entry
+                entry = float(trade.get("entry_price") or 0)
+                action = trade.get("action")
+                hit_be = (action == "BUY" and payload.new_sl >= entry) or \
+                         (action == "SELL" and payload.new_sl <= entry)
+                if hit_be:
+                    update["breakeven_set"] = True
+            else:
+                update["trail_active"] = True
+        elif payload.type == "PARTIAL_CLOSE" and payload.new_volume is not None:
+            update["lot_size"] = float(payload.new_volume)
+            update["partial_closed"] = True
+    else:
+        update["last_modification_error"] = payload.error or "unknown EA error"
+
+    await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    await ws_manager.broadcast(acc["user_id"], "trade_updated", {
+        "trade_id": payload.trade_id,
+        **update,
+    })
+    return {"ok": True}
 
 
 @router.post("/report")

@@ -32,8 +32,10 @@ class MT5BridgeEngine(ExecutionEngine):
             "symbol": signal["symbol"],
             "action": signal["action"],
             "lot_size": signal["lot_size"],
+            "original_lot_size": signal["lot_size"],
             "entry_price": signal["entry_price"],
             "stop_loss": signal["stop_loss"],
+            "original_stop_loss": signal["stop_loss"],
             "take_profit": signal["take_profit"],
             "exit_price": None,
             "pnl": 0.0,
@@ -45,6 +47,9 @@ class MT5BridgeEngine(ExecutionEngine):
             "closed_at": None,
             "error": None,
             "origin": signal.get("origin", "manual"),
+            "partial_closed": False,
+            "breakeven_set": False,
+            "trail_active": False,
         }
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
