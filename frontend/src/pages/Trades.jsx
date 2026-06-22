@@ -82,9 +82,9 @@ function fmtDateTime(iso) {
     }
 }
 
-function Stat({ label, value, accent }) {
+function Stat({ label, value, accent, testid }) {
     return (
-        <div className="p-4 border border-[#1F1F1F] bg-[#0A0A0A]">
+        <div className="p-4 border border-[#1F1F1F] bg-[#0A0A0A]" data-testid={testid}>
             <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">{label}</div>
             <div className={`font-mono font-medium text-base ${accent || "text-white"}`}>{value}</div>
         </div>
@@ -125,7 +125,9 @@ export default function Trades() {
         for (const t of trades) {
             if (t.status === "open" && t.symbol) set.add(t.symbol);
         }
-        return Array.from(set);
+        // Sort for a deterministic key — avoids redundant re-fetches when the
+        // first-encountered symbol order flips on WS updates.
+        return Array.from(set).sort();
     }, [trades]);
 
     const symbolsKey = openSymbols.join(",");
@@ -182,31 +184,29 @@ export default function Trades() {
             <div className="p-4 md:p-8 space-y-4">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
 
-                {stats && (
+                {stats && (() => {
+                    const openLive = trades.reduce((acc, t) => {
+                        if (t.status !== "open") return acc;
+                        const p = computeLivePnl(t, quotes[t.symbol]);
+                        return p == null ? acc : acc + p;
+                    }, 0);
+                    const hasAnyLive = trades.some(t => t.status === "open" && quotes[t.symbol] != null);
+                    const liveAccent = hasAnyLive
+                        ? (openLive >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]")
+                        : undefined;
+                    return (
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-3" data-testid="trades-stats">
                         <Stat label="OPEN" value={stats.open_trades} />
-                        <Stat label="OPEN LIVE P&L" value={(() => {
-                            const live = trades.reduce((acc, t) => {
-                                if (t.status !== "open") return acc;
-                                const p = computeLivePnl(t, quotes[t.symbol]);
-                                return p == null ? acc : acc + p;
-                            }, 0);
-                            const hasAny = trades.some(t => t.status === "open" && quotes[t.symbol] != null);
-                            return hasAny ? fmtPnl(live) : "—";
-                        })()} accent={(() => {
-                            const live = trades.reduce((acc, t) => {
-                                if (t.status !== "open") return acc;
-                                const p = computeLivePnl(t, quotes[t.symbol]);
-                                return p == null ? acc : acc + p;
-                            }, 0);
-                            return live >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]";
-                        })()} />
+                        <Stat label="OPEN LIVE P&L" testid="stat-open-live-pnl"
+                            value={hasAnyLive ? fmtPnl(openLive) : "—"}
+                            accent={liveAccent} />
                         <Stat label="TOTAL" value={stats.total_trades} />
                         <Stat label="WIN RATE" value={`${stats.win_rate}%`} accent="text-[#00FF41]" />
                         <Stat label="WINS / LOSSES" value={`${stats.wins} / ${stats.losses}`} />
                         <Stat label="TOTAL P&L" value={`${stats.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(stats.total_pnl).toFixed(2)}`} accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
                     </div>
-                )}
+                    );
+                })()}
 
                 <div className="flex gap-2 flex-wrap">
                     {["", "pending", "open", "closed", "failed"].map(f => (
