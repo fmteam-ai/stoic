@@ -44,7 +44,9 @@ export default function RiskCommander() {
         try {
             const { data } = await api.get("/nl/triggers");
             setTriggers(data);
-        } catch { /* ignore */ }
+        } catch (e) {
+            console.warn("[risk-commander] failed to load triggers", e?.message);
+        }
     };
 
     useEffect(() => { loadTriggers(); }, []);
@@ -116,7 +118,9 @@ export default function RiskCommander() {
         try {
             await api.delete(`/nl/triggers/${id}`);
             await loadTriggers();
-        } catch { /* ignore */ }
+        } catch (e) {
+            toast.error("Couldn't cancel trigger", { description: formatApiError(e) });
+        }
     };
 
     return (

@@ -165,7 +165,6 @@ async def on_startup():
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global _bot_runner_task, _warmer_task
     for task in (_bot_runner_task, _warmer_task):
         if task and not task.done():
             task.cancel()
