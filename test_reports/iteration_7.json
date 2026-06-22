@@ -1,0 +1,41 @@
+{
+  "summary": "Iter-9 full-stack regression after cosmetic/perf/logging refactor (RiskCommander silent-catch->console.warn+toast, server.py unused globals cleanup, AuthContext value memoised, Dashboard chart styles hoisted + 3 silent catches->console.warn, .eslintrc.json overrides). Backend: 144/144 pytest tests PASS in 125s (no regressions from iter-8). Frontend smoke: login -> dashboard renders with STOIC logo in sidebar, all 7 sidebar links navigate cleanly (Dashboard, AI Signals, Risk Commander, Bot Config(/bot), MT5 Accounts, Trades, Symbols, Subscription) with 0 page errors. Co-Pilot widget end-to-end works: launcher opens panel with 5 quick actions, send/receive renders assistant reply, copilot-clear empties messages, copilot-close hides panel. Risk Commander COMMAND mode 'close all my open trades' returns CLOSE_ALL_TRADES receipt; STRATEGY mode 'conservative gold scalping' hits /api/nl/strategy, renders compiled JSON + apply-strategy-button. Co-Pilot rate limit verified at 31st rapid request -> 429. WebSocket /api/ws receives panic_lock broadcast within 1s of POST /api/panic. Signal pipeline returns all iter-6 fields (regime_execution_mode, noise_filter, meta_label, compressed_features). Subscription plans return correct prices (49 / 132.30 / 235.20 / 352.80) and effective monthly ($49.00 / $44.10 / $39.20 / $29.40) — prior iter-6 $44.1/$39.2 cosmetic now fixed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter7_results.xml",
+    "/app/test_reports/ratelimit_test.py",
+    "/app/test_reports/ws_and_paper_test.py"
+  ],
+  "action_items": [
+    "(DOC ONLY) The review request lists 'GET /api/bridge/download-ea' for the EA download endpoint, but the actual route is GET /api/ea-script (returns the 7209-byte .mq5 file with status 200). Either move/alias the route or update the spec/README — pytest TestEAScript already targets the correct path.",
+    "(CARRY-OVER, LOW) Two items from iter-6 still open and not picked up this round: (a) sanitise raw Stripe SDK exception text leaked in 502 detail of /api/subscription/checkout and 400 detail of /api/webhook/stripe; (b) pass html-to-image option {skipFonts:true} (or self-host Inter/font-mono) in /app/frontend/src/lib/diagnostics.js captureViewport() so cross-origin Google Fonts CSS reads stop emitting SecurityError during bug-capture (PNG still produced, font fallback is system).",
+    "(CARRY-OVER, LOW) Admin grandfather state is computed from plan_id === 'admin_grandfather'. If admin ever completes a real checkout via /subscription/checkout, apply_successful_payment overwrites their plan_id and the grandfather banner stops showing. Recommend expose a separate is_admin_grandfather boolean from /api/subscription/status (or short-circuit apply_successful_payment when user.role === 'admin')."
+  ],
+  "critical_code_review_comments": [
+    "144/144 tests pass with the post-iter-8 refactor (AuthContext useMemo, Dashboard chart style hoist, console.warn replacements). No behavioural regressions detected at the API or UI layer.",
+    "WebSocket panic_lock broadcast verified live: WS first frame {type:'connected'}, then within 1s of POST /api/panic the client receives {type:'panic_lock', payload:{bots_disabled, trades_cancelled, open_trades_marked_for_close, at}}. Good.",
+    "Co-Pilot rate limit is per-process in-memory (sliding 30/5min). Verified that exactly the 31st rapid POST /api/copilot/chat for a single user returns 429. Documented limitation: if backend is scaled to >1 worker the limit becomes 30*N. Worth a future Redis-backed limiter if you scale out.",
+    "Risk Commander STRATEGY mode requires clicking [data-testid='mode-strategy'] BEFORE typing — when I drove the input first and toggled mode after, the user's message routed to /api/nl/command. UX is correct (state is read at submit time), but worth a Cypress/Playwright note for future automation: assert active mode class before send.",
+    "Signal payload now returns all required iter-6 fields: regime + regime_execution_mode (sl_multiplier_applied, tp_multiplier_applied), noise_filter (entropy/label/traffic_light/tradeable), meta_label (p_true/verdict/threshold), compressed_features (available/mom_5d/vol_20d_annual). HOLD action with 42% confidence on BTCUSD verified live.",
+    "Dashboard renders cleanly post-refactor: chart legends, prices ($XAUUSD 4208.10, BTCUSD 64070.13), upcoming macro events list, NL conditional triggers panel — all present, 0 console errors during sidebar navigation.",
+    "Subscription page price formatting is now correct ($44.10 not $44.1, $39.20 not $39.2) — iter-6 cosmetic resolved.",
+    "Made-with-Emergent badge sits flush bottom-right; copilot-launcher uses bottom-24 spacing and does not overlap it. Layout verified at 1920x1080."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (144/144)", "frontend": "100% on smoke + Co-Pilot + Risk Commander + Subscription + WebSocket"},
+  "test_credentials": "admin@trading.bot / admin123 (verified working). STRIPE_API_KEY=sk_test_emergent active in backend/.env.",
+  "seed_data_creation": "Created 1 throwaway user (TEST_rl_* for rate-limit test) and 1 paper-account user (TEST_paper_*) plus ~30 copilot_sessions rows for rate-limit test. All TEST_-prefixed so easy to clean. Panic was triggered then released cleanly. No admin grandfather pollution this round (no real checkout fired against admin).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression file: /app/backend/tests/backend_test.py — 144 tests across 35+ classes, runs in ~2 minutes. Helper scripts: /app/test_reports/ratelimit_test.py (Co-Pilot 429 sliding-window) and /app/test_reports/ws_and_paper_test.py (WS panic broadcast + signal payload shape + plans pricing). The EA download endpoint is /api/ea-script (NOT /api/bridge/download-ea — review-request spec was wrong on that one). Admin grandfather state is intact at end of run. /subscription page now renders $44.10/$39.20 (iter-6 cosmetic resolved). Stripe live checkout sessions create cs_test_... URLs and admin is properly blocked (400) from initiating one.",
+  "rca of the issue": "n/a — pure regression pass. The iter-8 refactor (AuthContext memo, Dashboard chart hoist, console.warn replacements, RiskCommander toast on error, server.py unused globals cleanup, .eslintrc.json overrides) introduced zero behavioural regressions. Two open items carried from iter-6 are still LOW priority and not in scope of this round."
+}
