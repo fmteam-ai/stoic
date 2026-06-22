@@ -174,6 +174,27 @@ export default function Dashboard() {
             <div className="p-4 md:p-8 space-y-6">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="dashboard-error">{err}</div>}
 
+                {/* Portfolio performance — pinned at top */}
+                {stats && (
+                    <div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-3">PORTFOLIO PERFORMANCE</div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="portfolio-stats">
+                            <StatCell label="OPEN TRADES" value={stats.open_trades} accent="text-[#FFD700]" />
+                            <StatCell label="TOTAL TRADES" value={stats.total_trades} />
+                            <StatCell
+                                label="WIN RATE"
+                                value={`${stats.win_rate}%`}
+                                accent={stats.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FFB000]"}
+                            />
+                            <StatCell
+                                label="TOTAL P&L"
+                                value={`${stats.total_pnl >= 0 ? "+" : ""}${stats.total_pnl}`}
+                                accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}
+                            />
+                        </div>
+                    </div>
+                )}
+
                 {/* Quote tiles */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {loading ? (
@@ -324,19 +345,6 @@ export default function Dashboard() {
                             <StatCell label="12M LOW" value={indicators.low_180d ?? "—"} />
                             <StatCell label="% from High" value={`${indicators.pct_from_high ?? 0}%`} accent="text-[#FFB000]" />
                             <StatCell label="30D Volatility" value={`${indicators.volatility_30d_pct ?? 0}%`} />
-                        </div>
-                    </div>
-                )}
-
-                {/* Trading stats */}
-                {stats && (
-                    <div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-3">PORTFOLIO PERFORMANCE</div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3" data-testid="portfolio-stats">
-                            <StatCell label="OPEN TRADES" value={stats.open_trades} />
-                            <StatCell label="TOTAL TRADES" value={stats.total_trades} />
-                            <StatCell label="WIN RATE" value={`${stats.win_rate}%`} accent="text-[#00FF41]" />
-                            <StatCell label="TOTAL P&L" value={`${stats.total_pnl >= 0 ? "+" : ""}${stats.total_pnl}`} accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
                         </div>
                     </div>
                 )}
