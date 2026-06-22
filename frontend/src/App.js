@@ -15,6 +15,7 @@ import Symbols from "@/pages/Symbols";
 import RiskCommander from "@/pages/RiskCommander";
 import Subscription from "@/pages/Subscription";
 import SubscriptionSuccess from "@/pages/SubscriptionSuccess";
+import BrandingGallery from "@/pages/BrandingGallery";
 
 function App() {
     return (
@@ -33,6 +34,7 @@ function App() {
                         <Route path="/commander" element={<ProtectedRoute><RiskCommander /></ProtectedRoute>} />
                         <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
                         <Route path="/subscription/success" element={<ProtectedRoute><SubscriptionSuccess /></ProtectedRoute>} />
+                        <Route path="/branding" element={<ProtectedRoute><BrandingGallery /></ProtectedRoute>} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>
