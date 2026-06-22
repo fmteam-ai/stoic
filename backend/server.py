@@ -15,6 +15,7 @@ from seed import seed_admin, ensure_indexes
 from auth import decode_token
 from ws_manager import manager as ws_manager
 import bot_runner
+import warmer
 
 # Routers
 from routes.auth_routes import router as auth_router
@@ -135,30 +136,32 @@ else:
 
 
 _bot_runner_task = None
+_warmer_task = None
 
 
 @app.on_event("startup")
 async def on_startup():
-    global _bot_runner_task
+    global _bot_runner_task, _warmer_task
     try:
         await ensure_indexes()
         await seed_admin()
         logger.info("Startup: indexes ensured, admin seeded.")
-        # Launch the autonomous bot loop
         _bot_runner_task = asyncio.create_task(bot_runner.loop())
-        logger.info("Bot runner task scheduled.")
+        _warmer_task = asyncio.create_task(warmer.loop())
+        logger.info("Bot runner + warmer scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global _bot_runner_task
-    if _bot_runner_task and not _bot_runner_task.done():
-        _bot_runner_task.cancel()
-        try:
-            await _bot_runner_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    global _bot_runner_task, _warmer_task
+    for task in (_bot_runner_task, _warmer_task):
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
     await close_client()
 

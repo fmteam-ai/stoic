@@ -74,7 +74,74 @@ def supported_symbols() -> list:
     return list(SYMBOL_MAP.keys())
 
 
-# ---------- Crypto via CoinGecko ----------
+# ---------- Crypto: Coinbase Exchange (primary) → CoinGecko (fallback) ----------
+COINBASE_PRODUCT_MAP = {
+    "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD",
+    "BNBUSD": "BNB-USD", "XRPUSD": "XRP-USD", "ADAUSD": "ADA-USD",
+    "DOGEUSD": "DOGE-USD",
+}
+
+
+async def _coinbase_quote(symbol_key: str) -> dict:
+    product = COINBASE_PRODUCT_MAP.get(symbol_key)
+    if not product:
+        raise RuntimeError(f"Coinbase: {symbol_key} not mapped")
+    async with httpx.AsyncClient(timeout=10.0, headers=UA, follow_redirects=True) as c:
+        # 24h stats
+        r = await c.get(f"https://api.exchange.coinbase.com/products/{product}/stats")
+        r.raise_for_status()
+        stats = r.json()
+        # Spot price
+        r2 = await c.get(f"https://api.coinbase.com/v2/prices/{product}/spot")
+        r2.raise_for_status()
+        price = float(r2.json()["data"]["amount"])
+        open_24h = float(stats.get("open") or price)
+        change = price - open_24h
+        change_pct = (change / open_24h * 100) if open_24h else 0
+        return {
+            "price": price, "bid": price, "ask": price,
+            "change": round(change, 5),
+            "change_pct": round(change_pct, 4),
+            "high": float(stats.get("high") or 0) or None,
+            "low": float(stats.get("low") or 0) or None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+async def _coinbase_history(symbol_key: str) -> list:
+    """1-year daily history from Coinbase Exchange in two ~6-month chunks (300-candle cap)."""
+    product = COINBASE_PRODUCT_MAP.get(symbol_key)
+    if not product:
+        raise RuntimeError(f"Coinbase: {symbol_key} not mapped")
+    now = datetime.now(timezone.utc)
+    chunks = [
+        (now - timedelta(days=365), now - timedelta(days=180)),
+        (now - timedelta(days=180), now),
+    ]
+    out = []
+    async with httpx.AsyncClient(timeout=15.0, headers=UA, follow_redirects=True) as c:
+        for start, end in chunks:
+            r = await c.get(
+                f"https://api.exchange.coinbase.com/products/{product}/candles",
+                params={
+                    "granularity": 86400,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                },
+            )
+            r.raise_for_status()
+            candles = r.json()  # [[ts, low, high, open, close, volume], ...] newest-first
+            for ts, lo, hi, op, cl, vol in candles:
+                out.append({
+                    "date": datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d"),
+                    "open": float(op), "high": float(hi), "low": float(lo),
+                    "close": float(cl), "volume": float(vol),
+                })
+    # Dedupe by date and sort oldest-first
+    by_date = {row["date"]: row for row in out}
+    return [by_date[d] for d in sorted(by_date.keys())]
+
+
 async def _cg_quote(cg_id: str) -> dict:
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {"ids": cg_id, "vs_currencies": "usd", "include_24hr_change": "true"}
@@ -197,7 +264,10 @@ async def get_quote(symbol: str) -> dict:
 
         try:
             if meta["asset"] == "crypto":
-                q = await _cg_quote(meta["cg_id"])
+                try:
+                    q = await _coinbase_quote(sym)
+                except Exception:
+                    q = await _cg_quote(meta["cg_id"])
             elif meta["asset"] == "commodity":
                 q = await _gold_quote()
             elif meta["asset"] == "forex":
@@ -238,7 +308,12 @@ async def get_history(symbol: str) -> list:
 
         try:
             if meta["asset"] == "crypto":
-                hist = await _cg_history(meta["cg_id"])
+                try:
+                    hist = await _coinbase_history(sym)
+                    if len(hist) < 100:
+                        raise RuntimeError("Insufficient Coinbase candles")
+                except Exception:
+                    hist = await _cg_history(meta["cg_id"])
             elif meta["asset"] == "commodity":
                 hist = await _gold_history()
             elif meta["asset"] == "forex":

@@ -116,19 +116,25 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         action = "HOLD"
     confidence = float(parsed.get("confidence") or 0)
 
-    # Dual-AI veto
-    final_action, veto_reason = _apply_dual_veto(action, confidence, sentiment)
+    # Veto cascade — each veto checks its own condition independently,
+    # so reasoning carries all reasons we held off. Final action is HOLD if any fires.
+    final_action = action
 
-    # Regime-based safety veto: never trade during CHOP
+    # 1. Dual-AI sentiment veto (chart says trade, news strongly disagrees)
+    sentiment_action, veto_reason = _apply_dual_veto(action, confidence, sentiment)
+    if veto_reason:
+        final_action = "HOLD"
+
+    # 2. Regime CHOP safety veto
     regime_label = regime.get("regime")
     regime_veto = ""
-    if regime_label == "CHOP" and final_action != "HOLD":
+    if regime_label == "CHOP" and action != "HOLD":
         regime_veto = "Regime CHOP detected — high vol without direction. Trade vetoed."
         final_action = "HOLD"
 
-    # Macro-event veto: freeze trading around high-impact news
+    # 3. Macro-event freeze veto
     macro_veto = ""
-    if macro.get("frozen") and final_action != "HOLD":
+    if macro.get("frozen") and action != "HOLD":
         macro_veto = macro["reason"]
         final_action = "HOLD"
 
