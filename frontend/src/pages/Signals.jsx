@@ -168,6 +168,52 @@ function ManualTradeModal({ accounts, onClose, onSuccess }) {
     );
 }
 
+function VetoCascade({ s }) {
+    const reasoning = s.reasoning || "";
+    // Each gate evaluates a fragment of the signal payload to a tri-state:
+    //   "pass"  → green tick · gate said OK
+    //   "block" → red cross · gate caused or contributed to a HOLD
+    //   "skip"  → grey dot · gate didn't run / not applicable
+    const stages = [
+        { key: "ai", label: "AI", state: ["BUY", "SELL"].includes(s.action) ? "pass" : "skip" },
+        { key: "macro", label: "MACRO", state: reasoning.includes("VETO (macro)") ? "block" : "pass" },
+        { key: "regime", label: "REGIME", state: reasoning.includes("VETO (regime)") ? "block" : "pass" },
+        { key: "entropy", label: "ENTROPY", state: reasoning.includes("VETO (entropy)") ? "block" : "pass" },
+        { key: "meta", label: "META", state: reasoning.includes("VETO (meta-labeler)") ? "block" : (s.meta_label ? "pass" : "skip") },
+        { key: "mtf", label: "MTF", state: reasoning.includes("VETO (multi-timeframe)") ? "block" : ((s.mtf_gate?.checked) ? "pass" : "skip") },
+        { key: "learned", label: "LEARNED", state: reasoning.includes("VETO (learned-meta)") ? "block" : (s.learned_meta ? "pass" : "skip") },
+        { key: "aplus", label: "A+", state: reasoning.includes("VETO (A+ confluence)") ? "block" : (s.aplus_confluence?.checks ? "pass" : "skip") },
+        { key: "rr", label: "R:R", state: reasoning.includes("VETO (R:R)") ? "block" : (s.rr_ratio != null ? "pass" : "skip") },
+    ];
+    const cls = {
+        pass: "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/5",
+        block: "border-[#FF3B30]/50 text-[#FF3B30] bg-[#FF3B30]/10",
+        skip: "border-[#1F1F1F] text-[#52525B] bg-[#0A0A0A]",
+    };
+    const symbol = { pass: "✓", block: "✗", skip: "·" };
+    const blockedCount = stages.filter(s => s.state === "block").length;
+    return (
+        <div className="space-y-1.5" data-testid={`veto-cascade-${s.id}`}>
+            <div className="flex items-center justify-between font-mono text-[10px] text-[#52525B] tracking-widest">
+                <span>VETO CASCADE</span>
+                <span className={blockedCount > 0 ? "text-[#FF3B30]" : "text-[#00FF41]"}>
+                    {blockedCount > 0 ? `${blockedCount} BLOCKED` : "ALL CLEAR"}
+                </span>
+            </div>
+            <div className="flex items-center gap-1 flex-wrap">
+                {stages.map(stage => (
+                    <span key={stage.key}
+                        data-testid={`veto-cascade-${stage.key}-${stage.state}`}
+                        title={`${stage.label}: ${stage.state}`}
+                        className={`font-mono text-[10px] tracking-widest px-1.5 py-0.5 border ${cls[stage.state]}`}>
+                        <span className="mr-1">{symbol[stage.state]}</span>{stage.label}
+                    </span>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 function SignalCard({ s, accounts, onExecute, onDelete }) {
     const [accId, setAccId] = useState(accounts[0]?.id || "");
     useEffect(() => { if (!accId && accounts[0]) setAccId(accounts[0].id); }, [accounts, accId]);
@@ -195,6 +241,8 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
             </div>
 
             <ConfBar value={s.confidence || 0} threshold={s.min_confidence_required || 65} />
+
+            <VetoCascade s={s} />
 
             {s.veto_applied && s.reasoning?.includes("VETO (macro)") && (
                 <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 px-3 py-2 flex items-start gap-2">

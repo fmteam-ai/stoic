@@ -2628,6 +2628,13 @@ class TestSlippageVeto:
         assert t.get("close_reason") == "slippage_veto"
         assert (t.get("pending_modification") or {}).get("type") == "FULL_CLOSE"
         assert t.get("slippage_veto_cap_pips") == 5.0
+        # Cleanup — prevent zombie test rows from leaking into the live UI.
+        async def _cleanup():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            await db.trades.delete_one({"_id": ObjectId(trade_id)})
+            cli.close()
+        asyncio.run(_cleanup())
 
     def test_acceptable_slippage_does_not_veto(self, admin_session):
         """Slippage below cap should NOT veto — trade proceeds normally."""
@@ -2688,6 +2695,13 @@ class TestSlippageVeto:
         assert t["slippage_pips"] == 5.0
         assert t.get("close_reason") != "slippage_veto"
         assert t.get("pending_modification") is None
+        # Cleanup — prevent zombie test rows leaking into the live UI.
+        async def _cleanup():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            await db.trades.delete_one({"_id": ObjectId(trade_id)})
+            cli.close()
+        asyncio.run(_cleanup())
 
 
 
