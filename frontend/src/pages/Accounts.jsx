@@ -241,16 +241,3 @@ export default function Accounts() {
         </AppLayout>
     );
 }
-5 h-3.5" /> DELETE
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
-        </AppLayout>
-    );
-}

@@ -86,6 +86,69 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
                 </div>
             )}
 
+            {/* Three-Engine Verification Stack — Quant + Semantic + Meta-Labeler */}
+            <div className="grid grid-cols-3 gap-2 pt-2" data-testid={`verification-stack-${s.symbol}`}>
+                <div className={`border p-2 ${
+                    s.regime_execution_mode?.execution_mode === "DYNAMIC_MOMENTUM"
+                        ? "border-[#00FF41]/40 bg-[#00FF41]/5"
+                        : s.regime_execution_mode?.execution_mode === "DEFENSIVE_SCALP"
+                            ? "border-[#FFB000]/40 bg-[#FFB000]/5"
+                            : "border-[#1F1F1F]"
+                }`}>
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-0.5">EXEC MODE</div>
+                    <div className="font-mono text-[11px] uppercase tracking-tight">
+                        {s.regime_execution_mode?.execution_mode?.replace("_", " ") || "—"}
+                    </div>
+                </div>
+                <div className={`border p-2 ${
+                    s.noise_filter?.traffic_light === "green"
+                        ? "border-[#00FF41]/40 bg-[#00FF41]/5"
+                        : s.noise_filter?.traffic_light === "yellow"
+                            ? "border-[#FFB000]/40 bg-[#FFB000]/5"
+                            : "border-[#FF3B30]/40 bg-[#FF3B30]/5"
+                }`}>
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-0.5">NOISE · ENTROPY</div>
+                    <div className="font-mono text-[11px]">
+                        {s.noise_filter?.label || "—"} <span className="text-[#52525B]">· {s.noise_filter?.entropy ?? "—"}</span>
+                    </div>
+                </div>
+                <div className={`border p-2 ${
+                    s.meta_label?.verdict === "TRUE_SIGNAL"
+                        ? "border-[#00FF41]/40 bg-[#00FF41]/5"
+                        : s.meta_label?.verdict === "FAKE_OUT"
+                            ? "border-[#FF3B30]/40 bg-[#FF3B30]/5"
+                            : "border-[#1F1F1F]"
+                }`}>
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-0.5">META-LABELER</div>
+                    <div className="font-mono text-[11px]">
+                        {s.meta_label?.verdict?.replace("_", " ") || "—"}
+                        {s.meta_label?.p_true != null && (
+                            <span className="text-[#52525B]"> · p={s.meta_label.p_true}</span>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {s.veto_applied && s.reasoning?.includes("VETO (entropy)") && (
+                <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 px-3 py-2 flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-[#FF3B30] shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                        <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-0.5">ENTROPY VETO · NOISE</div>
+                        <div className="text-[#A1A1AA]">Random-walk distribution detected — trade blocked.</div>
+                    </div>
+                </div>
+            )}
+
+            {s.veto_applied && s.reasoning?.includes("VETO (meta-labeler)") && (
+                <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 px-3 py-2 flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-[#FF3B30] shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                        <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-0.5">META-LABELER VETO · FAKE-OUT</div>
+                        <div className="text-[#A1A1AA]">Quant + Semantic engines disagree — signal classified as a likely fake-out.</div>
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-3 gap-2 pt-2">
                 <div>
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">ENTRY</div>

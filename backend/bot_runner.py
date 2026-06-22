@@ -20,6 +20,8 @@ from circuit_breakers import check_and_trip
 from ws_manager import manager as ws_manager
 from rate_limiter import check_and_record as rl_check
 from execution import for_account as engine_for_account
+from execution import settle_paper_trades_against_price
+from trigger_sweeper import sweep_once as sweep_triggers
 
 logger = logging.getLogger("bot-runner")
 
@@ -147,6 +149,7 @@ async def _process_user(db, cfg: dict):
                 "origin": "auto",
             },
         )
+        logger.info("Bot auto-execute user=%s sym=%s trade=%s", user_id, sym, trade_doc.get("id"))
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {"consumed": True}})
         inflight += 1
 
@@ -163,6 +166,20 @@ async def loop():
             if configs:
                 await asyncio.gather(*[_process_user(db, c) for c in configs],
                                      return_exceptions=True)
+            # Settle paper trades against live prices (SL/TP hits)
+            try:
+                closed = await settle_paper_trades_against_price()
+                if closed:
+                    logger.info("Paper sweep closed %d trades", closed)
+            except Exception as e:
+                logger.exception("Paper sweep failed: %s", e)
+            # Evaluate NL conditional triggers
+            try:
+                sweep = await sweep_triggers()
+                if sweep.get("fired"):
+                    logger.info("Trigger sweep fired=%d", sweep["fired"])
+            except Exception as e:
+                logger.exception("Trigger sweep failed: %s", e)
         except Exception as e:
             logger.exception("Bot runner tick failed: %s", e)
         await asyncio.sleep(interval)

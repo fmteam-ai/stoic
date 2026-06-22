@@ -12,6 +12,7 @@ import BotConfig from "@/pages/BotConfig";
 import Accounts from "@/pages/Accounts";
 import Trades from "@/pages/Trades";
 import Symbols from "@/pages/Symbols";
+import RiskCommander from "@/pages/RiskCommander";
 
 function App() {
     return (
@@ -27,6 +28,7 @@ function App() {
                         <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
                         <Route path="/trades" element={<ProtectedRoute><Trades /></ProtectedRoute>} />
                         <Route path="/symbols" element={<ProtectedRoute><Symbols /></ProtectedRoute>} />
+                        <Route path="/commander" element={<ProtectedRoute><RiskCommander /></ProtectedRoute>} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>

@@ -1,0 +1,235 @@
+"""Natural-Language Commander routes.
+
+Two POST endpoints powered by Claude:
+  /api/nl/strategy   — translate user prompt → bot_config (preview, save optional)
+  /api/nl/command    — translate user prompt → actions, execute against the bot
+
+Plus a polling sweeper that reads `db.conditional_triggers` on each bot_runner
+tick and fires `then` actions when the condition is met.
+"""
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException
+from bson import ObjectId
+
+from auth import get_current_user
+from database import get_db
+from ws_manager import manager as ws_manager
+from nl_commander import build_strategy, interpret_command
+
+router = APIRouter(prefix="/nl", tags=["nl-commander"])
+
+
+# ------------------- Strategy Builder -------------------------------------
+@router.post("/strategy")
+async def nl_strategy(payload: dict, user=Depends(get_current_user)):
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt required")
+    if len(prompt) > 2000:
+        raise HTTPException(status_code=400, detail="prompt too long")
+
+    try:
+        result = await build_strategy(prompt)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI compile failed: {e}")
+
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=result["error"])
+
+    return {"compiled": result, "prompt": prompt}
+
+
+@router.post("/strategy/apply")
+async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
+    """Persist a compiled strategy into the user's bot_config."""
+    compiled = payload.get("compiled") or {}
+    if not compiled or compiled.get("clarification_needed"):
+        raise HTTPException(status_code=400, detail="No usable compiled strategy")
+
+    db = get_db()
+    update = {
+        "risk_level": compiled.get("risk_level", "medium"),
+        "symbols": [s.upper() for s in (compiled.get("symbols") or ["XAUUSD", "BTCUSD"])],
+        "max_concurrent_trades": int(compiled.get("max_concurrent_trades", 2)),
+        "auto_execute": bool(compiled.get("auto_execute", True)),
+        "session_preference": compiled.get("session_preference", "any"),
+        "strategy_style": compiled.get("strategy_style", "trend_following"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "nl_strategy_builder",
+    }
+    await db.bot_configs.update_one(
+        {"user_id": user["id"]}, {"$set": update}, upsert=True
+    )
+    cfg = await db.bot_configs.find_one({"user_id": user["id"]})
+    cfg["id"] = str(cfg.pop("_id"))
+    return {"ok": True, "config": cfg}
+
+
+# ------------------- Risk Commander (NL Circuit Breakers) ------------------
+@router.post("/command")
+async def nl_command(payload: dict, user=Depends(get_current_user)):
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt required")
+    if len(prompt) > 2000:
+        raise HTTPException(status_code=400, detail="prompt too long")
+
+    try:
+        parsed = await interpret_command(prompt)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI interpret failed: {e}")
+
+    if parsed.get("clarification_needed"):
+        return {"clarification_needed": parsed["clarification_needed"], "prompt": prompt}
+    if parsed.get("error"):
+        raise HTTPException(status_code=502, detail=parsed["error"])
+
+    actions = parsed.get("actions") or []
+    if not actions:
+        raise HTTPException(status_code=400, detail="No actions produced from prompt")
+
+    receipts = await _execute_actions(user["id"], actions)
+    summary = parsed.get("summary") or "Commands executed."
+    await ws_manager.broadcast(user["id"], "nl_command_executed", {
+        "summary": summary, "receipts": receipts, "prompt": prompt,
+    })
+    return {"summary": summary, "receipts": receipts, "actions": actions, "prompt": prompt}
+
+
+@router.get("/triggers")
+async def list_triggers(user=Depends(get_current_user)):
+    db = get_db()
+    cursor = db.conditional_triggers.find({"user_id": user["id"], "active": True})
+    docs = await cursor.to_list(length=100)
+    out = []
+    for d in docs:
+        d["id"] = str(d.pop("_id"))
+        out.append(d)
+    return out
+
+
+@router.delete("/triggers/{trigger_id}")
+async def delete_trigger(trigger_id: str, user=Depends(get_current_user)):
+    db = get_db()
+    await db.conditional_triggers.update_one(
+        {"_id": ObjectId(trigger_id), "user_id": user["id"]},
+        {"$set": {"active": False}},
+    )
+    return {"ok": True}
+
+
+# ------------------- Action Executors --------------------------------------
+async def _execute_actions(user_id: str, actions: list) -> list:
+    receipts = []
+    for act in actions:
+        a_type = (act.get("type") or "").upper()
+        target = act.get("target") or "all"
+        params = act.get("params") or {}
+        try:
+            if a_type == "DISABLE_BOTS":
+                r = await _disable_bots(user_id, target)
+            elif a_type == "ENABLE_BOTS":
+                r = await _enable_bots(user_id, target)
+            elif a_type == "MOVE_STOPS_BREAKEVEN":
+                r = await _move_stops_breakeven(user_id, target)
+            elif a_type == "CLOSE_ALL_TRADES":
+                r = await _close_all_trades(user_id, target)
+            elif a_type == "SET_RISK_LEVEL":
+                r = await _set_risk_level(user_id, params.get("risk_level", "low"))
+            elif a_type == "PANIC_LOCK":
+                from routes.panic_routes import _disable_all_bots_and_close_trades
+                r = await _disable_all_bots_and_close_trades(
+                    {"user_id": user_id}, broadcast_user_id=user_id
+                )
+            elif a_type == "SET_CONDITIONAL_TRIGGER":
+                r = await _save_trigger(user_id, params)
+            else:
+                r = {"skipped": True, "reason": f"unknown action {a_type}"}
+            receipts.append({"type": a_type, "target": target, "result": r})
+        except Exception as e:
+            receipts.append({"type": a_type, "target": target, "error": str(e)})
+    return receipts
+
+
+async def _disable_bots(user_id, target):
+    db = get_db()
+    q = {"user_id": user_id}
+    if target == "high_risk":
+        q["risk_level"] = {"$in": ["high", "extreme"]}
+    update = {"active": False, "tripped_at": datetime.now(timezone.utc).isoformat(),
+              "tripped_reason": f"NL command: disable {target}"}
+    res = await db.bot_configs.update_many(q, {"$set": update})
+    return {"bots_disabled": res.modified_count}
+
+
+async def _enable_bots(user_id, target):
+    db = get_db()
+    q = {"user_id": user_id}
+    if target == "high_risk":
+        q["risk_level"] = {"$in": ["high", "extreme"]}
+    res = await db.bot_configs.update_many(q, {"$set": {
+        "active": True,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    return {"bots_enabled": res.modified_count}
+
+
+async def _move_stops_breakeven(user_id, target):
+    db = get_db()
+    q = {"user_id": user_id, "status": "open"}
+    if target and target not in ("all", ""):
+        q["symbol"] = target.upper()
+    cursor = db.trades.find(q)
+    trades = await cursor.to_list(length=500)
+    updated = 0
+    for t in trades:
+        new_sl = t["entry_price"]
+        await db.trades.update_one(
+            {"_id": t["_id"]},
+            {"$set": {"stop_loss": new_sl, "sl_adjustment": "nl_breakeven",
+                      "sl_updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        updated += 1
+    return {"trades_updated": updated, "new_stop": "entry_price"}
+
+
+async def _close_all_trades(user_id, target):
+    db = get_db()
+    q = {"user_id": user_id, "status": {"$in": ["open", "pending"]}}
+    if target and target not in ("all", ""):
+        q["symbol"] = target.upper()
+    res = await db.trades.update_many(q, {"$set": {
+        "close_requested": True,
+        "close_reason": "nl_command",
+    }})
+    return {"trades_marked_for_close": res.modified_count}
+
+
+async def _set_risk_level(user_id, risk_level):
+    if risk_level not in ("low", "medium", "high", "extreme"):
+        return {"error": f"invalid risk_level {risk_level}"}
+    db = get_db()
+    res = await db.bot_configs.update_one(
+        {"user_id": user_id},
+        {"$set": {"risk_level": risk_level,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"risk_level": risk_level, "modified": res.modified_count}
+
+
+async def _save_trigger(user_id, params):
+    db = get_db()
+    doc = {
+        "user_id": user_id,
+        "symbol": (params.get("symbol") or "BTCUSD").upper(),
+        "condition": params.get("condition", "drop"),
+        "threshold_pct": float(params.get("threshold_pct", 3.0)),
+        "then": params.get("then", []),
+        "active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "baseline_price": None,  # filled on first sweep
+    }
+    r = await db.conditional_triggers.insert_one(doc)
+    return {"trigger_id": str(r.inserted_id), "symbol": doc["symbol"],
+            "condition": doc["condition"], "threshold_pct": doc["threshold_pct"]}

@@ -1,4 +1,12 @@
-"""AI-driven signal generation: dual-AI (technical + news sentiment) with veto."""
+"""AI-driven signal generation: Multi-Engine Consensus + Meta-Labeler.
+
+Three-tier verification (per 2026 best practice):
+  Engine 1 (Quant)      : indicators + regime + entropy
+  Engine 2 (Semantic)   : Claude Sonnet 4.5 + news sentiment
+  Engine 3 (Meta-Label) : binary classifier P(true_signal | engines)
+
+Plus dynamic Regime Swapping — SL/TP/Kelly mutate based on live regime.
+"""
 import os
 import json
 import uuid
@@ -12,10 +20,14 @@ from news import score_sentiment
 from microstructure import current_session, session_bias_for, classify_regime
 from economic_calendar import macro_freeze_check, upcoming_for
 from entropy_filter import classify_noise
+from regime_adapter import adapt_profile_for_regime
+from meta_labeler import predict_true_signal_probability
+from feature_compressor import compress_history
 
 SYSTEM_PROMPT = """You are an institutional-grade quantitative trading analyst.
 Inputs: live quote, 12-month indicator snapshot, current news sentiment score,
-trading session context, and regime classification.
+trading session context, regime classification, compressed long-history features
+(spectral/autocorrelation/skew), and current regime execution mode.
 
 Rules:
 - Output STRICT JSON only — no prose, no markdown, no code fences.
@@ -24,13 +36,14 @@ Rules:
 - key_factors: 2-4 short bullets (max 8 words each).
 - Confidence reflects your conviction; HOLD typically <50.
 - Regime guide:
-    HIGH_VOL_TREND  -> momentum entries favoured if direction aligns
-    LOW_VOL_TREND   -> safest trend entries; can use higher confidence
-    RANGE           -> prefer mean-reversion at extremes; skip trend entries
-    CHOP            -> default to HOLD (alpha-destroying state)
+    HIGH_VOL_TREND  -> momentum entries favoured (system runs DYNAMIC_MOMENTUM mode)
+    LOW_VOL_TREND   -> safe trend entries (system runs DEFENSIVE_SCALP mode)
+    RANGE           -> mean-reversion at extremes (DEFENSIVE_SCALP mode)
+    CHOP            -> always HOLD (system will block anyway)
     TRANSITIONAL    -> wait for confirmation
 - Session guide: respect the symbol-session bias when sizing conviction.
-- Be conservative when signals are mixed.
+- Use compressed_history_features (acf, spectral bands, kurtosis) for context.
+- Note: a Meta-Labeler will re-verify your output; conservative is safer.
 """
 
 
@@ -79,6 +92,12 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
     entropy = classify_noise([c["close"] for c in history]) if history else {
         "entropy": 0, "label": "ORGANIZED", "traffic_light": "green", "tradeable": True, "threshold": 0.9
     }
+    # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
+    compressed_features = compress_history(history)
+
+    # --- Regime-Adaptive Risk Modifier — swap execution mode by live regime ---
+    adapted_profile, regime_meta = adapt_profile_for_regime(profile, regime)
+
     current_price = quote.get("price") or indicators.get("current_price") or 0.0
 
     user_text = json.dumps({
@@ -104,11 +123,14 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
             for e in upcoming_macro[:5]
         ],
         "noise_filter": entropy,
+        "compressed_history_features": compressed_features,
+        "regime_execution_mode": regime_meta,
         "risk_profile": {
             "level": risk_level,
-            "min_confidence_to_trade": profile["min_confidence"],
-            "max_risk_pct_per_trade": profile["risk_pct"],
-            "kelly_cap": profile["kelly_cap"],
+            "min_confidence_to_trade": adapted_profile["min_confidence"],
+            "max_risk_pct_per_trade": adapted_profile["risk_pct"],
+            "kelly_cap": adapted_profile["kelly_cap"],
+            "regime_adapted": True,
         },
     }, separators=(",", ":"))
 
@@ -148,18 +170,47 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         macro_veto = macro["reason"]
         final_action = "HOLD"
 
-    # SL/TP from ATR-like proxy
+    # 4. Shannon entropy noise veto — block trades in chaotic/random markets
+    entropy_veto = ""
+    if not entropy.get("tradeable", True) and action != "HOLD":
+        entropy_veto = (
+            f"Noise filter: market entropy={entropy.get('entropy')} "
+            f"({entropy.get('label')}). Random walk regime — trade vetoed."
+        )
+        final_action = "HOLD"
+
+    # 5. Meta-Labeler veto — independent fake-out classifier on engines 1+2
+    meta_label = predict_true_signal_probability(
+        action=action,
+        confidence=confidence,
+        sentiment=sentiment,
+        regime=regime,
+        entropy=entropy,
+        session={**session, **session_bias},
+        indicators=indicators,
+        upcoming_macro=upcoming_macro,
+    )
+    meta_veto = ""
+    if action != "HOLD" and meta_label["verdict"] == "FAKE_OUT":
+        meta_veto = (
+            f"Meta-Labeler classified this as FAKE_OUT "
+            f"(p_true={meta_label['p_true']:.2f} < {meta_label['threshold']}). "
+            f"Engine consensus too weak — trade vetoed."
+        )
+        final_action = "HOLD"
+
+    # SL/TP from ATR-like proxy — use regime-adapted profile
     vol_pct = indicators.get("volatility_30d_pct") or 1.0
     atr_proxy = (vol_pct / 100.0) * current_price
-    sl, tp = derive_sl_tp(final_action, current_price, atr_proxy, profile)
+    sl, tp = derive_sl_tp(final_action, current_price, atr_proxy, adapted_profile)
 
-    # Kelly-modified position sizing
+    # Kelly-modified position sizing — use regime-adapted profile
     sl_distance = abs(current_price - sl) or 0.0001
     sizing = compute_kelly_position_size(
         equity=1000.0,
         confidence_pct=confidence,
         sl_pips=sl_distance,
-        profile=profile,
+        profile=adapted_profile,
         pip_value=1.0,
     )
 
@@ -172,6 +223,8 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         reasoning = f"{reasoning}\n\nVETO (macro): {macro_veto}"
     if entropy_veto:
         reasoning = f"{reasoning}\n\nVETO (entropy): {entropy_veto}"
+    if meta_veto:
+        reasoning = f"{reasoning}\n\nVETO (meta-labeler): {meta_veto}"
 
     return {
         "symbol": symbol,
@@ -195,9 +248,12 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "macro": macro,
         "upcoming_macro": upcoming_macro[:5],
         "noise_filter": entropy,
+        "compressed_features": compressed_features,
+        "regime_execution_mode": regime_meta,
+        "meta_label": meta_label,
         "key_factors": parsed.get("key_factors", []),
-        "min_confidence_required": profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto),
-        "tradeable": final_action != "HOLD" and confidence >= profile["min_confidence"],
+        "min_confidence_required": adapted_profile["min_confidence"],
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto),
+        "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

@@ -276,6 +276,20 @@ async def get_quote(symbol: str) -> dict:
                 raise RuntimeError("Unknown asset class")
             result = {"symbol": sym, **q}
             _cache_set(cache_key, result, ttl_seconds_for_quote(meta["asset"]))
+            # Persist into Mongo time-series collection for fast windowed queries
+            try:
+                from database import get_db
+                from datetime import datetime, timezone
+                db = get_db()
+                await db.price_ticks.insert_one({
+                    "ts": datetime.now(timezone.utc),
+                    "symbol": sym,
+                    "price": float(result.get("price") or 0),
+                    "bid": float(result.get("bid") or 0),
+                    "ask": float(result.get("ask") or 0),
+                })
+            except Exception:
+                pass  # never block live quotes on persistence
             return {**result, "cached": False}
         except httpx.HTTPError as e:
             raise RuntimeError(f"Quote fetch failed for {sym}: {e}")

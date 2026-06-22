@@ -2,12 +2,14 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
-    DollarSign as CurrencyCircleDollar, LogOut as SignOut, Zap as Lightning
+    DollarSign as CurrencyCircleDollar, LogOut as SignOut, Zap as Lightning,
+    MessageSquare
 } from "lucide-react";
 
 const items = [
     { to: "/", label: "Dashboard", icon: ChartLineUp, testid: "nav-dashboard" },
     { to: "/signals", label: "AI Signals", icon: Activity, testid: "nav-signals" },
+    { to: "/commander", label: "Risk Commander", icon: MessageSquare, testid: "nav-commander" },
     { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
     { to: "/accounts", label: "MT5 Accounts", icon: Wallet, testid: "nav-accounts" },
     { to: "/trades", label: "Trades", icon: ListChecks, testid: "nav-trades" },

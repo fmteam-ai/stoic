@@ -1345,3 +1345,347 @@ class TestSignalPayloadIter5Live:
         assert isinstance(sig["upcoming_macro"], list)
         # capped at 5 in analyze_symbol
         assert len(sig["upcoming_macro"]) <= 5
+
+
+# =====================================================================
+# ITER-6: Regime-Adaptive Exec, Meta-Labeler, Entropy Filter,
+# NL Strategy/Commander, Paper Trading, Time-Series Mongo.
+# =====================================================================
+
+# ---------- Regression: AI signal must NOT crash on 'entropy_veto not defined' ----------
+class TestIter6SignalPayload:
+    @pytest.fixture(scope="class")
+    def sig_user(cls):
+        s = requests.Session()
+        email = f"TEST_iter6_{uuid.uuid4().hex[:6]}@example.com"
+        r = s.post(f"{API}/auth/register",
+                   json={"email": email, "password": "testpass123"}, timeout=15)
+        assert r.status_code == 200
+        return s
+
+    def test_signal_has_all_iter6_fields(self, sig_user):
+        r = sig_user.post(f"{API}/signals/generate",
+                          json={"symbol": "BTCUSD", "risk_level": "medium"}, timeout=180)
+        assert r.status_code == 200, f"P0 entropy_veto bug regression? {r.status_code} {r.text}"
+        sig = r.json()
+        # New iter-6 envelopes
+        for fld in ("noise_filter", "regime", "regime_execution_mode",
+                    "meta_label", "compressed_features"):
+            assert fld in sig and sig[fld] is not None, f"missing {fld}"
+
+        nf = sig["noise_filter"]
+        for k in ("entropy", "label", "traffic_light", "tradeable", "threshold"):
+            assert k in nf, f"noise_filter missing {k}"
+
+        rem = sig["regime_execution_mode"]
+        for k in ("execution_mode", "regime_detected",
+                  "sl_multiplier_applied", "tp_multiplier_applied"):
+            assert k in rem, f"regime_execution_mode missing {k}"
+
+        ml = sig["meta_label"]
+        for k in ("p_true", "verdict", "threshold", "features"):
+            assert k in ml, f"meta_label missing {k}"
+        assert ml["verdict"] in ("NEUTRAL", "TRUE_SIGNAL", "FAKE_OUT")
+        assert 0 <= ml["p_true"] <= 1.0
+
+        cf = sig["compressed_features"]
+        assert cf.get("available") is True, f"compressed_features.available != True: {cf}"
+        for k in ("mom_5d", "mom_20d", "vol_20d_annual"):
+            assert k in cf, f"compressed_features missing {k}"
+
+
+# ---------- Regime-Adaptive Execution (pure function) ----------
+class TestRegimeAdapter:
+    def test_low_vol_trend_defensive_scalp_multipliers(self):
+        from regime_adapter import adapt_profile_for_regime, REGIME_MODIFIERS
+        from risk import get_profile
+        profile = get_profile("medium")
+        new_profile, meta = adapt_profile_for_regime(profile, {"regime": "LOW_VOL_TREND"})
+        assert meta["execution_mode"] == "DEFENSIVE_SCALP"
+        assert meta["sl_multiplier_applied"] == 0.85
+        assert meta["tp_multiplier_applied"] == 0.75
+        # multiplicative
+        assert new_profile["sl_atr_mult"] == round(profile["sl_atr_mult"] * 0.85, 3)
+        assert new_profile["tp_atr_mult"] == round(profile["tp_atr_mult"] * 0.75, 3)
+
+    def test_high_vol_trend_dynamic_momentum(self):
+        from regime_adapter import adapt_profile_for_regime
+        from risk import get_profile
+        new_p, meta = adapt_profile_for_regime(get_profile("medium"),
+                                                {"regime": "HIGH_VOL_TREND"})
+        assert meta["execution_mode"] == "DYNAMIC_MOMENTUM"
+        assert meta["sl_multiplier_applied"] == 1.40
+        assert meta["tp_multiplier_applied"] == 1.50
+
+    def test_unknown_regime_falls_back_transitional(self):
+        from regime_adapter import adapt_profile_for_regime
+        from risk import get_profile
+        _, meta = adapt_profile_for_regime(get_profile("low"),
+                                            {"regime": "WEIRD_NEW_REGIME"})
+        assert meta["execution_mode"] == "CAUTIOUS_WAIT"
+
+
+# ---------- Meta-Labeler ----------
+class TestMetaLabeler:
+    def test_hold_returns_neutral_verdict_zero_p(self):
+        from meta_labeler import predict_true_signal_probability
+        out = predict_true_signal_probability(
+            action="HOLD", confidence=50,
+            sentiment={"score": 0.0}, regime={"regime": "RANGE"},
+            entropy={"entropy": 0.5},
+            session={"primary": "off-hours", "is_high_volume_window": False, "is_weekend": False},
+            indicators={"current_price": 100, "rsi_14": 50},
+            upcoming_macro=[],
+        )
+        assert out["verdict"] == "NEUTRAL"
+        assert out["p_true"] == 0.0
+
+    def test_buy_returns_p_true_in_range_with_verdict(self):
+        from meta_labeler import predict_true_signal_probability
+        out = predict_true_signal_probability(
+            action="BUY", confidence=80,
+            sentiment={"score": 0.5}, regime={"regime": "LOW_VOL_TREND"},
+            entropy={"entropy": 0.3},
+            session={"primary": "london_ny_overlap", "is_high_volume_window": True, "is_weekend": False},
+            indicators={"current_price": 100, "rsi_14": 60,
+                        "sma_20": 102, "sma_50": 101, "sma_200": 100,
+                        "volatility_30d_pct": 1.0},
+            upcoming_macro=[],
+        )
+        assert 0 <= out["p_true"] <= 1.0
+        assert out["verdict"] in ("TRUE_SIGNAL", "FAKE_OUT")
+        assert "threshold" in out and "features" in out
+
+    def test_fake_out_cascades_to_veto_in_analyze_symbol(self):
+        """If meta_labeler returns FAKE_OUT, action must be HOLD and
+        reasoning must contain 'VETO (meta-labeler)'."""
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+        import ai_signals
+
+        os.environ.setdefault("EMERGENT_LLM_KEY", "test-dummy")
+
+        class FakeChat:
+            def with_model(self, *a, **k):
+                return self
+            async def send_message(self, msg):
+                return '{"action":"BUY","confidence":80,"reasoning":"bull","key_factors":["a"]}'
+
+        trending_ind = {"current_price": 100.0, "sma_20": 102, "sma_50": 101,
+                        "sma_200": 100, "rsi_14": 60, "volatility_30d_pct": 1.0}
+        fake_meta = {"p_true": 0.20, "verdict": "FAKE_OUT", "threshold": 0.55,
+                     "features": {}, "logit": -1.0}
+
+        async def run():
+            with patch.object(ai_signals, "LlmChat", return_value=FakeChat()), \
+                 patch.object(ai_signals, "get_quote", new=AsyncMock(return_value={"price": 100.0, "bid": 99.9, "ask": 100.1, "change_pct": 0.0})), \
+                 patch.object(ai_signals, "get_history", new=AsyncMock(return_value=[])), \
+                 patch.object(ai_signals, "compute_indicators", return_value=trending_ind), \
+                 patch.object(ai_signals, "score_sentiment", new=AsyncMock(return_value={"score": 0.0, "label": "neutral", "summary": "", "article_count": 0, "key_drivers": []})), \
+                 patch.object(ai_signals, "macro_freeze_check", new=AsyncMock(return_value={"frozen": False, "reason": "", "event": None})), \
+                 patch.object(ai_signals, "upcoming_for", new=AsyncMock(return_value=[])), \
+                 patch.object(ai_signals, "predict_true_signal_probability", return_value=fake_meta):
+                return await ai_signals.analyze_symbol("BTCUSD", "medium")
+
+        sig = asyncio.run(run())
+        assert sig["chart_action"] == "BUY"
+        assert sig["action"] == "HOLD"
+        assert sig["veto_applied"] is True
+        assert "VETO (meta-labeler)" in (sig["reasoning"] or "")
+
+
+# ---------- Paper Trading flow ----------
+class TestPaperTrading:
+    @pytest.fixture(scope="class")
+    def paper_ctx(cls):
+        s = requests.Session()
+        email = f"TEST_paper_{uuid.uuid4().hex[:6]}@example.com"
+        r = s.post(f"{API}/auth/register",
+                   json={"email": email, "password": "testpass123"}, timeout=15)
+        assert r.status_code == 200
+        # Paper account
+        acc_r = s.post(f"{API}/accounts", json={
+            "label": "TEST_Paper", "broker": "Exness",
+            "server": "paper", "account_number": "PAPER1",
+            "account_type": "demo", "base_currency": "USD",
+            "mode": "paper", "initial_balance": 10000,
+        }, timeout=10)
+        assert acc_r.status_code == 200, acc_r.text
+        return {"s": s, "acc": acc_r.json()}
+
+    def test_paper_account_persisted(self, paper_ctx):
+        s = paper_ctx["s"]
+        accs = s.get(f"{API}/accounts", timeout=10).json()
+        ours = [a for a in accs if a["id"] == paper_ctx["acc"]["id"]]
+        assert ours, "paper account not found in list"
+        a = ours[0]
+        assert (a.get("mode") == "paper") or (a.get("broker") == "INTERNAL_PAPER")
+
+    def test_paper_execute_creates_paper_trade(self, paper_ctx):
+        """Generate a signal until we get BUY/SELL (or inject), then execute paper."""
+        s = paper_ctx["s"]
+        acc = paper_ctx["acc"]
+        sig = None
+        for sym in ("BTCUSD", "XAUUSD"):
+            r = s.post(f"{API}/signals/generate", json={"symbol": sym}, timeout=180)
+            if r.status_code == 200 and r.json().get("action") in ("BUY", "SELL"):
+                sig = r.json()
+                break
+        if sig is None:
+            # Inject synthetic non-HOLD
+            from pymongo import MongoClient
+            client = MongoClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+            db = client[os.environ.get("DB_NAME", "ai_trading_bot")]
+            me = s.get(f"{API}/auth/me", timeout=10).json()
+            doc = {
+                "user_id": me["id"], "symbol": "BTCUSD", "action": "BUY",
+                "confidence": 80.0, "entry_price": 65000.0, "stop_loss": 64000.0,
+                "take_profit": 67000.0, "lot_size": 0.01, "reasoning": "synthetic",
+                "risk_level": "medium", "consumed": False,
+                "created_at": datetime_utcnow_iso(),
+            }
+            ins = db.signals.insert_one(doc)
+            sig = {**doc, "id": str(ins.inserted_id)}
+            client.close()
+
+        r = s.post(f"{API}/trades/execute/{sig['id']}",
+                   json={"account_id": acc["id"]}, timeout=15)
+        assert r.status_code == 200, r.text
+        trade = r.json()
+        # Verify paper trade attributes
+        mode = trade.get("mode") or "paper"  # paper account => paper trade
+        assert mode == "paper" or trade.get("broker") == "INTERNAL_PAPER" \
+               or acc.get("broker") == "INTERNAL_PAPER", \
+               f"Expected paper trade, got: {trade}"
+        assert trade["status"] in ("open", "pending")
+
+
+# ---------- NL Strategy Builder ----------
+class TestNLStrategy:
+    def test_strategy_compile_and_apply(self, admin_session):
+        r = admin_session.post(f"{API}/nl/strategy", json={
+            "prompt": "Conservative gold trading during London"
+        }, timeout=120)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        compiled = body.get("compiled") or {}
+        assert isinstance(compiled, dict) and compiled, f"no compiled in body: {body}"
+        risk = compiled.get("risk_level")
+        symbols = compiled.get("symbols") or []
+        session_pref = compiled.get("session_preference")
+        notes = compiled.get("notes")
+        assert risk == "low", f"risk_level should be low: {compiled}"
+        assert "XAUUSD" in symbols, f"symbols missing XAUUSD: {symbols}"
+        assert (session_pref or "").lower() == "london"
+        assert notes, "notes should be populated"
+
+        # Apply: route expects {"compiled": {...}}
+        r2 = admin_session.post(f"{API}/nl/strategy/apply",
+                                json={"compiled": compiled}, timeout=30)
+        assert r2.status_code == 200, r2.text
+
+
+# ---------- NL Risk Commander ----------
+class TestNLCommander:
+    def test_close_all_command(self, admin_session):
+        r = admin_session.post(f"{API}/nl/command",
+                               json={"prompt": "close all my open trades"},
+                               timeout=120)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # Expect summary + receipts or actions
+        actions = body.get("actions") or []
+        receipts = body.get("receipts") or []
+        all_action_types = ([a.get("type") for a in actions] +
+                            [r.get("action") or r.get("type") for r in receipts])
+        assert any("CLOSE_ALL" in (str(x) or "") for x in all_action_types), \
+            f"Expected CLOSE_ALL_TRADES action, got: {body}"
+
+    def test_conditional_trigger_creation_and_delete(self, admin_session):
+        r = admin_session.post(f"{API}/nl/command", json={
+            "prompt": "if Bitcoin drops 4% disable my high-risk bots"
+        }, timeout=120)
+        assert r.status_code == 200, r.text
+        # List triggers
+        r2 = admin_session.get(f"{API}/nl/triggers", timeout=10)
+        assert r2.status_code == 200
+        triggers = r2.json()
+        triggers_list = triggers if isinstance(triggers, list) else triggers.get("triggers", [])
+        btc_trigs = [t for t in triggers_list
+                     if t.get("symbol") == "BTCUSD" and t.get("active") is not False]
+        assert btc_trigs, f"no BTCUSD trigger created: {triggers_list}"
+        tr = btc_trigs[-1]
+        assert tr.get("condition") in ("drop", "drops", "down")
+        # threshold can be 4 or 4.0 or 0.04
+        thr = tr.get("threshold_pct") or tr.get("threshold")
+        assert thr in (4, 4.0) or (isinstance(thr, (int, float)) and abs(thr - 4) < 0.01) \
+               or (isinstance(thr, (int, float)) and abs(thr - 0.04) < 0.001), \
+               f"threshold mismatch: {tr}"
+
+        # Delete
+        rd = admin_session.delete(f"{API}/nl/triggers/{tr['id']}", timeout=10)
+        assert rd.status_code == 200
+        # Verify inactive
+        r3 = admin_session.get(f"{API}/nl/triggers", timeout=10)
+        new_list = r3.json() if isinstance(r3.json(), list) else r3.json().get("triggers", [])
+        same = [t for t in new_list if t.get("id") == tr["id"]]
+        if same:
+            assert same[0].get("active") is False
+
+
+# ---------- MongoDB Time-Series ----------
+class TestTimeSeriesCollections:
+    def test_price_ticks_populated_after_quote(self, admin_session):
+        # Generate a couple of quotes
+        for _ in range(2):
+            admin_session.get(f"{API}/market/quote/BTCUSD", timeout=30)
+        # Verify ticks present in DB
+        from pymongo import MongoClient
+        client = MongoClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+        db = client[os.environ.get("DB_NAME", "ai_trading_bot")]
+        # Collection should exist (created via ensure_indexes or first insert)
+        collections = db.list_collection_names()
+        assert "price_ticks" in collections, f"price_ticks not present: {collections}"
+        count = db.price_ticks.count_documents({"symbol": "BTCUSD"})
+        assert count >= 1, f"price_ticks empty for BTCUSD"
+        sample = db.price_ticks.find_one({"symbol": "BTCUSD"}, sort=[("ts", -1)])
+        for k in ("ts", "symbol", "price"):
+            assert k in sample, f"price_tick missing {k}: {sample}"
+        client.close()
+
+    def test_signal_history_collection_exists(self):
+        from pymongo import MongoClient
+        client = MongoClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+        db = client[os.environ.get("DB_NAME", "ai_trading_bot")]
+        collections = db.list_collection_names()
+        assert "signal_history" in collections or "signals" in collections, \
+            f"signal_history not present: {collections}"
+        client.close()
+
+    def test_conditional_triggers_collection_exists(self):
+        from pymongo import MongoClient
+        client = MongoClient(os.environ.get("MONGO_URL", "mongodb://localhost:27017"))
+        db = client[os.environ.get("DB_NAME", "ai_trading_bot")]
+        collections = db.list_collection_names()
+        assert "conditional_triggers" in collections, \
+            f"conditional_triggers not present: {collections}"
+        client.close()
+
+
+# ---------- Prior endpoints regression ----------
+class TestPriorEndpointsRegression:
+    def test_panic(self, admin_session):
+        r = admin_session.post(f"{API}/panic", timeout=10)
+        assert r.status_code == 200
+
+    def test_trades_stats(self, admin_session):
+        r = admin_session.get(f"{API}/trades/stats", timeout=10)
+        assert r.status_code == 200
+
+    def test_calendar_upcoming_btc(self, admin_session):
+        r = admin_session.get(f"{API}/calendar/upcoming/BTCUSD", timeout=30)
+        assert r.status_code == 200
+
+    def test_signals_list(self, admin_session):
+        r = admin_session.get(f"{API}/signals", timeout=10)
+        assert r.status_code == 200

@@ -1,0 +1,50 @@
+{
+  "summary": "Iter-6 testing complete. Backend: 108/108 pytest cases PASS (19 new iter-6 tests added on top of 89 prior). Verified P0 entropy_veto regression fix: /api/signals/generate returns signal with populated noise_filter, regime, regime_execution_mode, meta_label, and compressed_features (mom_5d/mom_20d/vol_20d_annual). Regime-Adaptive Execution: LOW_VOL_TREND -> DEFENSIVE_SCALP with sl=0.85/tp=0.75, HIGH_VOL_TREND -> DYNAMIC_MOMENTUM with sl=1.40/tp=1.50, unknown regimes fall back to CAUTIOUS_WAIT. Meta-Labeler: HOLD -> NEUTRAL/p=0; BUY/SELL -> TRUE_SIGNAL or FAKE_OUT with p_true in [0,1]; FAKE_OUT cascades into veto_applied=true with 'VETO (meta-labeler)' in reasoning. Paper trading: account created with mode=paper/initial_balance=10000 (account_type=demo accepted; 'paper' is rejected by pydantic Literal — see code review), trade executed and persisted. NL Strategy Builder: 'Conservative gold trading during London' compiles into {risk_level=low, symbols=[XAUUSD], session_preference=london, notes=...} and apply persists via {compiled:{...}} envelope. NL Risk Commander: 'close all my open trades' returns receipts with CLOSE_ALL_TRADES; 'if Bitcoin drops 4% disable my high-risk bots' creates conditional_triggers row (symbol=BTCUSD, condition=drop, threshold_pct=4.0); DELETE /api/nl/triggers/{id} -> active=false. MongoDB Time-Series: price_ticks, signal_history, conditional_triggers collections all exist; price_ticks populated after GET /api/market/quote/BTCUSD with ts/symbol/price fields. Frontend: /commander loads, mode-command<->mode-strategy toggle works, risk-commander-input + risk-commander-send produce chat history, apply-strategy-button appears in STRATEGY mode after compile. Signals page verification-stack-BTCUSD renders three cards (EXEC MODE=DEFENSIVE_SCALP, NOISE·ENTROPY=CHOPPY·0.83, META-LABELER=NEUTRAL p=0). Sidebar nav-commander present and routes correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/accounts", "issue": "AccountCreate.account_type Literal does not include 'paper' — clients passing account_type='paper' get 422. Workaround used: account_type='demo' + mode='paper'. Consider adding 'paper' to the Literal or aliasing it server-side."},
+      {"endpoint": "n/a", "issue": "5 PytestRemovedIn10Warning on class-scoped instance-method fixtures — pre-existing, not introduced this iter."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "WebSocket /api/ws on frontend", "issue": "Browser console shows intermittent 'WebSocket is closed before connection is established' warnings. Backend pytest TestWebSocket passes (token-auth works), so this looks like a reconnect-loop pattern client-side, not a server failure. Worth confirming the WS client uses the access_token cookie/query param consistently on retry.", "affected_selectors": []},
+      {"flow": "Initial page load", "issue": "Two 401 errors logged on first paint before login completes — likely from an eager fetch in a layout/provider. Cosmetic; doesn't block any user-facing flow.", "affected_selectors": []}
+    ],
+    "design_issues": [
+      {"screen": "AI Signals page", "issues": ["Legacy HOLD signals (those generated before iter-6) render the verification-stack cards with empty EXEC MODE / META-LABELER and just dashes — fine, but a subtle 'Legacy' badge or hiding the empty cards would improve clarity."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/iter6_results.xml"
+  ],
+  "action_items": [
+    "(LOW) Add 'paper' to AccountCreate.account_type Literal in /app/backend/models.py or normalise it server-side, so the documented payload {account_type:'paper'} from the review request works end-to-end.",
+    "(LOW) Investigate frontend WS retry behaviour — confirm token cookie / query param is reattached on every reconnect attempt.",
+    "(LOW) Suppress or fold the early 401s pre-auth on initial page paint."
+  ],
+  "critical_code_review_comments": [
+    "ai_signals.analyze_symbol now stacks five veto channels (news / regime / macro / entropy / meta-labeler) and writes each with a distinct 'VETO (...)' marker — easy to grep and good observability.",
+    "regime_adapter.adapt_profile_for_regime is pure (deepcopy) and uses multiplicative modifiers; min_conf_shift is additive, clamped via min(99, ...). REGIME_MODIFIERS hard-codes CHOP with min_confidence_delta=+99 — effectively unreachable threshold — good defensive default.",
+    "meta_labeler uses a hand-coded logistic regression over 8 explainable features (confidence_norm, sentiment_alignment, regime_quality, entropy_penalty, session_quality, rsi_extreme, macro_proximity, vol_extreme) — every output includes a 'features' dict for explainability. Threshold 0.55 is hard-coded; consider exposing per-profile if FAKE_OUT rate is too aggressive in extreme mode.",
+    "feature_compressor returns {available: False, reason: 'insufficient history'} for short histories instead of erroring — good defensive shape; UI should respect available flag (it does).",
+    "routes/nl_routes.py /strategy returns {compiled: {...}, prompt: ...} but /strategy/apply expects payload.compiled. Documented in tests; UI should pass {compiled} envelope (current /commander UI does).",
+    "Account schema (models.py L52) hard-codes Literal['microcent','cent','standard','demo'] for account_type. Paper-trading mode is signalled via 'mode' field (Literal['live','paper']) — this is the canonical way; review request slightly misled by saying account_type='paper'.",
+    "MongoDB time-series setup: seed.ensure_indexes creates price_ticks and signal_history as TS collections; market.get_quote inserts ticks every request — fine, but no TTL/retention configured. Long-running prod will need a retention policy.",
+    "No regression in file sizes; all backend modules remain <300 lines and well-separated."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py — appended 8 new iter-6 test classes (19 tests) covering: signal payload regression, regime adapter pure function, meta-labeler (incl. FAKE_OUT cascade with mocked LLM), paper trading flow, NL strategy compile+apply, NL commander close-all + trigger create/delete, time-series collections, and prior-endpoint regression sweep."
+  ],
+  "success_rate": {"backend": "100% (108/108)", "frontend": "100% on critical flows (sidebar nav, commander COMMAND+STRATEGY, signals verification-stack)"},
+  "test_credentials": "admin@trading.bot / admin123 (verified working). Test users registered via /api/auth/register with TEST_iter6_/TEST_paper_ prefixes.",
+  "seed_data_creation": "All test data namespaced TEST_*. Paper account + trade left in DB but isolated under throwaway test users. Conditional trigger created+deleted in same test (left as active=false).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression file at /app/backend/tests/backend_test.py now has 108 tests across 26 classes. Run with: `cd /app/backend && python -m pytest tests/backend_test.py -v`. Iter-6 additions are at the bottom in 8 classes: TestIter6SignalPayload, TestRegimeAdapter, TestMetaLabeler, TestPaperTrading, TestNLStrategy, TestNLCommander, TestTimeSeriesCollections, TestPriorEndpointsRegression. TestMetaLabeler.test_fake_out_cascades_to_veto_in_analyze_symbol patches ai_signals.predict_true_signal_probability — useful pattern for forcing FAKE_OUT verdicts deterministically. NL endpoints accept JSON envelopes: /nl/strategy/apply expects {compiled:{...}}, NOT {strategy:{...}}.",
+  "rca of the issue": "P0 'entropy_veto is not defined' bug regression verified FIXED: live POST /api/signals/generate now returns 200 with fully populated noise_filter, meta_label, compressed_features, and regime_execution_mode envelopes — no NameError observed across 19 iter-6 + 89 prior tests."
+}

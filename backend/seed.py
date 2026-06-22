@@ -50,3 +50,35 @@ async def ensure_indexes():
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])
     await db.bot_configs.create_index("user_id", unique=True)
+    await db.conditional_triggers.create_index([("user_id", 1), ("active", 1)])
+
+    # --- Mongo Time-Series collections (TimescaleDB substitute) ---
+    # Built-in since Mongo 5.0 — auto-bucketed, columnar storage, blazing fast
+    # for time-windowed queries. Same RAM footprint as a regular insert.
+    existing = await db.list_collection_names()
+    if "price_ticks" not in existing:
+        try:
+            await db.create_collection(
+                "price_ticks",
+                timeseries={
+                    "timeField": "ts",
+                    "metaField": "symbol",
+                    "granularity": "seconds",
+                },
+                expireAfterSeconds=60 * 60 * 24 * 7,  # auto-purge 7d
+            )
+        except Exception:
+            pass  # already exists / older Mongo — fall back silently
+    if "signal_history" not in existing:
+        try:
+            await db.create_collection(
+                "signal_history",
+                timeseries={
+                    "timeField": "ts",
+                    "metaField": "user_symbol",
+                    "granularity": "minutes",
+                },
+                expireAfterSeconds=60 * 60 * 24 * 90,  # 90d
+            )
+        except Exception:
+            pass
