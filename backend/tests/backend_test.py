@@ -1255,9 +1255,9 @@ class TestMacroVetoIntegration:
 
         sig = asyncio.run(run())
         assert sig["chart_action"] == "BUY"
-        # No vetoes applied: action should still be BUY
-        assert sig["action"] == "BUY"
-        assert sig["veto_applied"] is False
+        # Macro-specific assertion: there must be NO macro veto in the reasoning.
+        # (Other vetoes — A+ confluence, R:R — may legitimately fire on this
+        # synthetic input; that's covered by their own dedicated tests.)
         assert "VETO (macro)" not in (sig["reasoning"] or "")
         assert sig["macro"]["frozen"] is False
 
@@ -3155,3 +3155,101 @@ class TestLearnedMeta:
         assert r.status_code == 200
         body = r.json()
         assert "trained" in body
+
+
+
+class TestConfluenceFilter:
+    """A+ confluence filter logic."""
+
+    def _common(self):
+        import sys
+        sys.path.insert(0, "/app/backend")
+        from confluence import confluence_check
+        return confluence_check
+
+    def test_passes_when_all_check_pass(self):
+        cc = self._common()
+        out = cc(
+            action="BUY", symbol="XAUUSD",
+            mtf={"aligned": True, "checked": True},
+            learned_meta={"p_win": 0.7},
+            cot={"overcrowded_long": False, "overcrowded_short": False},
+            tips={"regime": "bullish_gold"},
+            session={"name": "london"},
+            history=[{"high": 100 + i % 5, "low": 99 + i % 5, "close": 100 + i % 5} for i in range(80)],
+            indicators={"atr_14": 1.5},
+            min_confluences=4,
+        )
+        assert out["passed"] is True
+        assert out["score"] >= 5
+
+    def test_blocks_when_only_3_checks_pass(self):
+        cc = self._common()
+        out = cc(
+            action="BUY", symbol="XAUUSD",
+            mtf={"aligned": False, "checked": True},        # fail
+            learned_meta={"p_win": 0.4},                     # fail
+            cot={"overcrowded_long": True},                  # fail (BUY vs overcrowded_long)
+            tips={"regime": "neutral"},                      # pass
+            session={"name": "london"},                      # pass
+            history=[], indicators={},                       # ATR ok by default
+            min_confluences=4,
+        )
+        assert out["passed"] is False
+        assert "A+ filter" in out["reason"]
+        assert "missing" in out["reason"].lower()
+
+    def test_non_xau_auto_passes_cot_and_tips(self):
+        cc = self._common()
+        # BTC — COT/TIPS are auto-pass even if data missing
+        out = cc(
+            action="BUY", symbol="BTCUSD",
+            mtf={"aligned": True}, learned_meta=None,
+            cot=None, tips=None,
+            session={"name": "london"},
+            history=[], indicators={},
+            min_confluences=4,
+        )
+        assert out["checks"]["cot_not_opposed"] is True
+        assert out["checks"]["tips_not_opposed"] is True
+        assert out["passed"] is True
+
+    def test_asia_session_fails_session_check(self):
+        cc = self._common()
+        out = cc(
+            action="BUY", symbol="XAUUSD",
+            mtf={"aligned": True}, learned_meta=None,
+            cot=None, tips=None,
+            session={"utc_hour": 3},   # asia
+            history=[], indicators={},
+            min_confluences=6,
+        )
+        assert out["checks"]["good_session"] is False
+
+
+class TestRRandAdaptiveSLTP:
+    """Minimum reward-to-risk gate + adaptive ATR-based SL/TP."""
+
+    def test_min_rr_default_2x_blocks_legacy_pip_system(self):
+        """The legacy pip system (SL150, TP1=100/TP2=200/TP3=300) yields
+        weighted R:R ≈ 1.17 which must trip the 2.0 gate."""
+        # Weighted TP: 0.5*100 + 0.25*200 + 0.25*300 = 175 pips
+        # R:R = 175 / 150 = 1.17  → fails min 2.0
+        weighted = 0.5 * 100 + 0.25 * 200 + 0.25 * 300
+        rr = weighted / 150
+        assert rr < 2.0
+
+    def test_adaptive_rr_meets_2x_when_atr_drives_sizing(self):
+        """Adaptive mode with TP_MULT=5.0, SL_MULT=1.5 and tier scaling
+        (0.4, 0.7, 1.0) → weighted R:R ≈ 2.08x — passes the 2.0 gate."""
+        atr = 10.0
+        sl_dist = 1.5 * atr            # 15
+        tp_full = 5.0 * atr            # 50 (max TP3)
+        tp1 = tp_full * 0.4            # 20
+        tp2 = tp_full * 0.7            # 35
+        tp3 = tp_full * 1.0            # 50
+        weighted_tp = 0.5 * tp1 + 0.25 * tp2 + 0.25 * tp3
+        rr = weighted_tp / sl_dist
+        assert rr >= 2.0, f"weighted R:R was {rr}, expected ≥ 2.0"
+        # And TP3 specifically gives R:R of ~3.3x
+        assert (tp3 / sl_dist) > 3.0

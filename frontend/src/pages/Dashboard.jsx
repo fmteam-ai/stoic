@@ -158,6 +158,21 @@ function BotStatusStrip({ status }) {
                                 SLIPPAGE · {status.intelligence.slippage_veto}
                             </span>
                         )}
+                        {status.intelligence.learned_meta_veto > 0 && (
+                            <span className="px-2 py-1 border border-[#9B59B6]/40 bg-[#9B59B6]/10 text-[#9B59B6]" data-testid="intel-learned">
+                                LEARNED · {status.intelligence.learned_meta_veto}
+                            </span>
+                        )}
+                        {status.intelligence.aplus_veto > 0 && (
+                            <span className="px-2 py-1 border border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]" data-testid="intel-aplus">
+                                A+ · {status.intelligence.aplus_veto}
+                            </span>
+                        )}
+                        {status.intelligence.rr_veto > 0 && (
+                            <span className="px-2 py-1 border border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]" data-testid="intel-rr">
+                                R:R · {status.intelligence.rr_veto}
+                            </span>
+                        )}
                     </div>
                 </div>
             )}

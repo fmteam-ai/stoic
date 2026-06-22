@@ -150,6 +150,15 @@ async def _process_user(db, cfg: dict):
             lm = signal.get("learned_meta") or {}
             if lm.get("verdict") == "REJECT":
                 await inc_intel_counter(user_id, "learned_meta_veto")
+            # Count A+ confluence vetoes
+            aplus = signal.get("aplus_confluence") or {}
+            if aplus.get("checks") and aplus.get("passed") is False:
+                await inc_intel_counter(user_id, "aplus_veto")
+            # Count R:R vetoes — signal action HOLD but veto_applied True is too broad;
+            # use rr_ratio + reasoning fingerprint
+            reasoning_blob = signal.get("reasoning") or ""
+            if "VETO (R:R)" in reasoning_blob:
+                await inc_intel_counter(user_id, "rr_veto")
         except Exception:
             pass
 

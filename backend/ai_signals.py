@@ -28,6 +28,17 @@ from kalman import kalman_features
 from macro.cot import get_gold_positioning
 from macro.tips import get_real_yield
 from learned_meta import predict_p_win as learned_predict_p_win
+from confluence import confluence_check
+from pip_utils import pips_to_price, price_to_pips
+
+# --- A+ Selectivity tunables (the WR-vs-frequency knobs) ---
+APLUS_MIN_CONFLUENCES = int(os.environ.get("APLUS_MIN_CONFLUENCES", "4"))   # 0-6
+MIN_RR_RATIO = float(os.environ.get("MIN_RR_RATIO", "2.0"))                 # TP / SL distance
+ADAPTIVE_SL_TP_ENABLED = os.environ.get("ADAPTIVE_SL_TP_ENABLED", "true").lower() == "true"
+ATR_SL_MULTIPLIER = float(os.environ.get("ATR_SL_MULTIPLIER", "1.5"))
+ATR_TP_MULTIPLIER = float(os.environ.get("ATR_TP_MULTIPLIER", "5.0"))   # gives weighted R:R ≈ 2.08x
+SL_MIN_PIPS = float(os.environ.get("SL_MIN_PIPS", "80"))
+SL_MAX_PIPS = float(os.environ.get("SL_MAX_PIPS", "250"))
 
 SYSTEM_PROMPT = """You are an institutional-grade quantitative trading analyst.
 Inputs: live quote, 12-month indicator snapshot, current news sentiment score,
@@ -276,27 +287,92 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         )
         final_action = "HOLD"
 
-    # SL/TP — pip-based fixed targets (150 SL, 100/200/300 TP tiers)
-    from pip_utils import pips_to_price
-    sl_pips_target = 150
-    tp1_pips_target = 100
-    tp2_pips_target = 200
-    tp3_pips_target = 300
-    sl_distance_price = pips_to_price(symbol, sl_pips_target)
-    if final_action == "BUY":
-        sl = round(current_price - sl_distance_price, 5)
-        tp1 = round(current_price + pips_to_price(symbol, tp1_pips_target), 5)
-        tp2 = round(current_price + pips_to_price(symbol, tp2_pips_target), 5)
-        tp3 = round(current_price + pips_to_price(symbol, tp3_pips_target), 5)
-    elif final_action == "SELL":
-        sl = round(current_price + sl_distance_price, 5)
-        tp1 = round(current_price - pips_to_price(symbol, tp1_pips_target), 5)
-        tp2 = round(current_price - pips_to_price(symbol, tp2_pips_target), 5)
-        tp3 = round(current_price - pips_to_price(symbol, tp3_pips_target), 5)
+    # 8. A+ Confluence filter — only let through high-conviction setups
+    confluence = confluence_check(
+        action=final_action,
+        symbol=symbol,
+        mtf=mtf,
+        learned_meta=learned_meta,
+        cot=cot_feat,
+        tips=tips_feat,
+        session={**session, **session_bias},
+        history=history,
+        indicators=indicators,
+        min_confluences=APLUS_MIN_CONFLUENCES,
+    )
+    aplus_veto = ""
+    if final_action != "HOLD" and not confluence["passed"]:
+        aplus_veto = confluence["reason"]
+        final_action = "HOLD"
+
+    # ---- SL/TP — adaptive ATR-based, with hardcoded pip-system fallback ----
+    sl, tp1, tp2, tp3 = current_price, current_price, current_price, current_price
+    atr = indicators.get("atr_14") or 0.0
+    if ADAPTIVE_SL_TP_ENABLED and atr > 0 and final_action in ("BUY", "SELL"):
+        # SL = clamp(ATR_SL_MULTIPLIER × ATR, SL_MIN_PIPS, SL_MAX_PIPS)
+        sl_dist_price = ATR_SL_MULTIPLIER * atr
+        # Convert clamp bounds from pips → price
+        sl_min_price = pips_to_price(symbol, SL_MIN_PIPS)
+        sl_max_price = pips_to_price(symbol, SL_MAX_PIPS)
+        sl_dist_price = max(sl_min_price, min(sl_max_price, sl_dist_price))
+        tp_dist_price = ATR_TP_MULTIPLIER * atr
+        # Scaling tiers across three TP levels (preserves the partial-close system)
+        tp1_dist = tp_dist_price * 0.4
+        tp2_dist = tp_dist_price * 0.7
+        tp3_dist = tp_dist_price * 1.0
+        if final_action == "BUY":
+            sl = round(current_price - sl_dist_price, 5)
+            tp1 = round(current_price + tp1_dist, 5)
+            tp2 = round(current_price + tp2_dist, 5)
+            tp3 = round(current_price + tp3_dist, 5)
+        else:
+            sl = round(current_price + sl_dist_price, 5)
+            tp1 = round(current_price - tp1_dist, 5)
+            tp2 = round(current_price - tp2_dist, 5)
+            tp3 = round(current_price - tp3_dist, 5)
+        sl_pips_target = round(price_to_pips(symbol, sl_dist_price), 1)
+        tp1_pips_target = round(price_to_pips(symbol, tp1_dist), 1)
+        tp2_pips_target = round(price_to_pips(symbol, tp2_dist), 1)
+        tp3_pips_target = round(price_to_pips(symbol, tp3_dist), 1)
+    elif final_action in ("BUY", "SELL"):
+        # Hardcoded legacy pip-system fallback (150 SL, 100/200/300 TP)
+        sl_pips_target = 150
+        tp1_pips_target = 100
+        tp2_pips_target = 200
+        tp3_pips_target = 300
+        sl_distance_price = pips_to_price(symbol, sl_pips_target)
+        if final_action == "BUY":
+            sl = round(current_price - sl_distance_price, 5)
+            tp1 = round(current_price + pips_to_price(symbol, tp1_pips_target), 5)
+            tp2 = round(current_price + pips_to_price(symbol, tp2_pips_target), 5)
+            tp3 = round(current_price + pips_to_price(symbol, tp3_pips_target), 5)
+        else:
+            sl = round(current_price + sl_distance_price, 5)
+            tp1 = round(current_price - pips_to_price(symbol, tp1_pips_target), 5)
+            tp2 = round(current_price - pips_to_price(symbol, tp2_pips_target), 5)
+            tp3 = round(current_price - pips_to_price(symbol, tp3_pips_target), 5)
     else:
-        # HOLD — no actionable targets; derive defaults from current price
-        sl, tp1, tp2, tp3 = current_price, current_price, current_price, current_price
-    tp = tp3  # legacy `take_profit` field points to the furthest target
+        sl_pips_target = tp1_pips_target = tp2_pips_target = tp3_pips_target = 0
+    tp = tp3
+
+    # 9. Minimum Reward-to-Risk gate — kill setups with poor expectancy.
+    # Use weighted-average TP distance (50%@TP1 + 25%@TP2 + 25%@TP3) vs SL.
+    rr_veto = ""
+    rr_ratio = None
+    if final_action in ("BUY", "SELL"):
+        sl_dist = abs(current_price - sl) or 1e-9
+        weighted_tp_dist = (
+            0.5 * abs(tp1 - current_price)
+            + 0.25 * abs(tp2 - current_price)
+            + 0.25 * abs(tp3 - current_price)
+        )
+        rr_ratio = round(weighted_tp_dist / sl_dist, 2)
+        if rr_ratio < MIN_RR_RATIO:
+            rr_veto = (
+                f"Weighted R:R {rr_ratio} < min {MIN_RR_RATIO}. "
+                f"Expected value too low — trade vetoed."
+            )
+            final_action = "HOLD"
 
     # Kelly-modified position sizing — use regime-adapted profile
     sl_distance = abs(current_price - sl) or 0.0001
@@ -323,6 +399,10 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         reasoning = f"{reasoning}\n\nVETO (multi-timeframe): {mtf_veto}"
     if learned_veto:
         reasoning = f"{reasoning}\n\nVETO (learned-meta): {learned_veto}"
+    if aplus_veto:
+        reasoning = f"{reasoning}\n\nVETO (A+ confluence): {aplus_veto}"
+    if rr_veto:
+        reasoning = f"{reasoning}\n\nVETO (R:R): {rr_veto}"
 
     return {
         "symbol": symbol,
@@ -356,12 +436,14 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "meta_label": meta_label,
         "mtf_gate": mtf,
         "learned_meta": learned_meta,
+        "aplus_confluence": confluence,
+        "rr_ratio": rr_ratio,
         "kalman_filter": kalman_feat,
         "cot_positioning": cot_feat,
         "real_yield_10y": tips_feat,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto),
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto),
         "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }
