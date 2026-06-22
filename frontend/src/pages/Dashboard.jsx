@@ -94,7 +94,9 @@ export default function Dashboard() {
         try {
             const { data } = await api.get(`/sentiment/${sym}`);
             setSentiment(s => ({ ...s, [sym]: data }));
-        } catch { /* ignore */ }
+        } catch (e) {
+            console.warn("[dashboard] sentiment load failed", sym, e?.message);
+        }
     }, []);
 
     const loadMacro = useCallback(async (sym) => {
@@ -104,12 +106,19 @@ export default function Dashboard() {
                 api.get(`/calendar/freeze/${sym}`),
             ]);
             setMacro({ events: upcoming.data.events || [], freeze: freeze.data });
-        } catch { /* ignore */ }
+        } catch (e) {
+            console.warn("[dashboard] macro load failed", sym, e?.message);
+        }
     }, []);
 
     const loadStats = useCallback(async () => {
-        try { const { data } = await api.get("/trades/stats"); setStats(data); } catch { /* ignore */ }
-    }, []); // deps: stable imports + setters only
+        try {
+            const { data } = await api.get("/trades/stats");
+            setStats(data);
+        } catch (e) {
+            console.warn("[dashboard] stats load failed", e?.message);
+        }
+    }, []);
 
     useEffect(() => {
         loadQuotes(); loadStats();

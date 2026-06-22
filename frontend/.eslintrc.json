@@ -1,0 +1,18 @@
+{
+    "root": true,
+    "rules": {
+        "react-hooks/exhaustive-deps": ["warn", {
+            "additionalHooks": "useLiveStream"
+        }],
+        "react/no-array-index-key": "off",
+        "no-empty": ["error", { "allowEmptyCatch": false }]
+    },
+    "overrides": [
+        {
+            "files": ["src/lib/diagnostics.js"],
+            "rules": {
+                "no-empty": ["error", { "allowEmptyCatch": true }]
+            }
+        }
+    ]
+}
