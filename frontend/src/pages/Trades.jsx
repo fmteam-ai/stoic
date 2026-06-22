@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { RefreshCw as ArrowsClockwise, X } from "lucide-react";
@@ -11,6 +11,49 @@ const STATUS_STYLE = {
     cancelled: "border-[#1F1F1F] text-[#52525B]",
     failed: "border-[#FF3B30]/40 text-[#FF3B30]",
 };
+
+// MT5 standard contract sizes — used to derive live $-P&L per open trade.
+// XAUUSD: 1 lot = 100 oz   → $1 move = $100 P&L per 1.00 lot
+// BTCUSD: 1 lot = 1 BTC    → $1 move = $1 P&L
+// XAGUSD: 1 lot = 5000 oz
+// FX majors: 1 lot = 100k units → 1 pip ≈ $10 (handled per-symbol if added)
+const CONTRACT_SIZE = {
+    XAUUSD: 100,
+    BTCUSD: 1,
+    ETHUSD: 1,
+    XAGUSD: 5000,
+};
+
+function priceDecimals(symbol) {
+    if (!symbol) return 2;
+    if (symbol === "BTCUSD" || symbol === "ETHUSD") return 2;
+    if (symbol === "XAUUSD" || symbol === "XAGUSD") return 2;
+    if (symbol.includes("JPY")) return 3;
+    return 5;
+}
+
+function fmtPrice(symbol, p) {
+    if (p == null || Number.isNaN(parseFloat(p))) return "—";
+    return parseFloat(p).toFixed(priceDecimals(symbol));
+}
+
+function fmtPnl(v) {
+    if (v == null || Number.isNaN(v)) return "—";
+    const sign = v >= 0 ? "+$" : "-$";
+    return `${sign}${Math.abs(v).toFixed(2)}`;
+}
+
+function computeLivePnl(trade, currentPrice) {
+    if (!currentPrice || trade.status !== "open") return null;
+    const entry = parseFloat(trade.entry_price);
+    const lot = parseFloat(trade.lot_size);
+    const cs = CONTRACT_SIZE[trade.symbol] ?? 1;
+    if (!entry || !lot || Number.isNaN(entry) || Number.isNaN(lot)) return null;
+    const diff = trade.action === "BUY"
+        ? (currentPrice - entry)
+        : (entry - currentPrice);
+    return diff * lot * cs;
+}
 
 const CLOSE_REASON_BADGE = {
     take_profit:     { label: "TP",       cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]",         icon: "🎯" },
@@ -54,6 +97,7 @@ export default function Trades() {
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [filter, setFilter] = useState("");
+    const [quotes, setQuotes] = useState({}); // {SYMBOL: price}
 
     const load = useCallback(async () => {
         try {
@@ -74,6 +118,47 @@ export default function Trades() {
         if (!lastEvent) return;
         if (lastEvent.type === "trade_created" || lastEvent.type === "trade_updated") load();
     }, [lastEvent, load]);
+
+    // Poll quotes for any open-trade symbols every 5s — drives live price + P&L.
+    const openSymbols = useMemo(() => {
+        const set = new Set();
+        for (const t of trades) {
+            if (t.status === "open" && t.symbol) set.add(t.symbol);
+        }
+        return Array.from(set);
+    }, [trades]);
+
+    const symbolsKey = openSymbols.join(",");
+    const inFlightRef = useRef(false);
+    useEffect(() => {
+        if (!symbolsKey) {
+            setQuotes({});
+            return undefined;
+        }
+        let cancelled = false;
+        const fetchQuotes = async () => {
+            if (inFlightRef.current) return;
+            inFlightRef.current = true;
+            try {
+                const { data } = await api.get(`/market/quotes?symbols=${symbolsKey}`);
+                if (cancelled) return;
+                const next = {};
+                for (const q of data.quotes || []) {
+                    if (q.symbol && q.price != null && !q.error) {
+                        next[q.symbol] = parseFloat(q.price);
+                    }
+                }
+                setQuotes(next);
+            } catch {
+                /* keep stale quote on transient errors */
+            } finally {
+                inFlightRef.current = false;
+            }
+        };
+        fetchQuotes();
+        const id = setInterval(fetchQuotes, 5000);
+        return () => { cancelled = true; clearInterval(id); };
+    }, [symbolsKey]);
 
     const close = async (id) => {
         if (!window.confirm("Send close instruction to MT5 EA?")) return;
@@ -98,8 +183,24 @@ export default function Trades() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
 
                 {stats && (
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3" data-testid="trades-stats">
+                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3" data-testid="trades-stats">
                         <Stat label="OPEN" value={stats.open_trades} />
+                        <Stat label="OPEN LIVE P&L" value={(() => {
+                            const live = trades.reduce((acc, t) => {
+                                if (t.status !== "open") return acc;
+                                const p = computeLivePnl(t, quotes[t.symbol]);
+                                return p == null ? acc : acc + p;
+                            }, 0);
+                            const hasAny = trades.some(t => t.status === "open" && quotes[t.symbol] != null);
+                            return hasAny ? fmtPnl(live) : "—";
+                        })()} accent={(() => {
+                            const live = trades.reduce((acc, t) => {
+                                if (t.status !== "open") return acc;
+                                const p = computeLivePnl(t, quotes[t.symbol]);
+                                return p == null ? acc : acc + p;
+                            }, 0);
+                            return live >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]";
+                        })()} />
                         <Stat label="TOTAL" value={stats.total_trades} />
                         <Stat label="WIN RATE" value={`${stats.win_rate}%`} accent="text-[#00FF41]" />
                         <Stat label="WINS / LOSSES" value={`${stats.wins} / ${stats.losses}`} />
@@ -131,7 +232,7 @@ export default function Trades() {
                         <table className="w-full text-sm" data-testid="trades-table">
                             <thead>
                                 <tr className="border-b border-[#1F1F1F]">
-                                    {["SYMBOL", "SIDE", "LOTS", "ENTRY", "SL", "TP", "EXIT", "P&L", "OPENED", "CLOSED", "STATUS", ""].map(h => (
+                                    {["SYMBOL", "SIDE", "LOTS", "ENTRY", "CURRENT", "SL", "TP", "EXIT", "LIVE P&L", "P&L", "OPENED", "CLOSED", "STATUS", ""].map(h => (
                                         <th key={h} className="px-3 py-2 text-left font-mono text-[10px] text-[#52525B] tracking-widest whitespace-nowrap">{h}</th>
                                     ))}
                                 </tr>
@@ -150,10 +251,26 @@ export default function Trades() {
                                         </td>
                                         <td className={`px-3 py-2 font-mono ${t.action === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{t.action}</td>
                                         <td className="px-3 py-2 font-mono">{t.lot_size}</td>
-                                        <td className="px-3 py-2 font-mono">{t.entry_price}</td>
-                                        <td className="px-3 py-2 font-mono text-[#FF3B30]">{t.stop_loss}</td>
-                                        <td className="px-3 py-2 font-mono text-[#00FF41]">{t.take_profit}</td>
-                                        <td className="px-3 py-2 font-mono">{t.exit_price ?? "—"}</td>
+                                        <td className="px-3 py-2 font-mono">{fmtPrice(t.symbol, t.entry_price)}</td>
+                                        <td className="px-3 py-2 font-mono" data-testid={`current-${t.id}`}>
+                                            {t.status === "open" && quotes[t.symbol] != null ? (
+                                                <span className="text-white">{fmtPrice(t.symbol, quotes[t.symbol])}</span>
+                                            ) : (
+                                                <span className="text-[#52525B]">—</span>
+                                            )}
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-[#FF3B30]">{fmtPrice(t.symbol, t.stop_loss)}</td>
+                                        <td className="px-3 py-2 font-mono text-[#00FF41]">{fmtPrice(t.symbol, t.take_profit)}</td>
+                                        <td className="px-3 py-2 font-mono">{t.exit_price != null ? fmtPrice(t.symbol, t.exit_price) : "—"}</td>
+                                        <td className="px-3 py-2 font-mono" data-testid={`live-pnl-${t.id}`}>
+                                            {(() => {
+                                                if (t.status !== "open") return <span className="text-[#52525B]">—</span>;
+                                                const live = computeLivePnl(t, quotes[t.symbol]);
+                                                if (live == null) return <span className="text-[#52525B]">…</span>;
+                                                const cls = live >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]";
+                                                return <span className={cls}>{fmtPnl(live)}</span>;
+                                            })()}
+                                        </td>
                                         <td className={`px-3 py-2 font-mono ${(t.pnl ?? 0) >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
                                             {t.pnl != null && t.pnl !== 0
                                                 ? `${t.pnl >= 0 ? "+$" : "-$"}${Math.abs(t.pnl).toFixed(2)}`

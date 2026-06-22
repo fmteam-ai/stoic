@@ -1,0 +1,36 @@
+{
+  "summary": "Iter-10 verification of new CURRENT + LIVE P&L columns and OPEN LIVE P&L stat on /trades (frontend-only feature). Logged in as admin@trading.bot, navigated to /trades, observed 16 OPEN trades (mix of BTCUSD and XAUUSD), 1 CLOSED, 1 CANCELLED, 1 FAILED. All 7 acceptance criteria PASS: headers in correct order (SYMBOL/SIDE/LOTS/ENTRY/CURRENT/SL/TP/EXIT/LIVE P&L/P&L/OPENED/CLOSED/STATUS); CURRENT and LIVE P&L populate live for OPEN rows; non-open rows show '—'; OPEN LIVE P&L stat aggregates correctly (+$17729.03 across 16 open trades); polling cadence confirmed (5 calls to /api/market/quotes in ~12s, deduped — no overlapping bursts); live P&L math validated against spec for BTCUSD and XAUUSD examples; closed-trade badges (MANUAL/CANCELLED/FAILED) intact; filter chips intact; manual CLOSE button rendered for OPEN rows; zero JS console/page errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/trades_table.png"
+  ],
+  "action_items": [
+    "(INFO, very minor cosmetic) OPEN LIVE P&L stat accent in Trades.jsx lines 196-203 always recomputes the aggregate; when no live quotes are available yet the value shows '—' but accent still resolves to green (live=0 → text-[#00FF41]). Not a bug because the '—' string itself is white-on-card, but tidy-up would be: only assign accent color when hasAny is true. Pure polish.",
+    "(INFO) Same aggregate computation is done twice in JSX (once for value, once for accent) — extract to a local variable for readability. No functional impact.",
+    "(INFO, pre-existing, not introduced by this feature) /api/ws WebSocket reconnects fail with 'WebSocket is closed before the connection is established' warnings in console — useLiveStream hook continues to function via reconnect logic and trade_created/trade_updated reload path still works. Out of scope for this UI-only feature."
+  ],
+  "critical_code_review_comments": [
+    "computeLivePnl() math is correct and matches MT5 contract conventions: BUY uses (current-entry), SELL uses (entry-current), multiplied by lot_size and CONTRACT_SIZE[symbol] (XAUUSD=100, BTCUSD=1, ETHUSD=1, XAGUSD=5000). Falls back to multiplier=1 for unknown symbols, which is a safe default that won't crash but will give wrong $-values for FX majors / indices if those symbols are ever traded — consider a 'show ?' fallback or extend the table when those symbols are added.",
+    "Polling effect uses (a) symbolsKey-driven re-subscribe, (b) inFlightRef dedupe, (c) cancelled flag to drop late responses, (d) clearInterval cleanup — textbook correct. Verified live: 5 quote calls in ~12s with no overlapping bursts even with rapid trades state churn from the WebSocket trade_updated events.",
+    "openSymbols memo uses a Set → Array.from so insertion order determines the joined key. With current data it's stable ('BTCUSD,XAUUSD' or 'XAUUSD,BTCUSD' depending on first-encountered open trade). Two early double-fetches were observed because the initial load + a near-simultaneous trade_updated WS event flipped the order. Cosmetic only; consider sorting the array before joining: openSymbols.sort().join(',') to make symbolsKey deterministic and eliminate redundant re-fetches on order flips.",
+    "fmtPrice() / fmtPnl() / fmtDateTime() all guard NaN/null properly and return '—'. priceDecimals() handles BTC/XAU/JPY/FX cases. No string-vs-number bugs observed.",
+    "CONTRACT_SIZE lookup uses ?? 1 fallback — won't crash on unknown symbols, but will silently mis-price. Acceptable for current XAUUSD/BTCUSD-only product surface; flag if FX/indices added.",
+    "data-testids `current-{id}` and `live-pnl-{id}` correctly emitted on every row (OPEN and non-OPEN). Stat label 'OPEN LIVE P&L' shows up inside [data-testid=\"trades-stats\"]; consider giving the OPEN LIVE P&L Stat its own testid like 'stat-open-live-pnl' for easier future targeting.",
+    "Color semantics correct: live-pnl cell uses text-[#00FF41] for >=0 and text-[#FF3B30] for <0; non-open shows text-[#52525B] '—'. Verified at the DOM-class level in test (LIVE_PNL_INFO log).",
+    "Existing behaviours regressions-tested: MANUAL close_reason badge still renders on closed trade; CANCELLED / FAILED status chips intact; date formatting 'Jun 22 · HH:MM' intact; filter chips ALL/PENDING/OPEN/CLOSED/FAILED intact; manual × CLOSE button renders only for OPEN rows.",
+    "useLiveStream() WebSocket failures are noisy in console but don't break the page; they're orthogonal to this feature and the trade_created/trade_updated reload path is exercised independently."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not retested (frontend-only request)", "frontend": "100% — all 7 acceptance criteria pass on /trades"},
+  "test_credentials": "admin@trading.bot / admin123 — verified working.",
+  "seed_data_creation": "None — admin tenant already has 16 OPEN trades + 1 CLOSED + 1 CANCELLED + 1 FAILED across BTCUSD and XAUUSD which fully exercised all required paths.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Trades page tests live in this iteration via browser_automation only — no pytest file added (UI-only feature). Quote polling URL: GET /api/market/quotes?symbols=XAUUSD,BTCUSD every 5s. Math constants in /app/frontend/src/pages/Trades.jsx CONTRACT_SIZE = {XAUUSD:100, BTCUSD:1, ETHUSD:1, XAGUSD:5000}. New testids: current-{trade_id}, live-pnl-{trade_id}. Existing testids preserved: trade-row-{id}, close-trade-{id}, opened-{id}, closed-{id}, close-reason-{id}, badge-pc/be/trail/pending-{id}, trades-table, trades-empty, trades-stats, filter-{all|pending|open|closed|failed}, trades-refresh-button. Live aggregate stat 'OPEN LIVE P&L' is the 2nd card in the stats grid; no dedicated testid yet (suggested above).",
+  "rca of the issue": "n/a — pure feature-add verification. The user request ('add current price and show live P&L on /trades') is fully delivered: live polling drives CURRENT cell + LIVE P&L cell + aggregate OPEN LIVE P&L stat, with correct math and correct null-state ('—' for non-open trades). Only suggestions are micro-polish (sort symbolsKey, hoist aggregate compute, add stat testid)."
+}
