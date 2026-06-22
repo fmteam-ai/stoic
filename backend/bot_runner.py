@@ -18,6 +18,7 @@ from database import get_db
 from ai_signals import analyze_symbol
 from circuit_breakers import check_and_trip
 from ws_manager import manager as ws_manager
+from rate_limiter import check_and_record as rl_check
 
 logger = logging.getLogger("bot-runner")
 
@@ -114,6 +115,12 @@ async def _process_user(db, cfg: dict):
             logger.info("Max concurrent (%s) reached for user=%s; skipping execute", max_concurrent, user_id)
             continue
         if not connected:
+            continue
+        # Per-user rate-limit guard — hard cap from env
+        rl = rl_check(user_id)
+        if not rl["allowed"]:
+            logger.warning("Rate-limited user=%s, count_60s=%s/%s, skip auto-execute",
+                           user_id, rl["count_60s"], rl["limit"])
             continue
         target_account = connected[0]
         trade_doc = {

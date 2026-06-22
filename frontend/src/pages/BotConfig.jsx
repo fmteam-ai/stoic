@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle } from "lucide-react";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -57,6 +57,16 @@ export default function BotConfig() {
         } catch (e) { setErr(formatApiError(e)); }
     };
 
+    const triggerPanic = async () => {
+        if (!window.confirm("PANIC LOCK\n\nThis will:\n• Stop your bot\n• Cancel all pending trades\n• Request close on all open trades\n\nProceed?")) return;
+        setErr(""); setMsg("");
+        try {
+            const { data } = await api.post("/panic");
+            setMsg(`PANIC LOCK engaged · ${data.bots_disabled} bot(s) disabled · ${data.trades_cancelled} pending cancelled · ${data.open_trades_marked_for_close} open marked-for-close.`);
+            await load();
+        } catch (e) { setErr(formatApiError(e)); }
+    };
+
     const addSymbol = () => {
         const sym = newSym.trim().toUpperCase();
         if (!sym || cfg.symbols.includes(sym)) return;
@@ -90,6 +100,11 @@ export default function BotConfig() {
                                 cfg.active ? "bg-[#FF3B30] hover:bg-[#E53527] text-white" : "bg-[#00FF41] hover:bg-[#00E53A] text-black"
                             }`}>
                             {cfg.active ? <><Pause className="w-3.5 h-3.5" /> STOP BOT</> : <><Play className="w-3.5 h-3.5" /> START BOT</>}
+                        </button>
+                        <button onClick={triggerPanic} data-testid="panic-button"
+                            title="Stops bot, cancels pending trades, and requests close on all open positions"
+                            className="px-3 py-2 text-xs tracking-widest font-medium flex items-center gap-2 border border-[#FF3B30]/50 text-[#FF3B30] hover:bg-[#FF3B30]/10 transition-colors duration-150">
+                            <AlertTriangle className="w-3.5 h-3.5" /> PANIC
                         </button>
                     </div>
                 }

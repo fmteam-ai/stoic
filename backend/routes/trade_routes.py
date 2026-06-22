@@ -4,6 +4,7 @@ from bson import ObjectId
 
 from auth import get_current_user
 from database import get_db
+from rate_limiter import check_and_record
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -78,6 +79,14 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
     account = await db.accounts.find_one({"_id": ObjectId(account_id), "user_id": user["id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+
+    # Kill-switch: hard cap on orders per minute per user
+    rl = check_and_record(user["id"])
+    if not rl["allowed"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit: max {rl['limit']} orders/min reached. Retry in {rl['retry_in_s']}s.",
+        )
 
     trade_doc = {
         "user_id": user["id"],
