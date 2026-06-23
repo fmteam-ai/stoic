@@ -5,12 +5,13 @@ import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
-    CreditCard, HelpCircle, BookOpen
+    CreditCard, HelpCircle, BookOpen, Cpu
 } from "lucide-react";
 
 const items = [
     { to: "/", label: "Dashboard", icon: ChartLineUp, testid: "nav-dashboard" },
     { to: "/signals", label: "AI Signals", icon: Activity, testid: "nav-signals" },
+    { to: "/agents", label: "Agents", icon: Cpu, testid: "nav-agents" },
     { to: "/commander", label: "Risk Commander", icon: MessageSquare, testid: "nav-commander" },
     { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
     { to: "/accounts", label: "MT5 Accounts", icon: Wallet, testid: "nav-accounts" },

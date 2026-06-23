@@ -15,7 +15,8 @@ from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 
 from database import get_db
-from ai_signals import analyze_symbol
+from ai_signals import analyze_symbol  # noqa: F401  (kept for legacy callers/tests)
+from agents.orchestrator import get_orchestrator
 from circuit_breakers import check_and_trip
 from ws_manager import manager as ws_manager
 from rate_limiter import check_and_record as rl_check
@@ -223,9 +224,23 @@ async def _process_user(db, cfg: dict):
                 continue
 
         try:
-            signal = await analyze_symbol(sym, risk_level)
+            # Route every tick through the multi-agent orchestrator:
+            # Research → Strategy → Risk. Returns the post-risk signal and
+            # persists the activity log to `agent_activity`.
+            orch = get_orchestrator()
+            active_positions = await db.trades.find({
+                "user_id": user_id,
+                "status": {"$in": ["open", "pending"]},
+            }).to_list(length=50)
+            tick_out = await orch.analyze_tick(
+                user_id=user_id, symbol=sym, risk_level=risk_level,
+                active_positions=active_positions,
+            )
+            signal = tick_out.get("signal")
+            if not signal:
+                continue
         except Exception as e:
-            logger.exception("analyze_symbol failed user=%s sym=%s: %s", user_id, sym, e)
+            logger.exception("orchestrator.analyze_tick failed user=%s sym=%s: %s", user_id, sym, e)
             continue
 
         # Auto-Tune: raise the min-confidence threshold using historical analytics
