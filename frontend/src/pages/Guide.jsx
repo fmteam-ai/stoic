@@ -4,7 +4,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
-    Plane, Power, Repeat, Eye, Cpu, Search, Send,
+    Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
@@ -19,8 +19,10 @@ const SECTIONS = [
     { id: "autopilot",    title: "8. Autopilot mode explained",        icon: Plane },
     { id: "daily",        title: "9. Daily 5-min routine",             icon: Clock },
     { id: "advanced",     title: "10. Advanced — tuning & auditing",   icon: SettingsIcon },
-    { id: "going-live",   title: "11. Going live (paper → real)",      icon: TrendingUp },
-    { id: "faq",          title: "12. Quick links",                    icon: Zap },
+    { id: "presets",      title: "11. Strategy Presets",                icon: Bookmark },
+    { id: "going-live",   title: "12. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "13. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "14. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -87,7 +89,9 @@ export default function Guide() {
                     <Autopilot />
                     <DailyFlow />
                     <Advanced />
+                    <PresetsSection />
                     <GoingLive />
+                    <AffiliateSection />
                     <QuickLinks />
                 </article>
             </div>
@@ -658,7 +662,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>11. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>12. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -674,6 +678,131 @@ function GoingLive() {
     );
 }
 
+function PresetsSection() {
+    const presets = [
+        { name: "Sniper",          tag: "Patient. Precise. A-grade only." },
+        { name: "Scalper",         tag: "Fast in, fast out, many small wins." },
+        { name: "Trend Rider",     tag: "Catch the wave, hold the line." },
+        { name: "Breakout Hunter", tag: "Wait for volatility expansion." },
+        { name: "Mean Reversion",  tag: "Buy weakness, sell strength." },
+        { name: "Aggressive",      tag: "Macro-first. Force trades on clear bias." },
+        { name: "Balanced",        tag: "STOIC's house defaults." },
+    ];
+    return (
+        <section>
+            <H2 id="presets" icon={Bookmark}>11. Strategy Presets</H2>
+            <P>
+                Presets are <strong className="text-white">one-click personality profiles</strong> for the bot. They overlay
+                behaviour knobs (confidence floor, trade cap, trailing stop, cooldowns, news protector) onto your config — but
+                leave <strong className="text-white">risk level, symbols, and drawdown limits untouched</strong>. Find them at
+                the top of <Link to="/bot" className="text-[#00FF41] hover:underline">Bot Config</Link>.
+            </P>
+
+            <div className="font-display font-bold text-base mt-5 mb-2">The 7 built-in presets</div>
+            <div className="grid sm:grid-cols-2 gap-2 mt-2">
+                {presets.map(p => (
+                    <div key={p.name} className="border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2"
+                        data-testid={`guide-preset-${p.name.toLowerCase().replace(/\s+/g, "-")}`}>
+                        <div className="font-display font-bold text-sm tracking-tight text-[#FFD700]">{p.name}</div>
+                        <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">{p.tag}</div>
+                    </div>
+                ))}
+            </div>
+
+            <div className="font-display font-bold text-base mt-6 mb-2">Save your own preset</div>
+            <P>
+                Customise any built-in preset, tweak the trailing or cooldowns to your taste, then hit{" "}
+                <strong className="text-[#FFD700]">SAVE CURRENT AS PRESET</strong> at the bottom of the presets grid. Name it,
+                describe it, and it joins <strong className="text-white">Your Presets</strong> — apply again with one click.
+                Limit: <strong>10 custom presets per account</strong>. Hover any custom card to reveal the trash icon to delete.
+            </P>
+
+            <Callout kind="info">
+                Presets do <strong>not</strong> persist automatically — after applying, click{" "}
+                <strong className="text-white">SAVE CONFIGURATION</strong> at the bottom of Bot Config to commit. This lets
+                you preview a preset before committing.
+            </Callout>
+
+            <div className="mt-5">
+                <CTAButton to="/bot" testid="guide-cta-presets">OPEN PRESETS</CTAButton>
+            </div>
+        </section>
+    );
+}
+
+function AffiliateSection() {
+    return (
+        <section>
+            <H2 id="affiliate" icon={DollarSign}>13. Earn 20% recurring (affiliate program)</H2>
+            <P>
+                Refer one trader — get paid every month they stay subscribed. STOIC pays{" "}
+                <strong className="text-[#FFD700]">20% recurring commission</strong> on the base subscription fee for the
+                <strong className="text-white"> full lifetime</strong> of each referred account. No caps, no clawbacks.
+            </P>
+
+            <div className="grid sm:grid-cols-2 gap-2 mt-4">
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-3">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">COMMISSION</div>
+                    <div className="font-display font-bold text-lg text-[#FFD700]">20% recurring</div>
+                </div>
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-3">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">COOKIE WINDOW</div>
+                    <div className="font-display font-bold text-lg">60 days</div>
+                </div>
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-3">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">MIN PAYOUT</div>
+                    <div className="font-display font-bold text-lg">$50</div>
+                </div>
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-3">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">PAYOUT</div>
+                    <div className="font-display font-bold text-lg">Stripe / PayPal</div>
+                </div>
+            </div>
+
+            <div className="font-display font-bold text-base mt-6 mb-2">How to join</div>
+            <div className="space-y-3">
+                <Step n="1" title="Apply" testid="guide-aff-step-1">
+                    Open <Link to="/affiliate" className="text-[#00FF41] hover:underline">Affiliate</Link> in the sidebar.
+                    Fill the form (display name, payout method, traffic source). Applications are reviewed manually within
+                    1–2 business days.
+                </Step>
+                <Step n="2" title="Share your code" testid="guide-aff-step-2">
+                    Once approved, you get a unique 6-character code and a trackable link
+                    (<code className="font-mono text-[10px] text-[#00FF41]">https://stoic.app/api/r/YOURCODE</code>). Drop it in
+                    blog reviews, YouTube descriptions, Discord pinned messages — anywhere your audience lives.
+                </Step>
+                <Step n="3" title="Track + get paid" testid="guide-aff-step-3">
+                    Live click and conversion counters update in your dashboard. Once your unpaid balance hits <strong>$50</strong>,
+                    click <strong className="text-[#00FF41]">REQUEST PAYOUT</strong>. Payouts are processed around the 15th of
+                    each month.
+                </Step>
+            </div>
+
+            <div className="font-display font-bold text-base mt-6 mb-2">The public landing page</div>
+            <P>
+                Share <Link to="/affiliates" className="text-[#00FF41] hover:underline">/affiliates</Link> directly with cold
+                traffic — it&apos;s a public marketing page that explains the program, runs an interactive earnings calculator,
+                and routes visitors to <strong className="text-white">create their account</strong> before applying.
+                Perfect for your bio link, your X/Twitter pinned post, or affiliate-recruitment outreach.
+            </P>
+
+            <Callout kind="warn">
+                <strong>The agreement matters.</strong> Self-referrals, brand-bidding on &quot;STOIC&quot; keywords, and
+                guaranteed-profit claims will get you banned and forfeit your unpaid balance. Section 5 of the agreement
+                covers the FTC / FCA / SEC essentials — read it before publishing anything.
+            </Callout>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+                <CTAButton to="/affiliate" testid="guide-cta-affiliate-dashboard">AFFILIATE DASHBOARD</CTAButton>
+                <Link to="/affiliates" data-testid="guide-cta-affiliate-public"
+                    className="inline-flex items-center gap-2 border border-[#FFD700]/40 hover:bg-[#FFD700]/10 text-[#FFD700] font-medium px-4 py-2 text-xs tracking-widest transition-colors">
+                    VIEW PUBLIC LANDING PAGE <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+            </div>
+        </section>
+    );
+}
+
 function QuickLinks() {
     const links = [
         { to: "/", label: "Dashboard" },
@@ -682,13 +811,14 @@ function QuickLinks() {
         { to: "/accounts", label: "MT5 Accounts" },
         { to: "/trades", label: "Trades" },
         { to: "/analytics", label: "Analytics" },
+        { to: "/affiliate", label: "Affiliate" },
         { to: "/billing", label: "Billing" },
         { to: "/settings", label: "Settings" },
         { to: "/faq", label: "FAQ" },
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>12. Quick links</H2>
+            <H2 id="faq" icon={Zap}>14. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (

@@ -88,6 +88,13 @@ export default function Register() {
                     Already have access?{" "}
                     <Link to="/login" data-testid="register-login-link" className="text-[#00FF41] hover:underline">Sign in</Link>
                 </div>
+
+                <div className="mt-3 text-sm">
+                    <Link to="/affiliates" data-testid="register-affiliate-link"
+                        className="font-mono text-[10px] text-[#FFD700] tracking-widest hover:underline">
+                        EARN 20% RECURRING · AFFILIATE PROGRAM →
+                    </Link>
+                </div>
             </div>
         </div>
     );

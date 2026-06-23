@@ -162,6 +162,13 @@ export default function Login() {
                         <Link to="/register" data-testid="login-register-link" className="text-[#00FF41] hover:underline">Create account</Link>
                     </div>
 
+                    <div className="mt-3 text-sm">
+                        <Link to="/affiliates" data-testid="login-affiliate-link"
+                            className="font-mono text-[10px] text-[#FFD700] tracking-widest hover:underline">
+                            EARN 20% RECURRING · BECOME AN AFFILIATE →
+                        </Link>
+                    </div>
+
                     <div className="mt-10 pt-6 border-t border-[#1F1F1F]">
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">DEMO CREDENTIALS</div>
                         <div className="font-mono text-xs text-[#A1A1AA]">

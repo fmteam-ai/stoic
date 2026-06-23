@@ -24,6 +24,7 @@ import Billing from "@/pages/Billing";
 import FAQ from "@/pages/FAQ";
 import Guide from "@/pages/Guide";
 import Agents from "@/pages/Agents";
+import AffiliateLanding from "@/pages/AffiliateLanding";
 
 function App() {
     return (
@@ -33,6 +34,8 @@ function App() {
                     <Routes>
                         <Route path="/login" element={<Login />} />
                         <Route path="/register" element={<Register />} />
+                        {/* Public affiliate marketing page — no auth required */}
+                        <Route path="/affiliates" element={<AffiliateLanding />} />
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/signals" element={<ProtectedRoute><Signals /></ProtectedRoute>} />
                         <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
