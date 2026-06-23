@@ -160,3 +160,84 @@ def test_reconcile_skips_trades_without_mt5_ticket(db, seeded):
     assert summary["closed_count"] == 2
     untouched = db.trades.find_one({"_id": ObjectId(seeded["trade_ids"][0])})
     assert untouched["status"] == "open"
+
+
+def test_reconcile_clears_pending_close_orphans(db, seeded):
+    """REGRESSION (iter-23.1): user clicks × CLOSE → trade flips to
+    status=pending with close_requested=True. EA never acks. Reconciler must
+    close these too, not just status=open trades.
+    """
+    from trade_reconciler import reconcile_account
+
+    db.trades.update_many(
+        {"account_id": seeded["account_id"]},
+        {"$set": {"status": "pending", "close_requested": True, "close_reason": "manual"}},
+    )
+    open_count = db.trades.count_documents({"account_id": seeded["account_id"], "status": "open"})
+    assert open_count == 0
+
+    summary = _arun(reconcile_account(seeded["account_id"], [], source="test"))
+    assert summary["closed_count"] == 3, "Pending+close_requested orphans must be closed"
+    closed_count = db.trades.count_documents({"account_id": seeded["account_id"], "status": "closed"})
+    assert closed_count == 3
+
+
+def test_reconcile_keeps_pending_open_without_close_request(db, seeded):
+    """Pending-OPEN trades (waiting for EA to first execute, no close_requested)
+    must NOT be touched — reconciler is for orphans, not never-filled new orders.
+    """
+    from trade_reconciler import reconcile_account
+
+    db.trades.update_many(
+        {"account_id": seeded["account_id"]},
+        {"$set": {"status": "pending"}, "$unset": {"close_requested": ""}},
+    )
+    summary = _arun(reconcile_account(seeded["account_id"], [], source="test"))
+    assert summary["closed_count"] == 0
+    pending_still = db.trades.count_documents({"account_id": seeded["account_id"], "status": "pending"})
+    assert pending_still == 3
+
+
+def test_reconcile_user_closes_account_orphans(db, seeded):
+    """REGRESSION (iter-23.2): trades attached to a deleted account become
+    permanently orphaned (no broker to reconcile against). reconcile_user
+    must sweep them with close_reason='account_deleted'.
+    """
+    from trade_reconciler import reconcile_user
+
+    # Delete the account, leaving the 3 trades attached to a now-orphan account_id
+    db.accounts.delete_one({"_id": ObjectId(seeded["account_id"])})
+
+    result = _arun(reconcile_user(seeded["user_id"]))
+    assert result["total_closed"] == 3
+    # Sweep summary should show under "<deleted>" pseudo-account
+    deleted_summary = next(
+        s for s in result["accounts"] if s.get("account_id") == "<deleted>"
+    )
+    assert deleted_summary["closed_count"] == 3
+
+    # All 3 trades flipped to closed with the right reason
+    closed = db.trades.find({"_id": {"$in": [ObjectId(t) for t in seeded["trade_ids"]]}})
+    for t in closed:
+        assert t["status"] == "closed"
+        assert t["close_reason"] == "account_deleted"
+        assert t["reconciled"] is True
+
+
+def test_reconcile_user_pending_close_via_count_fallback(db, seeded):
+    """End-to-end: user clicks × CLOSE on all 3 → status=pending+close_req.
+    Heartbeat says open_positions=0. reconcile_user must close all 3 via the
+    count fallback, even though their status is pending (not open).
+    """
+    from trade_reconciler import reconcile_user
+
+    db.trades.update_many(
+        {"account_id": seeded["account_id"]},
+        {"$set": {"status": "pending", "close_requested": True, "close_reason": "manual"}},
+    )
+    db.accounts.update_one(
+        {"_id": ObjectId(seeded["account_id"])},
+        {"$set": {"open_positions": 0, "last_heartbeat": _now()}},
+    )
+    result = _arun(reconcile_user(seeded["user_id"]))
+    assert result["total_closed"] == 3

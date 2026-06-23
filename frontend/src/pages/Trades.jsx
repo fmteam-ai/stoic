@@ -172,7 +172,9 @@ export default function Trades() {
     const quoteHistoryRef = useRef({}); // {SYMBOL: [{ts, price}]}
     const [velocities, setVelocities] = useState({}); // {SYMBOL: priceUnitsPerSec}
 
+    const [refreshing, setRefreshing] = useState(false);
     const load = useCallback(async () => {
+        setRefreshing(true);
         try {
             const [t, s] = await Promise.all([
                 api.get(`/trades${filter ? `?status=${filter}` : ""}`),
@@ -180,7 +182,7 @@ export default function Trades() {
             ]);
             setTrades(t.data); setStats(s.data);
         } catch (e) { setErr(formatApiError(e)); }
-        finally { setLoading(false); }
+        finally { setLoading(false); setRefreshing(false); }
     }, [filter]);
 
     useEffect(() => { load(); }, [load]);
@@ -319,9 +321,11 @@ export default function Trades() {
                             className="flex items-center gap-2 px-3 py-2 border border-[#FFB000]/40 hover:bg-[#FFB000]/10 disabled:opacity-50 text-[#FFB000] text-xs font-mono tracking-widest transition-colors">
                             <GitMerge className="w-3.5 h-3.5" /> {reconciling ? "SYNCING…" : "SYNC WITH BROKER"}
                         </button>
-                        <button onClick={load} data-testid="trades-refresh-button"
-                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
-                            <ArrowsClockwise className="w-3.5 h-3.5" /> REFRESH
+                        <button onClick={load} disabled={refreshing}
+                            data-testid="trades-refresh-button"
+                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] disabled:opacity-50 text-xs font-mono tracking-widest transition-colors">
+                            <ArrowsClockwise className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                            {refreshing ? "REFRESHING…" : "REFRESH"}
                         </button>
                     </div>
                 }

@@ -1,13 +1,19 @@
-"""Reconcile DB-open trades against the EA's actual list of open MT5 tickets.
+"""Reconcile DB trades against the EA's actual list of open MT5 tickets.
 
-A trade is "orphaned" when:
-  • DB has it as status="open" with a non-null mt5_ticket
-  • Heartbeat says the broker no longer has that ticket open
+A trade is "orphaned" when the broker no longer reports its ticket as open,
+but STOIC still has it in a non-terminal state. Two flavours:
 
-The most common cause is a missed `/bridge/report` POST when MT5 fired a
-stop-loss / take-profit. EA may have crashed, restarted, or had a network blip
-at the moment of close. Without reconciliation, the trade stays "open" in the
-UI forever, throwing off P&L, anti-tilt counters, and concurrent-trade caps.
+  • status="open"    — the original bug. Bot opened a position; SL hit at the
+    broker; EA crashed / lost connection / missed the close report. Trade
+    sits OPEN in STOIC forever, throwing off P&L and concurrent-trade caps.
+
+  • status="pending" + close_requested=True — user clicked × CLOSE on the row.
+    Backend set the trade to pending-close; EA was supposed to execute on MT5
+    and ack with /bridge/report. EA never ack'd. Broker has already closed it
+    (or it was never open) — STOIC should mirror reality.
+
+Both are dangerous to leave hanging: anti-tilt counters miscount, drawdown
+caps misfire, manual close buttons get stuck.
 """
 from datetime import datetime, timezone
 from bson import ObjectId
@@ -25,11 +31,16 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
     db = get_db()
     open_set = {int(t) for t in (open_tickets or []) if t is not None}
 
-    # Find all DB-open trades on this account that have a real ticket
+    # Orphan-able set:
+    #   • status="open" with a real ticket (the original bug — SL hit, EA missed report)
+    #   • status="pending" with close_requested=True and a real ticket (user clicked
+    #     × CLOSE; EA never ack'd. Broker has already closed it — mirror that.)
     cursor = db.trades.find({
         "account_id": account_id,
-        "status": "open",
-        "mt5_ticket": {"$ne": None},
+        "$or": [
+            {"status": "open", "mt5_ticket": {"$ne": None}},
+            {"status": "pending", "close_requested": True, "mt5_ticket": {"$ne": None}},
+        ],
     })
     candidates = await cursor.to_list(length=200)
 
@@ -80,11 +91,59 @@ async def reconcile_user(user_id: str) -> dict:
     heartbeat reports `open_positions == 0`, we know unambiguously that the
     broker has zero open positions, so every DB-open trade on that account
     must be stale.
+
+    Also sweeps "account-orphan" trades — pending/open trades attached to an
+    account_id that no longer exists in the user's accounts (account was
+    deleted while a position was still open). These can never be reconciled
+    against a broker again, so we close them with reason="account_deleted".
     """
     db = get_db()
     cursor = db.accounts.find({"user_id": user_id})
     accounts = await cursor.to_list(length=20)
+    valid_account_ids = {str(a["_id"]) for a in accounts}
+
     summaries = []
+
+    # Phase 1: account-orphan sweep (trades whose account was deleted)
+    orphan_cursor = db.trades.find({
+        "user_id": user_id,
+        "$or": [
+            {"status": "open", "mt5_ticket": {"$ne": None}},
+            {"status": "pending", "close_requested": True, "mt5_ticket": {"$ne": None}},
+        ],
+    })
+    all_orphan_candidates = await orphan_cursor.to_list(length=200)
+    deleted_account_orphans = [
+        t for t in all_orphan_candidates
+        if t.get("account_id") not in valid_account_ids
+    ]
+    if deleted_account_orphans:
+        from ws_manager import manager as ws_manager
+        now_iso = datetime.now(timezone.utc).isoformat()
+        closed_ids = []
+        for t in deleted_account_orphans:
+            update = {
+                "status": "closed",
+                "closed_at": now_iso,
+                "close_reason": "account_deleted",
+                "reconciled": True,
+                "reconciled_at": now_iso,
+            }
+            await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
+            closed_ids.append(str(t["_id"]))
+            await ws_manager.broadcast(user_id, "trade_updated", {
+                "trade_id": str(t["_id"]),
+                **update,
+            })
+        summaries.append({
+            "account_id": "<deleted>",
+            "label": "Deleted account orphans",
+            "closed_count": len(closed_ids),
+            "closed_trade_ids": closed_ids,
+            "source": "account_deleted_sweep",
+        })
+
+    # Phase 2: per-account reconciliation against live broker state
     for acc in accounts:
         tickets = acc.get("open_tickets")
         if tickets is None:
