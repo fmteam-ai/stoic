@@ -8,6 +8,7 @@ from models import BridgeHeartbeat, BridgeTradeReport
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips
 from intelligence_counters import increment as inc_intel_counter
+from trade_reconciler import reconcile_account, reconcile_user
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
 
@@ -43,6 +44,22 @@ async def heartbeat(payload: BridgeHeartbeat):
         if clean:
             set_doc["current_spreads"] = clean
             set_doc["spreads_updated_at"] = now_iso
+
+    # EA v1.22+: persist the ticket list so the user can later trigger
+    # manual reconciliation even if a heartbeat isn't currently in flight.
+    reconcile_summary = None
+    if payload.open_tickets is not None:
+        try:
+            tickets = [int(t) for t in payload.open_tickets if t is not None]
+        except (TypeError, ValueError):
+            tickets = []
+        set_doc["open_tickets"] = tickets
+        set_doc["open_tickets_updated_at"] = now_iso
+        # Auto-reconcile on every heartbeat — closes orphans within ~5s of EA tick.
+        reconcile_summary = await reconcile_account(
+            str(acc["_id"]), tickets, source="heartbeat",
+        )
+
     await db.accounts.update_one({"_id": acc["_id"]}, {"$set": set_doc})
     await ws_manager.broadcast(acc["user_id"], "account_heartbeat", {
         "account_id": str(acc["_id"]),
@@ -52,7 +69,10 @@ async def heartbeat(payload: BridgeHeartbeat):
         "last_heartbeat": now_iso,
         "spreads": set_doc.get("current_spreads"),
     })
-    return {"ok": True, "server_time": now_iso}
+    resp = {"ok": True, "server_time": now_iso}
+    if reconcile_summary and reconcile_summary["closed_count"] > 0:
+        resp["reconciled"] = reconcile_summary
+    return resp
 
 
 class PollRequest(BaseModel):

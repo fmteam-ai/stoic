@@ -206,6 +206,10 @@ class BridgeHeartbeat(BaseModel):
     balance: float
     equity: float
     open_positions: int = 0
+    # EA v1.22+: full ticket list of currently-open MT5 positions on this account.
+    # When provided, the server reconciles DB-open trades against this list and
+    # auto-closes any orphans (e.g. SL hit but trade-close report was missed).
+    open_tickets: Optional[list[int]] = None
     spreads: Optional[Dict[str, float]] = None  # symbol -> spread in pips (EA v1.21+)
 
 

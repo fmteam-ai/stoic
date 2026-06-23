@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -272,6 +272,38 @@ export default function Trades() {
         try { await api.post(`/trades/${id}/close`); await load(); } catch (e) { setErr(formatApiError(e)); }
     };
 
+    const [reconciling, setReconciling] = useState(false);
+    const reconcile = async () => {
+        if (!window.confirm(
+            "Sync open trades with the broker?\n\n" +
+            "Any STOIC-open trade that the broker no longer reports as open " +
+            "will be marked closed (orphaned by a missed EA report). This is " +
+            "safe — it never opens or modifies real positions.",
+        )) return;
+        setReconciling(true);
+        try {
+            const { data } = await api.post("/trades/reconcile");
+            const total = data.total_closed || 0;
+            if (total > 0) {
+                toast.success(`Synced · closed ${total} orphan${total === 1 ? "" : "s"}`, {
+                    description: "Trades that had hit SL/TP at the broker are now reflected here.",
+                });
+            } else {
+                toast(`All open trades match the broker — nothing to close.`);
+            }
+            // Inspect any "skipped" accounts so the user knows if their EA is too old
+            const skipped = (data.accounts || []).filter(a => a.skipped);
+            if (skipped.length) {
+                toast(`${skipped.length} account(s) skipped — update your MT5 EA to v1.22+ for live reconciliation.`);
+            }
+            await load();
+        } catch (e) {
+            toast.error("Sync failed", { description: formatApiError(e) });
+        } finally {
+            setReconciling(false);
+        }
+    };
+
     return (
         <AppLayout>
             <PageHeader
@@ -281,6 +313,12 @@ export default function Trades() {
                 action={
                     <div className="flex gap-2 items-center">
                         <ClearTradesMenu trades={trades} onCleared={load} />
+                        <button onClick={reconcile} disabled={reconciling}
+                            data-testid="trades-reconcile-button"
+                            title="Close any STOIC-open trade that the broker no longer reports as open"
+                            className="flex items-center gap-2 px-3 py-2 border border-[#FFB000]/40 hover:bg-[#FFB000]/10 disabled:opacity-50 text-[#FFB000] text-xs font-mono tracking-widest transition-colors">
+                            <GitMerge className="w-3.5 h-3.5" /> {reconciling ? "SYNCING…" : "SYNC WITH BROKER"}
+                        </button>
                         <button onClick={load} data-testid="trades-refresh-button"
                             className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
                             <ArrowsClockwise className="w-3.5 h-3.5" /> REFRESH

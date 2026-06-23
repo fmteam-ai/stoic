@@ -9,8 +9,20 @@ from database import get_db
 from market import get_quote
 from rate_limiter import check_and_record
 from execution import for_account as engine_for_account
+from trade_reconciler import reconcile_user
 
 router = APIRouter(prefix="/trades", tags=["trades"])
+
+
+@router.post("/reconcile")
+async def reconcile_open_trades(user=Depends(get_current_user)):
+    """Force-close any DB-open trade that the broker no longer reports as open.
+
+    Uses the `open_tickets` list stored on each account from the last heartbeat
+    (EA v1.22+). Returns a per-account summary of how many trades were closed.
+    Frontend exposes this via the SYNC WITH BROKER button on the Trades page.
+    """
+    return await reconcile_user(user["id"])
 
 
 class ManualTradeRequest(BaseModel):
