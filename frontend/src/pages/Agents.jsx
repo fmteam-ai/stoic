@@ -226,13 +226,13 @@ function TickRow({ tick }) {
                 </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                {tick.steps.map((step, i) => {
+                {tick.steps.map((step) => {
                     const meta = AGENT_META[step.agent] || { label: step.agent, icon: Activity, color: "#52525B" };
                     const palette = STATUS_PALETTE[step.status] || STATUS_PALETTE.skipped;
                     const StatusIcon = palette.icon;
                     const Icon = meta.icon;
                     return (
-                        <div key={i} className={`border ${palette.bd} ${palette.bg} px-3 py-2`}
+                        <div key={step.agent} className={`border ${palette.bd} ${palette.bg} px-3 py-2`}
                             data-testid={`step-${step.agent}`}>
                             <div className="flex items-center justify-between mb-1">
                                 <div className="flex items-center gap-1.5">
