@@ -5,7 +5,7 @@ import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
-    CreditCard, HelpCircle
+    CreditCard, HelpCircle, BookOpen
 } from "lucide-react";
 
 const items = [
@@ -22,6 +22,7 @@ const items = [
     { to: "/billing", label: "Billing", icon: CreditCard, testid: "nav-billing" },
     { to: "/affiliate", label: "Affiliate", icon: Users, testid: "nav-affiliate" },
     { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
+    { to: "/guide", label: "Guide", icon: BookOpen, testid: "nav-guide" },
     { to: "/faq", label: "FAQ", icon: HelpCircle, testid: "nav-faq" },
 ];
 

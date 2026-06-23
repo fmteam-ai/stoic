@@ -8,6 +8,7 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-02-23 — **Guide page autopilot rework**: Added new Section 7 "Autopilot mode explained" with a 7-stage lifecycle diagram (Tick → Dual-AI → Cascade → Sizing → EA Order → Server-side monitor → Guards) and an 8-item pre-flight checklist. Renumbered TOC, sharpened Step 6 with exact toggles (START BOT, Auto-Execute = ENABLED, Default MT5 account, Symbols list) and a VPS callout in Step 3 for 24/7 operation. Intro now leads with "complete autopilot" + a TL;DR Callout. User-verified via screenshots.
 - Earlier sessions: pip-based scaling (SL 150 / TP1 100 / TP2 200 / TP3 300),
   Profit Protection Suite (BE shift, trailing), Telegram 2-way bot,
   Performance Attribution Analytics, Encrypted Broker Vault, Bot Status Strip.
@@ -42,7 +43,37 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   - Tests: 12 new (TestMtfGate ×5, TestAutoTune ×4, TestSpreadFilter ×3).
   - **Regression: 156/156 backend tests passing.**
 
-## Active features (live)
+- 2026-06-23 (iter-15) — **Self-service operations + content** (this fork):
+  - **Billing page** (`/billing`) — current plan, expiration with day-countdown,
+    auto-renew status, full transaction history. Smart CTA adapts to plan
+    state (RENEW / MANAGE / ADMIN GRANT).
+  - **FAQ page** (`/faq`) — 40 hand-written entries in 8 categories
+    (Getting Started, AI Signals, Risk, MT5 Bridge, Billing, Security,
+    Notifications, Troubleshooting) with search + category filter + accordion.
+  - **Guide page** (`/guide`) — sticky-TOC docs site with 10 sections covering
+    what STOIC is, why it's different vs retail bots, the dual-AI engine,
+    full 10-veto cascade, risk guards, step-by-step setup (6 steps),
+    daily workflow (5 min/day), advanced tuning + audit, going-live path
+    (paper → real), and quick-link launcher.
+  - **Bulk-clear** for Signals (`DELETE /api/signals`, scope=all|hold|non_hold
+    + older_than_days) and Trades (`DELETE /api/trades`, scope=all|closed|
+    cancelled|failed, with hard refuse on open/pending).
+  - **HoldReasonBanner** + **StrengthBanner** — every signal card now has a
+    plain-English audit line; BUY/SELLs get a 0-100 strength score with
+    component-level concerns/strengths chips.
+  - **Signal filter chips** — STRONG / SOLID / MARGINAL / BLOCKED / ALL HOLDS,
+    live counts, auto-disabled empty buckets.
+  - **Telegram safety net** — `_is_plausible_trade()` in `notifier.py` blocks
+    obviously-synthetic alerts (mock tickets < 1M, entry > 50% off live quote).
+    Combined with the pytest conftest + `notified_opened` flag = 3-layer
+    defence against phantom Telegram messages.
+  - **Real bug fixes**: `anti_tilt_active` was set but never enforced — now
+    correctly freezes new entries when tripped. Stripe webhook stack-trace
+    spam fixed (CheckoutError catch). PUT `/api/bot/config` switched to
+    PATCH semantics (partial updates no longer wipe other fields).
+  - **Sidebar** — added Billing, Guide, FAQ entries. Sidebar is now 15 items.
+  - **Tests**: regression suite still green; pytest `conftest.py` autouse
+    fixture silences ALL outbound notifications during tests.
 - Live MT5 execution via signed Bridge token (EA v1.21).
 - Paper accounts with simulator + manual close.
 - Dual-AI Claude Sonnet 4.5 + indicators engine.
