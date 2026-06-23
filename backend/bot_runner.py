@@ -23,6 +23,7 @@ from execution import for_account as engine_for_account
 from execution import settle_paper_trades_against_price
 from trigger_sweeper import sweep_once as sweep_triggers
 from sl_watcher import sweep_once as sweep_sl_imminent
+from position_protector import sweep_all as sweep_pre_news
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
@@ -39,6 +40,45 @@ def _loop_interval() -> int:
 
 def _cooldown_minutes() -> int:
     return int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "15"))
+
+
+def _sl_cooldown_minutes_default() -> int:
+    return int(os.environ.get("SL_COOLDOWN_MIN", "45"))
+
+
+async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int) -> dict | None:
+    """If the most recent trade for (user, symbol) was a stop-out within
+    `lookback_min` minutes, return that trade's metadata. Used to suppress
+    revenge re-entries into the same losing regime.
+    """
+    if lookback_min <= 0:
+        return None
+    cursor = db.trades.find({
+        "user_id": user_id,
+        "symbol": symbol,
+        "status": "closed",
+        "close_reason": "stop_loss",
+    }).sort("closed_at", -1).limit(1)
+    docs = await cursor.to_list(length=1)
+    if not docs:
+        return None
+    last = docs[0]
+    closed_at = last.get("closed_at")
+    if not closed_at:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(closed_at).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    age_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+    if age_min < lookback_min:
+        return {
+            "trade_id": str(last.get("_id")),
+            "age_minutes": round(age_min, 1),
+            "lookback_minutes": lookback_min,
+            "resumes_in_min": round(lookback_min - age_min, 1),
+        }
+    return None
 
 
 def _on_cooldown(user_id: str, symbol: str) -> bool:
@@ -113,6 +153,8 @@ async def _process_user(db, cfg: dict):
     anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4))
     trade_of_day_cap = int(cfg.get("trade_of_day_cap", 1) or 0)
     asia_skip_xau = bool(cfg.get("asia_session_skip_xau", True))
+    sl_cooldown_enabled = bool(cfg.get("sl_cooldown_enabled", True))
+    sl_cooldown_min = int(cfg.get("sl_cooldown_minutes", _sl_cooldown_minutes_default()) or 0)
 
     # === Anti-tilt: freeze auto-execute if last N closed trades all lost ===
     anti_tilt_active = False
@@ -165,6 +207,19 @@ async def _process_user(db, cfg: dict):
             if today_count >= trade_of_day_cap:
                 logger.info("Trade-of-day cap reached user=%s sym=%s count=%d/%d",
                             user_id, sym, today_count, trade_of_day_cap)
+                continue
+
+        # 3. Per-symbol SL cooldown — if last trade on this symbol stopped out
+        #    within `sl_cooldown_minutes`, block re-entry. Prevents revenge-regime
+        #    bounce-trading into the same losing setup.
+        if sl_cooldown_enabled and sl_cooldown_min > 0:
+            sl_cd = await _on_sl_cooldown(db, user_id, sym, sl_cooldown_min)
+            if sl_cd:
+                logger.info(
+                    "SL cooldown user=%s sym=%s last_sl=%smin ago, resumes in %smin",
+                    user_id, sym, sl_cd["age_minutes"], sl_cd["resumes_in_min"],
+                )
+                await inc_intel_counter(user_id, "sl_cooldown_block")
                 continue
 
         try:
@@ -323,6 +378,14 @@ async def loop():
                                 sl_sweep["fired"], sl_sweep["checked"])
             except Exception as e:
                 logger.exception("SL-imminent sweep failed: %s", e)
+            # Pre-news existing-position protector — flatten open trades into
+            # imminent HIGH-impact macro events (NFP/CPI/FOMC).
+            try:
+                protected = await sweep_pre_news(db)
+                if protected:
+                    logger.warning("Pre-news protect flattened %d trade(s)", protected)
+            except Exception as e:
+                logger.exception("Pre-news protect sweep failed: %s", e)
         except Exception as e:
             logger.exception("Bot runner tick failed: %s", e)
         await asyncio.sleep(interval)

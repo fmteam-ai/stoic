@@ -60,6 +60,14 @@ const FAQS = [
       a: "XAUUSD chops sideways during the Asia session (00:00-07:00 UTC) with razor-thin moves and wide spreads. By default STOIC skips new gold entries in that window. Toggle in Bot Config → Capital Preservation." },
     { cat: "risk", q: "What is the slippage veto?",
       a: "Server-side check that runs after the EA fills your order. If the actual fill price is more than N pips from the intended entry (default 5 for XAU, 50 for BTC), the trade is auto-closed and a 'VETOED — slippage too wide' notice is logged." },
+    { cat: "risk", q: "What is the Post-SL Cooldown?",
+      a: "If a trade just stopped out, STOIC locks NEW entries on the same symbol for 45 minutes by default. Prevents revenge-regime re-entry — the same conditions that hit your last SL are likely to hit the next one too. Tunable in Bot Config → Capital Preservation." },
+    { cat: "risk", q: "What is the Pre-News Position Protector?",
+      a: "Veto #2 of the cascade blocks NEW entries before a high-impact macro event (NFP / CPI / FOMC). The Pre-News Protector covers the other half — it auto-flattens OPEN trades 5 min before the event so they aren't exposed to news-spike whipsaws. Tunable in Bot Config." },
+    { cat: "risk", q: "How does the Liquidity-Window Booster work?",
+      a: "For Gold (XAUUSD) only: during the London-NY overlap (13:00-16:00 UTC) STOIC lowers the min-confidence floor by 3 pts (best liquidity, cleanest trends). In off-hours it raises the floor by 4 pts (wide spreads, choppy fills). BTC trades 24/7 so this only applies to gold." },
+    { cat: "risk", q: "How does ATR-Adaptive SL/TP work?",
+      a: "Instead of fixed pip stops, STOIC sizes the stop-loss at 1.5 × ATR(14) and take-profit at 5 × ATR. The stops shrink in calm markets (capturing tight trends) and widen in volatile ones (so noise doesn't trigger them). Falls back to 150/300 fixed pips if ATR isn't available." },
 
     // MT5 Bridge ─────────────────────────────────────────────────────────────
     { cat: "mt5", q: "How does the MT5 EA bridge work?",

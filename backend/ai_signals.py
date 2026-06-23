@@ -150,6 +150,29 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
     # --- Regime-Adaptive Risk Modifier — swap execution mode by live regime ---
     adapted_profile, regime_meta = adapt_profile_for_regime(profile, regime)
 
+    # --- Liquidity-window booster (XAUUSD only) ---
+    # Gold trends cleanest during London/NY overlap (13:00-16:00 UTC) — tighten
+    # the confidence floor a touch in that window to capture the best setups;
+    # raise it in off-hours where slippage and chop tax everything.
+    # No-op for non-XAU symbols.
+    liquidity_window = {
+        "primary": session["primary"],
+        "high_volume_overlap": bool(session.get("is_high_volume_window")),
+        "confidence_adjustment": 0,
+    }
+    if symbol.upper() == "XAUUSD":
+        base_min = adapted_profile["min_confidence"]
+        if session.get("is_high_volume_window"):
+            # Lower floor by 3 pts (clamped at 70) — best liquidity, tightest spreads.
+            new_min = max(70, base_min - 3)
+            liquidity_window["confidence_adjustment"] = new_min - base_min
+            adapted_profile = {**adapted_profile, "min_confidence": new_min}
+        elif session["primary"] in ("off-hours",) and not session.get("is_weekend"):
+            # Raise floor by +4 (clamped at 92) — off-hours = wider spreads.
+            new_min = min(92, base_min + 4)
+            liquidity_window["confidence_adjustment"] = new_min - base_min
+            adapted_profile = {**adapted_profile, "min_confidence": new_min}
+
     current_price = quote.get("price") or indicators.get("current_price") or 0.0
 
     user_text = json.dumps({
@@ -470,6 +493,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "real_yield_10y": tips_feat,
         "dxy": dxy_feat,
         "dxy_gate": dxy_gate,
+        "liquidity_window": liquidity_window,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
         "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto) or bool(dxy_veto),

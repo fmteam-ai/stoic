@@ -45,6 +45,10 @@ async def _get_or_create_config(db, user_id: str) -> dict:
         "anti_tilt_freeze_hours": 4,
         "trade_of_day_cap": 1,
         "asia_session_skip_xau": True,
+        "sl_cooldown_enabled": True,
+        "sl_cooldown_minutes": 45,
+        "pre_news_protect_enabled": True,
+        "pre_news_protect_minutes": 5,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.bot_configs.insert_one(new_cfg)
@@ -83,6 +87,10 @@ def _serialize(cfg: dict) -> dict:
         "anti_tilt_freeze_hours": cfg.get("anti_tilt_freeze_hours", 4),
         "trade_of_day_cap": cfg.get("trade_of_day_cap", 1),
         "asia_session_skip_xau": cfg.get("asia_session_skip_xau", True),
+        "sl_cooldown_enabled": cfg.get("sl_cooldown_enabled", True),
+        "sl_cooldown_minutes": cfg.get("sl_cooldown_minutes", 45),
+        "pre_news_protect_enabled": cfg.get("pre_news_protect_enabled", True),
+        "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
         "updated_at": cfg.get("updated_at"),
     }
 

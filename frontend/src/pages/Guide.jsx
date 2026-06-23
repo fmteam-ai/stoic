@@ -292,6 +292,10 @@ function RiskSection() {
         ["❄ Anti-Tilt Freeze",               "Pauses new entries after N consecutive losses"],
         ["📅 Trade-of-Day Cap",              "Max N entries per symbol per UTC day"],
         ["🌙 Asia-Session XAU Skip",         "No new gold trades 00:00–07:00 UTC"],
+        ["⏱ Post-SL Cooldown",               "Blocks re-entry on the same symbol for N min after a stop-out"],
+        ["📣 Pre-News Position Protector",   "Auto-flattens open trades 5 min before NFP / CPI / FOMC"],
+        ["💧 Liquidity-Window Booster",      "XAU: lowers conf-floor 3 pts in London-NY overlap; raises 4 pts in off-hours"],
+        ["📐 ATR-Adaptive SL/TP",            "SL = 1.5 × ATR · TP = 5 × ATR — scales with current volatility regime"],
         ["💨 Server-Side Slippage Veto",     "Auto-closes trades filled >N pips off intent"],
         ["📊 Spread Filter",                  "Skip entries when broker spread > cap"],
     ];

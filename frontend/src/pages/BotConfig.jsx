@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone } from "lucide-react";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -63,6 +63,10 @@ export default function BotConfig() {
                 anti_tilt_freeze_hours: cfg.anti_tilt_freeze_hours,
                 trade_of_day_cap: cfg.trade_of_day_cap,
                 asia_session_skip_xau: cfg.asia_session_skip_xau,
+                sl_cooldown_enabled: cfg.sl_cooldown_enabled,
+                sl_cooldown_minutes: cfg.sl_cooldown_minutes,
+                pre_news_protect_enabled: cfg.pre_news_protect_enabled,
+                pre_news_protect_minutes: cfg.pre_news_protect_minutes,
             });
             setCfg(data); setMsg("Configuration saved.");
         } catch (e) { setErr(formatApiError(e)); }
@@ -295,6 +299,28 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="asia_session_skip_xau" label="Skip Asia-Session Gold (XAU)" icon={MoonStar} color="#FFD700"
                         desc="XAUUSD chops sideways during the Asia session (00:00–07:00 UTC) with razor-thin moves and wide spreads. Toggle ON to skip new XAU entries during this window." />
+                </div>
+
+                {/* SL Cooldown */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="sl_cooldown_enabled" label="Post-SL Cooldown" icon={Timer} color="#FF3B30"
+                        desc="If a trade was just stopped out, block new entries on the same symbol for N minutes. Prevents revenge-regime re-entry into the same losing setup." />
+                    {cfg.sl_cooldown_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="sl_cooldown_minutes" label="COOLDOWN WINDOW" suffix="minutes" step={5} min={5} max={240} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Pre-news Position Protector */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="pre_news_protect_enabled" label="Pre-News Position Protector" icon={Megaphone} color="#FFB000"
+                        desc="Automatically flatten OPEN trades right before a high-impact macro event (NFP / CPI / FOMC). Veto #2 already blocks NEW entries — this protects positions already in flight." />
+                    {cfg.pre_news_protect_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="pre_news_protect_minutes" label="FLATTEN WINDOW BEFORE EVENT" suffix="minutes" step={1} min={1} max={30} />
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

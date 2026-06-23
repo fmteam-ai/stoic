@@ -225,3 +225,13 @@ async def notify_high_conf_signal(user_id: str, signal: dict) -> None:
             f"Entry: {signal.get('entry_price')}",
             f"SL: {signal.get('stop_loss')}  TP: {signal.get('take_profit')}",
         ])
+
+
+async def notify_pre_news_close(user_id: str, trade_id: str, symbol: str, event_title: str, minutes_until: float) -> None:
+    await send_telegram(user_id, "pre_news_protect",
+        f"🛡 Pre-News Protect · {symbol}",
+        [
+            f"Trade: {trade_id[-6:]}",
+            f"Flattening before '{event_title}' in {minutes_until:.0f}min.",
+            "Position will be re-evaluated after the event settles.",
+        ])

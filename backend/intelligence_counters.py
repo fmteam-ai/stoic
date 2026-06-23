@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 
 from database import get_db
 
-CATEGORIES = ("mtf_veto", "auto_tune_block", "spread_block", "slippage_veto", "learned_meta_veto", "aplus_veto", "rr_veto")
+CATEGORIES = ("mtf_veto", "auto_tune_block", "spread_block", "slippage_veto", "learned_meta_veto", "aplus_veto", "rr_veto", "sl_cooldown_block", "pre_news_protect")
 
 
 def _today() -> str:

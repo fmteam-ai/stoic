@@ -141,6 +141,12 @@ class BotConfigUpdate(BaseModel):
     anti_tilt_freeze_hours: int = 4
     trade_of_day_cap: int = 1   # max NEW trades per symbol per UTC day; 0 = unlimited
     asia_session_skip_xau: bool = True
+    # Per-symbol cooldown after a stop-loss hit — prevents revenge-regime re-entry
+    sl_cooldown_enabled: bool = True
+    sl_cooldown_minutes: int = 45
+    # Pre-news existing-position protector — flatten OPEN trades into imminent HIGH-impact events
+    pre_news_protect_enabled: bool = True
+    pre_news_protect_minutes: int = 5
 
 
 class BotConfigOut(BotConfigUpdate):
