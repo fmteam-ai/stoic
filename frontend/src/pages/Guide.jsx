@@ -4,22 +4,23 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
-    Plane, Power, Repeat, Eye,
+    Plane, Power, Repeat, Eye, Cpu, Search, Send,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
 const SECTIONS = [
-    { id: "intro",        title: "1. What is STOIC?",                 icon: BookOpen },
-    { id: "edge",         title: "2. Why STOIC is different",         icon: Sparkles },
-    { id: "engine",       title: "3. The Dual-AI engine",             icon: Brain },
-    { id: "cascade",      title: "4. The 10-Layer Veto Cascade",      icon: Layers },
-    { id: "risk",         title: "5. Risk & Capital Preservation",    icon: ShieldCheck },
-    { id: "setup",        title: "6. Setup — sign-up to autopilot",   icon: Rocket },
-    { id: "autopilot",    title: "7. Autopilot mode explained",       icon: Plane },
-    { id: "daily",        title: "8. Daily 5-min routine",            icon: Clock },
-    { id: "advanced",     title: "9. Advanced — tuning & auditing",   icon: SettingsIcon },
-    { id: "going-live",   title: "10. Going live (paper → real)",     icon: TrendingUp },
-    { id: "faq",          title: "11. Quick links",                   icon: Zap },
+    { id: "intro",        title: "1. What is STOIC?",                  icon: BookOpen },
+    { id: "edge",         title: "2. Why STOIC is different",          icon: Sparkles },
+    { id: "engine",       title: "3. The Dual-AI engine",              icon: Brain },
+    { id: "agents",       title: "4. The Multi-Agent Architecture",    icon: Cpu },
+    { id: "cascade",      title: "5. The 10-Layer Veto Cascade",       icon: Layers },
+    { id: "risk",         title: "6. Risk & Capital Preservation",     icon: ShieldCheck },
+    { id: "setup",        title: "7. Setup — sign-up to autopilot",    icon: Rocket },
+    { id: "autopilot",    title: "8. Autopilot mode explained",        icon: Plane },
+    { id: "daily",        title: "9. Daily 5-min routine",             icon: Clock },
+    { id: "advanced",     title: "10. Advanced — tuning & auditing",   icon: SettingsIcon },
+    { id: "going-live",   title: "11. Going live (paper → real)",      icon: TrendingUp },
+    { id: "faq",          title: "12. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -79,6 +80,7 @@ export default function Guide() {
                     <Intro />
                     <Edge />
                     <Engine />
+                    <Agents />
                     <Cascade />
                     <RiskSection />
                     <SetupSteps />
@@ -248,6 +250,138 @@ function Engine() {
     );
 }
 
+function Agents() {
+    const roster = [
+        {
+            icon: Search, color: "#00FF41",
+            name: "Research Agent",
+            blurb: "The eyes & ears.",
+            does: "Pulls every unstructured + macro signal needed to reason about the next 60s of the market.",
+            data: [
+                "News sentiment (NewsAPI)",
+                "FRED macro: Fed Funds, 10Y yield, breakeven inflation, unemployment, VIX",
+                "COT positioning (CFTC weekly)",
+                "TIPS 10-Year real yield",
+                "DXY snapshot (Yahoo + Stooq)",
+                "Economic-calendar imminent events (NFP / CPI / FOMC)",
+            ],
+        },
+        {
+            icon: Brain, color: "#FFD700",
+            name: "Strategy Agent",
+            blurb: "The brain.",
+            does: "Fuses Research's macro picture with live technicals into a candidate signal (BUY / SELL / HOLD + confidence + entry / SL / TP).",
+            data: [
+                "Claude Sonnet 4.5 — narrative reasoning",
+                "Session-specific Logistic Regression — local hit-rate memory",
+                "12 technical indicators (Kalman, ATR, RSI, MACD, Bollinger, MTF…)",
+                "Kelly-criterion sizing + regime-adaptive risk modifier",
+                "Built-in 10-layer veto cascade",
+            ],
+        },
+        {
+            icon: ShieldCheck, color: "#FF3B30",
+            name: "Risk Agent",
+            blurb: "The compliance officer.",
+            does: "Operates on the WHOLE PORTFOLIO — vetoes candidate signals that look fine in isolation but stack hidden risk across positions.",
+            data: [
+                "Cross-asset correlation veto (XAU ↔ BTC under DXY stress)",
+                "Daily & weekly drawdown circuits",
+                "Anti-tilt freeze after N consecutive losses",
+                "Pre-news position protector (flatten before NFP/CPI)",
+                "Post-SL cooldown (revenge-trade blocker)",
+            ],
+        },
+        {
+            icon: Send, color: "#A855F7",
+            name: "Execution Agent",
+            blurb: "The hands.",
+            does: "Takes approved signals and routes them to the right broker account, then watches the fill quality.",
+            data: [
+                "Picks default MT5 account (or first ●CONNECTED)",
+                "Posts entry/SL/TP to the bridge — EA picks up within 5s",
+                "Server-side slippage veto on fills",
+                "Breakeven shift · partial close at TP1 · trailing SL until close",
+            ],
+        },
+    ];
+    return (
+        <section>
+            <H2 id="agents" icon={Cpu}>4. The Multi-Agent Architecture</H2>
+            <P>
+                Inside STOIC, every tick is processed by <strong className="text-white">four named agents</strong>
+                that hand off to each other in a strict pipeline. Each agent is independent,
+                logged, and observable on the live <Link to="/agents" className="text-[#00FF41] hover:underline">Agents page</Link>.
+            </P>
+            <P>
+                This split is what lets STOIC scale: each agent has one job, one set of inputs, one set of outputs.
+                When something misfires, you can see exactly which agent fired (or vetoed) — no black box.
+            </P>
+
+            {/* The handoff diagram */}
+            <div className="border border-[#1F1F1F] bg-[#0A0A0A] my-5">
+                <div className="px-4 py-2 border-b border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
+                    PIPELINE — RUNS EVERY 60s
+                </div>
+                <div className="px-4 py-3 flex items-center justify-between gap-2 flex-wrap">
+                    {roster.map((a, i) => (
+                        <div key={a.name} className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#1F1F1F]">
+                                <a.icon className="w-3.5 h-3.5" style={{ color: a.color }} />
+                                <span className="font-mono text-[11px] tracking-wide">{a.name.replace(" Agent", "")}</span>
+                            </div>
+                            {i < roster.length - 1 && <ArrowRight className="w-3 h-3 text-[#52525B]" />}
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <div className="space-y-4 mt-4" data-testid="agent-roster-detail">
+                {roster.map((a, i) => (
+                    <div key={a.name} className="border border-[#1F1F1F] bg-[#0A0A0A]"
+                        data-testid={`guide-agent-${a.name.toLowerCase().replace(" agent", "")}`}>
+                        <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-3">
+                            <div className="w-7 h-7 rounded-full border flex items-center justify-center shrink-0"
+                                style={{ borderColor: a.color, color: a.color }}>
+                                <a.icon className="w-3.5 h-3.5" />
+                            </div>
+                            <div>
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                                    AGENT {i + 1} · {a.blurb.toUpperCase()}
+                                </div>
+                                <div className="font-display font-bold text-base tracking-tight">{a.name}</div>
+                            </div>
+                        </div>
+                        <div className="p-5 space-y-3">
+                            <p className="text-sm text-[#A1A1AA] leading-relaxed">{a.does}</p>
+                            <div>
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">DATA · TOOLS</div>
+                                <ul className="space-y-1">
+                                    {a.data.map(d => (
+                                        <li key={d} className="flex items-start gap-2 text-xs text-[#A1A1AA]">
+                                            <CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0" style={{ color: a.color }} />
+                                            <span>{d}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            <Callout kind="info">
+                <strong>Why agents instead of one giant function?</strong> Single-script bots fail silently:
+                a bad news fetch crashes the whole tick. STOIC&apos;s agents are isolated — if Research can&apos;t reach
+                FRED, Strategy still runs with the data it has, and the activity log shows exactly which input was missing.
+                On the live <Link to="/agents" className="text-[#00FF41] hover:underline">Agents page</Link>{" "}
+                you can watch every handoff in real-time, with per-step timings and the current FRED macro snapshot.
+            </Callout>
+        </section>
+    );
+}
+
+
 function Cascade() {
     const gates = [
         ["1. Sentiment Veto", "News tape disagrees with action"],
@@ -263,7 +397,7 @@ function Cascade() {
     ];
     return (
         <section>
-            <H2 id="cascade" icon={Layers}>4. The 10-Layer Veto Cascade</H2>
+            <H2 id="cascade" icon={Layers}>5. The 10-Layer Veto Cascade</H2>
             <P>After both engines vote, the signal has to clear <strong className="text-white">every</strong> gate.
                 A single block makes the signal HOLD:</P>
             <ol className="space-y-1.5 mt-4">
@@ -324,7 +458,7 @@ function RiskSection() {
 function SetupSteps() {
     return (
         <section>
-            <H2 id="setup" icon={Rocket}>6. Setup — sign-up to autopilot</H2>
+            <H2 id="setup" icon={Rocket}>7. Setup — sign-up to autopilot</H2>
             <P>Six steps. Roughly 10 minutes if you already have an MT5 broker account. After step 6, STOIC trades
                 without you needing to touch it again.</P>
             <div className="space-y-5 mt-4">
@@ -398,7 +532,7 @@ function Autopilot() {
     ];
     return (
         <section>
-            <H2 id="autopilot" icon={Plane}>7. Autopilot mode explained</H2>
+            <H2 id="autopilot" icon={Plane}>8. Autopilot mode explained</H2>
             <P>
                 Once you complete Step 6, STOIC operates on a closed loop with no human in the middle. Here&apos;s
                 exactly what happens on every cycle:
@@ -471,7 +605,7 @@ function DailyFlow() {
     ];
     return (
         <section>
-            <H2 id="daily" icon={Clock}>8. Daily 5-min routine</H2>
+            <H2 id="daily" icon={Clock}>9. Daily 5-min routine</H2>
             <P>Autopilot doesn&apos;t mean &quot;set and forget forever&quot;. About <strong className="text-white">5 minutes a day</strong> keeps you in the loop:</P>
             <ol className="space-y-1.5 mt-3 list-decimal list-inside marker:text-[#52525B] marker:font-mono">
                 {checks.map(([t, sub]) => (
@@ -492,7 +626,7 @@ function DailyFlow() {
 function Advanced() {
     return (
         <section>
-            <H2 id="advanced" icon={SettingsIcon}>9. Advanced — tuning & auditing</H2>
+            <H2 id="advanced" icon={SettingsIcon}>10. Advanced — tuning & auditing</H2>
             <div className="space-y-4 mt-3">
                 <div>
                     <div className="font-display font-bold text-base mb-1.5">🔍 Auditing a specific signal</div>
@@ -524,7 +658,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>10. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>11. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -554,7 +688,7 @@ function QuickLinks() {
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>11. Quick links</H2>
+            <H2 id="faq" icon={Zap}>12. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (
