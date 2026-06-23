@@ -83,7 +83,7 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
     }
 
 
-async def reconcile_user(user_id: str) -> dict:
+async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
     """Run reconciliation across every account this user owns, using each
     account's last-known open_tickets stored on the heartbeat doc.
 
@@ -96,6 +96,12 @@ async def reconcile_user(user_id: str) -> dict:
     account_id that no longer exists in the user's accounts (account was
     deleted while a position was still open). These can never be reconciled
     against a broker again, so we close them with reason="account_deleted".
+
+    `force=True`: user has manually verified on the broker UI that positions
+    are closed. Closes ALL DB-open + pending-close trades for every account,
+    bypassing the heartbeat-freshness / open_positions guards. Also cancels
+    never-executed pending-OPEN trades (mt5_ticket=None) which are stuck
+    waiting for an offline EA.
     """
     db = get_db()
     cursor = db.accounts.find({"user_id": user_id})
@@ -145,6 +151,36 @@ async def reconcile_user(user_id: str) -> dict:
 
     # Phase 2: per-account reconciliation against live broker state
     for acc in accounts:
+        if force:
+            # User explicitly confirmed — close everything regardless of heartbeat.
+            summary = await reconcile_account(
+                str(acc["_id"]), [], source="manual_force",
+            )
+            # Also cancel never-executed pending OPEN trades (no ticket)
+            cancel_cursor = db.trades.find({
+                "account_id": str(acc["_id"]),
+                "status": "pending",
+                "mt5_ticket": None,
+            })
+            cancelled = []
+            now_iso = datetime.now(timezone.utc).isoformat()
+            async for t in cancel_cursor:
+                update = {
+                    "status": "cancelled",
+                    "closed_at": now_iso,
+                    "close_reason": "force_cancelled_never_filled",
+                    "reconciled": True,
+                    "reconciled_at": now_iso,
+                }
+                await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
+                cancelled.append(str(t["_id"]))
+            summary["cancelled_pending_opens"] = len(cancelled)
+            summary["closed_count"] = summary.get("closed_count", 0) + len(cancelled)
+            summary["label"] = acc.get("label")
+            summary["forced"] = True
+            summaries.append(summary)
+            continue
+
         tickets = acc.get("open_tickets")
         if tickets is None:
             # Old EA. Fall back to count-based reconciliation when it's safe.

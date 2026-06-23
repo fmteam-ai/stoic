@@ -275,27 +275,51 @@ export default function Trades() {
     };
 
     const [reconciling, setReconciling] = useState(false);
-    const reconcile = async () => {
-        if (!window.confirm(
-            "Sync open trades with the broker?\n\n" +
-            "Any STOIC-open trade that the broker no longer reports as open " +
-            "will be marked closed (orphaned by a missed EA report). This is " +
-            "safe — it never opens or modifies real positions.",
-        )) return;
+    const reconcile = async (force = false) => {
+        const confirmMsg = force
+            ? "FORCE SYNC — close ALL pending/open trades right now?\n\n" +
+              "Use this ONLY when you've verified on MT5 that the positions are " +
+              "actually closed but your EA is offline. This skips the safety " +
+              "checks and marks every DB-open / pending-close trade as closed, " +
+              "and cancels never-filled pending opens.\n\n" +
+              "Continue?"
+            : "Sync open trades with the broker?\n\n" +
+              "Any STOIC-open trade that the broker no longer reports as open " +
+              "will be marked closed (orphaned by a missed EA report). This is " +
+              "safe — it never opens or modifies real positions.";
+        if (!window.confirm(confirmMsg)) return;
         setReconciling(true);
         try {
-            const { data } = await api.post("/trades/reconcile");
+            const url = force ? "/trades/reconcile?force=true" : "/trades/reconcile";
+            const { data } = await api.post(url);
             const total = data.total_closed || 0;
             if (total > 0) {
                 toast.success(`Synced · closed ${total} orphan${total === 1 ? "" : "s"}`, {
-                    description: "Trades that had hit SL/TP at the broker are now reflected here.",
+                    description: force
+                        ? "Force-sync complete. Pending opens cancelled, pending closes marked closed."
+                        : "Trades that had hit SL/TP at the broker are now reflected here.",
                 });
             } else {
-                toast(`All open trades match the broker — nothing to close.`);
+                // Check if any accounts were skipped due to stale heartbeat → offer force option
+                const skippedStale = (data.accounts || []).some(a =>
+                    a.skipped && a.reason === "ea_too_old_and_positions_nonzero");
+                if (skippedStale && !force) {
+                    if (window.confirm(
+                        "Standard sync found nothing to close because your EA hasn't sent a " +
+                        "heartbeat recently. We can't verify the broker's current state.\n\n" +
+                        "If you've manually verified on MT5 that the positions are closed, " +
+                        "click OK to FORCE SYNC anyway. Otherwise click Cancel and bring your " +
+                        "EA back online first.",
+                    )) {
+                        setReconciling(false);
+                        return reconcile(true);   // recurse with force=true
+                    }
+                } else {
+                    toast(`All open trades match the broker — nothing to close.`);
+                }
             }
-            // Inspect any "skipped" accounts so the user knows if their EA is too old
             const skipped = (data.accounts || []).filter(a => a.skipped);
-            if (skipped.length) {
+            if (skipped.length && !force) {
                 toast(`${skipped.length} account(s) skipped — update your MT5 EA to v1.22+ for live reconciliation.`);
             }
             await load();

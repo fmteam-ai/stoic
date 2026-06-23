@@ -15,14 +15,18 @@ router = APIRouter(prefix="/trades", tags=["trades"])
 
 
 @router.post("/reconcile")
-async def reconcile_open_trades(user=Depends(get_current_user)):
+async def reconcile_open_trades(force: bool = False, user=Depends(get_current_user)):
     """Force-close any DB-open trade that the broker no longer reports as open.
 
     Uses the `open_tickets` list stored on each account from the last heartbeat
     (EA v1.22+). Returns a per-account summary of how many trades were closed.
     Frontend exposes this via the SYNC WITH BROKER button on the Trades page.
+
+    Pass `?force=true` when the user has manually verified on MT5 that positions
+    are closed but the EA is offline (so the standard heartbeat-based safety
+    guards would otherwise refuse to close anything).
     """
-    return await reconcile_user(user["id"])
+    return await reconcile_user(user["id"], force=force)
 
 
 class ManualTradeRequest(BaseModel):
