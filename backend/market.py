@@ -9,8 +9,11 @@ All sources are keyless, generous-rate, and don't IP-throttle our cluster.
 """
 import time
 import asyncio
+import logging
 import httpx
 from datetime import datetime, timezone, timedelta
+
+log = logging.getLogger("market")
 
 # ---------- Symbol map ----------
 SYMBOL_MAP = {
@@ -199,8 +202,95 @@ async def _gold_quote() -> dict:
         }
 
 
+async def _yahoo_gold_history() -> list:
+    """Yahoo Finance v8 chart API — Gold front-month futures (GC=F), 1y daily.
+
+    Free, no key, OHLC, very reliable. This is the primary source for XAU history.
+    """
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=1y&interval=1d"
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as c:
+        r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        data = r.json()
+    result = (data.get("chart") or {}).get("result") or []
+    if not result:
+        raise RuntimeError("Yahoo returned no gold candles")
+    res = result[0]
+    ts_list = res.get("timestamp") or []
+    quotes = ((res.get("indicators") or {}).get("quote") or [{}])[0]
+    opens = quotes.get("open") or []
+    highs = quotes.get("high") or []
+    lows = quotes.get("low") or []
+    closes = quotes.get("close") or []
+    history: list = []
+    for i, ts in enumerate(ts_list):
+        close = closes[i] if i < len(closes) else None
+        if close is None:
+            continue
+        date_str = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
+        history.append({
+            "date": date_str,
+            "open": float(opens[i]) if i < len(opens) and opens[i] is not None else float(close),
+            "high": float(highs[i]) if i < len(highs) and highs[i] is not None else float(close),
+            "low": float(lows[i]) if i < len(lows) and lows[i] is not None else float(close),
+            "close": float(close),
+            "volume": 0,
+        })
+    history.sort(key=lambda r: r["date"])
+    return history
+
+
+async def _stooq_gold_history() -> list:
+    """Stooq CSV — XAUUSD daily (may be JS-gated occasionally)."""
+    url = "https://stooq.com/q/d/l/?s=xauusd&i=d"
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as c:
+        r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        text = r.text
+    if "<html" in text.lower():
+        raise RuntimeError("Stooq returned HTML (rate-limited)")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines or "Date" not in lines[0]:
+        raise RuntimeError("Stooq returned no CSV header")
+    history: list = []
+    for ln in lines[1:]:
+        parts = ln.split(",")
+        if len(parts) < 5:
+            continue
+        try:
+            history.append({
+                "date": parts[0],
+                "open": float(parts[1]),
+                "high": float(parts[2]),
+                "low": float(parts[3]),
+                "close": float(parts[4]),
+                "volume": float(parts[5]) if len(parts) > 5 and parts[5] not in ("", "0") else 0,
+            })
+        except (ValueError, IndexError):
+            continue
+    history.sort(key=lambda r: r["date"])
+    return history[-365:]
+
+
 async def _gold_history() -> list:
-    """Use PAX Gold (PAXG) as a 1:1 proxy for XAU/USD historical."""
+    """Multi-source XAU/USD daily history with explicit fallback chain.
+
+    Order: Yahoo (GC=F front-month, OHLC, reliable) → Stooq CSV → CoinGecko PAXG.
+    Last resort is handled by the get_history() Mongo cache.
+    """
+    try:
+        h = await _yahoo_gold_history()
+        if len(h) >= 100:
+            return h
+    except Exception as e:
+        log.warning("Yahoo gold history failed: %s", e)
+    try:
+        h = await _stooq_gold_history()
+        if len(h) >= 100:
+            return h
+    except Exception as e:
+        log.warning("Stooq gold history failed: %s", e)
+    log.warning("Falling back to CoinGecko PAXG proxy for XAU history")
     return await _cg_history("pax-gold")
 
 
@@ -304,6 +394,43 @@ def ttl_seconds_for_quote(asset: str) -> int:
     return 600
 
 
+async def _history_save_to_mongo(sym: str, history: list) -> None:
+    """Persist a successful history fetch so a future cold-start can recover
+    even if every upstream is rate-limited."""
+    try:
+        from database import get_db
+        await get_db().history_cache.update_one(
+            {"_id": sym},
+            {"$set": {
+                "symbol": sym,
+                "history": history,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "len": len(history),
+            }},
+            upsert=True,
+        )
+    except Exception as e:
+        log.debug("history_save_to_mongo failed for %s: %s", sym, e)
+
+
+async def _history_load_from_mongo(sym: str) -> list | None:
+    """Last-resort retrieval if every live source is failing."""
+    try:
+        from database import get_db
+        doc = await get_db().history_cache.find_one({"_id": sym})
+        if not doc:
+            return None
+        hist = doc.get("history") or []
+        if len(hist) < 100:
+            return None
+        log.warning("Using Mongo-cached history for %s (saved_at=%s, %d bars)",
+                    sym, doc.get("saved_at"), len(hist))
+        return hist
+    except Exception as e:
+        log.debug("history_load_from_mongo failed for %s: %s", sym, e)
+        return None
+
+
 async def get_history(symbol: str) -> list:
     sym = _key(symbol)
     cache_key = f"history:{sym}"
@@ -320,6 +447,8 @@ async def get_history(symbol: str) -> list:
         if not meta:
             raise RuntimeError(f"Symbol {sym} not supported")
 
+        hist: list = []
+        upstream_error: Exception | None = None
         try:
             if meta["asset"] == "crypto":
                 try:
@@ -332,12 +461,24 @@ async def get_history(symbol: str) -> list:
                 hist = await _gold_history()
             elif meta["asset"] == "forex":
                 hist = await _fx_history(meta["base"], meta["quote"])
-            else:
-                hist = []
-            _cache_set(cache_key, hist, 21600)  # 6h
+        except (httpx.HTTPError, RuntimeError) as e:
+            upstream_error = e
+
+        if len(hist) >= 100:
+            _cache_set(cache_key, hist, 21600)  # 6h memory cache
+            await _history_save_to_mongo(sym, hist)
             return hist
-        except httpx.HTTPError as e:
-            raise RuntimeError(f"History fetch failed for {sym}: {e}")
+
+        # Upstream failed or returned too few bars — fall back to Mongo
+        fallback = await _history_load_from_mongo(sym)
+        if fallback:
+            # Cache for a short period (15 min) so we keep retrying upstream periodically
+            _cache_set(cache_key, fallback, 900)
+            return fallback
+
+        raise RuntimeError(
+            f"History fetch failed for {sym}: {upstream_error or 'no upstream returned enough bars'}"
+        )
 
 
 def _ttl_seconds_for_quote(symbol: str):  # backward compat alias
