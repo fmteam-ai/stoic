@@ -5,8 +5,10 @@ import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
-    CreditCard, HelpCircle, BookOpen, Cpu
+    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink
 } from "lucide-react";
+
+const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
 
 const items = [
     { to: "/", label: "Dashboard", icon: ChartLineUp, testid: "nav-dashboard" },
@@ -62,6 +64,17 @@ export function Sidebar({ onNavigate }) {
                         <span>{it.label}</span>
                     </NavLink>
                 ))}
+
+                <a href={SUPPORT_TELEGRAM_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={onNavigate}
+                    data-testid="nav-support-telegram"
+                    className="flex items-center gap-2 px-3 py-2 text-sm transition-colors duration-150 whitespace-nowrap shrink-0 md:whitespace-normal text-[#00FF41] hover:bg-[#00FF41]/10 border-l-2 border-transparent md:border-l-2 border-b-2 md:border-b-0 border-b-transparent">
+                    <LifeBuoy className="w-4 h-4 shrink-0" />
+                    <span>Support</span>
+                    <ExternalLink className="w-3 h-3 ml-auto opacity-60 hidden md:inline" />
+                </a>
             </nav>
 
             <div className="hidden md:block p-3 border-t border-[#1F1F1F]">
