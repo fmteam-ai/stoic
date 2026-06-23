@@ -254,8 +254,10 @@ export default function Trades() {
                     if (rates.length >= 1) vel[sym] = median(rates);
                 }
                 setVelocities(vel);
-            } catch {
-                /* keep stale quote on transient errors */
+            } catch (err) {
+                // Quote-polling errors are routine (CoinGecko 429s, brief network blips).
+                // Keep the stale price on screen; surface at debug-level only.
+                console.debug("[Trades] quote poll failed:", err?.message || err);
             } finally {
                 inFlightRef.current = false;
             }

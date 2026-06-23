@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { useLiveStream } from "@/lib/useLiveStream";
@@ -35,7 +35,11 @@ export default function RiskCommander() {
     const [prompt, setPrompt] = useState("");
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
-    const [history, setHistory] = useState([]); // {role:user|ai, content, receipts?}
+    const [history, setHistory] = useState([]); // {id, role:user|ai, content, receipts?}
+
+    // Monotonic counter for chat-row keys. Avoids index-as-key (stale after edits/deletes).
+    const msgIdRef = useRef(0);
+    const newMsg = (m) => ({ id: ++msgIdRef.current, ...m });
     const [triggers, setTriggers] = useState([]);
     const [compiledPreview, setCompiledPreview] = useState(null);
     const { lastEvent } = useLiveStream();
@@ -68,33 +72,33 @@ export default function RiskCommander() {
     const submit = async () => {
         if (!prompt.trim()) return;
         setErr(""); setLoading(true);
-        const userMsg = { role: "user", content: prompt };
+        const userMsg = newMsg({ role: "user", content: prompt });
         setHistory(h => [...h, userMsg]);
         try {
             if (mode === "command") {
                 const { data } = await api.post("/nl/command", { prompt });
                 if (data.clarification_needed) {
-                    setHistory(h => [...h, { role: "ai", content: data.clarification_needed, isQuestion: true }]);
+                    setHistory(h => [...h, newMsg({ role: "ai", content: data.clarification_needed, isQuestion: true })]);
                 } else {
-                    setHistory(h => [...h, {
+                    setHistory(h => [...h, newMsg({
                         role: "ai",
                         content: data.summary,
                         receipts: data.receipts,
-                    }]);
+                    })]);
                     toast.success("Command executed", { description: data.summary });
                     await loadTriggers();
                 }
             } else {
                 const { data } = await api.post("/nl/strategy", { prompt });
                 if (data.compiled?.clarification_needed) {
-                    setHistory(h => [...h, { role: "ai", content: data.compiled.clarification_needed, isQuestion: true }]);
+                    setHistory(h => [...h, newMsg({ role: "ai", content: data.compiled.clarification_needed, isQuestion: true })]);
                 } else {
                     setCompiledPreview(data.compiled);
-                    setHistory(h => [...h, {
+                    setHistory(h => [...h, newMsg({
                         role: "ai",
                         content: data.compiled.notes || "Strategy compiled — review below.",
                         compiled: data.compiled,
-                    }]);
+                    })]);
                 }
             }
             setPrompt("");
@@ -211,7 +215,7 @@ export default function RiskCommander() {
                             </div>
                         )}
                         {history.map((m, i) => (
-                            <div key={i} className={`flex gap-3 ${m.role === "user" ? "justify-end" : ""}`}
+                            <div key={m.id} className={`flex gap-3 ${m.role === "user" ? "justify-end" : ""}`}
                                 data-testid={`msg-${i}`}>
                                 {m.role !== "user" && (
                                     <div className="w-6 h-6 rounded-none bg-[#00FF41]/20 text-[#00FF41] flex items-center justify-center shrink-0">
@@ -231,7 +235,7 @@ export default function RiskCommander() {
                                     {m.receipts?.length > 0 && (
                                         <div className="mt-2 space-y-1" data-testid={`receipts-${i}`}>
                                             {m.receipts.map((r, j) => (
-                                                <div key={j} className="font-mono text-[10px] text-[#A1A1AA] flex items-center gap-2">
+                                                <div key={`${m.id}-r${j}`} className="font-mono text-[10px] text-[#A1A1AA] flex items-center gap-2">
                                                     <CheckCircle2 className="w-3 h-3 text-[#00FF41]" />
                                                     <span className="text-[#00FF41]">{r.type}</span>
                                                     <span className="text-[#52525B]">·</span>
@@ -300,7 +304,7 @@ export default function RiskCommander() {
                     </div>
                     <div className="px-3 pb-3 flex flex-wrap gap-1.5">
                         {(mode === "command" ? EXAMPLE_COMMANDS : EXAMPLE_STRATEGIES).map((ex, i) => (
-                            <button key={i} onClick={() => setPrompt(ex)}
+                            <button key={ex} onClick={() => setPrompt(ex)}
                                 data-testid={`example-${i}`}
                                 className="font-mono text-[10px] text-[#A1A1AA] hover:text-[#00FF41] bg-[#121212] border border-[#1F1F1F] px-2 py-1 transition-colors">
                                 <Clock className="w-3 h-3 inline mr-1" />{ex}
