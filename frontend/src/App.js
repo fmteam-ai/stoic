@@ -21,6 +21,7 @@ import Notifications from "@/pages/Notifications";
 import Analytics from "@/pages/Analytics";
 import Settings from "@/pages/Settings";
 import Billing from "@/pages/Billing";
+import FAQ from "@/pages/FAQ";
 
 function App() {
     return (
@@ -45,6 +46,7 @@ function App() {
                         <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
                         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                         <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
+                        <Route path="/faq" element={<ProtectedRoute><FAQ /></ProtectedRoute>} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>
