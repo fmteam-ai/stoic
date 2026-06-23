@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2 } from "lucide-react";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -17,6 +17,7 @@ export default function BotConfig() {
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
     const [msg, setMsg] = useState("");
+    const [saveMsg, setSaveMsg] = useState("");
     const [newSym, setNewSym] = useState("");
 
     const load = useCallback(async () => {
@@ -32,8 +33,15 @@ export default function BotConfig() {
 
     useEffect(() => { load(); }, [load]);
 
+    // Auto-dismiss the "Configuration saved." toast 3s after it appears
+    useEffect(() => {
+        if (!saveMsg) return;
+        const t = setTimeout(() => setSaveMsg(""), 3000);
+        return () => clearTimeout(t);
+    }, [saveMsg]);
+
     const save = async () => {
-        setSaving(true); setErr(""); setMsg("");
+        setSaving(true); setErr(""); setSaveMsg("");
         try {
             const { data } = await api.put("/bot/config", {
                 risk_level: cfg.risk_level,
@@ -68,7 +76,7 @@ export default function BotConfig() {
                 pre_news_protect_enabled: cfg.pre_news_protect_enabled,
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
             });
-            setCfg(data); setMsg("Configuration saved.");
+            setCfg(data); setSaveMsg("Configuration saved.");
         } catch (e) { setErr(formatApiError(e)); }
         finally { setSaving(false); }
     };
@@ -245,7 +253,13 @@ export default function BotConfig() {
                 {/* Section 06 — Capital Preservation Guards */}
                 <CapitalGuardsSection cfg={cfg} setCfg={setCfg} />
 
-                <div className="flex justify-end">
+                <div className="flex items-center justify-end gap-3 flex-wrap" data-testid="bot-save-row">
+                    {saveMsg && (
+                        <div className="flex items-center gap-2 border border-[#00FF41]/30 bg-[#00FF41]/10 px-3 py-2 text-xs text-[#00FF41] font-mono"
+                            data-testid="bot-save-message">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> {saveMsg}
+                        </div>
+                    )}
                     <button onClick={save} disabled={saving}
                         data-testid="bot-save-button"
                         className="bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium px-6 py-2.5 text-xs tracking-widest flex items-center gap-2 transition-colors">
