@@ -602,6 +602,7 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
 export default function Signals() {
     const [signals, setSignals] = useState([]);
     const [accounts, setAccounts] = useState([]);
+    const [filter, setFilter] = useState("all");  // all | actionable | hold | strong | solid | marginal | blocked
     const [loading, setLoading] = useState(true);
     const [generating, setGenerating] = useState(false);
     const [err, setErr] = useState("");
@@ -698,6 +699,8 @@ export default function Signals() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="signals-error">{err}</div>}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
 
+                {signals.length > 0 && <SignalFilterBar signals={signals} filter={filter} setFilter={setFilter} />}
+
                 {loading ? (
                     <div className="font-mono text-xs text-[#52525B] tracking-widest">LOADING SIGNALS…</div>
                 ) : signals.length === 0 ? (
@@ -707,11 +710,7 @@ export default function Signals() {
                         <div className="text-sm text-[#A1A1AA] mb-4">Click <em>Generate Signals</em> to let Claude analyse your configured markets.</div>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        {signals.map(s => (
-                            <SignalCard key={s.id} s={s} accounts={accounts} onExecute={handleExecute} onDelete={handleDelete} />
-                        ))}
-                    </div>
+                    <FilteredGrid signals={signals} filter={filter} accounts={accounts} onExecute={handleExecute} onDelete={handleDelete} />
                 )}
             </div>
         </AppLayout>
@@ -786,5 +785,111 @@ function ClearOption({ icon: Icon, label, sub, onClick, testid, danger, disabled
                 <div className="font-mono text-[10px] text-[#52525B] tracking-wide mt-0.5">{sub}</div>
             </div>
         </button>
+    );
+}
+
+
+// ─── Filter ────────────────────────────────────────────────────────────────
+// Bucket a signal into ONE of: strong | solid | marginal | hold-blocked |
+// hold-info | hold-other. Used by both the chip counts and the grid filter.
+function bucketOf(s) {
+    if (s.action === "BUY" || s.action === "SELL") {
+        const dx = diagnoseStrength(s);
+        if (!dx) return "solid";
+        return dx.severity;  // "strong" | "solid" | "marginal"
+    }
+    // HOLD
+    const dx = diagnoseHold(s);
+    if (dx?.severity === "block") return "hold-blocked";
+    if (dx?.severity === "warn")  return "hold-blocked";  // soft veto — still a block
+    return "hold-info";  // confidence-floor / claude-hold
+}
+
+function passesFilter(s, filter) {
+    const b = bucketOf(s);
+    switch (filter) {
+        case "all":         return true;
+        case "actionable":  return b === "strong" || b === "solid" || b === "marginal";
+        case "strong":      return b === "strong";
+        case "solid":       return b === "solid";
+        case "marginal":    return b === "marginal";
+        case "blocked":     return b === "hold-blocked";
+        case "hold":        return b === "hold-blocked" || b === "hold-info";
+        default:            return true;
+    }
+}
+
+function SignalFilterBar({ signals, filter, setFilter }) {
+    const counts = signals.reduce((acc, s) => {
+        const b = bucketOf(s);
+        acc[b] = (acc[b] || 0) + 1;
+        return acc;
+    }, {});
+    const actionable = (counts.strong || 0) + (counts.solid || 0) + (counts.marginal || 0);
+    const holdAll = (counts["hold-blocked"] || 0) + (counts["hold-info"] || 0);
+
+    const chips = [
+        { id: "all",        label: "ALL",         count: signals.length,           color: "neutral" },
+        { id: "actionable", label: "ACTIONABLE",  count: actionable,               color: "green" },
+        { id: "strong",     label: "STRONG",      count: counts.strong || 0,       color: "green" },
+        { id: "solid",      label: "SOLID",       count: counts.solid || 0,        color: "neutral" },
+        { id: "marginal",   label: "MARGINAL",    count: counts.marginal || 0,     color: "amber" },
+        { id: "blocked",    label: "BLOCKED",     count: counts["hold-blocked"] || 0, color: "red" },
+        { id: "hold",       label: "ALL HOLDS",   count: holdAll,                  color: "neutral" },
+    ];
+
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-3" data-testid="signal-filter-bar">
+            <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-1">FILTER ·</span>
+                {chips.map(c => (
+                    <FilterChip key={c.id} chip={c} active={filter === c.id} onClick={() => setFilter(c.id)} />
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function FilterChip({ chip, active, onClick }) {
+    const palette = {
+        green:   { ring: "border-[#00FF41]/40", fg: "text-[#00FF41]", bg: "bg-[#00FF41]/10" },
+        amber:   { ring: "border-[#FFB000]/40", fg: "text-[#FFB000]", bg: "bg-[#FFB000]/10" },
+        red:     { ring: "border-[#FF3B30]/40", fg: "text-[#FF3B30]", bg: "bg-[#FF3B30]/10" },
+        neutral: { ring: "border-[#1F1F1F]",    fg: "text-[#A1A1AA]", bg: "bg-[#0A0A0A]" },
+    }[chip.color];
+
+    const activeCls = active
+        ? `${palette.fg} ${palette.bg} ${palette.ring}`
+        : "text-[#52525B] bg-transparent border-[#1F1F1F] hover:text-[#A1A1AA] hover:border-[#333333]";
+
+    return (
+        <button type="button" onClick={onClick}
+            data-testid={`signal-filter-${chip.id}`}
+            disabled={chip.count === 0 && chip.id !== "all"}
+            className={`font-mono text-[10px] tracking-widest px-2 py-1 border transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${activeCls}`}>
+            {chip.label} <span className="ml-1 font-display font-bold">{chip.count}</span>
+        </button>
+    );
+}
+
+function FilteredGrid({ signals, filter, accounts, onExecute, onDelete }) {
+    const filtered = signals.filter(s => passesFilter(s, filter));
+    if (filtered.length === 0) {
+        return (
+            <div className="border border-dashed border-[#1F1F1F] p-12 text-center" data-testid="signals-empty-filtered">
+                <Brain className="w-10 h-10 text-[#52525B] mx-auto mb-3" />
+                <div className="font-display font-bold text-lg mb-1">No signals match this filter</div>
+                <div className="text-sm text-[#A1A1AA]">
+                    Try a different filter or click <em>Generate Signals</em> for fresh ones.
+                </div>
+            </div>
+        );
+    }
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {filtered.map(s => (
+                <SignalCard key={s.id} s={s} accounts={accounts} onExecute={onExecute} onDelete={onDelete} />
+            ))}
+        </div>
     );
 }
