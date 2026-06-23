@@ -214,8 +214,9 @@ class TestWeeklyDrawdown:
         self.db.bot_configs.insert_one(dict(cfg))
         accounts = [{"equity": 1000.0, "balance": 1000.0}]
 
-        db = get_db()
-        _reset_motor(); from database import get_db as _gd; result = _arun(check_and_trip(_gd(), self.uid, cfg, accounts))
+        _reset_motor()
+        from database import get_db as _gd
+        result = _arun(check_and_trip(_gd(), self.uid, cfg, accounts))
 
         assert result["tripped"] is True, f"expected weekly trip, got {result}"
         assert result["kind"] == "weekly", f"expected kind=weekly, got {result['kind']}"
@@ -238,7 +239,8 @@ class TestWeeklyDrawdown:
         self.db.bot_configs.insert_one(dict(cfg))
         accounts = [{"equity": 1000.0, "balance": 1000.0}]
 
-        _reset_motor(); result = _arun(check_and_trip(get_db(), self.uid, cfg, accounts))
+        _reset_motor()
+        result = _arun(check_and_trip(get_db(), self.uid, cfg, accounts))
         assert result["tripped"] is False, f"expected NO trip with weekly disabled, got {result}"
         assert result["kind"] == ""
 
@@ -261,7 +263,8 @@ class TestWeeklyDrawdown:
         self.db.bot_configs.insert_one(dict(cfg))
         accounts = [{"equity": 1000.0, "balance": 1000.0}]
 
-        _reset_motor(); result = _arun(check_and_trip(get_db(), self.uid, cfg, accounts))
+        _reset_motor()
+        result = _arun(check_and_trip(get_db(), self.uid, cfg, accounts))
         assert result["tripped"] is True
         assert result["kind"] == "daily", f"daily should win precedence, got {result}"
 

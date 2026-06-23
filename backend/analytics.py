@@ -59,11 +59,16 @@ def _confidence_bucket(conf) -> Optional[str]:
         c = float(conf)
     except Exception:
         return None
-    if c < 50: return "<50"
-    if c < 60: return "50-60"
-    if c < 70: return "60-70"
-    if c < 80: return "70-80"
-    if c < 90: return "80-90"
+    if c < 50:
+        return "<50"
+    if c < 60:
+        return "50-60"
+    if c < 70:
+        return "60-70"
+    if c < 80:
+        return "70-80"
+    if c < 90:
+        return "80-90"
     return "90+"
 
 

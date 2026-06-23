@@ -61,7 +61,8 @@ def test_sl_cooldown_blocks_recent_stopout():
         "close_reason": "stop_loss",
         "closed_at": closed_at,
     }])
-    db = MagicMock(); db.trades = trades
+    db = MagicMock()
+    db.trades = trades
     out = _arun(_on_sl_cooldown(db, "u1", "XAUUSD", lookback_min=45))
     assert out is not None
     assert out["age_minutes"] < 45
@@ -77,7 +78,8 @@ def test_sl_cooldown_lets_old_stopout_through():
         "_id": "trade-x", "status": "closed", "close_reason": "stop_loss",
         "closed_at": closed_at,
     }])
-    db = MagicMock(); db.trades = trades
+    db = MagicMock()
+    db.trades = trades
     out = _arun(_on_sl_cooldown(db, "u1", "XAUUSD", lookback_min=45))
     assert out is None
 
@@ -86,7 +88,8 @@ def test_sl_cooldown_empty_when_no_recent_sl_trade():
     """Cursor returns no docs (e.g. last trade was a TP close) — should pass through."""
     from bot_runner import _on_sl_cooldown
     trades, _ = _make_trades_collection([])
-    db = MagicMock(); db.trades = trades
+    db = MagicMock()
+    db.trades = trades
     out = _arun(_on_sl_cooldown(db, "u1", "XAUUSD", lookback_min=45))
     assert out is None
 
@@ -94,7 +97,8 @@ def test_sl_cooldown_empty_when_no_recent_sl_trade():
 def test_sl_cooldown_disabled_when_minutes_zero():
     from bot_runner import _on_sl_cooldown
     trades, _ = _make_trades_collection([])
-    db = MagicMock(); db.trades = trades
+    db = MagicMock()
+    db.trades = trades
     out = _arun(_on_sl_cooldown(db, "u1", "XAUUSD", lookback_min=0))
     assert out is None
 

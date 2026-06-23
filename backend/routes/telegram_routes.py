@@ -149,9 +149,12 @@ async def _cmd_trades(token, chat_id, user_id) -> None:
     for t in trades:
         emoji = "🟢" if t.get("action") == "BUY" else "🔴"
         flags = []
-        if t.get("partial_closed"): flags.append("PC")
-        if t.get("breakeven_set"): flags.append("BE")
-        if t.get("trail_active"): flags.append("TRAIL")
+        if t.get("partial_closed"):
+            flags.append("PC")
+        if t.get("breakeven_set"):
+            flags.append("BE")
+        if t.get("trail_active"):
+            flags.append("TRAIL")
         flag_str = " " + " ".join(f"`{f}`" for f in flags) if flags else ""
         lines.append(
             f"{emoji} {_esc(t.get('symbol'))} {_esc(t.get('action'))} "
