@@ -99,7 +99,49 @@ async def send_telegram(user_id: str, event_type: str, title: str, lines: list) 
 
 # ------------- Event helpers (composes message bodies) -------------
 
+async def _is_plausible_trade(trade: dict) -> bool:
+    """Reject obviously-synthetic trades that should never trigger a real notification.
+
+    Tests historically use round numbers (entry=2400.5, sl=2385, tp=2430 for XAU
+    at a 2024-era price) and dummy mt5_tickets (999111, 999222). These leak into
+    Telegram if a test runner hits /api/bridge/report directly. This is the
+    last-line defence below the pytest conftest.
+    """
+    # 1. Mock tickets — real MT5 tickets are 8-10 digit unique IDs, never < 1,000,000
+    ticket = trade.get("mt5_ticket")
+    if ticket is not None:
+        try:
+            t_int = int(str(ticket))
+            if 0 < t_int < 1_000_000:
+                return False
+        except (TypeError, ValueError):
+            pass
+
+    # 2. Entry price sanity — must be within 50% of live market price.
+    entry = trade.get("entry_price")
+    sym = trade.get("symbol")
+    if entry and sym:
+        try:
+            from market import get_quote
+            q = await get_quote(sym)
+            live = (q or {}).get("price")
+            if live and live > 0:
+                ratio = entry / live
+                if ratio < 0.5 or ratio > 2.0:
+                    return False
+        except Exception:
+            pass  # if quote fails, be permissive — don't block real alerts
+    return True
+
+
 async def notify_trade_opened(user_id: str, trade: dict) -> bool:
+    if not await _is_plausible_trade(trade):
+        logger.warning(
+            "Refusing to send 'trade_opened' notification for implausible trade: "
+            "symbol=%s entry=%s mt5_ticket=%s (probable test fixture)",
+            trade.get("symbol"), trade.get("entry_price"), trade.get("mt5_ticket"),
+        )
+        return False
     arrow = "🟢" if trade.get("action") == "BUY" else "🔴"
     return await send_telegram(user_id, "trade_opened",
         f"{arrow} Trade Opened · {trade.get('symbol')} {trade.get('action')}",
@@ -112,6 +154,13 @@ async def notify_trade_opened(user_id: str, trade: dict) -> bool:
 
 
 async def notify_trade_closed(user_id: str, trade: dict) -> None:
+    if not await _is_plausible_trade(trade):
+        logger.warning(
+            "Refusing to send 'trade_closed' notification for implausible trade: "
+            "symbol=%s entry=%s mt5_ticket=%s (probable test fixture)",
+            trade.get("symbol"), trade.get("entry_price"), trade.get("mt5_ticket"),
+        )
+        return
     pnl = float(trade.get("pnl") or 0)
     emoji = "✅" if pnl >= 0 else "❌"
     sign = "+" if pnl >= 0 else ""
