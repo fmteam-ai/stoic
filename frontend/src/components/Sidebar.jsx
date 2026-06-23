@@ -4,7 +4,8 @@ import { StoicMark } from "@/components/StoicLogo";
 import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
-    MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon
+    MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
+    CreditCard
 } from "lucide-react";
 
 const items = [
@@ -18,6 +19,7 @@ const items = [
     { to: "/symbols", label: "Symbols", icon: CurrencyCircleDollar, testid: "nav-symbols" },
     { to: "/notifications", label: "Notifications", icon: Bell, testid: "nav-notifications" },
     { to: "/subscription", label: "Subscription", icon: Sparkles, testid: "nav-subscription" },
+    { to: "/billing", label: "Billing", icon: CreditCard, testid: "nav-billing" },
     { to: "/affiliate", label: "Affiliate", icon: Users, testid: "nav-affiliate" },
     { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
 ];

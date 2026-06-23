@@ -47,6 +47,33 @@ async def status(user=Depends(get_current_user)):
     return {"subscription": sub, "entitlement": state}
 
 
+@sub_router.get("/transactions")
+async def list_transactions(user=Depends(get_current_user), limit: int = 50):
+    """Return the current user's payment-transaction history, newest first.
+
+    Only returns the fields safe to surface in the UI — no raw Stripe metadata.
+    """
+    from database import get_db
+    db = get_db()
+    cursor = db.payment_transactions.find(
+        {"user_id": user["id"]}
+    ).sort("created_at", -1).limit(max(1, min(limit, 200)))
+    out = []
+    async for tx in cursor:
+        out.append({
+            "id": str(tx.get("_id") or ""),
+            "plan_id": tx.get("plan_id"),
+            "amount_usd": float(tx.get("amount_usd") or 0),
+            "currency": (tx.get("currency") or "usd").upper(),
+            "payment_status": tx.get("payment_status") or "unknown",
+            "session_id": tx.get("session_id"),
+            "created_at": tx.get("created_at"),
+            "completed_at": tx.get("completed_at"),
+        })
+    return out
+
+
+
 @sub_router.post("/checkout")
 async def create_checkout(payload: dict, request: Request, user=Depends(get_current_user)):
     # Admin grandfather is permanent — block them from accidentally subscribing.
