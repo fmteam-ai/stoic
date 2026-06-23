@@ -578,8 +578,8 @@ export default function Dashboard() {
                         )}
                         {sentiment[selected].key_drivers?.length > 0 && (
                             <ul className="flex flex-wrap gap-1.5 mt-2">
-                                {sentiment[selected].key_drivers.map((d, i) => (
-                                    <li key={i} className="font-mono text-[10px] text-[#A1A1AA] bg-[#121212] border border-[#1F1F1F] px-2 py-0.5">{d}</li>
+                                {sentiment[selected].key_drivers.map((d) => (
+                                    <li key={d} className="font-mono text-[10px] text-[#A1A1AA] bg-[#121212] border border-[#1F1F1F] px-2 py-0.5">{d}</li>
                                 ))}
                             </ul>
                         )}

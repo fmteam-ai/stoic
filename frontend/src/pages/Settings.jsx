@@ -110,7 +110,7 @@ export default function Settings() {
 
     const copySecret = async (text) => {
         try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
-        catch { /* noop */ }
+        catch (e) { console.warn("Clipboard copy failed:", e); }
     };
 
     if (!user) return (
