@@ -3,6 +3,7 @@ import api, { formatApiError, API } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
+import { toast } from "sonner";
 
 const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000, investor_password: "", master_password: "" };
 
@@ -68,7 +69,18 @@ export default function Accounts() {
         } catch (e) { setErr(formatApiError(e)); }
     };
 
-    const copyToken = (t) => { navigator.clipboard.writeText(t); setMsg("Bridge token copied."); };
+    const copyToken = async (t) => {
+        try {
+            await navigator.clipboard.writeText(t);
+            toast.success("Bridge token copied", {
+                description: "Paste it into the EA's BridgeToken input on MT5.",
+            });
+        } catch (e) {
+            toast.error("Couldn't copy — please copy manually", {
+                description: e?.message,
+            });
+        }
+    };
 
     const [testResults, setTestResults] = useState({});
     const [testing, setTesting] = useState({});
