@@ -8,6 +8,7 @@ from database import get_db
 from models import BotConfigUpdate, BotConfigOut
 from risk import get_profile
 from intelligence_counters import get_window_24h as intel_window_24h
+from strategy_presets import list_presets, get_preset
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 
@@ -95,6 +96,7 @@ def _serialize(cfg: dict) -> dict:
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
         "aggressive_mode": cfg.get("aggressive_mode", False),
         "min_confidence_override": cfg.get("min_confidence_override", 0),
+        "active_preset": cfg.get("active_preset"),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -152,6 +154,33 @@ async def stop_bot(user=Depends(get_current_user)):
         {"$set": {"active": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     return {"active": False}
+
+
+@router.get("/presets")
+async def get_strategy_presets(user=Depends(get_current_user)):  # noqa: ARG001 (auth gate)
+    """Return all named strategy presets. Frontend renders these as preset cards."""
+    return {"presets": list_presets()}
+
+
+@router.post("/preset/{key}")
+async def apply_strategy_preset(key: str, user=Depends(get_current_user)):
+    """Overlay a named preset onto the user's bot_config.
+
+    Only the fields defined in the preset are touched. risk_level, symbols,
+    drawdown limits, and per-symbol caps are preserved.
+    """
+    preset = get_preset(key)
+    if not preset:
+        raise HTTPException(status_code=404, detail=f"Preset '{key}' not found")
+    db = get_db()
+    await _get_or_create_config(db, user["id"])  # ensure doc exists
+    overlay = {**preset["config"], "active_preset": key,
+               "updated_at": datetime.now(timezone.utc).isoformat()}
+    await db.bot_configs.update_one(
+        {"user_id": user["id"]}, {"$set": overlay}, upsert=True
+    )
+    cfg = await db.bot_configs.find_one({"user_id": user["id"]})
+    return {"applied": key, "label": preset["label"], "config": _serialize(cfg)}
 
 
 @router.get("/status")

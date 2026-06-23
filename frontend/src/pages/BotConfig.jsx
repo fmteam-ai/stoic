@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -10,10 +11,25 @@ const RISK_DESCRIPTIONS = {
     extreme: "Maximum risk. Largest size, lowest threshold, suitable only for microcent or experimental accounts.",
 };
 
+// Visual multiplier badge mapped to backend risk_pct
+const RISK_MULTIPLIER = {
+    low:     "×0.5",
+    medium:  "×1.0",
+    high:    "×2.5",
+    extreme: "×5.0",
+};
+
+// Preset key → lucide-react icon mapping (kept in sync with strategy_presets.py)
+const PRESET_ICONS = {
+    Crosshair, Zap, TrendingUp, Rocket, Activity, Flame, Scale,
+};
+
 export default function BotConfig() {
     const [cfg, setCfg] = useState(null);
     const [profiles, setProfiles] = useState({});
     const [supported, setSupported] = useState([]);
+    const [presets, setPresets] = useState([]);
+    const [applyingPreset, setApplyingPreset] = useState(null);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
     const [msg, setMsg] = useState("");
@@ -22,12 +38,14 @@ export default function BotConfig() {
 
     const load = useCallback(async () => {
         try {
-            const [c, p, s] = await Promise.all([
+            const [c, p, s, pr] = await Promise.all([
                 api.get("/bot/config"),
                 api.get("/market/risk-profiles"),
                 api.get("/market/symbols"),
+                api.get("/bot/presets"),
             ]);
             setCfg(c.data); setProfiles(p.data.profiles); setSupported(s.data.symbols);
+            setPresets(pr.data.presets || []);
         } catch (e) { setErr(formatApiError(e)); }
     }, []);
 
@@ -39,6 +57,21 @@ export default function BotConfig() {
         const t = setTimeout(() => setSaveMsg(""), 3000);
         return () => clearTimeout(t);
     }, [saveMsg]);
+
+    const applyPreset = async (key, label) => {
+        setApplyingPreset(key); setErr("");
+        try {
+            const { data } = await api.post(`/bot/preset/${key}`);
+            setCfg(data.config);
+            toast.success(`Preset applied · ${label}`, {
+                description: "Behaviour knobs updated. Click SAVE CONFIGURATION to persist.",
+            });
+        } catch (e) {
+            setErr(formatApiError(e));
+        } finally {
+            setApplyingPreset(null);
+        }
+    };
 
     const save = async () => {
         setSaving(true); setErr(""); setSaveMsg("");
@@ -150,6 +183,52 @@ export default function BotConfig() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
 
+                {/* Strategy Presets */}
+                <div className="border border-[#FFD700]/30 bg-[#0A0A0A]" data-testid="strategy-presets-section">
+                    <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-[#FFD700]" />
+                        <div>
+                            <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">STRATEGY PRESETS · ONE-CLICK PERSONAS</div>
+                            <div className="font-display font-bold text-lg tracking-tight">Pick a personality for the bot</div>
+                        </div>
+                    </div>
+                    <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" data-testid="presets-grid">
+                        {presets.map(p => {
+                            const Icon = PRESET_ICONS[p.icon] || Sparkles;
+                            const active = cfg.active_preset === p.key;
+                            const isApplying = applyingPreset === p.key;
+                            return (
+                                <button key={p.key} onClick={() => applyPreset(p.key, p.label)}
+                                    disabled={isApplying}
+                                    data-testid={`preset-card-${p.key}`}
+                                    className={`text-left p-4 border transition-colors duration-150 disabled:opacity-50 ${
+                                        active ? "border-[#FFD700] bg-[#FFD700]/5" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
+                                    }`}>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center gap-2">
+                                            <Icon className="w-4 h-4" style={{ color: p.color }} />
+                                            <span className="font-display font-bold text-sm tracking-tight">{p.label}</span>
+                                        </div>
+                                        {active && (
+                                            <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10">
+                                                ACTIVE
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="font-mono text-[10px] text-[#A1A1AA] tracking-wide mb-2">{p.tagline}</div>
+                                    <p className="text-xs text-[#52525B] leading-relaxed line-clamp-3">{p.description}</p>
+                                    <div className="mt-3 font-mono text-[9px] text-[#52525B] tracking-widest">
+                                        {isApplying ? "APPLYING…" : "TAP TO APPLY →"}
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <div className="px-5 py-2 border-t border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
+                        TIP · Presets overlay behaviour knobs only. Your risk level, symbols, and drawdown limits stay untouched. Click SAVE to persist.
+                    </div>
+                </div>
+
                 {/* Risk Profile */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A]">
                     <div className="px-5 py-3 border-b border-[#1F1F1F]">
@@ -166,7 +245,13 @@ export default function BotConfig() {
                                         selected ? "border-[#00FF41] bg-[#00FF41]/5" : "border-[#1F1F1F] hover:border-[#333333]"
                                     }`}>
                                     <div className="flex items-center justify-between mb-2">
-                                        <div className="font-display font-bold tracking-tight">{p.label}</div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="font-display font-bold tracking-tight">{p.label}</div>
+                                            <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10"
+                                                data-testid={`risk-multiplier-${key}`}>
+                                                {RISK_MULTIPLIER[key] || `×${p.risk_pct}`}
+                                            </span>
+                                        </div>
                                         <div className={`w-3 h-3 border-2 ${selected ? "border-[#00FF41] bg-[#00FF41]" : "border-[#333333]"}`} />
                                     </div>
                                     <p className="text-xs text-[#A1A1AA] mb-3 leading-relaxed">{RISK_DESCRIPTIONS[key]}</p>

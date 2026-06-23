@@ -1,12 +1,16 @@
 import { Sidebar } from "@/components/Sidebar";
 import { CoPilotWidget } from "@/components/CoPilotWidget";
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
+import { TickerTape } from "@/components/TickerTape";
+import { StatusBar } from "@/components/StatusBar";
 
 export function AppLayout({ children }) {
     return (
         <div className="min-h-screen bg-[#050505] text-white">
             <Sidebar />
             <main className="md:ml-60 min-h-screen">
+                <StatusBar />
+                <TickerTape />
                 <SubscriptionBanner />
                 {children}
             </main>

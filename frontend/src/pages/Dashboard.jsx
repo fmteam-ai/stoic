@@ -20,10 +20,10 @@ const CHART_TOOLTIP_LABEL = { color: "#A1A1AA" };
 
 // User-selectable chart timeframes — daily-bar data, sliced client-side.
 const CHART_RANGES = {
-    "14D": { label: "14 days",  days: 14  },
-    "1M":  { label: "1 month",  days: 30  },
-    "6M":  { label: "6 months", days: 180 },
-    "1Y":  { label: "1 year",   days: 365 },
+    "14D": { label: "14 days",  days: 14,  shortLabel: "14D" },
+    "1M":  { label: "1 month",  days: 30,  shortLabel: "1M"  },
+    "6M":  { label: "6 months", days: 180, shortLabel: "6M"  },
+    "1Y":  { label: "1 year",   days: 365, shortLabel: "1Y"  },
 };
 
 function PriceTile({ quote, selected, onClick }) {
@@ -500,11 +500,21 @@ export default function Dashboard() {
                                     </button>
                                 ))}
                             </div>
-                            {indicators?.six_month_return_pct != null && (
-                                <div className={`font-mono text-sm ml-2 ${indicators.six_month_return_pct >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
-                                    {indicators.six_month_return_pct >= 0 ? "+" : ""}{indicators.six_month_return_pct}% / 12M
-                                </div>
-                            )}
+                            {(() => {
+                                const sliced = history.slice(-CHART_RANGES[chartRange].days);
+                                if (sliced.length < 2) return null;
+                                const first = sliced[0].close;
+                                const last = sliced[sliced.length - 1].close;
+                                if (!first) return null;
+                                const pct = ((last - first) / first) * 100;
+                                const positive = pct >= 0;
+                                return (
+                                    <div className={`font-mono text-sm ml-2 ${positive ? "text-[#00FF41]" : "text-[#FF3B30]"}`}
+                                        data-testid="chart-range-return">
+                                        {positive ? "+" : ""}{pct.toFixed(2)}% / {CHART_RANGES[chartRange].shortLabel}
+                                    </div>
+                                );
+                            })()}
                         </div>
                     </div>
                     <div className="h-64 md:h-80 p-2" data-testid="price-chart">
