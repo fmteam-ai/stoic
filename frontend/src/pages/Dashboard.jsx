@@ -367,6 +367,27 @@ export default function Dashboard() {
         }
     }, []);
 
+    // Manual REFRESH button: fan out to every panel loader so the user gets
+    // a fresh view of EVERYTHING (quotes, chart, stats, bot status, sentiment,
+    // macro, live trades). `Promise.all` so the spinner reflects the slowest call.
+    const [refreshing, setRefreshing] = useState(false);
+    const refreshAll = useCallback(async () => {
+        setRefreshing(true);
+        try {
+            await Promise.all([
+                loadQuotes(),
+                loadHistory(selected),
+                loadStats(),
+                loadBotStatus(),
+                loadLiveTrades(),
+                loadSentiment(selected),
+                loadMacro(selected),
+            ]);
+        } finally {
+            setRefreshing(false);
+        }
+    }, [selected, loadQuotes, loadHistory, loadStats, loadBotStatus, loadLiveTrades, loadSentiment, loadMacro]);
+
     useEffect(() => {
         loadQuotes(); loadStats(); loadBotStatus(); loadLiveTrades();
         // 10s for live prices (was 60s) — keeps price tiles flickering near real-time
@@ -421,10 +442,11 @@ export default function Dashboard() {
                             <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-[#00FF41] pulse-dot" : "bg-[#52525B]"}`} />
                             {wsConnected ? "LIVE" : "OFFLINE"}
                         </span>
-                        <button onClick={() => { loadQuotes(); loadHistory(selected); }}
+                        <button onClick={refreshAll} disabled={refreshing}
                             data-testid="dashboard-refresh-button"
-                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors duration-150">
-                            <ArrowsClockwise className="w-3.5 h-3.5" /> REFRESH
+                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] disabled:opacity-50 text-xs font-mono tracking-widest transition-colors duration-150">
+                            <ArrowsClockwise className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                            {refreshing ? "REFRESHING…" : "REFRESH"}
                         </button>
                     </div>
                 }
