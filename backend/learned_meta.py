@@ -280,6 +280,8 @@ async def retrain() -> dict:
 
     return {
         "trained": True,
+        # Back-compat top-level keys (mirror of `global` for legacy consumers)
+        **{k: global_doc[k] for k in ("n_samples", "n_wins", "train_auc", "threshold", "trained_at")},
         "global": {k: global_doc[k] for k in ("n_samples", "n_wins", "train_auc", "threshold", "trained_at")},
         "per_session": per_session,
     }

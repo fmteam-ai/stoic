@@ -33,6 +33,8 @@ async def _get_or_create_config(db, user_id: str) -> dict:
         "trailing_distance_r": 0.7,
         "daily_drawdown_pct": 3.0,
         "daily_drawdown_enabled": True,
+        "weekly_drawdown_pct": 7.0,
+        "weekly_drawdown_enabled": True,
         "spread_filter_enabled": False,
         "max_spread_pips": {"XAUUSD": 50.0, "BTCUSD": 100.0},
         "auto_tune_enabled": True,
@@ -69,6 +71,8 @@ def _serialize(cfg: dict) -> dict:
         "trailing_distance_r": cfg.get("trailing_distance_r", 0.7),
         "daily_drawdown_pct": cfg.get("daily_drawdown_pct", 3.0),
         "daily_drawdown_enabled": cfg.get("daily_drawdown_enabled", True),
+        "weekly_drawdown_pct": cfg.get("weekly_drawdown_pct", 7.0),
+        "weekly_drawdown_enabled": cfg.get("weekly_drawdown_enabled", True),
         "spread_filter_enabled": cfg.get("spread_filter_enabled", False),
         "max_spread_pips": cfg.get("max_spread_pips") or {"XAUUSD": 50.0, "BTCUSD": 100.0},
         "auto_tune_enabled": cfg.get("auto_tune_enabled", True),
@@ -93,34 +97,23 @@ async def get_config(user=Depends(get_current_user)):
 @router.put("/config")
 async def update_config(payload: BotConfigUpdate, user=Depends(get_current_user)):
     db = get_db()
-    update = {
-        "risk_level": payload.risk_level,
-        "symbols": [s.upper() for s in payload.symbols],
-        "active": payload.active,
-        "max_concurrent_trades": payload.max_concurrent_trades,
-        "auto_execute": payload.auto_execute,
-        "breakeven_enabled": payload.breakeven_enabled,
-        "breakeven_trigger_r": payload.breakeven_trigger_r,
-        "partial_close_enabled": payload.partial_close_enabled,
-        "partial_close_trigger_r": payload.partial_close_trigger_r,
-        "partial_close_fraction": payload.partial_close_fraction,
-        "trailing_enabled": payload.trailing_enabled,
-        "trailing_start_r": payload.trailing_start_r,
-        "trailing_distance_r": payload.trailing_distance_r,
-        "daily_drawdown_pct": payload.daily_drawdown_pct,
-        "daily_drawdown_enabled": payload.daily_drawdown_enabled,
-        "spread_filter_enabled": payload.spread_filter_enabled,
-        "max_spread_pips": {str(k).upper(): float(v) for k, v in (payload.max_spread_pips or {}).items()},
-        "auto_tune_enabled": payload.auto_tune_enabled,
-        "slippage_veto_enabled": payload.slippage_veto_enabled,
-        "max_slippage_pips": {str(k).upper(): float(v) for k, v in (payload.max_slippage_pips or {}).items()},
-        "anti_tilt_enabled": payload.anti_tilt_enabled,
-        "anti_tilt_consecutive_losses": payload.anti_tilt_consecutive_losses,
-        "anti_tilt_freeze_hours": payload.anti_tilt_freeze_hours,
-        "trade_of_day_cap": payload.trade_of_day_cap,
-        "asia_session_skip_xau": payload.asia_session_skip_xau,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    # PATCH semantics — only fields explicitly sent by the client are written.
+    # Lets the UI / API do partial updates without nuking other settings.
+    update = payload.model_dump(exclude_unset=True)
+
+    # Field-specific coercions
+    if "symbols" in update:
+        update["symbols"] = [s.upper() for s in (update["symbols"] or [])]
+    if "max_spread_pips" in update:
+        update["max_spread_pips"] = {
+            str(k).upper(): float(v) for k, v in (update["max_spread_pips"] or {}).items()
+        }
+    if "max_slippage_pips" in update:
+        update["max_slippage_pips"] = {
+            str(k).upper(): float(v) for k, v in (update["max_slippage_pips"] or {}).items()
+        }
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+
     await db.bot_configs.update_one(
         {"user_id": user["id"]}, {"$set": update}, upsert=True
     )

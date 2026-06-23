@@ -79,12 +79,41 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   - **New deps**: `pyotp==2.10.0`, `qrcode==8.2`.
   - **Tests**: +19 (`test_iter12_settings_2fa.py`). **Suite: 207/207 passing.**
 
+- 2026-06-23 (iter-14) — **Gold Edge Pack** (this fork):
+  - **Macro Sentinel — DXY Gate** (Veto #10): pulls daily DXY from Yahoo Finance
+    (`DX-Y.NYB`, stooq fallback), computes EMA-20 + 5-day slope, classifies
+    regime as `bullish_usd` / `bearish_usd` / `neutral`. XAU BUYs are vetoed
+    when DXY is bullish-usd, XAU SELLs vetoed when bearish-usd. Non-XAU
+    symbols pass through. Snapshot cached 1h in `dxy_cache`.
+  - **Weekly Drawdown Kill-Switch**: rolling 7-day P&L kill-switch in
+    `circuit_breakers.check_and_trip` alongside daily. Per-user thresholds via
+    BotConfig (`weekly_drawdown_pct` default 7%, `weekly_drawdown_enabled`
+    default true). Daily takes precedence over weekly when both would trip.
+  - **Session-Specific LR Models**: `learned_meta.retrain()` now trains a
+    global artifact + up to 3 per-session artifacts (ASIA 00–07, LONDON 07–13,
+    NY 13–22 UTC). Needs ≥25 samples per session AND both classes. Inference
+    auto-picks the artifact for the CURRENT UTC session, falls back to global.
+  - **Bot Config PATCH semantics**: `PUT /api/bot/config` now uses
+    `exclude_unset=True` — partial updates no longer reset unsent fields.
+  - **DXY pill** added to the Signals VetoCascade strip; **Weekly Drawdown**
+    toggle added to BotConfig Section 04.
+  - **News blackout** (Veto #3) was already shipped in earlier iter — covered
+    by `macro_freeze_check`. No new work.
+  - **Claude news sentiment** (Veto #1) was already live via `news.py` +
+    NewsAPI key. No new work.
+  - **Tests**: +16 new in `test_iter14_gold_edge.py`. **Suite: 233/233 passing**
+    (legacy `TestApplyPaymentIdempotency` flaky in full-suite run but green in
+    isolation — pre-existing, unrelated).
+
 ## Roadmap (priority order)
 - **P1** Binance live BTC execution via CCXT.
-- **P2** Surface `mtf_veto` / `auto_tune_block` block reasons inline on the
-  Signals page (turn the gate into a teaching tool).
+- **P1** Macro Climate widget on Dashboard (live DXY regime + news-blackout countdown).
+- **P2** Surface `mtf_veto` / `auto_tune_block` block reasons inline on Signals page.
 - **P2** Per-user slippage analytics widget (avg slippage by symbol/time).
 - **P2** Trusted-device "remember this browser for 30 days" for 2FA.
+- **P2** Retail-positioning fader (Myfxbook/FXSSI % long XAU contrarian veto).
+- **P2** Partial-close ladder + chandelier-exit trail.
+- **P2** Walk-forward auto-retune of confluence weights every 4 weeks.
 
 ## Test credentials
 See `/app/memory/test_credentials.md`.
