@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
@@ -257,11 +257,61 @@ async def get_bot_status(user=Depends(get_current_user)):
     profile_min_conf = profile.get("min_confidence", 65)
     override = int(cfg.get("min_confidence_override") or 0)
     min_conf = override if (0 < override < 100) else profile_min_conf
+
+    # Look up EA heartbeat freshness for live accounts (5-min cutoff matches bot_runner)
+    accounts = await db.accounts.find({"user_id": user["id"]}).to_list(length=20)
+    HEARTBEAT_FRESH_SEC = 300
+    fresh_live_account = None
+    stalest_age = None
+    for a in accounts:
+        if a.get("mode") == "paper":
+            fresh_live_account = a   # paper is always "connected"
+            break
+        hb = a.get("last_heartbeat")
+        if not hb:
+            continue
+        try:
+            from datetime import datetime as _dt
+            hb_dt = _dt.fromisoformat(hb.replace("Z", "+00:00"))
+            age_sec = (datetime.now(timezone.utc) - hb_dt).total_seconds()
+            if age_sec <= HEARTBEAT_FRESH_SEC:
+                fresh_live_account = a
+                break
+            if stalest_age is None or age_sec < stalest_age:
+                stalest_age = int(age_sec)
+        except Exception:
+            continue
+
+    # Per-symbol signal cooldown — replicate bot_runner internal state
+    cooldown_remaining_sec = None
+    last_signal_symbol = (last_signal or {}).get("symbol")
+    if last_tick_iso and last_signal_symbol:
+        try:
+            from datetime import datetime as _dt
+            last_tick_dt = _dt.fromisoformat(last_tick_iso.replace("Z", "+00:00"))
+            cooldown_min = int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "15"))
+            eligible_at = last_tick_dt + timedelta(minutes=cooldown_min)
+            remaining = (eligible_at - datetime.now(timezone.utc)).total_seconds()
+            if remaining > 0:
+                cooldown_remaining_sec = int(remaining)
+        except Exception:
+            pass
+
     why_no_trade = None
     if not cfg.get("active"):
         why_no_trade = "Bot is stopped — start it from Bot Config"
     elif not cfg.get("auto_execute"):
         why_no_trade = "Auto-execute is OFF — signals generated but trades require manual click"
+    elif not accounts:
+        why_no_trade = "No MT5 account connected — add one in Accounts to enable execution"
+    elif fresh_live_account is None:
+        if stalest_age is not None:
+            why_no_trade = (
+                f"EA heartbeat stale ({stalest_age}s ago) — live execution needs a "
+                f"heartbeat within 5 min. Check MT5 Algo Trading button."
+            )
+        else:
+            why_no_trade = "EA never connected — install EmergentTradingBridge.ex5 on MT5"
     elif last_signal is None:
         why_no_trade = "No signals generated yet — first tick pending"
     elif last_action == "HOLD":
@@ -270,7 +320,37 @@ async def get_bot_status(user=Depends(get_current_user)):
         why_no_trade = f"Confidence {last_conf}% below {min_conf}% threshold ({profile.get('label')} profile)"
     elif last_veto:
         why_no_trade = f"Vetoed: {last_veto}"
+    elif cooldown_remaining_sec and cooldown_remaining_sec > 0:
+        mins, secs = divmod(cooldown_remaining_sec, 60)
+        why_no_trade = (
+            f"Symbol on cooldown for {mins}m {secs}s — last signal fired recently. "
+            f"Next eligible tick when cooldown clears."
+        )
     # else: trade likely fired — no explanation needed
+
+    # If a trade was attempted recently but the broker rejected it, surface the error.
+    # This trumps cooldown messages because it's the actually-actionable failure.
+    recent_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    recent_failed = await db.trades.find_one(
+        {"user_id": user["id"], "status": "failed", "opened_at": {"$gte": recent_cutoff}},
+        sort=[("opened_at", -1)],
+    )
+    if recent_failed and recent_failed.get("error"):
+        err = str(recent_failed["error"])
+        retcode_hint = ""
+        if "10016" in err:
+            retcode_hint = " (INVALID_STOPS — broker rejects: SL/TP too close to entry. Try a different broker or widen risk profile.)"
+        elif "10013" in err:
+            retcode_hint = " (INVALID_REQUEST — bad order params; check symbol name in EA)"
+        elif "10014" in err:
+            retcode_hint = " (INVALID_VOLUME — lot size below broker minimum)"
+        elif "10018" in err:
+            retcode_hint = " (MARKET_CLOSED — symbol not tradable right now)"
+        elif "10019" in err:
+            retcode_hint = " (NO_MONEY — insufficient margin / account balance)"
+        elif "10027" in err:
+            retcode_hint = " (AUTOTRADING_DISABLED on broker side — enable in MT5 server settings)"
+        why_no_trade = f"Broker rejected last trade: {err}{retcode_hint}"
 
     next_tick_in = None
     if seconds_since_tick is not None:
@@ -303,5 +383,6 @@ async def get_bot_status(user=Depends(get_current_user)):
             "created_at": last_tick_iso,
         } if last_signal else None,
         "why_no_trade": why_no_trade,
+        "cooldown_remaining_sec": cooldown_remaining_sec,
         "intelligence": intelligence,
     }
