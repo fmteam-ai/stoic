@@ -109,7 +109,8 @@ async def live_open_trades(user=Depends(get_current_user)):
         lot = float(t.get("lot_size") or 0)
         current = prices.get(sym, 0.0)
 
-        pip_diff_to_target = lambda target: price_to_pips(sym, abs(target - current)) if target and current else None
+        def pip_diff_to_target(target):
+            return price_to_pips(sym, abs(target - current)) if target and current else None
         pips_in_profit = None
         if current and entry:
             diff = (current - entry) if action == "BUY" else (entry - current)

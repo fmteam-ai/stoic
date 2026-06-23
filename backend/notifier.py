@@ -158,7 +158,7 @@ async def notify_circuit_breaker(user_id: str, reason: str, today_pnl, equity) -
     await send_telegram(user_id, "circuit_breaker",
         "🚨 CIRCUIT BREAKER TRIPPED",
         [
-            f"Bot has been auto-stopped.",
+            "Bot has been auto-stopped.",
             f"Reason: {reason}",
             f"Today's P&L: {today_pnl}",
             f"Equity: {equity}",

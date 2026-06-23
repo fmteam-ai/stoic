@@ -137,6 +137,11 @@ async def _process_user(db, cfg: dict):
         "status": {"$in": ["pending", "open"]},
     })
 
+    # If anti-tilt fired above, freeze ALL new entries for this cycle.
+    # Existing open trades are NOT closed — only new entries are blocked.
+    if anti_tilt_active:
+        return
+
     for sym in symbols:
         if _on_cooldown(user_id, sym):
             continue

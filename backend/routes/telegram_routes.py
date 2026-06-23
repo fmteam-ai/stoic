@@ -93,7 +93,7 @@ async def _cmd_status(token, chat_id, user_id) -> None:
     })
     active = bool(cfg and cfg.get("active"))
     parts = [
-        f"*🤖 Bot Status*",
+        "*🤖 Bot Status*",
         f"State: {'🟢 ACTIVE' if active else '🔴 STOPPED'}",
         f"Risk: {_esc(cfg.get('risk_level','medium') if cfg else 'medium')}",
         f"Symbols: {_esc(' · '.join(cfg.get('symbols', []) if cfg else []))}",
