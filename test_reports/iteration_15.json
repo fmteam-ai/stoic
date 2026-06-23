@@ -1,0 +1,35 @@
+{
+  "summary": "Iter21 full regression of Strategy Presets (built-in + custom) and Affiliate Payout self-service flow + Copilot smoke. 21/21 tests pass against the live preview backend. End-to-end admin payout process flow verified by seeding a synthetic payout_request + pending commission into MongoDB and confirming the endpoint flips status=paid, marks commissions paid, and zeros the affiliate's unpaid_balance_usd.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter21_presets_and_payouts.py",
+    "/app/test_reports/pytest/iter21_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/bot_routes.py POST /preset/{key}: when applying a custom preset, the response sets active_preset to 'custom:{id}' on the bot_config. That is the long-form key, which is fine, but the frontend will need to display the preset name (not the raw id) — UI should look up the custom row by id when rendering 'Active preset: …'.",
+    "user_presets._sanitize_config silently drops unknown fields. This is intentional, but there is no API to UPDATE an existing custom preset (only create/delete). If users want to tweak a saved preset they must delete + recreate. Consider adding PATCH /api/bot/my-presets/{id} in a follow-up if user feedback requests it.",
+    "affiliate_routes /admin/affiliate/payout-requests/{rid}/process zeros the affiliate's unpaid_balance_usd unconditionally even if the actual sum of pending commissions != the request's amount_usd. If a new commission was accrued between request creation and processing, that delta is silently zeroed too. Recommend processing should only zero out the amount actually paid, OR move new commissions to a separate bucket.",
+    "/affiliate/payout-requests returns raw Mongo docs (after popping _id->id). The doc may contain `payment_details` which can include sensitive payout info (paypal email / bank last4). Confirm the affiliate endpoint is OK to echo this back to the affiliate themselves (it is), but the admin endpoint also returns it — fine for admins, just be aware.",
+    "Conftest autouse fixture only silences Telegram notifier. Co-Pilot smoke test does a REAL Claude call (~10–15s) — this incurs cost on every CI run. Consider gating by an env flag or mocking emergentintegrations for cheaper repeat runs.",
+    "Email validator on /api/auth/register rejects .local TLDs (caught during testing). Not a bug, but flagging because automation scripts using fake test domains must use a real-looking TLD (e.g. iter21test.com)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter21_presets_and_payouts.py (NEW)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "n/a (backend-only request)"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md). Fresh users registered with random iter21_<hex>@iter21test.com emails.",
+  "seed_data_creation": "Per-test ephemeral data only — seeded an affiliate_payout_request + affiliate_commission with `_test_iter21:true` marker for the admin-process E2E test; both are deleted on teardown. The admin affiliate (code MI77QK) unpaid_balance was temporarily set to 75.0 then zeroed by the process endpoint (expected outcome). Also wiped and recreated 10 user_presets for the limit-test on userA, then deleted them.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter21_presets_and_payouts.py is the regression suite. It uses pymongo for direct DB ops, cookies via requests.Session for auth, and admin@trading.bot / admin123. The end-to-end payout test mutates the admin affiliate's unpaid_balance_usd (sets it to 75, then process endpoint zeros it). If a future test needs the admin affiliate to have a non-zero balance, run that test before this suite OR re-seed after. Email validator on register requires a real-looking TLD — use @iter21test.com, NOT @test.local.",
+  "rca of the issue": "n/a — no bugs found. All 21 endpoint contracts behaved exactly as specified in the review_request, including: 7 ordered built-in presets with whitelisted config keys, sniper apply with correct overlay (min_confidence_override=75, trade_of_day_cap=1, aggressive_mode=false, active_preset='sniper') leaving risk_level + symbols untouched, 404 for invalid built-in & custom preset ids, 400 for empty/dup name + 11th preset (limit), per-user isolation (userB sees empty custom[], 404 on apply/delete of userA's preset), affiliate payout 404 for non-affiliate, 400 'Minimum payout is $50' for admin with $0 balance, 403 'admin only' for non-admin on /admin/affiliate/payout-requests, 400 on invalid ObjectId for /process, full E2E process flow (status flipped, commissions paid, balance zeroed), and Co-Pilot returns {session_id, answer, snapshot{bot_config, recent_signals}} with session continuity."
+}
