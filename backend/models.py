@@ -147,6 +147,12 @@ class BotConfigUpdate(BaseModel):
     # Pre-news existing-position protector — flatten OPEN trades into imminent HIGH-impact events
     pre_news_protect_enabled: bool = True
     pre_news_protect_minutes: int = 5
+    # Aggressive Mode — when the Strategy Agent returns HOLD but underlying indicators have
+    # a clear directional bias, override to BUY/SELL. Increases trade frequency at the cost
+    # of per-trade edge. Use carefully.
+    aggressive_mode: bool = False
+    # Custom minimum-confidence override (1-95). 0 = use the risk_level default.
+    min_confidence_override: int = 0
 
 
 class BotConfigOut(BotConfigUpdate):

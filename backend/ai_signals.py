@@ -11,7 +11,10 @@ import os
 import json
 import uuid
 import re
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger("ai_signals")
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 from market import get_quote, get_history, compute_indicators, asset_type_of
@@ -110,7 +113,9 @@ def _apply_dual_veto(action: str, confidence: float, sentiment: dict) -> tuple:
     return action, ""
 
 
-async def analyze_symbol(symbol: str, risk_level: str) -> dict:
+async def analyze_symbol(symbol: str, risk_level: str,
+                         min_conf_override: int = 0,
+                         aggressive_mode: bool = False) -> dict:
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
@@ -172,6 +177,10 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
             new_min = min(92, base_min + 4)
             liquidity_window["confidence_adjustment"] = new_min - base_min
             adapted_profile = {**adapted_profile, "min_confidence": new_min}
+
+    # User-level threshold override (lowest priority — applied after all profile/session adjustments)
+    if 0 < min_conf_override < 100:
+        adapted_profile = {**adapted_profile, "min_confidence": int(min_conf_override)}
 
     current_price = quote.get("price") or indicators.get("current_price") or 0.0
 
@@ -243,6 +252,46 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         action = "HOLD"
     confidence = float(parsed.get("confidence") or 0)
 
+    # ------------------------------------------------------------------------
+    # AGGRESSIVE MODE — opt-in override:
+    # When Claude returns HOLD with any non-zero confidence and macro isn't
+    # frozen, infer a directional bias from underlying indicators (Kalman
+    # velocity sign + price-vs-MA200 + macro DXY bias) and convert HOLD to
+    # BUY/SELL. Increases trade frequency at the cost of per-trade edge.
+    # The 10-layer veto cascade still runs after this — so macro/regime/spread
+    # vetoes can still block the trade.
+    # ------------------------------------------------------------------------
+    aggressive_applied = None
+    if aggressive_mode and action == "HOLD" and confidence >= 15 and not macro.get("frozen"):
+        bias_votes = 0
+        kv = indicators.get("kalman_velocity")
+        if isinstance(kv, (int, float)) and kv != 0:
+            bias_votes += 1 if kv > 0 else -1
+        cp = indicators.get("current_price")
+        ma200 = indicators.get("ma_200") or indicators.get("ma200")
+        if cp and ma200:
+            bias_votes += 1 if cp > ma200 else -1
+        dxy_dir = (dxy_feat or {}).get("regime") if dxy_feat else None
+        if dxy_dir == "bullish_usd":
+            bias_votes -= 1  # bullish USD → bearish gold
+        elif dxy_dir == "bearish_usd":
+            bias_votes += 1
+        logger.info("Aggressive Mode eval sym=%s claude=%s conf=%s votes=%d kv=%s cp_vs_ma200=%s dxy=%s",
+                    symbol, action, confidence, bias_votes, kv,
+                    "above" if (cp and ma200 and cp > ma200) else "below" if (cp and ma200) else "?",
+                    dxy_dir)
+        if bias_votes >= 1:
+            action = "BUY"
+            confidence = max(confidence, adapted_profile["min_confidence"] + 3)
+            aggressive_applied = "BUY (aggressive override · indicator bias bullish)"
+        elif bias_votes <= -1:
+            action = "SELL"
+            confidence = max(confidence, adapted_profile["min_confidence"] + 3)
+            aggressive_applied = "SELL (aggressive override · indicator bias bearish)"
+    elif aggressive_mode:
+        logger.info("Aggressive Mode skipped sym=%s action=%s conf=%s frozen=%s",
+                    symbol, action, confidence, macro.get("frozen"))
+
     # Veto cascade — each veto checks its own condition independently,
     # so reasoning carries all reasons we held off. Final action is HOLD if any fires.
     final_action = action
@@ -267,7 +316,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
 
     # 4. Shannon entropy noise veto — block trades in chaotic/random markets
     entropy_veto = ""
-    if not entropy.get("tradeable", True) and action != "HOLD":
+    if not entropy.get("tradeable", True) and action != "HOLD" and not aggressive_mode:
         entropy_veto = (
             f"Noise filter: market entropy={entropy.get('entropy')} "
             f"({entropy.get('label')}). Random walk regime — trade vetoed."
@@ -286,7 +335,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         upcoming_macro=upcoming_macro,
     )
     meta_veto = ""
-    if action != "HOLD" and meta_label["verdict"] == "FAKE_OUT":
+    if action != "HOLD" and meta_label["verdict"] == "FAKE_OUT" and not aggressive_mode:
         meta_veto = (
             f"Meta-Labeler classified this as FAKE_OUT "
             f"(p_true={meta_label['p_true']:.2f} < {meta_label['threshold']}). "
@@ -297,7 +346,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
     # 6. Multi-Timeframe trend confluence gate
     mtf = multi_timeframe_gate(action, history, indicators)
     mtf_veto = ""
-    if action != "HOLD" and not mtf["aligned"]:
+    if action != "HOLD" and not mtf["aligned"] and not aggressive_mode:
         mtf_veto = mtf["reason"]
         final_action = "HOLD"
 
@@ -319,7 +368,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         learned_meta = await learned_predict_p_win(learned_input)
     except Exception:
         learned_meta = None
-    if learned_meta and action != "HOLD" and learned_meta["verdict"] == "REJECT":
+    if learned_meta and action != "HOLD" and learned_meta["verdict"] == "REJECT" and not aggressive_mode:
         learned_veto = (
             f"Learned classifier: p_win={learned_meta['p_win']:.2f} "
             f"< {learned_meta['threshold']:.2f} "
@@ -342,7 +391,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         min_confluences=APLUS_MIN_CONFLUENCES,
     )
     aplus_veto = ""
-    if final_action != "HOLD" and not confluence["passed"]:
+    if final_action != "HOLD" and not confluence["passed"] and not aggressive_mode:
         aplus_veto = confluence["reason"]
         final_action = "HOLD"
 
@@ -408,17 +457,20 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
             + 0.25 * abs(tp3 - current_price)
         )
         rr_ratio = round(weighted_tp_dist / sl_dist, 2)
-        if rr_ratio < MIN_RR_RATIO:
+        # In Aggressive Mode, drop the R:R floor to 1.1 (still positive expectancy).
+        rr_floor = 1.1 if aggressive_mode else MIN_RR_RATIO
+        if rr_ratio < rr_floor:
             rr_veto = (
-                f"Weighted R:R {rr_ratio} < min {MIN_RR_RATIO}. "
+                f"Weighted R:R {rr_ratio} < min {rr_floor}. "
                 f"Expected value too low — trade vetoed."
             )
             final_action = "HOLD"
 
     # 10. DXY inverse-correlation gate (XAUUSD only) — block trades fighting the dollar.
+    # Aggressive Mode already used DXY direction to set the action, so skip this veto.
     dxy_gate = dxy_gate_check(final_action, symbol, dxy_feat)
     dxy_veto = ""
-    if final_action in ("BUY", "SELL") and not dxy_gate["passed"]:
+    if final_action in ("BUY", "SELL") and not dxy_gate["passed"] and not aggressive_mode:
         dxy_veto = dxy_gate["reason"]
         final_action = "HOLD"
 
@@ -458,6 +510,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "symbol": symbol,
         "action": final_action,
         "chart_action": action,
+        "aggressive_applied": aggressive_applied,
         "confidence": round(confidence, 1),
         "entry_price": round(current_price, 5),
         "stop_loss": sl,

@@ -55,6 +55,7 @@ class Orchestrator:
         symbol: str,
         risk_level: str,
         active_positions: list[dict] | None = None,
+        user_cfg: dict | None = None,
     ) -> dict:
         """Run Research → Strategy → Risk for a single (user, symbol) tick.
 
@@ -85,7 +86,7 @@ class Orchestrator:
         # 2. Strategy
         st_t0 = time.monotonic()
         try:
-            signal = await self.strategy.propose(symbol, risk_level, research)
+            signal = await self.strategy.propose(symbol, risk_level, research, user_cfg=user_cfg)
             steps.append({
                 "agent": "strategy", "status": "ok",
                 "summary": f"{signal.get('action')} {signal.get('confidence')}%",

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2 } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame } from "lucide-react";
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -75,6 +75,8 @@ export default function BotConfig() {
                 sl_cooldown_minutes: cfg.sl_cooldown_minutes,
                 pre_news_protect_enabled: cfg.pre_news_protect_enabled,
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
+                aggressive_mode: cfg.aggressive_mode,
+                min_confidence_override: cfg.min_confidence_override,
             });
             setCfg(data); setSaveMsg("Configuration saved.");
         } catch (e) { setErr(formatApiError(e)); }
@@ -333,6 +335,17 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     {cfg.pre_news_protect_enabled && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="pre_news_protect_minutes" label="FLATTEN WINDOW BEFORE EVENT" suffix="minutes" step={1} min={1} max={30} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Aggressive Mode */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="aggressive_mode" label="Aggressive Mode" icon={Flame} color="#FF6B00"
+                        desc="When Claude returns HOLD with any non-zero conviction AND the macro window is open, infer a direction from indicators (Kalman velocity + price-vs-MA200 + DXY bias) and convert HOLD → BUY/SELL. Increases trade frequency at the cost of per-trade edge. The full 10-layer veto cascade still runs." />
+                    {cfg.aggressive_mode && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="min_confidence_override" label="MIN-CONF OVERRIDE (0 = use profile)" suffix="%" step={1} min={0} max={95} />
                         </div>
                     )}
                 </div>

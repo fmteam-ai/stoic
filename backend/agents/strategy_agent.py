@@ -16,12 +16,21 @@ logger = logging.getLogger("agent.strategy")
 class StrategyAgent:
     name = "strategy"
 
-    async def propose(self, symbol: str, risk_level: str, research_payload: dict | None = None) -> dict:
+    async def propose(self, symbol: str, risk_level: str,
+                      research_payload: dict | None = None,
+                      user_cfg: dict | None = None) -> dict:
         """Produce a candidate signal for `symbol` under `risk_level`.
 
         `research_payload` is informational — `ai_signals.analyze_symbol`
         currently fetches its own data, so we pass research through for
         observability (the orchestrator records it on the activity log).
+        `user_cfg` lets per-user overrides flow into the analyzer (aggressive
+        mode, custom min-confidence threshold).
         """
-        signal = await analyze_symbol(symbol, risk_level)
+        cfg = user_cfg or {}
+        signal = await analyze_symbol(
+            symbol, risk_level,
+            min_conf_override=int(cfg.get("min_confidence_override") or 0),
+            aggressive_mode=bool(cfg.get("aggressive_mode") or False),
+        )
         return signal

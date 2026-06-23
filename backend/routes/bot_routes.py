@@ -49,6 +49,8 @@ async def _get_or_create_config(db, user_id: str) -> dict:
         "sl_cooldown_minutes": 45,
         "pre_news_protect_enabled": True,
         "pre_news_protect_minutes": 5,
+        "aggressive_mode": False,
+        "min_confidence_override": 0,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.bot_configs.insert_one(new_cfg)
@@ -91,6 +93,8 @@ def _serialize(cfg: dict) -> dict:
         "sl_cooldown_minutes": cfg.get("sl_cooldown_minutes", 45),
         "pre_news_protect_enabled": cfg.get("pre_news_protect_enabled", True),
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
+        "aggressive_mode": cfg.get("aggressive_mode", False),
+        "min_confidence_override": cfg.get("min_confidence_override", 0),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -175,7 +179,9 @@ async def get_bot_status(user=Depends(get_current_user)):
     last_action = (last_signal or {}).get("action")
     last_conf = (last_signal or {}).get("confidence")
     last_veto = (last_signal or {}).get("veto_reason")
-    min_conf = profile.get("min_confidence", 65)
+    profile_min_conf = profile.get("min_confidence", 65)
+    override = int(cfg.get("min_confidence_override") or 0)
+    min_conf = override if (0 < override < 100) else profile_min_conf
     why_no_trade = None
     if not cfg.get("active"):
         why_no_trade = "Bot is stopped — start it from Bot Config"

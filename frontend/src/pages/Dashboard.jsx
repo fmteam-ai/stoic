@@ -18,6 +18,14 @@ const CHART_TOOLTIP_CONTENT = {
 };
 const CHART_TOOLTIP_LABEL = { color: "#A1A1AA" };
 
+// User-selectable chart timeframes — daily-bar data, sliced client-side.
+const CHART_RANGES = {
+    "14D": { label: "14 days",  days: 14  },
+    "1M":  { label: "1 month",  days: 30  },
+    "6M":  { label: "6 months", days: 180 },
+    "1Y":  { label: "1 year",   days: 365 },
+};
+
 function PriceTile({ quote, selected, onClick }) {
     if (!quote) return null;
     const positive = (quote.change_pct || 0) >= 0;
@@ -278,6 +286,7 @@ export default function Dashboard() {
     const [quotes, setQuotes] = useState({});
     const [selected, setSelected] = useState("XAUUSD");
     const [history, setHistory] = useState([]);
+    const [chartRange, setChartRange] = useState("1Y");  // 14D | 1M | 6M | 1Y
     const [indicators, setIndicators] = useState({});
     const [sentiment, setSentiment] = useState({});
     const [macro, setMacro] = useState({ events: [], freeze: null });
@@ -360,10 +369,12 @@ export default function Dashboard() {
 
     useEffect(() => {
         loadQuotes(); loadStats(); loadBotStatus(); loadLiveTrades();
-        const id = setInterval(() => { loadQuotes(); loadBotStatus(); loadLiveTrades(); loadStats(); }, 60_000);
+        // 10s for live prices (was 60s) — keeps price tiles flickering near real-time
+        const quotesId = setInterval(loadQuotes, 10_000);
+        const id = setInterval(() => { loadStats(); }, 60_000);
         const tickId = setInterval(loadBotStatus, 10_000);
-        const liveId = setInterval(loadLiveTrades, 5_000); // 5s refresh for time-to-target
-        return () => { clearInterval(id); clearInterval(tickId); clearInterval(liveId); };
+        const liveId = setInterval(loadLiveTrades, 5_000);
+        return () => { clearInterval(quotesId); clearInterval(id); clearInterval(tickId); clearInterval(liveId); };
     }, [loadQuotes, loadStats, loadBotStatus, loadLiveTrades]);
 
     useEffect(() => { loadHistory(selected); loadSentiment(selected); loadMacro(selected); }, [selected, loadHistory, loadSentiment, loadMacro]);
@@ -465,19 +476,36 @@ export default function Dashboard() {
 
                 {/* Chart */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A]">
-                    <div className="px-5 py-4 border-b border-[#1F1F1F] flex items-center justify-between">
+                    <div className="px-5 py-4 border-b border-[#1F1F1F] flex items-center justify-between gap-3 flex-wrap">
                         <div>
-                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">CHART · 12 MONTHS · DAILY</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">CHART · {CHART_RANGES[chartRange].label.toUpperCase()} · DAILY</div>
                             <div className="flex items-center gap-2">
                                 <ChartLineUp className="w-4 h-4 text-[#00FF41]" />
                                 <span className="font-display font-bold text-lg tracking-tight" data-testid="chart-symbol">{selected}</span>
                             </div>
                         </div>
-                        {indicators?.six_month_return_pct != null && (
-                            <div className={`font-mono text-sm ${indicators.six_month_return_pct >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
-                                {indicators.six_month_return_pct >= 0 ? "+" : ""}{indicators.six_month_return_pct}% / 12M
+                        <div className="flex items-center gap-2">
+                            {/* Timeframe pills */}
+                            <div className="flex items-center gap-1 border border-[#1F1F1F] p-0.5" data-testid="chart-range-selector">
+                                {Object.entries(CHART_RANGES).map(([key, cfg]) => (
+                                    <button key={key}
+                                        onClick={() => setChartRange(key)}
+                                        data-testid={`chart-range-${key}`}
+                                        className={`px-2.5 py-1 font-mono text-[10px] tracking-widest transition-colors ${
+                                            chartRange === key
+                                                ? "bg-[#00FF41]/10 text-[#00FF41] border border-[#00FF41]/40"
+                                                : "text-[#52525B] hover:text-[#A1A1AA] border border-transparent"
+                                        }`}>
+                                        {cfg.label}
+                                    </button>
+                                ))}
                             </div>
-                        )}
+                            {indicators?.six_month_return_pct != null && (
+                                <div className={`font-mono text-sm ml-2 ${indicators.six_month_return_pct >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
+                                    {indicators.six_month_return_pct >= 0 ? "+" : ""}{indicators.six_month_return_pct}% / 12M
+                                </div>
+                            )}
+                        </div>
                     </div>
                     <div className="h-64 md:h-80 p-2" data-testid="price-chart">
                         {historyLoading ? (
@@ -486,7 +514,7 @@ export default function Dashboard() {
                             <div className="h-full flex items-center justify-center font-mono text-xs text-[#52525B] tracking-widest">NO DATA AVAILABLE</div>
                         ) : (
                             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-                                <AreaChart data={history}>
+                                <AreaChart data={history.slice(-CHART_RANGES[chartRange].days)}>
                                     <defs>
                                         <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
                                             <stop offset="0%" stopColor="#00FF41" stopOpacity={0.3} />

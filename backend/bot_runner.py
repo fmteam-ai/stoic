@@ -147,6 +147,11 @@ async def _process_user(db, cfg: dict):
     auto_exec = bool(cfg.get("auto_execute", True))
     max_concurrent = int(cfg.get("max_concurrent_trades", 3))
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
+    # If the user has explicitly set a min_confidence_override, treat that as
+    # the floor — auto-tune cannot raise the bar above it. Same applies in
+    # Aggressive Mode where the user has explicitly opted into more entries.
+    min_conf_override = int(cfg.get("min_confidence_override") or 0)
+    aggressive_mode_cfg = bool(cfg.get("aggressive_mode") or False)
     spread_filter_enabled = bool(cfg.get("spread_filter_enabled", False))
     max_spread_pips = cfg.get("max_spread_pips") or {}
     anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
@@ -235,6 +240,7 @@ async def _process_user(db, cfg: dict):
             tick_out = await orch.analyze_tick(
                 user_id=user_id, symbol=sym, risk_level=risk_level,
                 active_positions=active_positions,
+                user_cfg=cfg,
             )
             signal = tick_out.get("signal")
             if not signal:
@@ -250,6 +256,11 @@ async def _process_user(db, cfg: dict):
                 tune = await get_auto_threshold(user_id, sym, risk_level)
                 signal["auto_tune"] = tune
                 eff = float(tune.get("effective_threshold") or 0)
+                # Apply user override / aggressive mode cap: don't let auto-tune
+                # raise the bar above an explicit user-chosen threshold.
+                if aggressive_mode_cfg or (0 < min_conf_override < 100):
+                    cap = min_conf_override if (0 < min_conf_override < 100) else 100
+                    eff = min(eff, float(cap))
                 if (signal.get("confidence") or 0) < eff:
                     auto_tune_block_reason = (
                         f"Auto-tune raised threshold to {eff:.0f}% "
