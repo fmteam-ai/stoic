@@ -82,6 +82,49 @@ export default function Accounts() {
         }
     };
 
+    const [refreshingBalance, setRefreshingBalance] = useState({});
+    const refreshBalance = async (id) => {
+        setRefreshingBalance(prev => ({ ...prev, [id]: true }));
+        try {
+            // Reuses the existing connection-test endpoint — it returns the
+            // current balance/equity from the account doc (last heartbeat).
+            const { data } = await api.get(`/accounts/${id}/test_connection`);
+            setAccounts(prev => prev.map(a => a.id === id
+                ? { ...a, balance: data.balance ?? a.balance,
+                    equity: data.equity ?? a.equity,
+                    last_heartbeat: data.last_heartbeat ?? a.last_heartbeat,
+                    open_positions: data.open_positions ?? a.open_positions,
+                    status: data.connected ? "connected" : "disconnected" }
+                : a));
+            toast.success("Balance refreshed", {
+                description: data.connected
+                    ? `Latest from MT5: $${(data.balance ?? 0).toFixed(2)}`
+                    : "EA heartbeat is stale — start MT5 + EA to update.",
+            });
+        } catch (e) {
+            toast.error("Refresh failed", { description: formatApiError(e) });
+        } finally {
+            setRefreshingBalance(prev => ({ ...prev, [id]: false }));
+        }
+    };
+
+    // "Updated Xs ago" timestamp — recomputed each tick so it counts up smoothly.
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const id = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, []);
+    const ageString = (iso) => {
+        if (!iso) return null;
+        const t = Date.parse(iso);
+        if (isNaN(t)) return null;
+        const s = Math.max(0, Math.round((now - t) / 1000));
+        if (s < 60)    return `${s}s`;
+        if (s < 3600)  return `${Math.round(s / 60)}m`;
+        if (s < 86400) return `${Math.round(s / 3600)}h`;
+        return `${Math.round(s / 86400)}d`;
+    };
+
     const [testResults, setTestResults] = useState({});
     const [testing, setTesting] = useState({});
 
@@ -267,14 +310,50 @@ export default function Accounts() {
                                             <div className="font-mono text-xs text-[#A1A1AA]">{a.broker} · {a.server} · #{a.account_number}</div>
                                             <div className="font-mono text-[10px] text-[#52525B] tracking-widest">TYPE · {a.account_type?.toUpperCase()} · {a.base_currency}</div>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <div className="p-3 border border-[#1F1F1F]">
-                                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">BALANCE</div>
-                                                <div className="font-mono text-sm">{(a.balance ?? 0).toFixed(2)}</div>
+                                        <div className="space-y-2 min-w-[280px]">
+                                            <div className="grid grid-cols-2 gap-3" data-testid={`balance-card-${a.account_number}`}>
+                                                <div className="p-3 border border-[#1F1F1F] bg-[#050505] relative">
+                                                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">BALANCE</div>
+                                                    <div className="font-display font-bold text-2xl tabular-nums tracking-tight"
+                                                        data-testid={`balance-${a.account_number}`}>
+                                                        ${(a.balance ?? 0).toFixed(2)}
+                                                    </div>
+                                                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-0.5">{a.base_currency || "USD"}</div>
+                                                </div>
+                                                <div className="p-3 border border-[#1F1F1F] bg-[#050505] relative">
+                                                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">EQUITY</div>
+                                                    <div className="font-display font-bold text-2xl tabular-nums tracking-tight"
+                                                        data-testid={`equity-${a.account_number}`}>
+                                                        ${(a.equity ?? 0).toFixed(2)}
+                                                    </div>
+                                                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-0.5">
+                                                        {(a.open_positions ?? 0)} OPEN POSITION{(a.open_positions ?? 0) === 1 ? "" : "S"}
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div className="p-3 border border-[#1F1F1F]">
-                                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">EQUITY</div>
-                                                <div className="font-mono text-sm">{(a.equity ?? 0).toFixed(2)}</div>
+
+                                            <div className="flex items-center justify-between gap-3 px-1 flex-wrap">
+                                                {(() => {
+                                                    const age = ageString(a.last_heartbeat);
+                                                    const fresh = a.last_heartbeat && (now - Date.parse(a.last_heartbeat)) < 10_000;
+                                                    return (
+                                                        <div className="flex items-center gap-2 font-mono text-[10px] tracking-widest"
+                                                            data-testid={`balance-age-${a.account_number}`}>
+                                                            <span className={`w-1.5 h-1.5 rounded-full ${fresh ? "bg-[#00FF41] pulse-dot" : "bg-[#52525B]"}`} />
+                                                            <span className={fresh ? "text-[#00FF41]" : "text-[#52525B]"}>
+                                                                {age ? `LIVE · UPDATED ${age} AGO` : "NO HEARTBEAT YET"}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })()}
+                                                <button onClick={() => refreshBalance(a.id)}
+                                                    disabled={!!refreshingBalance[a.id]}
+                                                    data-testid={`refresh-balance-${a.account_number}`}
+                                                    title="Pull the latest balance + equity from your MT5 EA"
+                                                    className="flex items-center gap-1.5 px-2.5 py-1 border border-[#1F1F1F] hover:border-[#00FF41]/40 hover:text-[#00FF41] disabled:opacity-50 text-[10px] font-mono tracking-widest transition-colors">
+                                                    <ArrowsClockwise className={`w-3 h-3 ${refreshingBalance[a.id] ? "animate-spin" : ""}`} />
+                                                    {refreshingBalance[a.id] ? "REFRESHING…" : "REFRESH"}
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
