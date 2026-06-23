@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
@@ -294,3 +294,62 @@ async def close_trade(trade_id: str, user=Depends(get_current_user)):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Open trade not found")
     return {"ok": True}
+
+
+
+# Statuses that are SAFE to bulk-delete. Open & pending trades are intentionally
+# excluded — they represent real money on the broker side and must be closed
+# properly via /trades/{id}/close, not silently wiped.
+_DELETABLE_STATUSES = {"closed", "cancelled", "failed"}
+
+
+@router.delete("")
+async def bulk_clear_trades(
+    scope: str = "all",
+    older_than_days: Optional[int] = None,
+    user=Depends(get_current_user),
+):
+    """Bulk-delete CLOSED / CANCELLED / FAILED trades for the current user.
+
+    Open and pending trades are NEVER deletable through this endpoint —
+    use /trades/{id}/close first.
+
+    Query params:
+      scope=all        → all closed + cancelled + failed (default)
+      scope=closed     → only fully-closed trades
+      scope=cancelled  → only cancelled
+      scope=failed     → only failed
+      older_than_days  → restrict to trades whose closed_at OR opened_at is
+                         older than N days
+    """
+    db = get_db()
+    if scope == "all":
+        status_filter = {"$in": list(_DELETABLE_STATUSES)}
+    elif scope in _DELETABLE_STATUSES:
+        status_filter = scope
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope must be one of: all, {', '.join(sorted(_DELETABLE_STATUSES))}",
+        )
+
+    q: dict = {"user_id": user["id"], "status": status_filter}
+
+    if older_than_days is not None:
+        if older_than_days < 0:
+            raise HTTPException(status_code=400, detail="older_than_days must be ≥ 0")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+        # Match trades whose closed_at < cutoff (preferred) OR opened_at < cutoff
+        # when closed_at is missing (e.g. cancelled-before-open trades).
+        q["$or"] = [
+            {"closed_at": {"$lt": cutoff}},
+            {"closed_at": None, "opened_at": {"$lt": cutoff}},
+        ]
+
+    result = await db.trades.delete_many(q)
+    return {
+        "ok": True,
+        "deleted": result.deleted_count,
+        "scope": scope,
+        "older_than_days": older_than_days,
+    }

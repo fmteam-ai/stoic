@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
+import { toast } from "sonner";
 
 const STATUS_STYLE = {
     pending: "border-[#FFB000]/40 text-[#FFB000]",
@@ -276,10 +277,13 @@ export default function Trades() {
                 subtitle="Open positions and historical trades synced from MT5 EA."
                 testid="trades-header"
                 action={
-                    <button onClick={load} data-testid="trades-refresh-button"
-                        className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
-                        <ArrowsClockwise className="w-3.5 h-3.5" /> REFRESH
-                    </button>
+                    <div className="flex gap-2 items-center">
+                        <ClearTradesMenu trades={trades} onCleared={load} />
+                        <button onClick={load} data-testid="trades-refresh-button"
+                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
+                            <ArrowsClockwise className="w-3.5 h-3.5" /> REFRESH
+                        </button>
+                    </div>
                 }
             />
 
@@ -444,5 +448,86 @@ export default function Trades() {
                 )}
             </div>
         </AppLayout>
+    );
+}
+
+
+function ClearTradesMenu({ trades, onCleared }) {
+    const [open, setOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const closedCount = trades.filter(t => t.status === "closed").length;
+    const cancelledCount = trades.filter(t => t.status === "cancelled").length;
+    const failedCount = trades.filter(t => t.status === "failed").length;
+    const deletableTotal = closedCount + cancelledCount + failedCount;
+
+    const clear = async (scope, label, days) => {
+        const noun = scope === "closed" ? `${closedCount} closed trade(s)`
+                   : scope === "cancelled" ? `${cancelledCount} cancelled trade(s)`
+                   : scope === "failed" ? `${failedCount} failed trade(s)`
+                   : days ? `trades older than ${days} day(s)`
+                   : `${deletableTotal} closed/cancelled/failed trade(s)`;
+        if (!window.confirm(`Delete ${noun}? Open positions are protected.\n\nThis cannot be undone.`)) return;
+        setBusy(true);
+        try {
+            const params = new URLSearchParams();
+            if (scope) params.set("scope", scope);
+            if (days) params.set("older_than_days", String(days));
+            const { data } = await api.delete(`/trades?${params.toString()}`);
+            toast.success(`Cleared ${data.deleted} trade${data.deleted === 1 ? "" : "s"} (${label})`);
+            setOpen(false);
+            await onCleared();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally { setBusy(false); }
+    };
+
+    return (
+        <div className="relative" data-testid="clear-trades-menu">
+            <button onClick={() => setOpen(!open)} disabled={busy || deletableTotal === 0}
+                data-testid="clear-trades-toggle"
+                className="flex items-center gap-2 px-3 py-2 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 disabled:opacity-40 disabled:cursor-not-allowed font-medium text-xs tracking-widest transition-colors duration-150">
+                <Trash className="w-3.5 h-3.5" /> CLEAR <ChevronDown className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`} />
+            </button>
+            {open && (
+                <div className="absolute right-0 top-full mt-1 z-30 w-80 border border-[#1F1F1F] bg-[#0A0A0A] shadow-2xl"
+                    data-testid="clear-trades-dropdown">
+                    <div className="px-3 py-2 border-b border-[#1F1F1F]">
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">DELETABLE TRADES</div>
+                        <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">
+                            {closedCount} closed · {cancelledCount} cancelled · {failedCount} failed
+                        </div>
+                        <div className="font-mono text-[10px] text-[#00FF41] mt-1">
+                            ✓ Open positions are PROTECTED — never deleted
+                        </div>
+                    </div>
+                    <ClearTradeOption icon={Trash} label="Clear closed trades only" sub={`${closedCount} settled position${closedCount === 1 ? "" : "s"}`}
+                        onClick={() => clear("closed", "closed")} testid="clear-closed" disabled={closedCount === 0} />
+                    <ClearTradeOption icon={Trash} label="Clear cancelled / failed only" sub={`${cancelledCount + failedCount} never-filled`}
+                        onClick={() => clear("cancelled", "cancelled")} testid="clear-cancelled" disabled={cancelledCount === 0} />
+                    <ClearTradeOption icon={Trash} label="Clear trades > 30 days old" sub="Keep last month only"
+                        onClick={() => clear(null, "30d", 30)} testid="clear-30d" />
+                    <ClearTradeOption icon={Trash} label="Clear trades > 7 days old" sub="Keep the recent week"
+                        onClick={() => clear(null, "7d", 7)} testid="clear-7d" />
+                    <ClearTradeOption icon={X} label="Clear ALL closed history" sub="Wipes the full closed-trade log" danger
+                        onClick={() => clear("all", "all closed")} testid="clear-all" disabled={deletableTotal === 0} />
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ClearTradeOption({ icon: Icon, label, sub, onClick, testid, danger, disabled }) {
+    return (
+        <button type="button" onClick={onClick} disabled={disabled}
+            data-testid={testid}
+            className={`w-full flex items-center gap-3 px-3 py-2 text-left border-b border-[#1F1F1F] last:border-b-0 transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                danger ? "hover:bg-[#FF3B30]/10" : "hover:bg-[#121212]"
+            }`}>
+            <Icon className={`w-3.5 h-3.5 ${danger ? "text-[#FF3B30]" : "text-[#A1A1AA]"}`} />
+            <div className="flex-1">
+                <div className={`text-xs font-medium ${danger ? "text-[#FF3B30]" : "text-white"}`}>{label}</div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-wide mt-0.5">{sub}</div>
+            </div>
+        </button>
     );
 }
