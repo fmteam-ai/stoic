@@ -118,6 +118,8 @@ class BotConfigUpdate(BaseModel):
     trailing_distance_r: float = 0.7          # distance SL trails behind price (in R)
     daily_drawdown_pct: float = 3.0           # auto-stop bot if today's P&L drops below -3%
     daily_drawdown_enabled: bool = True
+    weekly_drawdown_pct: float = 7.0          # auto-stop bot if rolling 7-day P&L drops below -7%
+    weekly_drawdown_enabled: bool = True
     # Spread Filter — block auto-execution when current MT5 spread > threshold
     spread_filter_enabled: bool = False
     max_spread_pips: Dict[str, float] = Field(

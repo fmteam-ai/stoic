@@ -27,6 +27,7 @@ from mtf_check import multi_timeframe_gate
 from kalman import kalman_features
 from macro.cot import get_gold_positioning
 from macro.tips import get_real_yield
+from macro.dxy import get_dxy_snapshot, dxy_gate_check
 from learned_meta import predict_p_win as learned_predict_p_win
 from confluence import confluence_check
 from pip_utils import pips_to_price, price_to_pips
@@ -70,6 +71,12 @@ Rules:
     • real_yield_10y.regime == "bullish_gold" → real yields falling → gold
       tailwind; bias slightly toward BUY confidence. "bearish_gold" → bias
       toward SELL / HOLD.
+    • dxy_dollar_index.regime == "bullish_usd" → DXY above 20-EMA and rising;
+      strong inverse-correlation headwind for XAU longs. Prefer SELL / HOLD.
+    • dxy_dollar_index.regime == "bearish_usd" → DXY below 20-EMA and falling;
+      tailwind for XAU longs. Bias toward BUY.
+    • A downstream DXY gate will hard-veto any XAU trade that fights the
+      dollar's prevailing direction — make sure your action is consistent.
 """
 
 
@@ -125,6 +132,7 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
     kalman_feat = kalman_features([c["close"] for c in history]) if history else {}
     cot_feat = None
     tips_feat = None
+    dxy_feat = None
     if symbol.upper() == "XAUUSD":
         try:
             cot_feat = await get_gold_positioning()
@@ -134,6 +142,10 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
             tips_feat = await get_real_yield()
         except Exception:
             tips_feat = None
+        try:
+            dxy_feat = await get_dxy_snapshot()
+        except Exception:
+            dxy_feat = None
 
     # --- Regime-Adaptive Risk Modifier — swap execution mode by live regime ---
     adapted_profile, regime_meta = adapt_profile_for_regime(profile, regime)
@@ -179,6 +191,12 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
             "delta_5d": tips_feat.get("delta_5d"),
             "regime": tips_feat.get("regime"),
         } if tips_feat else None),
+        "dxy_dollar_index": ({
+            "current": dxy_feat.get("current_price"),
+            "ema_20": dxy_feat.get("ema_20"),
+            "slope_5d_pct": dxy_feat.get("slope_5d_pct"),
+            "regime": dxy_feat.get("regime"),
+        } if dxy_feat else None),
         "risk_profile": {
             "level": risk_level,
             "min_confidence_to_trade": adapted_profile["min_confidence"],
@@ -374,6 +392,13 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
             )
             final_action = "HOLD"
 
+    # 10. DXY inverse-correlation gate (XAUUSD only) — block trades fighting the dollar.
+    dxy_gate = dxy_gate_check(final_action, symbol, dxy_feat)
+    dxy_veto = ""
+    if final_action in ("BUY", "SELL") and not dxy_gate["passed"]:
+        dxy_veto = dxy_gate["reason"]
+        final_action = "HOLD"
+
     # Kelly-modified position sizing — use regime-adapted profile
     sl_distance = abs(current_price - sl) or 0.0001
     sizing = compute_kelly_position_size(
@@ -403,6 +428,8 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         reasoning = f"{reasoning}\n\nVETO (A+ confluence): {aplus_veto}"
     if rr_veto:
         reasoning = f"{reasoning}\n\nVETO (R:R): {rr_veto}"
+    if dxy_veto:
+        reasoning = f"{reasoning}\n\nVETO (DXY gate): {dxy_veto}"
 
     return {
         "symbol": symbol,
@@ -441,9 +468,11 @@ async def analyze_symbol(symbol: str, risk_level: str) -> dict:
         "kalman_filter": kalman_feat,
         "cot_positioning": cot_feat,
         "real_yield_10y": tips_feat,
+        "dxy": dxy_feat,
+        "dxy_gate": dxy_gate,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto),
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto) or bool(dxy_veto),
         "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

@@ -184,6 +184,7 @@ function VetoCascade({ s }) {
         { key: "learned", label: "LEARNED", state: reasoning.includes("VETO (learned-meta)") ? "block" : (s.learned_meta ? "pass" : "skip") },
         { key: "aplus", label: "A+", state: reasoning.includes("VETO (A+ confluence)") ? "block" : (s.aplus_confluence?.checks ? "pass" : "skip") },
         { key: "rr", label: "R:R", state: reasoning.includes("VETO (R:R)") ? "block" : (s.rr_ratio != null ? "pass" : "skip") },
+        { key: "dxy", label: "DXY", state: reasoning.includes("VETO (DXY gate)") ? "block" : (s.dxy ? "pass" : "skip") },
     ];
     const cls = {
         pass: "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/5",

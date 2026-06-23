@@ -33,12 +33,43 @@ from database import get_db
 
 logger = logging.getLogger("learned_meta")
 
-MIN_SAMPLES = 30
+MIN_SAMPLES = 30                    # global minimum to train at all
+MIN_SAMPLES_PER_SESSION = 25        # per-session minimum to train a session-specific model
 N_FEATURES = 8     # excluding bias
 L2 = 0.5
 LR = 0.05
 EPOCHS = 400
 ARTIFACT_KEY = "learned_meta_v1"
+SESSION_ARTIFACT_PREFIX = "learned_meta_v1_session_"   # + ASIA / LONDON / NY
+
+
+def session_bucket(dt) -> str:
+    """Bucket a UTC datetime into one of: ASIA / LONDON / NY / OFF.
+
+    London-NY overlap (13:00-16:00 UTC) is bucketed under NY since most
+    institutional flow during the overlap leans on US data.
+    Anything else (22:00-00:00 UTC) is OFF — these trades are dropped from
+    session-specific training and fall back to the global model at inference.
+    """
+    if dt is None:
+        return "OFF"
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return "OFF"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    h = dt.hour
+    if 0 <= h < 7:
+        return "ASIA"
+    if 7 <= h < 13:
+        return "LONDON"
+    if 13 <= h < 22:
+        return "NY"
+    return "OFF"
 
 
 def _sigmoid(z):
@@ -96,8 +127,8 @@ def _features_from_signal(signal: dict, current_price_fallback: float = 0.0) -> 
     ]
 
 
-async def _build_dataset() -> tuple[np.ndarray, np.ndarray]:
-    """Pull closed trades + their signals; return (X, y) numpy arrays."""
+async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Pull closed trades + their signals; return (X, y, sessions)."""
     db = get_db()
     trades = await db.trades.find(
         {"status": "closed", "signal_id": {"$ne": None}}
@@ -110,12 +141,12 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray]:
         except Exception:
             continue
     if not sig_ids:
-        return np.array([]), np.array([])
+        return np.array([]), np.array([]), []
     sig_map = {}
     async for s in db.signals.find({"_id": {"$in": sig_ids}}):
         sig_map[str(s["_id"])] = s
 
-    X, y = [], []
+    X, y, sessions = [], [], []
     for t in trades:
         sig = sig_map.get(str(t.get("signal_id") or ""))
         if not sig:
@@ -123,9 +154,13 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray]:
         feats = _features_from_signal(sig, current_price_fallback=float(t.get("entry_price") or 0))
         if feats is None:
             continue
+        # Bucket by ENTRY time, not close time — the model conditions on
+        # context at trade-open, which is what inference sees.
+        entered_at = t.get("entered_at") or t.get("opened_at") or sig.get("created_at")
+        sessions.append(session_bucket(entered_at))
         X.append(feats)
         y.append(1 if float(t.get("pnl") or 0) > 0 else 0)
-    return np.array(X, dtype=float), np.array(y, dtype=float)
+    return np.array(X, dtype=float), np.array(y, dtype=float), sessions
 
 
 def _train_logreg(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, float]:
@@ -161,34 +196,26 @@ def _auc(y: np.ndarray, p: np.ndarray) -> float:
     return float(score / (pos.size * neg.size))
 
 
-async def retrain() -> dict:
-    """Pull closed-trade dataset, train model, persist artifact. Returns summary."""
-    db = get_db()
-    X, y = await _build_dataset()
+def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
+    """Train one logistic model on (X, y) and return the persistable artifact dict.
+
+    Caller is responsible for sample-count gating + persistence.
+    """
     n = len(y)
-    if n < MIN_SAMPLES:
-        return {
-            "trained": False,
-            "reason": f"need ≥{MIN_SAMPLES} closed trades (have {n})",
-            "n_samples": n,
-        }
-
     w, mu, sd, auc = _train_logreg(X, y)
-
-    # Calibrate threshold: pick the p_win below which precision ≥ 0.6 on training set.
+    # Calibrate threshold: lowest p_win below which precision_of_rejection >= 0.6
     p_final = _sigmoid(np.hstack([(X - mu) / sd, np.ones((n, 1))]) @ w)
-    threshold = 0.45  # default if no calibration succeeds
+    threshold = 0.45
     for cand in np.arange(0.30, 0.50, 0.01):
         rejected = p_final < cand
         if rejected.sum() == 0:
             continue
-        precision_of_rejection = (y[rejected] == 0).mean()
-        if precision_of_rejection >= 0.6:
+        if (y[rejected] == 0).mean() >= 0.6:
             threshold = float(cand)
             break
-
-    doc = {
-        "key": ARTIFACT_KEY,
+    return {
+        "key": key,
+        "label": label,
         "weights": w.tolist(),
         "mu": mu.tolist(),
         "sd": sd.tolist(),
@@ -203,16 +230,71 @@ async def retrain() -> dict:
             "mtf_aligned", "macro_event_24h",
         ],
     }
-    await db.learned_meta_artifacts.update_one(
-        {"key": ARTIFACT_KEY}, {"$set": doc}, upsert=True
-    )
-    return {"trained": True, **{k: doc[k] for k in (
-        "n_samples", "n_wins", "train_auc", "threshold", "trained_at"
-    )}}
 
 
-async def get_artifact() -> Optional[dict]:
+async def retrain() -> dict:
+    """Pull closed-trade dataset, train global + per-session models. Persist artifacts."""
     db = get_db()
+    X, y, sessions = await _build_dataset()
+    n = len(y)
+    if n < MIN_SAMPLES:
+        return {
+            "trained": False,
+            "reason": f"need ≥{MIN_SAMPLES} closed trades (have {n})",
+            "n_samples": n,
+        }
+
+    # 1. Global fallback artifact — always trained when there's enough data
+    global_doc = _fit_artifact(X, y, ARTIFACT_KEY, "GLOBAL")
+    await db.learned_meta_artifacts.update_one(
+        {"key": ARTIFACT_KEY}, {"$set": global_doc}, upsert=True
+    )
+
+    # 2. Per-session artifacts — only trained when each bucket has enough data
+    sessions_arr = np.array(sessions)
+    per_session = {}
+    for label in ("ASIA", "LONDON", "NY"):
+        mask = sessions_arr == label
+        n_s = int(mask.sum())
+        wins_s = int(y[mask].sum()) if n_s else 0
+        # Need both classes (≥1 win and ≥1 loss) — pure 0/1 sets degenerate LR
+        if n_s >= MIN_SAMPLES_PER_SESSION and 0 < wins_s < n_s:
+            key = f"{SESSION_ARTIFACT_PREFIX}{label}"
+            doc = _fit_artifact(X[mask], y[mask], key, label)
+            await db.learned_meta_artifacts.update_one(
+                {"key": key}, {"$set": doc}, upsert=True
+            )
+            per_session[label] = {
+                "trained": True, "n_samples": n_s, "n_wins": wins_s,
+                "train_auc": doc["train_auc"], "threshold": doc["threshold"],
+            }
+        else:
+            # Wipe stale per-session artifact so we don't predict on outdated weights
+            await db.learned_meta_artifacts.delete_one(
+                {"key": f"{SESSION_ARTIFACT_PREFIX}{label}"}
+            )
+            per_session[label] = {
+                "trained": False, "n_samples": n_s, "n_wins": wins_s,
+                "reason": f"need ≥{MIN_SAMPLES_PER_SESSION} samples + both classes",
+            }
+
+    return {
+        "trained": True,
+        "global": {k: global_doc[k] for k in ("n_samples", "n_wins", "train_auc", "threshold", "trained_at")},
+        "per_session": per_session,
+    }
+
+
+async def get_artifact(session_label: Optional[str] = None) -> Optional[dict]:
+    """Return the per-session artifact for `session_label`, else the global one."""
+    db = get_db()
+    if session_label and session_label in ("ASIA", "LONDON", "NY"):
+        doc = await db.learned_meta_artifacts.find_one(
+            {"key": f"{SESSION_ARTIFACT_PREFIX}{session_label}"}
+        )
+        if doc:
+            doc.pop("_id", None)
+            return doc
     doc = await db.learned_meta_artifacts.find_one({"key": ARTIFACT_KEY})
     if doc:
         doc.pop("_id", None)
@@ -220,8 +302,13 @@ async def get_artifact() -> Optional[dict]:
 
 
 async def predict_p_win(signal: dict) -> Optional[dict]:
-    """Return {p_win, threshold, verdict} or None if no trained model."""
-    art = await get_artifact()
+    """Return {p_win, threshold, verdict, model_used} or None if no model.
+
+    Picks the session-specific model for the CURRENT session if available;
+    otherwise falls back to the global model.
+    """
+    current_session_label = session_bucket(datetime.now(timezone.utc))
+    art = await get_artifact(session_label=current_session_label)
     if not art:
         return None
     feats = _features_from_signal(signal)
@@ -241,6 +328,8 @@ async def predict_p_win(signal: dict) -> Optional[dict]:
             "verdict": "REJECT" if p < threshold else "ACCEPT",
             "n_samples": int(art.get("n_samples", 0)),
             "train_auc": float(art.get("train_auc", 0.5)),
+            "model_used": art.get("label", "GLOBAL"),
+            "current_session": current_session_label,
         }
     except Exception as e:
         logger.warning("learned_meta inference failed: %s", e)

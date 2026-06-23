@@ -1,17 +1,26 @@
 """Circuit breakers — hard programmatic guardrails the AI cannot override.
 
-Currently implemented:
-  - Daily drawdown limit per user: if realised+unrealised P&L for today drops
-    below -drawdown_pct of equity-at-day-start, the bot is force-disabled and
-    a `circuit_breaker_tripped` event is broadcast.
-"""
-from datetime import datetime, timezone
+Implemented:
+  - Daily drawdown:  realised P&L today (UTC)        vs `daily_drawdown_pct`
+  - Weekly drawdown: realised P&L past 7 days (UTC)  vs `weekly_drawdown_pct`
 
+If either breaches the limit, the bot is force-disabled and a
+`circuit_breaker_tripped` event is broadcast.
+"""
+from datetime import datetime, timezone, timedelta
+
+# Conservative defaults — used if the user's bot_config doesn't override
 DEFAULT_DAILY_DRAWDOWN_PCT = {
-    "low": 2.0,        # tighter
+    "low": 2.0,
     "medium": 4.0,
     "high": 7.0,
-    "extreme": 12.0,   # most permissive
+    "extreme": 12.0,
+}
+DEFAULT_WEEKLY_DRAWDOWN_PCT = {
+    "low": 5.0,
+    "medium": 8.0,
+    "high": 14.0,
+    "extreme": 25.0,
 }
 
 
@@ -19,52 +28,107 @@ def today_iso() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-async def realised_pnl_today(db, user_id: str) -> float:
-    """Sum of P&L for trades closed today (UTC)."""
+def week_ago_iso() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+
+
+async def realised_pnl_since(db, user_id: str, since_iso: str) -> float:
+    """Sum of P&L for trades closed on or after `since_iso` (UTC date)."""
     cursor = db.trades.find({
         "user_id": user_id,
         "status": "closed",
-        "closed_at": {"$gte": today_iso()},
+        "closed_at": {"$gte": since_iso},
     })
-    closed = await cursor.to_list(length=1000)
+    closed = await cursor.to_list(length=2000)
     return sum((t.get("pnl") or 0) for t in closed)
 
 
-def drawdown_limit_for(risk_level: str) -> float:
-    return DEFAULT_DAILY_DRAWDOWN_PCT.get(risk_level, 4.0)
+def _daily_limit(cfg: dict) -> float:
+    """Resolve daily-drawdown threshold: per-user config wins, else risk-level default."""
+    explicit = cfg.get("daily_drawdown_pct")
+    if explicit is not None:
+        return float(explicit)
+    return DEFAULT_DAILY_DRAWDOWN_PCT.get(cfg.get("risk_level", "medium"), 4.0)
+
+
+def _weekly_limit(cfg: dict) -> float:
+    explicit = cfg.get("weekly_drawdown_pct")
+    if explicit is not None:
+        return float(explicit)
+    return DEFAULT_WEEKLY_DRAWDOWN_PCT.get(cfg.get("risk_level", "medium"), 8.0)
 
 
 async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
-    """Inspect today's loss vs. the user's daily drawdown limit.
+    """Inspect today's and the rolling 7-day loss vs the user's limits.
 
-    Returns: { tripped: bool, reason: str, pnl_today: float, limit_pct: float, equity: float }
+    Returns:
+      {
+        tripped: bool, reason: str, kind: "daily"|"weekly"|"",
+        pnl_today, drawdown_pct, limit_pct,
+        pnl_week,  drawdown_week_pct, weekly_limit_pct,
+        equity, daily_enabled, weekly_enabled,
+      }
     If tripped, the bot config is force-disabled in the DB.
     """
     total_equity = sum((a.get("equity") or 0) for a in accounts) or sum((a.get("balance") or 0) for a in accounts)
-    pnl_today = await realised_pnl_today(db, user_id)
-    limit_pct = drawdown_limit_for(cfg.get("risk_level", "medium"))
+    pnl_today = await realised_pnl_since(db, user_id, today_iso())
+    pnl_week = await realised_pnl_since(db, user_id, week_ago_iso())
+    daily_limit_pct = _daily_limit(cfg)
+    weekly_limit_pct = _weekly_limit(cfg)
+    daily_enabled = bool(cfg.get("daily_drawdown_enabled", True))
+    weekly_enabled = bool(cfg.get("weekly_drawdown_enabled", True))
 
-    # If no equity reported yet (EA hasn't sent heartbeat), skip check
+    base = {
+        "pnl_today": round(pnl_today, 2),
+        "pnl_week": round(pnl_week, 2),
+        "limit_pct": daily_limit_pct,
+        "weekly_limit_pct": weekly_limit_pct,
+        "equity": round(total_equity, 2),
+        "daily_enabled": daily_enabled,
+        "weekly_enabled": weekly_enabled,
+    }
+
+    # Can't compute a percentage without equity reported by the EA — skip.
     if total_equity <= 0:
-        return {"tripped": False, "reason": "", "pnl_today": pnl_today,
-                "limit_pct": limit_pct, "equity": total_equity}
+        return {**base, "tripped": False, "reason": "", "kind": "",
+                "drawdown_pct": 0.0, "drawdown_week_pct": 0.0}
 
-    drawdown_pct = (pnl_today / total_equity) * 100 if total_equity > 0 else 0
-    tripped = drawdown_pct <= -limit_pct
+    drawdown_pct = (pnl_today / total_equity) * 100
+    drawdown_week_pct = (pnl_week / total_equity) * 100
+
+    tripped, reason, kind = False, "", ""
+    if daily_enabled and drawdown_pct <= -daily_limit_pct:
+        tripped, kind = True, "daily"
+        reason = f"Daily drawdown {drawdown_pct:.2f}% breached -{daily_limit_pct}% limit"
+    elif weekly_enabled and drawdown_week_pct <= -weekly_limit_pct:
+        tripped, kind = True, "weekly"
+        reason = f"Weekly drawdown {drawdown_week_pct:.2f}% breached -{weekly_limit_pct}% limit (7-day window)"
+
     if tripped:
         await db.bot_configs.update_one(
             {"user_id": user_id},
             {"$set": {
                 "active": False,
                 "tripped_at": datetime.now(timezone.utc).isoformat(),
-                "tripped_reason": f"Daily drawdown {drawdown_pct:.2f}% exceeded {limit_pct}% limit",
+                "tripped_reason": reason,
+                "tripped_kind": kind,
             }},
         )
+
     return {
+        **base,
         "tripped": tripped,
-        "reason": f"Daily drawdown {drawdown_pct:.2f}% breached -{limit_pct}% limit" if tripped else "",
-        "pnl_today": round(pnl_today, 2),
+        "reason": reason,
+        "kind": kind,
         "drawdown_pct": round(drawdown_pct, 2),
-        "limit_pct": limit_pct,
-        "equity": round(total_equity, 2),
+        "drawdown_week_pct": round(drawdown_week_pct, 2),
     }
+
+
+# Legacy helper kept for any callers/tests that imported it directly.
+async def realised_pnl_today(db, user_id: str) -> float:
+    return await realised_pnl_since(db, user_id, today_iso())
+
+
+def drawdown_limit_for(risk_level: str) -> float:
+    return DEFAULT_DAILY_DRAWDOWN_PCT.get(risk_level, 4.0)

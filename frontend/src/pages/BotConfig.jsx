@@ -51,6 +51,8 @@ export default function BotConfig() {
                 trailing_distance_r: cfg.trailing_distance_r,
                 daily_drawdown_pct: cfg.daily_drawdown_pct,
                 daily_drawdown_enabled: cfg.daily_drawdown_enabled,
+                weekly_drawdown_pct: cfg.weekly_drawdown_pct,
+                weekly_drawdown_enabled: cfg.weekly_drawdown_enabled,
                 spread_filter_enabled: cfg.spread_filter_enabled,
                 max_spread_pips: cfg.max_spread_pips || {},
                 auto_tune_enabled: cfg.auto_tune_enabled,
@@ -386,6 +388,17 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                     {cfg.daily_drawdown_enabled && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="daily_drawdown_pct" label="DAILY LOSS LIMIT" suffix="% of equity" step={0.5} min={0.5} max={20} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Weekly drawdown */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="weekly_drawdown_enabled" label="Weekly Drawdown Circuit Breaker" icon={OctagonAlert} color="#FFB000"
+                        desc="A 7-day rolling kill-switch that catches slow-bleed losing streaks the daily limit misses. Conservative default: 7% — bumps to 8% at medium risk, 14% at high." />
+                    {cfg.weekly_drawdown_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="weekly_drawdown_pct" label="WEEKLY LOSS LIMIT" suffix="% of equity" step={0.5} min={1} max={40} />
                         </div>
                     )}
                 </div>
