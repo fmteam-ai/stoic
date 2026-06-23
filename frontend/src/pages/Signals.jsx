@@ -215,6 +215,83 @@ function VetoCascade({ s }) {
     );
 }
 
+// Maps a HOLD signal to the FIRST plain-English reason a human can act on.
+// Returns null for actionable signals (BUY/SELL) — banner is HOLD-only.
+function diagnoseHold(s) {
+    const action = s.action;
+    const reasoning = s.reasoning || "";
+    const conf = s.confidence ?? 0;
+    const minConf = s.min_confidence_required ?? 75;
+
+    // VETO patterns — order matters: most actionable / clearest reason wins.
+    // The strings on the right of the regex match the labels surfaced in
+    // ai_signals.py (e.g. "VETO (DXY gate): ...").
+    const vetoMap = [
+        // [match string in reasoning, severity, label, fallback explanation]
+        ["VETO (macro)",          "block",  "MACRO BLACKOUT",  "High-impact USD news event within blackout window — bot pauses entries."],
+        ["VETO (DXY gate)",       "block",  "DXY GATE",        "Dollar Index is trending against this XAU direction — fighting macro."],
+        ["VETO (R:R)",            "block",  "POOR R:R",        "Reward-to-risk below the minimum (TP ladder too close to entry vs SL)."],
+        ["VETO (A+ confluence)",  "warn",   "NOT A+ SETUP",    "Confluence factors aren't aligned enough to qualify as an A-grade setup."],
+        ["VETO (learned-meta)",   "warn",   "LEARNED-META",    "Historical session-specific p_win is below threshold for this kind of setup."],
+        ["VETO (MTF gate)",       "warn",   "MTF MISMATCH",    "M15 and H1 trends disagree — would be a counter-trend entry."],
+        ["VETO (meta-labeler)",   "warn",   "META MISMATCH",   "Claude and the local LR disagree on this trade — best to wait."],
+        ["VETO (entropy)",        "warn",   "CHOP / ENTROPY",  "Recent price action is near-random (entropy > 0.85) — no edge."],
+        ["VETO (regime)",         "warn",   "REGIME · CHOP",   "Low-volatility / chop regime needs higher confidence to risk an entry."],
+        ["VETO (news)",           "warn",   "DUAL-AI VETO",    "Chart wanted to trade but news sentiment disagreed — forced to HOLD."],
+    ];
+
+    for (const [needle, severity, label, fallback] of vetoMap) {
+        if (reasoning.includes(needle)) {
+            // Try to extract the line after the VETO marker for a more specific reason
+            const idx = reasoning.indexOf(needle);
+            const rest = reasoning.slice(idx + needle.length).split("\n")[0].replace(/^:\s*/, "").trim();
+            return { severity, label, detail: rest || fallback };
+        }
+    }
+
+    // No veto fired — only HOLDs here are confidence-floor or Claude-said-HOLD.
+    if (action === "HOLD") {
+        if (conf < minConf) {
+            return {
+                severity: "info",
+                label: "BELOW CONFIDENCE FLOOR",
+                detail: `Claude generated this setup but confidence (${conf}%) is under the minimum (${minConf}%). No veto fired — the bar simply isn't high enough.`,
+            };
+        }
+        return {
+            severity: "info",
+            label: "CLAUDE RETURNED HOLD",
+            detail: "All gates passed but Claude itself declined to trade — most often because no clear directional bias exists right now.",
+        };
+    }
+    return null;
+}
+
+function HoldReasonBanner({ s }) {
+    if (s.action !== "HOLD") return null;
+    const dx = diagnoseHold(s);
+    if (!dx) return null;
+
+    const palette = {
+        block: { bd: "border-[#FF3B30]/30", bg: "bg-[#FF3B30]/10", fg: "text-[#FF3B30]" },
+        warn:  { bd: "border-[#FFB000]/30", bg: "bg-[#FFB000]/10", fg: "text-[#FFB000]" },
+        info:  { bd: "border-[#1F1F1F]",    bg: "bg-[#0A0A0A]",    fg: "text-[#A1A1AA]" },
+    }[dx.severity];
+
+    return (
+        <div className={`px-3 py-2 flex items-start gap-2 border ${palette.bd} ${palette.bg}`}
+            data-testid={`hold-reason-${s.id}`}>
+            <ShieldCheck className={`w-4 h-4 ${palette.fg} shrink-0 mt-0.5`} />
+            <div className="text-xs flex-1">
+                <div className={`font-mono text-[10px] tracking-widest mb-0.5 ${palette.fg}`}>
+                    WHY HOLD · {dx.label}
+                </div>
+                <div className="text-[#A1A1AA] leading-relaxed">{dx.detail}</div>
+            </div>
+        </div>
+    );
+}
+
 function SignalCard({ s, accounts, onExecute, onDelete }) {
     const [accId, setAccId] = useState(accounts[0]?.id || "");
     useEffect(() => { if (!accId && accounts[0]) setAccId(accounts[0].id); }, [accounts, accId]);
@@ -245,35 +322,7 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
 
             <VetoCascade s={s} />
 
-            {s.veto_applied && s.reasoning?.includes("VETO (macro)") && (
-                <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 px-3 py-2 flex items-start gap-2">
-                    <ShieldCheck className="w-4 h-4 text-[#FF3B30] shrink-0 mt-0.5" />
-                    <div className="text-xs">
-                        <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-0.5">MACRO FREEZE VETO</div>
-                        <div className="text-[#A1A1AA]">{s.macro?.reason || "High-impact economic event window — bot is frozen."}</div>
-                    </div>
-                </div>
-            )}
-
-            {s.veto_applied && s.reasoning?.includes("VETO (regime)") && !s.reasoning?.includes("VETO (macro)") && (
-                <div className="bg-[#FFB000]/10 border border-[#FFB000]/30 px-3 py-2 flex items-start gap-2">
-                    <ShieldCheck className="w-4 h-4 text-[#FFB000] shrink-0 mt-0.5" />
-                    <div className="text-xs">
-                        <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-0.5">REGIME VETO · CHOP</div>
-                        <div className="text-[#A1A1AA]">Market is choppy — bot prefers to wait for clean direction.</div>
-                    </div>
-                </div>
-            )}
-
-            {s.veto_applied && s.reasoning?.includes("VETO (news)") && !s.reasoning?.includes("VETO (macro)") && !s.reasoning?.includes("VETO (regime)") && (
-                <div className="bg-[#FFB000]/10 border border-[#FFB000]/30 px-3 py-2 flex items-start gap-2">
-                    <ShieldCheck className="w-4 h-4 text-[#FFB000] shrink-0 mt-0.5" />
-                    <div className="text-xs">
-                        <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-0.5">DUAL-AI VETO APPLIED</div>
-                        <div className="text-[#A1A1AA]">Chart said {s.chart_action} but news sentiment disagreed — forced to HOLD.</div>
-                    </div>
-                </div>
-            )}
+            <HoldReasonBanner s={s} />
 
             {/* Three-Engine Verification Stack — Quant + Semantic + Meta-Labeler */}
             <div className="grid grid-cols-3 gap-2 pt-2" data-testid={`verification-stack-${s.symbol}`}>
