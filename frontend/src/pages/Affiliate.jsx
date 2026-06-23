@@ -80,6 +80,21 @@ export default function Affiliate() {
         }
     };
 
+    const requestPayout = async () => {
+        if (!window.confirm(`Request payout of $${status.affiliate.unpaid_balance_usd?.toFixed(2)} via ${status.affiliate.payment_method}?\n\nAdmin processes payouts within 5 business days.`)) {
+            return;
+        }
+        try {
+            const { data } = await api.post("/affiliate/request-payout");
+            toast.success(`Payout requested · $${data.amount_usd}`, {
+                description: "We'll email you when it's processed.",
+            });
+            await load();
+        } catch (e) {
+            toast.error("Payout request failed", { description: formatApiError(e) });
+        }
+    };
+
     if (loading) {
         return (
             <AppLayout>
@@ -104,7 +119,7 @@ export default function Affiliate() {
 
                 {status?.state === "approved" && (
                     <ApprovedDashboard affiliate={status.affiliate} stats={stats}
-                        onCopy={copyLink} copied={copied} />
+                        onCopy={copyLink} copied={copied} onRequestPayout={requestPayout} />
                 )}
 
                 {status?.state === "pending" && (
@@ -157,8 +172,11 @@ function StatCard({ icon: Icon, label, value, accent }) {
     );
 }
 
-function ApprovedDashboard({ affiliate, stats, onCopy, copied }) {
+function ApprovedDashboard({ affiliate, stats, onCopy, copied, onRequestPayout }) {
     const link = `${window.location.origin}/api/r/${affiliate.code}`;
+    const balance = affiliate.unpaid_balance_usd ?? 0;
+    const minPayout = stats?.min_payout_usd ?? 50;
+    const canRequestPayout = balance >= minPayout;
     return (
         <div className="space-y-6" data-testid="affiliate-approved">
             <div className="border border-[#00FF41]/40 bg-[#00FF41]/5 p-6 space-y-4">
@@ -189,8 +207,35 @@ function ApprovedDashboard({ affiliate, stats, onCopy, copied }) {
                 <StatCard icon={MousePointerClick} label="LIFETIME CLICKS" value={affiliate.lifetime_clicks ?? 0} />
                 <StatCard icon={Users} label="CONVERSIONS" value={affiliate.lifetime_conversions ?? 0} />
                 <StatCard icon={TrendingUp} label="LIFETIME EARNINGS" value={`$${(affiliate.lifetime_earnings_usd ?? 0).toFixed(2)}`} />
-                <StatCard icon={DollarSign} label="UNPAID BALANCE" value={`$${(affiliate.unpaid_balance_usd ?? 0).toFixed(2)}`}
-                    accent={(affiliate.unpaid_balance_usd ?? 0) >= (stats?.min_payout_usd ?? 50) ? "border-[#00FF41]/40" : ""} />
+                <StatCard icon={DollarSign} label="UNPAID BALANCE" value={`$${balance.toFixed(2)}`}
+                    accent={canRequestPayout ? "border-[#00FF41]/40" : ""} />
+            </div>
+
+            <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-5 flex items-center justify-between gap-4 flex-wrap"
+                data-testid="payout-cta-row">
+                <div>
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">PAYOUT STATUS</div>
+                    <div className="text-sm">
+                        {canRequestPayout ? (
+                            <span className="text-[#00FF41]">
+                                You&apos;re eligible to request a payout of <span className="font-bold">${balance.toFixed(2)}</span>.
+                            </span>
+                        ) : (
+                            <span className="text-[#A1A1AA]">
+                                ${(minPayout - balance).toFixed(2)} more in unpaid commissions before you can request a payout.
+                            </span>
+                        )}
+                    </div>
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-1">
+                        MINIMUM ${minPayout} · PAID VIA {affiliate.payment_method?.toUpperCase()}
+                    </div>
+                </div>
+                <button onClick={onRequestPayout}
+                    disabled={!canRequestPayout}
+                    data-testid="request-payout-button"
+                    className="px-5 py-2.5 text-xs font-mono tracking-widest bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-30 disabled:cursor-not-allowed text-black flex items-center gap-2">
+                    <DollarSign className="w-4 h-4" /> REQUEST PAYOUT
+                </button>
             </div>
 
             {stats?.recent_commissions?.length > 0 && (

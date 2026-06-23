@@ -9,6 +9,9 @@ from models import BotConfigUpdate, BotConfigOut
 from risk import get_profile
 from intelligence_counters import get_window_24h as intel_window_24h
 from strategy_presets import list_presets, get_preset
+from user_presets import (
+    list_user_presets, create_user_preset, delete_user_preset, get_user_preset,
+)
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 
@@ -157,30 +160,73 @@ async def stop_bot(user=Depends(get_current_user)):
 
 
 @router.get("/presets")
-async def get_strategy_presets(user=Depends(get_current_user)):  # noqa: ARG001 (auth gate)
-    """Return all named strategy presets. Frontend renders these as preset cards."""
-    return {"presets": list_presets()}
+async def get_strategy_presets(user=Depends(get_current_user)):
+    """Return built-in presets + the user's own saved presets, in one payload."""
+    custom = await list_user_presets(user["id"])
+    return {"presets": list_presets(), "custom": custom}
 
 
 @router.post("/preset/{key}")
 async def apply_strategy_preset(key: str, user=Depends(get_current_user)):
-    """Overlay a named preset onto the user's bot_config.
+    """Overlay a named preset (built-in or user-owned) onto the user's bot_config.
 
     Only the fields defined in the preset are touched. risk_level, symbols,
     drawdown limits, and per-symbol caps are preserved.
     """
-    preset = get_preset(key)
-    if not preset:
-        raise HTTPException(status_code=404, detail=f"Preset '{key}' not found")
     db = get_db()
+    preset_label: str
+    overlay_config: dict
+    if key.startswith("custom:"):
+        # user-owned preset → key is "custom:{preset_id}"
+        preset_id = key.split(":", 1)[1]
+        custom = await get_user_preset(user_id=user["id"], preset_id=preset_id)
+        if not custom:
+            raise HTTPException(status_code=404, detail="Custom preset not found")
+        preset_label = custom["name"]
+        overlay_config = custom["config"]
+    else:
+        builtin = get_preset(key)
+        if not builtin:
+            raise HTTPException(status_code=404, detail=f"Preset '{key}' not found")
+        preset_label = builtin["label"]
+        overlay_config = builtin["config"]
+
     await _get_or_create_config(db, user["id"])  # ensure doc exists
-    overlay = {**preset["config"], "active_preset": key,
+    overlay = {**overlay_config, "active_preset": key,
                "updated_at": datetime.now(timezone.utc).isoformat()}
     await db.bot_configs.update_one(
         {"user_id": user["id"]}, {"$set": overlay}, upsert=True
     )
     cfg = await db.bot_configs.find_one({"user_id": user["id"]})
-    return {"applied": key, "label": preset["label"], "config": _serialize(cfg)}
+    return {"applied": key, "label": preset_label, "config": _serialize(cfg)}
+
+
+@router.post("/my-presets")
+async def save_user_preset(payload: dict, user=Depends(get_current_user)):
+    """Save the user's CURRENT bot_config behaviour knobs as a named preset.
+
+    Body: { name, description? }
+    """
+    db = get_db()
+    cfg = await _get_or_create_config(db, user["id"])
+    try:
+        preset = await create_user_preset(
+            user_id=user["id"],
+            name=payload.get("name", ""),
+            description=payload.get("description", ""),
+            config=cfg,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return preset
+
+
+@router.delete("/my-presets/{preset_id}")
+async def delete_my_preset(preset_id: str, user=Depends(get_current_user)):
+    ok = await delete_user_preset(user_id=user["id"], preset_id=preset_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Custom preset not found")
+    return {"deleted": True, "id": preset_id}
 
 
 @router.get("/status")

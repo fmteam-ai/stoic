@@ -92,6 +92,115 @@ async def affiliate_stats(user=Depends(get_current_user)):
     return await stats_for(user["id"])
 
 
+# --- Self-service payout requests -----------------------------------------
+@router.post("/affiliate/request-payout")
+async def request_payout(user=Depends(get_current_user)):
+    """Affiliate self-requests a payout. Requires unpaid balance ≥ $50.
+
+    Creates a row in `affiliate_payout_requests`. Admin processes it via
+    POST /admin/affiliate/payout-requests/{id}/process which marks the
+    underlying commissions paid and zeros the affiliate's unpaid_balance.
+    """
+    db = get_db()
+    aff = await db.affiliates.find_one({"user_id": user["id"], "active": True})
+    if not aff:
+        raise HTTPException(status_code=404, detail="No active affiliate profile")
+    balance = float(aff.get("unpaid_balance_usd") or 0.0)
+    MIN_PAYOUT_USD = 50.0
+    if balance < MIN_PAYOUT_USD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Minimum payout is ${MIN_PAYOUT_USD:.0f} — current balance ${balance:.2f}",
+        )
+    # Block multiple open requests
+    pending = await db.affiliate_payout_requests.find_one(
+        {"affiliate_id": str(aff["_id"]), "status": "pending"}
+    )
+    if pending:
+        raise HTTPException(
+            status_code=400,
+            detail="A payout request is already pending — admin will process it shortly.",
+        )
+    doc = {
+        "affiliate_id": str(aff["_id"]),
+        "affiliate_code": aff.get("code"),
+        "user_id": user["id"],
+        "user_email": user.get("email"),
+        "amount_usd": round(balance, 2),
+        "payment_method": aff.get("payment_method"),
+        "payment_details": aff.get("payment_details"),
+        "status": "pending",
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+    }
+    r = await db.affiliate_payout_requests.insert_one(doc)
+    return {"ok": True, "id": str(r.inserted_id), "amount_usd": doc["amount_usd"]}
+
+
+@router.get("/affiliate/payout-requests")
+async def list_my_payout_requests(user=Depends(get_current_user)):
+    """An affiliate's own payout-request history."""
+    db = get_db()
+    aff = await db.affiliates.find_one({"user_id": user["id"]})
+    if not aff:
+        return {"requests": []}
+    cursor = db.affiliate_payout_requests.find(
+        {"affiliate_id": str(aff["_id"])}
+    ).sort("requested_at", -1).limit(20)
+    docs = await cursor.to_list(length=20)
+    for d in docs:
+        d["id"] = str(d.pop("_id"))
+    return {"requests": docs}
+
+
+@router.get("/admin/affiliate/payout-requests")
+async def admin_list_payout_requests(status: str = "pending",
+                                      user=Depends(get_current_user)):
+    _admin_only(user)
+    db = get_db()
+    q = {"status": status} if status else {}
+    cursor = db.affiliate_payout_requests.find(q).sort("requested_at", -1).limit(200)
+    docs = await cursor.to_list(length=200)
+    for d in docs:
+        d["id"] = str(d.pop("_id"))
+    return {"requests": docs}
+
+
+@router.post("/admin/affiliate/payout-requests/{rid}/process")
+async def admin_process_payout(rid: str, user=Depends(get_current_user)):
+    """Admin marks a payout as paid: flips all pending commissions to 'paid'
+    and zeros out the affiliate's unpaid_balance.
+    """
+    _admin_only(user)
+    db = get_db()
+    try:
+        oid = ObjectId(rid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid id")
+    req = await db.affiliate_payout_requests.find_one_and_update(
+        {"_id": oid, "status": "pending"},
+        {"$set": {"status": "paid",
+                  "processed_at": datetime.now(timezone.utc).isoformat(),
+                  "processed_by": user.get("email")}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="not found or already processed")
+    # Flip all pending commissions for this affiliate to paid
+    await db.affiliate_commissions.update_many(
+        {"affiliate_id": req["affiliate_id"], "status": "pending"},
+        {"$set": {"status": "paid",
+                  "paid_at": datetime.now(timezone.utc).isoformat(),
+                  "paid_by": user.get("email"),
+                  "payout_request_id": rid}},
+    )
+    # Zero out the running unpaid balance
+    await db.affiliates.update_one(
+        {"_id": ObjectId(req["affiliate_id"])},
+        {"$set": {"unpaid_balance_usd": 0.0}},
+    )
+    return {"ok": True, "id": rid}
+
+
 # --- Public attribution redirect ------------------------------------------
 @router.get("/r/{code}")
 async def referral_redirect(code: str, request: Request):

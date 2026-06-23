@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark } from "lucide-react";
 import { toast } from "sonner";
 
 const RISK_DESCRIPTIONS = {
@@ -29,7 +29,11 @@ export default function BotConfig() {
     const [profiles, setProfiles] = useState({});
     const [supported, setSupported] = useState([]);
     const [presets, setPresets] = useState([]);
+    const [customPresets, setCustomPresets] = useState([]);
     const [applyingPreset, setApplyingPreset] = useState(null);
+    const [showSaveModal, setShowSaveModal] = useState(false);
+    const [presetForm, setPresetForm] = useState({ name: "", description: "" });
+    const [savingPreset, setSavingPreset] = useState(false);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
     const [msg, setMsg] = useState("");
@@ -46,6 +50,7 @@ export default function BotConfig() {
             ]);
             setCfg(c.data); setProfiles(p.data.profiles); setSupported(s.data.symbols);
             setPresets(pr.data.presets || []);
+            setCustomPresets(pr.data.custom || []);
         } catch (e) { setErr(formatApiError(e)); }
     }, []);
 
@@ -70,6 +75,38 @@ export default function BotConfig() {
             setErr(formatApiError(e));
         } finally {
             setApplyingPreset(null);
+        }
+    };
+
+    const saveCustomPreset = async () => {
+        if (!presetForm.name.trim()) {
+            toast.error("Preset name required");
+            return;
+        }
+        setSavingPreset(true);
+        try {
+            await api.post("/bot/my-presets", presetForm);
+            toast.success(`Saved · "${presetForm.name}"`, {
+                description: "Find it under 'Your Presets' below the built-ins.",
+            });
+            setShowSaveModal(false);
+            setPresetForm({ name: "", description: "" });
+            await load();   // re-fetch presets so the new one shows up
+        } catch (e) {
+            toast.error("Save failed", { description: formatApiError(e) });
+        } finally {
+            setSavingPreset(false);
+        }
+    };
+
+    const deleteCustomPreset = async (id, name) => {
+        if (!window.confirm(`Delete preset "${name}"?`)) return;
+        try {
+            await api.delete(`/bot/my-presets/${id}`);
+            toast.success(`Deleted · "${name}"`);
+            await load();
+        } catch (e) {
+            toast.error("Delete failed", { description: formatApiError(e) });
         }
     };
 
@@ -224,10 +261,123 @@ export default function BotConfig() {
                             );
                         })}
                     </div>
-                    <div className="px-5 py-2 border-t border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
-                        TIP · Presets overlay behaviour knobs only. Your risk level, symbols, and drawdown limits stay untouched. Click SAVE to persist.
+                    <div className="px-5 py-2 border-t border-[#1F1F1F] flex items-center justify-between gap-3 flex-wrap">
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                            TIP · Presets overlay behaviour knobs only. Your risk level, symbols, and drawdown limits stay untouched. Click SAVE to persist.
+                        </div>
+                        <button onClick={() => setShowSaveModal(true)}
+                            data-testid="save-as-preset-button"
+                            className="px-3 py-1.5 text-[10px] font-mono tracking-widest border border-[#FFD700]/40 text-[#FFD700] hover:bg-[#FFD700]/10 flex items-center gap-1.5 transition-colors">
+                            <Bookmark className="w-3 h-3" /> SAVE CURRENT AS PRESET
+                        </button>
                     </div>
+
+                    {customPresets.length > 0 && (
+                        <div className="border-t border-[#1F1F1F]" data-testid="custom-presets-section">
+                            <div className="px-5 py-3 border-b border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
+                                YOUR PRESETS · {customPresets.length} / 10
+                            </div>
+                            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {customPresets.map(p => {
+                                    const customKey = `custom:${p.id}`;
+                                    const active = cfg.active_preset === customKey;
+                                    const isApplying = applyingPreset === customKey;
+                                    return (
+                                        <div key={p.id}
+                                            data-testid={`custom-preset-${p.id}`}
+                                            className={`text-left p-4 border transition-colors duration-150 group ${
+                                                active ? "border-[#9B59B6] bg-[#9B59B6]/5" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
+                                            }`}>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <Bookmark className="w-4 h-4 text-[#9B59B6] shrink-0" />
+                                                    <span className="font-display font-bold text-sm tracking-tight truncate">{p.name}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    {active && (
+                                                        <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#9B59B6]/40 text-[#9B59B6] bg-[#9B59B6]/10">
+                                                            ACTIVE
+                                                        </span>
+                                                    )}
+                                                    <button onClick={() => deleteCustomPreset(p.id, p.name)}
+                                                        data-testid={`delete-preset-${p.id}`}
+                                                        className="opacity-0 group-hover:opacity-100 text-[#52525B] hover:text-[#FF3B30] transition-opacity"
+                                                        title="Delete">
+                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-[#A1A1AA] leading-relaxed line-clamp-2 mb-3 min-h-[2.5rem]">
+                                                {p.description || <span className="text-[#52525B]">No description.</span>}
+                                            </p>
+                                            <button onClick={() => applyPreset(customKey, p.name)}
+                                                disabled={isApplying}
+                                                data-testid={`apply-custom-${p.id}`}
+                                                className="font-mono text-[9px] text-[#52525B] tracking-widest hover:text-[#9B59B6] disabled:opacity-50">
+                                                {isApplying ? "APPLYING…" : "TAP TO APPLY →"}
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                 </div>
+
+                {showSaveModal && (
+                    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+                        data-testid="save-preset-modal"
+                        onClick={() => !savingPreset && setShowSaveModal(false)}>
+                        <div className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-md w-full p-6 space-y-4"
+                            onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-2">
+                                <Bookmark className="w-5 h-5 text-[#FFD700]" />
+                                <h2 className="font-display font-bold text-lg tracking-tight">Save Current Config as Preset</h2>
+                            </div>
+                            <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                                Snapshots your current behaviour knobs (confidence, trade cap, trailing, cooldowns, etc).
+                                Your risk level, symbols, and drawdown limits are <span className="text-[#FFD700]">not</span> captured.
+                            </p>
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">PRESET NAME</label>
+                                <input value={presetForm.name}
+                                    onChange={e => setPresetForm({ ...presetForm, name: e.target.value })}
+                                    data-testid="preset-name-input"
+                                    maxLength={40}
+                                    autoFocus
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
+                                    placeholder="My Sniper" />
+                            </div>
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">DESCRIPTION (OPTIONAL)</label>
+                                <textarea value={presetForm.description}
+                                    onChange={e => setPresetForm({ ...presetForm, description: e.target.value })}
+                                    data-testid="preset-desc-input"
+                                    maxLength={200}
+                                    rows={3}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none resize-none"
+                                    placeholder="Sniper with looser trailing, no SL cooldown" />
+                                <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1 text-right">
+                                    {presetForm.description.length}/200
+                                </div>
+                            </div>
+                            <div className="flex items-center justify-end gap-2 pt-2">
+                                <button onClick={() => setShowSaveModal(false)}
+                                    disabled={savingPreset}
+                                    data-testid="preset-cancel-button"
+                                    className="px-4 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] hover:border-[#333333] text-[#A1A1AA]">
+                                    CANCEL
+                                </button>
+                                <button onClick={saveCustomPreset}
+                                    disabled={savingPreset || !presetForm.name.trim()}
+                                    data-testid="preset-save-button"
+                                    className="px-4 py-2 text-xs font-mono tracking-widest bg-[#FFD700] hover:bg-[#FFE033] disabled:opacity-50 text-black flex items-center gap-1.5">
+                                    <Bookmark className="w-3 h-3" /> {savingPreset ? "SAVING…" : "SAVE PRESET"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Risk Profile */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A]">
