@@ -99,9 +99,9 @@ async def send_telegram(user_id: str, event_type: str, title: str, lines: list) 
 
 # ------------- Event helpers (composes message bodies) -------------
 
-async def notify_trade_opened(user_id: str, trade: dict) -> None:
+async def notify_trade_opened(user_id: str, trade: dict) -> bool:
     arrow = "🟢" if trade.get("action") == "BUY" else "🔴"
-    await send_telegram(user_id, "trade_opened",
+    return await send_telegram(user_id, "trade_opened",
         f"{arrow} Trade Opened · {trade.get('symbol')} {trade.get('action')}",
         [
             f"Lots: {trade.get('lot_size')}",

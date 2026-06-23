@@ -111,7 +111,13 @@ class PaperEngine(ExecutionEngine):
         await ws_manager.broadcast(user_id, "trade_created", trade_doc)
         try:
             from notifier import notify_trade_opened
-            await notify_trade_opened(user_id, trade_doc)
+            sent = await notify_trade_opened(user_id, trade_doc)
+            # Mark notified_opened=True so bridge_routes.py doesn't double-send
+            # if the EA later reports the same trade as 'open'.
+            if sent:
+                await db.trades.update_one(
+                    {"_id": r.inserted_id}, {"$set": {"notified_opened": True}}
+                )
         except Exception:
             pass
         return trade_doc
