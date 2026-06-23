@@ -248,6 +248,12 @@ function ApprovedDashboard({ affiliate, stats, onCopy, copied, onRequestPayout }
                             <div key={c.id} className="px-5 py-2.5 flex items-center gap-3 text-xs">
                                 <span className="font-mono text-[#52525B] w-24">{new Date(c.created_at).toLocaleDateString()}</span>
                                 <span className="font-mono text-[#A1A1AA]">{c.plan_id}</span>
+                                {c.tier === 2 && (
+                                    <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#9B59B6]/40 text-[#9B59B6]"
+                                        title={`Tier-2 override from sub-affiliate ${c.tier1_affiliate_code || "?"}`}>
+                                        TIER 2
+                                    </span>
+                                )}
                                 <span className="flex-1" />
                                 <span className="font-mono text-[#A1A1AA]">${c.sale_amount_usd}</span>
                                 <span className="font-mono text-[#00FF41] font-bold">+${c.commission_usd}</span>
@@ -257,6 +263,40 @@ function ApprovedDashboard({ affiliate, stats, onCopy, copied, onRequestPayout }
                             </div>
                         ))}
                     </div>
+                </div>
+            )}
+
+            {stats?.affiliate && (
+                <div className="border border-[#9B59B6]/30 bg-[#0A0A0A]" data-testid="sub-affiliates-section">
+                    <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <div className="font-mono text-[10px] text-[#9B59B6] tracking-widest">TIER 2 · 5% OVERRIDE</div>
+                            <div className="font-display font-bold tracking-tight">Affiliates you&apos;ve recruited</div>
+                        </div>
+                        <div className="text-right">
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">OVERRIDE EARNINGS</div>
+                            <div className="font-display font-bold text-lg text-[#9B59B6]">
+                                ${(stats.tier2_earnings_usd ?? 0).toFixed(2)}
+                            </div>
+                        </div>
+                    </div>
+                    {(stats.sub_affiliates?.length ?? 0) === 0 ? (
+                        <div className="px-5 py-4 text-xs text-[#A1A1AA] leading-relaxed">
+                            Refer other people who themselves become affiliates and you&apos;ll earn an extra <strong className="text-[#9B59B6]">5% override</strong> on every commission they generate — for the full lifetime of their account.
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-[#1F1F1F]">
+                            {stats.sub_affiliates.map(s => (
+                                <div key={s.code} className="px-5 py-2.5 flex items-center gap-3 text-xs"
+                                    data-testid={`sub-aff-${s.code}`}>
+                                    <span className="font-mono text-[#9B59B6] font-bold w-20">{s.code}</span>
+                                    <span className="font-mono text-[#A1A1AA] flex-1 truncate">{s.user_email}</span>
+                                    <span className="font-mono text-[#52525B]">{s.lifetime_conversions} conv</span>
+                                    <span className="font-mono text-[#9B59B6] font-bold w-20 text-right">+${s.override_earnings_usd.toFixed(2)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
 

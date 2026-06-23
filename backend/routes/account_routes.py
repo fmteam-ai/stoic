@@ -93,8 +93,35 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
 
 
 @router.delete("/{account_id}")
-async def delete_account(account_id: str, user=Depends(get_current_user)):
+async def delete_account(account_id: str, force: bool = False,
+                         user=Depends(get_current_user)):
+    """Delete an account.
+
+    Refuses if the account has any non-terminal trades attached (open or
+    pending). This prevents the orphan-trades-on-deleted-account class of
+    bug. The frontend should:
+      1. Call POST /api/trades/reconcile to sync stale state
+      2. Manually close any genuinely-open trades
+      3. Retry DELETE
+    Pass `?force=true` to override (admin / cleanup escape hatch).
+    """
     db = get_db()
+    if not force:
+        non_terminal = await db.trades.count_documents({
+            "account_id": account_id,
+            "user_id": user["id"],
+            "status": {"$in": ["open", "pending"]},
+        })
+        if non_terminal > 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot delete account: {non_terminal} non-terminal "
+                    "trade(s) still attached. Click SYNC WITH BROKER on the "
+                    "Trades page to clear orphans, or close them manually first. "
+                    "Pass ?force=true to override."
+                ),
+            )
     result = await db.accounts.delete_one(
         {"_id": ObjectId(account_id), "user_id": user["id"]}
     )

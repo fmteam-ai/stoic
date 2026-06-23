@@ -4,6 +4,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock, Bot, Pause, CheckCircle2, AlertCircle, Clock, Target, TrendingUp, TrendingDown } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
+import { IntegrityWidget } from "@/components/IntegrityWidget";
 import { toast } from "sonner";
 
 const PRIMARY_SYMBOLS = ["XAUUSD", "BTCUSD"];
@@ -454,6 +455,8 @@ export default function Dashboard() {
 
             <div className="p-4 md:p-8 space-y-6">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="dashboard-error">{err}</div>}
+
+                <IntegrityWidget refreshSignal={lastEvent?.ts} />
 
                 {/* Portfolio performance — pinned at top */}
                 {stats && (

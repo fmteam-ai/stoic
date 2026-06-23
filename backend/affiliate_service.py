@@ -22,7 +22,8 @@ from database import get_db
 from subscription_plans import get_plan
 
 
-COMMISSION_RATE = 0.20         # 20% recurring
+COMMISSION_RATE = 0.20         # 20% recurring (tier 1)
+TIER2_OVERRIDE_RATE = 0.05     # 5% override on a sub-affiliate's commissions (tier 2)
 COOKIE_TTL_DAYS = 60           # 60-day attribution window
 MIN_PAYOUT_USD = 50.0          # minimum payout threshold
 
@@ -129,6 +130,19 @@ async def approve_application(application_id: str, admin_email: str) -> dict:
         "lifetime_earnings_usd": 0.0,
         "unpaid_balance_usd": 0.0,
     }
+
+    # 2-tier link: if this newly-approved affiliate was themselves referred by
+    # another active affiliate, record the parent so future commissions on
+    # this affiliate's sales pay a 5% override to the parent.
+    user_doc = await db.users.find_one({"_id": ObjectId(app_doc["user_id"])})
+    if user_doc and user_doc.get("referred_by_code"):
+        parent = await db.affiliates.find_one(
+            {"code": user_doc["referred_by_code"].upper(), "active": True}
+        )
+        if parent and parent["user_id"] != app_doc["user_id"]:
+            affiliate["parent_affiliate_id"] = str(parent["_id"])
+            affiliate["parent_affiliate_code"] = parent["code"]
+
     await db.affiliates.insert_one(affiliate)
     return {"ok": True, "code": code, "affiliate": {**affiliate, "id": "newly_created"}}
 
@@ -223,11 +237,13 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
         "sale_amount_usd": amount_usd,
         "commission_usd": commission_usd,
         "rate": COMMISSION_RATE,
+        "tier": 1,
         "is_first_payment": is_first,
         "status": "pending",  # 'pending' until payout; 'paid' after admin payout
         "created_at": _now().isoformat(),
     }
-    await db.affiliate_commissions.insert_one(doc)
+    res = await db.affiliate_commissions.insert_one(doc)
+    tier1_commission_id = str(res.inserted_id)
     await db.affiliates.update_one(
         {"_id": affiliate["_id"]},
         {"$inc": {
@@ -236,6 +252,41 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
             **({"lifetime_conversions": 1} if is_first else {}),
         }},
     )
+
+    # Tier-2 override: if THIS affiliate was themselves referred by a parent
+    # affiliate, the parent earns 5% on the same sale as a hands-off override.
+    if affiliate.get("parent_affiliate_id"):
+        parent = await db.affiliates.find_one(
+            {"_id": ObjectId(affiliate["parent_affiliate_id"]), "active": True}
+        )
+        if parent:
+            override_usd = round(amount_usd * TIER2_OVERRIDE_RATE, 2)
+            await db.affiliate_commissions.insert_one({
+                "affiliate_id": str(parent["_id"]),
+                "affiliate_code": parent["code"],
+                "referred_user_id": user_id,
+                "referred_user_email": user.get("email"),
+                "plan_id": plan_id,
+                "session_id": session_id,
+                "sale_amount_usd": amount_usd,
+                "commission_usd": override_usd,
+                "rate": TIER2_OVERRIDE_RATE,
+                "tier": 2,
+                "tier1_commission_id": tier1_commission_id,
+                "tier1_affiliate_id": str(affiliate["_id"]),
+                "tier1_affiliate_code": code,
+                "is_first_payment": is_first,
+                "status": "pending",
+                "created_at": _now().isoformat(),
+            })
+            await db.affiliates.update_one(
+                {"_id": parent["_id"]},
+                {"$inc": {
+                    "lifetime_earnings_usd": override_usd,
+                    "unpaid_balance_usd": override_usd,
+                }},
+            )
+
     if is_first:
         await db.users.update_one(
             {"_id": ObjectId(user_id)},
@@ -263,12 +314,42 @@ async def stats_for(user_id: str) -> dict:
     for r in recent:
         r["id"] = str(r.pop("_id"))
     affiliate["id"] = str(affiliate.pop("_id"))
+
+    # Tier-2 metrics: how many affiliates was this affiliate the parent of,
+    # and how much did they generate in override commissions.
+    sub_affiliates_cursor = db.affiliates.find(
+        {"parent_affiliate_id": afid, "active": True}
+    )
+    subs = await sub_affiliates_cursor.to_list(length=200)
+    sub_summary = []
+    tier2_earnings = 0.0
+    for s in subs:
+        sid = str(s["_id"])
+        # Sum tier-2 override commissions credited to this affiliate FROM this sub
+        cursor = db.affiliate_commissions.find(
+            {"affiliate_id": afid, "tier": 2, "tier1_affiliate_id": sid}
+        )
+        rows = await cursor.to_list(length=500)
+        sub_total = round(sum(r.get("commission_usd", 0) for r in rows), 2)
+        tier2_earnings += sub_total
+        sub_summary.append({
+            "code": s.get("code"),
+            "user_email": s.get("user_email"),
+            "active": s.get("active"),
+            "lifetime_conversions": s.get("lifetime_conversions", 0),
+            "override_earnings_usd": sub_total,
+            "override_count": len(rows),
+        })
+
     return {
         "affiliate": affiliate,
         "pending_commissions": pending,
         "paid_commissions": paid,
         "min_payout_usd": MIN_PAYOUT_USD,
         "commission_rate": COMMISSION_RATE,
+        "tier2_override_rate": TIER2_OVERRIDE_RATE,
         "cookie_ttl_days": COOKIE_TTL_DAYS,
         "recent_commissions": recent,
+        "sub_affiliates": sub_summary,
+        "tier2_earnings_usd": round(tier2_earnings, 2),
     }

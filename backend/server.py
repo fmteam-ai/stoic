@@ -38,6 +38,7 @@ from routes.notification_routes import router as notification_router
 from routes.telegram_routes import router as telegram_router
 from routes.analytics_routes import router as analytics_router
 from routes.agent_routes import router as agent_router
+from routes.integrity_routes import router as integrity_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -93,6 +94,7 @@ api_router.include_router(notification_router)
 api_router.include_router(telegram_router)
 api_router.include_router(analytics_router)
 api_router.include_router(agent_router)
+api_router.include_router(integrity_router)
 
 
 # ---------- WebSocket ----------
