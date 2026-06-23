@@ -116,6 +116,65 @@ async def rotate_token(account_id: str, user=Depends(get_current_user)):
     return {"bridge_token": new_token}
 
 
+@router.get("/{account_id}/test-connection")
+async def test_connection(account_id: str, user=Depends(get_current_user)):
+    """Diagnostic snapshot of the EA bridge health for one account.
+
+    Returns connected status + last heartbeat age + current spreads + an
+    actionable diagnostic message the Accounts UI can render inline.
+    """
+    db = get_db()
+    acc = await db.accounts.find_one(
+        {"_id": ObjectId(account_id), "user_id": user["id"]}
+    )
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    is_paper = (acc.get("mode") == "paper")
+    last_hb = acc.get("last_heartbeat")
+    age_seconds: int | None = None
+    if last_hb:
+        try:
+            ts = datetime.fromisoformat(str(last_hb).replace("Z", "+00:00"))
+            age_seconds = int((datetime.now(timezone.utc) - ts).total_seconds())
+        except Exception:
+            age_seconds = None
+
+    fresh = age_seconds is not None and age_seconds < 60
+    connected = bool(is_paper or fresh)
+
+    if is_paper:
+        msg = "Paper account — virtual engine always reachable. No EA needed."
+        severity = "ok"
+    elif age_seconds is None:
+        msg = "The EA has never connected. Complete steps 2–5 above to attach EmergentTradingBridge.mq5 to MT5."
+        severity = "error"
+    elif age_seconds < 60:
+        msg = f"EA online — last heartbeat {age_seconds}s ago. Trades will route here."
+        severity = "ok"
+    elif age_seconds < 600:
+        msg = f"EA stale — last heartbeat {age_seconds // 60}min ago. MT5 may have lost focus or internet. Verify AutoTrading is ON."
+        severity = "warn"
+    else:
+        msg = f"EA disconnected — last heartbeat {age_seconds // 60}min ago. Re-attach the EA or restart MT5 (run on a VPS for 24/7 autopilot)."
+        severity = "error"
+
+    return {
+        "account_id": str(acc["_id"]),
+        "mode": acc.get("mode"),
+        "connected": connected,
+        "fresh": fresh,
+        "last_heartbeat": last_hb,
+        "age_seconds": age_seconds,
+        "balance": acc.get("balance"),
+        "equity": acc.get("equity"),
+        "current_spreads": acc.get("current_spreads") or {},
+        "spreads_updated_at": acc.get("spreads_updated_at"),
+        "diagnostic": {"severity": severity, "message": msg},
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.patch("/{account_id}/credentials")
 async def update_credentials(account_id: str, payload: AccountCredsUpdate, user=Depends(get_current_user)):
     """Encrypt and store (or clear) broker login passwords on the account.

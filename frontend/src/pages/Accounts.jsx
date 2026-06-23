@@ -70,6 +70,24 @@ export default function Accounts() {
 
     const copyToken = (t) => { navigator.clipboard.writeText(t); setMsg("Bridge token copied."); };
 
+    const [testResults, setTestResults] = useState({});
+    const [testing, setTesting] = useState({});
+
+    const runConnectionTest = async (id) => {
+        setTesting(prev => ({ ...prev, [id]: true }));
+        try {
+            const { data } = await api.get(`/accounts/${id}/test-connection`);
+            setTestResults(prev => ({ ...prev, [id]: data }));
+        } catch (e) {
+            setTestResults(prev => ({
+                ...prev,
+                [id]: { connected: false, diagnostic: { severity: "error", message: formatApiError(e) } },
+            }));
+        } finally {
+            setTesting(prev => ({ ...prev, [id]: false }));
+        }
+    };
+
     const isFresh = (iso) => {
         if (!iso) return false;
         return (Date.now() - new Date(iso).getTime()) < 60_000;
@@ -257,6 +275,12 @@ export default function Accounts() {
                                                 className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
                                                 <Copy className="w-3.5 h-3.5" /> COPY
                                             </button>
+                                            <button onClick={() => runConnectionTest(a.id)}
+                                                disabled={!!testing[a.id]}
+                                                data-testid={`test-connection-${a.account_number}`}
+                                                className="px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-50">
+                                                <PlugsConnected className="w-3.5 h-3.5" /> {testing[a.id] ? "TESTING…" : "TEST"}
+                                            </button>
                                             <button onClick={() => rotate(a.id)} data-testid={`rotate-token-${a.account_number}`}
                                                 className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
                                                 <ArrowsClockwise className="w-3.5 h-3.5" /> ROTATE
@@ -267,6 +291,11 @@ export default function Accounts() {
                                             </button>
                                         </div>
                                     </div>
+
+                                    {testResults[a.id] && (
+                                        <ConnectionTestResult result={testResults[a.id]} onDismiss={() =>
+                                            setTestResults(prev => { const n = { ...prev }; delete n[a.id]; return n; })} />
+                                    )}
 
                                     {a.mode !== "paper" && (
                                         <CredentialsPanel account={a} onUpdate={load} onError={(e) => setErr(e)} onMessage={(m) => setMsg(m)} />
@@ -669,4 +698,60 @@ function CopyBox({ value, onCopy, copied, testid }) {
         </div>
     );
 }
+
+function ConnectionTestResult({ result, onDismiss }) {
+    const sev = result?.diagnostic?.severity || "error";
+    const palette = {
+        ok:    { bd: "border-[#00FF41]/40", bg: "bg-[#00FF41]/5",  fg: "text-[#00FF41]", icon: CheckCircle2, label: "CONNECTED" },
+        warn:  { bd: "border-[#FFB000]/40", bg: "bg-[#FFB000]/5",  fg: "text-[#FFB000]", icon: AlertTriangle, label: "STALE"     },
+        error: { bd: "border-[#FF3B30]/40", bg: "bg-[#FF3B30]/5",  fg: "text-[#FF3B30]", icon: AlertTriangle, label: "OFFLINE"   },
+    }[sev] || { bd: "border-[#1F1F1F]", bg: "bg-[#0A0A0A]", fg: "text-[#A1A1AA]", icon: Info, label: "UNKNOWN" };
+    const Icon = palette.icon;
+    const spreads = result?.current_spreads || {};
+    const spreadEntries = Object.entries(spreads);
+
+    return (
+        <div className={`mt-4 border ${palette.bd} ${palette.bg} px-4 py-3`} data-testid="connection-test-result">
+            <div className="flex items-start gap-3">
+                <Icon className={`w-5 h-5 ${palette.fg} shrink-0 mt-0.5`} />
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+                        <div className="flex items-center gap-2">
+                            <span className={`font-mono text-[10px] tracking-widest ${palette.fg}`}>● {palette.label}</span>
+                            {result.age_seconds !== null && result.age_seconds !== undefined && (
+                                <span className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                                    LAST HB · {result.age_seconds < 60 ? `${result.age_seconds}s` : `${Math.floor(result.age_seconds / 60)}min`} AGO
+                                </span>
+                            )}
+                            {result.checked_at && (
+                                <span className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                                    CHECKED {new Date(result.checked_at).toLocaleTimeString("en-US", { hour12: false })}
+                                </span>
+                            )}
+                        </div>
+                        <button onClick={onDismiss} data-testid="dismiss-test-result"
+                            className="font-mono text-[10px] text-[#52525B] hover:text-[#A1A1AA] tracking-widest">✕ DISMISS</button>
+                    </div>
+                    <div className="text-sm text-[#E4E4E7] leading-relaxed mb-2">{result.diagnostic?.message}</div>
+                    {(result.balance !== undefined || spreadEntries.length > 0) && (
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[11px] text-[#A1A1AA] mt-2 pt-2 border-t border-[#1F1F1F]">
+                            {result.balance !== undefined && result.balance !== null && (
+                                <span>BAL <span className="text-white tabular-nums">{result.balance.toFixed(2)}</span></span>
+                            )}
+                            {result.equity !== undefined && result.equity !== null && (
+                                <span>EQ <span className="text-white tabular-nums">{result.equity.toFixed(2)}</span></span>
+                            )}
+                            {spreadEntries.map(([sym, sp]) => (
+                                <span key={sym} data-testid={`test-spread-${sym}`}>
+                                    {sym} SPR <span className="text-white tabular-nums">{Number(sp).toFixed(1)}p</span>
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 
