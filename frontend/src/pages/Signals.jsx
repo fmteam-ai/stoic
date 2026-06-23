@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Brain, ArrowUp, ArrowDown, Pause, Zap as Lightning, Trash2 as Trash, ShieldCheck, Wand2, X } from "lucide-react";
+import { Brain, ArrowUp, ArrowDown, Pause, Zap as Lightning, Trash2 as Trash, ShieldCheck, Wand2, X, ChevronDown } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -492,7 +492,8 @@ export default function Signals() {
                 subtitle="Claude-generated trading signals across your configured symbols."
                 testid="signals-header"
                 action={
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
+                        <ClearSignalsMenu signals={signals} onCleared={load} />
                         <button onClick={() => setShowManual(true)}
                             data-testid="manual-trade-open-button"
                             className="flex items-center gap-2 px-3 py-2 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 font-medium text-xs tracking-widest transition-colors duration-150">
@@ -541,5 +542,76 @@ export default function Signals() {
                 )}
             </div>
         </AppLayout>
+    );
+}
+
+
+
+function ClearSignalsMenu({ signals, onCleared }) {
+    const [open, setOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const total = signals.length;
+    const holdCount = signals.filter(s => s.action === "HOLD").length;
+
+    const clear = async (scope, label, days) => {
+        const noun = scope === "hold" ? `${holdCount} HOLD signal(s)`
+                   : scope === "non_hold" ? "all BUY/SELL signals"
+                   : days ? `signals older than ${days} day(s)`
+                   : "ALL signals";
+        if (!window.confirm(`Delete ${noun}? This cannot be undone.`)) return;
+        setBusy(true);
+        try {
+            const params = new URLSearchParams();
+            if (scope) params.set("scope", scope);
+            if (days) params.set("older_than_days", String(days));
+            const { data } = await api.delete(`/signals?${params.toString()}`);
+            toast.success(`Cleared ${data.deleted} signal${data.deleted === 1 ? "" : "s"} (${label})`);
+            setOpen(false);
+            await onCleared();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally { setBusy(false); }
+    };
+
+    return (
+        <div className="relative" data-testid="clear-signals-menu">
+            <button onClick={() => setOpen(!open)} disabled={busy || total === 0}
+                data-testid="clear-signals-toggle"
+                className="flex items-center gap-2 px-3 py-2 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 disabled:opacity-40 disabled:cursor-not-allowed font-medium text-xs tracking-widest transition-colors duration-150">
+                <Trash className="w-3.5 h-3.5" /> CLEAR <ChevronDown className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`} />
+            </button>
+            {open && (
+                <div className="absolute right-0 top-full mt-1 z-30 w-72 border border-[#1F1F1F] bg-[#0A0A0A] shadow-2xl"
+                    data-testid="clear-signals-dropdown">
+                    <div className="px-3 py-2 border-b border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
+                        {total} SIGNAL{total === 1 ? "" : "S"} IN VIEW
+                    </div>
+                    <ClearOption icon={Pause} label="Clear HOLD signals only" sub={`${holdCount} noise signal${holdCount === 1 ? "" : "s"}`}
+                        onClick={() => clear("hold", "HOLDs")} testid="clear-holds" disabled={holdCount === 0} />
+                    <ClearOption icon={Trash} label="Clear signals > 7 days old" sub="Keep the recent week"
+                        onClick={() => clear(null, "old", 7)} testid="clear-7d" />
+                    <ClearOption icon={Trash} label="Clear signals > 1 day old" sub="Keep last 24h only"
+                        onClick={() => clear(null, "old", 1)} testid="clear-1d" />
+                    <ClearOption icon={X} label="Clear ALL signals" sub="Wipes the entire history" danger
+                        onClick={() => clear("all", "all")} testid="clear-all" />
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ClearOption({ icon: Icon, label, sub, onClick, testid, danger, disabled }) {
+    return (
+        <button type="button" onClick={onClick} disabled={disabled}
+            data-testid={testid}
+            className={`w-full flex items-center gap-3 px-3 py-2 text-left border-b border-[#1F1F1F] last:border-b-0 transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                danger ? "hover:bg-[#FF3B30]/10" : "hover:bg-[#121212]"
+            }`}>
+            <Icon className={`w-3.5 h-3.5 ${danger ? "text-[#FF3B30]" : "text-[#A1A1AA]"}`} />
+            <div className="flex-1">
+                <div className={`text-xs font-medium ${danger ? "text-[#FF3B30]" : "text-white"}`}>{label}</div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-wide mt-0.5">{sub}</div>
+            </div>
+        </button>
     );
 }
