@@ -292,6 +292,129 @@ function HoldReasonBanner({ s }) {
     );
 }
 
+// Score a BUY/SELL signal on a 0-100 strength scale. Each indicator contributes
+// independently — score is the average of the components present. Concerns
+// are surfaced as bullet-like chips so the user knows EXACTLY what's weak.
+function diagnoseStrength(s) {
+    if (s.action !== "BUY" && s.action !== "SELL") return null;
+
+    const conf = s.confidence ?? 0;
+    const minConf = s.min_confidence_required ?? 75;
+    const rr = s.rr_ratio;
+    const pWin = s.learned_meta?.p_win;
+    const pThr = s.learned_meta?.threshold;
+    const aplus = s.aplus_confluence;
+    const sentScore = Math.abs(s.sentiment?.score ?? 0);
+    const dxyAligned = s.dxy_gate?.aligned;
+
+    const components = [];
+    const concerns = [];
+    const strengths = [];
+
+    // 1. Confidence margin (Claude conviction)
+    const confMargin = conf - minConf;
+    if (confMargin >= 15) {
+        components.push(100); strengths.push(`High Claude conviction (+${confMargin.toFixed(0)}% over floor)`);
+    } else if (confMargin >= 5) {
+        components.push(70);
+    } else {
+        components.push(35);
+        concerns.push(`Confidence barely clears floor (${conf}% vs ${minConf}%)`);
+    }
+
+    // 2. Reward-to-risk
+    if (rr != null) {
+        if (rr >= 2.5) { components.push(100); strengths.push(`Excellent R:R ${rr.toFixed(2)}:1`); }
+        else if (rr >= 1.8) { components.push(70); }
+        else { components.push(35); concerns.push(`Marginal R:R ${rr.toFixed(2)}:1`); }
+    }
+
+    // 3. Learned-meta probability
+    if (pWin != null && pThr != null) {
+        const pMargin = pWin - pThr;
+        if (pMargin >= 0.10) { components.push(100); strengths.push(`Learned-meta p_win ${(pWin*100).toFixed(0)}% (strong)`); }
+        else if (pMargin >= 0.03) { components.push(65); }
+        else { components.push(35); concerns.push(`Learned-meta p_win ${(pWin*100).toFixed(0)}% only just above ${(pThr*100).toFixed(0)}% threshold`); }
+    }
+
+    // 4. A+ confluence depth
+    if (aplus && typeof aplus.checks === "number") {
+        if (aplus.checks >= 5) { components.push(100); strengths.push(`${aplus.checks}/5 A+ confluence factors aligned`); }
+        else if (aplus.checks >= 4) { components.push(70); }
+        else { components.push(40); concerns.push(`Thin A+ confluence (${aplus.checks}/5 factors)`); }
+    }
+
+    // 5. News sentiment alignment
+    if (sentScore >= 0.4) { components.push(100); strengths.push(`Strong news sentiment alignment`); }
+    else if (sentScore >= 0.15) { components.push(70); }
+    else { components.push(55); /* neutral sentiment — not a red flag */ }
+
+    // 6. DXY gate (XAU only)
+    if (s.symbol === "XAUUSD" && dxyAligned === true) {
+        components.push(100); strengths.push("DXY regime reinforces trade direction");
+    }
+
+    if (components.length === 0) return null;
+    const score = Math.round(components.reduce((a, b) => a + b, 0) / components.length);
+
+    let tier;
+    if (score >= 80)      tier = { label: "STRONG",   severity: "strong",   sub: "High-conviction setup — full Kelly sizing recommended" };
+    else if (score >= 60) tier = { label: "SOLID",    severity: "solid",    sub: "Clean setup with one or two soft spots" };
+    else                  tier = { label: "MARGINAL", severity: "marginal", sub: "Cleared all vetoes but barely — consider half-Kelly or skip" };
+
+    return { score, ...tier, concerns, strengths };
+}
+
+function StrengthBanner({ s }) {
+    const dx = diagnoseStrength(s);
+    if (!dx) return null;
+
+    const palette = {
+        strong:   { bd: "border-[#00FF41]/30", bg: "bg-[#00FF41]/10", fg: "text-[#00FF41]" },
+        solid:    { bd: "border-[#1F1F1F]",    bg: "bg-[#0A0A0A]",    fg: "text-[#A1A1AA]" },
+        marginal: { bd: "border-[#FFB000]/30", bg: "bg-[#FFB000]/10", fg: "text-[#FFB000]" },
+    }[dx.severity];
+
+    return (
+        <div className={`px-3 py-2 border ${palette.bd} ${palette.bg}`}
+            data-testid={`signal-strength-${s.id}`}>
+            <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="flex items-center gap-2">
+                    <ShieldCheck className={`w-4 h-4 ${palette.fg}`} />
+                    <span className={`font-mono text-[10px] tracking-widest ${palette.fg}`}>
+                        SIGNAL STRENGTH · {dx.label}
+                    </span>
+                </div>
+                <div className={`font-display font-bold text-sm ${palette.fg}`}>{dx.score}/100</div>
+            </div>
+            <div className="text-[10px] text-[#A1A1AA] leading-relaxed mb-1.5">{dx.sub}</div>
+            {/* Score bar */}
+            <div className="h-1 bg-[#0A0A0A] border border-[#1F1F1F] mb-2">
+                <div className={`h-full ${dx.severity === "strong" ? "bg-[#00FF41]" : dx.severity === "marginal" ? "bg-[#FFB000]" : "bg-[#A1A1AA]"}`}
+                    style={{ width: `${dx.score}%` }} />
+            </div>
+            {dx.concerns.length > 0 && (
+                <div className="flex flex-wrap gap-1 mb-1">
+                    {dx.concerns.map(c => (
+                        <span key={c} className="font-mono text-[9px] text-[#FFB000] bg-[#FFB000]/10 border border-[#FFB000]/30 px-1.5 py-0.5 tracking-wide">
+                            ⚠ {c}
+                        </span>
+                    ))}
+                </div>
+            )}
+            {dx.strengths.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                    {dx.strengths.map(c => (
+                        <span key={c} className="font-mono text-[9px] text-[#00FF41] bg-[#00FF41]/10 border border-[#00FF41]/30 px-1.5 py-0.5 tracking-wide">
+                            ✓ {c}
+                        </span>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function SignalCard({ s, accounts, onExecute, onDelete }) {
     const [accId, setAccId] = useState(accounts[0]?.id || "");
     useEffect(() => { if (!accId && accounts[0]) setAccId(accounts[0].id); }, [accounts, accId]);
@@ -323,6 +446,7 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
             <VetoCascade s={s} />
 
             <HoldReasonBanner s={s} />
+            <StrengthBanner s={s} />
 
             {/* Three-Engine Verification Stack — Quant + Semantic + Meta-Labeler */}
             <div className="grid grid-cols-3 gap-2 pt-2" data-testid={`verification-stack-${s.symbol}`}>
