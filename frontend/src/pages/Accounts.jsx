@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown } from "lucide-react";
+import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 
 const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000, investor_password: "", master_password: "" };
@@ -101,19 +101,7 @@ export default function Accounts() {
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
 
                 {/* Bridge instructions */}
-                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-5 flex gap-4">
-                    <Info className="w-5 h-5 text-[#FFB000] shrink-0 mt-0.5" />
-                    <div className="text-sm text-[#A1A1AA] space-y-2">
-                        <div className="font-display font-bold text-white">How the MT5 Bridge works</div>
-                        <ol className="list-decimal list-inside space-y-1 text-xs leading-relaxed">
-                            <li>Add your MT5 account here — you&apos;ll receive a unique <em>bridge token</em>.</li>
-                            <li>Download <code className="font-mono text-[#00FF41]">EmergentTradingBridge.mq5</code> and copy it to your MT5 <em>MQL5/Experts</em> folder.</li>
-                            <li>In MT5: <em>Tools → Options → Expert Advisors</em> — enable WebRequest and add this server URL.</li>
-                            <li>Attach the EA to any chart and paste your bridge token in the EA inputs.</li>
-                            <li>The EA polls every 5s for trades and reports execution back here.</li>
-                        </ol>
-                    </div>
-                </div>
+                <MT5ConnectionGuide />
 
                 {/* Broker / account-slot usage */}
                 <BrokerUsageCard limits={limits} />
@@ -527,3 +515,158 @@ function BrokerPresetPicker({ presets, form, setForm }) {
         </div>
     );
 }
+
+
+// ---------------------------------------------------------------------------
+// MT5 Connection Guide — step-by-step walkthrough shown on the Accounts page.
+// ---------------------------------------------------------------------------
+function MT5ConnectionGuide() {
+    const [open, setOpen] = useState(true);
+    const [troubleOpen, setTroubleOpen] = useState(false);
+    const serverUrl = API.replace(/\/api\/?$/, "");  // strip trailing /api
+    const [copied, setCopied] = useState("");
+
+    const copy = (text, label) => {
+        navigator.clipboard.writeText(text);
+        setCopied(label);
+        setTimeout(() => setCopied(""), 1500);
+    };
+
+    return (
+        <div className="border border-[#FFB000]/30 bg-[#0A0A0A]" data-testid="mt5-connection-guide">
+            <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between px-5 py-3 border-b border-[#1F1F1F] hover:bg-[#101010] transition-colors"
+                data-testid="mt5-guide-toggle">
+                <div className="flex items-center gap-3">
+                    <Info className="w-4 h-4 text-[#FFB000]" />
+                    <div className="text-left">
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SETUP — 5 MIN</div>
+                        <div className="font-display font-bold text-base tracking-tight">Connect an MT5 broker account to STOIC</div>
+                    </div>
+                </div>
+                <ChevronDown className={`w-4 h-4 text-[#A1A1AA] transition-transform ${open ? "rotate-180" : ""}`} />
+            </button>
+            {open && (
+                <div className="p-5 space-y-5">
+                    <Step n={1} title="Click ADD ACCOUNT (top-right)" testid="conn-step-1">
+                        <p>Pick <strong className="text-white">paper</strong> mode for sandboxing or <strong className="text-white">live</strong> for real trading. Choose a broker preset (RoboForex, Exness, IC Markets, Pepperstone, FXTM…) and STOIC auto-fills the server name. Enter your MT5 login number, account label, and click <strong>CREATE</strong>.</p>
+                        <p className="text-xs text-[#52525B] mt-2">A unique <code className="font-mono text-[#00FF41]">bridge_token</code> is generated for this account — that&apos;s what authenticates the EA to STOIC. Keep it private.</p>
+                    </Step>
+
+                    <Step n={2} title="Download the EA bridge file" testid="conn-step-2">
+                        <p>Click <strong className="text-white">DOWNLOAD EA</strong> in the top-right of this page (next to ADD ACCOUNT). You&apos;ll get a file named:</p>
+                        <CopyBox value="EmergentTradingBridge.mq5" onCopy={() => copy("EmergentTradingBridge.mq5", "filename")} copied={copied === "filename"} testid="conn-ea-filename" />
+                    </Step>
+
+                    <Step n={3} title="Open your MT5 Data Folder" testid="conn-step-3">
+                        <p>In MetaTrader 5: <strong className="text-white">File → Open Data Folder</strong>. A file explorer window opens — navigate to:</p>
+                        <CopyBox value={"MQL5\\Experts\\"} onCopy={() => copy("MQL5\\Experts\\", "path")} copied={copied === "path"} testid="conn-ea-path" />
+                        <p>Drop <code className="font-mono text-[#00FF41]">EmergentTradingBridge.mq5</code> into that folder. <span className="text-[#52525B]">(Typical full path: <code>{"C:\\Users\\YOU\\AppData\\Roaming\\MetaQuotes\\Terminal\\<ID>\\MQL5\\Experts\\"}</code>)</span></p>
+                    </Step>
+
+                    <Step n={4} title="Whitelist the STOIC server URL in MT5" testid="conn-step-4">
+                        <p>Still in MT5: <strong className="text-white">Tools → Options → Expert Advisors</strong>. Tick the box labelled <em>&quot;Allow WebRequest for listed URL&quot;</em>, then click <strong>add</strong> and paste:</p>
+                        <CopyBox value={serverUrl} onCopy={() => copy(serverUrl, "url")} copied={copied === "url"} testid="conn-server-url" />
+                        <p className="text-xs text-[#52525B] mt-2">Click OK to close the dialog. Without this whitelist, the EA gets <code>WebRequest error 4060</code> on every poll.</p>
+                    </Step>
+
+                    <Step n={5} title="Compile and attach the EA" testid="conn-step-5">
+                        <p>Back in MT5, press <strong className="text-white">Ctrl + N</strong> (or right-click in the Navigator → Refresh). You should now see <code className="font-mono text-[#00FF41]">EmergentTradingBridge</code> under <em>Expert Advisors</em>.</p>
+                        <p className="mt-2">Drag it onto <strong className="text-white">any chart</strong> (the symbol doesn&apos;t matter — the EA tracks XAUUSD/BTCUSD regardless). A configuration dialog opens with three inputs:</p>
+                        <ul className="font-mono text-xs space-y-1 mt-2 ml-2 text-[#A1A1AA]">
+                            <li>• <code className="text-[#00FF41]">ServerUrl</code> → paste the URL from step 4</li>
+                            <li>• <code className="text-[#00FF41]">BridgeToken</code> → copy it from this page&apos;s account row (the green token field)</li>
+                            <li>• <code className="text-[#00FF41]">PollSeconds</code> → leave at 5 (recommended)</li>
+                        </ul>
+                        <p className="mt-2">Confirm <strong>AutoTrading is ON</strong> (top-toolbar button is green, says <em>&quot;Algo Trading&quot;</em>), then click OK.</p>
+                    </Step>
+
+                    <Step n={6} title="Verify the connection" testid="conn-step-6">
+                        <p>Within 5 seconds, the account row below should switch to a green <span className="text-[#00FF41]">● CONNECTED</span> dot, and the EA prints in MT5&apos;s <em>Experts</em> tab:</p>
+                        <pre className="bg-[#050505] border border-[#1F1F1F] px-3 py-2 font-mono text-[11px] text-[#00FF41] overflow-x-auto">
+{`Heartbeat OK — balance: 10000.00  equity: 10000.00
+Polling /api/bridge/poll every 5s`}
+                        </pre>
+                        <p className="text-xs text-[#52525B] mt-2">You&apos;re live. The EA now polls STOIC every 5 seconds for new trades, executes them via MT5 <code>OrderSend()</code>, and reports fills back. To start auto-trading, go to <a href="/bot" className="text-[#00FF41] hover:underline">Bot Config</a> and click START BOT.</p>
+                    </Step>
+
+                    {/* Troubleshooting */}
+                    <button onClick={() => setTroubleOpen(!troubleOpen)}
+                        className="w-full flex items-center justify-between px-3 py-2 border border-[#1F1F1F] hover:border-[#FF3B30]/40 transition-colors mt-4"
+                        data-testid="mt5-troubleshoot-toggle">
+                        <div className="flex items-center gap-2">
+                            <AlertTriangle className="w-3.5 h-3.5 text-[#FF3B30]" />
+                            <span className="font-display font-bold text-xs tracking-tight">Troubleshooting · common issues</span>
+                        </div>
+                        <ChevronDown className={`w-3.5 h-3.5 text-[#A1A1AA] transition-transform ${troubleOpen ? "rotate-180" : ""}`} />
+                    </button>
+                    {troubleOpen && (
+                        <div className="border border-[#1F1F1F] divide-y divide-[#1F1F1F]" data-testid="mt5-troubleshoot-list">
+                            {TROUBLE.map(t => (
+                                <div key={t.code} className="px-4 py-3" data-testid={`trouble-${t.code}`}>
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className="font-mono text-[10px] px-2 py-0.5 bg-[#FF3B30]/10 text-[#FF3B30] border border-[#FF3B30]/40 tracking-widest">{t.code}</span>
+                                        <span className="font-display font-bold text-xs">{t.symptom}</span>
+                                    </div>
+                                    <p className="text-xs text-[#A1A1AA] leading-relaxed">{t.fix}</p>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="flex items-center gap-2 pt-2 border-t border-[#1F1F1F]">
+                        <a href="/guide#setup" className="text-xs text-[#00FF41] hover:underline flex items-center gap-1" data-testid="conn-full-guide-link">
+                            <ExternalLink className="w-3 h-3" /> Full setup tutorial in the Guide
+                        </a>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+const TROUBLE = [
+    { code: "4060",
+      symptom: "WebRequest error 4060 in the Experts tab",
+      fix: "The STOIC server URL is not whitelisted. Go to Tools → Options → Expert Advisors → tick \"Allow WebRequest for listed URL\" and paste the URL exactly (no trailing slash). Click OK and the EA will recover on the next poll." },
+    { code: "TOKEN",
+      symptom: "EA prints \"Invalid bridge_token\" or \"Account not found\"",
+      fix: "The token in the EA inputs doesn't match the one on this page. Click the copy icon next to the green token field above, then in MT5 right-click the EA → Properties → Inputs tab → paste over BridgeToken → OK." },
+    { code: "AUTO",
+      symptom: "EA attached but no trades execute",
+      fix: "AutoTrading is OFF. The top-toolbar \"Algo Trading\" button must be green. If it's red/grey, click it once. Also confirm the EA smiley face on the chart's top-right corner is happy (not sad)." },
+    { code: "POLL",
+      symptom: "Account heartbeat goes stale (●CONNECTED dot turns grey)",
+      fix: "Either your MT5 terminal closed or lost internet. The EA polls every 5s — if no heartbeat for 60s the dot drops. Re-attach the EA or restart MT5. For 24/7 autopilot, run MT5 on a VPS (~$5–15/mo)." },
+    { code: "SPREAD",
+      symptom: "Trades open then immediately close with \"slippage too wide\"",
+      fix: "Your broker's spread on XAU/BTC is too high at trade time. Microcent / ECN accounts have tighter spreads — check your broker tier. Or widen Bot Config → Risk → max-slippage cap." },
+    { code: "PERM",
+      symptom: "EA prints \"DLL imports not allowed\" or \"No permission to trade\"",
+      fix: "On the EA's first attach, MT5 asks for permissions. Right-click EA → Properties → Common tab → tick \"Allow algo trading\" and \"Allow DLL imports\" → OK." },
+];
+
+function Step({ n, title, children, testid }) {
+    return (
+        <div className="flex gap-4" data-testid={testid}>
+            <div className="shrink-0 w-8 h-8 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/40 flex items-center justify-center font-mono text-xs text-[#00FF41]">{n}</div>
+            <div className="flex-1 space-y-1">
+                <div className="font-display font-bold text-sm tracking-tight">{title}</div>
+                <div className="text-xs text-[#A1A1AA] leading-relaxed space-y-2">{children}</div>
+            </div>
+        </div>
+    );
+}
+
+function CopyBox({ value, onCopy, copied, testid }) {
+    return (
+        <div className="flex items-center gap-2 my-2">
+            <code className="flex-1 font-mono text-xs px-3 py-2 bg-[#050505] border border-[#1F1F1F] text-[#00FF41] break-all" data-testid={testid}>{value}</code>
+            <button onClick={onCopy} className="px-3 py-2 border border-[#1F1F1F] hover:border-[#00FF41]/40 transition-colors" data-testid={`${testid}-copy`}>
+                {copied
+                    ? <CheckCircle2 className="w-3.5 h-3.5 text-[#00FF41]" />
+                    : <Copy className="w-3.5 h-3.5 text-[#A1A1AA]" />}
+            </button>
+        </div>
+    );
+}
+
