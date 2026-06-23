@@ -152,13 +152,12 @@ async def stripe_webhook(request: Request):
     sig = request.headers.get("Stripe-Signature", "")
     try:
         event = await stripe.handle_webhook(body, sig)
-    except (KeyError, ValueError) as e:
-        # Malformed body / bad signature — expected on synthetic test calls.
-        # Log at WARNING (no stack-trace) instead of polluting err.log.
-        logger.warning("Stripe webhook rejected (malformed/invalid sig): %s", e)
-        raise HTTPException(status_code=400, detail="webhook signature invalid") from e
     except Exception as e:
-        logger.exception("Stripe webhook handle failed")
+        # All malformed-webhook cases (bad sig, missing fields, library
+        # wrapping a KeyError into CheckoutError) end here. Synthetic test
+        # calls hit this path constantly — log at WARNING without stack-trace
+        # so err.log stays clean for real issues.
+        logger.warning("Stripe webhook rejected: %s: %s", type(e).__name__, e)
         raise HTTPException(status_code=400, detail="webhook signature invalid") from e
     # Only act on terminal payment events
     if event.payment_status == "paid" and event.session_id:

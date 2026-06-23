@@ -485,7 +485,7 @@ export default function Dashboard() {
                         ) : history.length === 0 ? (
                             <div className="h-full flex items-center justify-center font-mono text-xs text-[#52525B] tracking-widest">NO DATA AVAILABLE</div>
                         ) : (
-                            <ResponsiveContainer width="100%" height="100%">
+                            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                                 <AreaChart data={history}>
                                     <defs>
                                         <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">

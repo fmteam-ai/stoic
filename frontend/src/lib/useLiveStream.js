@@ -60,7 +60,15 @@ export function useLiveStream() {
             if (ws) {
                 ws.onclose = null;  // prevent retry storm on intentional teardown
                 ws.onerror = null;
-                try { ws.close(); } catch (err) { console.warn("[ws] teardown close failed", err); }
+                // Only close() when the socket has finished connecting — calling
+                // close() on a CONNECTING socket triggers a browser console warning
+                // ("WebSocket closed before connection established"). For sockets
+                // still mid-handshake, defer close() until onopen fires.
+                if (ws.readyState === WebSocket.OPEN) {
+                    try { ws.close(); } catch (err) { console.warn("[ws] teardown close failed", err); }
+                } else if (ws.readyState === WebSocket.CONNECTING) {
+                    ws.onopen = () => { try { ws.close(); } catch { /* noop */ } };
+                }
             }
         };
     }, [user, connect]);
