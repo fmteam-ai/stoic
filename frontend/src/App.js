@@ -23,6 +23,7 @@ import Settings from "@/pages/Settings";
 import Billing from "@/pages/Billing";
 import FAQ from "@/pages/FAQ";
 import Guide from "@/pages/Guide";
+import SafetyBlocks from "@/pages/SafetyBlocks";
 import Agents from "@/pages/Agents";
 import AffiliateLanding from "@/pages/AffiliateLanding";
 
@@ -45,6 +46,7 @@ function App() {
                         <Route path="/bot-config" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
                         <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
                         <Route path="/trades" element={<ProtectedRoute><Trades /></ProtectedRoute>} />
+                        <Route path="/safety-blocks" element={<ProtectedRoute><SafetyBlocks /></ProtectedRoute>} />
                         <Route path="/symbols" element={<ProtectedRoute><Symbols /></ProtectedRoute>} />
                         <Route path="/commander" element={<ProtectedRoute><RiskCommander /></ProtectedRoute>} />
                         <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />

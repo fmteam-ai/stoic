@@ -1,0 +1,63 @@
+{
+  "summary": "Iter19 — verified new Safety Blocks page (backend + frontend). 12 NEW backend tests added in tests/test_iter19_safety_blocks.py covering /api/safety-blocks/list (pagination bounds, default params, custom window), /api/safety-blocks/stats (shape, by_day zero-fill = days+1, thresholds), /api/safety-blocks/{block_id} (400 invalid OID, 404 nonexistent, 404 on other-user isolation), plus auth requirement on /list and /stats. Seeded 3 user-A blocks + 1 user-B block via direct mongo, verified newest-first ordering, reason_label population, no _id leak, and user-A receives 404 when guessing user-B's block id. Full regression: 39/39 (12 new + 11 safety_guardian + 3 max_concurrent_race + 11 iter26_max_concurrent_endpoints + 2 iter18_diagnostic). FRONTEND: nav-safety-blocks sidebar link works, /safety-blocks route loads, goldilocks banner / sparkline / thresholds-collapsible / reason-bar / empty-state table all render. CRITICAL FRONTEND BUG FOUND: the days selector (sb-days-select) and refresh button (sb-refresh) are completely missing from the DOM because SafetyBlocks.jsx passes props `eyebrow`, `description`, `actions` to PageHeader, but PageHeader (components/AppLayout.jsx line 28) only accepts `title`, `subtitle`, `action`, `testid`. The `actions` (plural) prop is silently dropped, so users have no way to change the time window (1d/7d/30d) or refresh data — two of the six required features in the review request. The `description` and `eyebrow` text are also silently dropped.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "SafetyBlocks.jsx / AppLayout.PageHeader",
+        "issue": "Days selector (data-testid='sb-days-select') and Refresh button (data-testid='sb-refresh') are NOT rendered on /safety-blocks. PageHeader component signature is `({ title, subtitle, action, testid })` (single `action`, named `subtitle`), but SafetyBlocks.jsx passes `eyebrow`, `description`, `actions` (plural). React silently drops unrecognized props, so the actions panel and description never appear in the DOM. Empty-state page works because everything else lives inside `children`, not header props.",
+        "selector": "[data-testid='sb-days-select'], [data-testid='sb-refresh']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Time-window switch (1d / 7d / 30d)",
+        "issue": "Cannot be exercised from the UI — the <select> is never mounted. Backend supports days=1..90 correctly (tests pass), but the user has no way to invoke it. Refresh button likewise missing.",
+        "affected_selectors": ["[data-testid='sb-days-select']", "[data-testid='sb-refresh']"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "/safety-blocks header",
+        "issues": [
+          "Missing eyebrow ('Safety / risk envelope') and description ('Trades the guardian refused before they could reach the broker.') because PageHeader does not accept those prop names. Visually the header is bare — just the 'Safety Blocks' H1."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter19_safety_blocks.py",
+    "/app/test_reports/pytest/iter19_safety_blocks.xml",
+    "/app/test_reports/pytest/iter19_full.xml"
+  ],
+  "action_items": [
+    "Fix /app/frontend/src/pages/SafetyBlocks.jsx PageHeader call: rename `description` → `subtitle`, `actions` → `action`, drop `eyebrow` (unsupported) OR extend PageHeader in components/AppLayout.jsx to accept `eyebrow`/`description`/`actions` aliases. Easiest fix: change line ~212-232 of SafetyBlocks.jsx to use `subtitle={...}` and `action={...}`.",
+    "After fix, re-verify: data-testid='sb-days-select' visible, can change to 30, triggers GET /api/safety-blocks/stats?days=30; data-testid='sb-refresh' visible, click triggers re-fetch; description text 'Trades the guardian refused before they could reach the broker.' is visible under the H1."
+  ],
+  "critical_code_review_comments": [
+    "PageHeader prop mismatch (above) is the only blocker.",
+    "safety_blocks_routes.py uses ISO string for blocked_at and Python-side bucketing for by_day. Works, but lexicographic compare on ISO strings is correct only because UTC ISO is monotonic; if blocked_at is ever stored with mixed offsets (e.g. naive local), the $gte cutoff filter will silently miss rows. Consider storing as BSON datetime + using $dateTrunc for native aggregation.",
+    "_serialize() does `audit: doc.get('audit')` and `context: doc.get('context')` — both can be arbitrary nested dicts containing future ObjectIds. Today the seed data uses plain dicts so it works, but if execution.py ever stores an `_id` inside context (e.g. position_id from positions collection), the response will fail JSON encoding. Defensive: run a deep-strip-ObjectId pass on audit/context.",
+    "Stats endpoint hard-caps the by_day projection at length=10000 — fine for days<=90 with normal usage, but a noisy account could overflow this on days=90. Either use aggregation pipeline ($group on date) or paginate.",
+    "REASON_LABELS in safety_blocks_routes.py and the audit-name strings in safety_guardian.py are maintained in two places. Add a shared enum or import REASON_LABELS from safety_guardian to prevent drift (already saw 'risk_inputs_present' added since iter18).",
+    "SafetyBlocks.jsx renders threshold values as `{v}%` for every value — but `get_guardian_config()` returns thresholds in mixed units (some are %, some may be raw counts in future like max_concurrent_cap). Will display nonsensical '5%' for a max_concurrent integer if such a field is added.",
+    "BlockRow expanded state is keyed by block.id (string OK), but expanding a row only shows ACCOUNT STATE + AUDIT TRAIL; for a refused-trade postmortem it would help to also show entry/sl/tp from the original signal context. Currently those are not in `context` so the user can't reproduce why the guardian rejected."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter19_safety_blocks.py (NEW — 12 HTTP tests for /api/safety-blocks/* including direct-mongo seeding and user-isolation verification)"
+  ],
+  "success_rate": {
+    "backend": "100% (39/39 — 12 new iter19 + 27 regression)",
+    "frontend": "60% (5/7 features working: nav link, route, goldilocks banner, sparkline, reason-bar, thresholds collapsible, empty-state table render. BROKEN: days selector and refresh button never rendered)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (seed_admin via /api/auth/login). Ephemeral TEST_iter19_a_<uuid>@example.com + TEST_iter19_b_<uuid>@example.com auto-registered for user-isolation test.",
+  "seed_data_creation": "test_seed_and_verify_user_isolation inserts 3 + 1 docs into safety_blocks collection then deletes them in a finally block — fully self-cleaning. No persistent test data.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully tested + green. Frontend has ONE prop-name bug breaking days-selector + refresh button. Run: `cd /app/backend && set -a && source .env && source /app/frontend/.env && set +a && python -m pytest tests/test_iter19_safety_blocks.py tests/test_safety_guardian.py tests/test_max_concurrent_race.py tests/test_iter26_max_concurrent_endpoints.py tests/test_iter18_diagnostic_safety_guardian.py -v --asyncio-mode=auto` → 39/39. IMPORTANT: pytest needs BOTH .env files sourced (backend for MONGO_URL/DB_NAME, frontend for REACT_APP_BACKEND_URL). After main agent fixes the PageHeader prop names, retest by loading /safety-blocks as admin and confirming `document.querySelector(\"[data-testid='sb-days-select']\")` and `[data-testid='sb-refresh']` are non-null and visible.",
+  "rca of the issue": "FRONTEND BUG RCA: components/AppLayout.jsx::PageHeader signature is `({ title, subtitle, action, testid })`. SafetyBlocks.jsx line 211 calls it with `eyebrow`, `title`, `description`, `actions` (plural). React ignores unknown props silently — no console warning, no error. So in the rendered DOM only `<h1>Safety Blocks</h1>` appears in the header, and the `<select>` + refresh `<button>` (which were defined inside `actions={...}`) never mount. The user therefore cannot change the time window or trigger a refresh — two required features. Reproduction: 1) login as admin, 2) navigate to /safety-blocks, 3) `document.querySelectorAll('[data-testid=\"sb-days-select\"], [data-testid=\"sb-refresh\"]').length` → 0. Mitigation: either align prop names (rename to subtitle/action) OR extend PageHeader to alias eyebrow→prefixed-text, description→subtitle, actions→action. One-line code fix in SafetyBlocks.jsx is the safest path."
+}
