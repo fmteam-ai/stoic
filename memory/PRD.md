@@ -8,6 +8,11 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-02-24 (iter-24j) — **Manual import positions modal — workaround for legacy EAs**:
+  - **Why**: Even after EA v1.24 (which reports `account_login` so STOIC knows it's reading the right terminal), positions opened BEFORE the EA was attached remain invisible unless v1.25 (positions snapshot) is installed. To unblock users who don't want to keep re-installing the EA, added a one-shot manual import.
+  - **Backend**: `POST /api/accounts/{id}/import-positions` body `{positions: [{ticket, symbol, type, volume, price_open, sl, tp}]}`. Each unknown ticket → inserted as `origin=external`, `manually_imported=True`. Idempotent: existing tickets are skipped (returned in `skipped_existing[]`).
+  - **UI**: New yellow **IMPORT POSITIONS** button on each account row (next to REFRESH). Modal accepts CSV-style paste (`TICKET, SYMBOL, BUY|SELL, VOLUME, PRICE_OPEN[, SL, TP]`) one per line. Tab- and comma-separated both accepted. Footer note tells users this becomes automatic once EA v1.25 is installed.
+  - **Tests**: 5 new tests covering create, idempotency, 404 on unknown account, Pydantic validation (invalid type + zero volume). 14/14 pass combined.
 - 2026-02-24 (iter-24i) — **EA v1.25 · Heartbeat positions snapshot backfills missing trades**:
   - **Bug**: User had 4 open trades on micro account at the broker, but STOIC's Trades page showed 0. Cause: EA's `OnTradeTransaction` (v1.23) only catches NEW deals — positions opened BEFORE the EA was attached or opened directly on MT5 outside the EA's awareness are invisible to STOIC.
   - **EA v1.25**: New `BuildPositionsJson()` builds a full snapshot of every position via `PositionsTotal()` loop. Each entry carries `ticket / symbol / type / volume / price_open / sl / tp / time_open / magic / profit`. Sent in every heartbeat as `positions: [...]`.

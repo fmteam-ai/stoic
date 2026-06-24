@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
+from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
+from pydantic import BaseModel, Field
 
 from auth import get_current_user, generate_bridge_token
 from database import get_db
@@ -13,6 +15,20 @@ from account_limits import (
 from broker_presets import BROKER_PRESETS
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
+
+
+class ImportPosition(BaseModel):
+    ticket: int
+    symbol: str
+    type: Literal["BUY", "SELL"]
+    volume: float = Field(gt=0)
+    price_open: float = Field(gt=0)
+    sl: float = 0.0
+    tp: float = 0.0
+
+
+class ImportPositionsRequest(BaseModel):
+    positions: List[ImportPosition]
 
 
 def _serialize(doc: dict) -> dict:
@@ -146,6 +162,62 @@ async def rotate_token(account_id: str, user=Depends(get_current_user)):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Account not found")
     return {"bridge_token": new_token}
+
+
+@router.post("/{account_id}/import-positions")
+async def import_positions(account_id: str, payload: ImportPositionsRequest,
+                            user=Depends(get_current_user)):
+    """Manually backfill open positions you can see in MT5 but STOIC doesn't yet
+    track — typically positions opened BEFORE the EA was attached.
+
+    Idempotent on `(account_id, mt5_ticket)`: re-running with the same tickets
+    is a no-op, so the user can paste from MT5 → Trade tab without worrying
+    about duplicates. Once EA v1.25 is installed, the heartbeat-snapshot path
+    handles this automatically.
+    """
+    db = get_db()
+    acc = await db.accounts.find_one(
+        {"_id": ObjectId(account_id), "user_id": user["id"]}
+    )
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    created = 0
+    skipped: list[int] = []
+    for p in payload.positions:
+        exists = await db.trades.find_one({
+            "account_id": account_id, "mt5_ticket": int(p.ticket),
+        })
+        if exists:
+            skipped.append(p.ticket)
+            continue
+        await db.trades.insert_one({
+            "user_id": user["id"],
+            "account_id": account_id,
+            "symbol": p.symbol.upper(),
+            "action": p.type,
+            "lot_size": p.volume,
+            "entry_price": p.price_open,
+            "stop_loss": p.sl,
+            "take_profit": p.tp,
+            "exit_price": None,
+            "pnl": 0.0,
+            "status": "open",
+            "mode": acc.get("mode", "live"),
+            "broker": acc.get("broker", "MT5"),
+            "mt5_ticket": int(p.ticket),
+            "opened_at": now_iso,
+            "closed_at": None,
+            "origin": "external",
+            "external_open": True,
+            "manually_imported": True,
+        })
+        created += 1
+    return {
+        "created": created,
+        "skipped_existing": skipped,
+        "total_submitted": len(payload.positions),
+    }
 
 
 @router.get("/{account_id}/test-connection")

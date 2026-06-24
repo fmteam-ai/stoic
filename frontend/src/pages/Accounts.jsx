@@ -84,6 +84,7 @@ export default function Accounts() {
     };
 
     const [refreshingBalance, setRefreshingBalance] = useState({});
+    const [importAccount, setImportAccount] = useState(null);   // account selected in the Import Positions modal
     const refreshBalance = async (id) => {
         setRefreshingBalance(prev => ({ ...prev, [id]: true }));
         try {
@@ -383,6 +384,12 @@ export default function Accounts() {
                                                     <ArrowsClockwise className={`w-3 h-3 ${refreshingBalance[a.id] ? "animate-spin" : ""}`} />
                                                     {refreshingBalance[a.id] ? "REFRESHING…" : "REFRESH"}
                                                 </button>
+                                                <button onClick={() => setImportAccount(a)}
+                                                    data-testid={`import-positions-${a.account_number}`}
+                                                    title="Manually pull open positions from MT5 — useful for trades opened before the EA was attached."
+                                                    className="flex items-center gap-1.5 px-2.5 py-1 border border-[#1F1F1F] hover:border-[#FFD700]/40 hover:text-[#FFD700] text-[10px] font-mono tracking-widest transition-colors">
+                                                    <Download className="w-3 h-3" /> IMPORT POSITIONS
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
@@ -426,7 +433,115 @@ export default function Accounts() {
                     </div>
                 )}
             </div>
+
+            {importAccount && (
+                <ImportPositionsModal
+                    account={importAccount}
+                    onClose={() => setImportAccount(null)}
+                    onDone={(n) => {
+                        setImportAccount(null);
+                        if (n > 0) toast.success(`Imported · ${n} position${n === 1 ? "" : "s"} now visible in Trades`);
+                    }}
+                />
+            )}
         </AppLayout>
+    );
+}
+
+
+function ImportPositionsModal({ account, onClose, onDone }) {
+    // CSV-style textarea so the user can paste rows straight from MT5's Trade tab.
+    // One position per line · TICKET,SYMBOL,TYPE,VOLUME,PRICE_OPEN[,SL,TP]
+    const [raw, setRaw] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+
+    const parse = () => {
+        const out = [];
+        for (const line of raw.split("\n").map(l => l.trim()).filter(Boolean)) {
+            // Accept tab- or comma-separated. Strip $ signs, whitespace.
+            const parts = line.split(/[\t,]/).map(p => p.trim());
+            if (parts.length < 5) {
+                throw new Error(`Line "${line.slice(0, 40)}" needs at least 5 columns (ticket, symbol, type, volume, price_open)`);
+            }
+            const [ticket, symbol, type, volume, priceOpen, sl, tp] = parts;
+            const t = type.toUpperCase();
+            if (t !== "BUY" && t !== "SELL") {
+                throw new Error(`Invalid type "${type}" — must be BUY or SELL`);
+            }
+            out.push({
+                ticket: parseInt(ticket, 10),
+                symbol: symbol.toUpperCase().replace(/[^A-Z0-9._]/g, ""),
+                type: t,
+                volume: parseFloat(volume),
+                price_open: parseFloat(priceOpen),
+                sl: sl ? parseFloat(sl) : 0,
+                tp: tp ? parseFloat(tp) : 0,
+            });
+        }
+        return out;
+    };
+
+    const submit = async () => {
+        setBusy(true); setErr("");
+        try {
+            const positions = parse();
+            if (positions.length === 0) {
+                setErr("Paste at least one position row.");
+                setBusy(false);
+                return;
+            }
+            const { data } = await api.post(`/accounts/${account.id}/import-positions`, { positions });
+            onDone(data.created);
+        } catch (e) {
+            setErr(e?.response?.data?.detail || e.message || "Import failed");
+        } finally { setBusy(false); }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+            data-testid="import-positions-modal"
+            onClick={() => !busy && onClose()}>
+            <div className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-xl w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-2">
+                    <Download className="w-5 h-5 text-[#FFD700]" />
+                    <h2 className="font-display font-bold text-lg tracking-tight">Import positions · {account.label}</h2>
+                </div>
+                <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                    Open MT5 → <span className="text-white">Toolbox → Trade tab</span>. Right-click → <span className="text-white">Copy as CSV</span>, OR type one position per line:
+                </p>
+                <pre className="font-mono text-[10px] bg-[#050505] border border-[#1F1F1F] p-2 text-[#A1A1AA] whitespace-pre">
+TICKET, SYMBOL, BUY|SELL, VOLUME, PRICE_OPEN[, SL, TP]
+e.g.
+799001, XAUUSD, BUY,  0.50, 4050.10, 4030.00, 4100.00
+799002, XAUUSD, SELL, 0.30, 4080.50
+799003, BTCUSD, BUY,  0.01, 62000
+                </pre>
+                <textarea value={raw} onChange={e => setRaw(e.target.value)}
+                    data-testid="import-positions-textarea"
+                    rows={8}
+                    autoFocus
+                    placeholder="Paste your MT5 positions here, one per line…"
+                    className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-xs font-mono outline-none" />
+                {err && <div className="border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-3 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
+                <p className="font-mono text-[10px] text-[#52525B] tracking-widest leading-relaxed">
+                    DUPLICATES ARE IGNORED · TICKETS ALREADY TRACKED IN STOIC WILL BE SKIPPED. ONCE YOU INSTALL EA v1.25 THIS IS AUTOMATIC.
+                </p>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                    <button onClick={onClose} disabled={busy}
+                        data-testid="import-positions-cancel"
+                        className="px-4 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] hover:border-[#333333] text-[#A1A1AA]">
+                        CANCEL
+                    </button>
+                    <button onClick={submit} disabled={busy || !raw.trim()}
+                        data-testid="import-positions-submit"
+                        className="px-4 py-2 text-xs font-mono tracking-widest bg-[#FFD700] hover:bg-[#FFE033] disabled:opacity-50 text-black flex items-center gap-1.5">
+                        <Download className="w-3 h-3" /> {busy ? "IMPORTING…" : "IMPORT"}
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 }
 
