@@ -8,6 +8,11 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-02-24 (iter-24h) — **Self-healing wrong-balance — null on mismatch + visible EA diagnostic**:
+  - **Backend**: Heartbeat handler now refuses to overwrite `balance`/`equity` when the EA's reported `account_login` differs from the configured `account_number`. Balance becomes `None`, status flips to `disconnected`. Prevents silent display of the wrong account's balance.
+  - **UI**: Balance card shows `—` + "AWAITING VALID HEARTBEAT" when balance is null. New small diagnostic line under broker info: `EA READING FROM · #67199078 ✓` (green when match) or `#67198987 ⚠ MISMATCH` (yellow). Renders only when EA reports `account_login` (v1.24+).
+  - **Operational note**: User's two live EAs are still on legacy (no `account_login` → diagnostic line absent). Both reporting from same MT5 login. User must install EA v1.24 to enable the self-healing behaviour.
+  - **Tests**: Existing 4 wrong-terminal tests still pass.
 - 2026-02-24 (iter-24g) — **Wrong-terminal detection + REFRESH 404 fix**:
   - **Bug 1**: Accounts page REFRESH button returned "Refresh failed, not found". Cause: frontend called `/accounts/{id}/test_connection` (underscore) but the route is `/accounts/{id}/test-connection` (hyphen). One-character fix.
   - **Bug 2**: Two STOIC accounts showed the same balance because both EAs were attached to the same MT5 terminal, so `AccountInfoDouble(ACCOUNT_BALANCE)` returned the same number for both bridge_tokens. Fix:

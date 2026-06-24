@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 from fastapi import APIRouter, HTTPException
 from bson import ObjectId
 from pydantic import BaseModel
@@ -26,11 +27,29 @@ async def heartbeat(payload: BridgeHeartbeat):
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # First-pass mismatch check (v1.24+) — if the EA's MT5 login differs from
+    # STOIC's configured account_number, we DO NOT trust the balance/equity it
+    # reports. Persist the warning, null out the stale numbers so the UI shows
+    # "—" instead of a misleading mirror of the wrong account's value.
+    mismatch = False
+    mismatch_reason: Optional[str] = None
+    if payload.account_login is not None:
+        configured = str(acc.get("account_number") or "").strip()
+        reported = str(payload.account_login).strip()
+        if configured and reported and configured != reported:
+            mismatch = True
+            mismatch_reason = (
+                f"EA is logged into MT5 account {reported}, "
+                f"but this STOIC account is configured for {configured}. "
+                "Attach the EA to the correct MT5 terminal."
+            )
+
     set_doc = {
-        "balance": payload.balance,
-        "equity": payload.equity,
-        "open_positions": payload.open_positions,
-        "status": "connected",
+        "balance": payload.balance if not mismatch else None,
+        "equity": payload.equity if not mismatch else None,
+        "open_positions": payload.open_positions if not mismatch else 0,
+        "status": "connected" if not mismatch else "disconnected",
         "last_heartbeat": now_iso,
     }
     if payload.spreads:
@@ -45,25 +64,14 @@ async def heartbeat(payload: BridgeHeartbeat):
             set_doc["current_spreads"] = clean
             set_doc["spreads_updated_at"] = now_iso
 
-    # EA v1.24+: cross-check the broker's reported login against the STOIC
-    # account_number. When they diverge, the user has either pointed the EA
-    # at the wrong MT5 terminal OR attached two EAs to the same terminal —
-    # the latter is what makes "both accounts show the same balance".
+    # EA v1.24+: persist the broker-side login + currency so the Accounts UI
+    # can display the actual account the EA is reading from. We already
+    # computed `mismatch` at the top of this function (used to null out
+    # balance) — here we just record the values and clear/keep the flag.
     if payload.account_login is not None:
         set_doc["broker_account_id_reported"] = payload.account_login
-        configured = str(acc.get("account_number") or "").strip()
-        reported = str(payload.account_login).strip()
-        if configured and reported and configured != reported:
-            set_doc["broker_account_mismatch"] = True
-            set_doc["broker_account_mismatch_reason"] = (
-                f"EA is logged into MT5 account {reported}, "
-                f"but this STOIC account is configured for {configured}. "
-                "Attach the EA to the correct MT5 terminal."
-            )
-        else:
-            # All good — clear any prior warning.
-            set_doc["broker_account_mismatch"] = False
-            set_doc["broker_account_mismatch_reason"] = None
+        set_doc["broker_account_mismatch"] = mismatch
+        set_doc["broker_account_mismatch_reason"] = mismatch_reason
     if payload.base_currency:
         set_doc["broker_currency_reported"] = payload.base_currency.upper()
 

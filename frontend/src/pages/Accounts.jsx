@@ -324,6 +324,18 @@ export default function Accounts() {
                                             </div>
                                             <div className="font-mono text-xs text-[#A1A1AA]">{a.broker} · {a.server} · #{a.account_number}</div>
                                             <div className="font-mono text-[10px] text-[#52525B] tracking-widest">TYPE · {a.account_type?.toUpperCase()} · {a.base_currency}</div>
+                                            {a.broker_account_id_reported && (
+                                                <div className="font-mono text-[10px] tracking-widest flex items-center gap-1.5 mt-1"
+                                                    data-testid={`ea-reading-${a.account_number}`}>
+                                                    <span className="text-[#52525B]">EA READING FROM ·</span>
+                                                    <span className={String(a.broker_account_id_reported) === String(a.account_number)
+                                                        ? "text-[#00FF41]" : "text-[#FFB000]"}>
+                                                        #{a.broker_account_id_reported}
+                                                        {String(a.broker_account_id_reported) === String(a.account_number)
+                                                            ? " ✓" : " ⚠ MISMATCH"}
+                                                    </span>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="space-y-2 min-w-[280px]">
                                             <div className="grid grid-cols-2 gap-3" data-testid={`balance-card-${a.account_number}`}>
@@ -331,15 +343,17 @@ export default function Accounts() {
                                                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">BALANCE</div>
                                                     <div className="font-display font-bold text-2xl tabular-nums tracking-tight"
                                                         data-testid={`balance-${a.account_number}`}>
-                                                        ${(a.balance ?? 0).toFixed(2)}
+                                                        {a.balance == null ? <span className="text-[#52525B]">—</span> : `$${(a.balance).toFixed(2)}`}
                                                     </div>
-                                                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-0.5">{a.base_currency || "USD"}</div>
+                                                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-0.5">
+                                                        {a.balance == null ? "AWAITING VALID HEARTBEAT" : (a.base_currency || "USD")}
+                                                    </div>
                                                 </div>
                                                 <div className="p-3 border border-[#1F1F1F] bg-[#050505] relative">
                                                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">EQUITY</div>
                                                     <div className="font-display font-bold text-2xl tabular-nums tracking-tight"
                                                         data-testid={`equity-${a.account_number}`}>
-                                                        ${(a.equity ?? 0).toFixed(2)}
+                                                        {a.equity == null ? <span className="text-[#52525B]">—</span> : `$${(a.equity).toFixed(2)}`}
                                                     </div>
                                                     <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-0.5">
                                                         {(a.open_positions ?? 0)} OPEN POSITION{(a.open_positions ?? 0) === 1 ? "" : "S"}
