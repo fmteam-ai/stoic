@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, Pencil } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -182,6 +182,7 @@ export default function Trades() {
     }, [accounts]);
 
     const [refreshing, setRefreshing] = useState(false);
+    const [backfillTrade, setBackfillTrade] = useState(null);  // trade currently being backfilled in modal
     const load = useCallback(async () => {
         setRefreshing(true);
         try {
@@ -552,6 +553,13 @@ export default function Trades() {
                                                     <X className="w-3 h-3" /> CLOSE
                                                 </button>
                                             )}
+                                            {t.status === "closed" && t.exit_price == null && (
+                                                <button onClick={() => setBackfillTrade(t)} data-testid={`backfill-trade-${t.id}`}
+                                                    title="Closed at the broker but exit price/profit never reported — click to enter the actual values from MT5 history."
+                                                    className="text-[#FFD700] hover:text-[#FFE033] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                    <Pencil className="w-3 h-3" /> BACKFILL P&L
+                                                </button>
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
@@ -560,7 +568,124 @@ export default function Trades() {
                     </div>
                 )}
             </div>
+
+            {backfillTrade && (
+                <BackfillModal
+                    trade={backfillTrade}
+                    onClose={() => setBackfillTrade(null)}
+                    onSaved={async () => { setBackfillTrade(null); await load(); }}
+                />
+            )}
         </AppLayout>
+    );
+}
+
+
+function BackfillModal({ trade, onClose, onSaved }) {
+    const [exitPrice, setExitPrice] = useState("");
+    const [pnl, setPnl] = useState("");
+    const [busy, setBusy] = useState(false);
+
+    const direction = trade.action === "BUY" ? 1 : -1;
+    const lots = parseFloat(trade.lot_size) || 0;
+    const entry = parseFloat(trade.entry_price) || 0;
+    const cs = CONTRACT_SIZE[trade.symbol] ?? 1;
+
+    // Auto-compute P&L preview from exit price (user can override)
+    const exitNum = parseFloat(exitPrice);
+    const previewPnl = (!Number.isNaN(exitNum) && exitNum > 0 && entry > 0 && lots > 0)
+        ? direction * (exitNum - entry) * lots * cs
+        : null;
+
+    const useComputed = () => {
+        if (previewPnl != null) setPnl(previewPnl.toFixed(2));
+    };
+
+    const submit = async () => {
+        const ep = parseFloat(exitPrice);
+        const pn = parseFloat(pnl);
+        if (!ep || ep <= 0) { toast.error("Enter a valid exit price"); return; }
+        if (Number.isNaN(pn)) { toast.error("Enter a P&L value (use a minus sign for losses)"); return; }
+        setBusy(true);
+        try {
+            await api.patch(`/trades/${trade.id}/backfill`, {
+                exit_price: ep,
+                pnl: pn,
+            });
+            toast.success(`Backfilled · ${trade.symbol} ${trade.action} · ${pn >= 0 ? "+$" : "-$"}${Math.abs(pn).toFixed(2)}`);
+            await onSaved();
+        } catch (e) {
+            toast.error("Backfill failed", { description: formatApiError(e) });
+        } finally { setBusy(false); }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+            data-testid="backfill-modal"
+            onClick={() => !busy && onClose()}>
+            <div className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-md w-full p-6 space-y-4"
+                onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-2">
+                    <Pencil className="w-5 h-5 text-[#FFD700]" />
+                    <h2 className="font-display font-bold text-lg tracking-tight">Backfill P&amp;L from MT5</h2>
+                </div>
+                <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                    This trade closed at the broker, but STOIC never received the exit
+                    price/profit (typical when you click <span className="text-white">Close</span> directly
+                    in MT5). Copy the values from <span className="text-[#FFD700]">MT5 → History → Deal row</span> below.
+                </p>
+
+                <div className="border border-[#1F1F1F] p-3 bg-[#050505] font-mono text-[10px] tracking-widest text-[#A1A1AA] space-y-1">
+                    <div><span className="text-[#52525B]">TICKET</span> {trade.mt5_ticket || "—"}</div>
+                    <div><span className="text-[#52525B]">SYMBOL</span> {trade.symbol} · <span className={trade.action === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}>{trade.action}</span> · {trade.lot_size} lots</div>
+                    <div><span className="text-[#52525B]">ENTRY</span> {fmtPrice(trade.symbol, trade.entry_price)}</div>
+                </div>
+
+                <div>
+                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">EXIT PRICE (from MT5 deal row · Price column)</label>
+                    <input type="number" step="0.01" value={exitPrice}
+                        onChange={e => setExitPrice(e.target.value)}
+                        data-testid="backfill-exit-input"
+                        autoFocus
+                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
+                        placeholder="e.g. 4062.66" />
+                </div>
+
+                <div>
+                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5 flex items-center justify-between">
+                        <span>REALISED P&amp;L (from MT5 deal row · Profit column)</span>
+                        {previewPnl != null && (
+                            <button onClick={useComputed} type="button"
+                                data-testid="backfill-use-computed"
+                                className="text-[#FFD700] hover:text-[#FFE033] normal-case tracking-normal">
+                                AUTO: {previewPnl >= 0 ? "+$" : "-$"}{Math.abs(previewPnl).toFixed(2)} ↓
+                            </button>
+                        )}
+                    </label>
+                    <input type="number" step="0.01" value={pnl}
+                        onChange={e => setPnl(e.target.value)}
+                        data-testid="backfill-pnl-input"
+                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
+                        placeholder="e.g. 337.34  (use - for losses)" />
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1">
+                        Use a minus sign for losses (e.g. <span className="text-[#FF3B30]">-50.00</span>).
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                    <button onClick={onClose} disabled={busy}
+                        data-testid="backfill-cancel"
+                        className="px-4 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] hover:border-[#333333] text-[#A1A1AA]">
+                        CANCEL
+                    </button>
+                    <button onClick={submit} disabled={busy || !exitPrice || !pnl}
+                        data-testid="backfill-save"
+                        className="px-4 py-2 text-xs font-mono tracking-widest bg-[#FFD700] hover:bg-[#FFE033] disabled:opacity-50 text-black flex items-center gap-1.5">
+                        <Pencil className="w-3 h-3" /> {busy ? "SAVING…" : "SAVE BACKFILL"}
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 }
 

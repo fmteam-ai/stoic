@@ -320,6 +320,54 @@ async def close_trade(trade_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+class BackfillTradeRequest(BaseModel):
+    exit_price: float = Field(..., gt=0)
+    pnl: float                  # signed; profits positive, losses negative
+
+
+@router.patch("/{trade_id}/backfill")
+async def backfill_trade(trade_id: str, payload: BackfillTradeRequest,
+                         user=Depends(get_current_user)):
+    """Manually backfill exit_price + pnl on a closed trade that never received
+    a `/bridge/report` from the EA — for example, when the user closed the
+    position directly on MT5 (manual close) and the EA didn't catch it, or
+    when PANIC marked the trade closed before the broker confirmation arrived.
+
+    Only allowed on already-closed trades that currently have no exit_price.
+    Refuses on open/pending/cancelled/failed trades and on trades that already
+    have a recorded exit_price (no silent overrides).
+    """
+    db = get_db()
+    trade = await db.trades.find_one({"_id": ObjectId(trade_id), "user_id": user["id"]})
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    if trade.get("status") != "closed":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only closed trades can be backfilled. Close the trade on MT5 "
+                "first, then click SYNC WITH BROKER."
+            ),
+        )
+    if trade.get("exit_price") is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Trade already has an exit price recorded — refusing to override.",
+        )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    update = {
+        "exit_price": float(payload.exit_price),
+        "pnl": float(payload.pnl),
+        "backfilled": True,
+        "backfilled_at": now_iso,
+    }
+    # Keep the original close_reason but tag the source so audits can trace it.
+    update["close_reason"] = f"{trade.get('close_reason') or 'manual'}+backfill"
+    await db.trades.update_one({"_id": ObjectId(trade_id)}, {"$set": update})
+    return {"ok": True, "trade_id": trade_id, **update}
+
+
 
 # Statuses that are SAFE to bulk-delete. Open & pending trades are intentionally
 # excluded — they represent real money on the broker side and must be closed
