@@ -209,10 +209,9 @@ export default function SafetyBlocks() {
     return (
         <AppLayout>
             <PageHeader
-                eyebrow="Safety / risk envelope"
                 title="Safety Blocks"
-                description="Trades the guardian refused before they could reach the broker."
-                actions={
+                subtitle="Trades the guardian refused before they could reach the broker."
+                action={
                     <div className="flex items-center gap-2">
                         <select value={days} onChange={(e) => setDays(Number(e.target.value))}
                                 className="bg-[#0A0A0A] border border-[#1F1F1F] text-xs text-[#E4E4E7] px-2.5 py-1.5 font-mono"

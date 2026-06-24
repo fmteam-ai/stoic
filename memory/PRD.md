@@ -220,6 +220,29 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### Safety Blocks UI page — observability for guardian refusals
+**Why:** Users need to see WHY the bot's trades are being refused so they can dial config into the "goldilocks zone" (aggressive enough to earn, not so aggressive the guardian constantly slaps it down).
+
+**Backend `/api/safety-blocks/...` (user-scoped, owner-isolated):**
+- `GET /list?limit=&days=` → user's blocks newest-first with audit + context
+- `GET /stats?days=` → `{by_reason, by_day (zero-filled), total, thresholds, window_days}` powers the bars + sparkline
+- `GET /{block_id}` → single-block detail; 400 on bad OID, **404 if user doesn't own it** (no leak across users)
+
+**Frontend `/safety-blocks` page:**
+- Sidebar entry `nav-safety-blocks` (ShieldCheck icon)
+- **Goldilocks banner** — GOOD/OK/WATCH/LOOSEN tone based on count: "GOLDILOCKS · Bot trading freely within all safety floors"
+- **Blocks by Reason** bars — color-coded per severity, % of total
+- **Blocks per Day** sparkline — zero-filled SVG with hover tooltips
+- **Current Guardian Thresholds** collapsible — all 6 SAFETY_* env values
+- **Refused Trades** table — clickable rows expand to show ACCOUNT STATE AT BLOCK + AUDIT TRAIL (PASS/FAIL per check)
+- Days selector (1d/7d/30d) + Refresh button
+
+**Testing — verified by testing_agent_v3_fork (iter19):**
+- ✅ 39/39 backend tests pass · 0 critical/minor backend issues
+- ✅ 12 new HTTP tests (list/stats/detail, pagination, by_day zero-fill, user isolation 404)
+- ✅ 1 frontend prop-name bug found by agent (PageHeader `subtitle`/`action` vs `description`/`actions`) — fixed
+- ✅ Re-verified live via screenshot: subtitle, days selector, refresh button all render
+
 ### SAFETY GUARDIAN: server-side hard floors for LIVE accounts
 **Why:** User asked: *"how do I be sure the bot won't blow up my real account?"* — most efficient single intervention is non-bypassable, server-side risk caps that fire INSIDE the execution engine, regardless of user config.
 
