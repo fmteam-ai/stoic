@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, Pencil } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -182,7 +182,7 @@ export default function Trades() {
     }, [accounts]);
 
     const [refreshing, setRefreshing] = useState(false);
-    const [backfillTrade, setBackfillTrade] = useState(null);  // trade currently being backfilled in modal
+    const [auditTrade, setAuditTrade] = useState(null);  // trade whose audit trail modal is open
     const load = useCallback(async () => {
         setRefreshing(true);
         try {
@@ -547,19 +547,21 @@ export default function Trades() {
                                             </div>
                                         </td>
                                         <td className="px-3 py-2">
-                                            {t.status === "open" && (
-                                                <button onClick={() => close(t.id)} data-testid={`close-trade-${t.id}`}
-                                                    className="text-[#FF3B30] hover:text-[#FF6B61] text-xs font-mono tracking-widest flex items-center gap-1">
-                                                    <X className="w-3 h-3" /> CLOSE
-                                                </button>
-                                            )}
-                                            {t.status === "closed" && t.exit_price == null && (
-                                                <button onClick={() => setBackfillTrade(t)} data-testid={`backfill-trade-${t.id}`}
-                                                    title="Closed at the broker but exit price/profit never reported — click to enter the actual values from MT5 history."
-                                                    className="text-[#FFD700] hover:text-[#FFE033] text-xs font-mono tracking-widest flex items-center gap-1">
-                                                    <Pencil className="w-3 h-3" /> BACKFILL P&L
-                                                </button>
-                                            )}
+                                            <div className="flex items-center gap-3">
+                                                {t.status === "open" && (
+                                                    <button onClick={() => close(t.id)} data-testid={`close-trade-${t.id}`}
+                                                        className="text-[#FF3B30] hover:text-[#FF6B61] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                        <X className="w-3 h-3" /> CLOSE
+                                                    </button>
+                                                )}
+                                                {t.mt5_ticket && (
+                                                    <button onClick={() => setAuditTrade(t)} data-testid={`audit-trade-${t.id}`}
+                                                        title="Show every broker deal that touched this position"
+                                                        className="text-[#A1A1AA] hover:text-[#FFD700] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                        <History className="w-3 h-3" /> AUDIT
+                                                    </button>
+                                                )}
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -569,11 +571,10 @@ export default function Trades() {
                 )}
             </div>
 
-            {backfillTrade && (
-                <BackfillModal
-                    trade={backfillTrade}
-                    onClose={() => setBackfillTrade(null)}
-                    onSaved={async () => { setBackfillTrade(null); await load(); }}
+            {auditTrade && (
+                <AuditTrailModal
+                    trade={auditTrade}
+                    onClose={() => setAuditTrade(null)}
                 />
             )}
         </AppLayout>
@@ -581,110 +582,116 @@ export default function Trades() {
 }
 
 
-function BackfillModal({ trade, onClose, onSaved }) {
-    const [exitPrice, setExitPrice] = useState("");
-    const [pnl, setPnl] = useState("");
-    const [busy, setBusy] = useState(false);
+function AuditTrailModal({ trade, onClose }) {
+    const [events, setEvents] = useState(null);
+    const [err, setErr] = useState("");
 
-    const direction = trade.action === "BUY" ? 1 : -1;
-    const lots = parseFloat(trade.lot_size) || 0;
-    const entry = parseFloat(trade.entry_price) || 0;
-    const cs = CONTRACT_SIZE[trade.symbol] ?? 1;
-
-    // Auto-compute P&L preview from exit price (user can override)
-    const exitNum = parseFloat(exitPrice);
-    const previewPnl = (!Number.isNaN(exitNum) && exitNum > 0 && entry > 0 && lots > 0)
-        ? direction * (exitNum - entry) * lots * cs
-        : null;
-
-    const useComputed = () => {
-        if (previewPnl != null) setPnl(previewPnl.toFixed(2));
-    };
-
-    const submit = async () => {
-        const ep = parseFloat(exitPrice);
-        const pn = parseFloat(pnl);
-        if (!ep || ep <= 0) { toast.error("Enter a valid exit price"); return; }
-        if (Number.isNaN(pn)) { toast.error("Enter a P&L value (use a minus sign for losses)"); return; }
-        setBusy(true);
-        try {
-            await api.patch(`/trades/${trade.id}/backfill`, {
-                exit_price: ep,
-                pnl: pn,
-            });
-            toast.success(`Backfilled · ${trade.symbol} ${trade.action} · ${pn >= 0 ? "+$" : "-$"}${Math.abs(pn).toFixed(2)}`);
-            await onSaved();
-        } catch (e) {
-            toast.error("Backfill failed", { description: formatApiError(e) });
-        } finally { setBusy(false); }
-    };
+    useEffect(() => {
+        let cancelled = false;
+        api.get(`/trades/${trade.id}/audit`).then(r => {
+            if (!cancelled) setEvents(r.data);
+        }).catch(e => { if (!cancelled) setErr(formatApiError(e)); });
+        return () => { cancelled = true; };
+    }, [trade.id]);
 
     return (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
-            data-testid="backfill-modal"
-            onClick={() => !busy && onClose()}>
-            <div className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-md w-full p-6 space-y-4"
+            data-testid="audit-modal"
+            onClick={onClose}>
+            <div className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-2xl w-full max-h-[80vh] overflow-y-auto"
                 onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center gap-2">
-                    <Pencil className="w-5 h-5 text-[#FFD700]" />
-                    <h2 className="font-display font-bold text-lg tracking-tight">Backfill P&amp;L from MT5</h2>
-                </div>
-                <p className="text-xs text-[#A1A1AA] leading-relaxed">
-                    This trade closed at the broker, but STOIC never received the exit
-                    price/profit (typical when you click <span className="text-white">Close</span> directly
-                    in MT5). Copy the values from <span className="text-[#FFD700]">MT5 → History → Deal row</span> below.
-                </p>
-
-                <div className="border border-[#1F1F1F] p-3 bg-[#050505] font-mono text-[10px] tracking-widest text-[#A1A1AA] space-y-1">
-                    <div><span className="text-[#52525B]">TICKET</span> {trade.mt5_ticket || "—"}</div>
-                    <div><span className="text-[#52525B]">SYMBOL</span> {trade.symbol} · <span className={trade.action === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}>{trade.action}</span> · {trade.lot_size} lots</div>
-                    <div><span className="text-[#52525B]">ENTRY</span> {fmtPrice(trade.symbol, trade.entry_price)}</div>
-                </div>
-
-                <div>
-                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">EXIT PRICE (from MT5 deal row · Price column)</label>
-                    <input type="number" step="0.01" value={exitPrice}
-                        onChange={e => setExitPrice(e.target.value)}
-                        data-testid="backfill-exit-input"
-                        autoFocus
-                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
-                        placeholder="e.g. 4062.66" />
-                </div>
-
-                <div>
-                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5 flex items-center justify-between">
-                        <span>REALISED P&amp;L (from MT5 deal row · Profit column)</span>
-                        {previewPnl != null && (
-                            <button onClick={useComputed} type="button"
-                                data-testid="backfill-use-computed"
-                                className="text-[#FFD700] hover:text-[#FFE033] normal-case tracking-normal">
-                                AUTO: {previewPnl >= 0 ? "+$" : "-$"}{Math.abs(previewPnl).toFixed(2)} ↓
-                            </button>
-                        )}
-                    </label>
-                    <input type="number" step="0.01" value={pnl}
-                        onChange={e => setPnl(e.target.value)}
-                        data-testid="backfill-pnl-input"
-                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
-                        placeholder="e.g. 337.34  (use - for losses)" />
-                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1">
-                        Use a minus sign for losses (e.g. <span className="text-[#FF3B30]">-50.00</span>).
+                <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2 sticky top-0 bg-[#0A0A0A]">
+                    <History className="w-5 h-5 text-[#FFD700]" />
+                    <div className="flex-1 min-w-0">
+                        <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">TRADE AUDIT TRAIL</div>
+                        <div className="font-display font-bold text-lg tracking-tight truncate">
+                            {trade.symbol} · {trade.action} · {trade.lot_size} lots
+                            {trade.mt5_ticket && (
+                                <span className="font-mono text-xs text-[#52525B] ml-2">#{trade.mt5_ticket}</span>
+                            )}
+                        </div>
                     </div>
+                    <button onClick={onClose} data-testid="audit-close"
+                        className="p-1.5 text-[#52525B] hover:text-white">
+                        <X className="w-4 h-4" />
+                    </button>
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-2">
-                    <button onClick={onClose} disabled={busy}
-                        data-testid="backfill-cancel"
-                        className="px-4 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] hover:border-[#333333] text-[#A1A1AA]">
-                        CANCEL
-                    </button>
-                    <button onClick={submit} disabled={busy || !exitPrice || !pnl}
-                        data-testid="backfill-save"
-                        className="px-4 py-2 text-xs font-mono tracking-widest bg-[#FFD700] hover:bg-[#FFE033] disabled:opacity-50 text-black flex items-center gap-1.5">
-                        <Pencil className="w-3 h-3" /> {busy ? "SAVING…" : "SAVE BACKFILL"}
-                    </button>
+                {err && (
+                    <div className="border-b border-[#FF3B30]/30 bg-[#FF3B30]/10 px-5 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>
+                )}
+
+                {events === null && !err && (
+                    <div className="p-8 text-center font-mono text-xs text-[#52525B] tracking-widest" data-testid="audit-loading">
+                        LOADING…
+                    </div>
+                )}
+
+                {events && events.events.length === 0 && (
+                    <div className="p-8 text-center" data-testid="audit-empty">
+                        <div className="font-display font-bold text-base mb-1">No broker events yet</div>
+                        <div className="text-sm text-[#A1A1AA]">
+                            This trade has no recorded deal history. Once the EA reports the next deal, it will appear here.
+                        </div>
+                    </div>
+                )}
+
+                {events && events.events.length > 0 && (
+                    <div className="p-5 space-y-3" data-testid="audit-events">
+                        {events.events.map((e, i) => (
+                            <AuditEventRow key={i} e={e} />
+                        ))}
+                    </div>
+                )}
+
+                {events && events.broker_deal_count > 0 && (
+                    <div className="px-5 py-2 border-t border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
+                        BROKER DEALS · {events.broker_deal_count}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+const AUDIT_KIND_STYLE = {
+    stoic_open:    { color: "#00FF41", dot: "● " },
+    stoic_close:   { color: "#FF3B30", dot: "● " },
+    breakeven:     { color: "#FFD700", dot: "◆ " },
+    partial_close: { color: "#00FF41", dot: "◇ " },
+    trail_active:  { color: "#0099FF", dot: "▲ " },
+    broker_deal:   { color: "#A1A1AA", dot: "▸ " },
+};
+
+function AuditEventRow({ e }) {
+    const style = AUDIT_KIND_STYLE[e.kind] || AUDIT_KIND_STYLE.broker_deal;
+    const isManual = e.kind === "broker_deal" && e.details?.is_manual;
+
+    return (
+        <div className="border-l-2 pl-3 py-2" style={{ borderColor: style.color }}>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="font-mono text-xs tracking-wide" style={{ color: style.color }}>
+                    {style.dot}{e.label}
+                    {isManual && (
+                        <span className="ml-2 font-mono text-[9px] tracking-widest text-[#FFD700] border border-[#FFD700]/40 bg-[#FFD700]/10 px-1.5 py-0.5">
+                            MANUAL
+                        </span>
+                    )}
+                </div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest whitespace-nowrap">
+                    {fmtDateTime(e.at) || "—"}
                 </div>
             </div>
+            {e.details && (
+                <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 font-mono text-[10px] text-[#A1A1AA]">
+                    {Object.entries(e.details).filter(([_k, v]) => v !== null && v !== undefined && v !== "").map(([k, v]) => (
+                        <div key={k} className="truncate">
+                            <span className="text-[#52525B]">{k.toUpperCase()}</span>{" "}
+                            <span className="text-white">{typeof v === "boolean" ? (v ? "true" : "false") : String(v)}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

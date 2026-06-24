@@ -307,6 +307,128 @@ async def execute_manual_trade(payload: ManualTradeRequest, user=Depends(get_cur
     return trade_doc
 
 
+@router.get("/{trade_id}/audit")
+async def trade_audit(trade_id: str, user=Depends(get_current_user)):
+    """Full deal lineage for a single trade.
+
+    Joins the trade's own lifecycle events (created, opened, modified, closed)
+    with every broker_deal that touched its mt5_ticket. Ordered chronologically.
+    Powers the "AUDIT TRAIL" modal on the Trades page so the user can see
+    when partial fills, SL/TP modifications, and the final close actually
+    hit at the broker — with the exact broker timestamps.
+    """
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": ObjectId(trade_id), "user_id": user["id"]}
+    )
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    events: list[dict] = []
+
+    # 1. STOIC lifecycle events from the trade doc itself
+    if trade.get("opened_at"):
+        events.append({
+            "kind": "stoic_open",
+            "at": trade["opened_at"],
+            "label": "Trade created in STOIC",
+            "details": {
+                "symbol": trade.get("symbol"),
+                "action": trade.get("action"),
+                "lots": trade.get("lot_size"),
+                "entry_price": trade.get("entry_price"),
+                "stop_loss": trade.get("stop_loss"),
+                "take_profit": trade.get("take_profit"),
+                "origin": trade.get("origin"),
+            },
+        })
+    if trade.get("breakeven_set"):
+        events.append({
+            "kind": "breakeven",
+            "at": trade.get("breakeven_at") or trade.get("opened_at"),
+            "label": "SL moved to break-even",
+            "details": {"stop_loss": trade.get("stop_loss")},
+        })
+    if trade.get("partial_closed"):
+        events.append({
+            "kind": "partial_close",
+            "at": trade.get("partial_closed_at") or trade.get("opened_at"),
+            "label": "Partial close at TP1",
+        })
+    if trade.get("trail_active"):
+        events.append({
+            "kind": "trail_active",
+            "at": trade.get("trail_started_at") or trade.get("opened_at"),
+            "label": "Trailing stop activated",
+        })
+    if trade.get("closed_at"):
+        events.append({
+            "kind": "stoic_close",
+            "at": trade["closed_at"],
+            "label": f"STOIC marked closed ({trade.get('close_reason') or 'unknown'})",
+            "details": {
+                "exit_price": trade.get("exit_price"),
+                "pnl": trade.get("pnl"),
+                "close_reason": trade.get("close_reason"),
+            },
+        })
+
+    # 2. Broker deals — every MT5 event that touched this ticket
+    ticket = trade.get("mt5_ticket")
+    broker_deals: list[dict] = []
+    if ticket:
+        cursor = db.broker_deals.find(
+            {"user_id": user["id"], "mt5_ticket": int(ticket)}
+        ).sort("deal_time", 1)
+        broker_deals = await cursor.to_list(length=500)
+
+    for d in broker_deals:
+        # Prefer broker-native timestamp; fall back to received_at if missing.
+        deal_ts = d.get("deal_time")
+        ts_iso = (
+            datetime.fromtimestamp(deal_ts, tz=timezone.utc).isoformat()
+            if deal_ts else d.get("received_at")
+        )
+        side = "BUY" if d.get("action") == "BUY" else "SELL"
+        if d.get("deal_entry") == "in":
+            lbl = f"Broker: position opened ({side} {d.get('lots')} @ {d.get('price')})"
+        elif d.get("deal_entry") == "out":
+            realized = (d.get("profit") or 0) + (d.get("commission") or 0) + (d.get("swap") or 0)
+            sign = "+" if realized >= 0 else "-"
+            lbl = f"Broker: position closed @ {d.get('price')} · P&L {sign}${abs(realized):.2f}"
+        else:
+            lbl = f"Broker: position reversed @ {d.get('price')}"
+        events.append({
+            "kind": "broker_deal",
+            "at": ts_iso,
+            "label": lbl,
+            "details": {
+                "deal_id": d.get("deal_id"),
+                "deal_entry": d.get("deal_entry"),
+                "price": d.get("price"),
+                "lots": d.get("lots"),
+                "profit": d.get("profit"),
+                "commission": d.get("commission"),
+                "swap": d.get("swap"),
+                "magic": d.get("magic"),
+                "is_manual": d.get("magic") == 0,
+            },
+        })
+
+    # Sort chronologically. Some events may have None timestamps — push them last.
+    def _sort_key(e):
+        ts = e.get("at")
+        return (1, "") if not ts else (0, ts)
+    events.sort(key=_sort_key)
+
+    return {
+        "trade_id": trade_id,
+        "mt5_ticket": ticket,
+        "events": events,
+        "broker_deal_count": len(broker_deals),
+    }
+
+
 @router.post("/{trade_id}/close")
 async def close_trade(trade_id: str, user=Depends(get_current_user)):
     """Mark a trade as pending-close so the EA closes it on next poll."""
@@ -318,54 +440,6 @@ async def close_trade(trade_id: str, user=Depends(get_current_user)):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Open trade not found")
     return {"ok": True}
-
-
-class BackfillTradeRequest(BaseModel):
-    exit_price: float = Field(..., gt=0)
-    pnl: float                  # signed; profits positive, losses negative
-
-
-@router.patch("/{trade_id}/backfill")
-async def backfill_trade(trade_id: str, payload: BackfillTradeRequest,
-                         user=Depends(get_current_user)):
-    """Manually backfill exit_price + pnl on a closed trade that never received
-    a `/bridge/report` from the EA — for example, when the user closed the
-    position directly on MT5 (manual close) and the EA didn't catch it, or
-    when PANIC marked the trade closed before the broker confirmation arrived.
-
-    Only allowed on already-closed trades that currently have no exit_price.
-    Refuses on open/pending/cancelled/failed trades and on trades that already
-    have a recorded exit_price (no silent overrides).
-    """
-    db = get_db()
-    trade = await db.trades.find_one({"_id": ObjectId(trade_id), "user_id": user["id"]})
-    if not trade:
-        raise HTTPException(status_code=404, detail="Trade not found")
-    if trade.get("status") != "closed":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Only closed trades can be backfilled. Close the trade on MT5 "
-                "first, then click SYNC WITH BROKER."
-            ),
-        )
-    if trade.get("exit_price") is not None:
-        raise HTTPException(
-            status_code=400,
-            detail="Trade already has an exit price recorded — refusing to override.",
-        )
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    update = {
-        "exit_price": float(payload.exit_price),
-        "pnl": float(payload.pnl),
-        "backfilled": True,
-        "backfilled_at": now_iso,
-    }
-    # Keep the original close_reason but tag the source so audits can trace it.
-    update["close_reason"] = f"{trade.get('close_reason') or 'manual'}+backfill"
-    await db.trades.update_one({"_id": ObjectId(trade_id)}, {"$set": update})
-    return {"ok": True, "trade_id": trade_id, **update}
 
 
 
