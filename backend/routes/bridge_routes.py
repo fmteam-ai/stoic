@@ -91,6 +91,52 @@ async def heartbeat(payload: BridgeHeartbeat):
         )
 
     await db.accounts.update_one({"_id": acc["_id"]}, {"$set": set_doc})
+
+    # EA v1.25+: ingest the live positions snapshot. Auto-creates trade
+    # records for any open position STOIC doesn't yet track. Skipped on
+    # mismatch — we don't want to suck wrong-account positions into the
+    # STOIC profile they were misrouted to.
+    backfilled = 0
+    if payload.positions is not None and not mismatch:
+        account_id = str(acc["_id"])
+        for p in payload.positions:
+            # Already tracked?
+            existing = await db.trades.find_one({
+                "account_id": account_id, "mt5_ticket": int(p.ticket),
+            })
+            if existing:
+                continue
+            opened_iso = (
+                datetime.fromtimestamp(p.time_open, tz=timezone.utc).isoformat()
+                if p.time_open else now_iso
+            )
+            await db.trades.insert_one({
+                "user_id": acc["user_id"],
+                "account_id": account_id,
+                "symbol": p.symbol,
+                "action": p.type,
+                "lot_size": p.volume,
+                "entry_price": p.price_open,
+                "stop_loss": p.sl or 0.0,
+                "take_profit": p.tp or 0.0,
+                "exit_price": None,
+                "pnl": 0.0,
+                "status": "open",
+                "mode": "live",
+                "broker": acc.get("broker", "MT5"),
+                "mt5_ticket": int(p.ticket),
+                "opened_at": opened_iso,
+                "closed_at": None,
+                "origin": "external" if p.magic == 0 else "auto",
+                "external_open": p.magic == 0,
+                "backfilled_from_snapshot": True,
+            })
+            backfilled += 1
+        if backfilled > 0:
+            await ws_manager.broadcast(acc["user_id"], "trades_backfilled", {
+                "account_id": account_id, "count": backfilled,
+            })
+
     await ws_manager.broadcast(acc["user_id"], "account_heartbeat", {
         "account_id": str(acc["_id"]),
         "balance": payload.balance,

@@ -8,6 +8,13 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-02-24 (iter-24i) — **EA v1.25 · Heartbeat positions snapshot backfills missing trades**:
+  - **Bug**: User had 4 open trades on micro account at the broker, but STOIC's Trades page showed 0. Cause: EA's `OnTradeTransaction` (v1.23) only catches NEW deals — positions opened BEFORE the EA was attached or opened directly on MT5 outside the EA's awareness are invisible to STOIC.
+  - **EA v1.25**: New `BuildPositionsJson()` builds a full snapshot of every position via `PositionsTotal()` loop. Each entry carries `ticket / symbol / type / volume / price_open / sl / tp / time_open / magic / profit`. Sent in every heartbeat as `positions: [...]`.
+  - **Backend**: Heartbeat handler iterates the snapshot. For each ticket NOT already in STOIC's trades collection, inserts a new row with `status=open`, `origin=external` (magic=0) or `origin=auto` (our EA's magic), `backfilled_from_snapshot=True`. Skipped entirely when broker-account mismatch is detected (those positions belong to the wrong login).
+  - **Idempotency**: Lookup by `(account_id, mt5_ticket)` before insert → replays produce zero duplicates. Verified with 3 consecutive identical heartbeats → still exactly 1 trade row.
+  - **WebSocket**: New `trades_backfilled` broadcast (count + account_id) so the Trades page can refresh live.
+  - **Tests**: 5 new tests in `test_iter24h_position_snapshot.py` covering new-ticket insert, replay idempotency, skipped-on-mismatch, legacy-EA compatibility, magic→origin classification. 20/20 pass across iter-24 e/f/g/h.
 - 2026-02-24 (iter-24h) — **Self-healing wrong-balance — null on mismatch + visible EA diagnostic**:
   - **Backend**: Heartbeat handler now refuses to overwrite `balance`/`equity` when the EA's reported `account_login` differs from the configured `account_number`. Balance becomes `None`, status flips to `disconnected`. Prevents silent display of the wrong account's balance.
   - **UI**: Balance card shows `—` + "AWAITING VALID HEARTBEAT" when balance is null. New small diagnostic line under broker info: `EA READING FROM · #67199078 ✓` (green when match) or `#67198987 ⚠ MISMATCH` (yellow). Renders only when EA reports `account_login` (v1.24+).

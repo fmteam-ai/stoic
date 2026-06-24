@@ -25,9 +25,14 @@
 //|         currency so STOIC can detect wrong-terminal misconfigs    |
 //|         (e.g. two EAs attached to the same MT5 instance reading   |
 //|         the same balance).                                        |
+//| v1.25 — Heartbeat now carries a full snapshot of every open       |
+//|         position (ticket / symbol / type / volume / price /       |
+//|         SL / TP / time / magic / profit). STOIC auto-creates      |
+//|         trade records for positions it doesn't yet track —        |
+//|         eliminates "I see 4 trades on MT5 but 0 in the bot".      |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.24"
+#property version   "1.25"
 #property strict
 
 input string ServerUrl       = "https://your-app.preview.emergentagent.com";
@@ -42,7 +47,7 @@ datetime lastPoll = 0;
 //+------------------------------------------------------------------+
 int OnInit() {
    EventSetTimer(PollSeconds);
-   Print("STOIC Bridge EA v1.24 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.25 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -159,6 +164,41 @@ string BuildSpreadsJson() {
    return out;
 }
 
+// Build [{"ticket":...,"symbol":"...","type":"BUY","volume":1.0,
+//          "price_open":...,"sl":...,"tp":...,"time_open":...,
+//          "magic":...,"profit":...}, ...] for every currently-open position.
+// Backend ingests this snapshot to auto-create STOIC trade records for
+// positions opened BEFORE the EA was attached or opened manually on MT5.
+string BuildPositionsJson() {
+   int total = PositionsTotal();
+   string out = "[";
+   bool first = true;
+   for (int i = 0; i < total; i++) {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket == 0) continue;
+      if (!PositionSelectByTicket(ticket)) continue;
+      string sym       = PositionGetString(POSITION_SYMBOL);
+      long   ptype     = PositionGetInteger(POSITION_TYPE);   // 0=BUY,1=SELL
+      double volume    = PositionGetDouble(POSITION_VOLUME);
+      double priceOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl        = PositionGetDouble(POSITION_SL);
+      double tp        = PositionGetDouble(POSITION_TP);
+      long   timeOpen  = (long)PositionGetInteger(POSITION_TIME);
+      long   magic     = (long)PositionGetInteger(POSITION_MAGIC);
+      double profit    = PositionGetDouble(POSITION_PROFIT);
+      string typeStr   = (ptype == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+      if (!first) out += ",";
+      out += StringFormat(
+         "{\"ticket\":%I64u,\"symbol\":\"%s\",\"type\":\"%s\","
+         "\"volume\":%.2f,\"price_open\":%.5f,\"sl\":%.5f,\"tp\":%.5f,"
+         "\"time_open\":%I64d,\"magic\":%I64d,\"profit\":%.2f}",
+         ticket, sym, typeStr, volume, priceOpen, sl, tp, timeOpen, magic, profit);
+      first = false;
+   }
+   out += "]";
+   return out;
+}
+
 void SendHeartbeat() {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -168,11 +208,15 @@ void SendHeartbeat() {
    // detect "wrong MT5 terminal" misconfigurations.
    long   login  = (long)AccountInfoInteger(ACCOUNT_LOGIN);
    string ccy    = AccountInfoString(ACCOUNT_CURRENCY);
+   // EA v1.25: include the full live positions snapshot so STOIC can
+   // backfill pre-existing trades it never saw via OnTradeTransaction.
+   string positions = BuildPositionsJson();
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
-      "\"account_login\":%I64d,\"base_currency\":\"%s\"}",
-      BridgeToken, balance, equity, openPos, spreads, login, ccy);
+      "\"account_login\":%I64d,\"base_currency\":\"%s\","
+      "\"positions\":%s}",
+      BridgeToken, balance, equity, openPos, spreads, login, ccy, positions);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 

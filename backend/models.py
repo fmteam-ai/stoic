@@ -204,6 +204,26 @@ class TradeOut(BaseModel):
 
 
 # ---------- Bridge (MT5 EA <-> server) ----------
+class BridgePosition(BaseModel):
+    """A single MT5 open position reported in a heartbeat snapshot.
+
+    The EA fills these from PositionsTotal() on every tick so STOIC always
+    has the full live picture — including positions that were opened BEFORE
+    the EA was attached (legacy trades the OnTradeTransaction handler never
+    saw) or opened manually directly on MT5.
+    """
+    ticket: int                 # position ticket (long)
+    symbol: str
+    type: Literal["BUY", "SELL"]
+    volume: float = Field(gt=0)
+    price_open: float
+    sl: float = 0.0
+    tp: float = 0.0
+    time_open: int = 0          # unix seconds
+    magic: int = 0              # 0 = manual broker-side
+    profit: float = 0.0         # current floating P&L
+
+
 class BridgeHeartbeat(BaseModel):
     bridge_token: str
     balance: float
@@ -221,6 +241,12 @@ class BridgeHeartbeat(BaseModel):
     # which makes two STOIC accounts mirror the same balance.
     account_login: Optional[int] = None
     base_currency: Optional[str] = None         # broker's reported account currency
+    # EA v1.25+: full snapshot of every open position. Lets STOIC auto-create
+    # trade records for positions that were open BEFORE the EA was attached
+    # or were opened manually directly on MT5 (not just newly-fired deals via
+    # OnTradeTransaction). Backfills the "I see 4 trades on MT5 but only 0
+    # on STOIC" gap.
+    positions: Optional[list[BridgePosition]] = None
 
 
 class BridgeTradeReport(BaseModel):
