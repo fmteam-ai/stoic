@@ -4,7 +4,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
-    Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign,
+    Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign, Server,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
@@ -20,9 +20,10 @@ const SECTIONS = [
     { id: "daily",        title: "9. Daily 5-min routine",             icon: Clock },
     { id: "advanced",     title: "10. Advanced — tuning & auditing",   icon: SettingsIcon },
     { id: "presets",      title: "11. Strategy Presets",                icon: Bookmark },
-    { id: "going-live",   title: "12. Going live (paper → real)",      icon: TrendingUp },
-    { id: "affiliate",    title: "13. Earn 20% recurring (affiliate)", icon: DollarSign },
-    { id: "faq",          title: "14. Quick links",                    icon: Zap },
+    { id: "vps",          title: "12. VPS — 24/7 uptime",              icon: Server },
+    { id: "going-live",   title: "13. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "14. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "15. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -90,6 +91,7 @@ export default function Guide() {
                     <DailyFlow />
                     <Advanced />
                     <PresetsSection />
+                    <VpsSection />
                     <GoingLive />
                     <AffiliateSection />
                     <QuickLinks />
@@ -662,7 +664,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>12. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>13. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -674,6 +676,123 @@ function GoingLive() {
                 <strong>Realistic expectation:</strong> STOIC aims for ~55–65% win rate at 1.5–2.5 R:R — that translates to
                 ~6–12% monthly when sized correctly. Anything claiming &quot;200% / month consistently&quot; is selling fantasy.
             </Callout>
+        </section>
+    );
+}
+
+function VpsSection() {
+    return (
+        <section>
+            <H2 id="vps" icon={Server}>12. VPS — 24/7 uptime (eliminate disconnects)</H2>
+            <P>
+                Autopilot only works while your <strong className="text-white">MT5 terminal is running and online</strong>.
+                If your PC sleeps, closes its lid, reboots, or loses internet — the bot loses contact with your broker,
+                pending trades stall, and stop-losses can drift. The industry-standard fix is to move MT5 onto a{" "}
+                <strong className="text-[#FFD700]">virtual private server (VPS)</strong> that&apos;s online 24/7.
+            </P>
+
+            <Callout kind="info">
+                <strong>RoboForex users:</strong> a Free VPS is bundled with deposits ≥ $300.
+                Activate it from your{" "}
+                <a href="https://my.roboforex.com/en/products/free-vps/" target="_blank" rel="noreferrer"
+                    className="text-[#00FF41] hover:underline">RoboForex personal cabinet → Products → Free VPS</a>.
+                No need to pay for a third-party host if you qualify.
+            </Callout>
+
+            <div className="font-display font-bold text-base mt-6 mb-2">Step-by-step · RoboForex Free VPS</div>
+            <div className="space-y-3">
+                <Step n="1" title="Eligibility check" testid="guide-vps-step-1">
+                    Log in to your RoboForex cabinet. Free VPS is available when your account deposit
+                    is ≥ $300 (Pro/Pro-Cent/Prime/ECN). Verify under <em>Profile → Free Services → VPS</em>.
+                    If under threshold, top up the demo→live transfer, or use a third-party VPS instead
+                    (see the alternatives below).
+                </Step>
+                <Step n="2" title="Order the VPS" testid="guide-vps-step-2">
+                    From <em>Products → Free VPS Hosting → Activate</em>, pick the data centre closest to
+                    the RoboForex execution server (London for EU clients, New York for Americas).
+                    Lower latency = tighter fills. Activation usually takes 15–30 minutes — you&apos;ll
+                    receive an email with RDP credentials (IP, username, password).
+                </Step>
+                <Step n="3" title="Connect via RDP" testid="guide-vps-step-3">
+                    On Windows: open <em>Remote Desktop Connection</em> → enter the IP from the email →
+                    sign in with the provided creds.<br />
+                    On Mac: install <a href="https://apps.apple.com/app/microsoft-remote-desktop/id1295203466" target="_blank" rel="noreferrer" className="text-[#00FF41] hover:underline">Microsoft Remote Desktop</a> from the App Store → add the VPS as a new PC.<br />
+                    On mobile: <em>RD Client</em> by Microsoft works the same way.
+                </Step>
+                <Step n="4" title="Install MetaTrader 5 on the VPS" testid="guide-vps-step-4">
+                    Inside the VPS, open Edge → go to{" "}
+                    <a href="https://my.roboforex.com/en/clients/downloads/" target="_blank" rel="noreferrer"
+                        className="text-[#00FF41] hover:underline">RoboForex Downloads → MetaTrader 5</a>{" "}
+                    → install. Log in with your live account number + server (e.g.{" "}
+                    <code className="font-mono text-[10px] text-[#00FF41]">RoboForex-Pro</code> or{" "}
+                    <code className="font-mono text-[10px] text-[#00FF41]">RoboForex-ECN</code>).
+                </Step>
+                <Step n="5" title="Copy the STOIC EA to the VPS" testid="guide-vps-step-5">
+                    Easiest path: in MT5 click <em>File → Open Data Folder → MQL5/Experts</em>. Then{" "}
+                    <strong className="text-[#FFD700]">on the VPS</strong>, open the same MT5 → Data Folder →
+                    paste <code className="font-mono text-[10px] text-[#00FF41]">EmergentTradingBridge.ex5</code>{" "}
+                    into <em>MQL5/Experts</em>. Restart MT5. The EA appears in the Navigator panel.
+                </Step>
+                <Step n="6" title="Attach the EA + paste your bridge token" testid="guide-vps-step-6">
+                    Drag <code className="font-mono text-[10px] text-[#00FF41]">EmergentTradingBridge</code> from
+                    the Navigator onto any chart (XAUUSD M5 is fine — the EA listens for instructions, not the chart timeframe).
+                    In the EA inputs, paste your <strong className="text-[#FFD700]">Bridge Token</strong> from{" "}
+                    <Link to="/accounts" className="text-[#00FF41] hover:underline">MT5 Accounts → COPY</Link>.
+                    Tick <strong>Allow Algo Trading</strong>. Click OK.
+                </Step>
+                <Step n="7" title="Enable Algo Trading + autostart on reboot" testid="guide-vps-step-7">
+                    Top toolbar of MT5: <strong>Algo Trading</strong> button must be GREEN.<br />
+                    Also: <em>Tools → Options → Expert Advisors</em> — tick:
+                    <ul className="mt-2 ml-4 space-y-1 list-disc text-xs text-[#A1A1AA]">
+                        <li>Allow algorithmic trading</li>
+                        <li>Allow WebRequests for: <code className="font-mono text-[10px] text-[#00FF41]">https://stoic.app</code> (and the preview URL if testing)</li>
+                        <li>Disable algorithmic trading when the account has been changed — UNTICK</li>
+                    </ul>
+                    Finally: <em>View → Strategy Tester → Settings</em> → make sure MT5 is set to auto-launch
+                    when the VPS boots (Windows Run dialog → <code className="font-mono text-[10px] text-[#00FF41]">shell:startup</code> → drop an MT5 shortcut).
+                </Step>
+                <Step n="8" title="Verify uptime in STOIC" testid="guide-vps-step-8">
+                    Disconnect from the VPS (close RDP). Wait 60 seconds. Open STOIC{" "}
+                    <Link to="/" className="text-[#00FF41] hover:underline">Dashboard</Link> — the{" "}
+                    <strong>Integrity widget</strong> at the top should stay green (<strong className="text-[#00FF41]">● IN SYNC</strong>)
+                    with last-sync &lt; 10 seconds. That confirms your VPS is keeping the heartbeat alive without your laptop.
+                </Step>
+            </div>
+
+            <div className="font-display font-bold text-base mt-7 mb-2">Alternative · paid third-party VPS</div>
+            <div className="grid sm:grid-cols-2 gap-2 mt-2">
+                <a href="https://forexvps.net" target="_blank" rel="noreferrer"
+                    className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
+                    <div className="font-display font-bold text-sm">ForexVPS.net</div>
+                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">~$10/mo · low-latency to MT5 brokers · 1-click MT5</div>
+                </a>
+                <a href="https://accuwebhosting.com/forex-vps-hosting" target="_blank" rel="noreferrer"
+                    className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
+                    <div className="font-display font-bold text-sm">AccuWeb Forex VPS</div>
+                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">~$8/mo · Windows Server 2022 · NY4 datacentre</div>
+                </a>
+                <a href="https://cheapforexvps.com" target="_blank" rel="noreferrer"
+                    className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
+                    <div className="font-display font-bold text-sm">CheapForexVPS</div>
+                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">$5/mo · budget pick · LD4/NY4 datacentres</div>
+                </a>
+                <a href="https://aws.amazon.com/lightsail/" target="_blank" rel="noreferrer"
+                    className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
+                    <div className="font-display font-bold text-sm">AWS Lightsail Windows</div>
+                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">$8/mo · full control · pick region near broker</div>
+                </a>
+            </div>
+
+            <Callout kind="warn">
+                <strong>Don&apos;t skip Step 7&apos;s WebRequest allowlist.</strong> MT5 will silently
+                block the EA&apos;s HTTPS calls unless you whitelist the STOIC URL. Symptom: EA runs but
+                heartbeat never reaches STOIC. The MT5 <em>Experts</em> tab will show{" "}
+                <code className="font-mono text-[10px] text-[#FFB000]">WebRequest forbidden</code>.
+            </Callout>
+
+            <div className="mt-5">
+                <CTAButton to="/accounts" testid="guide-cta-vps">OPEN MT5 ACCOUNTS</CTAButton>
+            </div>
         </section>
     );
 }
@@ -733,7 +852,7 @@ function PresetsSection() {
 function AffiliateSection() {
     return (
         <section>
-            <H2 id="affiliate" icon={DollarSign}>13. Earn 20% recurring (affiliate program)</H2>
+            <H2 id="affiliate" icon={DollarSign}>14. Earn 20% recurring (affiliate program)</H2>
             <P>
                 Refer one trader — get paid every month they stay subscribed. STOIC pays{" "}
                 <strong className="text-[#FFD700]">20% recurring commission</strong> on the base subscription fee for the
@@ -818,7 +937,7 @@ function QuickLinks() {
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>14. Quick links</H2>
+            <H2 id="faq" icon={Zap}>15. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (
