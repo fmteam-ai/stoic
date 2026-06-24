@@ -4,7 +4,7 @@ from bson import ObjectId
 from pydantic import BaseModel
 
 from database import get_db
-from models import BridgeHeartbeat, BridgeTradeReport
+from models import BridgeHeartbeat, BridgeTradeReport, BridgeExternalDeal
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips
 from intelligence_counters import increment as inc_intel_counter
@@ -291,3 +291,166 @@ async def report_trade(payload: BridgeTradeReport):
         pass
 
     return {"ok": True}
+
+
+@router.post("/external-deal")
+async def external_deal(payload: BridgeExternalDeal):
+    """Report any broker-side deal — bot-initiated AND manual.
+
+    Fired from the EA's OnTradeTransaction handler. Catches the trades that
+    the old /bridge/report path missed (manual close on MT5, partial-close
+    from the broker UI, manual position open, etc.) so STOIC's view always
+    matches the broker.
+
+    Idempotency: `deal_id` is the broker's unique identifier per deal. We
+    upsert into `broker_deals` with a unique index so the same deal can
+    never be applied twice (covers EA retries on flaky network).
+    """
+    db = get_db()
+    acc = await _account_by_token(payload.bridge_token)
+    account_id = str(acc["_id"])
+    user_id = acc["user_id"]
+
+    # 1. Idempotency check + audit log
+    deal_doc = {
+        "deal_id": payload.deal_id,
+        "account_id": account_id,
+        "user_id": user_id,
+        "mt5_ticket": payload.mt5_ticket,
+        "deal_entry": payload.deal_entry,
+        "symbol": payload.symbol,
+        "action": payload.action,
+        "lots": payload.lots,
+        "price": payload.price,
+        "profit": payload.profit,
+        "commission": payload.commission,
+        "swap": payload.swap,
+        "deal_time": payload.deal_time,
+        "magic": payload.magic,
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db.broker_deals.insert_one(deal_doc)
+    except Exception:
+        # Duplicate key error → we already processed this deal_id. Safe no-op.
+        return {"ok": True, "duplicate": True, "deal_id": payload.deal_id}
+
+    # Best-effort ISO timestamp from broker (unix seconds → UTC ISO).
+    if payload.deal_time:
+        deal_iso = datetime.fromtimestamp(payload.deal_time, tz=timezone.utc).isoformat()
+    else:
+        deal_iso = datetime.now(timezone.utc).isoformat()
+
+    # 2. Look up matching STOIC trade by (account, mt5_ticket).
+    existing = await db.trades.find_one({
+        "account_id": account_id,
+        "mt5_ticket": payload.mt5_ticket,
+    })
+
+    realized = float(payload.profit) + float(payload.commission) + float(payload.swap)
+    is_external = (payload.magic == 0)   # 0 = NOT our EA's magic → opened manually on MT5
+
+    if payload.deal_entry == "in":
+        # OPEN event — only insert if STOIC doesn't already track this ticket.
+        if existing:
+            return {"ok": True, "noop": "ticket_already_tracked"}
+        trade_doc = {
+            "user_id": user_id,
+            "account_id": account_id,
+            "symbol": payload.symbol,
+            "action": payload.action,
+            "lot_size": payload.lots,
+            "entry_price": payload.price,
+            "stop_loss": 0.0,
+            "take_profit": 0.0,
+            "exit_price": None,
+            "pnl": 0.0,
+            "status": "open",
+            "mode": "live",
+            "broker": acc.get("broker", "MT5"),
+            "mt5_ticket": payload.mt5_ticket,
+            "opened_at": deal_iso,
+            "closed_at": None,
+            "origin": "external" if is_external else "auto",
+            "external_open": is_external,
+        }
+        result = await db.trades.insert_one(trade_doc)
+        tid = str(result.inserted_id)
+        await ws_manager.broadcast(user_id, "trade_updated", {
+            "trade_id": tid, "status": "open", "external_open": is_external,
+            "symbol": payload.symbol, "action": payload.action,
+        })
+        if is_external:
+            try:
+                from notifier import notify_trade_opened
+                trade_doc["_id"] = result.inserted_id
+                await notify_trade_opened(user_id, trade_doc)
+            except Exception:
+                pass
+        return {"ok": True, "created": tid, "external_open": is_external}
+
+    # deal_entry == "out" or "inout" → CLOSE event
+    update = {
+        "exit_price": payload.price,
+        "pnl": realized,
+        "status": "closed",
+        "closed_at": deal_iso,
+        "broker_deal_id": payload.deal_id,
+    }
+    if existing:
+        if existing.get("exit_price") is not None:
+            # /bridge/report already filled this; just confirm.
+            update = {
+                "broker_deal_id": payload.deal_id,
+                "external_confirmation": True,
+            }
+        else:
+            existing_reason = existing.get("close_reason")
+            update["close_reason"] = (
+                f"{existing_reason}+external_close" if existing_reason
+                else ("external_close" if is_external else "broker_confirmed")
+            )
+            update["backfilled"] = True
+            update["backfilled_at"] = datetime.now(timezone.utc).isoformat()
+        await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
+        tid = str(existing["_id"])
+    else:
+        # Close event with no matching trade — user opened AND closed on MT5
+        # without STOIC ever tracking it. Insert a fully-closed audit row so
+        # the P&L still lands in their account stats.
+        trade_doc = {
+            "user_id": user_id,
+            "account_id": account_id,
+            "symbol": payload.symbol,
+            "action": payload.action,
+            "lot_size": payload.lots,
+            "entry_price": payload.price,
+            "stop_loss": 0.0,
+            "take_profit": 0.0,
+            "mode": "live",
+            "broker": acc.get("broker", "MT5"),
+            "mt5_ticket": payload.mt5_ticket,
+            "origin": "external",
+            "external_open": is_external,
+            "external_close": True,
+            "opened_at": deal_iso,
+            "broker_deal_id": payload.deal_id,
+            **update,
+        }
+        result = await db.trades.insert_one(trade_doc)
+        tid = str(result.inserted_id)
+
+    await ws_manager.broadcast(user_id, "trade_updated", {
+        "trade_id": tid, **update,
+    })
+
+    if existing and existing.get("exit_price") is None:
+        try:
+            from notifier import notify_trade_closed
+            full = await db.trades.find_one({"_id": ObjectId(tid)})
+            if full:
+                await notify_trade_closed(user_id, full)
+        except Exception:
+            pass
+
+    return {"ok": True, "updated": tid, "pnl": realized}

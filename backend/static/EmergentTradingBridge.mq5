@@ -17,9 +17,13 @@
 //|         partial-close at TP1.                                     |
 //| v1.21 — Heartbeat now reports current symbol spread (pips) for   |
 //|         server-side spread filter.                               |
+//| v1.23 — OnTradeTransaction handler reports EVERY deal — including |
+//|         manual closes/opens done directly on MT5 — back to STOIC  |
+//|         via /api/bridge/external-deal. Closes the "I closed it on |
+//|         MT5 but STOIC still shows it open" gap.                   |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.21"
+#property version   "1.23"
 #property strict
 
 input string ServerUrl       = "https://your-app.preview.emergentagent.com";
@@ -34,7 +38,7 @@ datetime lastPoll = 0;
 //+------------------------------------------------------------------+
 int OnInit() {
    EventSetTimer(PollSeconds);
-   Print("STOIC Bridge EA v1.21 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.23 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -44,6 +48,60 @@ void OnDeinit(const int reason) { EventKillTimer(); }
 void OnTimer() {
    SendHeartbeat();
    PollPendingTrades();
+}
+
+//+------------------------------------------------------------------+
+//| OnTradeTransaction — fires on EVERY broker trade event.          |
+//| Captures manual MT5-side opens/closes (bypassing OrderSend from   |
+//| this EA) so STOIC stays in sync with the broker even when the     |
+//| user clicks Buy/Sell/Close directly in the MT5 terminal.          |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                        const MqlTradeRequest&    request,
+                        const MqlTradeResult&     result) {
+   // Only act on DEAL_ADD events — they fire once per executed deal
+   // (open, close or partial-close). Other transaction types (order
+   // updates, history pruning) would generate duplicates or noise.
+   if (trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   ulong deal_id = trans.deal;
+   if (deal_id == 0) return;
+   if (!HistoryDealSelect(deal_id)) return;
+
+   long   position_id = (long)HistoryDealGetInteger(deal_id, DEAL_POSITION_ID);
+   if (position_id == 0) return;   // balance ops, deposits etc.
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_id, DEAL_ENTRY);
+   long   magic      = (long)HistoryDealGetInteger(deal_id, DEAL_MAGIC);
+   string symbol     = HistoryDealGetString(deal_id, DEAL_SYMBOL);
+   ENUM_DEAL_TYPE dt = (ENUM_DEAL_TYPE)HistoryDealGetInteger(deal_id, DEAL_TYPE);
+   double price      = HistoryDealGetDouble(deal_id, DEAL_PRICE);
+   double volume     = HistoryDealGetDouble(deal_id, DEAL_VOLUME);
+   double profit     = HistoryDealGetDouble(deal_id, DEAL_PROFIT);
+   double commission = HistoryDealGetDouble(deal_id, DEAL_COMMISSION);
+   double swap       = HistoryDealGetDouble(deal_id, DEAL_SWAP);
+   long   deal_time  = (long)HistoryDealGetInteger(deal_id, DEAL_TIME);
+
+   string entry_str = "inout";
+   if (entry == DEAL_ENTRY_IN)  entry_str = "in";
+   else if (entry == DEAL_ENTRY_OUT) entry_str = "out";
+
+   // Deal type → position direction (BUY/SELL of the OPENING side).
+   // For a close deal, the deal type is OPPOSITE of the underlying position
+   // direction (BUY-close on a SELL position). We pass the deal's own
+   // side; the backend uses mt5_ticket + entry_in to determine the
+   // position direction when needed.
+   string action = (dt == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"mt5_ticket\":%I64d,\"deal_id\":%I64u,"
+      "\"deal_entry\":\"%s\",\"symbol\":\"%s\",\"action\":\"%s\","
+      "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
+      "\"commission\":%.2f,\"swap\":%.2f,"
+      "\"deal_time\":%I64d,\"magic\":%I64d}",
+      BridgeToken, position_id, deal_id,
+      entry_str, symbol, action,
+      volume, price, profit, commission, swap, deal_time, magic);
+
+   HttpPost(ServerUrl + "/api/bridge/external-deal", body);
 }
 
 //+------------------------------------------------------------------+

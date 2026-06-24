@@ -227,6 +227,28 @@ class BridgeTradeReport(BaseModel):
     error: Optional[str] = None
 
 
+class BridgeExternalDeal(BaseModel):
+    """Raw MT5 deal event reported via OnTradeTransaction.
+
+    Covers BOTH bot-initiated and broker-side manual trades. Idempotency is
+    keyed by `deal_id` (broker's unique deal identifier) so the same event
+    can never be double-applied even if the EA retries.
+    """
+    bridge_token: str
+    mt5_ticket: int                       # position ticket
+    deal_id: int                          # unique broker deal id
+    deal_entry: Literal["in", "out", "inout"]
+    symbol: str
+    action: Literal["BUY", "SELL"]
+    lots: float = Field(gt=0)
+    price: float                          # deal fill price
+    profit: float = 0.0
+    commission: float = 0.0
+    swap: float = 0.0
+    deal_time: int = 0                    # unix seconds (broker time)
+    magic: int = 0                        # 0 = manual broker-side; else our MagicNumber
+
+
 # ---------- Market ----------
 class QuoteOut(BaseModel):
     symbol: str

@@ -72,6 +72,14 @@ async def ensure_indexes():
     )
     await db.conditional_triggers.create_index([("user_id", 1), ("active", 1)])
 
+    # broker_deals — idempotency log of every MT5 deal reported via
+    # /bridge/external-deal. Unique on (deal_id, account_id) so a single
+    # broker deal can only be applied once per account, even if the EA retries.
+    await db.broker_deals.create_index(
+        [("deal_id", 1), ("account_id", 1)], unique=True
+    )
+    await db.broker_deals.create_index([("user_id", 1), ("received_at", -1)])
+
     # --- Mongo Time-Series collections (TimescaleDB substitute) ---
     # Built-in since Mongo 5.0 — auto-bucketed, columnar storage, blazing fast
     # for time-windowed queries. Same RAM footprint as a regular insert.
