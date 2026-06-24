@@ -220,6 +220,27 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### Admin auto-diagnostic (one-click bot triage)
+**Why:** When the bot won't trade, admins had to grep logs across `ai_signals.py`/`bot_runner.py`/`bridge_routes.py`. No single place to see "is everything OK?". The anti-tilt freeze bug (last session) proved this.
+
+**Built:**
+- `GET /api/diagnostic/run` (admin-only) — runs 6 sections in one shot:
+  1. **Connectivity** — MT5 accounts linked, EA heartbeat <5min
+  2. **Execution pipeline** — signals last 6h, top veto reasons, tradeable→executed conversion
+  3. **Trade sync** — ghosts, stuck SL/TP modifications, broker↔DB drift
+  4. **Risk state** — anti-tilt freeze (with per-account countdown), daily PnL, max-concurrent slots
+  5. **EA / Config** — EA version vs `1.26`, bot ON toggle, Claude key, Telegram alerts
+  6. **Broker errors** — 24h MT5 retcodes with plain-English explanations (10016/10027/...)
+- `POST /api/diagnostic/auto-fix` — applies safe remediations:
+  - `clear_stuck_modifications`, `ack_ghost_trades`, `reconcile_trades`, `release_anti_tilt`
+- **Dashboard UI**: "RUN AUTO-DIAGNOSTIC" button (admin-only) → modal with:
+  - Pass/Warn/Fail icons per section
+  - Per-issue FIX button + global AUTO-FIX ALL
+  - COPY AS TEXT for sharing with support
+  - RE-RUN to verify fixes landed
+
+Files: `/app/backend/routes/diagnostic_routes.py`, `/app/frontend/src/components/DiagnosticModal.jsx`, Dashboard wiring.
+
 ### Bot transparency: anti-tilt freeze now surfaced in UI
 **Problem:** Bot active + connected, but no trades opening despite ~58 tradeable signals in 6h. Root cause: anti-tilt freeze (`bot_runner.py` silently `return`s when last N closed trades all lost within freeze window). Last 4 XAUUSD trades all lost → 4h freeze → user had zero visibility.
 

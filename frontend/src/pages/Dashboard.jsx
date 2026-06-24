@@ -8,6 +8,9 @@ import { IntegrityWidget } from "@/components/IntegrityWidget";
 import { PerAccountComparison } from "@/components/PerAccountComparison";
 import { EaVersionStrip } from "@/components/EaVersionStrip";
 import { BotHealthScore } from "@/components/BotHealthScore";
+import { DiagnosticModal } from "@/components/DiagnosticModal";
+import { useAuth } from "@/context/AuthContext";
+import { Stethoscope } from "lucide-react";
 import { toast } from "sonner";
 
 const PRIMARY_SYMBOLS = ["XAUUSD", "BTCUSD"];
@@ -301,6 +304,9 @@ export default function Dashboard() {
     const [historyLoading, setHistoryLoading] = useState(false);
     const [err, setErr] = useState("");
     const { lastEvent, connected: wsConnected } = useLiveStream();
+    const { user } = useAuth();
+    const isAdmin = user?.role === "admin";
+    const [diagOpen, setDiagOpen] = useState(false);
 
     const loadQuotes = useCallback(async () => {
         try {
@@ -484,6 +490,19 @@ export default function Dashboard() {
 
                 {/* Top of dashboard — single 0-100 score replaces "scan 7 strips" cognitive load. */}
                 <BotHealthScore refreshSignal={lastEvent?.ts} />
+
+                {isAdmin && (
+                    <div className="flex items-center justify-between px-1">
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">ADMIN TOOLS</div>
+                        <button onClick={() => setDiagOpen(true)}
+                                className="px-3 py-1.5 border border-[#FFB000]/40 text-[#FFB000] font-mono text-[10px] tracking-widest hover:bg-[#FFB000]/10 inline-flex items-center gap-2"
+                                data-testid="open-diagnostic-btn">
+                            <Stethoscope className="w-3.5 h-3.5" />
+                            RUN AUTO-DIAGNOSTIC
+                        </button>
+                    </div>
+                )}
+                <DiagnosticModal open={diagOpen} onClose={() => setDiagOpen(false)} />
 
                 {/* EA Version Strip — surfaces stale builds across terminals */}
                 <EaVersionStrip refreshSignal={lastEvent?.ts} />
