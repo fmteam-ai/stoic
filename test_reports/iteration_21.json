@@ -1,0 +1,41 @@
+{
+  "summary": "Iter21 — RETEST of iter20 critical bug fix (POST /api/safety-blocks/apply-suggestion 500 on non-hex scope_account_id). FIX VERIFIED. Code at /app/backend/routes/safety_blocks_routes.py lines 256-265 now wraps ObjectId(scope_account_id) in try/except, raising HTTPException(404, 'Account not found') on bson.errors.InvalidId. BACKEND: 19/19 iter20 tests pass + full regression suite 58/58 pass (19 iter20 + 12 iter19 + 11 safety_guardian + 3 max_concurrent_race + 11 iter26 + 2 iter18_diagnostic). HTTP-LEVEL VERIFICATION via REACT_APP_BACKEND_URL: POST apply-suggestion with scope_account_id='iter20_acct' → 404 {detail: 'Account not found'} (NOT 500). POST with valid hex 6a3ad0ef17f40ac1dd3eb3ef → 200 with applied=true. GET /{block_id} with invalid id → 400. Missing patch → 400. LIVE UI FLOW: (1) Non-hex flow — seeded 5 per_trade_risk_cap safety_blocks for admin with account_id='iter20_acct' (non-hex), logged in via UI, navigated to /safety-blocks, SuggestionBanner rendered with all elements (label, '5 blocks · Single-trade risk exceeds equity %', title 'Per-trade risk too aggressive', rationale, CHANGE chip 'risk_level: medium → low', APPLY button), clicked APPLY → backend returned 404, frontend showed error toast 'Account not found', banner still visible, no crash. (2) Valid hex flow — re-seeded 5 blocks with account_id='6a3ad0ef17f40ac1dd3eb3ef' (admin's micro account), clicked APPLY → backend returned 200 with applied=true, success toast 'Config applied · risk_level=low · max_concurrent_trades=5 · max_lot_size=0.4 · active=true', page re-fetched and CHANGE chip updated from 'medium → low' to 'low → low' (already at floor), bot_config persisted risk_level=low (verified via Mongo). Cleanup performed: bot_config restored to risk_level=medium, all seed_tag='iter21_retest' safety_blocks deleted.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/safety-blocks/apply-suggestion",
+        "issue": "(Carried over from iter20, NOT in scope of this iter's fix) Ownership check only fires when scope_account_id is a valid ObjectId hex. If a safety_blocks doc has an account_id that IS a valid hex but does NOT belong to the user, the accounts lookup correctly 404s. However for non-hex strings, the function falls through to bot_configs lookup with {user_id, account_id} — which DOES verify ownership transitively (only the user's own bot_configs are matched), so this is actually safe. Note: in the live non-hex test, no bot_config exists for 'iter20_acct' so the 404 at line 260 short-circuits before reaching bot_configs. If a future scenario has a non-hex account_id with a matching bot_config, the flow would 404 first now (after the fix) — acceptable behavior."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter20_suggestion.py",
+    "/app/test_reports/pytest/iter20_retest.xml",
+    "/app/test_reports/pytest/iter21_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is minimal and correct: try/except wraps ObjectId() at lines 257-260 of safety_blocks_routes.py mirroring the analogous pattern at line 302-305 for GET /{block_id}.",
+    "Note: GET /{block_id} returns 400 on InvalidId while POST /apply-suggestion now returns 404 ('Account not found'). The asymmetry is intentional and matches iter20's recommendation — 400 for raw id-shape errors when the id IS the resource (block_id), and 404 for a scope_account_id that doesn't resolve to a user-owned account (which is the meaning here).",
+    "Carry-over from iter20 (not addressed and not in scope): _suggest_for() uses `float(cfg.get('max_lot_size') or 0) or 0.5` which silently substitutes 0.5 when max_lot_size==0 — still a minor honesty/UX concern; would mislead users who explicitly set max_lot_size=0.",
+    "Carry-over from iter20 (not addressed and not in scope): No shared ALLOWED_PATCH_KEYS constant between _suggest_for() output keys and the apply-suggestion whitelist — risk of silent drift in future. Recommend extracting a module-level constant.",
+    "Carry-over from iter20 (not addressed and not in scope): SuggestionBanner does not surface which account the suggestion targets (no account name/label) — minor UX clarity gap when user has multiple terminals."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (58/58 pytest + 4/4 direct HTTP verifications: non-hex 404, valid-hex 200, GET invalid block 400, missing patch 400)",
+    "frontend": "100% (both UI flows verified live: non-hex → error toast + banner persists + no crash; valid hex → success toast + new_config in toast body + page re-fetch shows updated state + bot_config persisted in DB)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (httpOnly cookie session — access_token/refresh_token set on /api/auth/login).",
+  "seed_data_creation": "Inserted 5 safety_blocks with seed_tag='iter21_retest' for admin (account_id='iter20_acct' then re-seeded with '6a3ad0ef17f40ac1dd3eb3ef'). Cleaned up post-test. Bot_config for 6a3ad0ef17f40ac1dd3eb3ef was modified by the valid-hex apply (risk_level: medium→low) and RESTORED back to medium at end of test session.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter20 bug FULLY RESOLVED. Fix is at /app/backend/routes/safety_blocks_routes.py lines 256-260 (try/except around ObjectId conversion). To retest in the future: source both .env files then run `python -m pytest tests/test_iter20_suggestion.py tests/test_iter19_safety_blocks.py tests/test_safety_guardian.py tests/test_max_concurrent_race.py tests/test_iter26_max_concurrent_endpoints.py tests/test_iter18_diagnostic_safety_guardian.py -v --asyncio-mode=auto` → expect 58/58. Live UI flow: seed safety_blocks with seed_tag for admin (admin _id from db.users; field name MUST be `blocked_at` not just `created_at` — the suggestion endpoint filters by blocked_at >= cutoff). Use account_id='6a3ad0ef17f40ac1dd3eb3ef' (admin's micro account with an existing bot_config) for the success path. Remember to restore bot_config.risk_level after the test since the apply mutates it.",
+  "rca of the issue": "Iter20 RCA: InvalidId raised from bson.ObjectId() on non-hex scope_account_id propagated as 500. FIX (verified in this iter21): wrap conversion in try/except Exception → HTTPException(404, 'Account not found'). Confirmed via 4 direct HTTP probes and 2 live UI flows — no 500s observed in any path. The flow is now robust to any non-hex string and degrades gracefully with a user-visible error toast."
+}

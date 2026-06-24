@@ -254,9 +254,12 @@ async def apply_suggestion(payload: dict, user=Depends(get_current_user)):
 
     db = get_db()
     if scope_account_id:
+        try:
+            acct_oid = __import__("bson").ObjectId(scope_account_id)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Account not found")
         owns = await db.accounts.find_one({
-            "_id": __import__("bson").ObjectId(scope_account_id),
-            "user_id": user["id"],
+            "_id": acct_oid, "user_id": user["id"],
         })
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
