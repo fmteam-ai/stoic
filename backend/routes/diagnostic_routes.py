@@ -33,7 +33,7 @@ _RETCODE_HINTS = {
     "10016": "INVALID_STOPS — SL/TP too close to entry",
     "10018": "MARKET_CLOSED — symbol not tradable now",
     "10019": "NO_MONEY — insufficient margin",
-    "10027": "AUTOTRADING_DISABLED — enable on broker server",
+    "10027": "AUTOTRADING_DISABLED — turn ON the 'Algo Trading' button in your MT5 toolbar (the green circular icon) + tick 'Allow Algo Trading' in the EA's properties (right-click EA → Properties → Common tab)",
 }
 
 
