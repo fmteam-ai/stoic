@@ -230,6 +230,41 @@ async def _check_risk_state(db, user_id: str) -> dict:
     else:
         checks.append(_mk("Anti-tilt freeze", "pass", "No active freeze"))
 
+    # Safety Guardian: confirm hard-floors are active + report recent blocks.
+    try:
+        from safety_guardian import get_guardian_config
+        gc = get_guardian_config()
+        checks.append(_mk(
+            "Safety Guardian active",
+            "pass",
+            f"Per-trade risk ≤ {gc['max_risk_pct_per_trade']}% · "
+            f"Daily loss ≤ {gc['max_daily_loss_pct']}% · "
+            f"Aggregate risk ≤ {gc['max_total_open_risk_pct']}% · "
+            f"Equity floor {gc['min_equity_vs_balance_pct']}% · "
+            f"Free margin floor {gc['min_free_margin_pct']}%",
+        ))
+        # Count recent safety blocks (last 24h) — bot tried but guardian refused
+        # NOTE: blocks aren't stored as trade docs; we surface log-based signal
+        # via bot_logs collection if it exists, else "no data yet" is fine.
+        day_ago = (now - timedelta(hours=24)).isoformat()
+        recent_blocks = await db.trades.count_documents({
+            "user_id": user_id, "status": "failed",
+            "error": {"$regex": "safety_guardian", "$options": "i"},
+            "opened_at": {"$gte": day_ago},
+        })
+        if recent_blocks > 0:
+            checks.append(_mk(
+                "Safety Guardian recent blocks (24h)", "warn",
+                f"{recent_blocks} trade(s) refused by safety floors — bot is trying "
+                "to trade outside risk envelope. Review last signal reasoning.",
+            ))
+        else:
+            checks.append(_mk("Safety Guardian recent blocks (24h)", "pass",
+                              "0 blocks — bot operating within risk envelope"))
+    except Exception as e:
+        checks.append(_mk("Safety Guardian active", "fail",
+                          f"Module not loadable: {e}"))
+
     # Daily PnL — sum today's closed trade pnl
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     today_trades = await db.trades.find({

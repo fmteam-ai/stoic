@@ -57,12 +57,18 @@ async def test_mt5_engine_allows_when_below_cap(monkeypatch):
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
     monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
 
+    async def passing_audit(**kw):  # noqa: ARG001
+        return {"ok": True, "blocked_by": None, "audit": [],
+                "evaluated_at": "2026-01-01T00:00:00+00:00", "context": {}}
+    monkeypatch.setattr("execution.audit_pre_trade", passing_audit)
+
     engine = MT5BridgeEngine()
     result = await engine.execute(
         user_id="u1",
-        account={"_id": "a1", "broker": "MT5"},
+        account={"_id": "a1", "broker": "MT5", "mode": "live",
+                 "equity": 10000.0, "balance": 10000.0, "free_margin": 9000.0},
         signal={
-            "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.25,
+            "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.05,
             "entry_price": 3960.0, "stop_loss": 3970.0, "take_profit": 3940.0,
             "origin": "auto",
         },
@@ -88,12 +94,18 @@ async def test_mt5_engine_no_cap_arg_allows(monkeypatch):
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
     monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
 
+    async def passing_audit(**kw):  # noqa: ARG001
+        return {"ok": True, "blocked_by": None, "audit": [],
+                "evaluated_at": "2026-01-01T00:00:00+00:00", "context": {}}
+    monkeypatch.setattr("execution.audit_pre_trade", passing_audit)
+
     engine = MT5BridgeEngine()
     result = await engine.execute(
         user_id="u1",
-        account={"_id": "a1", "broker": "MT5"},
+        account={"_id": "a1", "broker": "MT5", "mode": "live",
+                 "equity": 10000.0, "balance": 10000.0, "free_margin": 9000.0},
         signal={
-            "symbol": "XAUUSD", "action": "BUY", "lot_size": 0.10,
+            "symbol": "XAUUSD", "action": "BUY", "lot_size": 0.05,
             "entry_price": 3960.0, "stop_loss": 3950.0, "take_profit": 3980.0,
             "origin": "manual",
         },

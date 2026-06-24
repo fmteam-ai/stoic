@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 
 from database import get_db
 from market import get_quote
+from safety_guardian import audit_pre_trade
 from ws_manager import manager as ws_manager
 
 logger = logging.getLogger("execution")
@@ -44,6 +45,24 @@ class MT5BridgeEngine(ExecutionEngine):
                 )
                 return {"blocked": "max_concurrent_cap",
                         "inflight": live_inflight, "cap": max_concurrent}
+
+        # SAFETY GUARDIAN — server-side hard floors for live accounts. CANNOT be
+        # disabled by user config. Refuses any trade that would breach equity,
+        # margin, per-trade risk, daily loss, or aggregate exposure caps.
+        safety = await audit_pre_trade(
+            db=db, account=account, signal=signal,
+            user_id=user_id, cfg_account_id=cfg_account_id,
+        )
+        if not safety["ok"]:
+            logger.warning(
+                "SAFETY GUARDIAN refused trade user=%s acct=%s sym=%s blocked_by=%s",
+                user_id, cfg_account_id or "default",
+                signal.get("symbol"), safety.get("blocked_by"),
+            )
+            return {"blocked": "safety_guardian",
+                    "safety_blocked_by": safety["blocked_by"],
+                    "safety_audit": safety["audit"]}
+
         trade_doc = {
             "user_id": user_id,
             "account_id": str(account["_id"]),
@@ -77,6 +96,7 @@ class MT5BridgeEngine(ExecutionEngine):
             "partial_closed": False,
             "breakeven_set": False,
             "trail_active": False,
+            "safety_audit": safety,
         }
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)

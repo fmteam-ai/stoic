@@ -1,0 +1,669 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="14" skipped="6" tests="439" time="226.160" timestamp="2026-06-24T18:34:04.349860+00:00" hostname="agent-env-958cc085-5d52-44fe-9d2d-21189da82be7"><testcase classname="tests.backend_test.TestHealth" name="test_health" time="0.189" /><testcase classname="tests.backend_test.TestHealth" name="test_root" time="0.141" /><testcase classname="tests.backend_test.TestAuth" name="test_admin_login_and_me" time="0.449" /><testcase classname="tests.backend_test.TestAuth" name="test_register_login_logout" time="0.840" /><testcase classname="tests.backend_test.TestAuth" name="test_login_invalid_credentials" time="0.330" /><testcase classname="tests.backend_test.TestAuth" name="test_me_unauthenticated" time="0.111" /><testcase classname="tests.backend_test.TestMarket" name="test_symbols" time="0.056" /><testcase classname="tests.backend_test.TestMarket" name="test_risk_profiles" time="0.052" /><testcase classname="tests.backend_test.TestMarket" name="test_quote_xauusd" time="0.051" /><testcase classname="tests.backend_test.TestMarket" name="test_quote_btcusd" time="0.050" /><testcase classname="tests.backend_test.TestMarket" name="test_quote_eurusd" time="0.183" /><testcase classname="tests.backend_test.TestMarket" name="test_quotes_multi" time="0.056" /><testcase classname="tests.backend_test.TestMarket" name="test_history_with_indicators[XAUUSD]" time="0.062" /><testcase classname="tests.backend_test.TestMarket" name="test_history_with_indicators[BTCUSD]" time="0.063" /><testcase classname="tests.backend_test.TestMarket" name="test_history_with_indicators[EURUSD]" time="0.495" /><testcase classname="tests.backend_test.TestBotConfig" name="test_get_default_config" time="0.426" /><testcase classname="tests.backend_test.TestBotConfig" name="test_update_config_and_persist" time="0.111" /><testcase classname="tests.backend_test.TestBotConfig" name="test_start_stop_bot" time="0.217" /><testcase classname="tests.backend_test.TestAccounts" name="test_account_crud_and_token_rotation" time="0.248" /><testcase classname="tests.backend_test.TestEAScript" name="test_ea_download" time="0.118" /><testcase classname="tests.backend_test.TestSignals" name="test_generate_single_signal" time="7.065" /><testcase classname="tests.backend_test.TestSignals" name="test_list_signals" time="0.060" /><testcase classname="tests.backend_test.TestSignals" name="test_delete_signal" time="0.113" /><testcase classname="tests.backend_test.TestTradeBridge" name="test_bridge_heartbeat" time="16.906" /><testcase classname="tests.backend_test.TestTradeBridge" name="test_bridge_invalid_token" time="0.134" /><testcase classname="tests.backend_test.TestTradeBridge" name="test_full_trade_flow" time="0.436" /><testcase classname="tests.backend_test.TestOneYearHistory" name="test_history_has_300_plus_points[BTCUSD]" time="0.062" /><testcase classname="tests.backend_test.TestOneYearHistory" name="test_history_has_300_plus_points[XAUUSD]" time="0.057"><failure message="AssertionError: XAUUSD history only has 253 points (want &gt; 300)&#10;assert 253 &gt; 300&#10; +  where 253 = len([{'date': '2025-06-24', 'open': 3358.0, 'high': 3358.0, 'low': 3301.0, ...}, {'date': '2025-06-25', 'open': 3321.60009765625, 'high': 3331.199951171875, 'low': 3310.60009765625, ...}, {'date': '2025-06-26', 'open': 3332.39990234375, 'high': 3333.5, 'low': 3332.39990234375, ...}, {'date': '2025-06-27', 'open': 3318.699951171875, 'high': 3318.699951171875, 'low': 3253.800048828125, ...}, {'date': '2025-06-30', 'open': 3265.89990234375, 'high': 3306.89990234375, 'low': 3262.0, ...}, {'date': '2025-07-01', 'open': 3310.10009765625, 'high': 3354.10009765625, 'low': 3310.10009765625, ...}, ...])">self = &lt;backend_test.TestOneYearHistory object at 0xfa55a12db590&gt;
+admin_session = &lt;requests.sessions.Session object at 0xfa559fc55750&gt;
+symbol = 'XAUUSD'
+
+    @pytest.mark.parametrize("symbol", ["BTCUSD", "XAUUSD"])
+    def test_history_has_300_plus_points(self, admin_session, symbol):
+        r = admin_session.get(f"{API}/market/history/{symbol}", timeout=60)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # Was ~180 before; now should be &gt; 300 (1y daily)
+&gt;       assert len(data["history"]) &gt; 300, f"{symbol} history only has {len(data['history'])} points (want &gt; 300)"
+E       AssertionError: XAUUSD history only has 253 points (want &gt; 300)
+E       assert 253 &gt; 300
+E        +  where 253 = len([{'date': '2025-06-24', 'open': 3358.0, 'high': 3358.0, 'low': 3301.0, ...}, {'date': '2025-06-25', 'open': 3321.60009765625, 'high': 3331.199951171875, 'low': 3310.60009765625, ...}, {'date': '2025-06-26', 'open': 3332.39990234375, 'high': 3333.5, 'low': 3332.39990234375, ...}, {'date': '2025-06-27', 'open': 3318.699951171875, 'high': 3318.699951171875, 'low': 3253.800048828125, ...}, {'date': '2025-06-30', 'open': 3265.89990234375, 'high': 3306.89990234375, 'low': 3262.0, ...}, {'date': '2025-07-01', 'open': 3310.10009765625, 'high': 3354.10009765625, 'low': 3310.10009765625, ...}, ...])
+
+tests/backend_test.py:437: AssertionError</failure></testcase><testcase classname="tests.backend_test.TestSentiment" name="test_sentiment_shape[BTCUSD]" time="0.059" /><testcase classname="tests.backend_test.TestSentiment" name="test_sentiment_shape[XAUUSD]" time="0.060" /><testcase classname="tests.backend_test.TestSentiment" name="test_sentiment_unknown_symbol_does_not_500" time="0.176" /><testcase classname="tests.backend_test.TestSentiment" name="test_sentiment_requires_auth" time="0.112" /><testcase classname="tests.backend_test.TestSignalDualAIShape" name="test_signal_has_new_fields" time="8.984" /><testcase classname="tests.backend_test.TestWebSocket" name="test_ws_rejects_without_token" time="0.185" /><testcase classname="tests.backend_test.TestWebSocket" name="test_ws_accepts_with_token_and_emits_connected" time="0.203" /><testcase classname="tests.backend_test.TestCircuitBreaker" name="test_drawdown_limits_table" time="0.001" /><testcase classname="tests.backend_test.TestCircuitBreaker" name="test_check_and_trip_disables_bot_on_breach" time="0.011" /><testcase classname="tests.backend_test.TestCircuitBreaker" name="test_check_and_trip_no_breach_below_limit" time="0.007" /><testcase classname="tests.backend_test.TestDualAIVeto" name="test_buy_vetoed_by_bearish_sentiment" time="1.846" /><testcase classname="tests.backend_test.TestDualAIVeto" name="test_sell_vetoed_by_bullish_sentiment" time="0.000" /><testcase classname="tests.backend_test.TestDualAIVeto" name="test_no_veto_when_sentiment_weak" time="0.000" /><testcase classname="tests.backend_test.TestDualAIVeto" name="test_no_veto_when_aligned" time="0.000" /><testcase classname="tests.backend_test.TestKellyFraction" name="test_returns_zero_below_min_confidence" time="0.000" /><testcase classname="tests.backend_test.TestKellyFraction" name="test_monotonic_increasing_with_confidence" time="0.000" /><testcase classname="tests.backend_test.TestKellyFraction" name="test_capped_at_profile_kelly_cap" time="0.000" /><testcase classname="tests.backend_test.TestKellyFraction" name="test_negative_f_clamped_to_zero" time="0.000" /><testcase classname="tests.backend_test.TestComputeKellyPositionSize" name="test_returns_required_keys" time="0.000" /><testcase classname="tests.backend_test.TestComputeKellyPositionSize" name="test_zero_when_below_min_confidence" time="0.000" /><testcase classname="tests.backend_test.TestComputeKellyPositionSize" name="test_invalid_sl_returns_floor_lot" time="0.000" /><testcase classname="tests.backend_test.TestComputeKellyPositionSize" name="test_profile_kelly_caps" time="0.000" /><testcase classname="tests.backend_test.TestRegimeClassifier" name="test_chop_when_high_vol_no_trend" time="0.000" /><testcase classname="tests.backend_test.TestRegimeClassifier" name="test_low_vol_trend_when_smas_stacked_low_vol" time="0.000" /><testcase classname="tests.backend_test.TestRegimeClassifier" name="test_range_when_tight_and_rsi_mid" time="0.000" /><testcase classname="tests.backend_test.TestRegimeClassifier" name="test_high_vol_trend_when_smas_stacked_high_vol" time="0.000" /><testcase classname="tests.backend_test.TestRegimeClassifier" name="test_empty_indicators_returns_unknown" time="0.000" /><testcase classname="tests.backend_test.TestRegimeClassifier" name="test_regime_dict_has_required_fields" time="0.000" /><testcase classname="tests.backend_test.TestSessionDetection" name="test_tokyo_session_at_03_utc" time="0.000" /><testcase classname="tests.backend_test.TestSessionDetection" name="test_london_ny_overlap_at_14_utc" time="0.000" /><testcase classname="tests.backend_test.TestSessionDetection" name="test_off_hours_at_23_utc" time="0.000" /><testcase classname="tests.backend_test.TestSessionDetection" name="test_weekend_flag" time="0.000" /><testcase classname="tests.backend_test.TestSessionBias" name="test_xauusd_tokyo_mean_reversion" time="0.000" /><testcase classname="tests.backend_test.TestSessionBias" name="test_xauusd_overlap_trend_following" time="0.000" /><testcase classname="tests.backend_test.TestSessionBias" name="test_btcusd_weekend_counter_trend" time="0.000" /><testcase classname="tests.backend_test.TestSessionBias" name="test_btcusd_weekday_trend_following" time="0.000" /><testcase classname="tests.backend_test.TestRegimeVeto" name="test_chop_forces_hold_in_signal_payload" time="0.184" /><testcase classname="tests.backend_test.TestSignalPayloadNewFieldsLive" name="test_signal_has_all_new_iter4_fields" time="8.545" /><testcase classname="tests.backend_test.TestCalendarEndpoints" name="test_calendar_requires_auth" time="0.144" /><testcase classname="tests.backend_test.TestCalendarEndpoints" name="test_calendar_upcoming_requires_auth" time="0.114" /><testcase classname="tests.backend_test.TestCalendarEndpoints" name="test_calendar_freeze_requires_auth" time="0.118" /><testcase classname="tests.backend_test.TestCalendarEndpoints" name="test_calendar_all_events_returns_list" time="0.158" /><testcase classname="tests.backend_test.TestCalendarEndpoints" name="test_calendar_upcoming_xauusd" time="0.201" /><testcase classname="tests.backend_test.TestCalendarEndpoints" name="test_calendar_upcoming_eurusd_only_eur_usd" time="0.129" /><testcase classname="tests.backend_test.TestCalendarEndpoints" name="test_calendar_freeze_shape" time="0.215" /><testcase classname="tests.backend_test.TestRelevantEventsFor" name="test_xauusd_all_currency_returns_everything" time="0.000" /><testcase classname="tests.backend_test.TestRelevantEventsFor" name="test_btcusd_all_returns_everything" time="0.000" /><testcase classname="tests.backend_test.TestRelevantEventsFor" name="test_eurusd_only_eur_usd" time="0.000" /><testcase classname="tests.backend_test.TestRelevantEventsFor" name="test_usdjpy_only_usd_jpy" time="0.000" /><testcase classname="tests.backend_test.TestRelevantEventsFor" name="test_unknown_symbol_defaults_to_usd" time="0.002" /><testcase classname="tests.backend_test.TestMacroFreezeCheck" name="test_freeze_true_within_before_window" time="0.001" /><testcase classname="tests.backend_test.TestMacroFreezeCheck" name="test_freeze_true_within_after_window" time="0.001" /><testcase classname="tests.backend_test.TestMacroFreezeCheck" name="test_no_freeze_far_future" time="0.001" /><testcase classname="tests.backend_test.TestMacroFreezeCheck" name="test_no_freeze_far_past" time="0.001" /><testcase classname="tests.backend_test.TestMacroFreezeCheck" name="test_medium_impact_does_not_freeze" time="0.001" /><testcase classname="tests.backend_test.TestMacroFreezeCheck" name="test_event_for_different_currency_does_not_freeze_eurusd" time="0.001" /><testcase classname="tests.backend_test.TestMacroFreezeCheck" name="test_jpy_event_freezes_xauusd_due_to_all_flag" time="0.001" /><testcase classname="tests.backend_test.TestMacroVetoIntegration" name="test_macro_veto_forces_hold" time="0.003" /><testcase classname="tests.backend_test.TestMacroVetoIntegration" name="test_no_macro_veto_when_not_frozen" time="0.003" /><testcase classname="tests.backend_test.TestVetoStacking" name="test_all_three_vetoes_stack" time="0.003" /><testcase classname="tests.backend_test.TestSignalPayloadIter5Live" name="test_signal_has_macro_and_upcoming_macro_fields" time="8.358" /><testcase classname="tests.backend_test.TestIter6SignalPayload" name="test_signal_has_all_iter6_fields" time="8.015" /><testcase classname="tests.backend_test.TestRegimeAdapter" name="test_low_vol_trend_defensive_scalp_multipliers" time="0.001" /><testcase classname="tests.backend_test.TestRegimeAdapter" name="test_high_vol_trend_dynamic_momentum" time="0.000" /><testcase classname="tests.backend_test.TestRegimeAdapter" name="test_unknown_regime_falls_back_transitional" time="0.000" /><testcase classname="tests.backend_test.TestMetaLabeler" name="test_hold_returns_neutral_verdict_zero_p" time="0.000" /><testcase classname="tests.backend_test.TestMetaLabeler" name="test_buy_returns_p_true_in_range_with_verdict" time="0.000" /><testcase classname="tests.backend_test.TestMetaLabeler" name="test_fake_out_cascades_to_veto_in_analyze_symbol" time="0.004" /><testcase classname="tests.backend_test.TestPaperTrading" name="test_paper_account_persisted" time="0.492" /><testcase classname="tests.backend_test.TestPaperTrading" name="test_paper_execute_creates_paper_trade" time="15.857" /><testcase classname="tests.backend_test.TestNLStrategy" name="test_strategy_compile_and_apply" time="5.339" /><testcase classname="tests.backend_test.TestNLCommander" name="test_close_all_command" time="2.138" /><testcase classname="tests.backend_test.TestNLCommander" name="test_conditional_trigger_creation_and_delete" time="3.011" /><testcase classname="tests.backend_test.TestTimeSeriesCollections" name="test_price_ticks_populated_after_quote" time="0.110" /><testcase classname="tests.backend_test.TestTimeSeriesCollections" name="test_signal_history_collection_exists" time="0.003" /><testcase classname="tests.backend_test.TestTimeSeriesCollections" name="test_conditional_triggers_collection_exists" time="0.002" /><testcase classname="tests.backend_test.TestPriorEndpointsRegression" name="test_panic" time="0.059" /><testcase classname="tests.backend_test.TestPriorEndpointsRegression" name="test_trades_stats" time="0.058" /><testcase classname="tests.backend_test.TestPriorEndpointsRegression" name="test_calendar_upcoming_btc" time="0.187" /><testcase classname="tests.backend_test.TestPriorEndpointsRegression" name="test_signals_list" time="0.114" /><testcase classname="tests.backend_test.TestCoPilot" name="test_chat_unauthenticated" time="0.147" /><testcase classname="tests.backend_test.TestCoPilot" name="test_chat_empty_message_returns_400" time="0.062" /><testcase classname="tests.backend_test.TestCoPilot" name="test_chat_too_long_message_returns_400" time="0.056" /><testcase classname="tests.backend_test.TestCoPilot" name="test_chat_basic_returns_snapshot_and_answer" time="10.028" /><testcase classname="tests.backend_test.TestCoPilot" name="test_chat_multi_turn_continuity" time="7.345" /><testcase classname="tests.backend_test.TestCoPilot" name="test_list_sessions" time="0.055" /><testcase classname="tests.backend_test.TestCoPilot" name="test_session_detail_not_found_returns_404" time="0.058" /><testcase classname="tests.backend_test.TestCoPilot" name="test_grounding_recent_signal_appears_in_snapshot" time="13.335" /><testcase classname="tests.backend_test.TestCoPilot" name="test_no_route_conflict_existing_endpoints_still_work" time="0.143" /><testcase classname="tests.backend_test.TestBugReports" name="test_create_bug_unauthenticated_returns_401" time="0.202" /><testcase classname="tests.backend_test.TestBugReports" name="test_create_bug_missing_description_returns_400" time="0.057" /><testcase classname="tests.backend_test.TestBugReports" name="test_create_bug_empty_description_returns_400" time="0.053" /><testcase classname="tests.backend_test.TestBugReports" name="test_create_bug_too_long_description_returns_400" time="0.057" /><testcase classname="tests.backend_test.TestBugReports" name="test_create_bug_oversized_screenshot_returns_413" time="0.532" /><testcase classname="tests.backend_test.TestBugReports" name="test_create_bug_happy_path" time="0.121" /><testcase classname="tests.backend_test.TestBugReports" name="test_list_bugs_non_admin_returns_403" time="0.054" /><testcase classname="tests.backend_test.TestBugReports" name="test_list_bugs_admin_strips_screenshot" time="0.109" /><testcase classname="tests.backend_test.TestBugReports" name="test_get_bug_admin_includes_screenshot" time="0.121" /><testcase classname="tests.backend_test.TestBugReports" name="test_get_bug_non_admin_returns_403" time="0.101" /><testcase classname="tests.backend_test.TestBugReports" name="test_patch_status_admin_happy_path" time="0.175" /><testcase classname="tests.backend_test.TestBugReports" name="test_patch_status_invalid_returns_400" time="0.104" /><testcase classname="tests.backend_test.TestBugReports" name="test_patch_status_non_admin_returns_403" time="0.114" /><testcase classname="tests.backend_test.TestSubscriptionPlans" name="test_plans_public_endpoint" time="0.053" /><testcase classname="tests.backend_test.TestSubscriptionStatus" name="test_status_admin_grandfathered" time="0.057" /><testcase classname="tests.backend_test.TestSubscriptionStatus" name="test_status_requires_auth" time="0.103" /><testcase classname="tests.backend_test.TestSubscriptionCheckout" name="test_checkout_unauthenticated_returns_401" time="0.128" /><testcase classname="tests.backend_test.TestSubscriptionCheckout" name="test_checkout_invalid_plan_returns_400" time="0.056" /><testcase classname="tests.backend_test.TestSubscriptionCheckout" name="test_checkout_missing_origin_returns_400" time="0.056" /><testcase classname="tests.backend_test.TestSubscriptionCheckout" name="test_checkout_bad_origin_returns_400" time="0.050" /><testcase classname="tests.backend_test.TestSubscriptionCheckout" name="test_checkout_happy_path_monthly" time="0.692" /><testcase classname="tests.backend_test.TestSubscriptionCheckout" name="test_admin_cannot_subscribe" time="0.056" /><testcase classname="tests.backend_test.TestSubscriptionPoll" name="test_poll_nonexistent_session_returns_404" time="0.057" /><testcase classname="tests.backend_test.TestSubscriptionPoll" name="test_poll_foreign_session_returns_404" time="0.542" /><testcase classname="tests.backend_test.TestStripeWebhook" name="test_webhook_invalid_signature_returns_400" time="0.124" /><testcase classname="tests.backend_test.TestApplyPaymentIdempotency" name="test_apply_payment_twice_only_extends_once" time="0.457"><failure message="RuntimeError: Event loop is closed">self = &lt;backend_test.TestApplyPaymentIdempotency object at 0xfa55a131f290&gt;
+fresh_user_session = &lt;requests.sessions.Session object at 0xfa559fc5f010&gt;
+
+    def test_apply_payment_twice_only_extends_once(self, fresh_user_session):
+        import asyncio
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, "/app/backend")
+        # Load backend .env so MONGO_URL/DB_NAME are available to the
+        # imported service modules (we are not running inside uvicorn here).
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(Path("/app/backend/.env"))
+        except Exception:
+            pass
+        from subscription_service import apply_successful_payment  # noqa
+        from database import get_db  # noqa
+    
+        # Create a real checkout for fresh user to avoid polluting admin state
+        r = fresh_user_session.post(
+            f"{API}/subscription/checkout",
+            json={"plan_id": "monthly", "origin": ORIGIN},
+            timeout=30,
+        )
+        assert r.status_code == 200
+        sid = r.json()["session_id"]
+    
+        async def _run():
+            db = get_db()
+            # Force-mark our seed txn payment_status so apply can proceed
+            # apply_successful_payment looks up by session_id only; it ignores
+            # current payment_status until applied flag set.
+            sub1 = await apply_successful_payment(sid)
+            sub2 = await apply_successful_payment(sid)
+            return sub1, sub2, await db.subscriptions.find_one(
+                {"user_id": sub1["user_id"]}
+            )
+    
+&gt;       sub1, sub2, fresh = asyncio.run(_run())
+                            ^^^^^^^^^^^^^^^^^^^
+
+tests/backend_test.py:2150: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/backend_test.py:2144: in _run
+    sub1 = await apply_successful_payment(sid)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+subscription_service.py:109: in apply_successful_payment
+    txn = await db.payment_transactions.find_one({"session_id": session_id})
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.backend_test.TestBackendErrorLogs" name="test_no_recent_exceptions" time="5.001" /><testcase classname="tests.backend_test.TestMtfGate" name="test_buy_aligned_with_uptrend" time="0.000" /><testcase classname="tests.backend_test.TestMtfGate" name="test_buy_counter_trend_vetoed" time="0.000" /><testcase classname="tests.backend_test.TestMtfGate" name="test_sell_counter_trend_vetoed" time="0.000" /><testcase classname="tests.backend_test.TestMtfGate" name="test_hold_is_noop" time="0.000" /><testcase classname="tests.backend_test.TestMtfGate" name="test_short_history_passes" time="0.000" /><testcase classname="tests.backend_test.TestAutoTune" name="test_get_endpoint_returns_per_symbol" time="0.061" /><testcase classname="tests.backend_test.TestAutoTune" name="test_refresh_endpoint" time="0.072" /><testcase classname="tests.backend_test.TestAutoTune" name="test_compute_threshold_picks_lowest_qualifying_bucket" time="0.001" /><testcase classname="tests.backend_test.TestAutoTune" name="test_compute_threshold_falls_back_to_profile" time="0.000" /><testcase classname="tests.backend_test.TestSpreadFilter" name="test_bot_config_roundtrip_spread_fields" time="0.166" /><testcase classname="tests.backend_test.TestSpreadFilter" name="test_heartbeat_persists_spreads" time="0.239" /><testcase classname="tests.backend_test.TestSpreadFilter" name="test_heartbeat_without_spreads_still_works" time="0.510" /><testcase classname="tests.backend_test.TestAffiliateSubGate" name="test_admin_bypass" time="0.067" /><testcase classname="tests.backend_test.TestAffiliateSubGate" name="test_status_for_expired_user_returns_sub_required" time="0.584" /><testcase classname="tests.backend_test.TestAffiliateSubGate" name="test_apply_blocked_with_402_for_expired" time="0.490" /><testcase classname="tests.backend_test.TestIntelligenceCounters" name="test_status_returns_intelligence_block" time="0.056" /><testcase classname="tests.backend_test.TestIntelligenceCounters" name="test_increment_and_read" time="0.014" /><testcase classname="tests.backend_test.TestSlippageVeto" name="test_bot_config_roundtrip_slippage" time="0.106" /><testcase classname="tests.backend_test.TestSlippageVeto" name="test_excess_slippage_triggers_full_close" time="0.337"><failure message="AssertionError: assert None == 'slippage_veto'&#10; +  where None = &lt;built-in method get of dict object at 0xfa554f2bddc0&gt;('close_reason')&#10; +    where &lt;built-in method get of dict object at 0xfa554f2bddc0&gt; = {'_id': ObjectId('6a3c23a6282388dc8f6e88c7'), 'user_id': '6a37783f9360a2589770da4e', 'account_id': '6a3ad0ef17f40ac1dd3eb3ef', 'signal_id': None, ...}.get">self = &lt;backend_test.TestSlippageVeto object at 0xfa55a13338d0&gt;
+admin_session = &lt;requests.sessions.Session object at 0xfa559fc55750&gt;
+
+    def test_excess_slippage_triggers_full_close(self, admin_session):
+        """End-to-end: create a live account, simulate fill with 50-pip XAU slippage
+        → trade gets close_reason=slippage_veto and pending_modification=FULL_CLOSE."""
+        self._load_env()
+        # Ensure slippage veto is ON with a tight cap
+        cfg = admin_session.get(f"{API}/bot/config", timeout=10).json()
+        cfg["slippage_veto_enabled"] = True
+        cfg["max_slippage_pips"] = {"XAUUSD": 5.0, "BTCUSD": 80.0}
+        admin_session.put(f"{API}/bot/config", json=cfg, timeout=10)
+    
+        # Find or create a live account
+        accs = admin_session.get(f"{API}/accounts", timeout=10).json()
+        live = [a for a in accs if (a.get("mode") or "live") == "live"]
+        if not live:
+            r = admin_session.post(
+                f"{API}/accounts",
+                json={"label": "slip-test", "broker": "B", "server": "S",
+                      "account_number": "55512", "account_type": "demo", "mode": "live"},
+                timeout=15,
+            )
+            assert r.status_code == 200, r.text
+            account = r.json()
+        else:
+            account = live[0]
+        token = account["bridge_token"]
+        account_id = account["id"]
+    
+        # Insert a pending trade directly via Mongo so we can control the intended entry
+        import asyncio
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from bson import ObjectId
+        async def _seed():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            doc = {
+                "user_id": account["user_id"],
+                "account_id": account_id,
+                "signal_id": None,
+                "symbol": "XAUUSD",
+                "action": "BUY",
+                "lot_size": 0.01,
+                "entry_price": 2400.00,        # intended
+                "original_stop_loss": 2385.00,
+                "stop_loss": 2385.00,
+                "take_profit": 2430.00,
+                "tp1": 2410.0, "tp2": 2420.0, "tp3": 2430.0,
+                "status": "pending",
+                "created_at": "2026-06-22T17:00:00+00:00",
+            }
+            r = await db.trades.insert_one(doc)
+            cli.close()
+            return str(r.inserted_id)
+        trade_id = asyncio.run(_seed())
+    
+        # Now simulate EA reporting an "open" with 10-pip slippage (XAUUSD pip=0.10
+        # → 10 pips of slippage = 1.00 price diff). Intended 2400 → actual 2401.0
+        r = requests.post(
+            f"{API}/bridge/report",
+            json={
+                "bridge_token": token,
+                "trade_id": trade_id,
+                "status": "open",
+                "mt5_ticket": 999111,
+                "entry_price": 2401.00,
+            },
+            timeout=15,
+        )
+        assert r.status_code == 200, r.text
+    
+        # Pull the trade — must show slippage fields + veto kicked in (cap was 5p, slip was 10p)
+        async def _read():
+            cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+            db = cli[os.environ["DB_NAME"]]
+            t = await db.trades.find_one({"_id": ObjectId(trade_id)})
+            cli.close()
+            return t
+        t = asyncio.run(_read())
+        assert t is not None
+        assert t.get("slippage_pips") == 10.0
+        assert t.get("intended_entry_price") == 2400.00
+&gt;       assert t.get("close_reason") == "slippage_veto"
+E       AssertionError: assert None == 'slippage_veto'
+E        +  where None = &lt;built-in method get of dict object at 0xfa554f2bddc0&gt;('close_reason')
+E        +    where &lt;built-in method get of dict object at 0xfa554f2bddc0&gt; = {'_id': ObjectId('6a3c23a6282388dc8f6e88c7'), 'user_id': '6a37783f9360a2589770da4e', 'account_id': '6a3ad0ef17f40ac1dd3eb3ef', 'signal_id': None, ...}.get
+
+tests/backend_test.py:2628: AssertionError</failure></testcase><testcase classname="tests.backend_test.TestSlippageVeto" name="test_acceptable_slippage_does_not_veto" time="0.278" /><testcase classname="tests.backend_test.TestSLImminentWatcher" name="test_velocity_zero_returns_no_fire" time="0.007" /><testcase classname="tests.backend_test.TestSLImminentWatcher" name="test_velocity_from_recent_ticks" time="0.008" /><testcase classname="tests.backend_test.TestSLImminentWatcher" name="test_sweep_fires_when_eta_under_5min" time="0.071" /><testcase classname="tests.backend_test.TestSLImminentWatcher" name="test_buy_past_sl_does_not_fire" time="0.008" /><testcase classname="tests.backend_test.TestKalmanFilter" name="test_smooths_noisy_around_constant_signal" time="0.001" /><testcase classname="tests.backend_test.TestKalmanFilter" name="test_velocity_tracks_uptrend" time="0.000" /><testcase classname="tests.backend_test.TestKalmanFilter" name="test_handles_empty_and_single" time="0.000" /><testcase classname="tests.backend_test.TestCOTFetcher" name="test_summary_math" time="0.000" /><testcase classname="tests.backend_test.TestTipsFetcher" name="test_xml_parse_extracts_ten_year" time="0.000" /><testcase classname="tests.backend_test.TestBacktester" name="test_buy_fills_at_next_bar_open_then_tp" time="0.003" /><testcase classname="tests.backend_test.TestBacktester" name="test_macro_pit_delay_hides_event_until_absorbed" time="0.000" /><testcase classname="tests.backend_test.TestBacktester" name="test_backward_adjusted_stitch" time="0.000" /><testcase classname="tests.backend_test.TestLearnedMeta" name="test_features_extracted_correctly" time="0.000" /><testcase classname="tests.backend_test.TestLearnedMeta" name="test_hold_signal_returns_none" time="0.000" /><testcase classname="tests.backend_test.TestLearnedMeta" name="test_train_with_synthetic_data_learns_separable" time="0.059" /><testcase classname="tests.backend_test.TestLearnedMeta" name="test_retrain_with_insufficient_data_skips" time="0.045" /><testcase classname="tests.backend_test.TestLearnedMeta" name="test_endpoint_get_returns_artifact_shape" time="0.054" /><testcase classname="tests.backend_test.TestLearnedMeta" name="test_endpoint_retrain" time="0.070" /><testcase classname="tests.backend_test.TestConfluenceFilter" name="test_passes_when_all_check_pass" time="0.000" /><testcase classname="tests.backend_test.TestConfluenceFilter" name="test_blocks_when_only_3_checks_pass" time="0.000" /><testcase classname="tests.backend_test.TestConfluenceFilter" name="test_non_xau_auto_passes_cot_and_tips" time="0.000" /><testcase classname="tests.backend_test.TestConfluenceFilter" name="test_asia_session_fails_session_check" time="0.000" /><testcase classname="tests.backend_test.TestRRandAdaptiveSLTP" name="test_min_rr_default_2x_blocks_legacy_pip_system" time="0.000" /><testcase classname="tests.backend_test.TestRRandAdaptiveSLTP" name="test_adaptive_rr_meets_2x_when_atr_drives_sizing" time="0.000" /><testcase classname="tests.test_iter12_settings_2fa.TestProfileUpdate" name="test_profile_update_changes_name" time="0.472" /><testcase classname="tests.test_iter12_settings_2fa.TestChangePassword" name="test_wrong_current_password_401" time="0.659" /><testcase classname="tests.test_iter12_settings_2fa.TestChangePassword" name="test_same_password_400" time="0.612" /><testcase classname="tests.test_iter12_settings_2fa.TestChangePassword" name="test_change_password_success_and_login_swap" time="1.534" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactor" name="test_status_initially_disabled" time="0.374" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactor" name="test_enroll_returns_secret_uri_qr_and_reissues_on_repeat" time="0.504" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactor" name="test_verify_enroll_wrong_code_401" time="0.440" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactor" name="test_verify_enroll_correct_code_enables_and_returns_recovery_codes" time="2.310" /><testcase classname="tests.test_iter12_settings_2fa.TestLoginWith2FA" name="test_login_without_totp_returns_401_with_2fa_required_detail" time="2.588" /><testcase classname="tests.test_iter12_settings_2fa.TestLoginWith2FA" name="test_login_with_correct_totp_succeeds" time="3.574" /><testcase classname="tests.test_iter12_settings_2fa.TestLoginWith2FA" name="test_login_with_recovery_code_consumes_one" time="2.853" /><testcase classname="tests.test_iter12_settings_2fa.TestLoginWith2FA" name="test_login_with_invalid_totp_returns_401" time="4.462" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactorDisable" name="test_disable_wrong_password_401" time="3.558" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactorDisable" name="test_disable_wrong_code_401" time="4.297" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactorDisable" name="test_disable_correct_totp_succeeds_and_status_flips" time="3.599" /><testcase classname="tests.test_iter12_settings_2fa.TestTwoFactorDisable" name="test_disable_with_recovery_code_succeeds" time="2.788" /><testcase classname="tests.test_iter12_settings_2fa.TestCapitalGuards" name="test_bot_config_persists_new_guard_fields" time="0.522" /><testcase classname="tests.test_iter12_settings_2fa.TestCapitalGuards" name="test_bot_config_default_guard_values" time="0.374" /><testcase classname="tests.test_iter12_settings_2fa.TestAdminNo2FA" name="test_admin_login_and_no_2fa" time="0.451" /><testcase classname="tests.test_iter13_broker_limits.TestLimitsEndpoint" name="test_limits_shape_fresh_user" time="0.418" /><testcase classname="tests.test_iter13_broker_limits.TestPresetsEndpoint" name="test_presets_returns_list" time="0.403" /><testcase classname="tests.test_iter13_broker_limits.TestPerBrokerCap" name="test_three_roboforex_ok_fourth_403" time="0.612" /><testcase classname="tests.test_iter13_broker_limits.TestBrokerCap" name="test_five_distinct_brokers_ok_sixth_403" time="0.687" /><testcase classname="tests.test_iter13_broker_limits.TestPaperBypass" name="test_paper_works_even_when_caps_reached" time="1.432" /><testcase classname="tests.test_iter13_broker_limits.TestCaseInsensitive" name="test_roboforex_vs_roboforex_same_bucket" time="0.624" /><testcase classname="tests.test_iter13_broker_limits.TestDeleteFreesSlot" name="test_delete_then_add_succeeds" time="0.727" /><testcase classname="tests.test_iter13_broker_limits.TestMissingBrokerLive" name="test_empty_broker_live_403" time="0.388" /><testcase classname="tests.test_iter13_broker_limits.TestRegression" name="test_paper_create_and_list" time="0.505" /><testcase classname="tests.test_iter13_broker_limits.TestRegression" name="test_admin_login_still_works" time="0.416" /><testcase classname="tests.test_iter14_gold_edge.TestDXY" name="test_dxy_snapshot_shape" time="0.224" /><testcase classname="tests.test_iter14_gold_edge.TestDXY" name="test_dxy_gate_bullish_usd_blocks_xau_buy" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestDXY" name="test_dxy_gate_bullish_usd_passes_xau_sell" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestDXY" name="test_dxy_gate_bearish_usd_passes_xau_buy" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestDXY" name="test_dxy_gate_neutral_passes_both" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestDXY" name="test_dxy_gate_non_xau_symbols_pass" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestDXY" name="test_dxy_gate_no_snapshot_passes_with_reason" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestSignalsDXYWiring" name="test_xauusd_signal_has_dxy_fields" time="8.408" /><testcase classname="tests.test_iter14_gold_edge.TestWeeklyDrawdown" name="test_weekly_trips_when_enabled" time="0.011" /><testcase classname="tests.test_iter14_gold_edge.TestWeeklyDrawdown" name="test_weekly_disabled_does_not_trip" time="0.008" /><testcase classname="tests.test_iter14_gold_edge.TestWeeklyDrawdown" name="test_daily_precedes_weekly" time="0.009" /><testcase classname="tests.test_iter14_gold_edge.TestLearnedMetaSessions" name="test_session_bucket_hours" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestLearnedMetaSessions" name="test_session_bucket_accepts_iso_and_none" time="0.000" /><testcase classname="tests.test_iter14_gold_edge.TestLearnedMetaSessions" name="test_retrain_returns_global_plus_per_session" time="0.026" /><testcase classname="tests.test_iter14_gold_edge.TestLearnedMetaSessions" name="test_predict_p_win_picks_session_or_falls_back" time="0.008" /><testcase classname="tests.test_iter14_gold_edge.TestBotConfigWeeklyFields" name="test_put_and_get_weekly_fields" time="0.208" /><testcase classname="tests.test_iter16_profit_pack" name="test_sl_cooldown_blocks_recent_stopout" time="0.116" /><testcase classname="tests.test_iter16_profit_pack" name="test_sl_cooldown_lets_old_stopout_through" time="0.002" /><testcase classname="tests.test_iter16_profit_pack" name="test_sl_cooldown_empty_when_no_recent_sl_trade" time="0.002" /><testcase classname="tests.test_iter16_profit_pack" name="test_sl_cooldown_disabled_when_minutes_zero" time="0.002" /><testcase classname="tests.test_iter16_profit_pack" name="test_liquidity_window_high_volume_overlap_detected" time="0.001" /><testcase classname="tests.test_iter16_profit_pack" name="test_liquidity_window_off_hours_weekday" time="0.000" /><testcase classname="tests.test_iter16_profit_pack" name="test_liquidity_window_no_op_for_btc" time="0.000" /><testcase classname="tests.test_iter16_profit_pack" name="test_pre_news_flattens_imminent_high_impact" time="0.004" /><testcase classname="tests.test_iter16_profit_pack" name="test_pre_news_disabled_short_circuits" time="0.002" /><testcase classname="tests.test_iter16_profit_pack" name="test_pre_news_ignores_medium_impact" time="0.002" /><testcase classname="tests.test_iter16_profit_pack" name="test_pre_news_ignores_events_beyond_window" time="0.002" /><testcase classname="tests.test_iter16_profit_pack" name="test_new_counters_registered" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_pearson_perfect_positive" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_pearson_perfect_negative" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_pearson_too_few_samples" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_cross_asset_veto_fires_on_same_direction_correlated" time="0.001" /><testcase classname="tests.test_iter17_agents" name="test_cross_asset_veto_passes_opposite_direction" time="0.001" /><testcase classname="tests.test_iter17_agents" name="test_cross_asset_veto_passes_when_no_other_positions" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_review_appends_veto_reason_and_flips_to_hold" time="0.001" /><testcase classname="tests.test_iter17_agents" name="test_fred_classifier_dff_tightening" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_fred_classifier_dff_easing" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_fred_classifier_vix_high" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_fred_classifier_vix_calm" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_fred_classifier_unknown_series_neutral" time="0.000" /><testcase classname="tests.test_iter17_agents" name="test_orchestrator_logs_full_pipeline" time="0.002" /><testcase classname="tests.test_iter18_connection_test" name="test_connection_paper_always_ok" time="0.022" /><testcase classname="tests.test_iter18_connection_test" name="test_connection_live_fresh_heartbeat" time="0.001" /><testcase classname="tests.test_iter18_connection_test" name="test_connection_live_stale_heartbeat_warn" time="0.001" /><testcase classname="tests.test_iter18_connection_test" name="test_connection_live_dead_heartbeat_error" time="0.001" /><testcase classname="tests.test_iter18_connection_test" name="test_connection_never_connected" time="0.001" /><testcase classname="tests.test_iter18_connection_test" name="test_connection_unknown_account_404" time="0.001" /><testcase classname="tests.test_iter18_diagnostic_safety_guardian" name="test_diagnostic_run_admin_returns_safety_guardian_checks" time="0.484" /><testcase classname="tests.test_iter18_diagnostic_safety_guardian" name="test_diagnostic_run_non_admin_returns_403" time="0.383" /><testcase classname="tests.test_iter19_gold_history_fallback" name="test_get_history_uses_yahoo_when_healthy" time="0.003" /><testcase classname="tests.test_iter19_gold_history_fallback" name="test_get_history_falls_back_to_stooq" time="0.003" /><testcase classname="tests.test_iter19_gold_history_fallback" name="test_get_history_falls_back_to_coingecko" time="0.003" /><testcase classname="tests.test_iter19_gold_history_fallback" name="test_get_history_uses_mongo_when_all_upstreams_fail" time="0.003" /><testcase classname="tests.test_iter19_gold_history_fallback" name="test_get_history_raises_only_when_mongo_is_also_empty" time="0.004" /><testcase classname="tests.test_iter21_presets_and_payouts.TestBuiltinPresets" name="test_list_presets_shape_and_order" time="0.408" /><testcase classname="tests.test_iter21_presets_and_payouts.TestBuiltinPresets" name="test_apply_sniper_preset" time="0.183" /><testcase classname="tests.test_iter21_presets_and_payouts.TestBuiltinPresets" name="test_apply_invalid_preset_returns_404" time="0.060" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_save_custom_preset_response_shape" time="0.064" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_save_preset_empty_name_400" time="0.054" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_save_preset_duplicate_name_400" time="0.060" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_list_presets_includes_custom" time="0.058" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_apply_custom_preset" time="0.060" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_apply_custom_invalid_id_404" time="0.139" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_preset_limit_max_10" time="0.685" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_delete_custom_preset" time="0.223" /><testcase classname="tests.test_iter21_presets_and_payouts.TestUserPresets" name="test_delete_nonexistent_preset_404" time="0.139" /><testcase classname="tests.test_iter21_presets_and_payouts.TestPresetIsolation" name="test_user_b_cannot_see_apply_or_delete_user_a_presets" time="0.616" /><testcase classname="tests.test_iter21_presets_and_payouts.TestAffiliatePayout" name="test_payout_request_no_affiliate_returns_404" time="0.045" /><testcase classname="tests.test_iter21_presets_and_payouts.TestAffiliatePayout" name="test_payout_request_admin_zero_balance_400" time="0.389" /><testcase classname="tests.test_iter21_presets_and_payouts.TestAffiliatePayout" name="test_list_my_payout_requests_returns_array" time="0.096" /><testcase classname="tests.test_iter21_presets_and_payouts.TestAffiliatePayout" name="test_admin_payout_requests_non_admin_403" time="0.052" /><testcase classname="tests.test_iter21_presets_and_payouts.TestAffiliatePayout" name="test_admin_payout_requests_admin_200" time="0.052" /><testcase classname="tests.test_iter21_presets_and_payouts.TestAffiliatePayout" name="test_admin_process_payout_invalid_id_400" time="0.051" /><testcase classname="tests.test_iter21_presets_and_payouts.TestAffiliatePayout" name="test_admin_process_payout_end_to_end" time="0.061" /><testcase classname="tests.test_iter21_presets_and_payouts.TestCopilotSmoke" name="test_copilot_chat_returns_session_answer_snapshot" time="12.463" /><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_closes_all_when_broker_reports_zero" time="0.006"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e8928', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e8929', '6a3c23eb282388dc8f6e892a', '6a3c23eb282388dc8f6e892b']}
+
+    def test_reconcile_closes_all_when_broker_reports_zero(db, seeded):
+        from trade_reconciler import reconcile_account
+    
+&gt;       summary = _arun(reconcile_account(seeded["account_id"], [], source="test"))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:94: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:45: in reconcile_account
+    candidates = await cursor.to_list(length=200)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_keeps_trades_still_open_at_broker" time="0.005"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e892d', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e892e', '6a3c23eb282388dc8f6e892f', '6a3c23eb282388dc8f6e8930']}
+
+    def test_reconcile_keeps_trades_still_open_at_broker(db, seeded):
+        from trade_reconciler import reconcile_account
+    
+&gt;       summary = _arun(reconcile_account(seeded["account_id"], [777002], source="test"))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:110: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:45: in reconcile_account
+    candidates = await cursor.to_list(length=200)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_user_skips_old_ea_with_nonzero_positions" time="0.005"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e8932', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e8933', '6a3c23eb282388dc8f6e8934', '6a3c23eb282388dc8f6e8935']}
+
+    def test_reconcile_user_skips_old_ea_with_nonzero_positions(db, seeded):
+        """No open_tickets field + open_positions &gt; 0 → must skip (avoid false closes)."""
+        from trade_reconciler import reconcile_user
+    
+&gt;       result = _arun(reconcile_user(seeded["user_id"]))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:125: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:108: in reconcile_user
+    accounts = await cursor.to_list(length=20)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_user_count_fallback_when_zero" time="0.006"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e8937', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e8938', '6a3c23eb282388dc8f6e8939', '6a3c23eb282388dc8f6e893a']}
+
+    def test_reconcile_user_count_fallback_when_zero(db, seeded):
+        """No open_tickets field but heartbeat says open_positions=0 → safe close."""
+        from trade_reconciler import reconcile_user
+    
+        db.accounts.update_one(
+            {"_id": ObjectId(seeded["account_id"])},
+            {"$set": {"open_positions": 0, "last_heartbeat": _now()}},
+        )
+&gt;       result = _arun(reconcile_user(seeded["user_id"]))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:142: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:108: in reconcile_user
+    accounts = await cursor.to_list(length=20)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_skips_trades_without_mt5_ticket" time="0.006"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e893c', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e893d', '6a3c23eb282388dc8f6e893e', '6a3c23eb282388dc8f6e893f']}
+
+    def test_reconcile_skips_trades_without_mt5_ticket(db, seeded):
+        """Pending/never-filled trades (no ticket) must NOT be touched."""
+        from trade_reconciler import reconcile_account
+    
+        db.trades.update_one(
+            {"_id": ObjectId(seeded["trade_ids"][0])},
+            {"$set": {"mt5_ticket": None}},
+        )
+&gt;       summary = _arun(reconcile_account(seeded["account_id"], [], source="test"))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:159: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:45: in reconcile_account
+    candidates = await cursor.to_list(length=200)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_clears_pending_close_orphans" time="0.006"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e8941', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e8942', '6a3c23eb282388dc8f6e8943', '6a3c23eb282388dc8f6e8944']}
+
+    def test_reconcile_clears_pending_close_orphans(db, seeded):
+        """REGRESSION (iter-23.1): user clicks × CLOSE → trade flips to
+        status=pending with close_requested=True. EA never acks. Reconciler must
+        close these too, not just status=open trades.
+        """
+        from trade_reconciler import reconcile_account
+    
+        db.trades.update_many(
+            {"account_id": seeded["account_id"]},
+            {"$set": {"status": "pending", "close_requested": True, "close_reason": "manual"}},
+        )
+        open_count = db.trades.count_documents({"account_id": seeded["account_id"], "status": "open"})
+        assert open_count == 0
+    
+&gt;       summary = _arun(reconcile_account(seeded["account_id"], [], source="test"))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:179: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:45: in reconcile_account
+    candidates = await cursor.to_list(length=200)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_keeps_pending_open_without_close_request" time="0.006"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e8946', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e8947', '6a3c23eb282388dc8f6e8948', '6a3c23eb282388dc8f6e8949']}
+
+    def test_reconcile_keeps_pending_open_without_close_request(db, seeded):
+        """Pending-OPEN trades (waiting for EA to first execute, no close_requested)
+        must NOT be touched — reconciler is for orphans, not never-filled new orders.
+        """
+        from trade_reconciler import reconcile_account
+    
+        db.trades.update_many(
+            {"account_id": seeded["account_id"]},
+            {"$set": {"status": "pending"}, "$unset": {"close_requested": ""}},
+        )
+&gt;       summary = _arun(reconcile_account(seeded["account_id"], [], source="test"))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:195: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:45: in reconcile_account
+    candidates = await cursor.to_list(length=200)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_user_closes_account_orphans" time="0.005"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e894b', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e894c', '6a3c23eb282388dc8f6e894d', '6a3c23eb282388dc8f6e894e']}
+
+    def test_reconcile_user_closes_account_orphans(db, seeded):
+        """REGRESSION (iter-23.2): trades attached to a deleted account become
+        permanently orphaned (no broker to reconcile against). reconcile_user
+        must sweep them with close_reason='account_deleted'.
+        """
+        from trade_reconciler import reconcile_user
+    
+        # Delete the account, leaving the 3 trades attached to a now-orphan account_id
+        db.accounts.delete_one({"_id": ObjectId(seeded["account_id"])})
+    
+&gt;       result = _arun(reconcile_user(seeded["user_id"]))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:108: in reconcile_user
+    accounts = await cursor.to_list(length=20)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter23_reconciler" name="test_reconcile_user_pending_close_via_count_fallback" time="0.006"><failure message="RuntimeError: Event loop is closed">db = Database(MongoClient(host=['localhost:27017'], document_class=dict, tz_aware=False, connect=True), 'ai_trading_bot')
+seeded = {'user_id': 'iter23-recon-user', 'account_id': '6a3c23eb282388dc8f6e8950', 'tickets': [777001, 777002, 777003], 'trade_ids': ['6a3c23eb282388dc8f6e8951', '6a3c23eb282388dc8f6e8952', '6a3c23eb282388dc8f6e8953']}
+
+    def test_reconcile_user_pending_close_via_count_fallback(db, seeded):
+        """End-to-end: user clicks × CLOSE on all 3 → status=pending+close_req.
+        Heartbeat says open_positions=0. reconcile_user must close all 3 via the
+        count fallback, even though their status is pending (not open).
+        """
+        from trade_reconciler import reconcile_user
+    
+        db.trades.update_many(
+            {"account_id": seeded["account_id"]},
+            {"$set": {"status": "pending", "close_requested": True, "close_reason": "manual"}},
+        )
+        db.accounts.update_one(
+            {"_id": ObjectId(seeded["account_id"])},
+            {"$set": {"open_positions": 0, "last_heartbeat": _now()}},
+        )
+&gt;       result = _arun(reconcile_user(seeded["user_id"]))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter23_reconciler.py:242: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_iter23_reconciler.py:88: in _arun
+    return _LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+trade_reconciler.py:108: in reconcile_user
+    accounts = await cursor.to_list(length=20)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1648: in to_list
+    self.get_io_loop(), self._get_more(), self._to_list, length, the_list, future
+                        ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1411: in _get_more
+    return self._refresh()
+           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_default_config_has_null_account_id" time="0.403" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_get_per_account_config_auto_creates" time="0.149" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_put_max_lot_size_persists" time="0.095" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_max_lot_size_clamped_to_zero_minimum" time="0.053" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_default_config_independent_from_account" time="0.100" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_list_configs_returns_both" time="0.165" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_start_stop_is_scoped_per_account" time="0.252" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_unknown_account_id_returns_404" time="0.047" /><testcase classname="tests.test_iter24_per_account_bot_cfg.TestPerAccountBotConfig" name="test_delete_override_reverts_to_default" time="0.151" /><testcase classname="tests.test_iter24b_by_account.TestByAccountAnalytics" name="test_endpoint_authenticated" time="0.389" /><testcase classname="tests.test_iter24b_by_account.TestByAccountAnalytics" name="test_response_shape" time="0.063" /><testcase classname="tests.test_iter24b_by_account.TestByAccountAnalytics" name="test_account_row_fields" time="0.052" /><testcase classname="tests.test_iter24b_by_account.TestByAccountAnalytics" name="test_sorted_by_total_pnl_desc" time="0.059" /><testcase classname="tests.test_iter24b_by_account.TestByAccountAnalytics" name="test_unauthenticated_blocked" time="0.103" /><testcase classname="tests.test_iter24c_trades_filter.TestTradesByAccount" name="test_list_trades_no_filter_returns_all" time="0.402" /><testcase classname="tests.test_iter24c_trades_filter.TestTradesByAccount" name="test_filter_by_account_id" time="0.108" /><testcase classname="tests.test_iter24c_trades_filter.TestTradesByAccount" name="test_filter_partition_sums" time="0.000"><skipped type="pytest.skip" message="need 2+ accounts for partition test">/app/backend/tests/test_iter24c_trades_filter.py:70: need 2+ accounts for partition test</skipped></testcase><testcase classname="tests.test_iter24c_trades_filter.TestTradesByAccount" name="test_stats_filtered_by_account" time="0.109" /><testcase classname="tests.test_iter24c_trades_filter.TestTradesByAccount" name="test_live_filtered_by_account" time="0.052"><failure message="AssertionError: assert None == '6a3ad0ef17f40ac1dd3eb3ef'&#10; +  where None = &lt;built-in method get of dict object at 0xfa554f0d59c0&gt;('account_id')&#10; +    where &lt;built-in method get of dict object at 0xfa554f0d59c0&gt; = {'id': '6a3c23a6282388dc8f6e88c7', 'symbol': 'XAUUSD', 'action': 'BUY', 'lot_size': 0.01, ...}.get">self = &lt;test_iter24c_trades_filter.TestTradesByAccount object at 0xfa55a021f650&gt;
+admin_session = &lt;requests.sessions.Session object at 0xfa554eddf290&gt;
+accounts = [{'user_id': '6a37783f9360a2589770da4e', 'label': 'micro', 'broker': 'RoboForex', 'server': 'RoboForex-ECN', ...}]
+
+    def test_live_filtered_by_account(self, admin_session, accounts):
+        if not accounts:
+            pytest.skip("admin has no accounts")
+        acc_id = accounts[0]["id"]
+        r = admin_session.get(f"{API}/trades/live?account_id={acc_id}", timeout=15)
+        assert r.status_code == 200
+        for t in r.json():
+&gt;           assert t.get("account_id") == acc_id
+E           AssertionError: assert None == '6a3ad0ef17f40ac1dd3eb3ef'
+E            +  where None = &lt;built-in method get of dict object at 0xfa554f0d59c0&gt;('account_id')
+E            +    where &lt;built-in method get of dict object at 0xfa554f0d59c0&gt; = {'id': '6a3c23a6282388dc8f6e88c7', 'symbol': 'XAUUSD', 'action': 'BUY', 'lot_size': 0.01, ...}.get
+
+tests/test_iter24c_trades_filter.py:102: AssertionError</failure></testcase><testcase classname="tests.test_iter24e_external_deal.TestExternalDeal" name="test_invalid_bridge_token_401" time="0.106" /><testcase classname="tests.test_iter24e_external_deal.TestExternalDeal" name="test_open_creates_external_trade" time="0.392"><skipped type="pytest.skip" message="admin has no demo account">/app/backend/tests/test_iter24e_external_deal.py:87: admin has no demo account</skipped></testcase><testcase classname="tests.test_iter24e_external_deal.TestExternalDeal" name="test_close_backfills_existing_trade" time="0.000"><skipped type="pytest.skip" message="admin has no demo account">/app/backend/tests/test_iter24e_external_deal.py:107: admin has no demo account</skipped></testcase><testcase classname="tests.test_iter24e_external_deal.TestExternalDeal" name="test_idempotency_replays_are_safe" time="0.000"><skipped type="pytest.skip" message="admin has no demo account">/app/backend/tests/test_iter24e_external_deal.py:138: admin has no demo account</skipped></testcase><testcase classname="tests.test_iter24e_external_deal.TestExternalDeal" name="test_close_without_prior_trade_creates_audit_row" time="0.000"><skipped type="pytest.skip" message="admin has no demo account">/app/backend/tests/test_iter24e_external_deal.py:159: admin has no demo account</skipped></testcase><testcase classname="tests.test_iter24e_external_deal.TestExternalDeal" name="test_open_skipped_when_ticket_already_tracked" time="0.000"><skipped type="pytest.skip" message="admin has no demo account">/app/backend/tests/test_iter24e_external_deal.py:184: admin has no demo account</skipped></testcase><testcase classname="tests.test_iter24f_audit_trail.TestTradeAudit" name="test_audit_unknown_trade_404" time="0.388" /><testcase classname="tests.test_iter24f_audit_trail.TestTradeAudit" name="test_audit_returns_stoic_lifecycle" time="0.154" /><testcase classname="tests.test_iter24f_audit_trail.TestTradeAudit" name="test_audit_includes_broker_deals" time="0.055" /><testcase classname="tests.test_iter24f_audit_trail.TestTradeAudit" name="test_audit_other_users_trade_404" time="0.050" /><testcase classname="tests.test_iter24f_audit_trail.TestTradeAudit" name="test_backfill_endpoint_removed" time="0.054" /><testcase classname="tests.test_iter24g_wrong_terminal.TestWrongTerminalDetection" name="test_test_connection_route_responds" time="0.440" /><testcase classname="tests.test_iter24g_wrong_terminal.TestWrongTerminalDetection" name="test_heartbeat_flags_mismatch" time="0.154" /><testcase classname="tests.test_iter24g_wrong_terminal.TestWrongTerminalDetection" name="test_correct_login_clears_mismatch" time="0.150" /><testcase classname="tests.test_iter24g_wrong_terminal.TestWrongTerminalDetection" name="test_heartbeat_without_login_keeps_prior_state" time="0.209" /><testcase classname="tests.test_iter24h_position_snapshot.TestPositionSnapshotBackfill" name="test_new_tickets_get_created" time="0.600" /><testcase classname="tests.test_iter24h_position_snapshot.TestPositionSnapshotBackfill" name="test_replay_is_idempotent" time="0.318" /><testcase classname="tests.test_iter24h_position_snapshot.TestPositionSnapshotBackfill" name="test_skipped_on_terminal_mismatch" time="0.150" /><testcase classname="tests.test_iter24h_position_snapshot.TestPositionSnapshotBackfill" name="test_legacy_heartbeat_without_positions_still_ok" time="0.102" /><testcase classname="tests.test_iter24h_position_snapshot.TestPositionSnapshotBackfill" name="test_magic_0_external_others_auto" time="0.241" /><testcase classname="tests.test_iter24j_import_positions.TestImportPositions" name="test_import_creates_trades" time="0.425" /><testcase classname="tests.test_iter24j_import_positions.TestImportPositions" name="test_idempotent_skips_existing" time="0.098" /><testcase classname="tests.test_iter24j_import_positions.TestImportPositions" name="test_unknown_account_404" time="0.060" /><testcase classname="tests.test_iter24j_import_positions.TestImportPositions" name="test_validation_rejects_invalid_type" time="0.047" /><testcase classname="tests.test_iter24j_import_positions.TestImportPositions" name="test_validation_rejects_zero_volume" time="0.045" /><testcase classname="tests.test_iter25_revive_clears_pending_mod.TestReviveClearsPendingModification" name="test_revive_clears_pending_full_close" time="0.502" /><testcase classname="tests.test_iter25_revive_clears_pending_mod.TestReviveClearsPendingModification" name="test_audit_shows_pending_modification" time="0.061" /><testcase classname="tests.test_iter25b_mod_ack_notifications.TestModificationAckTelegram" name="test_partial_close_ack_marks_state_and_clears_pending" time="1.436" /><testcase classname="tests.test_iter25b_mod_ack_notifications.TestModificationAckTelegram" name="test_partial_close_tier2_progression" time="0.538" /><testcase classname="tests.test_iter25b_mod_ack_notifications.TestModificationAckTelegram" name="test_failed_ack_records_error_and_skips_state_changes" time="0.109" /><testcase classname="tests.test_iter25c_account_aware_sizing.TestAccountAwareLotSizing" name="test_zero_equity_returns_minimum_lot" time="0.000" /><testcase classname="tests.test_iter25c_account_aware_sizing.TestAccountAwareLotSizing" name="test_zero_sl_returns_minimum_lot" time="0.000" /><testcase classname="tests.test_iter25c_account_aware_sizing.TestAccountAwareLotSizing" name="test_xau_25k_high_conf_high_profile_below_old_kelly" time="0.000" /><testcase classname="tests.test_iter25c_account_aware_sizing.TestAccountAwareLotSizing" name="test_xau_25k_low_conf_yields_lot_well_below_cap" time="0.000" /><testcase classname="tests.test_iter25c_account_aware_sizing.TestAccountAwareLotSizing" name="test_microcent_account_scales_lot_up_x1000" time="0.000" /><testcase classname="tests.test_iter25c_account_aware_sizing.TestAccountAwareLotSizing" name="test_btc_pip_value_one_dollar_per_lot" time="0.000" /><testcase classname="tests.test_iter25c_account_aware_sizing.TestAccountAwareLotSizing" name="test_below_min_confidence_returns_minimum_lot" time="0.000" /><testcase classname="tests.test_iter25d_max_lot_kelly_peak.TestMaxLotAsKellyPeak" name="test_low_conf_well_below_cap" time="0.000" /><testcase classname="tests.test_iter25d_max_lot_kelly_peak.TestMaxLotAsKellyPeak" name="test_high_conf_reaches_cap" time="0.000" /><testcase classname="tests.test_iter25d_max_lot_kelly_peak.TestMaxLotAsKellyPeak" name="test_lots_scale_monotonically_with_confidence" time="0.000" /><testcase classname="tests.test_iter25d_max_lot_kelly_peak.TestMaxLotAsKellyPeak" name="test_max_lot_zero_uses_absolute_kelly" time="0.000" /><testcase classname="tests.test_iter25d_max_lot_kelly_peak.TestMaxLotAsKellyPeak" name="test_cap_acts_as_ceiling_even_when_kelly_higher" time="0.000" /><testcase classname="tests.test_iter25d_max_lot_kelly_peak.TestMaxLotAsKellyPeak" name="test_small_balance_uses_absolute_kelly_below_cap" time="0.000" /><testcase classname="tests.test_iter25e_sizing_preview.TestSizingPreview" name="test_preview_returns_scaled_rows" time="0.375" /><testcase classname="tests.test_iter25e_sizing_preview.TestSizingPreview" name="test_preview_default_symbol_is_xauusd" time="0.049" /><testcase classname="tests.test_iter25e_sizing_preview.TestSizingPreview" name="test_preview_btcusd_uses_btc_scenario" time="0.049" /><testcase classname="tests.test_iter25f_ea_version.TestEaVersionPropagation" name="test_heartbeat_persists_client_version" time="0.556" /><testcase classname="tests.test_iter25f_ea_version.TestEaVersionPropagation" name="test_heartbeat_without_version_leaves_field_unset" time="0.139" /><testcase classname="tests.test_iter25f_ea_version.TestEaVersionPropagation" name="test_list_accounts_exposes_ea_version" time="0.160" /><testcase classname="tests.test_iter25g_external_trade_alert" name="test_notify_trade_opened_external_uses_distinct_title" time="0.001" /><testcase classname="tests.test_iter25g_external_trade_alert" name="test_notify_trade_opened_bot_keeps_classic_format" time="0.001" /><testcase classname="tests.test_iter25g_external_trade_alert" name="test_external_open_flag_alone_triggers_manual_path" time="0.001" /><testcase classname="tests.test_iter25g_external_trade_alert" name="test_external_trade_opened_in_default_alerts_table" time="0.002" /><testcase classname="tests.test_iter25g_external_trade_alert" name="test_is_plausible_trade_rejects_dict_without_id" time="0.000" /><testcase classname="tests.test_iter25g_external_trade_alert" name="test_is_plausible_trade_rejects_id_not_in_db" time="0.001"><failure message="RuntimeError: Event loop is closed">def test_is_plausible_trade_rejects_id_not_in_db():
+        """Even with an _id that LOOKS valid, if the trade isn't persisted in
+        Mongo we refuse — closes the door on stale/replayed payloads."""
+        from bson import ObjectId
+        from notifier import _is_plausible_trade
+    
+        fake_oid = ObjectId()  # never inserted
+    
+        async def _run():
+            return await _is_plausible_trade({
+                "_id": fake_oid, "symbol": "BTCUSD", "action": "BUY",
+                "lot_size": 0.05, "entry_price": 62500.0,
+                "mt5_ticket": 696483514,
+            })
+&gt;       assert asyncio.run(_run()) is False
+               ^^^^^^^^^^^^^^^^^^^
+
+tests/test_iter25g_external_trade_alert.py:140: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_iter25g_external_trade_alert.py:135: in _run
+    return await _is_plausible_trade({
+notifier.py:126: in _is_plausible_trade
+    persisted = await db.trades.find_one({"_id": oid}, projection={"_id": 1})
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/motor/metaprogramming.py:74: in method
+    return framework.run_on_executor(
+/root/.venv/lib/python3.11/site-packages/motor/frameworks/asyncio/__init__.py:85: in run_on_executor
+    return loop.run_in_executor(_EXECUTOR, functools.partial(fn, *args, **kwargs))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:817: in run_in_executor
+    self._check_closed()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;_UnixSelectorEventLoop running=False closed=True debug=False&gt;
+
+    def _check_closed(self):
+        if self._closed:
+&gt;           raise RuntimeError('Event loop is closed')
+E           RuntimeError: Event loop is closed
+
+/usr/local/lib/python3.11/asyncio/base_events.py:520: RuntimeError</failure></testcase><testcase classname="tests.test_iter25h_force_sync_safety.TestForceSyncRespectsOpenTickets" name="test_force_sync_does_not_wipe_trades_when_ea_reports_them_open" time="0.472" /><testcase classname="tests.test_iter25h_force_sync_safety.TestForceSyncRespectsOpenTickets" name="test_force_sync_still_closes_genuinely_orphaned_trades" time="0.053" /><testcase classname="tests.test_iter25h_force_sync_safety.TestHeartbeatTicketRevive" name="test_heartbeat_revives_closed_trade_whose_ticket_is_still_open" time="0.118" /><testcase classname="tests.test_iter25h_force_sync_safety.TestHeartbeatTicketRevive" name="test_heartbeat_does_not_revive_trade_with_exit_price" time="0.107" /><testcase classname="tests.test_iter25i_stale_tickets.TestStaleTicketsDetection" name="test_heartbeat_treats_tickets_as_empty_when_positions_disagree" time="0.500" /><testcase classname="tests.test_iter25i_stale_tickets.TestStaleTicketsDetection" name="test_heartbeat_does_not_revive_already_closed_trades_on_stale_tickets" time="0.125" /><testcase classname="tests.test_iter25i_stale_tickets.TestStaleTicketsDetection" name="test_consistent_heartbeat_still_revives_and_reconciles_normally" time="0.168" /><testcase classname="tests.test_iter25j_health_score.TestHealthScore" name="test_health_score_has_required_shape" time="0.376" /><testcase classname="tests.test_iter25j_health_score.TestHealthScore" name="test_health_score_status_reflects_score_bucket" time="0.049" /><testcase classname="tests.test_iter25j_health_score.TestHealthScore" name="test_health_score_flags_outdated_ea" time="0.069" /><testcase classname="tests.test_iter25j_health_score.TestQuickActions" name="test_quick_actions_has_required_shape" time="0.056" /><testcase classname="tests.test_iter25j_health_score.TestQuickActions" name="test_quick_actions_open_trades_matches_db" time="0.047" /><testcase classname="tests.test_iter25k_partial_close_sync.TestPartialClosePreservesTrade" name="test_partial_out_deal_keeps_trade_open_and_reduces_lot" time="0.480" /><testcase classname="tests.test_iter25k_partial_close_sync.TestPartialClosePreservesTrade" name="test_full_out_deal_still_closes_trade" time="0.587" /><testcase classname="tests.test_iter25k_partial_close_sync.TestPartialClosePreservesTrade" name="test_partial_close_with_1pct_tolerance_still_closes_fully" time="0.591" /><testcase classname="tests.test_iter25k_partial_close_sync.TestOpenTicketsDerivedFromPositions" name="test_heartbeat_with_positions_but_no_open_tickets_field" time="0.120" /><testcase classname="tests.test_iter25l_full_regression" name="test_public_get_returns_200[/api/health]" time="0.101" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/auth/me]" time="0.377" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/accounts]" time="0.050" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/trades]" time="0.073" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/bot/config]" time="0.127" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/bot/configs]" time="0.053" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/bot/status]" time="0.054" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/bot/health-score]" time="0.091" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/bot/quick-actions]" time="0.060" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/bot/sizing-preview?symbol=XAUUSD]" time="0.056" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/bot/sizing-preview?symbol=BTCUSD]" time="0.049" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/analytics/by-account]" time="0.055" /><testcase classname="tests.test_iter25l_full_regression" name="test_authenticated_get_returns_200[/api/notifications/telegram]" time="0.051" /><testcase classname="tests.test_iter25l_full_regression" name="test_health_score_full_shape" time="0.053" /><testcase classname="tests.test_iter25l_full_regression" name="test_quick_actions_full_shape" time="0.051" /><testcase classname="tests.test_iter25l_full_regression" name="test_sizing_preview_rows_55_to_90" time="0.049" /><testcase classname="tests.test_iter25l_full_regression" name="test_sizing_preview_symbol_switch_btcusd" time="0.052" /><testcase classname="tests.test_iter25l_full_regression" name="test_notifications_telegram_returns_external_trade_opened_key" time="0.052" /><testcase classname="tests.test_iter25l_full_regression" name="test_telegram_test_endpoint_responds_ok_for_configured_admin" time="0.448" /><testcase classname="tests.test_iter25l_full_regression" name="test_heartbeat_positions_derives_open_tickets" time="0.233" /><testcase classname="tests.test_iter25l_full_regression" name="test_websocket_ws_connects_with_auth" time="0.176" /><testcase classname="tests.test_iter25l_full_regression" name="test_trade_revive_404_for_unknown_id" time="0.051" /><testcase classname="tests.test_iter25l_full_regression" name="test_trade_audit_404_for_unknown_id" time="0.054" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestBotStatus" name="test_status_no_account_returns_scope_fields" time="0.389" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestBotStatus" name="test_status_explicit_account_id_overrides_auto" time="0.096" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestDiagnosticRun" name="test_admin_run_returns_all_sections" time="0.063" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestDiagnosticRun" name="test_non_admin_run_403" time="0.378" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestDiagnosticAutoFix" name="test_unknown_code_returns_error" time="0.049" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestDiagnosticAutoFix" name="test_valid_codes_return_result_dicts" time="0.046" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestDiagnosticAutoFix" name="test_empty_codes_returns_400" time="0.043" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestDiagnosticAutoFix" name="test_non_admin_auto_fix_403" time="0.054" /><testcase classname="tests.test_iter26_max_concurrent_endpoints.TestHealthScore" name="test_admin_health_score_200" time="0.048" /><testcase classname="tests.test_iter26_max_concurrent_endpoints" name="test_paper_engine_blocks_when_cap_reached" time="0.004" /><testcase classname="tests.test_iter26_max_concurrent_endpoints" name="test_paper_engine_no_cap_kwarg_skips_count" time="0.005" /><testcase classname="tests.test_max_concurrent_race" name="test_mt5_engine_blocks_when_cap_reached" time="0.002" /><testcase classname="tests.test_max_concurrent_race" name="test_mt5_engine_allows_when_below_cap" time="0.002" /><testcase classname="tests.test_max_concurrent_race" name="test_mt5_engine_no_cap_arg_allows" time="0.002" /><testcase classname="tests.test_safety_guardian" name="test_paper_account_always_bypasses" time="0.002" /><testcase classname="tests.test_safety_guardian" name="test_live_account_zero_equity_refused" time="0.001" /><testcase classname="tests.test_safety_guardian" name="test_live_account_deep_drawdown_refused" time="0.001" /><testcase classname="tests.test_safety_guardian" name="test_live_account_low_free_margin_refused" time="0.001" /><testcase classname="tests.test_safety_guardian" name="test_live_account_oversized_trade_refused" time="0.001" /><testcase classname="tests.test_safety_guardian" name="test_live_account_good_trade_passes" time="0.002" /><testcase classname="tests.test_safety_guardian" name="test_live_account_daily_loss_cap_refuses" time="0.003" /><testcase classname="tests.test_safety_guardian" name="test_live_account_aggregate_risk_cap_refuses" time="0.002" /><testcase classname="tests.test_safety_guardian" name="test_guardian_config_exposes_thresholds" time="0.001" /><testcase classname="tests.test_safety_guardian" name="test_mt5_engine_calls_guardian_and_blocks_on_failure" time="0.002" /><testcase classname="tests.test_safety_guardian" name="test_mt5_engine_stamps_safety_audit_on_good_trade" time="0.004" /></testsuite></testsuites>

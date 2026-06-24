@@ -1,0 +1,41 @@
+{
+  "summary": "Iter 18 — verified the NEW safety_guardian.py server-side hard-floor module + execution.MT5BridgeEngine integration + diagnostic_routes surfacing. All 11 new safety_guardian unit tests pass; all 14 pre-existing iter26 + race regression tests still pass; the 23 iter25l regression tests still pass; 2 NEW HTTP-level tests added (test_iter18_diagnostic_safety_guardian.py) verify GET /api/diagnostic/run as admin includes both `Safety Guardian active` (with all six threshold values in the detail string) and `Safety Guardian recent blocks (24h)` checks, and that a non-admin gets 403. Combined run: 50/50 passed. Safety_guardian correctly bypasses for paper accounts, refuses on equity=0, deep drawdown, low free margin, oversized lot, daily loss cap breach, and aggregate open-risk cap breach. MT5BridgeEngine bails with {blocked:'safety_guardian', safety_blocked_by:<code>, safety_audit:[...]} on failure and stamps the full audit dict onto the inserted trade doc on success. No production code changes made; only added /app/backend/tests/test_iter18_diagnostic_safety_guardian.py.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_safety_guardian.py",
+    "/app/backend/tests/test_iter18_diagnostic_safety_guardian.py",
+    "/app/test_reports/pytest/iter18_safety_guardian.xml",
+    "/app/test_reports/pytest/iter18_safety_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "safety_guardian.py per_trade_risk_cap branch refuses ANY trade missing lot/entry/SL with blocked_by='per_trade_risk_cap'. This is technically correct (you cannot size a trade without an SL) but the failure reason name is misleading — the audit entry says 'cap' when the actual cause is 'missing inputs'. Consider a distinct check name (e.g. 'risk_inputs_present') so the diagnostic UI can show 'broker did not return SL' instead of implying the user oversized.",
+    "safety_guardian.py uses `account.get('mode') or 'live'` — defaulting to LIVE is the safe choice but means an account doc with mode=None will trigger all live caps. If a test/seed forgets to set mode, the new floors will silently refuse trades. Worth a startup migration to backfill `mode='paper'` on any account missing the field, OR a clearer fail message: 'account.mode missing — defaulting to live caps, set mode=paper to bypass'.",
+    "safety_guardian.py loads MAX_* constants ONCE at import time via os.environ.get. Changing SAFETY_* env vars requires a backend restart — the diagnostic endpoint will show stale values until restart. For an operator-facing tunable, consider reading env at audit_pre_trade() call time so a runtime export of SAFETY_MAX_RISK_PCT_PER_TRADE=2 takes effect on next trade without supervisor restart.",
+    "execution.py wires the guardian AFTER the max_concurrent cap check. Order is correct (cheap check first) but the trade_doc on success now carries the full safety_audit dict (~700 bytes of nested data per trade). On a 10k-trade history this is ~7MB of audit metadata. Consider trimming the stored audit to {blocked_by:None, evaluated_at, summary} on success and keeping the full audit only when a trade is refused (in a separate `safety_blocks` collection for analytics).",
+    "diagnostic_routes._check_risk_state counts 'recent blocks' by querying trades with status='failed' AND error~='safety_guardian' — but the engine returns the block result WITHOUT inserting a trade doc (per design). So this counter will ALWAYS report 0. The block events have no persistence right now; the dashboard claim '0 blocks' is technically misleading because it cannot detect blocks even if they occurred. Either (a) insert a lightweight `safety_block` audit row when the guardian refuses, or (b) rename the check to 'Safety Guardian failed-trade audit (24h)' and document the limitation in the detail string.",
+    "safety_guardian.py daily_loss_cap uses balance (not equity) as the denominator while the threshold percentage is documented as 'of equity' in the cap header comment (line 37 says 'today's realized + unrealized'). The implementation actually only uses realized PnL from closed trades against balance. Either rename MAX_DAILY_LOSS_PCT to clarify 'of starting-day balance' OR add the unrealized component (sum of PnL on currently-open trades) to the comparison.",
+    "safety_guardian.py lot_vs_equity_sanity uses pip_usd × 100 as a 'lot value proxy'. For XAUUSD this gives ~$100 per lot which is FAR below true notional (~$400k/lot). The cap (5% × equity × 5x leverage = 25% of equity) is therefore vastly larger than any realistic per-trade pip exposure → this check will essentially NEVER fire. If the intent is a real lot-vs-notional ceiling, swap in a proper contract-size lookup (XAUUSD = 100oz × spot price)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter18_diagnostic_safety_guardian.py (NEW — 2 HTTP tests verifying /api/diagnostic/run surfaces Safety Guardian active+recent blocks checks and that non-admin gets 403)"
+  ],
+  "success_rate": {
+    "backend": "100% on requested scope (50/50: 11 safety_guardian + 3 race + 11 iter26_endpoints + 23 iter25l + 2 iter18 diagnostic)",
+    "frontend": "not tested (review_request scope = backend only)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (cookie-based session via /api/auth/login). Non-admin: ephemeral TEST_iter18_safety_<uuid>@example.com auto-registered per run.",
+  "seed_data_creation": "Only ephemeral test users (TEST_iter18_safety_*) created via /api/auth/register — small footprint, no cleanup. No trades, accounts, or bot configs created/modified by this iteration's tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter18 added /app/backend/tests/test_iter18_diagnostic_safety_guardian.py with 2 HTTP integration tests for the diagnostic endpoint's new Safety Guardian checks. To re-run the full iter18 scope: `cd /app/backend && set -a && source .env && set +a && python -m pytest tests/test_safety_guardian.py tests/test_max_concurrent_race.py tests/test_iter26_max_concurrent_endpoints.py tests/test_iter25l_full_regression.py tests/test_iter18_diagnostic_safety_guardian.py -v --asyncio-mode=auto` → 50/50 passing. Note: when running pytest from a fresh shell, MONGO_URL/DB_NAME must be sourced from /app/backend/.env first; pytest does NOT auto-load the .env. Two pre-existing failures in unrelated files (backend_test.py::TestSlippageVeto::test_excess_slippage_triggers_full_close and test_iter25g_external_trade_alert.py::test_is_plausible_trade_rejects_id_not_in_db) exist BEFORE this iteration's changes — they test /api/bridge/report slippage-veto logic and plausibility heuristics respectively, neither path touches safety_guardian. Do NOT treat them as iter18 regressions.",
+  "rca of the issue": "N/A — this iteration is a NEW FEATURE verification, not a bug fix. Spec audit confirms: (a) safety_guardian.py implements all 6 live caps from the spec (equity_known, equity_vs_balance_floor, free_margin_floor, per_trade_risk_cap, lot_vs_equity_sanity, daily_loss_cap, total_open_risk_cap) with paper_mode_bypass; (b) execution.MT5BridgeEngine.execute() calls audit_pre_trade after the max_concurrent guard, returns {blocked:'safety_guardian', safety_blocked_by, safety_audit} without inserting on failure, stamps safety_audit on the trade_doc on success — verified by 2 engine-integration unit tests; (c) /api/diagnostic/run as admin surfaces both new checks with thresholds in the detail string — verified by HTTP test against the production-shape backend; (d) non-admin 403 path still enforced. All 25 unit tests + 23 iter25l regression tests + 2 new HTTP tests pass. The 6 critical_code_review_comments above identify second-order issues (audit-bloat, no persistence of block events, daily_loss naming, lot-sanity check effectively a no-op) that the main agent should consider but none of them are correctness regressions for the v1 feature as specified."
+}
