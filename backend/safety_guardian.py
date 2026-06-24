@@ -122,27 +122,28 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     sl = float(signal.get("stop_loss") or 0)
     sym = signal.get("symbol") or ""
     risk_usd = 0.0
-    if lot > 0 and entry > 0 and sl > 0:
-        sl_pips = price_to_pips(sym, abs(entry - sl))
-        pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"))
-        risk_usd = sl_pips * pip_usd * lot
-        max_risk_usd = equity * (MAX_RISK_PCT_PER_TRADE / 100.0)
-        if risk_usd > max_risk_usd:
-            audit.append(_fail("per_trade_risk_cap",
-                               f"Risk ${risk_usd:.2f} > cap ${max_risk_usd:.2f} ({MAX_RISK_PCT_PER_TRADE}% of equity)",
-                               risk_usd))
-            return {"ok": False, "blocked_by": "per_trade_risk_cap", "audit": audit,
-                    "evaluated_at": datetime.now(timezone.utc).isoformat(),
-                    "context": {**context, "risk_usd": risk_usd}}
-        audit.append(_ok("per_trade_risk_cap",
-                         value=f"${risk_usd:.2f} <= ${max_risk_usd:.2f}"))
-    else:
-        audit.append(_fail("per_trade_risk_cap",
+    if not (lot > 0 and entry > 0 and sl > 0):
+        audit.append(_fail("risk_inputs_present",
                            "Cannot compute risk — missing lot/entry/SL",
                            f"lot={lot} entry={entry} sl={sl}"))
-        return {"ok": False, "blocked_by": "per_trade_risk_cap", "audit": audit,
+        return {"ok": False, "blocked_by": "risk_inputs_present", "audit": audit,
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "context": context}
+    audit.append(_ok("risk_inputs_present",
+                     value=f"lot={lot} entry={entry} sl={sl}"))
+    sl_pips = price_to_pips(sym, abs(entry - sl))
+    pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"))
+    risk_usd = sl_pips * pip_usd * lot
+    max_risk_usd = equity * (MAX_RISK_PCT_PER_TRADE / 100.0)
+    if risk_usd > max_risk_usd:
+        audit.append(_fail("per_trade_risk_cap",
+                           f"Risk ${risk_usd:.2f} > cap ${max_risk_usd:.2f} ({MAX_RISK_PCT_PER_TRADE}% of equity)",
+                           risk_usd))
+        return {"ok": False, "blocked_by": "per_trade_risk_cap", "audit": audit,
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "context": {**context, "risk_usd": risk_usd}}
+    audit.append(_ok("per_trade_risk_cap",
+                     value=f"${risk_usd:.2f} <= ${max_risk_usd:.2f}"))
 
     # 5. Lot vs equity ratio sanity (catches Kelly explosion)
     # 1 lot XAU ≈ 100 oz ≈ $400k notional at current prices. Cap lot s.t.

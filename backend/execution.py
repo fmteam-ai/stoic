@@ -59,6 +59,22 @@ class MT5BridgeEngine(ExecutionEngine):
                 user_id, cfg_account_id or "default",
                 signal.get("symbol"), safety.get("blocked_by"),
             )
+            # Persist a lightweight audit row so the diagnostic can show
+            # 24h-block-count and operators can see WHY trades were refused.
+            try:
+                await db.safety_blocks.insert_one({
+                    "user_id": user_id,
+                    "account_id": cfg_account_id,
+                    "symbol": signal.get("symbol"),
+                    "action": signal.get("action"),
+                    "lot_size": signal.get("lot_size"),
+                    "blocked_by": safety["blocked_by"],
+                    "audit": safety["audit"],
+                    "context": safety.get("context"),
+                    "blocked_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to persist safety_block: %s", e)
             return {"blocked": "safety_guardian",
                     "safety_blocked_by": safety["blocked_by"],
                     "safety_audit": safety["audit"]}

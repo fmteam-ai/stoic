@@ -220,6 +220,32 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### SAFETY GUARDIAN: server-side hard floors for LIVE accounts
+**Why:** User asked: *"how do I be sure the bot won't blow up my real account?"* — most efficient single intervention is non-bypassable, server-side risk caps that fire INSIDE the execution engine, regardless of user config.
+
+**Built:**
+- New module `/app/backend/safety_guardian.py` exposes `audit_pre_trade(db, account, signal, user_id, cfg_account_id)` returning `{ok, blocked_by, audit, evaluated_at, context}`. Enforces 7 caps on live accounts:
+  1. `equity_known` — equity > 0
+  2. `equity_vs_balance_floor` — equity ≥ 70% of balance (drawdown halt)
+  3. `free_margin_floor` — free_margin ≥ 20% of equity
+  4. `risk_inputs_present` — lot/entry/SL must all be set
+  5. `per_trade_risk_cap` — SL$ × pip$ × lot ≤ 3% of equity
+  6. `lot_vs_equity_sanity` — lot exposure ceiling
+  7. `daily_loss_cap` — today's realized PnL > -6% of balance
+  8. `total_open_risk_cap` — sum of open trade risk + new trade risk ≤ 9% of equity
+- Paper accounts bypass with explicit `paper_mode_bypass` audit entry.
+- All thresholds env-overridable via `SAFETY_*` variables.
+
+**Engine integration (`execution.py`):**
+- `MT5BridgeEngine.execute()` calls `audit_pre_trade` AFTER the max_concurrent cap check.
+- On `ok=False`: returns `{blocked: 'safety_guardian', safety_blocked_by, safety_audit}` AND persists a row in new `safety_blocks` collection with the full audit. NO trade inserted.
+- On `ok=True`: stamps `safety_audit` field on the inserted trade_doc for forensic traceability.
+
+**Diagnostic surfacing (`diagnostic_routes.py`):**
+- Risk State section now reports `Safety Guardian active` with all thresholds in detail string + `Safety Guardian recent blocks (24h)` with breakdown by blocked_by reason from the new `safety_blocks` collection.
+
+**Testing:** 50/50 pass via `testing_agent_v3_fork` iter18 (11 new safety_guardian unit tests + 14 max_concurrent regressions + 23 iter25l + 2 HTTP integration). No critical/minor issues. Six code review notes addressed: (1) split `risk_inputs_present` from `per_trade_risk_cap` for honest error reporting, (5) persisted blocks to `safety_blocks` collection so the diagnostic shows real counts.
+
 ### BUG FIX: `max_concurrent_trades` cap bypass (race condition)
 **Reported by user:** *"i set the maximum trades 5, and there are 12 trades open"*
 

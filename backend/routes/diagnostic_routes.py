@@ -243,20 +243,24 @@ async def _check_risk_state(db, user_id: str) -> dict:
             f"Equity floor {gc['min_equity_vs_balance_pct']}% · "
             f"Free margin floor {gc['min_free_margin_pct']}%",
         ))
-        # Count recent safety blocks (last 24h) — bot tried but guardian refused
-        # NOTE: blocks aren't stored as trade docs; we surface log-based signal
-        # via bot_logs collection if it exists, else "no data yet" is fine.
+        # Count safety blocks persisted in the last 24h. The engine inserts
+        # a `safety_blocks` row each time the guardian refuses a trade, so
+        # this gives operators an honest view of risk-envelope breaches.
         day_ago = (now - timedelta(hours=24)).isoformat()
-        recent_blocks = await db.trades.count_documents({
-            "user_id": user_id, "status": "failed",
-            "error": {"$regex": "safety_guardian", "$options": "i"},
-            "opened_at": {"$gte": day_ago},
+        recent_blocks = await db.safety_blocks.count_documents({
+            "user_id": user_id, "blocked_at": {"$gte": day_ago},
         })
         if recent_blocks > 0:
+            top_reasons = await db.safety_blocks.aggregate([
+                {"$match": {"user_id": user_id, "blocked_at": {"$gte": day_ago}}},
+                {"$group": {"_id": "$blocked_by", "n": {"$sum": 1}}},
+                {"$sort": {"n": -1}}, {"$limit": 5},
+            ]).to_list(length=5)
+            breakdown = ", ".join(f"{r['_id']}×{r['n']}" for r in top_reasons)
             checks.append(_mk(
                 "Safety Guardian recent blocks (24h)", "warn",
-                f"{recent_blocks} trade(s) refused by safety floors — bot is trying "
-                "to trade outside risk envelope. Review last signal reasoning.",
+                f"{recent_blocks} trade(s) refused — {breakdown}. "
+                "Bot is attempting trades outside risk envelope.",
             ))
         else:
             checks.append(_mk("Safety Guardian recent blocks (24h)", "pass",

@@ -179,6 +179,7 @@ async def test_mt5_engine_calls_guardian_and_blocks_on_failure(monkeypatch):
     fake_db = MagicMock()
     fake_db.trades.count_documents = AsyncMock(return_value=0)
     fake_db.trades.insert_one = AsyncMock()
+    fake_db.safety_blocks.insert_one = AsyncMock()
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
 
     async def fake_audit(**kw):  # noqa: ARG001
