@@ -1,6 +1,8 @@
 """Risk management profiles + Kelly-modified dynamic position sizing."""
 from typing import Literal
 
+from pip_utils import price_to_pips, pip_value_usd_per_lot
+
 RiskLevel = Literal["low", "medium", "high", "extreme"]
 
 # `kelly_cap` is the maximum fraction of profile risk to deploy on a 100%-confidence
@@ -92,4 +94,63 @@ def derive_sl_tp(action: str, entry: float, atr: float, profile: dict) -> tuple:
     elif action == "SELL":
         return round(entry + sl_dist, 5), round(entry - tp_dist, 5)
     return entry, entry
+
+
+def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
+                            stop_loss: float, confidence_pct: float,
+                            profile: dict) -> dict:
+    """Account-aware Kelly position sizing — runs at execute time.
+
+    Uses the broker's real equity (not a hardcoded $1000), converts the SL
+    price distance to pips via the symbol's pip size, and applies the proper
+    USD-per-lot-per-pip table scaled by account_type (standard / cent /
+    microcent). Returns the lot size you should pass to the broker, *before*
+    the user's `max_lot_size` cap is applied.
+
+    Why this matters: the ai_signals.py signal-time `lot_size` was computed
+    with a fake $1000 equity and pip_value=1.0, which always over-shoots on
+    larger live accounts — making the user's max_lot_size cap permanently
+    binding (which feels like "the bot uses my max every trade").
+    """
+    equity = float(
+        account.get("equity")
+        or account.get("balance")
+        or account.get("initial_balance")
+        or 0
+    )
+    if equity <= 0:
+        return {"lot_size": 0.01, "method": "fallback_no_equity"}
+
+    sl_distance_price = abs(float(entry_price) - float(stop_loss))
+    sl_pips = price_to_pips(symbol, sl_distance_price)
+    if sl_pips <= 0:
+        return {"lot_size": 0.01, "method": "fallback_zero_sl"}
+
+    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"))
+    if pip_usd <= 0:
+        return {"lot_size": 0.01, "method": "fallback_zero_pip_value"}
+
+    payoff_ratio = profile["tp_atr_mult"] / max(profile["sl_atr_mult"], 0.1)
+    f = kelly_fraction(
+        confidence_pct=confidence_pct,
+        min_conf=profile["min_confidence"],
+        profile_kelly_cap=profile["kelly_cap"],
+        payoff_ratio=payoff_ratio,
+    )
+    if profile["kelly_cap"] > 0:
+        effective_risk_pct = profile["risk_pct"] * (f / profile["kelly_cap"])
+    else:
+        effective_risk_pct = 0.0
+    risk_amount_usd = equity * (effective_risk_pct / 100.0)
+    lots = risk_amount_usd / (sl_pips * pip_usd)
+    return {
+        "lot_size": max(round(lots, 2), 0.01),
+        "risk_amount_usd": round(risk_amount_usd, 2),
+        "kelly_f": round(f, 4),
+        "effective_risk_pct": round(effective_risk_pct, 3),
+        "sl_pips": round(sl_pips, 1),
+        "pip_usd_per_lot": round(pip_usd, 4),
+        "equity": round(equity, 2),
+        "method": "kelly_account_aware",
+    }
 

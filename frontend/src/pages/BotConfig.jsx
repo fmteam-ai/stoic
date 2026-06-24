@@ -525,18 +525,21 @@ export default function BotConfig() {
                                 <Layers className="w-3 h-3 text-[#FFD700]" />
                                 MAX LOT SIZE PER TRADE
                                 <span className="font-mono text-[9px] text-[#52525B] normal-case tracking-normal ml-auto">
-                                    Hard ceiling — clamps any signal larger than this. <span className="text-[#FFD700]">0</span> = uncapped.
+                                    Lot used at <span className="text-[#FFD700]">peak confidence</span> — scales down with signal confidence. <span className="text-[#FFD700]">0</span> = pure Kelly.
                                 </span>
                             </label>
                             <input type="number" min="0" step="0.01" value={cfg.max_lot_size ?? 0}
                                 onChange={e => setCfg({ ...cfg, max_lot_size: Math.max(0, parseFloat(e.target.value) || 0) })}
                                 data-testid="max-lot-size-input"
                                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
-                                placeholder="e.g. 0.10  (0 = uncapped)" />
+                                placeholder="e.g. 0.10  (0 = pure Kelly)" />
                             <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1.5">
                                 {selectedAccountId
                                     ? "APPLIES TO THIS ACCOUNT ONLY"
                                     : "APPLIES TO ANY ACCOUNT USING THE DEFAULT PROFILE"}
+                                <span className="ml-2 text-[#A1A1AA]">
+                                    · LOW CONFIDENCE = SMALLER LOT · MAX REACHED ONLY ON PEAK-CONVICTION SIGNALS
+                                </span>
                             </div>
                         </div>
                     </div>

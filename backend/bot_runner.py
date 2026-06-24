@@ -28,6 +28,7 @@ from position_protector import sweep_all as sweep_pre_news
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
+from risk import get_profile, compute_lot_for_account
 
 logger = logging.getLogger("bot-runner")
 
@@ -366,12 +367,52 @@ async def _process_user_account(db, cfg: dict):
                 await inc_intel_counter(user_id, "spread_block")
                 continue
 
-        # Apply per-account max lot size clamp before handing to the engine.
-        effective_lot = float(signal["lot_size"])
-        if max_lot_cap > 0 and effective_lot > max_lot_cap:
-            logger.info("Max-lot clamp user=%s acct=%s sym=%s: %.4f → %.4f",
-                        user_id, cfg_account_id or "default", sym, effective_lot, max_lot_cap)
-            effective_lot = max_lot_cap
+        # Recompute lot size against the TARGET account's real equity and the
+        # symbol's proper pip-value. The signal-time lot is computed with a
+        # hardcoded $1000 equity (account-agnostic), which always over-shoots
+        # on live accounts and made the user's max_lot_size cap permanently
+        # binding. Doing it here ties sizing to actual risk management.
+        profile = get_profile(risk_level)
+        sized = compute_lot_for_account(
+            account=target_account,
+            symbol=signal["symbol"],
+            entry_price=signal["entry_price"],
+            stop_loss=signal["stop_loss"],
+            confidence_pct=float(signal.get("confidence") or 0),
+            profile=profile,
+        )
+        kelly_f = float(sized.get("kelly_f") or 0)
+        kelly_cap = float(profile.get("kelly_cap") or 0)
+        absolute_lot = float(sized["lot_size"])
+
+        # Position-sizing strategy when user has set a `max_lot_size`:
+        #   • Treat max_lot_size as the lot at PEAK Kelly (max confidence).
+        #   • Scale linearly to lower confidence: lot = max × (kelly_f / kelly_cap).
+        # This is what the user means by "use lots according to risk management
+        # and not the maximum on every trade" — low-confidence signals get
+        # proportionally smaller lots, high-confidence signals approach the cap.
+        # When max_lot_size is 0 (unset), fall back to absolute Kelly sizing.
+        if max_lot_cap > 0 and kelly_cap > 0:
+            conf_scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
+            scaled_lot = max(round(max_lot_cap * conf_scale, 2), 0.01)
+            # Pick the smaller of: absolute Kelly lot vs confidence-scaled cap.
+            effective_lot = min(absolute_lot, scaled_lot)
+            sizing_method = "max_cap_kelly_scaled"
+        else:
+            effective_lot = absolute_lot
+            # Legacy hard-ceiling clamp (no scaling — only when kelly_cap=0)
+            if max_lot_cap > 0 and effective_lot > max_lot_cap:
+                effective_lot = max_lot_cap
+            sizing_method = "absolute_kelly"
+
+        logger.info(
+            "Lot sized acct=%s sym=%s equity=$%s conf=%s%% kelly_f=%s "
+            "sl_pips=%s pip_usd=$%s abs_lot=%s max_cap=%s → lots=%s (method=%s)",
+            cfg_account_id or "default", sym,
+            sized.get("equity"), signal.get("confidence"),
+            kelly_f, sized.get("sl_pips"), sized.get("pip_usd_per_lot"),
+            absolute_lot, max_lot_cap, effective_lot, sizing_method,
+        )
 
         engine = engine_for_account(target_account)
         trade_doc = await engine.execute(
