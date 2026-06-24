@@ -39,6 +39,10 @@ function App() {
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/signals" element={<ProtectedRoute><Signals /></ProtectedRoute>} />
                         <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
+                        {/* Alias — `bot-config` is the documented path, while
+                            the historical sidebar link is `/bot`. Both render
+                            the same page so direct navigation works either way. */}
+                        <Route path="/bot-config" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
                         <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
                         <Route path="/trades" element={<ProtectedRoute><Trades /></ProtectedRoute>} />
                         <Route path="/symbols" element={<ProtectedRoute><Symbols /></ProtectedRoute>} />

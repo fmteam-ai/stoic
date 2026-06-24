@@ -44,6 +44,7 @@ def _serialize(doc: dict) -> dict:
 
 
 @router.get("/telegram")
+@router.get("/prefs")   # alias — friendlier name for the UI / docs
 async def get_telegram(user=Depends(get_current_user)):
     db = get_db()
     doc = await db.notifications.find_one({"user_id": user["id"]}) or {}
