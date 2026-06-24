@@ -679,12 +679,15 @@ function AuditTrailModal({ trade, onClose }) {
 }
 
 const AUDIT_KIND_STYLE = {
-    stoic_open:    { color: "#00FF41", dot: "● " },
-    stoic_close:   { color: "#FF3B30", dot: "● " },
-    breakeven:     { color: "#FFD700", dot: "◆ " },
-    partial_close: { color: "#00FF41", dot: "◇ " },
-    trail_active:  { color: "#0099FF", dot: "▲ " },
-    broker_deal:   { color: "#A1A1AA", dot: "▸ " },
+    stoic_open:           { color: "#00FF41", dot: "● " },
+    stoic_close:          { color: "#FF3B30", dot: "● " },
+    breakeven:            { color: "#FFD700", dot: "◆ " },
+    partial_close:        { color: "#00FF41", dot: "◇ " },
+    trail_active:         { color: "#0099FF", dot: "▲ " },
+    revived:              { color: "#FFD700", dot: "↻ " },
+    pending_modification: { color: "#FF9500", dot: "⏳" },
+    modification_error:   { color: "#FF3B30", dot: "⚠ " },
+    broker_deal:          { color: "#A1A1AA", dot: "▸ " },
 };
 
 function AuditEventRow({ e }) {

@@ -372,6 +372,46 @@ async def trade_audit(trade_id: str, user=Depends(get_current_user)):
                 "close_reason": trade.get("close_reason"),
             },
         })
+    if trade.get("revived_at"):
+        events.append({
+            "kind": "revived",
+            "at": trade["revived_at"],
+            "label": "Trade revived (re-opened from wrongful close)",
+            "details": {
+                "revived_from_close_reason": trade.get("revived_from_close_reason"),
+                "revived_via_snapshot": trade.get("revived_via_snapshot"),
+            },
+        })
+
+    # Pending EA modification — fires when STOIC has queued a change (partial
+    # close, BE, FULL_CLOSE) that the EA hasn't acked yet. Without this, the
+    # user sees a stuck trade with no visible reason in the audit log.
+    pm = trade.get("pending_modification")
+    if pm and isinstance(pm, dict):
+        kind = pm.get("type") or "unknown"
+        ts = pm.get("requested_at") or trade.get("opened_at")
+        if kind == "PARTIAL_CLOSE":
+            lbl = f"⏳ Pending EA action · partial close to {pm.get('new_volume')} lots"
+            if pm.get("new_sl") is not None:
+                lbl += f" + SL→{pm.get('new_sl')} (break-even)"
+        elif kind == "MODIFY_SL":
+            lbl = f"⏳ Pending EA action · SL→{pm.get('new_sl')}"
+        elif kind == "FULL_CLOSE":
+            lbl = "⏳ Pending EA action · full close requested"
+        else:
+            lbl = f"⏳ Pending EA action · {kind}"
+        events.append({
+            "kind": "pending_modification",
+            "at": ts,
+            "label": lbl,
+            "details": pm,
+        })
+    if trade.get("last_modification_error"):
+        events.append({
+            "kind": "modification_error",
+            "at": trade.get("opened_at"),
+            "label": f"⚠ EA reported error: {trade.get('last_modification_error')}",
+        })
 
     # 2. Broker deals — every MT5 event that touched this ticket
     ticket = trade.get("mt5_ticket")
@@ -462,6 +502,10 @@ async def revive_trade(trade_id: str, user=Depends(get_current_user)):
             "closed_at": None,
             "revived_at": now_iso,
             "revived_from_close_reason": trade.get("close_reason"),
+            # Clear any pending EA modification (e.g. FULL_CLOSE queued by
+            # slippage veto / reconciler) — otherwise the EA would close the
+            # trade again on its next poll, undoing the revive.
+            "pending_modification": None,
         },
          "$unset": {"close_reason": "", "reconciled": "", "close_requested": ""}},
     )

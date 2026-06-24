@@ -20,9 +20,7 @@ from database import get_db
 from market import get_quote
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips
-from notifier import (
-    notify_breakeven, notify_partial_close, notify_trail, notify_circuit_breaker
-)
+from notifier import notify_circuit_breaker
 
 logger = logging.getLogger("trade-manager")
 
@@ -112,10 +110,7 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             "to_lot": new_lot,
             "pips": round(pips_up, 1),
         })
-        try:
-            await notify_partial_close(trade["user_id"], str(trade_id), current_lot, new_lot, pips_up / max(1, tp1_pips))
-        except Exception:
-            pass
+        # NOTE: no Telegram here — fires from modification_ack on EA confirm.
         return
 
     # Tier 2 — close another 25% at +tp2 pips (remaining = 25% of original)
@@ -142,10 +137,7 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                 "to_lot": new_lot,
                 "pips": round(pips_up, 1),
             })
-            try:
-                await notify_partial_close(trade["user_id"], str(trade_id), current_lot, new_lot, pips_up / max(1, tp1_pips))
-            except Exception:
-                pass
+            # NOTE: no Telegram here — fires from modification_ack on EA confirm.
             return
 
     # Tier 1 — close 50% AND move SL to entry at +tp1 pips
@@ -173,11 +165,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                 "new_sl": round(entry, 5),
                 "pips": round(pips_up, 1),
             })
-            try:
-                await notify_partial_close(trade["user_id"], str(trade_id), current_lot, new_lot, 1.0)
-                await notify_breakeven(trade["user_id"], str(trade_id), round(entry, 5), 1.0)
-            except Exception:
-                pass
+            # NOTE: no Telegram here — both partial-close and break-even
+            # alerts fire from modification_ack once the EA confirms the move.
             return
 
 

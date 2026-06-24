@@ -131,6 +131,10 @@ async def heartbeat(payload: BridgeHeartbeat):
                             "revived_at": now_iso,
                             "revived_from_close_reason": existing.get("close_reason"),
                             "revived_via_snapshot": True,
+                            # Clear any leftover EA modification (FULL_CLOSE from
+                            # slippage veto / reconciler) so the EA doesn't re-kill
+                            # the revived position on its next poll.
+                            "pending_modification": None,
                         },
                          "$unset": {
                              "close_reason": "", "reconciled": "",
@@ -257,6 +261,11 @@ async def modification_ack(payload: BridgeModificationAck):
     if not trade or trade["account_id"] != str(acc["_id"]):
         raise HTTPException(status_code=404, detail="Trade not found")
 
+    # Notifications to fire AFTER the EA confirms — collected here, dispatched
+    # only on the success path so the user never gets a Telegram for an action
+    # the broker never actually applied.
+    pending_notifs: list = []
+
     update = {"pending_modification": None}
     if payload.success:
         if payload.type == "MODIFY_SL" and payload.new_sl is not None:
@@ -269,22 +278,34 @@ async def modification_ack(payload: BridgeModificationAck):
                          (action == "SELL" and payload.new_sl <= entry)
                 if hit_be:
                     update["breakeven_set"] = True
+                    pending_notifs.append(("breakeven", float(payload.new_sl), 1.0))
             else:
                 update["trail_active"] = True
+                pending_notifs.append(("trail", float(payload.new_sl), None))
         elif payload.type == "PARTIAL_CLOSE" and payload.new_volume is not None:
-            update["lot_size"] = float(payload.new_volume)
+            from_lot = float(trade.get("lot_size") or 0)
+            to_lot = float(payload.new_volume)
+            update["lot_size"] = to_lot
             update["partial_closed"] = True
+            update["partial_closed_at"] = datetime.now(timezone.utc).isoformat()
             # If this PC also carried a new_sl (Tier-1 combo move), apply it
             mod = trade.get("pending_modification") or {}
             mod_new_sl = mod.get("new_sl")
             if mod_new_sl is not None:
                 update["stop_loss"] = float(mod_new_sl)
                 update["breakeven_set"] = True
-            # Mark tier progression
+            # Mark tier progression + compute R for the alert
             if not trade.get("tp1_closed"):
                 update["tp1_closed"] = True
+                r_mult = 1.0
             elif not trade.get("tp2_closed"):
                 update["tp2_closed"] = True
+                r_mult = 2.0
+            else:
+                r_mult = 3.0
+            pending_notifs.append(("partial_close", from_lot, to_lot, r_mult))
+            if mod_new_sl is not None:
+                pending_notifs.append(("breakeven", float(mod_new_sl), 1.0))
         elif payload.type == "FULL_CLOSE":
             update["tp3_closed"] = True
     else:
@@ -295,6 +316,34 @@ async def modification_ack(payload: BridgeModificationAck):
         "trade_id": payload.trade_id,
         **update,
     })
+
+    # Dispatch the queued Telegram alerts now that the broker has confirmed.
+    if pending_notifs:
+        try:
+            from notifier import (
+                notify_breakeven, notify_partial_close, notify_trail,
+            )
+            for n in pending_notifs:
+                kind = n[0]
+                if kind == "partial_close":
+                    _, from_lot, to_lot, r_mult = n
+                    await notify_partial_close(
+                        acc["user_id"], payload.trade_id, from_lot, to_lot, r_mult,
+                    )
+                elif kind == "breakeven":
+                    _, new_sl, r_mult = n
+                    await notify_breakeven(
+                        acc["user_id"], payload.trade_id, new_sl, r_mult,
+                    )
+                elif kind == "trail":
+                    _, new_sl, _r = n
+                    # r_multiple unknown at server side for pure trailing — pass 1+
+                    await notify_trail(
+                        acc["user_id"], payload.trade_id, new_sl, 1.0,
+                    )
+        except Exception as e:
+            logger.warning("modification-ack notify dispatch failed: %s", e)
+
     return {"ok": True}
 
 
