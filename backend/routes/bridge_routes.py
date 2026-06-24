@@ -100,6 +100,26 @@ async def heartbeat(payload: BridgeHeartbeat):
             tickets = [int(t) for t in payload.open_tickets if t is not None]
         except (TypeError, ValueError):
             tickets = []
+
+        # STALE-TICKET DETECTION: some EA builds (pre-v1.26) cache the tickets
+        # array and never purge entries after MT5 closes them — heartbeats then
+        # arrive with `open_positions=0` but `open_tickets=[4 dead ones]`.
+        # `open_positions` comes from PositionsTotal() and is authoritative.
+        # When the two disagree and positions reports FEWER, the tickets list
+        # is stale → use the count as ground truth and let reconcile close
+        # the leftovers in DB. (When positions reports MORE we keep the
+        # tickets list — safer to under-close than to over-close.)
+        ea_positions_count = payload.open_positions
+        if (ea_positions_count is not None
+                and ea_positions_count < len(tickets)):
+            logger.warning(
+                "EA stale-tickets detected: positions=%s but %s tickets reported "
+                "for account=%s. Treating tickets as []; user should upgrade EA "
+                "to v1.26 for OnTradeTransaction + history sweep.",
+                ea_positions_count, len(tickets), str(acc["_id"]),
+            )
+            tickets = []  # force orphan sweep; revive sweep also skipped below
+
         set_doc["open_tickets"] = tickets
         set_doc["open_tickets_updated_at"] = now_iso
 
@@ -110,6 +130,9 @@ async def heartbeat(payload: BridgeHeartbeat):
         # mode of slippage_veto / reconciler / Force Sync wiping a trade
         # whose ticket is still live on the broker. Works for v1.22+ EAs
         # that only send open_tickets (not full positions snapshot).
+        #
+        # Skip when tickets is empty after stale detection — otherwise we
+        # would loop-revive trades the broker has actually closed.
         if tickets:
             revive_candidates = await db.trades.find({
                 "account_id": str(acc["_id"]),
