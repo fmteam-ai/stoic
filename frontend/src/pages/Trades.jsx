@@ -168,24 +168,43 @@ export default function Trades() {
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [filter, setFilter] = useState("");
+    const [accountFilter, setAccountFilter] = useState("");   // "" = all accounts; otherwise account_id
+    const [accounts, setAccounts] = useState([]);             // for filter pills + label lookup
     const [quotes, setQuotes] = useState({}); // {SYMBOL: price}
     const quoteHistoryRef = useRef({}); // {SYMBOL: [{ts, price}]}
     const [velocities, setVelocities] = useState({}); // {SYMBOL: priceUnitsPerSec}
+
+    // Account_id → label map for inline display on each trade row.
+    const accountLabelById = useMemo(() => {
+        const m = {};
+        for (const a of accounts) m[a.id] = a.label || a.account_number || a.id.slice(-6);
+        return m;
+    }, [accounts]);
 
     const [refreshing, setRefreshing] = useState(false);
     const load = useCallback(async () => {
         setRefreshing(true);
         try {
+            const params = new URLSearchParams();
+            if (filter) params.set("status", filter);
+            if (accountFilter) params.set("account_id", accountFilter);
+            const qs = params.toString();
+            const statsParams = accountFilter ? `?account_id=${accountFilter}` : "";
             const [t, s] = await Promise.all([
-                api.get(`/trades${filter ? `?status=${filter}` : ""}`),
-                api.get("/trades/stats"),
+                api.get(`/trades${qs ? `?${qs}` : ""}`),
+                api.get(`/trades/stats${statsParams}`),
             ]);
             setTrades(t.data); setStats(s.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); setRefreshing(false); }
-    }, [filter]);
+    }, [filter, accountFilter]);
 
     useEffect(() => { load(); }, [load]);
+
+    // Accounts list — only refetched on mount (cheap, rarely changes during a session).
+    useEffect(() => {
+        api.get("/accounts").then(r => setAccounts(r.data || [])).catch(() => {});
+    }, []);
 
     // Live: refresh on any trade event
     const { lastEvent } = useLiveStream();
@@ -423,6 +442,29 @@ export default function Trades() {
                     ))}
                 </div>
 
+                {accounts.length > 1 && (
+                    <div className="flex items-center gap-2 flex-wrap" data-testid="account-filter-row">
+                        <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-1">ACCOUNT ·</span>
+                        <button onClick={() => setAccountFilter("")}
+                            data-testid="account-filter-all"
+                            className={`px-3 py-1.5 text-xs font-mono tracking-widest border transition-colors ${
+                                !accountFilter ? "border-[#FFD700] text-[#FFD700]" : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]"
+                            }`}>
+                            ALL ACCOUNTS
+                        </button>
+                        {accounts.map(a => (
+                            <button key={a.id} onClick={() => setAccountFilter(a.id)}
+                                data-testid={`account-filter-${a.id}`}
+                                className={`px-3 py-1.5 text-xs font-mono tracking-widest border transition-colors flex items-center gap-1.5 ${
+                                    accountFilter === a.id ? "border-[#FFD700] text-[#FFD700]" : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]"
+                                }`}>
+                                <span>{(a.label || a.account_number || "—").toUpperCase()}</span>
+                                <span className="font-mono text-[9px] text-[#52525B]">· {(a.mode || "live").toUpperCase()}</span>
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {loading ? (
                     <div className="font-mono text-xs text-[#52525B] tracking-widest">LOADING TRADES…</div>
                 ) : trades.length === 0 ? (
@@ -435,7 +477,7 @@ export default function Trades() {
                         <table className="w-full text-sm" data-testid="trades-table">
                             <thead>
                                 <tr className="border-b border-[#1F1F1F]">
-                                    {["SYMBOL", "SIDE", "LOTS", "ENTRY", "CURRENT", "SL", "TP", "EXIT", "LIVE P&L", "P&L", "OPENED", "CLOSED", "STATUS", ""].map(h => (
+                                    {["SYMBOL", "ACCOUNT", "SIDE", "LOTS", "ENTRY", "CURRENT", "SL", "TP", "EXIT", "LIVE P&L", "P&L", "OPENED", "CLOSED", "STATUS", ""].map(h => (
                                         <th key={h} className="px-3 py-2 text-left font-mono text-[10px] text-[#52525B] tracking-widest whitespace-nowrap">{h}</th>
                                     ))}
                                 </tr>
@@ -451,6 +493,9 @@ export default function Trades() {
                                                 {t.trail_active && <span title="Trailing stop active" className="font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1" data-testid={`badge-trail-${t.id}`}>TRAIL</span>}
                                                 {t.pending_modification && <span title={`Pending: ${t.pending_modification.type}`} className="font-mono text-[9px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-1 animate-pulse" data-testid={`badge-pending-${t.id}`}>SYNC</span>}
                                             </div>
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-[#A1A1AA] text-xs whitespace-nowrap" data-testid={`trade-account-${t.id}`}>
+                                            {accountLabelById[t.account_id] || (t.account_id ? `…${t.account_id.slice(-6)}` : "—")}
                                         </td>
                                         <td className={`px-3 py-2 font-mono ${t.action === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{t.action}</td>
                                         <td className="px-3 py-2 font-mono">{t.lot_size}</td>

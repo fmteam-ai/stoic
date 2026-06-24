@@ -46,11 +46,15 @@ def _serialize(doc: dict) -> dict:
 
 
 @router.get("")
-async def list_trades(limit: int = 100, status: str = None, user=Depends(get_current_user)):
+async def list_trades(limit: int = 100, status: str = None,
+                      account_id: Optional[str] = None,
+                      user=Depends(get_current_user)):
     db = get_db()
     query = {"user_id": user["id"]}
     if status:
         query["status"] = status
+    if account_id:
+        query["account_id"] = account_id
     cursor = db.trades.find(query).sort("opened_at", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
     return [_serialize(d) for d in docs]
@@ -77,28 +81,32 @@ def _aggregate_stats(closed: list) -> dict:
 
 
 @router.get("/stats")
-async def trade_stats(user=Depends(get_current_user)):
+async def trade_stats(account_id: Optional[str] = None,
+                      user=Depends(get_current_user)):
     db = get_db()
-    closed = await db.trades.find(
-        {"user_id": user["id"], "status": "closed"}
-    ).to_list(length=1000)
-    open_trades = await db.trades.find(
-        {"user_id": user["id"], "status": "open"}
-    ).to_list(length=100)
+    closed_q = {"user_id": user["id"], "status": "closed"}
+    open_q = {"user_id": user["id"], "status": "open"}
+    if account_id:
+        closed_q["account_id"] = account_id
+        open_q["account_id"] = account_id
+    closed = await db.trades.find(closed_q).to_list(length=1000)
+    open_trades = await db.trades.find(open_q).to_list(length=100)
     return {**_aggregate_stats(closed), "open_trades": len(open_trades)}
 
 
 @router.get("/live")
-async def live_open_trades(user=Depends(get_current_user)):
+async def live_open_trades(account_id: Optional[str] = None,
+                           user=Depends(get_current_user)):
     """Open trades enriched with current price, unrealised P&L, distance to SL/TP1/TP2/TP3.
 
     Used by the Dashboard's "Time-to-Target" widget. Refreshes every ~5s on the client.
     """
     from pip_utils import pip_size, price_to_pips
     db = get_db()
-    cursor = db.trades.find({
-        "user_id": user["id"], "status": {"$in": ["pending", "open"]}
-    }).sort("opened_at", -1)
+    query = {"user_id": user["id"], "status": {"$in": ["pending", "open"]}}
+    if account_id:
+        query["account_id"] = account_id
+    cursor = db.trades.find(query).sort("opened_at", -1)
     trades = await cursor.to_list(length=50)
     if not trades:
         return []
