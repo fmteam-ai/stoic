@@ -105,3 +105,36 @@ def test_external_trade_opened_in_default_alerts_table():
     Notifications page and can toggle it from the start."""
     from routes.notification_routes import DEFAULT_ALERTS
     assert "external_trade_opened" in DEFAULT_ALERTS
+
+
+def test_is_plausible_trade_rejects_dict_without_id():
+    """The DB-presence guard must reject any dict that wasn't actually
+    persisted — this is the safety net that catches accidental/synthetic
+    notify_* invocations (e.g. an agent's ad-hoc test push)."""
+    from notifier import _is_plausible_trade
+
+    async def _run():
+        # No _id and no id → reject immediately
+        return await _is_plausible_trade({
+            "symbol": "BTCUSD", "action": "BUY",
+            "lot_size": 0.05, "entry_price": 62500.0,
+            "mt5_ticket": 696483514,  # even a REAL-looking ticket
+        })
+    assert asyncio.run(_run()) is False
+
+
+def test_is_plausible_trade_rejects_id_not_in_db():
+    """Even with an _id that LOOKS valid, if the trade isn't persisted in
+    Mongo we refuse — closes the door on stale/replayed payloads."""
+    from bson import ObjectId
+    from notifier import _is_plausible_trade
+
+    fake_oid = ObjectId()  # never inserted
+
+    async def _run():
+        return await _is_plausible_trade({
+            "_id": fake_oid, "symbol": "BTCUSD", "action": "BUY",
+            "lot_size": 0.05, "entry_price": 62500.0,
+            "mt5_ticket": 696483514,
+        })
+    assert asyncio.run(_run()) is False

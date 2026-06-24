@@ -18,6 +18,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 import httpx
+from bson import ObjectId
+from bson.errors import InvalidId
 
 from database import get_db
 from secrets_vault import decrypt as vault_decrypt
@@ -107,6 +109,24 @@ async def _is_plausible_trade(trade: dict) -> bool:
     Telegram if a test runner hits /api/bridge/report directly. This is the
     last-line defence below the pytest conftest.
     """
+    # 0. PRIMARY GUARD: the trade must actually exist in the DB. A real call
+    # site always passes a dict freshly loaded from / inserted into the
+    # `trades` collection, so it carries an `_id` (or its serialized `id`
+    # form when the dict has been prepared for a WS broadcast). Direct
+    # synthetic invocations hand in a plain dict with neither — they fail
+    # this check and never reach the user.
+    trade_id = trade.get("_id") or trade.get("id")
+    if not trade_id:
+        return False
+    try:
+        oid = trade_id if isinstance(trade_id, ObjectId) else ObjectId(str(trade_id))
+    except (InvalidId, TypeError, ValueError):
+        return False
+    db = get_db()
+    persisted = await db.trades.find_one({"_id": oid}, projection={"_id": 1})
+    if not persisted:
+        return False
+
     # 1. Mock tickets — real MT5 tickets are 8-10 digit unique IDs, never < 1,000,000
     ticket = trade.get("mt5_ticket")
     if ticket is not None:
