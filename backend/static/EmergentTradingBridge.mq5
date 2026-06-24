@@ -30,24 +30,39 @@
 //|         SL / TP / time / magic / profit). STOIC auto-creates      |
 //|         trade records for positions it doesn't yet track —        |
 //|         eliminates "I see 4 trades on MT5 but 0 in the bot".      |
+//| v1.26 — Autonomous Deal-History Sweep. Every HistorySweepSeconds  |
+//|         the EA scans MT5's deal log for the last 24h and pushes   |
+//|         any deals not yet reported via /api/bridge/external-deal. |
+//|         Catches closes that OnTradeTransaction missed (other      |
+//|         terminal, network blip, EA reload) so STOIC stays fully   |
+//|         autopilot — no manual "Backfill Exit" needed ever again.  |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.25"
+#property version   "1.26"
 #property strict
 
-input string ServerUrl       = "https://your-app.preview.emergentagent.com";
-input string BridgeToken     = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
-input string TrackedSymbols  = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
-input int    PollSeconds     = 5;
-input int    Slippage        = 10;
-input int    MagicNumber     = 901234;
+input string ServerUrl              = "https://your-app.preview.emergentagent.com";
+input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
+input string TrackedSymbols         = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
+input int    PollSeconds            = 5;
+input int    Slippage               = 10;
+input int    MagicNumber            = 901234;
+input int    HistorySweepSeconds    = 60;     // how often to scan MT5 deal history
+input int    HistoryLookbackSeconds = 86400;  // initial backfill window (24h)
+input int    HistorySweepMaxDeals   = 50;     // hard cap per sweep so a fresh chart doesn't flood STOIC
 
-datetime lastPoll = 0;
+datetime lastPoll              = 0;
+datetime lastHistorySweep      = 0;
+datetime lastReportedDealTime  = 0;   // high-watermark — never re-push deals older than this
 
 //+------------------------------------------------------------------+
 int OnInit() {
    EventSetTimer(PollSeconds);
-   Print("STOIC Bridge EA v1.25 started. Polling: ", ServerUrl);
+   // First sweep covers HistoryLookbackSeconds backwards so any ghosts
+   // (closed on another terminal while EA was offline) get backfilled
+   // automatically once the user installs v1.26.
+   lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
+   Print("STOIC Bridge EA v1.26 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -57,6 +72,12 @@ void OnDeinit(const int reason) { EventKillTimer(); }
 void OnTimer() {
    SendHeartbeat();
    PollPendingTrades();
+   // Autonomous history sweep — at most once every HistorySweepSeconds so
+   // we don't bombard the server with redundant /external-deal calls.
+   if (TimeCurrent() - lastHistorySweep >= HistorySweepSeconds) {
+      SweepDealHistory();
+      lastHistorySweep = TimeCurrent();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -111,6 +132,81 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
       volume, price, profit, commission, swap, deal_time, magic);
 
    HttpPost(ServerUrl + "/api/bridge/external-deal", body);
+}
+
+//+------------------------------------------------------------------+
+//| SweepDealHistory — autonomous catch-up scan.                     |
+//|                                                                  |
+//| Walks every deal in [lastReportedDealTime .. now] and pushes it  |
+//| to /api/bridge/external-deal. The server is idempotent on        |
+//| deal_id (unique index on broker_deals), so duplicate pushes are  |
+//| harmless no-ops. This is what makes STOIC fully autopilot — even |
+//| when OnTradeTransaction misses an event (closed on a different   |
+//| terminal, EA reloaded mid-event, network glitch), the sweep      |
+//| catches it on the next tick and pushes it through.               |
+//+------------------------------------------------------------------+
+void SweepDealHistory() {
+   datetime from_ts = lastReportedDealTime;
+   if (from_ts <= 0) from_ts = TimeCurrent() - HistoryLookbackSeconds;
+   datetime to_ts   = TimeCurrent() + 60;   // slight forward fudge in case of clock skew
+
+   if (!HistorySelect(from_ts, to_ts)) return;
+   int total = HistoryDealsTotal();
+   if (total <= 0) return;
+
+   datetime new_watermark = lastReportedDealTime;
+   int pushed = 0;
+
+   for (int i = 0; i < total; i++) {
+      if (pushed >= HistorySweepMaxDeals) break;
+      ulong deal_id = HistoryDealGetTicket(i);
+      if (deal_id == 0) continue;
+
+      long position_id = (long)HistoryDealGetInteger(deal_id, DEAL_POSITION_ID);
+      if (position_id == 0) continue;  // skip balance ops, deposits etc.
+      long deal_time = (long)HistoryDealGetInteger(deal_id, DEAL_TIME);
+      if ((datetime)deal_time <= lastReportedDealTime) continue;
+
+      ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_id, DEAL_ENTRY);
+      long   magic      = (long)HistoryDealGetInteger(deal_id, DEAL_MAGIC);
+      string symbol     = HistoryDealGetString(deal_id, DEAL_SYMBOL);
+      ENUM_DEAL_TYPE dt = (ENUM_DEAL_TYPE)HistoryDealGetInteger(deal_id, DEAL_TYPE);
+      double price      = HistoryDealGetDouble(deal_id, DEAL_PRICE);
+      double volume     = HistoryDealGetDouble(deal_id, DEAL_VOLUME);
+      double profit     = HistoryDealGetDouble(deal_id, DEAL_PROFIT);
+      double commission = HistoryDealGetDouble(deal_id, DEAL_COMMISSION);
+      double swap       = HistoryDealGetDouble(deal_id, DEAL_SWAP);
+
+      string entry_str = "inout";
+      if (entry == DEAL_ENTRY_IN)       entry_str = "in";
+      else if (entry == DEAL_ENTRY_OUT) entry_str = "out";
+
+      string action = (dt == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+
+      string body = StringFormat(
+         "{\"bridge_token\":\"%s\",\"mt5_ticket\":%I64d,\"deal_id\":%I64u,"
+         "\"deal_entry\":\"%s\",\"symbol\":\"%s\",\"action\":\"%s\","
+         "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
+         "\"commission\":%.2f,\"swap\":%.2f,"
+         "\"deal_time\":%I64d,\"magic\":%I64d}",
+         BridgeToken, position_id, deal_id,
+         entry_str, symbol, action,
+         volume, price, profit, commission, swap, deal_time, magic);
+
+      HttpPost(ServerUrl + "/api/bridge/external-deal", body);
+      pushed++;
+      if ((datetime)deal_time > new_watermark) new_watermark = (datetime)deal_time;
+   }
+
+   // Advance the watermark only on successful processing — server idempotency
+   // covers duplicates if the EA restarts mid-sweep.
+   if (new_watermark > lastReportedDealTime) {
+      lastReportedDealTime = new_watermark;
+   }
+   if (pushed > 0) {
+      Print("STOIC history sweep pushed ", pushed, " deals (window ",
+            TimeToString(from_ts), " → ", TimeToString(to_ts), ")");
+   }
 }
 
 //+------------------------------------------------------------------+
