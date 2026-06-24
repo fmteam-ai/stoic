@@ -647,7 +647,39 @@ async def get_bot_status(account_id: Optional[str] = None,
     per-account override when supplied.
     """
     db = get_db()
-    cfg = await _get_or_create_config(db, user["id"], account_id)
+    # When the caller doesn't specify an account, prefer the *active* per-account
+    # config whose account is online (heartbeat fresh) — that's the bot the user
+    # actually sees firing trades. Falls back to the default profile when no
+    # per-account config qualifies.
+    auto_selected_account = None
+    if not account_id:
+        per_acc_cfgs = await db.bot_configs.find({
+            "user_id": user["id"],
+            "active": True,
+            "account_id": {"$ne": None},
+        }).to_list(length=20)
+        if per_acc_cfgs:
+            now_utc = datetime.now(timezone.utc)
+            for pac in per_acc_cfgs:
+                acc = await db.accounts.find_one({"_id": ObjectId(pac["account_id"])}) \
+                    if pac.get("account_id") else None
+                if not acc:
+                    continue
+                if acc.get("mode") == "paper":
+                    auto_selected_account = pac["account_id"]
+                    break
+                hb = acc.get("last_heartbeat")
+                try:
+                    hb_dt = datetime.fromisoformat(str(hb).replace("Z", "+00:00"))
+                    if (now_utc - hb_dt).total_seconds() <= 300:
+                        auto_selected_account = pac["account_id"]
+                        break
+                except Exception:
+                    continue
+            if not auto_selected_account:
+                auto_selected_account = per_acc_cfgs[0]["account_id"]
+    effective_account = account_id or auto_selected_account
+    cfg = await _get_or_create_config(db, user["id"], effective_account)
     profile = get_profile(cfg.get("risk_level", "medium"))
     interval = int(os.environ.get("BOT_LOOP_INTERVAL_SEC", "60"))
 
@@ -833,4 +865,6 @@ async def get_bot_status(account_id: Optional[str] = None,
         "anti_tilt_frozen_until": anti_tilt_frozen_until,
         "cooldown_remaining_sec": cooldown_remaining_sec,
         "intelligence": intelligence,
+        "scope_account_id": effective_account,
+        "scope_auto_selected": bool(auto_selected_account and not account_id),
     }
