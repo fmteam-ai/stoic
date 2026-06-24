@@ -218,6 +218,20 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
     (legacy `TestApplyPaymentIdempotency` flaky in full-suite run but green in
     isolation — pre-existing, unrelated).
 
+## Changelog — Feb 2026
+
+### Bot transparency: anti-tilt freeze now surfaced in UI
+**Problem:** Bot active + connected, but no trades opening despite ~58 tradeable signals in 6h. Root cause: anti-tilt freeze (`bot_runner.py` silently `return`s when last N closed trades all lost within freeze window). Last 4 XAUUSD trades all lost → 4h freeze → user had zero visibility.
+
+**Fix:**
+- `GET /api/bot/status` now mirrors anti-tilt logic and exposes:
+  - `why_no_trade` = "Anti-tilt freeze: last 3 trades lost — auto-execute paused for {Xh Ym}. Adjust in Bot Config → Capital Preservation."
+  - `anti_tilt_frozen_until` (ISO timestamp)
+- `GET /api/bot/health-score` adds a warning-level issue with -5 deduction so the widget catches the user's eye (score 100 → ~91 during freeze), with countdown ETA and clear actionable fix.
+- Dashboard `why_no_trade` strip already renders the new message automatically.
+
+No core risk logic changed — only observability. User can lower `anti_tilt_freeze_hours` / `anti_tilt_consecutive_losses` or disable in Bot Config if intentional.
+
 ## Roadmap (priority order)
 - **P1** Binance live BTC execution via CCXT.
 - **P1** Macro Climate widget on Dashboard (live DXY regime + news-blackout countdown).

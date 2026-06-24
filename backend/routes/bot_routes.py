@@ -526,6 +526,47 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "label": "Bot is paused (not generating signals)",
                        "fix": "Go to BotConfig and toggle the bot ON to start trading."})
 
+    # --- 7. Anti-tilt freeze active (max -5, advisory only) --------------
+    # The bot is functioning correctly — anti-tilt is a designed risk halt
+    # after N consecutive losses. We surface it explicitly so the user knows
+    # *why* no trades are firing, with a small deduction to make sure the
+    # widget catches their eye instead of showing a misleading "100/100".
+    tilt_cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=20)
+    tilt_frozen_accounts = []
+    for tc in tilt_cfgs:
+        if not tc.get("anti_tilt_enabled", True):
+            continue
+        atn = int(tc.get("anti_tilt_consecutive_losses", 3) or 0)
+        ath = int(tc.get("anti_tilt_freeze_hours", 4) or 0)
+        if atn <= 0 or ath <= 0:
+            continue
+        at_q = {"user_id": user["id"], "status": "closed"}
+        if tc.get("account_id"):
+            at_q["account_id"] = tc["account_id"]
+        at_recent = await db.trades.find(at_q).sort("closed_at", -1).limit(atn).to_list(length=atn)
+        if len(at_recent) == atn and all(float(r.get("pnl") or 0) <= 0 for r in at_recent):
+            last_close = at_recent[0].get("closed_at")
+            try:
+                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
+                unfreeze_at = lc + timedelta(hours=ath)
+                remaining = (unfreeze_at - now).total_seconds()
+                if remaining > 0:
+                    mins_left = int(remaining // 60)
+                    hrs, mins = divmod(mins_left, 60)
+                    eta = f"{hrs}h {mins}m" if hrs else f"{mins}m"
+                    label = tc.get("account_id") or "default"
+                    tilt_frozen_accounts.append({"scope": label, "eta": eta,
+                                                  "unfreeze_at": unfreeze_at.isoformat()})
+            except Exception:
+                pass
+    if tilt_frozen_accounts:
+        score -= 5
+        eta_first = tilt_frozen_accounts[0]["eta"]
+        issues.append({"severity": "warning", "code": "anti_tilt_freeze",
+                       "label": f"Anti-tilt freeze active — auto-execute paused for {eta_first}",
+                       "fix": "Designed protection after consecutive losses. Lower freeze window or disable in Bot Config → Capital Preservation if intentional.",
+                       "details": tilt_frozen_accounts})
+
     # --- Final score & summary -------------------------------------------
     score = max(0, min(100, int(round(score))))
     if score >= 90:
@@ -670,11 +711,44 @@ async def get_bot_status(account_id: Optional[str] = None,
         except Exception:
             pass
 
+    # Anti-tilt freeze: bot_runner.py silently halts auto-execute when the last
+    # N closed trades all lost within the freeze window. Mirror the exact logic
+    # here so the UI can show the user *why* no trades are firing + a countdown.
+    anti_tilt_frozen_until = None
+    anti_tilt_reason = None
+    if cfg.get("anti_tilt_enabled", True):
+        atn = int(cfg.get("anti_tilt_consecutive_losses", 3) or 0)
+        ath = int(cfg.get("anti_tilt_freeze_hours", 4) or 0)
+        if atn > 0 and ath > 0:
+            at_q = {"user_id": user["id"], "status": "closed"}
+            if cfg.get("account_id"):
+                at_q["account_id"] = cfg["account_id"]
+            at_recent = await db.trades.find(at_q).sort("closed_at", -1).limit(atn).to_list(length=atn)
+            if len(at_recent) == atn and all(float(r.get("pnl") or 0) <= 0 for r in at_recent):
+                last_close = at_recent[0].get("closed_at")
+                try:
+                    lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
+                    unfreeze_at = lc + timedelta(hours=ath)
+                    remaining = (unfreeze_at - datetime.now(timezone.utc)).total_seconds()
+                    if remaining > 0:
+                        anti_tilt_frozen_until = unfreeze_at.isoformat()
+                        mins_left = int(remaining // 60)
+                        hrs, mins = divmod(mins_left, 60)
+                        eta = f"{hrs}h {mins}m" if hrs else f"{mins}m"
+                        anti_tilt_reason = (
+                            f"Anti-tilt freeze: last {atn} trades lost — auto-execute "
+                            f"paused for {eta}. Adjust in Bot Config → Capital Preservation."
+                        )
+                except Exception:
+                    pass
+
     why_no_trade = None
     if not cfg.get("active"):
         why_no_trade = "Bot is stopped — start it from Bot Config"
     elif not cfg.get("auto_execute"):
         why_no_trade = "Auto-execute is OFF — signals generated but trades require manual click"
+    elif anti_tilt_reason:
+        why_no_trade = anti_tilt_reason
     elif not accounts:
         why_no_trade = "No MT5 account connected — add one in Accounts to enable execution"
     elif fresh_live_account is None:
@@ -756,6 +830,7 @@ async def get_bot_status(account_id: Optional[str] = None,
             "created_at": last_tick_iso,
         } if last_signal else None,
         "why_no_trade": why_no_trade,
+        "anti_tilt_frozen_until": anti_tilt_frozen_until,
         "cooldown_remaining_sec": cooldown_remaining_sec,
         "intelligence": intelligence,
     }
