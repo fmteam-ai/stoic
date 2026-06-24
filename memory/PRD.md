@@ -220,6 +220,24 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### Suggested Config Adjustment (auto-tune from safety-block patterns)
+**Why:** Passive observability (safety-blocks UI) isn't enough — users need a one-click bridge from "I see the bot is being clipped" to "my config is now within the envelope". The page now actively proposes the smallest config change that should reduce future blocks.
+
+**Backend:**
+- `GET /api/safety-blocks/suggestion?days=7` — when ≥3 blocks of the same kind exist in the window, returns `{has_suggestion, top_reason, reason_label, count, title, severity, rationale, preview, patch, scope_account_id}`. Mapping:
+  - `per_trade_risk_cap` → `risk_level` steps down one notch (high→medium→low)
+  - `total_open_risk_cap` → `max_concurrent_trades` -= 1 (floor 1)
+  - `lot_vs_equity_sanity` → `max_lot_size` × 0.7 (floor 0.01, 2-dp)
+  - `daily_loss_cap` / `equity_vs_balance_floor` / `free_margin_floor` → `active=false` (red, pause)
+  - `risk_inputs_present` → has_suggestion=true, patch=null (manual review)
+- `POST /api/safety-blocks/apply-suggestion {patch, scope_account_id}` — sanitizes patch against allowlist `{risk_level, max_concurrent_trades, max_lot_size, active}`, validates ownership of `scope_account_id`, persists with `updated_at` + `last_suggestion_applied_at` stamps, returns the new config snapshot.
+
+**Frontend:**
+- `SuggestionBanner` rendered at top of `/safety-blocks` when `has_suggestion=true` — Sparkles icon, severity-tinted border (amber/red), label/title/rationale/CHANGE-preview-chip + APPLY button (only shown when `patch` is non-null).
+- On APPLY: POST → toast with new_config summary → re-fetch list/stats/suggestion (suggestion typically disappears next refresh since blocks are now within new envelope).
+
+**Bug found & fixed:** Iter20 testing agent caught a 500 on non-hex `scope_account_id` (raw `ObjectId()` raised `InvalidId`). Fixed with try/except → 404. Verified in iter21: 58/58 backend tests + live UI flow for both non-hex (graceful 404 toast) and valid hex (200 + persisted) paths.
+
 ### Safety Blocks UI page — observability for guardian refusals
 **Why:** Users need to see WHY the bot's trades are being refused so they can dial config into the "goldilocks zone" (aggressive enough to earn, not so aggressive the guardian constantly slaps it down).
 
