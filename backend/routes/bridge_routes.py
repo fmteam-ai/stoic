@@ -3,6 +3,7 @@ from typing import Optional
 import logging
 from fastapi import APIRouter, HTTPException
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,16 @@ async def heartbeat(payload: BridgeHeartbeat):
 
     # EA v1.22+: persist the ticket list so the user can later trigger
     # manual reconciliation even if a heartbeat isn't currently in flight.
+    #
+    # EA v1.25+ stopped sending `open_tickets` as a top-level field but does
+    # send the full `positions` array — derive the ticket list from there so
+    # the reconciler keeps working on every heartbeat. Without this, the DB's
+    # `open_tickets` would be permanently STUCK at whatever the last legacy
+    # heartbeat sent (the original 696559793... bug).
+    if payload.open_tickets is None and payload.positions:
+        payload.open_tickets = [int(p.ticket) for p in payload.positions
+                                if getattr(p, "ticket", None) is not None]
+
     reconcile_summary = None
     if payload.open_tickets is not None:
         try:
@@ -617,6 +628,58 @@ async def external_deal(payload: BridgeExternalDeal):
         return {"ok": True, "created": tid, "external_open": is_external}
 
     # deal_entry == "out" or "inout" → CLOSE event
+    # PARTIAL vs FULL CLOSE DISCRIMINATION:
+    # A position's "out" deal can be either a full close (deal.lots ==
+    # position.lot_size) or a partial close (deal.lots < position.lot_size,
+    # the remainder stays open). Treating every "out" as full was the
+    # 696627605 / 696637253 bug — STOIC closed positions that the broker
+    # still had open with reduced size.
+    is_partial_close = False
+    if existing and existing.get("status") == "open":
+        prior_lot = float(existing.get("lot_size") or 0)
+        deal_lot = float(payload.lots or 0)
+        # 1% tolerance for floating-point rounding by the broker
+        if prior_lot > 0 and deal_lot > 0 and deal_lot < prior_lot * 0.99:
+            is_partial_close = True
+
+    if is_partial_close:
+        new_lot = round(float(existing["lot_size"]) - float(payload.lots), 2)
+        update = {
+            "lot_size": max(new_lot, 0.01),
+            "partial_closed": True,
+            "partial_closed_at": deal_iso,
+            "broker_deal_id": payload.deal_id,
+            "pending_modification": None,   # broker confirmed the partial
+        }
+        if not existing.get("original_lot_size"):
+            update["original_lot_size"] = float(existing["lot_size"])
+        # Accumulate realised P&L on the closed portion
+        prior_pnl = float(existing.get("pnl") or 0)
+        update["pnl"] = round(prior_pnl + float(realized or 0), 2)
+        await db.trades.update_one(
+            {"_id": existing["_id"]}, {"$set": update},
+        )
+        # Tag the already-persisted deal as a partial close so the audit
+        # trail shows it correctly. The outer flow above already saved
+        # the deal_doc with deal_entry="out" before we got here.
+        await db.broker_deals.update_one(
+            {"deal_id": payload.deal_id, "account_id": str(acc["_id"])},
+            {"$set": {"deal_entry_kind": "partial_out"}},
+        )
+        await ws_manager.broadcast(user_id, "trade_updated", {
+            "trade_id": str(existing["_id"]),
+            "lot_size": update["lot_size"],
+            "partial_closed": True,
+            "pnl": update["pnl"],
+        })
+        logger.info(
+            "Partial-close ingested for ticket=%s: %s → %s lots (deal=%s lots)",
+            payload.mt5_ticket, existing.get("lot_size"), update["lot_size"], payload.lots,
+        )
+        return {"ok": True, "updated": str(existing["_id"]),
+                "partial_close": True, "new_lot_size": update["lot_size"]}
+
+    # Full close (or "out" deal for a trade STOIC didn't know was open) — original path.
     update = {
         "exit_price": payload.price,
         "pnl": realized,
