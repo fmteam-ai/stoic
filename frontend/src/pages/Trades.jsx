@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, ClipboardEdit } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -311,6 +311,8 @@ export default function Trades() {
         }
     };
 
+    const [backfillTrade, setBackfillTrade] = useState(null);  // ghost trade selected for manual backfill
+
     const [reconciling, setReconciling] = useState(false);
     const reconcile = async (force = false) => {
         const confirmMsg = force
@@ -578,6 +580,13 @@ export default function Trades() {
                                                         <RotateCcw className="w-3 h-3" /> REVIVE
                                                     </button>
                                                 )}
+                                                {t.status === "closed" && t.exit_price == null && (
+                                                    <button onClick={() => setBackfillTrade(t)} data-testid={`backfill-trade-${t.id}`}
+                                                        title="EA missed reporting this close (likely closed on a different MT5 terminal). Paste the exit price + P&L from your MT5 History tab to backfill."
+                                                        className="text-[#FFD700] hover:text-[#FFE633] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                        <ClipboardEdit className="w-3 h-3" /> BACKFILL
+                                                    </button>
+                                                )}
                                                 {t.mt5_ticket && (
                                                     <button onClick={() => setAuditTrade(t)} data-testid={`audit-trade-${t.id}`}
                                                         title="Show every broker deal that touched this position"
@@ -599,6 +608,14 @@ export default function Trades() {
                 <AuditTrailModal
                     trade={auditTrade}
                     onClose={() => setAuditTrade(null)}
+                />
+            )}
+
+            {backfillTrade && (
+                <BackfillExitModal
+                    trade={backfillTrade}
+                    onClose={() => setBackfillTrade(null)}
+                    onSuccess={async () => { setBackfillTrade(null); await load(); }}
                 />
             )}
         </AppLayout>
@@ -689,6 +706,125 @@ const AUDIT_KIND_STYLE = {
     modification_error:   { color: "#FF3B30", dot: "⚠ " },
     broker_deal:          { color: "#A1A1AA", dot: "▸ " },
 };
+
+
+function BackfillExitModal({ trade, onClose, onSuccess }) {
+    const [exitPrice, setExitPrice] = useState("");
+    const [pnl, setPnl] = useState("");
+    const [lotSize, setLotSize] = useState(String(trade.lot_size ?? ""));
+    const [submitting, setSubmitting] = useState(false);
+    const [err, setErr] = useState("");
+
+    const submit = async (e) => {
+        e.preventDefault();
+        const exitNum = parseFloat(exitPrice);
+        const pnlNum = parseFloat(pnl);
+        if (!Number.isFinite(exitNum) || exitNum <= 0) {
+            setErr("Exit price must be a positive number.");
+            return;
+        }
+        if (!Number.isFinite(pnlNum)) {
+            setErr("P&L must be a number (use negative for a loss).");
+            return;
+        }
+        setSubmitting(true);
+        setErr("");
+        try {
+            const payload = { exit_price: exitNum, pnl: pnlNum };
+            const lotNum = parseFloat(lotSize);
+            if (Number.isFinite(lotNum) && lotNum > 0) payload.lot_size = lotNum;
+            await api.post(`/trades/${trade.id}/backfill-exit`, payload);
+            toast.success("Exit backfilled · stats now reflect the broker close");
+            onSuccess?.();
+        } catch (e2) {
+            setErr(formatApiError(e2));
+            toast.error("Backfill failed", { description: formatApiError(e2) });
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+             data-testid="backfill-modal" onClick={onClose}>
+            <form onClick={(e) => e.stopPropagation()} onSubmit={submit}
+                  className="w-full max-w-md bg-[#0A0A0A] border border-[#FFD700]/40 shadow-2xl">
+                <div className="flex items-center justify-between border-b border-[#1F1F1F] px-5 py-3">
+                    <div>
+                        <div className="font-mono text-[10px] tracking-widest text-[#FFD700]">
+                            ◇ BACKFILL EXIT
+                        </div>
+                        <div className="font-display text-lg leading-tight mt-0.5">
+                            {trade.symbol} · {trade.action} · #{trade.mt5_ticket ?? trade.id.slice(-6)}
+                        </div>
+                    </div>
+                    <button type="button" onClick={onClose} data-testid="backfill-close"
+                            className="text-[#A1A1AA] hover:text-white p-1">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+                <div className="px-5 py-4 space-y-3">
+                    <div className="font-mono text-[10px] text-[#A1A1AA] leading-relaxed border-l-2 border-[#FFD700]/40 pl-3">
+                        Open MT5 → History tab → copy <span className="text-[#FFD700]">Price</span> +{" "}
+                        <span className="text-[#FFD700]">Profit</span> for ticket{" "}
+                        <span className="text-white">#{trade.mt5_ticket}</span> and paste below.
+                    </div>
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1">
+                            EXIT PRICE
+                        </label>
+                        <input type="number" step="0.00001" min="0" value={exitPrice}
+                               onChange={(e) => setExitPrice(e.target.value)}
+                               data-testid="backfill-exit-price" autoFocus
+                               className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
+                               placeholder="e.g. 4055.387" required />
+                    </div>
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1">
+                            REALISED P&amp;L ($)
+                            <span className="ml-2 text-[#A1A1AA] normal-case tracking-normal">
+                                negative for a loss
+                            </span>
+                        </label>
+                        <input type="number" step="0.01" value={pnl}
+                               onChange={(e) => setPnl(e.target.value)}
+                               data-testid="backfill-pnl"
+                               className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
+                               placeholder="e.g. 1072.15" required />
+                    </div>
+                    <div>
+                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1">
+                            CLOSED LOTS · OPTIONAL
+                            <span className="ml-2 text-[#A1A1AA] normal-case tracking-normal">
+                                leave to keep current ({trade.lot_size})
+                            </span>
+                        </label>
+                        <input type="number" step="0.01" min="0" value={lotSize}
+                               onChange={(e) => setLotSize(e.target.value)}
+                               data-testid="backfill-lot-size"
+                               className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                    </div>
+                    {err && (
+                        <div className="font-mono text-xs text-[#FF3B30] border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-3 py-2"
+                             data-testid="backfill-error">
+                            {err}
+                        </div>
+                    )}
+                </div>
+                <div className="border-t border-[#1F1F1F] px-5 py-3 flex items-center justify-end gap-2">
+                    <button type="button" onClick={onClose}
+                            className="font-mono text-xs tracking-widest text-[#A1A1AA] hover:text-white px-3 py-2">
+                        CANCEL
+                    </button>
+                    <button type="submit" disabled={submitting} data-testid="backfill-submit"
+                            className="font-mono text-xs tracking-widest text-[#FFD700] border border-[#FFD700]/40 hover:bg-[#FFD700]/10 px-3 py-2 disabled:opacity-50">
+                        {submitting ? "SAVING..." : "BACKFILL EXIT"}
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
+}
 
 function AuditEventRow({ e }) {
     const style = AUDIT_KIND_STYLE[e.kind] || AUDIT_KIND_STYLE.broker_deal;

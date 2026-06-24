@@ -469,6 +469,68 @@ async def trade_audit(trade_id: str, user=Depends(get_current_user)):
     }
 
 
+class TradeBackfillExit(BaseModel):
+    exit_price: float = Field(..., gt=0)
+    pnl: float
+    closed_at: Optional[str] = None
+    lot_size: Optional[float] = Field(None, gt=0)
+
+
+@router.post("/{trade_id}/backfill-exit")
+async def backfill_exit(trade_id: str, payload: TradeBackfillExit,
+                        user=Depends(get_current_user)):
+    """Manually attach an exit price + realised P&L to a "ghost" closed trade.
+
+    Use case: STOIC's reconciler closed the trade (ticket vanished from EA's
+    heartbeat) but the EA never fired OnTradeTransaction — typically when
+    the user closed the position on a DIFFERENT MT5 terminal session than
+    the one running the EA. The trade ends up `status=closed, exit_price=None,
+    pnl=0` — visible but with no P&L attribution.
+
+    Lets the user paste the exit price + realised P&L straight from their
+    MT5 History tab so account analytics, trade journals, and Telegram
+    summaries reflect reality. Refuses if the trade already has an exit_price
+    (use revive + close to overwrite legit data).
+    """
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": ObjectId(trade_id), "user_id": user["id"]}
+    )
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    if trade.get("status") != "closed":
+        raise HTTPException(
+            status_code=400,
+            detail="Only closed trades can be backfilled. Close it first or use /revive.",
+        )
+    if trade.get("exit_price") is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Trade already has an exit_price — refusing to overwrite. "
+                   "Revive the trade if you need to change it.",
+        )
+
+    update = {
+        "exit_price": float(payload.exit_price),
+        "pnl": float(payload.pnl),
+        "backfilled_exit": True,
+        "backfilled_exit_at": datetime.now(timezone.utc).isoformat(),
+        "backfilled_exit_by": user["id"],
+    }
+    if payload.closed_at:
+        update["closed_at"] = payload.closed_at
+    if payload.lot_size is not None:
+        update["lot_size"] = float(payload.lot_size)
+    # Tag the close_reason so account analytics can tell apart genuine bot
+    # closes from user-attributed manual closes.
+    existing_reason = trade.get("close_reason") or "manual"
+    if "backfill" not in existing_reason:
+        update["close_reason"] = f"{existing_reason}+user_backfill"
+
+    await db.trades.update_one({"_id": ObjectId(trade_id)}, {"$set": update})
+    return {"ok": True, "trade_id": trade_id, **update}
+
+
 @router.post("/{trade_id}/revive")
 async def revive_trade(trade_id: str, user=Depends(get_current_user)):
     """Re-open a trade STOIC mistakenly marked closed.

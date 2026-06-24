@@ -574,6 +574,12 @@ async def external_deal(payload: BridgeExternalDeal):
             )
             update["backfilled"] = True
             update["backfilled_at"] = datetime.now(timezone.utc).isoformat()
+            # Distinguish "auto-repaired from reconciler ghost" vs "first-time
+            # close report" — useful in the Audit Trail when STOIC initially
+            # had no exit_price and the EA later caught up.
+            if existing.get("status") == "closed":
+                update["auto_repaired_from_ghost"] = True
+                update["auto_repaired_at"] = datetime.now(timezone.utc).isoformat()
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
         tid = str(existing["_id"])
     else:

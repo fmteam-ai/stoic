@@ -545,6 +545,10 @@ export default function BotConfig() {
                     </div>
                 </div>
 
+                {/* Position Sizing Preview — shows the lot the bot would open
+                    at various confidence levels given current settings. */}
+                <PositionSizingPreview accountId={selectedAccountId} cfg={cfg} />
+
                 {/* Section 04 — Profit Protection Suite */}
                 <ProfitProtectionSection cfg={cfg} setCfg={setCfg} />
 
@@ -947,5 +951,178 @@ function ScopeTile({ active, onClick, title, subtitle, cfg, testid }) {
                 <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1.5 italic">USES DEFAULT</div>
             )}
         </button>
+    );
+}
+
+
+const PREVIEW_SYMBOLS = ["XAUUSD", "BTCUSD"];
+
+function PositionSizingPreview({ accountId, cfg }) {
+    const [symbol, setSymbol] = useState("XAUUSD");
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [err, setErr] = useState("");
+
+    // Recompute whenever the user changes the symbol, risk level, max_lot_size,
+    // or switches to a different account scope.
+    const riskLevel = cfg?.risk_level;
+    const maxLot = cfg?.max_lot_size;
+
+    useEffect(() => {
+        let cancelled = false;
+        const load = async () => {
+            setLoading(true);
+            setErr("");
+            try {
+                const params = new URLSearchParams({ symbol });
+                if (accountId) params.set("account_id", accountId);
+                const { data: d } = await api.get(`/bot/sizing-preview?${params.toString()}`);
+                if (!cancelled) setData(d);
+            } catch (e) {
+                if (!cancelled) setErr(formatApiError(e));
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        };
+        load();
+        return () => { cancelled = true; };
+    }, [symbol, accountId, riskLevel, maxLot]);
+
+    const maxEff = data ? Math.max(...data.rows.map(r => r.effective_lot || 0)) : 0;
+
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="sizing-preview">
+            <div className="border-b border-[#1F1F1F] px-5 py-3 flex items-center gap-3 flex-wrap">
+                <Gauge className="w-4 h-4 text-[#FFD700]" />
+                <div className="font-display text-base">Position Sizing Preview</div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                    LIVE · UPDATES AS YOU TUNE
+                </div>
+                <div className="ml-auto flex items-center gap-1.5">
+                    {PREVIEW_SYMBOLS.map(s => (
+                        <button key={s} type="button" onClick={() => setSymbol(s)}
+                                data-testid={`sizing-symbol-${s}`}
+                                className={`font-mono text-[10px] tracking-widest px-2.5 py-1 border transition-colors ${
+                                    symbol === s
+                                        ? "border-[#FFD700] text-[#FFD700] bg-[#FFD700]/10"
+                                        : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333]"
+                                }`}>
+                            {s}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {err && (
+                <div className="px-5 py-4 font-mono text-xs text-[#FF3B30]"
+                     data-testid="sizing-error">{err}</div>
+            )}
+
+            {!err && data && data.rows.length === 0 && (
+                <div className="px-5 py-4 font-mono text-xs text-[#A1A1AA]"
+                     data-testid="sizing-empty">
+                    Connect an account to see lot-size projections.
+                </div>
+            )}
+
+            {!err && data && data.rows.length > 0 && (
+                <>
+                    <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 gap-3 border-b border-[#1F1F1F]"
+                         data-testid="sizing-context">
+                        <PreviewStat label="Account" value={data.account_label || "—"}
+                                     sub={`${data.account_type || ""}`.toUpperCase()} />
+                        <PreviewStat label="Equity" value={`$${(data.account_equity || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                                     sub={`RISK ${(data.risk_pct).toFixed(1)}%`} />
+                        <PreviewStat label="Risk Level"
+                                     value={(data.risk_level || "").toUpperCase()}
+                                     sub={`KELLY CAP ${(data.kelly_cap * 100).toFixed(0)}%`} />
+                        <PreviewStat label="Max Lot Cap"
+                                     value={data.max_lot_size > 0 ? data.max_lot_size : "—"}
+                                     sub={data.max_lot_size > 0 ? "AT PEAK KELLY" : "UNSET · PURE KELLY"} />
+                    </div>
+
+                    <div className="px-5 py-3 font-mono text-[10px] text-[#52525B] tracking-widest border-b border-[#1F1F1F]">
+                        SCENARIO · {data.symbol} · entry {data.scenario.entry_price} · SL {data.scenario.stop_loss}
+                        ({data.scenario.sl_distance_price.toFixed(2)} price units)
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-xs font-mono">
+                            <thead>
+                                <tr className="text-[10px] tracking-widest text-[#52525B] border-b border-[#1F1F1F]">
+                                    <th className="px-4 py-2 text-left">CONF</th>
+                                    <th className="px-4 py-2 text-right">KELLY f</th>
+                                    <th className="px-4 py-2 text-right">RISK USD</th>
+                                    <th className="px-4 py-2 text-right">ABS LOT</th>
+                                    <th className="px-4 py-2 text-right">YOU GET</th>
+                                    <th className="px-4 py-2 text-left">BAR</th>
+                                </tr>
+                            </thead>
+                            <tbody data-testid="sizing-rows">
+                                {data.rows.map(r => {
+                                    const pct = maxEff > 0 ? (r.effective_lot / maxEff) * 100 : 0;
+                                    return (
+                                        <tr key={r.confidence_pct}
+                                            data-testid={`sizing-row-${r.confidence_pct}`}
+                                            className={r.below_min_confidence
+                                                ? "border-b border-[#1F1F1F] opacity-40"
+                                                : "border-b border-[#1F1F1F]"}>
+                                            <td className="px-4 py-2 text-left text-[#A1A1AA]">
+                                                {r.confidence_pct}%
+                                                {r.below_min_confidence && (
+                                                    <span className="ml-1.5 text-[9px] text-[#FF3B30]">VETO</span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-2 text-right text-[#A1A1AA]">
+                                                {r.kelly_f?.toFixed(2) ?? "—"}
+                                            </td>
+                                            <td className="px-4 py-2 text-right text-[#A1A1AA]">
+                                                ${(r.risk_amount_usd || 0).toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-2 text-right text-[#52525B]">
+                                                {r.absolute_lot?.toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-2 text-right text-[#FFD700] font-bold">
+                                                {r.effective_lot?.toFixed(2)}
+                                            </td>
+                                            <td className="px-4 py-2">
+                                                <div className="w-full bg-[#1F1F1F] h-1.5 overflow-hidden">
+                                                    <div className="bg-[#FFD700] h-full transition-all"
+                                                         style={{ width: `${Math.min(100, pct)}%` }} />
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="px-5 py-3 border-t border-[#1F1F1F] font-mono text-[9px] text-[#52525B] tracking-widest">
+                        ABS LOT = pure Kelly with no cap.
+                        YOU GET = effective lot after applying your Max Lot Cap (scaled by confidence).
+                        Below {data.min_confidence}% confidence the signal is vetoed → no trade.
+                    </div>
+                </>
+            )}
+
+            {loading && (
+                <div className="px-5 py-2 font-mono text-[9px] text-[#52525B] tracking-widest">
+                    RECOMPUTING…
+                </div>
+            )}
+        </div>
+    );
+}
+
+function PreviewStat({ label, value, sub }) {
+    return (
+        <div>
+            <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-0.5">{label}</div>
+            <div className="font-display text-sm tracking-tight truncate">{value}</div>
+            {sub && (
+                <div className="font-mono text-[9px] text-[#A1A1AA] tracking-widest mt-0.5">{sub}</div>
+            )}
+        </div>
     );
 }

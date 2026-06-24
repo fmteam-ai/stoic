@@ -7,7 +7,7 @@ from bson import ObjectId
 from auth import get_current_user
 from database import get_db
 from models import BotConfigUpdate, BotConfigOut
-from risk import get_profile
+from risk import get_profile, compute_lot_for_account
 from intelligence_counters import get_window_24h as intel_window_24h
 from strategy_presets import list_presets, get_preset
 from user_presets import (
@@ -119,6 +119,101 @@ def _serialize(cfg: dict) -> dict:
         "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
         "updated_at": cfg.get("updated_at"),
+    }
+
+
+@router.get("/sizing-preview")
+async def sizing_preview(
+    account_id: Optional[str] = None,
+    symbol: str = "XAUUSD",
+    user=Depends(get_current_user),
+):
+    """Live preview of the lot size the bot would open at various confidence
+    levels — using the user's actual equity, risk profile, and max_lot_size.
+
+    Lets the user dial in a sensible `max_lot_size` BEFORE risking real money,
+    instead of trial-and-error on actual signals. Powers the "Position Sizing
+    Preview" panel on the BotConfig page.
+    """
+    db = get_db()
+
+    # Pick the account: requested → first connected → first owned.
+    acct = None
+    if account_id:
+        acct = await db.accounts.find_one(
+            {"_id": ObjectId(account_id), "user_id": user["id"]}
+        )
+        if not acct:
+            raise HTTPException(status_code=404, detail="Account not found")
+    if not acct:
+        acct = await db.accounts.find_one(
+            {"user_id": user["id"], "status": "connected"}
+        )
+    if not acct:
+        acct = await db.accounts.find_one({"user_id": user["id"]})
+    if not acct:
+        return {
+            "symbol": symbol, "rows": [], "warnings": ["No account connected"],
+        }
+
+    cfg = await _get_or_create_config(db, user["id"], account_id)
+    profile = get_profile(cfg.get("risk_level", "medium"))
+    max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
+
+    # Realistic SL distances per symbol — matches the typical ATR-derived SL
+    # the bot uses live. Keeps the preview honest without faking the calc.
+    typical_entry_sl = {
+        "XAUUSD": (4100.0, 4115.0),    # ~150 pips
+        "BTCUSD": (62000.0, 61500.0),  # ~500 pips
+        "ETHUSD": (3200.0, 3175.0),
+        "XAGUSD": (32.0, 31.7),
+    }
+    entry, sl = typical_entry_sl.get(symbol.upper(), (1.0, 0.985))
+
+    rows = []
+    for conf in (55, 60, 65, 70, 75, 80, 85, 90):
+        sized = compute_lot_for_account(
+            account=acct, symbol=symbol,
+            entry_price=entry, stop_loss=sl,
+            confidence_pct=float(conf), profile=profile,
+        )
+        kelly_f = float(sized.get("kelly_f") or 0)
+        kelly_cap = float(profile.get("kelly_cap") or 0)
+        absolute_lot = float(sized["lot_size"])
+        if max_lot_cap > 0 and kelly_cap > 0:
+            scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
+            scaled = max(round(max_lot_cap * scale, 2), 0.01)
+            effective = min(absolute_lot, scaled)
+        else:
+            effective = (min(absolute_lot, max_lot_cap)
+                         if max_lot_cap > 0 else absolute_lot)
+        rows.append({
+            "confidence_pct": conf,
+            "kelly_f": kelly_f,
+            "absolute_lot": absolute_lot,
+            "effective_lot": effective,
+            "risk_amount_usd": sized.get("risk_amount_usd"),
+            "below_min_confidence": conf < profile["min_confidence"],
+        })
+
+    return {
+        "account_id": str(acct["_id"]),
+        "account_label": acct.get("label"),
+        "account_equity": float(acct.get("equity") or acct.get("balance") or 0),
+        "account_type": acct.get("account_type"),
+        "symbol": symbol,
+        "risk_level": cfg.get("risk_level", "medium"),
+        "risk_pct": profile["risk_pct"],
+        "kelly_cap": profile["kelly_cap"],
+        "min_confidence": profile["min_confidence"],
+        "max_lot_size": max_lot_cap,
+        "sl_pips": rows[0].get("sl_pips") if rows else None,
+        "scenario": {
+            "entry_price": entry,
+            "stop_loss": sl,
+            "sl_distance_price": abs(entry - sl),
+        },
+        "rows": rows,
     }
 
 
