@@ -692,26 +692,30 @@ function VpsSection() {
             </P>
 
             <Callout kind="info">
-                <strong>RoboForex users:</strong> a Free VPS is bundled with deposits ≥ $300.
+                <strong>RoboForex users:</strong> a Free VPS is available when your account equity is ≥ $300{" "}
+                <em>and</em> you trade at least 3 standard lots per month.
                 Activate it from your{" "}
-                <a href="https://my.roboforex.com/en/products/free-vps/" target="_blank" rel="noreferrer"
-                    className="text-[#00FF41] hover:underline">RoboForex personal cabinet → Products → Free VPS</a>.
-                No need to pay for a third-party host if you qualify.
+                <a href="https://roboforex.com/clients/services/forex-vps/" target="_blank" rel="noreferrer"
+                    className="text-[#00FF41] hover:underline">RoboForex VPS service page</a>{" "}
+                (log in → Member Area → Services → Your VPS 2.0 server → Submit Application).
+                If you don&apos;t meet the volume requirement, the VPS is available for $5/month from the same page.
             </Callout>
 
             <div className="font-display font-bold text-base mt-6 mb-2">Step-by-step · RoboForex Free VPS</div>
             <div className="space-y-3">
                 <Step n="1" title="Eligibility check" testid="guide-vps-step-1">
-                    Log in to your RoboForex cabinet. Free VPS is available when your account deposit
-                    is ≥ $300 (Pro/Pro-Cent/Prime/ECN). Verify under <em>Profile → Free Services → VPS</em>.
-                    If under threshold, top up the demo→live transfer, or use a third-party VPS instead
-                    (see the alternatives below).
+                    Log in to your{" "}
+                    <a href="https://my.roboforex.com/en/login/" target="_blank" rel="noreferrer"
+                        className="text-[#00FF41] hover:underline">RoboForex Member Area</a>.
+                    Free VPS requires ≥ $300 equity <em>and</em> ≥ 3 standard lots traded in the current month
+                    (CFDs excluding US-stock CFDs). Check eligibility under <em>Services → Your VPS 2.0 server</em>.
+                    Below threshold? The same panel offers a $5/month paid option, or use any third-party VPS.
                 </Step>
-                <Step n="2" title="Order the VPS" testid="guide-vps-step-2">
-                    From <em>Products → Free VPS Hosting → Activate</em>, pick the data centre closest to
-                    the RoboForex execution server (London for EU clients, New York for Americas).
-                    Lower latency = tighter fills. Activation usually takes 15–30 minutes — you&apos;ll
-                    receive an email with RDP credentials (IP, username, password).
+                <Step n="2" title="Submit the application" testid="guide-vps-step-2">
+                    From <em>Services → Your VPS 2.0 server → Submit Application</em>, RoboForex auto-picks
+                    the data centre closest to the execution server (London / New York / Singapore).
+                    Approval is manual but usually arrives within 15–30 minutes by email — your IP address,
+                    username, and password come in that message.
                 </Step>
                 <Step n="3" title="Connect via RDP" testid="guide-vps-step-3">
                     On Windows: open <em>Remote Desktop Connection</em> → enter the IP from the email →
