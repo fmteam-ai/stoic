@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 
 from auth import get_current_user
 from analytics import compute_attribution
+from account_analytics import per_account_stats
 from auto_tune import get_all_thresholds, get_auto_threshold, invalidate_cache
 from learned_meta import retrain as learned_retrain, get_artifact as learned_artifact
 from database import get_db
@@ -14,6 +15,14 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 async def get_attribution(user=Depends(get_current_user)):
     """Full performance attribution across every dimension."""
     return await compute_attribution(user["id"])
+
+
+@router.get("/by-account")
+async def get_by_account(user=Depends(get_current_user)):
+    """Side-by-side aggregates per MT5 account — feeds the dashboard's
+    Per-Account Comparison widget (winner highlighting, 30d P&L, win rate, etc).
+    """
+    return await per_account_stats(user["id"])
 
 
 @router.get("/auto-tune")

@@ -5,6 +5,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock, Bot, Pause, CheckCircle2, AlertCircle, Clock, Target, TrendingUp, TrendingDown } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { IntegrityWidget } from "@/components/IntegrityWidget";
+import { PerAccountComparison } from "@/components/PerAccountComparison";
 import { toast } from "sonner";
 
 const PRIMARY_SYMBOLS = ["XAUUSD", "BTCUSD"];
@@ -481,6 +482,9 @@ export default function Dashboard() {
 
                 {/* Bot Status Strip */}
                 {botStatus && <BotStatusStrip status={botStatus} />}
+
+                {/* Per-account A/B comparison — only renders when user has 2+ accounts */}
+                <PerAccountComparison refreshSignal={lastEvent?.ts} />
 
                 {/* Time-to-Target — open positions live */}
                 {liveTrades.length > 0 && <TimeToTargetPanel trades={liveTrades} />}
