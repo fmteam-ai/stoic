@@ -6,6 +6,7 @@ import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLin
 import { useLiveStream } from "@/lib/useLiveStream";
 import { IntegrityWidget } from "@/components/IntegrityWidget";
 import { PerAccountComparison } from "@/components/PerAccountComparison";
+import { EaVersionStrip } from "@/components/EaVersionStrip";
 import { toast } from "sonner";
 
 const PRIMARY_SYMBOLS = ["XAUUSD", "BTCUSD"];
@@ -479,6 +480,9 @@ export default function Dashboard() {
                         </div>
                     </div>
                 )}
+
+                {/* EA Version Strip — surfaces stale builds across terminals */}
+                <EaVersionStrip refreshSignal={lastEvent?.ts} />
 
                 {/* Bot Status Strip */}
                 {botStatus && <BotStatusStrip status={botStatus} />}

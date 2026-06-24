@@ -247,6 +247,10 @@ class BridgeHeartbeat(BaseModel):
     # OnTradeTransaction). Backfills the "I see 4 trades on MT5 but only 0
     # on STOIC" gap.
     positions: Optional[list[BridgePosition]] = None
+    # EA v1.26+: the EA's own semantic version string. Drives the "EA Version"
+    # badge on the Dashboard so the user can tell at a glance which terminals
+    # are running stale builds (e.g. missing the autonomous deal-history sweep).
+    client_version: Optional[str] = None
 
 
 class BridgeTradeReport(BaseModel):

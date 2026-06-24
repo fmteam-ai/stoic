@@ -307,11 +307,13 @@ void SendHeartbeat() {
    // EA v1.25: include the full live positions snapshot so STOIC can
    // backfill pre-existing trades it never saw via OnTradeTransaction.
    string positions = BuildPositionsJson();
+   // EA v1.26: report our own semantic version so the Dashboard can flag
+   // stale terminals (no manual MT5 inspection required).
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
-      "\"positions\":%s}",
+      "\"positions\":%s,\"client_version\":\"1.26\"}",
       BridgeToken, balance, equity, openPos, spreads, login, ccy, positions);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }

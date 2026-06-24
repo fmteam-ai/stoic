@@ -86,6 +86,12 @@ async def heartbeat(payload: BridgeHeartbeat):
     if payload.base_currency:
         set_doc["broker_currency_reported"] = payload.base_currency.upper()
 
+    # EA v1.26+: track the EA's reported semantic version so the Dashboard
+    # can flag terminals running stale builds (missing history-sweep, etc.).
+    if payload.client_version:
+        set_doc["ea_version"] = str(payload.client_version)
+        set_doc["ea_version_updated_at"] = now_iso
+
     # EA v1.22+: persist the ticket list so the user can later trigger
     # manual reconciliation even if a heartbeat isn't currently in flight.
     reconcile_summary = None
