@@ -467,7 +467,13 @@ async def report_trade(payload: BridgeTradeReport):
             cap = float(caps.get(symbol, caps.get(symbol.upper(), 9999)))
             if slip_pips > cap:
                 slippage_force_close = True
-                update["pending_modification"] = {"type": "FULL_CLOSE"}
+                # Stamp requested_at so the stuck-modification health check
+                # can age this out after 10min if the EA ignores it.
+                update["pending_modification"] = {
+                    "type": "FULL_CLOSE",
+                    "requested_at": now_iso,
+                    "reason": "slippage_veto",
+                }
                 update["close_reason"] = "slippage_veto"
                 update["slippage_veto_cap_pips"] = cap
 

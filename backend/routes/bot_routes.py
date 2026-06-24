@@ -471,14 +471,26 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "details": outdated})
 
     # --- 4. Stuck pending modifications (max -15) ------------------------
+    # AUTO-CLEAN: any pending_modification queued >10min ago without an EA
+    # ack is stale — the EA either ignored it or the queue is broken. Either
+    # way, repeatedly penalising the score for it is noise. Clear, then count
+    # only the genuinely-recent ones.
+    ten_min_ago_iso = (now - timedelta(minutes=10)).isoformat()
+    await db.trades.update_many({
+        "user_id": user["id"], "status": "open",
+        "pending_modification": {"$ne": None},
+        "$or": [
+            {"pending_modification.requested_at": {"$lt": ten_min_ago_iso}},
+            {"pending_modification.requested_at": {"$exists": False}},
+        ],
+    }, {"$set": {"pending_modification": None,
+                  "pending_modification_expired": True}})
+
     five_min_ago_iso = (now - timedelta(minutes=5)).isoformat()
     stuck = await db.trades.count_documents({
         "user_id": user["id"], "status": "open",
         "pending_modification": {"$ne": None},
-        "$or": [
-            {"pending_modification.requested_at": {"$lt": five_min_ago_iso}},
-            {"pending_modification.requested_at": {"$exists": False}},
-        ],
+        "pending_modification.requested_at": {"$lt": five_min_ago_iso},
     })
     if stuck > 0:
         score -= min(15, 5 * stuck)
@@ -487,8 +499,12 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "fix": "Recompile EA to v1.26 (F7 in MetaEditor) — the modification queue isn't being consumed."})
 
     # --- 5. Ghost trades — closed with no exit_price (max -10) ----------
+    # Acknowledged ghosts (panic / account_deleted / reconciler-only closes
+    # that will never have a broker exit_price) don't count — penalising the
+    # user for unrecoverable history is just noise.
     ghosts = await db.trades.count_documents({
         "user_id": user["id"], "status": "closed", "exit_price": None,
+        "ghost_acknowledged": {"$ne": True},
     })
     if ghosts > 0:
         score -= min(10, 2 * ghosts)
