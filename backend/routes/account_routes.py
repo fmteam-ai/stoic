@@ -127,6 +127,11 @@ async def delete_account(account_id: str, force: bool = False,
     )
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Account not found")
+    # Clean up the per-account bot_config override (if any) — the user's
+    # default profile is preserved.
+    await db.bot_configs.delete_one(
+        {"user_id": user["id"], "account_id": account_id}
+    )
     return {"ok": True}
 
 

@@ -105,8 +105,14 @@ async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
         reason = f"Weekly drawdown {drawdown_week_pct:.2f}% breached -{weekly_limit_pct}% limit (7-day window)"
 
     if tripped:
+        # Disable only the cfg that tripped — per-account override OR default profile.
+        cfg_filter: dict = {"user_id": user_id}
+        if cfg.get("account_id"):
+            cfg_filter["account_id"] = cfg["account_id"]
+        else:
+            cfg_filter["$or"] = [{"account_id": None}, {"account_id": {"$exists": False}}]
         await db.bot_configs.update_one(
-            {"user_id": user_id},
+            cfg_filter,
             {"$set": {
                 "active": False,
                 "tripped_at": datetime.now(timezone.utc).isoformat(),

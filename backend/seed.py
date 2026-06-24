@@ -23,21 +23,32 @@ async def seed_admin():
             {"$set": {"password_hash": hash_password(admin_password)}},
         )
 
-    # Default bot config for admin
+    # Default bot config for admin (account_id=None marks the user-default profile)
     admin = await db.users.find_one({"email": admin_email})
     admin_id = str(admin["_id"])
     await db.bot_configs.update_one(
-        {"user_id": admin_id},
+        {"user_id": admin_id, "$or": [{"account_id": None},
+                                      {"account_id": {"$exists": False}}]},
         {"$setOnInsert": {
             "user_id": admin_id,
+            "account_id": None,
             "risk_level": "medium",
             "symbols": ["XAUUSD", "BTCUSD"],
             "active": False,
             "max_concurrent_trades": 3,
             "auto_execute": True,
+            "max_lot_size": 0.0,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }},
         upsert=True,
+    )
+
+    # Backfill: any legacy bot_configs doc that pre-dates per-account scoping
+    # has no `account_id`. Mark it as the user's default (None) so the new
+    # filter (`account_id` null OR missing) keeps matching it.
+    await db.bot_configs.update_many(
+        {"account_id": {"$exists": False}},
+        {"$set": {"account_id": None}},
     )
 
 
@@ -49,7 +60,16 @@ async def ensure_indexes():
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])
-    await db.bot_configs.create_index("user_id", unique=True)
+    # bot_configs is now keyed by (user_id, account_id). account_id=None marks
+    # the user's default profile; other docs are per-account overrides.
+    # Drop the old unique(user_id) index if it exists, then create the composite.
+    try:
+        await db.bot_configs.drop_index("user_id_1")
+    except Exception:
+        pass  # index didn't exist on this deploy
+    await db.bot_configs.create_index(
+        [("user_id", 1), ("account_id", 1)], unique=True
+    )
     await db.conditional_triggers.create_index([("user_id", 1), ("active", 1)])
 
     # --- Mongo Time-Series collections (TimescaleDB substitute) ---

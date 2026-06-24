@@ -113,8 +113,12 @@ async def _connected_accounts(db, user_id: str) -> list:
     return fresh
 
 
-async def _process_user(db, cfg: dict):
+async def _process_user_account(db, cfg: dict):
+    """Run one bot config's tick — scoped to either the user's default profile
+    (one trade per signal, on first connected account) or a specific account
+    (independent per-account bot with its own settings/lot cap/symbols)."""
     user_id = cfg["user_id"]
+    cfg_account_id = cfg.get("account_id")  # None = default profile
     symbols = cfg.get("symbols") or []
     if not symbols:
         return
@@ -122,20 +126,40 @@ async def _process_user(db, cfg: dict):
     # 0. Subscription gate — paper accounts always allowed; live execution requires active sub
     entitlement = await subscription_active(user_id)
 
-    all_accounts = await db.accounts.find({"user_id": user_id}).to_list(length=50)
+    # Resolve which accounts this cfg controls.
+    #   - Per-account cfg: only that single account.
+    #   - Default cfg: every account that does NOT have its own per-account cfg.
+    if cfg_account_id:
+        all_accounts = await db.accounts.find(
+            {"user_id": user_id, "_id": ObjectId(cfg_account_id)}
+        ).to_list(length=1)
+    else:
+        all_accounts = await db.accounts.find({"user_id": user_id}).to_list(length=50)
+        if all_accounts:
+            # Filter out accounts that have their OWN active/inactive override config —
+            # those are managed by their dedicated cfg pass (independent bot).
+            overridden = await db.bot_configs.find({
+                "user_id": user_id,
+                "account_id": {"$nin": [None]},
+            }, {"account_id": 1}).to_list(length=50)
+            ov_ids = {o["account_id"] for o in overridden if o.get("account_id")}
+            all_accounts = [a for a in all_accounts if str(a["_id"]) not in ov_ids]
+
+    if not all_accounts:
+        return
 
     # 1. Circuit breaker check first — never analyse if tripped
     cb = await check_and_trip(db, user_id, cfg, all_accounts)
     if cb["tripped"]:
         await ws_manager.broadcast(user_id, "circuit_breaker_tripped", cb)
-        logger.warning("Circuit breaker tripped for user=%s: %s", user_id, cb["reason"])
+        logger.warning("Circuit breaker tripped for user=%s acct=%s: %s",
+                       user_id, cfg_account_id or "default", cb["reason"])
         return
 
     # Paper-mode-only fallback when subscription is inactive
     if not entitlement["active"]:
         all_accounts = [a for a in all_accounts if (a.get("mode") or "live") == "paper"]
         if not all_accounts:
-            # No paper account either → skip silently. UI banner will prompt to subscribe.
             return
 
     connected = [a for a in all_accounts
@@ -146,10 +170,8 @@ async def _process_user(db, cfg: dict):
     risk_level = cfg.get("risk_level", "medium")
     auto_exec = bool(cfg.get("auto_execute", True))
     max_concurrent = int(cfg.get("max_concurrent_trades", 3))
+    max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
-    # If the user has explicitly set a min_confidence_override, treat that as
-    # the floor — auto-tune cannot raise the bar above it. Same applies in
-    # Aggressive Mode where the user has explicitly opted into more entries.
     min_conf_override = int(cfg.get("min_confidence_override") or 0)
     aggressive_mode_cfg = bool(cfg.get("aggressive_mode") or False)
     spread_filter_enabled = bool(cfg.get("spread_filter_enabled", False))
@@ -162,81 +184,82 @@ async def _process_user(db, cfg: dict):
     sl_cooldown_enabled = bool(cfg.get("sl_cooldown_enabled", True))
     sl_cooldown_min = int(cfg.get("sl_cooldown_minutes", _sl_cooldown_minutes_default()) or 0)
 
+    # Cooldown / counters are scoped per (user, account) so multiple
+    # per-account bots can fire concurrently on the same symbol.
+    cooldown_scope = f"{user_id}:{cfg_account_id or 'default'}"
+
     # === Anti-tilt: freeze auto-execute if last N closed trades all lost ===
     anti_tilt_active = False
     if anti_tilt_enabled and anti_tilt_n > 0:
-        recent = await db.trades.find(
-            {"user_id": user_id, "status": "closed"}
-        ).sort("closed_at", -1).limit(anti_tilt_n).to_list(length=anti_tilt_n)
+        recent_q = {"user_id": user_id, "status": "closed"}
+        if cfg_account_id:
+            recent_q["account_id"] = cfg_account_id
+        recent = await db.trades.find(recent_q).sort(
+            "closed_at", -1
+        ).limit(anti_tilt_n).to_list(length=anti_tilt_n)
         if len(recent) == anti_tilt_n and all(float(r.get("pnl") or 0) <= 0 for r in recent):
             last_close = recent[0].get("closed_at")
             try:
                 lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
                 if datetime.now(timezone.utc) - lc < timedelta(hours=anti_tilt_hours):
                     anti_tilt_active = True
-                    logger.warning("Anti-tilt active for user=%s — last %d trades lost, freezing auto-exec",
-                                   user_id, anti_tilt_n)
+                    logger.warning("Anti-tilt active user=%s acct=%s — last %d trades lost",
+                                   user_id, cfg_account_id or "default", anti_tilt_n)
             except Exception:
                 pass
 
-    # Count current open + pending trades to respect max_concurrent
-    inflight = await db.trades.count_documents({
-        "user_id": user_id,
-        "status": {"$in": ["pending", "open"]},
-    })
+    # Count current open + pending trades to respect max_concurrent (per-account when scoped)
+    inflight_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
+    if cfg_account_id:
+        inflight_q["account_id"] = cfg_account_id
+    inflight = await db.trades.count_documents(inflight_q)
 
-    # If anti-tilt fired above, freeze ALL new entries for this cycle.
-    # Existing open trades are NOT closed — only new entries are blocked.
     if anti_tilt_active:
         return
 
     for sym in symbols:
-        if _on_cooldown(user_id, sym):
+        if _on_cooldown(cooldown_scope, sym):
             continue
 
         # Capital-preservation guards (skip BEFORE expensive AI analysis)
-        # 1. Asia-session skip for XAU (00:00-07:00 UTC = chop graveyard for gold)
         if asia_skip_xau and sym.upper() == "XAUUSD":
             now_h = datetime.now(timezone.utc).hour
             if now_h < 7:
                 logger.info("Asia-session skip user=%s sym=%s hour=%d", user_id, sym, now_h)
                 continue
 
-        # 2. Trade-of-the-day cap: max N new trades per symbol per UTC day
         if trade_of_day_cap > 0:
             day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            today_count = await db.trades.count_documents({
+            tod_q = {
                 "user_id": user_id,
                 "symbol": sym,
                 "created_at": {"$gte": day_start.isoformat()},
-            })
+            }
+            if cfg_account_id:
+                tod_q["account_id"] = cfg_account_id
+            today_count = await db.trades.count_documents(tod_q)
             if today_count >= trade_of_day_cap:
                 logger.info("Trade-of-day cap reached user=%s sym=%s count=%d/%d",
                             user_id, sym, today_count, trade_of_day_cap)
                 continue
 
-        # 3. Per-symbol SL cooldown — if last trade on this symbol stopped out
-        #    within `sl_cooldown_minutes`, block re-entry. Prevents revenge-regime
-        #    bounce-trading into the same losing setup.
         if sl_cooldown_enabled and sl_cooldown_min > 0:
             sl_cd = await _on_sl_cooldown(db, user_id, sym, sl_cooldown_min)
             if sl_cd:
-                logger.info(
-                    "SL cooldown user=%s sym=%s last_sl=%smin ago, resumes in %smin",
-                    user_id, sym, sl_cd["age_minutes"], sl_cd["resumes_in_min"],
-                )
+                logger.info("SL cooldown user=%s sym=%s resumes in %smin",
+                            user_id, sym, sl_cd["resumes_in_min"])
                 await inc_intel_counter(user_id, "sl_cooldown_block")
                 continue
 
         try:
-            # Route every tick through the multi-agent orchestrator:
-            # Research → Strategy → Risk. Returns the post-risk signal and
-            # persists the activity log to `agent_activity`.
             orch = get_orchestrator()
-            active_positions = await db.trades.find({
+            active_positions_q = {
                 "user_id": user_id,
                 "status": {"$in": ["open", "pending"]},
-            }).to_list(length=50)
+            }
+            if cfg_account_id:
+                active_positions_q["account_id"] = cfg_account_id
+            active_positions = await db.trades.find(active_positions_q).to_list(length=50)
             tick_out = await orch.analyze_tick(
                 user_id=user_id, symbol=sym, risk_level=risk_level,
                 active_positions=active_positions,
@@ -249,15 +272,13 @@ async def _process_user(db, cfg: dict):
             logger.exception("orchestrator.analyze_tick failed user=%s sym=%s: %s", user_id, sym, e)
             continue
 
-        # Auto-Tune: raise the min-confidence threshold using historical analytics
+        # Auto-Tune
         auto_tune_block_reason = None
         if auto_tune_enabled:
             try:
                 tune = await get_auto_threshold(user_id, sym, risk_level)
                 signal["auto_tune"] = tune
                 eff = float(tune.get("effective_threshold") or 0)
-                # Apply user override / aggressive mode cap: don't let auto-tune
-                # raise the bar above an explicit user-chosen threshold.
                 if aggressive_mode_cfg or (0 < min_conf_override < 100):
                     cap = min_conf_override if (0 < min_conf_override < 100) else 100
                     eff = min(eff, float(cap))
@@ -270,21 +291,16 @@ async def _process_user(db, cfg: dict):
             except Exception as e:
                 logger.exception("auto_tune failed user=%s sym=%s: %s", user_id, sym, e)
 
-        # Count Multi-Timeframe vetoes (gate fired inside ai_signals)
         try:
             mtf_gate = signal.get("mtf_gate") or {}
             if mtf_gate.get("checked") and mtf_gate.get("aligned") is False:
                 await inc_intel_counter(user_id, "mtf_veto")
-            # Count Learned Meta-Classifier vetoes
             lm = signal.get("learned_meta") or {}
             if lm.get("verdict") == "REJECT":
                 await inc_intel_counter(user_id, "learned_meta_veto")
-            # Count A+ confluence vetoes
             aplus = signal.get("aplus_confluence") or {}
             if aplus.get("checks") and aplus.get("passed") is False:
                 await inc_intel_counter(user_id, "aplus_veto")
-            # Count R:R vetoes — signal action HOLD but veto_applied True is too broad;
-            # use rr_ratio + reasoning fingerprint
             reasoning_blob = signal.get("reasoning") or ""
             if "VETO (R:R)" in reasoning_blob:
                 await inc_intel_counter(user_id, "rr_veto")
@@ -292,6 +308,8 @@ async def _process_user(db, cfg: dict):
             pass
 
         signal["user_id"] = user_id
+        if cfg_account_id:
+            signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
         signal["consumed"] = False
         signal["created_at"] = datetime.now(timezone.utc).isoformat()
         signal["origin"] = "auto"
@@ -300,9 +318,8 @@ async def _process_user(db, cfg: dict):
         broadcast_payload = {**signal, "id": signal_id}
         broadcast_payload.pop("_id", None)
         await ws_manager.broadcast(user_id, "signal_created", broadcast_payload)
-        _mark_cooldown(user_id, sym)
+        _mark_cooldown(cooldown_scope, sym)
 
-        # Telegram alert on high-confidence non-HOLD signals
         try:
             if signal.get("action") in ("BUY", "SELL") and (signal.get("confidence") or 0) >= 75:
                 from notifier import notify_high_conf_signal
@@ -310,7 +327,6 @@ async def _process_user(db, cfg: dict):
         except Exception:
             pass
 
-        # Auto-execute decision
         if not (auto_exec and signal["tradeable"]):
             continue
         if auto_tune_block_reason:
@@ -318,28 +334,27 @@ async def _process_user(db, cfg: dict):
             await inc_intel_counter(user_id, "auto_tune_block")
             continue
         if inflight >= max_concurrent:
-            logger.info("Max concurrent (%s) reached for user=%s; skipping execute", max_concurrent, user_id)
+            logger.info("Max concurrent (%s) reached user=%s acct=%s",
+                        max_concurrent, user_id, cfg_account_id or "default")
             continue
         if not connected:
             continue
-        # Per-user rate-limit guard — hard cap from env
         rl = rl_check(user_id)
         if not rl["allowed"]:
             logger.warning("Rate-limited user=%s, count_60s=%s/%s, skip auto-execute",
                            user_id, rl["count_60s"], rl["limit"])
             continue
+
+        # Target account: per-account cfg pins one; default cfg picks the first connected.
         target_account = connected[0]
 
-        # Spread filter — block auto-execution when MT5 spread > configured cap
         if spread_filter_enabled and (target_account.get("mode") or "live") == "live":
             spreads = target_account.get("current_spreads") or {}
             current_sp = spreads.get(sym)
             cap = max_spread_pips.get(sym)
             if current_sp is not None and cap is not None and current_sp > float(cap):
-                logger.info(
-                    "Spread filter block user=%s sym=%s spread=%.1fp cap=%.1fp",
-                    user_id, sym, current_sp, cap,
-                )
+                logger.info("Spread filter block user=%s sym=%s spread=%.1fp cap=%.1fp",
+                            user_id, sym, current_sp, cap)
                 await db.signals.update_one(
                     {"_id": result.inserted_id},
                     {"$set": {"spread_filter_block": {
@@ -350,6 +365,14 @@ async def _process_user(db, cfg: dict):
                 )
                 await inc_intel_counter(user_id, "spread_block")
                 continue
+
+        # Apply per-account max lot size clamp before handing to the engine.
+        effective_lot = float(signal["lot_size"])
+        if max_lot_cap > 0 and effective_lot > max_lot_cap:
+            logger.info("Max-lot clamp user=%s acct=%s sym=%s: %.4f → %.4f",
+                        user_id, cfg_account_id or "default", sym, effective_lot, max_lot_cap)
+            effective_lot = max_lot_cap
+
         engine = engine_for_account(target_account)
         trade_doc = await engine.execute(
             user_id=user_id,
@@ -358,16 +381,22 @@ async def _process_user(db, cfg: dict):
                 "signal_id": signal_id,
                 "symbol": signal["symbol"],
                 "action": signal["action"],
-                "lot_size": signal["lot_size"],
+                "lot_size": effective_lot,
                 "entry_price": signal["entry_price"],
                 "stop_loss": signal["stop_loss"],
                 "take_profit": signal["take_profit"],
                 "origin": "auto",
             },
         )
-        logger.info("Bot auto-execute user=%s sym=%s trade=%s", user_id, sym, trade_doc.get("id"))
+        logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
+                    user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {"consumed": True}})
         inflight += 1
+
+
+async def _process_user(db, cfg: dict):
+    """Backward-compat shim — routes to the new per-config processor."""
+    await _process_user_account(db, cfg)
 
 
 async def loop():

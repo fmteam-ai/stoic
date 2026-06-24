@@ -58,14 +58,17 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     uid = str(result.inserted_id)
 
     await db.bot_configs.update_one(
-        {"user_id": uid},
+        {"user_id": uid, "$or": [{"account_id": None},
+                                 {"account_id": {"$exists": False}}]},
         {"$setOnInsert": {
             "user_id": uid,
+            "account_id": None,
             "risk_level": "medium",
             "symbols": ["XAUUSD", "BTCUSD"],
             "active": False,
             "max_concurrent_trades": 3,
             "auto_execute": True,
+            "max_lot_size": 0.0,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }},
         upsert=True,

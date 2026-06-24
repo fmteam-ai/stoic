@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
 import os
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 
@@ -16,12 +17,26 @@ from user_presets import (
 router = APIRouter(prefix="/bot", tags=["bot"])
 
 
-async def _get_or_create_config(db, user_id: str) -> dict:
-    cfg = await db.bot_configs.find_one({"user_id": user_id})
+def _config_filter(user_id: str, account_id: Optional[str]) -> dict:
+    """Match the user's bot_config doc for either the default scope (no
+    account_id / account_id null) or a specific account.
+    Stored docs may omit `account_id` (legacy) — treat as default.
+    """
+    if account_id:
+        return {"user_id": user_id, "account_id": account_id}
+    return {
+        "user_id": user_id,
+        "$or": [{"account_id": None}, {"account_id": {"$exists": False}}],
+    }
+
+
+async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = None) -> dict:
+    cfg = await db.bot_configs.find_one(_config_filter(user_id, account_id))
     if cfg:
         return cfg
     new_cfg = {
         "user_id": user_id,
+        "account_id": account_id,  # None = default profile
         "risk_level": "medium",
         "symbols": ["XAUUSD", "BTCUSD"],
         "active": False,
@@ -55,6 +70,7 @@ async def _get_or_create_config(db, user_id: str) -> dict:
         "pre_news_protect_minutes": 5,
         "aggressive_mode": False,
         "min_confidence_override": 0,
+        "max_lot_size": 0.0,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     result = await db.bot_configs.insert_one(new_cfg)
@@ -66,6 +82,7 @@ def _serialize(cfg: dict) -> dict:
     return {
         "id": str(cfg["_id"]),
         "user_id": cfg["user_id"],
+        "account_id": cfg.get("account_id"),
         "risk_level": cfg.get("risk_level", "medium"),
         "symbols": cfg.get("symbols", []),
         "active": cfg.get("active", False),
@@ -99,21 +116,51 @@ def _serialize(cfg: dict) -> dict:
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
         "aggressive_mode": cfg.get("aggressive_mode", False),
         "min_confidence_override": cfg.get("min_confidence_override", 0),
+        "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
         "updated_at": cfg.get("updated_at"),
     }
 
 
 @router.get("/config")
-async def get_config(user=Depends(get_current_user)):
+async def get_config(account_id: Optional[str] = None, user=Depends(get_current_user)):
+    """Fetch the bot config for the default scope (account_id=None) or a
+    specific connected account. Creates a fresh config doc on first read.
+    """
     db = get_db()
-    cfg = await _get_or_create_config(db, user["id"])
+    if account_id:
+        # Validate the account belongs to this user before touching the config.
+        owns = await db.accounts.find_one(
+            {"_id": ObjectId(account_id), "user_id": user["id"]}
+        )
+        if not owns:
+            raise HTTPException(status_code=404, detail="Account not found")
+    cfg = await _get_or_create_config(db, user["id"], account_id)
     return _serialize(cfg)
 
 
-@router.put("/config")
-async def update_config(payload: BotConfigUpdate, user=Depends(get_current_user)):
+@router.get("/configs")
+async def list_configs(user=Depends(get_current_user)):
+    """List every bot_config the user owns — the default plus any per-account
+    overrides. Used by the UI's account selector.
+    """
     db = get_db()
+    cursor = db.bot_configs.find({"user_id": user["id"]})
+    docs = await cursor.to_list(length=100)
+    return [_serialize(d) for d in docs]
+
+
+@router.put("/config")
+async def update_config(payload: BotConfigUpdate,
+                        account_id: Optional[str] = None,
+                        user=Depends(get_current_user)):
+    db = get_db()
+    if account_id:
+        owns = await db.accounts.find_one(
+            {"_id": ObjectId(account_id), "user_id": user["id"]}
+        )
+        if not owns:
+            raise HTTPException(status_code=404, detail="Account not found")
     # PATCH semantics — only fields explicitly sent by the client are written.
     # Lets the UI / API do partial updates without nuking other settings.
     update = payload.model_dump(exclude_unset=True)
@@ -129,34 +176,56 @@ async def update_config(payload: BotConfigUpdate, user=Depends(get_current_user)
         update["max_slippage_pips"] = {
             str(k).upper(): float(v) for k, v in (update["max_slippage_pips"] or {}).items()
         }
+    if "max_lot_size" in update:
+        update["max_lot_size"] = max(0.0, float(update["max_lot_size"]))
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 
+    # Ensure the target doc exists, then PATCH.
+    await _get_or_create_config(db, user["id"], account_id)
     await db.bot_configs.update_one(
-        {"user_id": user["id"]}, {"$set": update}, upsert=True
+        _config_filter(user["id"], account_id), {"$set": update}
     )
-    cfg = await db.bot_configs.find_one({"user_id": user["id"]})
+    cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
     return _serialize(cfg)
 
 
-@router.post("/start")
-async def start_bot(user=Depends(get_current_user)):
+@router.delete("/config")
+async def reset_account_config(account_id: str, user=Depends(get_current_user)):
+    """Remove a per-account override so the account reverts to the user's
+    default bot_config. Refuses if account_id is missing.
+    """
     db = get_db()
-    await db.bot_configs.update_one(
-        {"user_id": user["id"]},
-        {"$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True,
+    res = await db.bot_configs.delete_one(
+        {"user_id": user["id"], "account_id": account_id}
     )
-    return {"active": True}
+    return {"deleted": res.deleted_count > 0}
+
+
+@router.post("/start")
+async def start_bot(account_id: Optional[str] = None, user=Depends(get_current_user)):
+    db = get_db()
+    if account_id:
+        owns = await db.accounts.find_one(
+            {"_id": ObjectId(account_id), "user_id": user["id"]}
+        )
+        if not owns:
+            raise HTTPException(status_code=404, detail="Account not found")
+    await _get_or_create_config(db, user["id"], account_id)
+    await db.bot_configs.update_one(
+        _config_filter(user["id"], account_id),
+        {"$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"active": True, "account_id": account_id}
 
 
 @router.post("/stop")
-async def stop_bot(user=Depends(get_current_user)):
+async def stop_bot(account_id: Optional[str] = None, user=Depends(get_current_user)):
     db = get_db()
     await db.bot_configs.update_one(
-        {"user_id": user["id"]},
+        _config_filter(user["id"], account_id),
         {"$set": {"active": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
-    return {"active": False}
+    return {"active": False, "account_id": account_id}
 
 
 @router.get("/presets")
@@ -167,13 +236,21 @@ async def get_strategy_presets(user=Depends(get_current_user)):
 
 
 @router.post("/preset/{key}")
-async def apply_strategy_preset(key: str, user=Depends(get_current_user)):
+async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
+                                user=Depends(get_current_user)):
     """Overlay a named preset (built-in or user-owned) onto the user's bot_config.
 
     Only the fields defined in the preset are touched. risk_level, symbols,
-    drawdown limits, and per-symbol caps are preserved.
+    drawdown limits, and per-symbol caps are preserved. Pass `?account_id=X`
+    to target a per-account override (default scope otherwise).
     """
     db = get_db()
+    if account_id:
+        owns = await db.accounts.find_one(
+            {"_id": ObjectId(account_id), "user_id": user["id"]}
+        )
+        if not owns:
+            raise HTTPException(status_code=404, detail="Account not found")
     preset_label: str
     overlay_config: dict
     if key.startswith("custom:"):
@@ -191,24 +268,26 @@ async def apply_strategy_preset(key: str, user=Depends(get_current_user)):
         preset_label = builtin["label"]
         overlay_config = builtin["config"]
 
-    await _get_or_create_config(db, user["id"])  # ensure doc exists
+    await _get_or_create_config(db, user["id"], account_id)
     overlay = {**overlay_config, "active_preset": key,
                "updated_at": datetime.now(timezone.utc).isoformat()}
     await db.bot_configs.update_one(
-        {"user_id": user["id"]}, {"$set": overlay}, upsert=True
+        _config_filter(user["id"], account_id), {"$set": overlay}
     )
-    cfg = await db.bot_configs.find_one({"user_id": user["id"]})
+    cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
     return {"applied": key, "label": preset_label, "config": _serialize(cfg)}
 
 
 @router.post("/my-presets")
-async def save_user_preset(payload: dict, user=Depends(get_current_user)):
-    """Save the user's CURRENT bot_config behaviour knobs as a named preset.
+async def save_user_preset(payload: dict, account_id: Optional[str] = None,
+                           user=Depends(get_current_user)):
+    """Save the active bot_config's behaviour knobs as a named preset.
 
     Body: { name, description? }
+    Pass `?account_id=X` to snapshot a per-account config; omitted = default.
     """
     db = get_db()
-    cfg = await _get_or_create_config(db, user["id"])
+    cfg = await _get_or_create_config(db, user["id"], account_id)
     try:
         preset = await create_user_preset(
             user_id=user["id"],
@@ -230,10 +309,15 @@ async def delete_my_preset(preset_id: str, user=Depends(get_current_user)):
 
 
 @router.get("/status")
-async def get_bot_status(user=Depends(get_current_user)):
-    """Return rich bot runtime status: last signal, last tick, why-no-trade, next tick ETA."""
+async def get_bot_status(account_id: Optional[str] = None,
+                         user=Depends(get_current_user)):
+    """Return rich bot runtime status: last signal, last tick, why-no-trade, next tick ETA.
+
+    Status is scoped to the default config when account_id omitted, or to the
+    per-account override when supplied.
+    """
     db = get_db()
-    cfg = await _get_or_create_config(db, user["id"])
+    cfg = await _get_or_create_config(db, user["id"], account_id)
     profile = get_profile(cfg.get("risk_level", "medium"))
     interval = int(os.environ.get("BOT_LOOP_INTERVAL_SEC", "60"))
 

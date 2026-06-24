@@ -211,9 +211,10 @@ async def _check_daily_drawdown(user_id: str, cfg: dict) -> None:
     limit_pct = float(cfg.get("daily_drawdown_pct", 3.0))
     drawdown_pct = (today_pnl / equity) * 100.0
     if drawdown_pct <= -limit_pct:
-        # Trip
-        await db.bot_configs.update_one(
-            {"user_id": user_id},
+        # Trip — disable every active bot_config for this user (default + all
+        # per-account overrides). Drawdown is user-level so all bots stop.
+        await db.bot_configs.update_many(
+            {"user_id": user_id, "active": True},
             {"$set": {
                 "active": False,
                 "circuit_breaker_tripped_at": datetime.now(timezone.utc).isoformat(),

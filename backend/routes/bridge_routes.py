@@ -211,8 +211,19 @@ async def report_trade(payload: BridgeTradeReport):
         update["intended_entry_price"] = intended
         update["slippage_pips"] = round(slip_pips, 2)
         update["slippage_checked"] = True
-        # Pull bot config for the threshold
-        cfg = await db.bot_configs.find_one({"user_id": acc["user_id"]}) or {}
+        # Pull bot config for the threshold — prefer the per-account override
+        # if it exists, else fall back to the user's default profile.
+        account_id_str = str(acc["_id"])
+        cfg = (
+            await db.bot_configs.find_one(
+                {"user_id": acc["user_id"], "account_id": account_id_str}
+            )
+            or await db.bot_configs.find_one({
+                "user_id": acc["user_id"],
+                "$or": [{"account_id": None}, {"account_id": {"$exists": False}}],
+            })
+            or {}
+        )
         if cfg.get("slippage_veto_enabled", True):
             caps = cfg.get("max_slippage_pips") or {"XAUUSD": 20.0, "BTCUSD": 80.0}
             cap = float(caps.get(symbol, caps.get(symbol.upper(), 9999)))

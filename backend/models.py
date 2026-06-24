@@ -153,6 +153,9 @@ class BotConfigUpdate(BaseModel):
     aggressive_mode: bool = False
     # Custom minimum-confidence override (1-95). 0 = use the risk_level default.
     min_confidence_override: int = 0
+    # Per-account lot-size cap. 0 = uncapped (use signal's computed lot size).
+    # Hard ceiling — even if AI computes a larger lot, this clamps it.
+    max_lot_size: float = 0.0
 
 
 class BotConfigOut(BotConfigUpdate):

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 const RISK_DESCRIPTIONS = {
@@ -30,6 +30,11 @@ export default function BotConfig() {
     const [supported, setSupported] = useState([]);
     const [presets, setPresets] = useState([]);
     const [customPresets, setCustomPresets] = useState([]);
+    // Account selector — null = the user's default profile; otherwise a specific account_id
+    const [accounts, setAccounts] = useState([]);
+    const [selectedAccountId, setSelectedAccountId] = useState(null);
+    const [allConfigs, setAllConfigs] = useState([]);   // index of configs the user owns
+    const [resetting, setResetting] = useState(false);
     const [applyingPreset, setApplyingPreset] = useState(null);
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [presetForm, setPresetForm] = useState({ name: "", description: "" });
@@ -40,19 +45,25 @@ export default function BotConfig() {
     const [saveMsg, setSaveMsg] = useState("");
     const [newSym, setNewSym] = useState("");
 
+    const accountQuery = selectedAccountId ? `?account_id=${selectedAccountId}` : "";
+
     const load = useCallback(async () => {
         try {
-            const [c, p, s, pr] = await Promise.all([
-                api.get("/bot/config"),
+            const [c, p, s, pr, ac, cfgs] = await Promise.all([
+                api.get(`/bot/config${accountQuery}`),
                 api.get("/market/risk-profiles"),
                 api.get("/market/symbols"),
                 api.get("/bot/presets"),
+                api.get("/accounts"),
+                api.get("/bot/configs"),
             ]);
             setCfg(c.data); setProfiles(p.data.profiles); setSupported(s.data.symbols);
             setPresets(pr.data.presets || []);
             setCustomPresets(pr.data.custom || []);
+            setAccounts(ac.data || []);
+            setAllConfigs(cfgs.data || []);
         } catch (e) { setErr(formatApiError(e)); }
-    }, []);
+    }, [accountQuery]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -66,7 +77,7 @@ export default function BotConfig() {
     const applyPreset = async (key, label) => {
         setApplyingPreset(key); setErr("");
         try {
-            const { data } = await api.post(`/bot/preset/${key}`);
+            const { data } = await api.post(`/bot/preset/${key}${accountQuery}`);
             setCfg(data.config);
             toast.success(`Preset applied · ${label}`, {
                 description: "Behaviour knobs updated. Click SAVE CONFIGURATION to persist.",
@@ -85,7 +96,7 @@ export default function BotConfig() {
         }
         setSavingPreset(true);
         try {
-            await api.post("/bot/my-presets", presetForm);
+            await api.post(`/bot/my-presets${accountQuery}`, presetForm);
             toast.success(`Saved · "${presetForm.name}"`, {
                 description: "Find it under 'Your Presets' below the built-ins.",
             });
@@ -113,11 +124,12 @@ export default function BotConfig() {
     const save = async () => {
         setSaving(true); setErr(""); setSaveMsg("");
         try {
-            const { data } = await api.put("/bot/config", {
+            const { data } = await api.put(`/bot/config${accountQuery}`, {
                 risk_level: cfg.risk_level,
                 symbols: cfg.symbols,
                 active: cfg.active,
                 max_concurrent_trades: cfg.max_concurrent_trades,
+                max_lot_size: cfg.max_lot_size || 0,
                 auto_execute: cfg.auto_execute,
                 breakeven_enabled: cfg.breakeven_enabled,
                 breakeven_trigger_r: cfg.breakeven_trigger_r,
@@ -149,6 +161,8 @@ export default function BotConfig() {
                 min_confidence_override: cfg.min_confidence_override,
             });
             setCfg(data); setSaveMsg("Configuration saved.");
+            // refresh allConfigs index so the selector reflects new state
+            try { const c = await api.get("/bot/configs"); setAllConfigs(c.data || []); } catch (_e) { /* non-fatal */ }
         } catch (e) { setErr(formatApiError(e)); }
         finally { setSaving(false); }
     };
@@ -157,10 +171,27 @@ export default function BotConfig() {
         setErr(""); setMsg("");
         try {
             const ep = cfg.active ? "/bot/stop" : "/bot/start";
-            await api.post(ep);
+            await api.post(`${ep}${accountQuery}`);
             setCfg({ ...cfg, active: !cfg.active });
             setMsg(cfg.active ? "Bot stopped." : "Bot started.");
+            try { const c = await api.get("/bot/configs"); setAllConfigs(c.data || []); } catch (_e) { /* non-fatal */ }
         } catch (e) { setErr(formatApiError(e)); }
+    };
+
+    const resetAccountConfig = async () => {
+        if (!selectedAccountId) return;
+        const accLabel = accounts.find(a => a.id === selectedAccountId)?.label || "this account";
+        if (!window.confirm(`Reset bot config for "${accLabel}" to the default profile?\n\nThis deletes the per-account override. The account will trade using your DEFAULT settings.`)) return;
+        setResetting(true); setErr("");
+        try {
+            await api.delete(`/bot/config?account_id=${selectedAccountId}`);
+            toast.success("Per-account override removed", { description: "This account now uses the default profile." });
+            setSelectedAccountId(null);  // jump back to default view
+        } catch (e) {
+            setErr(formatApiError(e));
+        } finally {
+            setResetting(false);
+        }
     };
 
     const triggerPanic = async () => {
@@ -219,6 +250,17 @@ export default function BotConfig() {
             <div className="p-4 md:p-8 space-y-6 max-w-4xl">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
+
+                {/* Account scope selector — switch between the user's DEFAULT bot
+                    profile and per-account overrides. Each scope edits its own cfg. */}
+                <AccountScopeBar
+                    accounts={accounts}
+                    allConfigs={allConfigs}
+                    selectedAccountId={selectedAccountId}
+                    onSelect={setSelectedAccountId}
+                    onReset={resetAccountConfig}
+                    resetting={resetting}
+                />
 
                 {/* Strategy Presets */}
                 <div className="border border-[#FFD700]/30 bg-[#0A0A0A]" data-testid="strategy-presets-section">
@@ -477,6 +519,25 @@ export default function BotConfig() {
                                 }`}>
                                 {cfg.auto_execute ? "● ENABLED" : "○ DISABLED"}
                             </button>
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2 flex items-center gap-2">
+                                <Layers className="w-3 h-3 text-[#FFD700]" />
+                                MAX LOT SIZE PER TRADE
+                                <span className="font-mono text-[9px] text-[#52525B] normal-case tracking-normal ml-auto">
+                                    Hard ceiling — clamps any signal larger than this. <span className="text-[#FFD700]">0</span> = uncapped.
+                                </span>
+                            </label>
+                            <input type="number" min="0" step="0.01" value={cfg.max_lot_size ?? 0}
+                                onChange={e => setCfg({ ...cfg, max_lot_size: Math.max(0, parseFloat(e.target.value) || 0) })}
+                                data-testid="max-lot-size-input"
+                                className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
+                                placeholder="e.g. 0.10  (0 = uncapped)" />
+                            <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1.5">
+                                {selectedAccountId
+                                    ? "APPLIES TO THIS ACCOUNT ONLY"
+                                    : "APPLIES TO ANY ACCOUNT USING THE DEFAULT PROFILE"}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -781,5 +842,107 @@ function TradingIntelligenceSection({ cfg, setCfg }) {
                 </div>
             </div>
         </div>
+    );
+}
+
+
+function AccountScopeBar({ accounts, allConfigs, selectedAccountId, onSelect, onReset, resetting }) {
+    // Configs keyed by account_id ("default" for null) so we can show ACTIVE / OVERRIDE badges
+    // next to each option in the selector.
+    const cfgByAccount = {};
+    (allConfigs || []).forEach(c => {
+        cfgByAccount[c.account_id || "default"] = c;
+    });
+    const currentKey = selectedAccountId || "default";
+    const currentCfg = cfgByAccount[currentKey];
+    const hasOverride = selectedAccountId
+        ? Boolean(cfgByAccount[selectedAccountId])
+        : true;  // default profile always exists
+
+    return (
+        <div className="border border-[#FFD700]/30 bg-[#0A0A0A]" data-testid="account-scope-bar">
+            <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                <Layers className="w-4 h-4 text-[#FFD700]" />
+                <div className="flex-1 min-w-0">
+                    <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">BOT SCOPE · WHICH ACCOUNT ARE YOU CONFIGURING?</div>
+                    <div className="font-display font-bold text-lg tracking-tight">Independent bots, independent settings</div>
+                </div>
+                {selectedAccountId && hasOverride && (
+                    <button onClick={onReset} disabled={resetting}
+                        data-testid="reset-account-cfg-button"
+                        title="Delete this account's override — it will inherit the default profile."
+                        className="px-3 py-1.5 text-[10px] font-mono tracking-widest border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 disabled:opacity-50 flex items-center gap-1.5 transition-colors">
+                        <RotateCcw className="w-3 h-3" /> {resetting ? "RESETTING…" : "RESET TO DEFAULT"}
+                    </button>
+                )}
+            </div>
+            <div className="p-5 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2" data-testid="account-scope-options">
+                    {/* Default tile */}
+                    <ScopeTile
+                        active={!selectedAccountId}
+                        onClick={() => onSelect(null)}
+                        title="Default Profile"
+                        subtitle="Fallback for accounts without an override"
+                        cfg={cfgByAccount["default"]}
+                        testid="scope-default"
+                    />
+                    {(accounts || []).map(a => (
+                        <ScopeTile key={a.id}
+                            active={selectedAccountId === a.id}
+                            onClick={() => onSelect(a.id)}
+                            title={a.label || a.account_number}
+                            subtitle={`${(a.mode || "live").toUpperCase()} · ${a.broker || "—"}`}
+                            cfg={cfgByAccount[a.id]}
+                            testid={`scope-account-${a.id}`}
+                        />
+                    ))}
+                </div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest leading-relaxed">
+                    {selectedAccountId
+                        ? hasOverride
+                            ? "EDITING A PER-ACCOUNT OVERRIDE · CHANGES APPLY ONLY TO THIS ACCOUNT"
+                            : "NO OVERRIDE YET · SAVING WILL CREATE A NEW PER-ACCOUNT CONFIG"
+                        : "EDITING THE DEFAULT PROFILE · APPLIES TO EVERY ACCOUNT THAT HAS NO OVERRIDE"}
+                    {currentCfg && (
+                        <span className="ml-2 text-[#A1A1AA]">
+                            · RISK <span className="text-white">{(currentCfg.risk_level || "—").toUpperCase()}</span>
+                            {currentCfg.max_lot_size > 0 && (
+                                <> · MAX LOT <span className="text-[#FFD700]">{currentCfg.max_lot_size}</span></>
+                            )}
+                        </span>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ScopeTile({ active, onClick, title, subtitle, cfg, testid }) {
+    const isActive = Boolean(cfg?.active);
+    const hasOverride = Boolean(cfg);
+    return (
+        <button onClick={onClick}
+            data-testid={testid}
+            className={`text-left p-3 border transition-colors duration-150 ${
+                active ? "border-[#FFD700] bg-[#FFD700]/5" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
+            }`}>
+            <div className="flex items-center justify-between mb-1.5">
+                <div className="font-display font-bold text-sm tracking-tight truncate">{title}</div>
+                <div className="flex items-center gap-1 shrink-0">
+                    {hasOverride && (
+                        <span className={`font-mono text-[9px] tracking-widest px-1.5 py-0.5 border ${
+                            isActive ? "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10" : "border-[#1F1F1F] text-[#A1A1AA]"
+                        }`}>
+                            {isActive ? "● ON" : "○ OFF"}
+                        </span>
+                    )}
+                </div>
+            </div>
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest truncate">{subtitle}</div>
+            {!hasOverride && (
+                <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1.5 italic">USES DEFAULT</div>
+            )}
+        </button>
     );
 }
