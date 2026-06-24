@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
 from typing import Optional
+import logging
 from fastapi import APIRouter, HTTPException
 from bson import ObjectId
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from database import get_db
 from models import BridgeHeartbeat, BridgeTradeReport, BridgeExternalDeal
@@ -27,6 +30,14 @@ async def heartbeat(payload: BridgeHeartbeat):
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
     now_iso = datetime.now(timezone.utc).isoformat()
+    # Diagnostic: log the position snapshot size on every heartbeat so we can
+    # tell whether the EA is sending the v1.25 `positions` field at all.
+    pos_count = len(payload.positions) if payload.positions is not None else -1
+    logger.info(
+        "HB account=%s open_positions=%s positions_field=%s login=%s",
+        acc.get("label") or str(acc["_id"])[-6:],
+        payload.open_positions, pos_count, payload.account_login,
+    )
 
     # First-pass mismatch check (v1.24+) — if the EA's MT5 login differs from
     # STOIC's configured account_number, we DO NOT trust the balance/equity it
@@ -97,6 +108,7 @@ async def heartbeat(payload: BridgeHeartbeat):
     # mismatch — we don't want to suck wrong-account positions into the
     # STOIC profile they were misrouted to.
     backfilled = 0
+    revived = 0
     if payload.positions is not None and not mismatch:
         account_id = str(acc["_id"])
         for p in payload.positions:
@@ -105,6 +117,27 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "account_id": account_id, "mt5_ticket": int(p.ticket),
             })
             if existing:
+                # AUTO-REVIVE: STOIC has the ticket but marked it closed
+                # without an exit price — yet the broker still has the
+                # position open. Premature close (panic + reconcile race).
+                # Bring it back under bot control.
+                if (existing.get("status") == "closed"
+                        and existing.get("exit_price") is None):
+                    await db.trades.update_one(
+                        {"_id": existing["_id"]},
+                        {"$set": {
+                            "status": "open",
+                            "closed_at": None,
+                            "revived_at": now_iso,
+                            "revived_from_close_reason": existing.get("close_reason"),
+                            "revived_via_snapshot": True,
+                        },
+                         "$unset": {
+                             "close_reason": "", "reconciled": "",
+                             "close_requested": "",
+                         }},
+                    )
+                    revived += 1
                 continue
             opened_iso = (
                 datetime.fromtimestamp(p.time_open, tz=timezone.utc).isoformat()
@@ -135,6 +168,10 @@ async def heartbeat(payload: BridgeHeartbeat):
         if backfilled > 0:
             await ws_manager.broadcast(acc["user_id"], "trades_backfilled", {
                 "account_id": account_id, "count": backfilled,
+            })
+        if revived > 0:
+            await ws_manager.broadcast(acc["user_id"], "trades_revived", {
+                "account_id": account_id, "count": revived,
             })
 
     await ws_manager.broadcast(acc["user_id"], "account_heartbeat", {

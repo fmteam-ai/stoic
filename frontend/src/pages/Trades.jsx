@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -294,6 +294,23 @@ export default function Trades() {
         try { await api.post(`/trades/${id}/close`); await load(); } catch (e) { setErr(formatApiError(e)); }
     };
 
+    const revive = async (id) => {
+        if (!window.confirm(
+            "Revive this trade?\n\n" +
+            "Use this when STOIC marked the trade closed but the broker still " +
+            "has the position open (e.g. PANIC or Force-Sync was too eager). " +
+            "The trade returns to status=open and the bot can manage it again " +
+            "(break-even, trailing, partial-close, PANIC)."
+        )) return;
+        try {
+            await api.post(`/trades/${id}/revive`);
+            toast.success("Trade revived — bot is now managing it again");
+            await load();
+        } catch (e) {
+            toast.error("Revive failed", { description: formatApiError(e) });
+        }
+    };
+
     const [reconciling, setReconciling] = useState(false);
     const reconcile = async (force = false) => {
         const confirmMsg = force
@@ -552,6 +569,13 @@ export default function Trades() {
                                                     <button onClick={() => close(t.id)} data-testid={`close-trade-${t.id}`}
                                                         className="text-[#FF3B30] hover:text-[#FF6B61] text-xs font-mono tracking-widest flex items-center gap-1">
                                                         <X className="w-3 h-3" /> CLOSE
+                                                    </button>
+                                                )}
+                                                {t.status === "closed" && t.exit_price == null && (
+                                                    <button onClick={() => revive(t.id)} data-testid={`revive-trade-${t.id}`}
+                                                        title="STOIC marked this closed but the broker still has the position open. Click to bring it back under the bot's control."
+                                                        className="text-[#00FF41] hover:text-[#33FF66] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                        <RotateCcw className="w-3 h-3" /> REVIVE
                                                     </button>
                                                 )}
                                                 {t.mt5_ticket && (

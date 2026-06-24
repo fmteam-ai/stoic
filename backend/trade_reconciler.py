@@ -152,7 +152,30 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
     # Phase 2: per-account reconciliation against live broker state
     for acc in accounts:
         if force:
-            # User explicitly confirmed — close everything regardless of heartbeat.
+            # SAFETY: refuse to force-close when the EA hasn't reported
+            # ticket-level data AND the account claims open positions. Force
+            # Sync's destructive "close everything" was burning real trades
+            # whenever the EA was on a legacy version (no open_tickets/positions
+            # fields) — the heartbeat would say "4 positions open" but
+            # Force Sync would still orphan all DB rows.
+            ea_open_positions = int(acc.get("open_positions") or 0)
+            knows_tickets = (
+                acc.get("open_tickets") is not None      # v1.22+ field present
+            )
+            if ea_open_positions > 0 and not knows_tickets:
+                summaries.append({
+                    "account_id": str(acc["_id"]),
+                    "label": acc.get("label"),
+                    "skipped": True,
+                    "reason": (
+                        f"Force Sync refused — EA reports {ea_open_positions} open positions "
+                        "but is on a legacy version that can't list tickets. Upgrade the EA "
+                        "to v1.22+ (or v1.25 for full sync) before force-closing."
+                    ),
+                    "ea_version_hint": "Re-install EA from Accounts → Download EA, then F7 to compile, then re-attach to chart.",
+                })
+                continue
+            # User explicitly confirmed AND EA is silent — close everything.
             summary = await reconcile_account(
                 str(acc["_id"]), [], source="manual_force",
             )

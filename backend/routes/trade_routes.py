@@ -429,6 +429,45 @@ async def trade_audit(trade_id: str, user=Depends(get_current_user)):
     }
 
 
+@router.post("/{trade_id}/revive")
+async def revive_trade(trade_id: str, user=Depends(get_current_user)):
+    """Re-open a trade STOIC mistakenly marked closed.
+
+    Use case: PANIC or the reconciler closed a trade in DB before the broker
+    actually closed it (e.g. heartbeat blip + stale `open_tickets`). The
+    position is still alive at MT5 and needs to come back under bot control
+    (break-even, trailing, partial-close, PANIC).
+
+    Refuses on anything other than `closed` + `exit_price=None` — we never
+    want to "revive" a genuinely-closed trade and lose its realised P&L.
+    """
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": ObjectId(trade_id), "user_id": user["id"]}
+    )
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    if trade.get("status") != "closed":
+        raise HTTPException(status_code=400, detail="Only closed trades can be revived")
+    if trade.get("exit_price") is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Trade has a recorded exit price — refusing to revive (would lose realised P&L).",
+        )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.trades.update_one(
+        {"_id": ObjectId(trade_id)},
+        {"$set": {
+            "status": "open",
+            "closed_at": None,
+            "revived_at": now_iso,
+            "revived_from_close_reason": trade.get("close_reason"),
+        },
+         "$unset": {"close_reason": "", "reconciled": "", "close_requested": ""}},
+    )
+    return {"ok": True, "trade_id": trade_id, "status": "open"}
+
+
 @router.post("/{trade_id}/close")
 async def close_trade(trade_id: str, user=Depends(get_current_user)):
     """Mark a trade as pending-close so the EA closes it on next poll."""
