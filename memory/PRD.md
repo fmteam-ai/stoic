@@ -220,6 +220,23 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### BUG FIX: `max_concurrent_trades` cap bypass (race condition)
+**Reported by user:** *"i set the maximum trades 5, and there are 12 trades open"*
+
+**Root cause:**
+1. `bot_runner._process_user_account` read `inflight` ONCE at function start, never re-counted as trades were queued in the for-symbol loop.
+2. `_on_cooldown` was process-local in-memory — uvicorn hot reloads spawned new `bot_runner.loop()` tasks while old ones kept running. All instances saw stale state and each fired a trade per tick (5s EA heartbeat → 11 excess trades in 50s).
+
+**Fix (two-layer defense):**
+1. **Atomic config lock** at start of `_process_user_account`: `findOneAndUpdate({_id, _tick_lock_until: $lt now})` claims a 50s lease. Concurrent runners can't process the same cfg. Wrapped in `try/finally` so a crash mid-tick releases the lock immediately (no 50s starvation).
+2. **Last-line-of-defense recount** in `execution.MT5BridgeEngine.execute()` and `PaperEngine.execute()`: fresh `db.trades.count_documents` right before `insert_one`. If `inflight >= max_concurrent`, the engine returns `{blocked: 'max_concurrent_cap'}` and skips the insert. `bot_runner` passes `max_concurrent` + `cfg_account_id` and bails on `blocked`. Backward-compat: manual UI trades (no kwargs) skip the check.
+
+**Diagnostic added:**
+- `_check_risk_state` now audits each per-config cap → reports `OVER CAP — {scope}: {inflight}/{cap}` as FAIL with auto-fix code `close_excess_trades`.
+- New auto-fix `close_excess_trades`: closes oldest open trades on any over-cap scope down to the cap (sets `close_requested + close_reason='excess_over_cap'` so the EA cleans up on next poll).
+
+**Testing:** 14/14 pass (3 race-guard unit tests + 11 endpoint regressions). Full regression 130/130 (testing_agent_v3_fork iter17).
+
 ### Bot Status auto-selects online account (Feb 2026)
 `GET /api/bot/status` now auto-picks the **first active per-account config whose account is heartbeating** when caller omits `account_id`. Falls back to default profile when no per-account bot qualifies. Adds `scope_account_id` + `scope_auto_selected` to the response so the Dashboard can label which bot it's showing. Eliminates the misleading "Bot is STOPPED" strip when the user's per-account override is what's actually running.
 

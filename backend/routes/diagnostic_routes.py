@@ -245,17 +245,38 @@ async def _check_risk_state(db, user_id: str) -> dict:
     else:
         checks.append(_mk("Daily PnL", "pass", f"${daily_pnl:.2f}"))
 
-    # Trade-of-day cap
-    open_pending = await db.trades.count_documents({
-        "user_id": user_id, "status": {"$in": ["pending", "open"]},
-    })
-    max_conc = max((int(c.get("max_concurrent_trades", 3) or 3) for c in cfgs), default=3)
-    if open_pending >= max_conc:
-        checks.append(_mk("Max concurrent trades", "warn",
-                          f"{open_pending}/{max_conc} slots used"))
+    # Per-config cap audit: detect over-cap state on any scope (the bug the
+    # user reported — 12 trades open with cap=5).
+    over_cap_scopes = []
+    for c in cfgs:
+        cap = int(c.get("max_concurrent_trades", 0) or 0)
+        if cap <= 0:
+            continue
+        scope_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
+        if c.get("account_id"):
+            scope_q["account_id"] = c["account_id"]
+        inflight = await db.trades.count_documents(scope_q)
+        if inflight > cap:
+            over_cap_scopes.append(f"{c.get('account_id') or 'default'}: {inflight}/{cap}")
+    if over_cap_scopes:
+        checks.append(_mk("Max concurrent trades", "fail",
+                          "OVER CAP — " + ", ".join(over_cap_scopes),
+                          fix_code="close_excess_trades",
+                          fix_label="Close oldest excess down to cap"))
     else:
-        checks.append(_mk("Max concurrent trades", "pass",
-                          f"{open_pending}/{max_conc} slots used"))
+        # Show the highest-utilisation scope as a positive signal
+        max_util = "0/0"
+        for c in cfgs:
+            cap = int(c.get("max_concurrent_trades", 0) or 0)
+            if cap <= 0:
+                continue
+            scope_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
+            if c.get("account_id"):
+                scope_q["account_id"] = c["account_id"]
+            inflight = await db.trades.count_documents(scope_q)
+            if cap > 0:
+                max_util = f"{inflight}/{cap}"
+        checks.append(_mk("Max concurrent trades", "pass", f"Within cap · {max_util}"))
     return {"id": "risk_state", "title": "Risk State",
             "checks": checks, "status": _section_status(checks)}
 
@@ -411,11 +432,48 @@ async def _fix_release_anti_tilt(db, uid: str) -> dict:
     return {"released": True, "trade_id": str(last["_id"])}
 
 
+async def _fix_close_excess_trades(db, uid: str) -> dict:
+    """Close the oldest open trades on any account where the live position count
+    exceeds the user's max_concurrent_trades cap. Closes the EXCESS only,
+    leaving the cap many newest positions open.
+
+    Marks the closures with close_reason='excess_over_cap' so the EA will close
+    them on its next poll and accounting stays clean.
+    """
+    closed_total = 0
+    closed_by_acct: dict = {}
+    cfgs = await db.bot_configs.find({"user_id": uid}).to_list(length=20)
+    for cfg in cfgs:
+        cap = int(cfg.get("max_concurrent_trades", 0) or 0)
+        if cap <= 0:
+            continue
+        scope_q = {"user_id": uid, "status": {"$in": ["pending", "open"]}}
+        if cfg.get("account_id"):
+            scope_q["account_id"] = cfg["account_id"]
+        inflight = await db.trades.count_documents(scope_q)
+        if inflight <= cap:
+            continue
+        # Close the OLDEST trades down to the cap
+        to_close = inflight - cap
+        oldest = await db.trades.find(scope_q).sort("opened_at", 1).limit(to_close).to_list(length=to_close)
+        for t in oldest:
+            await db.trades.update_one(
+                {"_id": t["_id"]},
+                {"$set": {"close_requested": True,
+                          "close_reason": "excess_over_cap"}},
+            )
+        scope_label = cfg.get("account_id") or "default"
+        closed_by_acct[scope_label] = to_close
+        closed_total += to_close
+    return {"closed": closed_total, "by_account": closed_by_acct}
+
+
 _FIX_REGISTRY = {
     "clear_stuck_modifications": _fix_clear_stuck_modifications,
     "ack_ghost_trades": _fix_ack_ghost_trades,
     "reconcile_trades": _fix_reconcile_trades,
     "release_anti_tilt": _fix_release_anti_tilt,
+    "close_excess_trades": _fix_close_excess_trades,
 }
 
 

@@ -118,7 +118,6 @@ async def _process_user_account(db, cfg: dict):
     """Run one bot config's tick — scoped to either the user's default profile
     (one trade per signal, on first connected account) or a specific account
     (independent per-account bot with its own settings/lot cap/symbols)."""
-    user_id = cfg["user_id"]
     cfg_account_id = cfg.get("account_id")  # None = default profile
     symbols = cfg.get("symbols") or []
     if not symbols:
@@ -146,6 +145,23 @@ async def _process_user_account(db, cfg: dict):
         logger.debug("Skipping cfg=%s acct=%s — tick lock held by another runner",
                      str(cfg.get("_id")), cfg_account_id or "default")
         return
+
+    try:
+        await _process_user_account_locked(db, cfg)
+    finally:
+        # Release the tick lock so the next loop iteration isn't starved for 50s
+        # if signal-generation crashed mid-flight. Setting to None lets the next
+        # findOneAndUpdate claim the lock immediately.
+        await db.bot_configs.update_one(
+            {"_id": cfg["_id"]}, {"$set": {"_tick_lock_until": None}},
+        )
+
+
+async def _process_user_account_locked(db, cfg: dict):
+    """The actual per-cfg tick logic, executed under the atomic lock."""
+    user_id = cfg["user_id"]
+    cfg_account_id = cfg.get("account_id")
+    symbols = cfg.get("symbols") or []
 
     # 0. Subscription gate — paper accounts always allowed; live execution requires active sub
     entitlement = await subscription_active(user_id)
