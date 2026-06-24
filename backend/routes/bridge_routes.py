@@ -45,6 +45,28 @@ async def heartbeat(payload: BridgeHeartbeat):
             set_doc["current_spreads"] = clean
             set_doc["spreads_updated_at"] = now_iso
 
+    # EA v1.24+: cross-check the broker's reported login against the STOIC
+    # account_number. When they diverge, the user has either pointed the EA
+    # at the wrong MT5 terminal OR attached two EAs to the same terminal —
+    # the latter is what makes "both accounts show the same balance".
+    if payload.account_login is not None:
+        set_doc["broker_account_id_reported"] = payload.account_login
+        configured = str(acc.get("account_number") or "").strip()
+        reported = str(payload.account_login).strip()
+        if configured and reported and configured != reported:
+            set_doc["broker_account_mismatch"] = True
+            set_doc["broker_account_mismatch_reason"] = (
+                f"EA is logged into MT5 account {reported}, "
+                f"but this STOIC account is configured for {configured}. "
+                "Attach the EA to the correct MT5 terminal."
+            )
+        else:
+            # All good — clear any prior warning.
+            set_doc["broker_account_mismatch"] = False
+            set_doc["broker_account_mismatch_reason"] = None
+    if payload.base_currency:
+        set_doc["broker_currency_reported"] = payload.base_currency.upper()
+
     # EA v1.22+: persist the ticket list so the user can later trigger
     # manual reconciliation even if a heartbeat isn't currently in flight.
     reconcile_summary = None

@@ -191,6 +191,17 @@ async def test_connection(account_id: str, user=Depends(get_current_user)):
         msg = f"EA disconnected — last heartbeat {age_seconds // 60}min ago. Re-attach the EA or restart MT5 (run on a VPS for 24/7 autopilot)."
         severity = "error"
 
+    # Surface broker-account mismatch (EA v1.24+) — when the EA reports a
+    # different MT5 login than what STOIC has configured, the diagnostic
+    # message MUST flag it loud so the user catches "wrong terminal" or
+    # "two EAs attached to one terminal" bugs.
+    mismatch = bool(acc.get("broker_account_mismatch"))
+    if mismatch and severity == "ok":
+        severity = "warn"
+        msg = acc.get("broker_account_mismatch_reason") or (
+            "EA is reporting from a different MT5 account than this profile expects."
+        )
+
     return {
         "account_id": str(acc["_id"]),
         "mode": acc.get("mode"),
@@ -202,6 +213,9 @@ async def test_connection(account_id: str, user=Depends(get_current_user)):
         "equity": acc.get("equity"),
         "current_spreads": acc.get("current_spreads") or {},
         "spreads_updated_at": acc.get("spreads_updated_at"),
+        "broker_account_id_reported": acc.get("broker_account_id_reported"),
+        "broker_account_mismatch": mismatch,
+        "broker_account_mismatch_reason": acc.get("broker_account_mismatch_reason"),
         "diagnostic": {"severity": severity, "message": msg},
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal } from "lucide-react";
+const Warning = AlertTriangle;
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -88,7 +89,7 @@ export default function Accounts() {
         try {
             // Reuses the existing connection-test endpoint — it returns the
             // current balance/equity from the account doc (last heartbeat).
-            const { data } = await api.get(`/accounts/${id}/test_connection`);
+            const { data } = await api.get(`/accounts/${id}/test-connection`);
             setAccounts(prev => prev.map(a => a.id === id
                 ? { ...a, balance: data.balance ?? a.balance,
                     equity: data.equity ?? a.equity,
@@ -297,6 +298,20 @@ export default function Accounts() {
                             const live = isFresh(a.last_heartbeat);
                             return (
                                 <div key={a.id} className="border border-[#1F1F1F] bg-[#0A0A0A] p-5" data-testid={`account-row-${a.account_number}`}>
+                                    {a.broker_account_mismatch && (
+                                        <div className="mb-4 border border-[#FFB000]/40 bg-[#FFB000]/10 px-3 py-2 flex items-start gap-2"
+                                            data-testid={`broker-mismatch-${a.account_number}`}>
+                                            <Warning className="w-4 h-4 text-[#FFB000] mt-0.5 shrink-0" />
+                                            <div className="font-mono text-[11px] text-[#FFB000] leading-relaxed">
+                                                <span className="tracking-widest">WRONG MT5 TERMINAL · </span>
+                                                {a.broker_account_mismatch_reason ||
+                                                    `EA is logged into MT5 account ${a.broker_account_id_reported}, but this STOIC account is configured for ${a.account_number}.`}
+                                                <div className="text-[#A1A1AA] tracking-normal mt-1">
+                                                    Run this EA on a DIFFERENT MT5 instance (or remove the duplicate). Two EAs attached to the same terminal will mirror the same balance.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                     <div className="flex items-start justify-between gap-3 flex-wrap">
                                         <div className="space-y-1">
                                             <div className="flex items-center gap-3">

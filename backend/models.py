@@ -214,6 +214,13 @@ class BridgeHeartbeat(BaseModel):
     # auto-closes any orphans (e.g. SL hit but trade-close report was missed).
     open_tickets: Optional[list[int]] = None
     spreads: Optional[Dict[str, float]] = None  # symbol -> spread in pips (EA v1.21+)
+    # EA v1.24+: the MT5 account number the EA is currently logged into. We
+    # cross-check this against the configured `account_number` on the STOIC
+    # account — when they diverge, we surface a "wrong terminal" warning so
+    # the user catches the case of "both EAs attached to the same MT5 instance"
+    # which makes two STOIC accounts mirror the same balance.
+    account_login: Optional[int] = None
+    base_currency: Optional[str] = None         # broker's reported account currency
 
 
 class BridgeTradeReport(BaseModel):

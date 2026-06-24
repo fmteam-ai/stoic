@@ -21,9 +21,13 @@
 //|         manual closes/opens done directly on MT5 — back to STOIC  |
 //|         via /api/bridge/external-deal. Closes the "I closed it on |
 //|         MT5 but STOIC still shows it open" gap.                   |
+//| v1.24 — Heartbeat now reports the broker's MT5 account login +    |
+//|         currency so STOIC can detect wrong-terminal misconfigs    |
+//|         (e.g. two EAs attached to the same MT5 instance reading   |
+//|         the same balance).                                        |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.23"
+#property version   "1.24"
 #property strict
 
 input string ServerUrl       = "https://your-app.preview.emergentagent.com";
@@ -38,7 +42,7 @@ datetime lastPoll = 0;
 //+------------------------------------------------------------------+
 int OnInit() {
    EventSetTimer(PollSeconds);
-   Print("STOIC Bridge EA v1.23 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.24 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -160,9 +164,15 @@ void SendHeartbeat() {
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
    int    openPos = PositionsTotal();
    string spreads = BuildSpreadsJson();
+   // EA v1.24: include broker-side account login + currency so STOIC can
+   // detect "wrong MT5 terminal" misconfigurations.
+   long   login  = (long)AccountInfoInteger(ACCOUNT_LOGIN);
+   string ccy    = AccountInfoString(ACCOUNT_CURRENCY);
    string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"open_positions\":%d,\"spreads\":%s}",
-      BridgeToken, balance, equity, openPos, spreads);
+      "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
+      "\"open_positions\":%d,\"spreads\":%s,"
+      "\"account_login\":%I64d,\"base_currency\":\"%s\"}",
+      BridgeToken, balance, equity, openPos, spreads, login, ccy);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 
