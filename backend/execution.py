@@ -17,14 +17,33 @@ logger = logging.getLogger("execution")
 
 class ExecutionEngine(ABC):
     @abstractmethod
-    async def execute(self, *, user_id, account, signal) -> dict: ...
+    async def execute(self, *, user_id, account, signal,
+                      max_concurrent: int = 0, cfg_account_id: str = None) -> dict: ...
 
 
 class MT5BridgeEngine(ExecutionEngine):
     """Live engine — inserts a `pending` trade; the MT5 EA polls and executes."""
 
-    async def execute(self, *, user_id, account, signal) -> dict:
+    async def execute(self, *, user_id, account, signal,
+                      max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+        # Atomic last-line-of-defense cap check. bot_runner.py reads `inflight`
+        # ONCE per loop iteration — hot reloads can spawn duplicate loops that
+        # all see stale counts. Re-counting right before insert closes the race.
+        if max_concurrent > 0:
+            cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
+            if cfg_account_id:
+                cap_q["account_id"] = cfg_account_id
+            live_inflight = await db.trades.count_documents(cap_q)
+            if live_inflight >= max_concurrent:
+                logger.warning(
+                    "execute blocked by max_concurrent cap user=%s acct=%s sym=%s "
+                    "inflight=%d cap=%d",
+                    user_id, cfg_account_id or "default",
+                    signal.get("symbol"), live_inflight, max_concurrent,
+                )
+                return {"blocked": "max_concurrent_cap",
+                        "inflight": live_inflight, "cap": max_concurrent}
         trade_doc = {
             "user_id": user_id,
             "account_id": str(account["_id"]),
@@ -69,8 +88,23 @@ class MT5BridgeEngine(ExecutionEngine):
 class PaperEngine(ExecutionEngine):
     """Virtual engine — simulates an instant fill at the current live mid-price."""
 
-    async def execute(self, *, user_id, account, signal) -> dict:
+    async def execute(self, *, user_id, account, signal,
+                      max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+        if max_concurrent > 0:
+            cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
+            if cfg_account_id:
+                cap_q["account_id"] = cfg_account_id
+            live_inflight = await db.trades.count_documents(cap_q)
+            if live_inflight >= max_concurrent:
+                logger.warning(
+                    "paper execute blocked by max_concurrent cap user=%s acct=%s "
+                    "sym=%s inflight=%d cap=%d",
+                    user_id, cfg_account_id or "default",
+                    signal.get("symbol"), live_inflight, max_concurrent,
+                )
+                return {"blocked": "max_concurrent_cap",
+                        "inflight": live_inflight, "cap": max_concurrent}
         quote = await get_quote(signal["symbol"])
         fill_price = quote.get("price") or signal["entry_price"]
 

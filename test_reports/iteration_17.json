@@ -1,0 +1,41 @@
+{
+  "summary": "Iter 26 backend testing — max_concurrent_trades race fix + new admin diagnostic endpoints + bot/status auto-select scope. 14/14 new tests pass (3 race-guard unit tests for MT5BridgeEngine + 2 supplemental PaperEngine cap tests + 9 endpoint regression tests). Full regression: 107/107 passed across iter24*/iter25*, 23/23 in iter25l. Total 130/130 pass + 6 unrelated legacy skips. No code changes to production files; only added test_iter26_max_concurrent_endpoints.py.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter26_max_concurrent_endpoints.py",
+    "/app/backend/tests/test_max_concurrent_race.py",
+    "/app/test_reports/pytest/iter26_results.xml",
+    "/app/test_reports/pytest/iter26_regression.xml",
+    "/app/test_reports/pytest/iter26_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "execution.py MT5BridgeEngine and PaperEngine duplicate the cap-check block verbatim (lines 33-46 and 94-107) — extract `_check_cap(db, user_id, cfg_account_id, max_concurrent)` helper to keep the guard DRY. If one path is later updated (e.g., to include `failed` status or use a different field) the other will silently drift.",
+    "bot_runner.py acquires a Mongo-side lock via findOneAndUpdate({_tick_lock_until}) with a 50s lease — recommend documenting that the lease MUST be released (or expire naturally) on exception paths; consider try/finally to clear the lock so a crash during signal-generation doesn't block the next 50s of ticks for that cfg.",
+    "diagnostic_routes._admin_only() accepts EITHER role=='admin' OR email=='admin@trading.bot' — the email fallback is a foot-gun. Once another admin is provisioned with role=admin but a different email, the equality check is redundant; if the seed admin's email is ever changed, the role check is the only line of defense. Drop the email branch.",
+    "diagnostic_routes._fix_release_anti_tilt() mutates a closed trade's pnl to 0.01 to break the anti-tilt freeze condition — this corrupts realized-PnL analytics (preserved as pnl_original, but downstream sums and the dashboard's todays_pnl_usd will be off by the difference). Prefer an explicit `anti_tilt_frozen_until_override: <iso>` flag on bot_configs that bot_runner & /status both honour.",
+    "bot_routes.py /status auto-select picks the FIRST per-account cfg whose account has a fresh heartbeat (line 663-678) — non-deterministic when admin has 2+ live per-account bots. Returns scope_account_id but UI can't tell if a *different* per-account cfg also qualifies. Consider returning `available_scopes: [{account_id, label, heartbeat_fresh}]` so UI can show a switcher.",
+    "execution.py count_documents query uses `status: {$in: ['pending','open']}` — does NOT include `failed` (correct) but ALSO doesn't include trades currently being inserted by *another* concurrent loop. Mongo count is not transactional with the subsequent insert_one. For absolute correctness, switch to an atomic findOneAndUpdate on a counter doc or a unique index pattern. This is the documented residual race; mitigated by the 50s bot_runner lease but worth a comment in code."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter26_max_concurrent_endpoints.py (NEW — 11 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (130/130 passing; 6 unrelated legacy skips)",
+    "frontend": "not tested (review_request scope = backend only)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md). One ephemeral TEST_iter26_* user created via /api/auth/register per run for the 403 path; no cleanup needed (small ephemeral users).",
+  "seed_data_creation": "test_iter26_endpoints.py auto-fix test calls ack_ghost_trades + clear_stuck_modifications against the LIVE admin DB. These are idempotent and only mutate the user's own ghost/stuck rows (zero on a clean DB). The user's 12 stale open trades on micro account (the original bug-state) were NOT touched — this confirms the engine-level fix is the new safeguard for going-forward inserts, but does NOT retroactively repair existing rows. Recommend a one-time admin cleanup of those 7 excess trades.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter26 regression is at /app/backend/tests/test_iter26_max_concurrent_endpoints.py — 11 tests cover the diagnostic_routes endpoints + bot/status auto-select + PaperEngine cap guard. Combined with /app/backend/tests/test_max_concurrent_race.py (3 MT5 race tests), the full iter26 set is 14 tests, all passing. The pre-existing iter25l regression remains 23/23. Run: `cd /app/backend && pytest tests/test_iter25l_full_regression.py tests/test_iter26_max_concurrent_endpoints.py tests/test_max_concurrent_race.py -v --asyncio-mode=auto`. Admin's 12 open trades on micro account are pre-existing corruption from before the engine guard landed — do not treat as a failure. The new code prevents future occurrences, not historical ones.",
+  "rca of the issue": "Original bug: bot_runner.py loop read `inflight` once per tick and held an in-memory cooldown set; FastAPI hot-reloads on each save spawned a new asyncio loop task while the old task kept running. Both tasks observed inflight=4, both decided 'room for 1 more', both inserted, and the EA executed both at its 5s heartbeat — repeated 7x over 50s to land at 12 open vs cap=5. Fix has two layers verified in this iteration: (1) bot_runner now claims an atomic Mongo lock with a 50s lease via findOneAndUpdate({_tick_lock_until}), so only one loop instance processes a given cfg at a time; (2) execution.MT5BridgeEngine.execute()/PaperEngine.execute() re-count `pending+open` trades via a FRESH db.trades.count_documents() *immediately before* insert_one. If inflight >= cap, the engine returns {'blocked': 'max_concurrent_cap', 'inflight': N, 'cap': N} and skips the insert. Both layers tested and pass; the count_documents+insert_one pair is still not strictly transactional (acknowledged code-review item #6) but the 50s bot_runner lease closes the practical attack window. Mitigation for existing corruption: 7 excess trades on micro account need manual closure via reconcile_trades autofix or admin endpoint — engine guard is a forward-looking safeguard only."
+}

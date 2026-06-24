@@ -124,6 +124,29 @@ async def _process_user_account(db, cfg: dict):
     if not symbols:
         return
 
+    # === Atomic config lock — prevents concurrent bot_runner.loop() instances
+    # (from uvicorn hot reloads or duplicate startup tasks) racing each other
+    # and blowing past max_concurrent_trades. findOneAndUpdate atomically
+    # claims a 50-second lease on this cfg. If another loop already holds it,
+    # skip this tick entirely.
+    now_utc = datetime.now(timezone.utc)
+    lock_expiry = (now_utc + timedelta(seconds=50)).isoformat()
+    lock_filter = {
+        "_id": cfg["_id"],
+        "$or": [
+            {"_tick_lock_until": {"$exists": False}},
+            {"_tick_lock_until": None},
+            {"_tick_lock_until": {"$lt": now_utc.isoformat()}},
+        ],
+    }
+    locked = await db.bot_configs.find_one_and_update(
+        lock_filter, {"$set": {"_tick_lock_until": lock_expiry}},
+    )
+    if not locked:
+        logger.debug("Skipping cfg=%s acct=%s — tick lock held by another runner",
+                     str(cfg.get("_id")), cfg_account_id or "default")
+        return
+
     # 0. Subscription gate — paper accounts always allowed; live execution requires active sub
     entitlement = await subscription_active(user_id)
 
@@ -428,7 +451,15 @@ async def _process_user_account(db, cfg: dict):
                 "take_profit": signal["take_profit"],
                 "origin": "auto",
             },
+            max_concurrent=max_concurrent,
+            cfg_account_id=cfg_account_id,
         )
+        if trade_doc.get("blocked"):
+            logger.warning(
+                "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
+                user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
+            )
+            continue
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
                     user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {"consumed": True}})
