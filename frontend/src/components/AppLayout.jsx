@@ -3,15 +3,21 @@ import { CoPilotWidget } from "@/components/CoPilotWidget";
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import { TickerTape } from "@/components/TickerTape";
 import { StatusBar } from "@/components/StatusBar";
+import { QuickActionsBar } from "@/components/QuickActionsBar";
+import { OnboardingBanner } from "@/components/OnboardingBanner";
 
 export function AppLayout({ children }) {
     return (
         <div className="min-h-screen bg-[#050505] text-white">
             <Sidebar />
+            <QuickActionsBar />
             <main className="md:ml-60 min-h-screen">
                 <StatusBar />
                 <TickerTape />
                 <SubscriptionBanner />
+                <div className="px-4 md:px-8 pt-3">
+                    <OnboardingBanner />
+                </div>
                 {children}
             </main>
             <CoPilotWidget />

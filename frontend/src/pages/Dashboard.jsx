@@ -7,6 +7,7 @@ import { useLiveStream } from "@/lib/useLiveStream";
 import { IntegrityWidget } from "@/components/IntegrityWidget";
 import { PerAccountComparison } from "@/components/PerAccountComparison";
 import { EaVersionStrip } from "@/components/EaVersionStrip";
+import { BotHealthScore } from "@/components/BotHealthScore";
 import { toast } from "sonner";
 
 const PRIMARY_SYMBOLS = ["XAUUSD", "BTCUSD"];
@@ -480,6 +481,9 @@ export default function Dashboard() {
                         </div>
                     </div>
                 )}
+
+                {/* Top of dashboard — single 0-100 score replaces "scan 7 strips" cognitive load. */}
+                <BotHealthScore refreshSignal={lastEvent?.ts} />
 
                 {/* EA Version Strip — surfaces stale builds across terminals */}
                 <EaVersionStrip refreshSignal={lastEvent?.ts} />

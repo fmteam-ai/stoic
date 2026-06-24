@@ -1,0 +1,169 @@
+import { useEffect, useState, useCallback } from "react";
+import api from "@/lib/api";
+import { Power, Zap, TrendingUp, TrendingDown, AlertOctagon } from "lucide-react";
+import { toast } from "sonner";
+import { formatApiError } from "@/lib/api";
+
+/* Sticky Quick Actions bar — appears top-right on every authed page. Shows:
+ *   • Bot ON/OFF toggle (mirrors active state across all configs)
+ *   • Today's realised P&L (real-time)
+ *   • Open trades count
+ *   • PANIC button (full close-all confirmation modal)
+ *
+ * Designed for repeated daily use: every primary action one click away,
+ * without hunting through nav.
+ */
+const REFRESH_MS = 15_000;
+
+export function QuickActionsBar() {
+    const [data, setData] = useState(null);
+    const [panicOpen, setPanicOpen] = useState(false);
+    const [actionInflight, setActionInflight] = useState(false);
+
+    const load = useCallback(async () => {
+        try {
+            const { data: d } = await api.get("/bot/quick-actions");
+            setData(d);
+        } catch { /* keep last good */ }
+    }, []);
+
+    useEffect(() => {
+        load();
+        const t = setInterval(load, REFRESH_MS);
+        return () => clearInterval(t);
+    }, [load]);
+
+    const toggleBot = async () => {
+        if (!data || actionInflight) return;
+        setActionInflight(true);
+        try {
+            const next = !data.bot_active;
+            await api.put("/bot/config", { active: next });
+            setData(d => ({ ...d, bot_active: next }));
+            toast.success(next ? "Bot started · trading enabled" : "Bot paused · no new trades");
+        } catch (e) {
+            toast.error("Bot toggle failed", { description: formatApiError(e) });
+        } finally {
+            setActionInflight(false);
+        }
+    };
+
+    const panicClose = async () => {
+        setActionInflight(true);
+        try {
+            await api.post("/panic");
+            toast.success("PANIC sent · closing all positions");
+            setPanicOpen(false);
+            await load();
+        } catch (e) {
+            toast.error("PANIC failed", { description: formatApiError(e) });
+        } finally {
+            setActionInflight(false);
+        }
+    };
+
+    if (!data) return null;
+    const pnl = data.todays_pnl_usd ?? 0;
+    const pnlPositive = pnl >= 0;
+
+    return (
+        <>
+            <div className="fixed top-3 right-3 z-40 flex items-center gap-1.5 sm:gap-2 bg-[#0A0A0A]/95 backdrop-blur-md border border-[#1F1F1F] shadow-xl px-2 py-1.5"
+                 data-testid="quick-actions-bar">
+
+                {/* Today's P&L */}
+                <div className="hidden md:flex flex-col items-end px-2"
+                     data-testid="quick-todays-pnl"
+                     title={`${data.todays_closed_count} trades closed today`}>
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest leading-none">
+                        TODAY
+                    </div>
+                    <div className="font-display text-sm leading-tight mt-0.5"
+                         style={{ color: pnlPositive ? "#00FF41" : "#FF3B30" }}>
+                        {pnlPositive ? "+" : ""}${pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </div>
+                </div>
+
+                {/* Open trades */}
+                <div className="hidden sm:flex flex-col items-end px-2 border-l border-[#1F1F1F]"
+                     data-testid="quick-open-trades">
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest leading-none">
+                        OPEN
+                    </div>
+                    <div className="font-display text-sm leading-tight mt-0.5 text-white">
+                        {data.open_trades}
+                    </div>
+                </div>
+
+                {/* Bot ON/OFF */}
+                <button type="button" onClick={toggleBot} disabled={actionInflight}
+                        data-testid="quick-toggle-bot"
+                        title={data.bot_active ? "Bot is ON — click to pause" : "Bot is OFF — click to start"}
+                        className={`flex items-center gap-1.5 font-mono text-[10px] tracking-widest px-2.5 py-1.5 border transition-colors ${
+                            data.bot_active
+                                ? "text-[#00FF41] border-[#00FF41]/40 bg-[#00FF41]/10 hover:bg-[#00FF41]/15"
+                                : "text-[#A1A1AA] border-[#1F1F1F] hover:border-[#52525B]"
+                        } disabled:opacity-50`}>
+                    <Power className="w-3 h-3" />
+                    <span className="hidden sm:inline">{data.bot_active ? "BOT ON" : "BOT OFF"}</span>
+                </button>
+
+                {/* PANIC button */}
+                <button type="button" onClick={() => setPanicOpen(true)}
+                        disabled={data.open_trades === 0 || actionInflight}
+                        data-testid="quick-panic"
+                        title={data.open_trades === 0
+                            ? "Nothing to panic-close"
+                            : `Close all ${data.open_trades} open positions immediately`}
+                        className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest px-2.5 py-1.5 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 disabled:opacity-30 disabled:cursor-not-allowed">
+                    <AlertOctagon className="w-3 h-3" />
+                    <span className="hidden sm:inline">PANIC</span>
+                </button>
+            </div>
+
+            {/* PANIC confirmation modal */}
+            {panicOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4"
+                     data-testid="panic-confirm-modal"
+                     onClick={() => setPanicOpen(false)}>
+                    <div onClick={e => e.stopPropagation()}
+                         className="w-full max-w-md bg-[#0A0A0A] border border-[#FF3B30]/60 shadow-2xl">
+                        <div className="border-b border-[#1F1F1F] px-5 py-3 flex items-center gap-2">
+                            <AlertOctagon className="w-4 h-4 text-[#FF3B30]" />
+                            <div className="font-display text-lg text-[#FF3B30]">
+                                PANIC-CLOSE ALL POSITIONS?
+                            </div>
+                        </div>
+                        <div className="px-5 py-4 space-y-3 font-mono text-xs text-[#A1A1AA] leading-relaxed">
+                            <div>
+                                This will tell the EA to <span className="text-white">immediately close every open position</span>{" "}
+                                on every connected account.
+                            </div>
+                            <div className="border-l-2 border-[#FF3B30]/40 pl-3">
+                                Currently open: <span className="text-white">{data.open_trades}</span> trade(s)<br />
+                                Today&apos;s realised P&amp;L: <span style={{ color: pnlPositive ? "#00FF41" : "#FF3B30" }}>
+                                    {pnlPositive ? "+" : ""}${pnl.toFixed(2)}
+                                </span>
+                            </div>
+                            <div className="text-[10px] text-[#52525B] tracking-widest">
+                                ⚠ THIS LOCKS IN UNREALISED P&amp;L AT CURRENT PRICE
+                            </div>
+                        </div>
+                        <div className="border-t border-[#1F1F1F] px-5 py-3 flex items-center justify-end gap-2">
+                            <button type="button" onClick={() => setPanicOpen(false)}
+                                    data-testid="panic-cancel"
+                                    className="font-mono text-xs tracking-widest text-[#A1A1AA] hover:text-white px-3 py-2">
+                                CANCEL
+                            </button>
+                            <button type="button" onClick={panicClose} disabled={actionInflight}
+                                    data-testid="panic-confirm"
+                                    className="font-mono text-xs tracking-widest text-[#FF3B30] border border-[#FF3B30]/40 hover:bg-[#FF3B30]/10 px-3 py-2 disabled:opacity-50">
+                                {actionInflight ? "CLOSING…" : "CLOSE ALL NOW"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+}

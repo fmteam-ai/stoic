@@ -403,6 +403,184 @@ async def delete_my_preset(preset_id: str, user=Depends(get_current_user)):
     return {"deleted": True, "id": preset_id}
 
 
+@router.get("/health-score")
+async def bot_health_score(user=Depends(get_current_user)):
+    """Single 0-100 score summarising "is the bot actually working right now?".
+
+    Replaces the cognitive load of scanning seven dashboard strips. Each
+    sub-check contributes a weighted deduction; the result + a list of
+    actionable issues drives the friendly Bot Health Score widget.
+
+    Issue severity:
+      • error   — bot is structurally broken (red)
+      • warning — degraded but operating (amber)
+      • info    — minor / nice-to-have (grey)
+    """
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    issues: list[dict] = []
+    score = 100.0
+
+    # --- 1. Account connectivity (max -40) -------------------------------
+    accs = await db.accounts.find({
+        "user_id": user["id"],
+        "$or": [{"mode": "live"}, {"mode": {"$exists": False}}],
+    }).to_list(length=20)
+    connected = [a for a in accs if a.get("status") == "connected"]
+    if not accs:
+        score -= 40
+        issues.append({"severity": "error", "code": "no_accounts",
+                       "label": "No live accounts connected",
+                       "fix": "Go to Accounts → Connect MT5 to link a broker."})
+    elif not connected:
+        score -= 35
+        issues.append({"severity": "error", "code": "no_connected_account",
+                       "label": "No accounts currently online",
+                       "fix": "Restart MetaTrader 5 and attach the STOIC EA to a chart."})
+
+    # --- 2. EA heartbeat freshness (max -20) -----------------------------
+    stale_accounts = []
+    for a in connected:
+        hb = a.get("last_heartbeat")
+        if not hb:
+            stale_accounts.append(a.get("label"))
+            continue
+        try:
+            dt = datetime.fromisoformat(str(hb).replace("Z", "+00:00"))
+            age = (now - dt).total_seconds()
+            if age > 90:
+                stale_accounts.append(a.get("label"))
+        except Exception:
+            stale_accounts.append(a.get("label"))
+    if stale_accounts:
+        score -= min(20, 10 * len(stale_accounts))
+        issues.append({"severity": "warning", "code": "stale_heartbeat",
+                       "label": f"EA heartbeat stale on {len(stale_accounts)} account(s)",
+                       "fix": f"Check {', '.join(stale_accounts)} in MT5 — the EA may have detached.",
+                       "details": stale_accounts})
+
+    # --- 3. EA version currency (max -10) --------------------------------
+    LATEST_EA = "1.26"
+    outdated = [a.get("label") for a in connected
+                if (a.get("ea_version") or "") < LATEST_EA]
+    if outdated:
+        score -= min(10, 5 * len(outdated))
+        issues.append({"severity": "warning", "code": "ea_outdated",
+                       "label": f"{len(outdated)} terminal(s) on outdated EA",
+                       "fix": f"Recompile EmergentTradingBridge.mq5 in MetaEditor (F7) for {', '.join(outdated)}.",
+                       "details": outdated})
+
+    # --- 4. Stuck pending modifications (max -15) ------------------------
+    five_min_ago_iso = (now - timedelta(minutes=5)).isoformat()
+    stuck = await db.trades.count_documents({
+        "user_id": user["id"], "status": "open",
+        "pending_modification": {"$ne": None},
+        "$or": [
+            {"pending_modification.requested_at": {"$lt": five_min_ago_iso}},
+            {"pending_modification.requested_at": {"$exists": False}},
+        ],
+    })
+    if stuck > 0:
+        score -= min(15, 5 * stuck)
+        issues.append({"severity": "warning", "code": "stuck_modifications",
+                       "label": f"{stuck} trade modification(s) waiting >5min for EA",
+                       "fix": "Recompile EA to v1.26 (F7 in MetaEditor) — the modification queue isn't being consumed."})
+
+    # --- 5. Ghost trades — closed with no exit_price (max -10) ----------
+    ghosts = await db.trades.count_documents({
+        "user_id": user["id"], "status": "closed", "exit_price": None,
+    })
+    if ghosts > 0:
+        score -= min(10, 2 * ghosts)
+        issues.append({"severity": "info", "code": "ghost_trades",
+                       "label": f"{ghosts} closed trade(s) missing exit price",
+                       "fix": "EA v1.26 history sweep will auto-fill these within ~60s of connecting."})
+
+    # --- 6. Bot active flag (max -10) ------------------------------------
+    cfg = await db.bot_configs.find_one({"user_id": user["id"], "account_id": None})
+    any_active = bool(cfg and cfg.get("active"))
+    if not any_active:
+        per_acc_active = await db.bot_configs.count_documents({
+            "user_id": user["id"], "account_id": {"$ne": None}, "active": True,
+        })
+        any_active = per_acc_active > 0
+    if not any_active:
+        score -= 10
+        issues.append({"severity": "info", "code": "bot_inactive",
+                       "label": "Bot is paused (not generating signals)",
+                       "fix": "Go to BotConfig and toggle the bot ON to start trading."})
+
+    # --- Final score & summary -------------------------------------------
+    score = max(0, min(100, int(round(score))))
+    if score >= 90:
+        status = "excellent"
+        headline = "All systems nominal — the bot is in control."
+    elif score >= 75:
+        status = "good"
+        headline = "Bot is running with minor advisories."
+    elif score >= 50:
+        status = "degraded"
+        headline = "Bot is partially operational — fix the issues below to restore full control."
+    else:
+        status = "critical"
+        headline = "Bot is in trouble — needs attention now."
+
+    return {
+        "score": score,
+        "status": status,
+        "headline": headline,
+        "issues": issues,
+        "checked_at": now.isoformat(),
+        "context": {
+            "accounts_connected": len(connected),
+            "accounts_total": len(accs),
+            "ea_latest_version": LATEST_EA,
+        },
+    }
+
+
+@router.get("/quick-actions")
+async def quick_actions(user=Depends(get_current_user)):
+    """Compact payload for the Quick Actions sticky bar — pre-aggregated so
+    the UI doesn't have to make 4 separate calls."""
+    db = get_db()
+    user_id = user["id"]
+
+    # Bot active state (any config active counts)
+    cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": None})
+    bot_active = bool(cfg and cfg.get("active"))
+    if not bot_active:
+        bot_active = (await db.bot_configs.count_documents({
+            "user_id": user_id, "account_id": {"$ne": None}, "active": True,
+        })) > 0
+
+    # Open trades count + sum of running pnl (approx — uses last known price)
+    open_count = await db.trades.count_documents({
+        "user_id": user_id, "status": "open",
+    })
+
+    # Today's realised P&L
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    cursor = db.trades.find({
+        "user_id": user_id, "status": "closed",
+        "closed_at": {"$gte": today_start.isoformat()},
+    })
+    todays_pnl = 0.0
+    todays_count = 0
+    async for t in cursor:
+        pnl = t.get("pnl")
+        if pnl is not None:
+            todays_pnl += float(pnl)
+            todays_count += 1
+
+    return {
+        "bot_active": bot_active,
+        "open_trades": open_count,
+        "todays_pnl_usd": round(todays_pnl, 2),
+        "todays_closed_count": todays_count,
+    }
+
+
 @router.get("/status")
 async def get_bot_status(account_id: Optional[str] = None,
                          user=Depends(get_current_user)):
