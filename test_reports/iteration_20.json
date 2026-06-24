@@ -1,0 +1,59 @@
+{
+  "summary": "Iter20 — Tested new 'Suggested Config Adjustment' feature. Added 19 NEW backend tests in tests/test_iter20_suggestion.py covering /api/safety-blocks/suggestion (no-blocks, under-threshold, per_trade_risk_cap high→medium/medium→low/low→low, total_open_risk_cap with floor-at-1, lot_vs_equity_sanity 0.7×, daily_loss_cap/equity_vs_balance_floor/free_margin_floor → active=false red severity, risk_inputs_present manual review with patch=null, auth-required) and /api/safety-blocks/apply-suggestion (400 missing patch, 400 no allowed keys, sanitize whitelist persistence, 404 on foreign account, user-isolation cross-account 404, auth-required). FULL REGRESSION: 58/58 pass (19 new iter20 + 12 iter19 + 11 safety_guardian + 3 max_concurrent_race + 11 iter26_max_concurrent + 2 iter18_diagnostic). FRONTEND: Live-tested with admin user — seeded 5 per_trade_risk_cap blocks → SuggestionBanner rendered correctly with all 6 required elements (label 'SUGGESTED CONFIG ADJUSTMENT', '5 blocks · Single-trade risk exceeds equity %', title 'Per-trade risk too aggressive', full rationale, CHANGE chip with 'risk_level: high → medium', APPLY button visible). CRITICAL BUG: clicking APPLY → backend returns 500 because POST /api/safety-blocks/apply-suggestion crashes on `ObjectId(scope_account_id)` when scope_account_id is not a 24-char hex string. Reproduction: any safety_blocks doc whose account_id is not an ObjectId hex (e.g. legacy or non-MT5 broker accounts) → suggestion endpoint returns that string in scope_account_id → frontend posts it back → apply endpoint raises bson.errors.InvalidId → uncaught → 500.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/safety-blocks/apply-suggestion",
+        "issue": "Uncaught bson.errors.InvalidId when scope_account_id is not a valid ObjectId hex string. Line 258 of safety_blocks_routes.py: `__import__('bson').ObjectId(scope_account_id)` raises InvalidId → 500 Internal Server Error. Should be wrapped in try/except and return 404 (account-not-found) — same shape as `GET /{block_id}` which catches the analogous case at line 299-302.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/safety-blocks/apply-suggestion",
+        "issue": "Inconsistent: the GET /suggestion endpoint returns scope_account_id verbatim from the safety_blocks doc (any string), but POST /apply-suggestion validates ownership ONLY when account_id is a valid ObjectId. If safety_blocks.account_id is stored as the MT5 login (e.g. '67198987') or any non-ObjectId string, ownership is never verified — apply runs unconditionally on the user's first bot_config matching {user_id, account_id}. Recommend: validate scope_account_id format up front, and verify ownership via bot_configs lookup as fallback when account_id is not an ObjectId."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "APPLY suggestion (Safety Blocks page)",
+        "issue": "Click on APPLY button → POST /api/safety-blocks/apply-suggestion → 500 in real-world scenarios where scope_account_id is not a 24-char hex string. UI shows error toast (toast.error(formatApiError(e))), no state change. Root cause is backend (above), but the user sees a generic error.",
+        "affected_selectors": ["[data-testid='sb-apply-suggestion']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter20_suggestion.py",
+    "/app/test_reports/pytest/iter20_suggestion.xml",
+    "/app/test_reports/pytest/iter20_full.xml"
+  ],
+  "action_items": [
+    "Wrap ObjectId(scope_account_id) in try/except in /app/backend/routes/safety_blocks_routes.py line 256-262 — raise HTTPException(404, 'Account not found') on bson.errors.InvalidId (mirror pattern at line 299-302). Alternative: accept both ObjectId-format and arbitrary string account_ids; validate ownership via bot_configs.find_one({user_id, account_id}) instead of (or in addition to) accounts collection lookup.",
+    "After fix, re-test the live flow: seed 5 per_trade_risk_cap blocks, click APPLY on /safety-blocks → expect 'Config applied' toast + cfg persisted with risk_level=medium + page re-fetch shows new suggestion (medium→low).",
+    "Consider documenting/asserting the account_id format invariant for safety_blocks/bot_configs/accounts (everywhere it's the ObjectId-hex string of the accounts._id), and migrate any legacy non-conformant docs."
+  ],
+  "critical_code_review_comments": [
+    "ObjectId conversion in apply-suggestion is not defensive (HIGH — see above).",
+    "_suggest_for() references current_mlot via `float(cfg.get('max_lot_size') or 0) or 0.5` — the `or 0.5` fallback when max_lot_size==0 silently substitutes a different value than the user's actual setting. If a user has explicitly set max_lot_size=0 (disabled), the preview shows '0.5 → 0.35', which is misleading. Either: drop the fallback (use 0.0 honestly) or refuse to suggest when current_mlot is 0.",
+    "Both endpoints don't include the patch dict in response when it's empty after sanitization on apply — they 400 instead. Good. But the 400 returned with `detail='No allowed fields in patch'` is generic; consider including the dropped keys for client-side debugging in dev mode.",
+    "scope_account_id is derived from the dominant {reason, account_id} group in the aggregate, which can be None when safety_blocks.account_id is null. The PUT endpoint then matches bot_configs without account_id filter — fine, but the frontend SuggestionBanner doesn't surface which account the suggestion targets. Add an account name/label in the banner so the user knows which terminal will be affected.",
+    "_suggest_for() and the apply-suggestion endpoint don't share a single source of truth for which patch keys map to which reasons. If a future reason maps to e.g. 'max_lot_size' but the whitelist drifts (someone removes 'max_lot_size'), suggestions would silently be 400'd. Add a constant ALLOWED_PATCH_KEYS and reuse in both places."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter20_suggestion.py (NEW — 19 HTTP tests for /api/safety-blocks/suggestion + /apply-suggestion)"
+  ],
+  "success_rate": {
+    "backend": "100% on test suite (58/58) but production POST /apply-suggestion has a 500-crash path on non-ObjectId scope_account_id (caught via live UI test, not pytest because pytest seed used different account_id format that bypassed the ObjectId branch)",
+    "frontend": "85% — banner renders with all 6 required elements and APPLY button is wired up, but the actual apply flow fails due to backend 500. Page re-fetch on success path is implemented but cannot be verified until backend bug is fixed."
+  },
+  "test_credentials": "admin@trading.bot / admin123 — used for live UI test. Ephemeral TEST_iter20_a_<uuid>@example.com & TEST_iter20_b_<uuid>@example.com registered for isolation/sanitization tests (auto-cleaned).",
+  "seed_data_creation": "Tests insert into safety_blocks + bot_configs with try/finally cleanup; all TEST_* prefixed. Live UI test seeded 5 admin safety_blocks (context.seed_tag='iter20') + 1 bot_config (account_id='iter20_acct') and cleaned them up at end of session — no persistent data.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent wraps ObjectId conversion in try/except (or switches ownership check to bot_configs), re-run: `cd /app/backend && set -a && source .env && source /app/frontend/.env && set +a && python -m pytest tests/test_iter20_suggestion.py tests/test_iter19_safety_blocks.py tests/test_safety_guardian.py tests/test_max_concurrent_race.py tests/test_iter26_max_concurrent_endpoints.py tests/test_iter18_diagnostic_safety_guardian.py -v --asyncio-mode=auto` → 58/58. Then live-verify APPLY flow: 1) seed 5 per_trade_risk_cap blocks for admin (any account_id string), 2) GET /safety-blocks page, 3) click APPLY, 4) expect Config-applied toast + bot_config persists risk_level=medium. Sample seed script is in this report's bash history (uses motor + admin_id from /api/auth/me). The 500-crash is the only outstanding bug; everything else is green.",
+  "rca of the issue": "BUG RCA: POST /api/safety-blocks/apply-suggestion crashes with 500 when scope_account_id is provided but isn't a 24-char hex string. Root cause: line 258 of /app/backend/routes/safety_blocks_routes.py — `__import__('bson').ObjectId(scope_account_id)` raises bson.errors.InvalidId for any non-ObjectId input, which is not handled. The GET /suggestion endpoint blindly returns scope_account_id from the safety_blocks doc (line 238 — `top['_id'].get('acct')`), so any safety_blocks.account_id string that isn't ObjectId-shaped (legacy demo data, MT5 login-number-formatted ids, etc.) flows through to apply-suggestion and detonates. Backend log shows: `bson.errors.InvalidId: 'iter20_acct' is not a valid ObjectId, it must be a 12-byte input or a 24-character hex string`. The analogous GET /{block_id} endpoint (line 299-302) DOES wrap ObjectId() in try/except and returns 400 — same pattern needs to be applied here, but returning 404 is more appropriate (caller passed a scope_account_id we can't validate as theirs). Reproduction: 1) login as admin, 2) seed 5 safety_blocks docs with blocked_by='per_trade_risk_cap' and account_id='any_non_hex_string' (e.g. 'iter20_acct'), 3) navigate to /safety-blocks, 4) banner renders correctly with APPLY button, 5) click APPLY → network tab shows 500 on POST /api/safety-blocks/apply-suggestion, 6) error toast displays formatApiError(e). Mitigation: wrap ObjectId conversion in try/except OR change ownership check to query bot_configs (where account_id is a plain string) instead of accounts (where _id is ObjectId)."
+}

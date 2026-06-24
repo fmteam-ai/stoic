@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { ShieldCheck, RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { ShieldCheck, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Sparkles, Check } from "lucide-react";
 import { toast } from "sonner";
 
 const REASON_COLOR = {
@@ -179,22 +179,47 @@ export default function SafetyBlocks() {
     const [list, setList] = useState(null);
     const [loading, setLoading] = useState(true);
     const [expanded, setExpanded] = useState(null);
+    const [suggestion, setSuggestion] = useState(null);
+    const [applying, setApplying] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const [s, l] = await Promise.all([
+            const [s, l, sug] = await Promise.all([
                 api.get(`/safety-blocks/stats?days=${days}`),
                 api.get(`/safety-blocks/list?days=${days}&limit=100`),
+                api.get(`/safety-blocks/suggestion?days=${days}`),
             ]);
             setStats(s.data);
             setList(l.data);
+            setSuggestion(sug.data);
         } catch (e) {
             toast.error(formatApiError(e));
         } finally {
             setLoading(false);
         }
     }, [days]);
+
+    const applySuggestion = useCallback(async () => {
+        if (!suggestion?.has_suggestion || !suggestion.patch) return;
+        setApplying(true);
+        try {
+            const { data } = await api.post("/safety-blocks/apply-suggestion", {
+                patch: suggestion.patch,
+                scope_account_id: suggestion.scope_account_id,
+            });
+            toast.success("Config applied", {
+                description: Object.entries(data.new_config || {})
+                    .filter(([, v]) => v !== undefined)
+                    .map(([k, v]) => `${k}=${v}`).join(" · "),
+            });
+            await load();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally {
+            setApplying(false);
+        }
+    }, [suggestion, load]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -231,6 +256,14 @@ export default function SafetyBlocks() {
             />
 
             <div className="space-y-4">
+                {suggestion?.has_suggestion && (
+                    <SuggestionBanner
+                        suggestion={suggestion}
+                        applying={applying}
+                        onApply={applySuggestion}
+                    />
+                )}
+
                 {goldilocks && (
                     <div className="border border-[#1F1F1F] px-4 py-3 flex items-center gap-3 bg-[#0A0A0A]"
                          data-testid="sb-goldilocks">
@@ -319,5 +352,55 @@ export default function SafetyBlocks() {
                 </div>
             </div>
         </AppLayout>
+    );
+}
+
+const SEVERITY_STYLE = {
+    amber: { border: "border-[#FFB000]/50", glow: "bg-[#FFB000]/5", color: "#FFB000" },
+    red:   { border: "border-[#FF3B30]/50", glow: "bg-[#FF3B30]/5", color: "#FF3B30" },
+};
+
+function SuggestionBanner({ suggestion, applying, onApply }) {
+    const s = SEVERITY_STYLE[suggestion.severity] || SEVERITY_STYLE.amber;
+    const canApply = !!suggestion.patch;
+    return (
+        <div className={`border ${s.border} ${s.glow} p-4`}
+             data-testid="sb-suggestion-banner">
+            <div className="flex items-start gap-3">
+                <Sparkles className="w-5 h-5 mt-0.5 shrink-0" style={{ color: s.color }} />
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-[10px] tracking-widest" style={{ color: s.color }}>
+                            SUGGESTED CONFIG ADJUSTMENT
+                        </span>
+                        <span className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                            · {suggestion.count} blocks · {suggestion.reason_label}
+                        </span>
+                    </div>
+                    <div className="text-sm text-[#E4E4E7] mt-1 font-medium">
+                        {suggestion.title}
+                    </div>
+                    <div className="text-[12px] text-[#A1A1AA] mt-1.5 leading-relaxed">
+                        {suggestion.rationale}
+                    </div>
+                    {suggestion.preview && (
+                        <div className="mt-2 inline-flex items-center gap-2 px-2.5 py-1 bg-[#0A0A0A] border border-[#1F1F1F]">
+                            <span className="font-mono text-[10px] text-[#52525B] tracking-widest">CHANGE</span>
+                            <span className="font-mono text-[11px] text-[#E4E4E7]">{suggestion.preview}</span>
+                        </div>
+                    )}
+                </div>
+                {canApply && (
+                    <button onClick={onApply} disabled={applying}
+                            className="px-3 py-2 font-mono text-[10px] tracking-widest inline-flex items-center gap-2 disabled:opacity-40 transition-colors"
+                            style={{ border: `1px solid ${s.color}`, color: s.color }}
+                            data-testid="sb-apply-suggestion">
+                        {applying ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  : <Check className="w-3.5 h-3.5" />}
+                        APPLY
+                    </button>
+                )}
+            </div>
+        </div>
     );
 }

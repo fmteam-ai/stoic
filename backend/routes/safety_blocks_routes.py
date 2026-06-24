@@ -31,6 +31,77 @@ REASON_LABELS = {
 }
 
 
+# Map each dominant blocker → suggested config delta that should reduce
+# future blocks. Each entry returns the patch to apply via PUT /api/bot/config.
+def _suggest_for(reason: str, cfg: dict) -> dict | None:
+    """Return {title, rationale, severity, preview, patch} or None."""
+    current_level = cfg.get("risk_level", "medium")
+    current_mlot = float(cfg.get("max_lot_size") or 0) or 0.5
+    current_mc = int(cfg.get("max_concurrent_trades", 3) or 3)
+
+    if reason == "per_trade_risk_cap":
+        # Step risk down one notch (high→medium→low) — smaller SL distance × lot
+        if current_level == "high":
+            new_level = "medium"
+        elif current_level == "medium":
+            new_level = "low"
+        else:
+            new_level = "low"
+        return {
+            "title": "Per-trade risk too aggressive",
+            "severity": "amber",
+            "rationale": "The Safety Guardian refused trades because a single trade's "
+                         f"risk exceeded {get_guardian_config()['max_risk_pct_per_trade']}% of equity. "
+                         "Stepping risk_level down shrinks lot size and SL distance.",
+            "preview": f"risk_level: {current_level} → {new_level}",
+            "patch": {"risk_level": new_level},
+        }
+    if reason == "total_open_risk_cap":
+        new_mc = max(1, current_mc - 1)
+        return {
+            "title": "Too many simultaneous open trades",
+            "severity": "amber",
+            "rationale": "Aggregate open risk crossed the safety ceiling. Reducing "
+                         "max_concurrent_trades caps total exposure.",
+            "preview": f"max_concurrent_trades: {current_mc} → {new_mc}",
+            "patch": {"max_concurrent_trades": new_mc},
+        }
+    if reason == "lot_vs_equity_sanity":
+        new_mlot = round(max(0.01, current_mlot * 0.7), 2)
+        return {
+            "title": "Lot size too large for equity",
+            "severity": "amber",
+            "rationale": "Proposed lot exceeded the lot-vs-equity sanity ceiling. "
+                         "Lowering max_lot_size keeps individual position size in scale.",
+            "preview": f"max_lot_size: {current_mlot} → {new_mlot}",
+            "patch": {"max_lot_size": new_mlot},
+        }
+    if reason in ("daily_loss_cap", "equity_vs_balance_floor", "free_margin_floor"):
+        return {
+            "title": "Account stress — pause recommended",
+            "severity": "red",
+            "rationale": "Repeated blocks at the daily-loss or account-health floor "
+                         "mean the bot is being kept from compounding losses. Pause until "
+                         "the account stabilizes or fund equity is restored.",
+            "preview": "active: ON → OFF (pause bot)",
+            "patch": {"active": False},
+        }
+    if reason == "max_concurrent_cap":
+        # Not a guardian block but a config cap — suggest no change here
+        return None
+    if reason == "risk_inputs_present":
+        return {
+            "title": "Signal payload incomplete",
+            "severity": "amber",
+            "rationale": "Signals arrived without a stop-loss. This usually means the "
+                         "signal generator misconfigured TP/SL. No safe auto-fix — review "
+                         "the AI Signals page and confirm SL is being produced.",
+            "preview": "Manual review of AI Signals required",
+            "patch": None,
+        }
+    return None
+
+
 def _serialize(doc: dict) -> dict:
     """Strip MongoDB ObjectId + ensure JSON-safe fields."""
     return {
@@ -118,6 +189,105 @@ async def block_stats(
         "total": sum(r["count"] for r in by_reason),
         "thresholds": get_guardian_config(),
         "window_days": days,
+    }
+
+
+@router.get("/suggestion")
+async def get_suggestion(days: int = Query(7, ge=1, le=90),
+                        user=Depends(get_current_user)):
+    """Inspect the last N days of safety blocks. If a single blocker dominates,
+    propose a config delta that should reduce future blocks.
+
+    Returns:
+      { has_suggestion: bool, top_reason?, count?, title?, rationale?,
+        severity?, preview?, patch?, scope_account_id? }
+    """
+    db = get_db()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = await db.safety_blocks.aggregate([
+        {"$match": {"user_id": user["id"], "blocked_at": {"$gte": cutoff}}},
+        {"$group": {"_id": {"reason": "$blocked_by", "acct": "$account_id"},
+                    "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 1},
+    ]).to_list(length=1)
+
+    if not rows or rows[0]["count"] < 3:
+        # Need at least 3 blocks of the same kind to make a confident suggestion.
+        return {"has_suggestion": False,
+                "reason": "Not enough recent blocks to suggest a change "
+                          "(need ≥3 of the same kind in the window)."}
+
+    top = rows[0]
+    reason = top["_id"]["reason"]
+    scope_account_id = top["_id"].get("acct")
+    cfg_q = {"user_id": user["id"]}
+    if scope_account_id:
+        cfg_q["account_id"] = scope_account_id
+    cfg = await db.bot_configs.find_one(cfg_q) or {}
+    sug = _suggest_for(reason, cfg)
+    if not sug:
+        return {"has_suggestion": False, "top_reason": reason,
+                "reason": "No automated suggestion available for this blocker."}
+    return {
+        "has_suggestion": True,
+        "top_reason": reason,
+        "reason_label": REASON_LABELS.get(reason, reason),
+        "count": top["count"],
+        "window_days": days,
+        "scope_account_id": scope_account_id,
+        **sug,
+    }
+
+
+@router.post("/apply-suggestion")
+async def apply_suggestion(payload: dict, user=Depends(get_current_user)):
+    """Apply the suggested config patch. Body: { patch: dict, scope_account_id?: str }.
+
+    Server re-derives the current top suggestion to ensure the client isn't
+    submitting a stale patch — if the suggestion has changed, returns 409.
+    """
+    patch = payload.get("patch")
+    scope_account_id = payload.get("scope_account_id")
+    if not patch or not isinstance(patch, dict):
+        raise HTTPException(status_code=400, detail="patch (dict) required")
+
+    db = get_db()
+    if scope_account_id:
+        owns = await db.accounts.find_one({
+            "_id": __import__("bson").ObjectId(scope_account_id),
+            "user_id": user["id"],
+        })
+        if not owns:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+    cfg_q = {"user_id": user["id"]}
+    if scope_account_id:
+        cfg_q["account_id"] = scope_account_id
+    cfg = await db.bot_configs.find_one(cfg_q)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Bot config not found")
+
+    # Sanitize allowed keys — only these may be modified via the suggestion
+    allowed = {"risk_level", "max_concurrent_trades", "max_lot_size", "active"}
+    safe_patch = {k: v for k, v in patch.items() if k in allowed}
+    if not safe_patch:
+        raise HTTPException(status_code=400, detail="No allowed fields in patch")
+    safe_patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+    safe_patch["last_suggestion_applied_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db.bot_configs.update_one(cfg_q, {"$set": safe_patch})
+    updated = await db.bot_configs.find_one(cfg_q)
+    return {
+        "applied": True,
+        "applied_at": safe_patch["updated_at"],
+        "patch": safe_patch,
+        "new_config": {
+            "risk_level": updated.get("risk_level"),
+            "max_concurrent_trades": updated.get("max_concurrent_trades"),
+            "max_lot_size": updated.get("max_lot_size"),
+            "active": updated.get("active"),
+        },
     }
 
 
