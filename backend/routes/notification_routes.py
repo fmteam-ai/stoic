@@ -20,6 +20,7 @@ DEFAULT_ALERTS = {
     "trail": False,                # trailing fires often — opt-in
     "circuit_breaker": True,
     "high_conf_signal": True,
+    "external_trade_opened": True, # manual MT5 trade detected (clearly labelled)
 }
 
 

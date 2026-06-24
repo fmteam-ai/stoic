@@ -142,6 +142,28 @@ async def notify_trade_opened(user_id: str, trade: dict) -> bool:
             trade.get("symbol"), trade.get("entry_price"), trade.get("mt5_ticket"),
         )
         return False
+    origin = trade.get("origin", "AI signal")
+    is_external = (origin == "external") or bool(trade.get("external_open"))
+
+    # External trades — opened on MT5 outside STOIC (manual click, another EA,
+    # or a test). Use a visibly different title + event key so the user can
+    # opt out separately and never confuses them with bot-initiated trades.
+    if is_external:
+        arrow = "📌"
+        title = f"{arrow} Manual Trade Detected · {trade.get('symbol')} {trade.get('action')}"
+        body_lines = [
+            f"Lots: {trade.get('lot_size')}",
+            f"Entry: {trade.get('entry_price')}",
+            "",
+            "⚠ This was NOT opened by STOIC — it came from your MT5 terminal",
+            "(manual click, another EA, or the broker). STOIC is tracking it",
+            "for P&L reporting only.",
+        ]
+        # Fire under a dedicated event key so users can mute these without
+        # losing notifications for their bot-initiated trades.
+        return await send_telegram(user_id, "external_trade_opened", title, body_lines)
+
+    # Bot-initiated trade — the normal STOIC alert.
     arrow = "🟢" if trade.get("action") == "BUY" else "🔴"
     return await send_telegram(user_id, "trade_opened",
         f"{arrow} Trade Opened · {trade.get('symbol')} {trade.get('action')}",
@@ -149,7 +171,7 @@ async def notify_trade_opened(user_id: str, trade: dict) -> bool:
             f"Lots: {trade.get('lot_size')}",
             f"Entry: {trade.get('entry_price')}",
             f"SL: {trade.get('stop_loss')}  TP: {trade.get('take_profit')}",
-            f"Origin: {trade.get('origin', 'AI signal')}",
+            f"Origin: {origin}",
         ])
 
 

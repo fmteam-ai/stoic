@@ -15,6 +15,7 @@ const EVENT_LABELS = {
     trail: { label: "SL Trailed", desc: "Each time trailing SL moves (can be frequent — opt-in)", color: "#A1A1AA" },
     circuit_breaker: { label: "Circuit Breaker Tripped", desc: "When daily drawdown limit auto-stops the bot", color: "#FF3B30" },
     high_conf_signal: { label: "High-Confidence Signal", desc: "When AI generates a BUY/SELL with confidence ≥75%", color: "#FFD700" },
+    external_trade_opened: { label: "Manual Trade Detected", desc: "When a position is opened on MT5 outside STOIC (manual click, another EA). Tagged 📌 — never confused with bot trades.", color: "#FFB000" },
     sl_imminent: { label: "SL Imminent (≤5min)", desc: "When an open trade's stop-loss ETA drops below 5 minutes at current market velocity", color: "#FF3B30" },
 };
 
