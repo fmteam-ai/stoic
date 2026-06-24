@@ -152,17 +152,19 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
     # Phase 2: per-account reconciliation against live broker state
     for acc in accounts:
         if force:
-            # SAFETY: refuse to force-close when the EA hasn't reported
-            # ticket-level data AND the account claims open positions. Force
-            # Sync's destructive "close everything" was burning real trades
-            # whenever the EA was on a legacy version (no open_tickets/positions
-            # fields) — the heartbeat would say "4 positions open" but
-            # Force Sync would still orphan all DB rows.
+            # When the EA *is* reporting tickets, those are the ground truth —
+            # Force Sync must respect them and only close trades NOT in the EA's
+            # open list. The previous version passed `[]` here, which silently
+            # wiped every DB-open trade regardless of what the broker said and
+            # repeatedly burned live positions. Force Sync now means
+            # "reconcile aggressively against the broker's live ticket list",
+            # NOT "close everything no matter what".
             ea_open_positions = int(acc.get("open_positions") or 0)
-            knows_tickets = (
-                acc.get("open_tickets") is not None      # v1.22+ field present
-            )
+            ea_tickets = acc.get("open_tickets")  # None on legacy EAs
+            knows_tickets = ea_tickets is not None
+
             if ea_open_positions > 0 and not knows_tickets:
+                # Legacy EA + broker says positions open → refuse (unchanged guard).
                 summaries.append({
                     "account_id": str(acc["_id"]),
                     "label": acc.get("label"),
@@ -175,9 +177,12 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
                     "ea_version_hint": "Re-install EA from Accounts → Download EA, then F7 to compile, then re-attach to chart.",
                 })
                 continue
-            # User explicitly confirmed AND EA is silent — close everything.
+
+            # Modern EA (knows_tickets=True) → use the real list. Legacy EA
+            # with zero positions → still safe to pass [].
+            authoritative_tickets = ea_tickets if knows_tickets else []
             summary = await reconcile_account(
-                str(acc["_id"]), [], source="manual_force",
+                str(acc["_id"]), authoritative_tickets, source="manual_force",
             )
             # Also cancel never-executed pending OPEN trades (no ticket)
             cancel_cursor = db.trades.find({

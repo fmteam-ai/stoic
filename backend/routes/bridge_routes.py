@@ -102,6 +102,42 @@ async def heartbeat(payload: BridgeHeartbeat):
             tickets = []
         set_doc["open_tickets"] = tickets
         set_doc["open_tickets_updated_at"] = now_iso
+
+        # TICKET-LEVEL AUTO-REVIVE: if STOIC has closed a trade but the
+        # broker is still reporting its ticket as open, STOIC was wrong.
+        # Revive it before reconcile_account runs — otherwise the EA would
+        # never get it back under bot control. This catches the failure
+        # mode of slippage_veto / reconciler / Force Sync wiping a trade
+        # whose ticket is still live on the broker. Works for v1.22+ EAs
+        # that only send open_tickets (not full positions snapshot).
+        if tickets:
+            revive_candidates = await db.trades.find({
+                "account_id": str(acc["_id"]),
+                "mt5_ticket": {"$in": tickets},
+                "status": "closed",
+                "exit_price": None,
+            }).to_list(length=50)
+            for t in revive_candidates:
+                await db.trades.update_one(
+                    {"_id": t["_id"]},
+                    {"$set": {
+                        "status": "open", "closed_at": None,
+                        "revived_at": now_iso,
+                        "revived_from_close_reason": t.get("close_reason"),
+                        "revived_via_open_tickets": True,
+                        "pending_modification": None,
+                    },
+                     "$unset": {
+                         "close_reason": "", "reconciled": "",
+                         "close_requested": "",
+                     }},
+                )
+                logger.info(
+                    "Auto-revived trade %s (ticket %s) — broker still has it open "
+                    "(prior close_reason=%s)",
+                    t["_id"], t.get("mt5_ticket"), t.get("close_reason"),
+                )
+
         # Auto-reconcile on every heartbeat — closes orphans within ~5s of EA tick.
         reconcile_summary = await reconcile_account(
             str(acc["_id"]), tickets, source="heartbeat",
