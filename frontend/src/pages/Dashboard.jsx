@@ -307,6 +307,32 @@ export default function Dashboard() {
     const { user } = useAuth();
     const isAdmin = user?.role === "admin";
     const [diagOpen, setDiagOpen] = useState(false);
+    const [diagSummary, setDiagSummary] = useState(null);  // { status, fails, warns }
+
+    // Admin-only passive diagnostic — runs on mount + every 2min so the button
+    // can badge red/amber when something needs attention, without forcing the
+    // admin to click + wait.
+    const loadDiag = useCallback(async () => {
+        if (!isAdmin) return;
+        try {
+            const { data } = await api.get("/diagnostic/run");
+            let fails = 0, warns = 0;
+            for (const sec of data.sections || []) {
+                for (const c of sec.checks || []) {
+                    if (c.status === "fail") fails += 1;
+                    else if (c.status === "warn") warns += 1;
+                }
+            }
+            setDiagSummary({ status: data.status, fails, warns });
+        } catch { /* stay silent on error */ }
+    }, [isAdmin]);
+
+    useEffect(() => {
+        if (!isAdmin) return;
+        loadDiag();
+        const t = setInterval(loadDiag, 120_000);
+        return () => clearInterval(t);
+    }, [isAdmin, loadDiag, diagOpen]);  // refresh when modal closes too
 
     const loadQuotes = useCallback(async () => {
         try {
@@ -494,12 +520,7 @@ export default function Dashboard() {
                 {isAdmin && (
                     <div className="flex items-center justify-between px-1">
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest">ADMIN TOOLS</div>
-                        <button onClick={() => setDiagOpen(true)}
-                                className="px-3 py-1.5 border border-[#FFB000]/40 text-[#FFB000] font-mono text-[10px] tracking-widest hover:bg-[#FFB000]/10 inline-flex items-center gap-2"
-                                data-testid="open-diagnostic-btn">
-                            <Stethoscope className="w-3.5 h-3.5" />
-                            RUN AUTO-DIAGNOSTIC
-                        </button>
+                        <DiagButton summary={diagSummary} onClick={() => setDiagOpen(true)} />
                     </div>
                 )}
                 <DiagnosticModal open={diagOpen} onClose={() => setDiagOpen(false)} />
@@ -698,5 +719,36 @@ export default function Dashboard() {
                 )}
             </div>
         </AppLayout>
+    );
+}
+
+function DiagButton({ summary, onClick }) {
+    const fails = summary?.fails || 0;
+    const warns = summary?.warns || 0;
+    const total = fails + warns;
+    let color, bg, border, label, pulse = false;
+    if (fails > 0) {
+        color = "#FF3B30"; bg = "bg-[#FF3B30]/10"; border = "border-[#FF3B30]/50";
+        label = `RUN AUTO-DIAGNOSTIC · ${total} ISSUE${total !== 1 ? "S" : ""}`;
+        pulse = true;
+    } else if (warns > 0) {
+        color = "#FFB000"; bg = "bg-[#FFB000]/10"; border = "border-[#FFB000]/40";
+        label = `RUN AUTO-DIAGNOSTIC · ${warns} ADVISOR${warns !== 1 ? "IES" : "Y"}`;
+    } else if (summary) {
+        color = "#00FF41"; bg = "bg-transparent hover:bg-[#00FF41]/10"; border = "border-[#00FF41]/40";
+        label = "RUN AUTO-DIAGNOSTIC · ALL OK";
+    } else {
+        color = "#FFB000"; bg = "hover:bg-[#FFB000]/10"; border = "border-[#FFB000]/40";
+        label = "RUN AUTO-DIAGNOSTIC";
+    }
+    return (
+        <button onClick={onClick}
+                className={`px-3 py-1.5 border ${border} ${bg} font-mono text-[10px] tracking-widest inline-flex items-center gap-2 ${pulse ? "animate-pulse" : ""}`}
+                style={{ color }}
+                data-testid="open-diagnostic-btn"
+                aria-label={label}>
+            <Stethoscope className="w-3.5 h-3.5" />
+            {label}
+        </button>
     );
 }

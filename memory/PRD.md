@@ -238,8 +238,12 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   - Per-issue FIX button + global AUTO-FIX ALL
   - COPY AS TEXT for sharing with support
   - RE-RUN to verify fixes landed
+- **Passive auto-refresh** (every 2min) — button silently re-fetches and badges:
+  - 🔴 `· N ISSUES` (pulsing red, fails > 0)
+  - 🟠 `· N ADVISORIES` (amber, warns only)
+  - 🟢 `· ALL OK` (subtle green, clean run)
 
-Files: `/app/backend/routes/diagnostic_routes.py`, `/app/frontend/src/components/DiagnosticModal.jsx`, Dashboard wiring.
+Files: `/app/backend/routes/diagnostic_routes.py`, `/app/frontend/src/components/DiagnosticModal.jsx`, Dashboard wiring with `DiagButton` sub-component.
 
 ### Bot transparency: anti-tilt freeze now surfaced in UI
 **Problem:** Bot active + connected, but no trades opening despite ~58 tradeable signals in 6h. Root cause: anti-tilt freeze (`bot_runner.py` silently `return`s when last N closed trades all lost within freeze window). Last 4 XAUUSD trades all lost → 4h freeze → user had zero visibility.
