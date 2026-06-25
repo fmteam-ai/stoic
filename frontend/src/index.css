@@ -29,6 +29,19 @@ body {
 ::-webkit-scrollbar-thumb { background: #1f1f1f; border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: #333; }
 
+/* PANIC button — strong attention-grabbing pulse when there are open trades */
+@keyframes panicPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.55), 0 0 12px rgba(255, 59, 48, 0.35);
+    }
+    50% {
+        box-shadow: 0 0 0 6px rgba(255, 59, 48, 0), 0 0 18px rgba(255, 59, 48, 0.55);
+    }
+}
+.panic-pulse {
+    animation: panicPulse 1.6s ease-in-out infinite;
+}
+
 @layer base {
     :root {
         --background: 0 0% 2%;

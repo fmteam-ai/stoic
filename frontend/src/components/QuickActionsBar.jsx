@@ -108,16 +108,25 @@ export function QuickActionsBar() {
                     <span className="hidden sm:inline">{data.bot_active ? "BOT ON" : "BOT OFF"}</span>
                 </button>
 
-                {/* PANIC button */}
+                {/* PANIC button — solid red, larger, with pulsing alert ring when there's something to close */}
                 <button type="button" onClick={() => setPanicOpen(true)}
                         disabled={data.open_trades === 0 || actionInflight}
                         data-testid="quick-panic"
                         title={data.open_trades === 0
                             ? "Nothing to panic-close"
                             : `Close all ${data.open_trades} open positions immediately`}
-                        className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest px-2.5 py-1.5 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 disabled:opacity-30 disabled:cursor-not-allowed">
-                    <AlertOctagon className="w-3 h-3" />
-                    <span className="hidden sm:inline">PANIC</span>
+                        className={`relative flex items-center gap-1.5 font-mono text-[11px] font-bold tracking-widest px-3 py-1.5 border-2 transition-all
+                            ${data.open_trades > 0 && !actionInflight
+                                ? "bg-[#FF3B30] border-[#FF3B30] text-white hover:bg-[#E5352B] hover:border-[#E5352B] shadow-[0_0_0_3px_rgba(255,59,48,0.25)] hover:shadow-[0_0_0_4px_rgba(255,59,48,0.4)] panic-pulse"
+                                : "border-[#FF3B30]/30 text-[#FF3B30]/40 cursor-not-allowed"}
+                        `}>
+                    <AlertOctagon className={`w-3.5 h-3.5 ${data.open_trades > 0 ? "animate-pulse" : ""}`} />
+                    <span>PANIC</span>
+                    {data.open_trades > 0 && (
+                        <span className="hidden sm:inline-block ml-1 px-1.5 py-0.5 text-[9px] bg-white/20 text-white rounded-sm font-bold">
+                            {data.open_trades}
+                        </span>
+                    )}
                 </button>
             </div>
 
