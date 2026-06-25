@@ -8,6 +8,15 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-25 (iter-38) — **Live-simulation polish pass (4 user-visible bugs closed)**:
+  - **HOLD-signal zero-stop footgun** (ai_signals.py line ~509): when `final_action == "HOLD"`, response now returns `entry_price=None, stop_loss=None, take_profit=None, tp1/2/3=None, sl_pips=0, tp_pips=[0,0,0], lot_size=0`. Previously the response had `entry=SL=TP=current_price` which would be a zero-risk trade if ever forced through execution. `tradeable=False` already prevented exec via UI but defence-in-depth says don't emit broken math.
+  - **`/api/macro/freeze/{symbol}` 404 fix** (routes/macro_routes.py): added the route as an alias to `economic_calendar.macro_freeze_check`. The frontend MacroClimate widget was constantly hitting this 404 (visible in production logs). Identical response shape to `/api/calendar/freeze/{symbol}`.
+  - **`/api/macro/snapshot` summary block** (routes/macro_routes.py): response now folds in the gate state — top-level `summary` block with `regime`, `gate_open`, `buy_ok`, `sell_ok`, `blocked[]`, plus quick scalars `vix`/`dxy`/`y10y`/`y2y` — so the MacroClimate widget can render in one round-trip instead of two and never sees nulls when FRED data exists.
+  - **`/api/notifications/settings` 404 alias** (routes/notification_routes.py): added as a third route decorator alongside `/telegram` and `/prefs` — same handler, same response shape — for legacy frontend callers.
+  - **Audit by simulation**: 7 P0/P1 candidates flagged during the end-to-end trace, 4 were real bugs (above), 3 were false positives in my probe (portfolio uses nested dicts not flat `drawdown_pct` keys; `sl_atr_mult` is an env-level constant not a per-config field; `/api/diagnostic/run` already existed under the right path).
+  - **All verified live**: HOLD signal now returns null SL/TP/entry; macro/freeze returns 200 with `frozen=false`; macro/snapshot has `summary.regime=macro_neutral, gate_open=true, dxy=120.4, y10y=4.5`; notifications/settings returns full prefs. Zero existing tests broken — `"stop_loss" in sig` assertions still hold (key exists, just None on HOLD).
+
+
 - 2026-06-25 (iter-35) — **Binance Spot live BTC execution via CCXT**:
   - **Server-side REST execution path for crypto** — bypasses the MT5 EA queue entirely. Added `crypto_bridge/` package with `binance_ccxt.py` (async ccxt wrapper, testnet defence-in-depth) and `binance_engine.py` (`BinanceCCXTEngine(ExecutionEngine)`). Plugs into `execution.for_account()` via a new `kind == "binance"` discriminator on accounts — same signal pipeline, same Safety Guardian audit, same Explainable AI snapshot, same WebSocket broadcast as MT5BridgeEngine.
   - **Defence-in-depth live toggle**: an account runs against Binance testnet (sandbox) unless ALL of these are true: `account.testnet == False` AND `account.live == True` AND env `BINANCE_LIVE_ENABLED == true`. Any one falsy → testnet. Default `.env` ships with `BINANCE_LIVE_ENABLED=false`.

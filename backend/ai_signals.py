@@ -506,21 +506,26 @@ async def analyze_symbol(symbol: str, risk_level: str,
     if dxy_veto:
         reasoning = f"{reasoning}\n\nVETO (DXY gate): {dxy_veto}"
 
+    # On HOLD, clear price levels so consumers (UI, execution) don't see
+    # a misleading entry=SL=TP that would be a zero-risk trade if forced
+    # through. tradeable=False already prevents execution, but data should
+    # match semantics.
+    is_hold = final_action == "HOLD"
     return {
         "symbol": symbol,
         "action": final_action,
         "chart_action": action,
         "aggressive_applied": aggressive_applied,
         "confidence": round(confidence, 1),
-        "entry_price": round(current_price, 5),
-        "stop_loss": sl,
-        "take_profit": tp,
-        "tp1": tp1,
-        "tp2": tp2,
-        "tp3": tp3,
-        "sl_pips": sl_pips_target,
-        "tp_pips": [tp1_pips_target, tp2_pips_target, tp3_pips_target],
-        "lot_size": sizing["lot_size"],
+        "entry_price": None if is_hold else round(current_price, 5),
+        "stop_loss": None if is_hold else sl,
+        "take_profit": None if is_hold else tp,
+        "tp1": None if is_hold else tp1,
+        "tp2": None if is_hold else tp2,
+        "tp3": None if is_hold else tp3,
+        "sl_pips": 0 if is_hold else sl_pips_target,
+        "tp_pips": [0, 0, 0] if is_hold else [tp1_pips_target, tp2_pips_target, tp3_pips_target],
+        "lot_size": 0 if is_hold else sizing["lot_size"],
         "kelly_f": sizing["kelly_f"],
         "effective_risk_pct": sizing["effective_risk_pct"],
         "risk_amount": sizing["risk_amount"],
