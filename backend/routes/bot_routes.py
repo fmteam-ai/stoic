@@ -119,6 +119,10 @@ def _serialize(cfg: dict) -> dict:
         "min_confidence_override": cfg.get("min_confidence_override", 0),
         "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
+        # iter-39 — Paper Shadow Mode (run pipeline, never execute) +
+        # per-account crypto risk cap override.
+        "paper_shadow_mode": bool(cfg.get("paper_shadow_mode", False)),
+        "crypto_risk_pct_per_trade": cfg.get("crypto_risk_pct_per_trade"),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -461,7 +465,7 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "details": stale_accounts})
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.26"
+    LATEST_EA = "1.27"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:

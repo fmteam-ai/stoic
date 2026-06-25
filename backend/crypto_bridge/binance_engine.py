@@ -112,19 +112,35 @@ class BinanceCCXTEngine(ExecutionEngine):
                     "safety_audit": safety["audit"]}
 
         # 3. Crypto-specific tighter cap (% of equity in $ at entry).
+        # Per-account override (bot_config.crypto_risk_pct_per_trade) takes
+        # precedence over the global env CRYPTO_MAX_RISK_PCT_PER_TRADE.
+        per_account_cap = None
+        if cfg_account_id:
+            try:
+                cfg_doc = await db.bot_configs.find_one({
+                    "user_id": user_id, "account_id": cfg_account_id,
+                })
+                if cfg_doc and cfg_doc.get("crypto_risk_pct_per_trade") is not None:
+                    per_account_cap = float(cfg_doc["crypto_risk_pct_per_trade"])
+            except Exception:
+                per_account_cap = None
+        cap_pct_used = per_account_cap if per_account_cap is not None else _crypto_risk_cap_pct()
+
         equity = float(account.get("equity") or account.get("balance") or 0)
         entry_px = float(signal.get("entry_price") or 0)
         sl_px = float(signal.get("stop_loss") or 0)
         risk_per_unit = abs(entry_px - sl_px) if entry_px > 0 and sl_px > 0 else 0
         crypto_risk_usd = risk_per_unit * amount
-        crypto_cap = equity * (_crypto_risk_cap_pct() / 100.0)
+        crypto_cap = equity * (cap_pct_used / 100.0)
         if equity > 0 and crypto_risk_usd > crypto_cap and crypto_cap > 0:
             logger.warning(
-                "BINANCE per-trade risk cap exceeded user=%s risk=$%.2f cap=$%.2f",
-                user_id, crypto_risk_usd, crypto_cap,
+                "BINANCE per-trade risk cap exceeded user=%s risk=$%.2f cap=$%.2f (%.2f%%)",
+                user_id, crypto_risk_usd, crypto_cap, cap_pct_used,
             )
             return {"blocked": "crypto_risk_cap",
-                    "risk_usd": crypto_risk_usd, "cap_usd": crypto_cap}
+                    "risk_usd": crypto_risk_usd, "cap_usd": crypto_cap,
+                    "cap_pct_used": cap_pct_used,
+                    "cap_source": "per_account" if per_account_cap is not None else "env_default"}
 
         # 4. Smart-routed order.
         order_type, limit_price = _smart_route(signal)
@@ -195,7 +211,8 @@ class BinanceCCXTEngine(ExecutionEngine):
             "crypto_risk_cap": {
                 "risk_usd": round(crypto_risk_usd, 4),
                 "cap_usd": round(crypto_cap, 4),
-                "applied_pct": _crypto_risk_cap_pct(),
+                "applied_pct": cap_pct_used,
+                "cap_source": "per_account" if per_account_cap is not None else "env_default",
             },
         }
 

@@ -238,6 +238,71 @@ async def analyze_symbol(symbol: str, risk_level: str,
         },
     }, separators=(",", ":"))
 
+    # ------------------------------------------------------------------------
+    # CHEAP HOLD pre-filter (iter-39) — skip the LLM call entirely when the
+    # deterministic gates already guarantee HOLD. Saves ~$0.01-0.03 per call
+    # plus 2-5s latency. The Claude pass would have HOLD'd anyway via the
+    # 10-layer veto cascade below; this just short-circuits earlier.
+    # ------------------------------------------------------------------------
+    cheap_hold_reason = None
+    if not aggressive_mode:
+        if macro.get("frozen"):
+            cheap_hold_reason = f"Macro freeze in effect: {macro.get('reason') or 'high-impact event window'}"
+        elif regime.get("regime") == "CHOP":
+            cheap_hold_reason = "Regime CHOP — high volatility without direction"
+        elif not entropy.get("tradeable", True):
+            cheap_hold_reason = f"Noise filter: {entropy.get('label', 'NOISY')} (entropy={entropy.get('entropy')})"
+
+    if cheap_hold_reason:
+        # Build the same response shape the LLM path would, with HOLD baked in.
+        # Skip every veto / sizing path because final_action is locked to HOLD.
+        return {
+            "symbol": symbol,
+            "action": "HOLD",
+            "chart_action": "HOLD",
+            "aggressive_applied": False,
+            "confidence": 0,
+            "entry_price": None,
+            "stop_loss": None,
+            "take_profit": None,
+            "tp1": None, "tp2": None, "tp3": None,
+            "sl_pips": 0, "tp_pips": [0, 0, 0],
+            "lot_size": 0, "kelly_f": 0, "effective_risk_pct": 0, "risk_amount": 0,
+            "risk_level": risk_level,
+            "reasoning": (
+                f"CHEAP HOLD pre-filter: {cheap_hold_reason}. "
+                f"Skipping LLM call to save tokens — the veto cascade would have "
+                f"reached the same conclusion."
+            ),
+            "indicators": indicators,
+            "sentiment": sentiment,
+            "session": session,
+            "session_bias": session_bias,
+            "regime": regime,
+            "macro": macro,
+            "upcoming_macro": upcoming_macro[:5],
+            "noise_filter": entropy,
+            "compressed_features": compressed_features,
+            "regime_execution_mode": regime_meta,
+            "meta_label": None,
+            "mtf_gate": None,
+            "learned_meta": None,
+            "aplus_confluence": None,
+            "rr_ratio": None,
+            "kalman_filter": kalman_feat,
+            "cot_positioning": cot_feat,
+            "real_yield_10y": tips_feat,
+            "dxy": dxy_feat,
+            "dxy_gate": None,
+            "liquidity_window": liquidity_window,
+            "key_factors": [cheap_hold_reason],
+            "min_confidence_required": adapted_profile["min_confidence"],
+            "veto_applied": True,
+            "cheap_hold": True,  # tag for cost analytics / UI badge
+            "tradeable": False,
+            "created_at": datetime.now(timezone.utc),
+        }
+
     chat = LlmChat(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",

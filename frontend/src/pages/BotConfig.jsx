@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin } from "lucide-react";
 import { toast } from "sonner";
 
 const RISK_DESCRIPTIONS = {
@@ -159,6 +159,8 @@ export default function BotConfig() {
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
                 aggressive_mode: cfg.aggressive_mode,
                 min_confidence_override: cfg.min_confidence_override,
+                paper_shadow_mode: cfg.paper_shadow_mode,
+                crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
             });
             setCfg(data); setSaveMsg("Configuration saved.");
             // refresh allConfigs index so the selector reflects new state
@@ -651,6 +653,38 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="min_confidence_override" label="MIN-CONF OVERRIDE (0 = use profile)" suffix="%" step={1} min={0} max={95} />
                         </div>
                     )}
+                </div>
+
+                {/* iter-39 — Paper-Shadow Mode */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="paper_shadow_mode" label="Paper Shadow Mode" icon={Eye} color="#06B6D4"
+                        desc="Run the full signal pipeline but NEVER execute trades. Every signal is logged with origin='shadow' so you can A/B test your config against the market for weeks before flipping live. Activates even when the bot is paused. Recommended for new traders or after big config changes." />
+                </div>
+
+                {/* iter-39 — Per-account crypto risk cap */}
+                <div>
+                    <div className="border border-[#1F1F1F] p-4 bg-[#050505]">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Bitcoin className="w-4 h-4 text-[#FFD700]" />
+                            <span className="font-display font-bold text-sm">Crypto Risk Cap (per-account override)</span>
+                        </div>
+                        <p className="text-xs text-[#A1A1AA] leading-relaxed mb-3">
+                            Override the global crypto-per-trade risk cap (default 0.5% of equity). Set to a tighter value (e.g. 0.1%) on volatile pairs or larger account balances. Leave at 0 to fall back to the global env default.
+                        </p>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="font-mono text-[9px] text-[#52525B] tracking-widest block mb-1">CAP % OF EQUITY (0 = use env default)</label>
+                                <input type="number" step="0.05" min="0" max="5"
+                                    value={cfg.crypto_risk_pct_per_trade ?? 0}
+                                    onChange={(e) => {
+                                        const v = parseFloat(e.target.value);
+                                        setCfg({ ...cfg, crypto_risk_pct_per_trade: (isNaN(v) || v <= 0) ? null : v });
+                                    }}
+                                    data-testid="crypto-risk-pct-per-trade"
+                                    className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

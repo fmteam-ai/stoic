@@ -30,6 +30,7 @@ import Portfolio from "@/pages/Portfolio";
 import Execution from "@/pages/Execution";
 import Research from "@/pages/Research";
 import Crypto from "@/pages/Crypto";
+import ShadowPerformance from "@/pages/ShadowPerformance";
 import AffiliateLanding from "@/pages/AffiliateLanding";
 
 function App() {
@@ -51,6 +52,7 @@ function App() {
                         <Route path="/bot-config" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
                         <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
                         <Route path="/crypto" element={<ProtectedRoute><Crypto /></ProtectedRoute>} />
+                        <Route path="/shadow-performance" element={<ProtectedRoute><ShadowPerformance /></ProtectedRoute>} />
                         <Route path="/trades" element={<ProtectedRoute><Trades /></ProtectedRoute>} />
                         <Route path="/safety-blocks" element={<ProtectedRoute><SafetyBlocks /></ProtectedRoute>} />
                         <Route path="/symbols" element={<ProtectedRoute><Symbols /></ProtectedRoute>} />

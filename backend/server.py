@@ -47,6 +47,8 @@ from routes.portfolio_routes import router as portfolio_router
 from routes.execution_intel_routes import router as execution_intel_router
 from routes.research_routes import router as research_router
 from routes.crypto_routes import router as crypto_router
+from routes.data_freshness_routes import router as data_freshness_router
+from routes.shadow_routes import router as shadow_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -111,6 +113,8 @@ api_router.include_router(portfolio_router)
 api_router.include_router(execution_intel_router)
 api_router.include_router(research_router)
 api_router.include_router(crypto_router)
+api_router.include_router(data_freshness_router)
+api_router.include_router(shadow_router)
 
 
 # ---------- WebSocket ----------

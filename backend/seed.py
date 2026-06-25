@@ -80,6 +80,21 @@ async def ensure_indexes():
     )
     await db.broker_deals.create_index([("user_id", 1), ("received_at", -1)])
 
+    # --- iter-39: 90-day TTL on agent_activity ---
+    # agent_activity grows ~1 row/tick/user. With 1000+ users this is ~525k
+    # rows/year. Cap retention at 90d so the DB stays small. expireAfterSeconds
+    # is set on the `started_at` index — Mongo's TTL monitor sweeps every 60s.
+    # NB: Only applied to collections whose timestamp field is a real BSON
+    # Date (not ISO string). Signals/safety_blocks store ISO strings so TTL
+    # would silently no-op on them — they'd need a model migration first.
+    try:
+        await db.agent_activity.create_index(
+            "started_at", expireAfterSeconds=90 * 24 * 3600,
+            name="agent_activity_ttl_90d",
+        )
+    except Exception:
+        pass  # index may already exist with different settings
+
     # --- Mongo Time-Series collections (TimescaleDB substitute) ---
     # Built-in since Mongo 5.0 — auto-bucketed, columnar storage, blazing fast
     # for time-windowed queries. Same RAM footprint as a regular insert.

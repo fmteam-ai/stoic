@@ -156,6 +156,13 @@ class BotConfigUpdate(BaseModel):
     # Per-account lot-size cap. 0 = uncapped (use signal's computed lot size).
     # Hard ceiling — even if AI computes a larger lot, this clamps it.
     max_lot_size: float = 0.0
+    # iter-39 — Paper Shadow Mode: when active=False but paper_shadow_mode=True,
+    # the bot_runner still generates signals (origin="shadow") but never executes.
+    # Lets users A/B-test their config for weeks without risking capital.
+    paper_shadow_mode: bool = False
+    # iter-39 — Per-account crypto risk cap override (% of equity per trade).
+    # Overrides the global env CRYPTO_MAX_RISK_PCT_PER_TRADE. None → fall back to env.
+    crypto_risk_pct_per_trade: Optional[float] = None
 
 
 class BotConfigOut(BotConfigUpdate):

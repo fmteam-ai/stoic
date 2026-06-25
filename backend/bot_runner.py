@@ -211,6 +211,13 @@ async def _process_user_account_locked(db, cfg: dict):
 
     risk_level = cfg.get("risk_level", "medium")
     auto_exec = bool(cfg.get("auto_execute", True))
+    # Paper-shadow mode (iter-39): when the cfg is in shadow mode but not
+    # fully active, run the entire signal pipeline but FORCE auto_execute
+    # off. Signals get tagged origin='shadow' so the UI can filter them
+    # out of "real" performance reports.
+    shadow_only = bool(cfg.get("paper_shadow_mode")) and not bool(cfg.get("active"))
+    if shadow_only:
+        auto_exec = False
     max_concurrent = int(cfg.get("max_concurrent_trades", 3))
     max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
@@ -354,7 +361,7 @@ async def _process_user_account_locked(db, cfg: dict):
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
         signal["consumed"] = False
         signal["created_at"] = datetime.now(timezone.utc).isoformat()
-        signal["origin"] = "auto"
+        signal["origin"] = "shadow" if shadow_only else "auto"
         result = await db.signals.insert_one(signal)
         signal_id = str(result.inserted_id)
         broadcast_payload = {**signal, "id": signal_id}
@@ -496,7 +503,12 @@ async def loop():
     while True:
         try:
             db = get_db()
-            cursor = db.bot_configs.find({"active": True})
+            # Pick up both fully-active bots AND paper-shadow bots (the latter
+            # run the full signal pipeline but never execute — they log "what
+            # would have happened" so users can A/B test their config safely.
+            cursor = db.bot_configs.find({
+                "$or": [{"active": True}, {"paper_shadow_mode": True}],
+            })
             configs = await cursor.to_list(length=200)
             if configs:
                 await asyncio.gather(*[_process_user(db, c) for c in configs],

@@ -8,6 +8,7 @@ import { IntegrityWidget } from "@/components/IntegrityWidget";
 import { PerAccountComparison } from "@/components/PerAccountComparison";
 import { EaVersionStrip } from "@/components/EaVersionStrip";
 import { BotHealthScore } from "@/components/BotHealthScore";
+import DataFreshnessStrip from "@/components/DataFreshnessStrip";
 import { MacroClimate } from "@/components/MacroClimate";
 import { DiagnosticModal } from "@/components/DiagnosticModal";
 import { useAuth } from "@/context/AuthContext";
@@ -530,6 +531,9 @@ export default function Dashboard() {
 
                 {/* EA Version Strip — surfaces stale builds across terminals */}
                 <EaVersionStrip refreshSignal={lastEvent?.ts} />
+
+                {/* iter-39 — Data Freshness: surfaces stale FRED/news/EA/etc. */}
+                <DataFreshnessStrip />
 
                 {/* Bot Status Strip */}
                 {botStatus && <BotStatusStrip status={botStatus} />}
