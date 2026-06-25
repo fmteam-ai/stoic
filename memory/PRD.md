@@ -8,6 +8,14 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-25 (iter-30) — **AI Strategy Generator · full Generate → Code → Backtest → Optimize → Deploy pipeline**:
+  - **Stage 2 · WRITE CODE** (`strategy_code_generator.py` + `POST /api/nl/strategy/code`): Claude expands the compiled JSON preset into a closed-vocab DSL (5 allowed fields × 5 allowed ops × 4 allowed exit kinds) + a Python-flavoured pseudocode block. Strict validator clamps param ranges (no LLM hallucination wrecks the bot). Returns DSL with `entry_rules`, `exit_rules`, `params`, `pseudocode`. The bot interprets the tree — nothing `eval()`s.
+  - **Stage 4 · OPTIMIZE** (`strategy_optimizer.py` + `POST /api/nl/strategy/optimize`): grid-search across 36 variants (session × symbol subset × lookback) each backtested against the user's own trade history. Composite score = `win_rate × log(1+n) + 0.001×pnl`. ≥5-trade qualification floor rejects lucky 2-trade winners. Returns baseline vs best + top-10 ranked variants + delta % + transparency notes about what's NOT optimized (indicator thresholds).
+  - **Frontend pipeline overhaul** (`pages/Strategies.jsx`): 5-button workflow — WRITE CODE (purple) → BACKTEST (green) → OPTIMIZE (cyan) → SAVE → DEPLOY (orange). Each stage gets its own panel: STAGE 1 compiled JSON, STAGE 2 code (pseudocode + DSL rules), STAGE 3 backtest stats, STAGE 4 optimizer baseline-vs-best with rank table + "APPLY BEST VARIANT" button to merge the optimized filters back into the compiled strategy before DEPLOY.
+  - **Library schema** (`db.strategies`): now also persists `dsl` + `optimization` payloads so users can LOAD a saved strategy and see its full pipeline state restored.
+  - **Tests**: 10 new tests in `test_iter30_strategy_pipeline.py` (DSL validator pos/neg cases, code-gen with mocked LLM, optimizer baseline/improvement/lucky-sample disqualification). **69/69 across iter-17/27/29/30 + safety_guardian regression suite green.**
+  - **End-to-end verified live**: `/api/nl/strategy/optimize` returns 36 tested variants + selected best filter set + transparency notes.
+
 - 2026-06-25 (iter-29) — **7-agent pipeline + standalone AI Strategy Generator page**:
   - **3 new specialised analysers** (run in parallel before Strategy):
     - `TechnicalAnalysisAgent` (`agents/technical_agent.py`): trend (MA20 vs MA200), RSI extremes, ATR%, regime — pure deterministic from cached indicators

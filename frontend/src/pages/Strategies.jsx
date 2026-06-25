@@ -4,7 +4,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { toast } from "sonner";
 import {
     Sparkles, BarChart3, TrendingUp, TrendingDown, Save,
-    Trash2, Library, Send, Bot, Clock,
+    Trash2, Library, Send, Bot, Clock, Code2, Wand2, Trophy, Rocket,
 } from "lucide-react";
 
 const EXAMPLES = [
@@ -24,6 +24,12 @@ export default function Strategies() {
     const [backtestLoading, setBacktestLoading] = useState(false);
     const [backtest, setBacktest] = useState(null);
 
+    // Stage 2: code + optimize
+    const [codeLoading, setCodeLoading] = useState(false);
+    const [dsl, setDsl] = useState(null);
+    const [optLoading, setOptLoading] = useState(false);
+    const [optResult, setOptResult] = useState(null);
+
     const [library, setLibrary] = useState([]);
     const [libLoading, setLibLoading] = useState(true);
 
@@ -42,7 +48,8 @@ export default function Strategies() {
 
     const compile = async () => {
         if (!prompt.trim()) return;
-        setErr(""); setCompiling(true); setBacktest(null);
+        setErr(""); setCompiling(true);
+        setBacktest(null); setDsl(null); setOptResult(null);
         try {
             const { data } = await api.post("/nl/strategy", { prompt });
             if (data.compiled?.clarification_needed) {
@@ -59,6 +66,20 @@ export default function Strategies() {
         } finally { setCompiling(false); }
     };
 
+    const writeCode = async () => {
+        if (!compiled) return;
+        setCodeLoading(true); setOptResult(null);
+        try {
+            const { data } = await api.post("/nl/strategy/code", { compiled });
+            setDsl(data.dsl);
+            toast.success("Code generated");
+        } catch (e) {
+            toast.error("Code generation failed", { description: formatApiError(e) });
+        } finally {
+            setCodeLoading(false);
+        }
+    };
+
     const runBacktest = async () => {
         if (!compiled) return;
         setBacktestLoading(true);
@@ -72,6 +93,39 @@ export default function Strategies() {
         } finally {
             setBacktestLoading(false);
         }
+    };
+
+    const optimize = async () => {
+        const target = dsl || compiled;
+        if (!target?.symbols) {
+            toast.error("Need a compiled strategy with symbols first");
+            return;
+        }
+        setOptLoading(true);
+        try {
+            const { data } = await api.post("/nl/strategy/optimize", { dsl: target });
+            setOptResult(data);
+            toast.success(
+                data.improvement_pct > 0
+                    ? `Optimizer found +${data.improvement_pct}% improvement`
+                    : "Baseline already optimal across tested grid"
+            );
+        } catch (e) {
+            toast.error("Optimize failed", { description: formatApiError(e) });
+        } finally {
+            setOptLoading(false);
+        }
+    };
+
+    const applyOptimized = () => {
+        if (!optResult?.best?.filters) return;
+        const merged = {
+            ...(compiled || {}),
+            symbols: optResult.best.filters.symbols,
+            session_preference: optResult.best.filters.session_preference,
+        };
+        setCompiled(merged);
+        toast.success("Optimized filters merged into compiled strategy");
     };
 
     const applyToBot = async () => {
@@ -92,6 +146,7 @@ export default function Strategies() {
         try {
             await api.post("/strategies", {
                 name: name.trim(), prompt, compiled, backtest,
+                dsl, optimization: optResult,
             });
             toast.success("Saved to library");
             setName("");
@@ -115,6 +170,8 @@ export default function Strategies() {
         setPrompt(s.prompt || "");
         setCompiled(s.compiled || null);
         setBacktest(s.backtest || null);
+        setDsl(s.dsl || null);
+        setOptResult(s.optimization || null);
         setName(s.name || "");
         window.scrollTo({ top: 0, behavior: "smooth" });
     };
@@ -173,14 +230,14 @@ export default function Strategies() {
                     </div>
                 </div>
 
-                {/* Compiled preview */}
+                {/* Compiled preview + 5-stage pipeline */}
                 {compiled && (
                     <div className="border border-[#FFB000]/30 bg-[#FFB000]/5 p-4 space-y-3"
                          data-testid="strategy-compiled-panel">
                         <div className="flex items-center gap-2">
                             <Bot className="w-4 h-4 text-[#FFB000]" />
                             <span className="font-mono text-[10px] text-[#FFB000] tracking-widest">
-                                COMPILED STRATEGY
+                                STAGE 1 · COMPILED STRATEGY
                             </span>
                         </div>
                         {compiled.notes && (
@@ -188,10 +245,12 @@ export default function Strategies() {
                                 {compiled.notes}
                             </div>
                         )}
-                        <pre className="font-mono text-[10px] text-[#A1A1AA] whitespace-pre-wrap bg-[#050505] border border-[#1F1F1F] p-3"
+                        <pre className="font-mono text-[10px] text-[#A1A1AA] whitespace-pre-wrap bg-[#050505] border border-[#1F1F1F] p-3 max-h-48 overflow-y-auto"
                              data-testid="strategy-compiled-json">
                             {JSON.stringify(compiled, null, 2)}
                         </pre>
+
+                        {/* Pipeline buttons — Code → Backtest → Optimize → Apply */}
                         <div className="flex gap-2 flex-wrap items-center">
                             <input
                                 value={name}
@@ -201,12 +260,26 @@ export default function Strategies() {
                                 maxLength={80}
                                 className="flex-1 min-w-[200px] bg-[#050505] border border-[#1F1F1F] focus:border-[#FFB000] px-3 py-2 text-xs font-mono outline-none"
                             />
+                            <button onClick={writeCode}
+                                disabled={codeLoading}
+                                data-testid="strategy-code-button"
+                                className="px-3 py-2 text-xs font-mono tracking-widest border border-[#A855F7]/50 text-[#A855F7] hover:bg-[#A855F7]/10 disabled:opacity-40 flex items-center gap-1.5">
+                                <Code2 className="w-3.5 h-3.5" />
+                                {codeLoading ? "WRITING…" : "WRITE CODE"}
+                            </button>
                             <button onClick={runBacktest}
                                 disabled={backtestLoading}
                                 data-testid="strategy-backtest-button"
                                 className="px-3 py-2 text-xs font-mono tracking-widest border border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/10 disabled:opacity-40 flex items-center gap-1.5">
                                 <BarChart3 className="w-3.5 h-3.5" />
                                 {backtestLoading ? "BACKTESTING…" : "BACKTEST 30d"}
+                            </button>
+                            <button onClick={optimize}
+                                disabled={optLoading}
+                                data-testid="strategy-optimize-button"
+                                className="px-3 py-2 text-xs font-mono tracking-widest border border-[#06B6D4]/50 text-[#06B6D4] hover:bg-[#06B6D4]/10 disabled:opacity-40 flex items-center gap-1.5">
+                                <Wand2 className="w-3.5 h-3.5" />
+                                {optLoading ? "OPTIMIZING…" : "OPTIMIZE"}
                             </button>
                             <button onClick={saveStrategy}
                                 data-testid="strategy-save-button"
@@ -216,15 +289,25 @@ export default function Strategies() {
                             <button onClick={applyToBot}
                                 data-testid="strategy-apply-button"
                                 className="px-3 py-2 text-xs font-mono tracking-widest bg-[#FFB000] text-black hover:bg-[#E59E00] flex items-center gap-1.5">
-                                APPLY TO BOT
+                                <Rocket className="w-3.5 h-3.5" /> DEPLOY
                             </button>
                         </div>
                     </div>
                 )}
 
-                {/* Backtest results */}
+                {/* Stage 2: Generated code/DSL */}
+                {dsl && (
+                    <CodePanel dsl={dsl} />
+                )}
+
+                {/* Stage 3: Backtest results */}
                 {backtest && (
                     <BacktestPanel backtest={backtest} />
+                )}
+
+                {/* Stage 4: Optimization results */}
+                {optResult && (
+                    <OptimizePanel result={optResult} onApply={applyOptimized} />
                 )}
 
                 {/* Library */}
@@ -299,7 +382,7 @@ function BacktestPanel({ backtest }) {
             <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="font-mono text-[10px] text-[#00FF41] tracking-widest flex items-center gap-1.5">
                     <BarChart3 className="w-3.5 h-3.5" />
-                    BACKTEST · LAST {backtest.lookback_days}d
+                    STAGE 3 · BACKTEST · LAST {backtest.lookback_days}d
                 </div>
                 <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
                     {backtest.matched_trades}/{backtest.total_trades} TRADES MATCHED
@@ -375,6 +458,203 @@ function Metric({ label, value, color = "#E4E4E7", sub, icon: Icon, small }) {
                 {value}
             </div>
             {sub && <div className="text-[10px] text-[#52525B] font-mono mt-0.5">{sub}</div>}
+        </div>
+    );
+}
+
+function CodePanel({ dsl }) {
+    return (
+        <div className="border border-[#A855F7]/30 bg-[#A855F7]/5 p-4 space-y-3"
+             data-testid="strategy-code-panel">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                    <Code2 className="w-4 h-4 text-[#A855F7]" />
+                    <span className="font-mono text-[10px] text-[#A855F7] tracking-widest">
+                        STAGE 2 · GENERATED CODE
+                    </span>
+                </div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                    DSL v{dsl.version} · {dsl.entry_rules?.length || 0} entry · {dsl.exit_rules?.length || 0} exit
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {/* Pseudocode block */}
+                <div data-testid="strategy-pseudocode">
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">
+                        PSEUDOCODE
+                    </div>
+                    <pre className="font-mono text-[11px] text-[#E4E4E7] bg-[#050505] border border-[#1F1F1F] p-3 leading-snug whitespace-pre-wrap max-h-72 overflow-y-auto">
+                        {dsl.pseudocode}
+                    </pre>
+                </div>
+
+                {/* DSL rules */}
+                <div data-testid="strategy-dsl-rules">
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">
+                        EXECUTABLE DSL
+                    </div>
+                    <div className="bg-[#050505] border border-[#1F1F1F] p-3 max-h-72 overflow-y-auto space-y-2">
+                        <div>
+                            <div className="font-mono text-[9px] text-[#A855F7] tracking-widest mb-1">PARAMS</div>
+                            {Object.entries(dsl.params || {}).map(([k, v]) => (
+                                <div key={k} className="font-mono text-[10px] flex justify-between">
+                                    <span className="text-[#A1A1AA]">{k}</span>
+                                    <span className="text-[#E4E4E7]">{String(v)}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div>
+                            <div className="font-mono text-[9px] text-[#00FF41] tracking-widest mb-1">ENTRY RULES</div>
+                            {(dsl.entry_rules || []).map((r, i) => (
+                                <div key={`e${i}`} className="font-mono text-[10px] text-[#A1A1AA] leading-snug">
+                                    <span className="text-[#00FF41]">{r.side}</span> when{" "}
+                                    <span className="text-[#FFB000]">{r.field}</span>{" "}
+                                    <span className="text-white">{r.op}</span>{" "}
+                                    <span className="text-[#06B6D4]">{r.value_ref || JSON.stringify(r.value)}</span>
+                                    {r.description && <div className="text-[#52525B] text-[9px]">{r.description}</div>}
+                                </div>
+                            ))}
+                        </div>
+                        <div>
+                            <div className="font-mono text-[9px] text-[#FF3B30] tracking-widest mb-1">EXIT RULES</div>
+                            {(dsl.exit_rules || []).map((r, i) => (
+                                <div key={`x${i}`} className="font-mono text-[10px] flex justify-between">
+                                    <span className="text-[#A1A1AA]">{r.kind}</span>
+                                    <span className="text-[#E4E4E7]">{r.value}%</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function OptimizePanel({ result, onApply }) {
+    const better = result.improvement_pct > 0
+        && JSON.stringify(result.best.filters) !== JSON.stringify(result.baseline.filters);
+    return (
+        <div className="border border-[#06B6D4]/30 bg-[#06B6D4]/5 p-4 space-y-3"
+             data-testid="strategy-optimize-panel">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                    <Wand2 className="w-4 h-4 text-[#06B6D4]" />
+                    <span className="font-mono text-[10px] text-[#06B6D4] tracking-widest">
+                        STAGE 4 · OPTIMIZER
+                    </span>
+                </div>
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                    {result.tested_variants} VARIANTS TESTED
+                </div>
+            </div>
+
+            {/* Baseline vs Best */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="border border-[#1F1F1F] p-3" data-testid="opt-baseline">
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-2">BASELINE</div>
+                    <VariantStats v={result.baseline} />
+                </div>
+                <div className={`border p-3 ${better ? "border-[#00FF41]/40 bg-[#00FF41]/5" : "border-[#1F1F1F]"}`}
+                     data-testid="opt-best">
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="font-mono text-[9px] text-[#06B6D4] tracking-widest flex items-center gap-1">
+                            <Trophy className="w-3 h-3" /> BEST VARIANT
+                        </div>
+                        {result.improvement_pct !== 0 && (
+                            <div className={`font-mono text-[10px] tracking-widest ${
+                                result.improvement_pct > 0 ? "text-[#00FF41]" : "text-[#FF3B30]"
+                            }`}>
+                                {result.improvement_pct > 0 ? "+" : ""}{result.improvement_pct}%
+                            </div>
+                        )}
+                    </div>
+                    <VariantStats v={result.best} />
+                    {better && (
+                        <button onClick={onApply}
+                            data-testid="opt-apply-best"
+                            className="mt-3 w-full px-3 py-1.5 text-[10px] font-mono tracking-widest bg-[#06B6D4] hover:bg-[#0891B2] text-black flex items-center justify-center gap-1.5">
+                            <Rocket className="w-3 h-3" /> APPLY BEST VARIANT
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Top variants table */}
+            {result.variants?.length > 0 && (
+                <div data-testid="opt-variants-list" className="border-t border-[#06B6D4]/20 pt-3">
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-2">
+                        TOP {result.variants.length} VARIANTS (RANKED BY COMPOSITE SCORE)
+                    </div>
+                    <div className="space-y-1 max-h-64 overflow-y-auto">
+                        {result.variants.map((v, i) => (
+                            <div key={`v${i}`} className="font-mono text-[10px] flex items-center gap-2 text-[#A1A1AA]">
+                                <span className="text-[#52525B] w-5">#{i + 1}</span>
+                                <span className="text-[#06B6D4] w-20 truncate">{(v.filters.symbols || []).join(",")}</span>
+                                <span className="w-14 text-[#FFB000]">{v.filters.session_preference?.toUpperCase()}</span>
+                                <span className="w-10 text-[#A1A1AA]">{v.filters.lookback_days}d</span>
+                                <span className="w-16">
+                                    {v.win_rate != null ? `${(v.win_rate * 100).toFixed(0)}% W` : "—"}
+                                </span>
+                                <span className="w-12 text-[#52525B]">n={v.matched_trades}</span>
+                                <span className="flex-1 text-right" style={{ color: (v.total_pnl_usd || 0) >= 0 ? "#00FF41" : "#FF3B30" }}>
+                                    ${(v.total_pnl_usd || 0).toFixed(2)}
+                                </span>
+                                <span className="w-16 text-right text-[#06B6D4]">{(v.score || 0).toFixed(3)}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Transparency notes */}
+            {result.notes?.length > 0 && (
+                <div className="border-t border-[#06B6D4]/20 pt-3 space-y-1" data-testid="opt-notes">
+                    {result.notes.map((n) => (
+                        <div key={n} className="text-[10px] text-[#A1A1AA] font-mono leading-snug">· {n}</div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function VariantStats({ v }) {
+    return (
+        <div className="space-y-1 font-mono text-[11px]">
+            <div className="flex justify-between text-[#A1A1AA]">
+                <span>Symbols</span>
+                <span className="text-[#FFB000]">{(v.filters?.symbols || []).join(", ")}</span>
+            </div>
+            <div className="flex justify-between text-[#A1A1AA]">
+                <span>Session</span>
+                <span className="text-[#E4E4E7]">{v.filters?.session_preference?.toUpperCase()}</span>
+            </div>
+            <div className="flex justify-between text-[#A1A1AA]">
+                <span>Lookback</span>
+                <span className="text-[#E4E4E7]">{v.filters?.lookback_days || 30}d</span>
+            </div>
+            <div className="flex justify-between text-[#A1A1AA] pt-1 border-t border-[#1F1F1F]">
+                <span>Win rate</span>
+                <span style={{ color: (v.win_rate || 0) >= 0.5 ? "#00FF41" : "#FFB000" }}>
+                    {v.win_rate != null ? `${(v.win_rate * 100).toFixed(1)}%` : "—"}
+                </span>
+            </div>
+            <div className="flex justify-between text-[#A1A1AA]">
+                <span>Total P&amp;L</span>
+                <span style={{ color: (v.total_pnl_usd || 0) >= 0 ? "#00FF41" : "#FF3B30" }}>
+                    ${(v.total_pnl_usd || 0).toFixed(2)}
+                </span>
+            </div>
+            <div className="flex justify-between text-[#A1A1AA]">
+                <span>Sample</span>
+                <span className="text-[#E4E4E7]">{v.matched_trades || 0} trades</span>
+            </div>
+            <div className="flex justify-between text-[#A1A1AA]">
+                <span>Score</span>
+                <span className="text-[#06B6D4]">{(v.score || 0).toFixed(3)}</span>
+            </div>
         </div>
     );
 }

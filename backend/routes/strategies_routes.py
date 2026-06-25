@@ -32,7 +32,9 @@ def _serialise(doc: dict) -> dict:
         "name": doc.get("name"),
         "prompt": doc.get("prompt"),
         "compiled": doc.get("compiled") or {},
+        "dsl": doc.get("dsl"),
         "backtest": doc.get("backtest"),
+        "optimization": doc.get("optimization"),
         "created_at": doc.get("created_at"),
         "updated_at": doc.get("updated_at"),
     }
@@ -63,7 +65,9 @@ async def save_strategy(payload: dict, user=Depends(get_current_user)):
         "name": name,
         "prompt": (payload.get("prompt") or "")[:2000],
         "compiled": compiled,
+        "dsl": payload.get("dsl"),
         "backtest": payload.get("backtest"),
+        "optimization": payload.get("optimization"),
         "created_at": now,
         "updated_at": now,
     }

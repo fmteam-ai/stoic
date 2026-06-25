@@ -16,6 +16,8 @@ from database import get_db
 from ws_manager import manager as ws_manager
 from nl_commander import build_strategy, interpret_command
 from strategy_backtest import run_backtest
+from strategy_code_generator import generate_code
+from strategy_optimizer import optimize as optimize_strategy
 from route_utils import parse_object_id
 
 router = APIRouter(prefix="/nl", tags=["nl-commander"])
@@ -39,6 +41,45 @@ async def nl_strategy(payload: dict, user=Depends(get_current_user)):
         raise HTTPException(status_code=502, detail=result["error"])
 
     return {"compiled": result, "prompt": prompt}
+
+
+@router.post("/strategy/code")
+async def nl_strategy_code(payload: dict, user=Depends(get_current_user)):  # noqa: ARG001
+    """Expand a compiled NL strategy into a DSL + pseudocode block.
+
+    Body: {"compiled": {...}}
+    Returns the DSL (closed-vocab JSON) + a Python-flavoured pseudocode block.
+    Refuses on empty/clarification-only compiles.
+    """
+    compiled = payload.get("compiled") or {}
+    if not compiled or compiled.get("clarification_needed"):
+        raise HTTPException(status_code=400, detail="No usable compiled strategy")
+    try:
+        dsl = await generate_code(compiled)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Code generation failed: {e}")
+    if dsl.get("error"):
+        raise HTTPException(status_code=502, detail=dsl["error"])
+    return {"dsl": dsl}
+
+
+@router.post("/strategy/optimize")
+async def nl_strategy_optimize(payload: dict, user=Depends(get_current_user)):
+    """Grid-search filter variants of a DSL and return the best by score.
+
+    Body: {"dsl": {...}}    # DSL produced by /strategy/code (or compiled with symbols)
+    Returns baseline + best variant + tested variants + transparency notes.
+    """
+    dsl = payload.get("dsl") or payload.get("compiled") or {}
+    if not dsl:
+        raise HTTPException(status_code=400, detail="dsl (or compiled) required")
+    if not dsl.get("symbols"):
+        raise HTTPException(status_code=400, detail="dsl.symbols required")
+    try:
+        result = await optimize_strategy(dsl=dsl, user_id=user["id"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Optimization failed: {e}")
+    return result
 
 
 @router.post("/strategy/backtest")
