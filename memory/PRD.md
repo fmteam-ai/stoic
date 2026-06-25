@@ -220,6 +220,13 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### Global InvalidId exception handler (iter25 — belt-and-suspenders)
+Registered `bson.errors.InvalidId` exception handler on the FastAPI app in `server.py`. Any future route that forgets to use `route_utils.parse_object_id` and calls raw `ObjectId(user_input)` now returns a clean **404 `{detail: "Resource not found"}`** instead of a 500. Prevents the entire iter22 P2.2 class of bug from re-emerging when new routes are added.
+
+**Testing:**
+- ✅ 3/3 iter25 unit tests pass (handler registered, unprotected route returns 404, valid OID still passes)
+- ✅ 47/47 full regression (iter22 + iter24 + iter25 + safety_guardian + max_concurrent + iter26) all green
+
 ### ObjectId hardening carry-over (iter24)
 Completed the carry-over from iter22 — migrated remaining raw `ObjectId()` calls to `parse_object_id` across the 4 flagged route modules. Malformed ObjectIds on any user-supplied path/query param now return a clean **404** across the entire codebase instead of a 500.
 

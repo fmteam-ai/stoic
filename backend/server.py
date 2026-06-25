@@ -143,6 +143,20 @@ async def ws_endpoint(websocket: WebSocket):
 app.include_router(api_router)
 
 
+# Belt-and-suspenders: any route that forgets to use route_utils.parse_object_id
+# and crashes on a malformed Mongo ObjectId now returns a clean 404 instead of
+# a 500. Prevents the same class of bug (iter22 P2.2) from re-emerging when
+# new routes are added.
+from bson.errors import InvalidId
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+
+@app.exception_handler(InvalidId)
+async def _invalid_id_handler(_request: Request, _exc: InvalidId):
+    return JSONResponse(status_code=404, content={"detail": "Resource not found"})
+
+
 # CORS — credentialed cookies must NEVER be paired with a wildcard origin.
 # Either: explicit allowlist with credentials, OR wildcard WITHOUT credentials.
 # If CORS_ORIGINS is unset/wildcard, we strip credentials so a malicious site
