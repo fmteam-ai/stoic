@@ -42,6 +42,7 @@ from routes.integrity_routes import router as integrity_router
 from routes.diagnostic_routes import router as diagnostic_router
 from routes.safety_blocks_routes import router as safety_blocks_router
 from routes.macro_routes import router as macro_router
+from routes.strategies_routes import router as strategies_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -101,6 +102,7 @@ api_router.include_router(integrity_router)
 api_router.include_router(diagnostic_router)
 api_router.include_router(safety_blocks_router)
 api_router.include_router(macro_router)
+api_router.include_router(strategies_router)
 
 
 # ---------- WebSocket ----------

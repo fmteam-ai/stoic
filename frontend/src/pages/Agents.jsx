@@ -1,20 +1,36 @@
 import { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     Brain, Search, ShieldCheck, Send, Activity, RefreshCw,
     CheckCircle2, XCircle, AlertTriangle, Clock, Cpu,
+    LineChart, Globe, Newspaper, Scale, Zap, Sparkles, ArrowRight,
 } from "lucide-react";
 
 const AGENT_META = {
-    research: { icon: Search, label: "Research", color: "#00FF41",
-                blurb: "Pulls news sentiment, COT, TIPS, DXY and FRED macro data." },
-    strategy: { icon: Brain, label: "Strategy", color: "#FFD700",
-                blurb: "Claude Sonnet 4.5 + Logistic Regression → candidate signal." },
-    risk:     { icon: ShieldCheck, label: "Risk", color: "#FF3B30",
-                blurb: "Portfolio-level checks: cross-asset correlation, exposure caps." },
-    execution: { icon: Send, label: "Execution", color: "#A855F7",
-                 blurb: "Routes approved orders to the MT5 bridge / paper engine." },
+    // 3 specialised analysers — run in parallel before Strategy
+    technical:       { icon: LineChart,  label: "Technical",          color: "#00FF41",
+                       blurb: "Trend, RSI extremes, ATR%, regime classification from cached candles." },
+    macro:           { icon: Globe,      label: "Macro",              color: "#FFD700",
+                       blurb: "FRED snapshot + real-yield + DXY + COT + macro-regime gate for XAUUSD." },
+    news_sentiment:  { icon: Newspaper,  label: "News Sentiment",     color: "#A855F7",
+                       blurb: "NewsAPI score + upcoming-events summary, distilled to one directional bias." },
+    // Core decision agents
+    strategy:        { icon: Brain,      label: "Strategy",           color: "#FFB000",
+                       blurb: "Claude Sonnet 4.5 + Logistic Regression → candidate signal with 10-layer veto." },
+    risk:            { icon: ShieldCheck, label: "Risk",              color: "#FF3B30",
+                       blurb: "Portfolio cross-asset correlation veto + Safety Guardian hard floors." },
+    // 2 post-decision shapers — adjust lot / timing
+    portfolio_allocator: { icon: Scale,  label: "Portfolio Allocator", color: "#06B6D4",
+                       blurb: "Blended volatility-parity × Kelly trim of the proposed lot size." },
+    execution_optimizer: { icon: Zap,    label: "Execution Optimizer", color: "#F97316",
+                       blurb: "Spread guard, off-hours session defer, lot-slice planner." },
+    // Legacy — kept for back-compat with old activity rows
+    research:        { icon: Search,     label: "Research (legacy)",  color: "#52525B",
+                       blurb: "Pre-v28 combined analyser. Replaced by Technical + Macro + News Sentiment." },
+    execution:       { icon: Send,       label: "Broker Execution",   color: "#A1A1AA",
+                       blurb: "Routes the approved + sized order to MT5 bridge or paper engine." },
 };
 
 const STATUS_PALETTE = {
@@ -73,7 +89,7 @@ export default function Agents() {
         <AppLayout>
             <PageHeader
                 title="Agent Pipeline"
-                subtitle="Multi-agent architecture · Research → Strategy → Risk → Execution"
+                subtitle="7 specialised agents · Technical + Macro + News → Strategy → Risk → Allocator → Execution Optimizer"
                 testid="agents-header"
                 action={
                     <button onClick={load} data-testid="agents-refresh"
@@ -85,6 +101,7 @@ export default function Agents() {
             <div className="p-4 md:p-8 space-y-6 max-w-6xl">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="agents-error">{err}</div>}
 
+                <StrategyGeneratorCta />
                 <AgentRoster />
                 <MacroSnapshot macro={macro} />
                 <ActivityFeed loading={loading} activity={activity} />
@@ -93,18 +110,52 @@ export default function Agents() {
     );
 }
 
+function StrategyGeneratorCta() {
+    return (
+        <Link
+            to="/strategies"
+            data-testid="strategy-generator-cta"
+            className="block border border-[#FFB000]/40 bg-gradient-to-r from-[#FFB000]/10 to-[#A855F7]/10 hover:border-[#FFB000] transition-colors"
+        >
+            <div className="px-5 py-4 flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3">
+                    <Sparkles className="w-5 h-5 text-[#FFB000]" />
+                    <div>
+                        <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-0.5">
+                            AI STRATEGY GENERATOR
+                        </div>
+                        <div className="font-display font-bold text-base tracking-tight">
+                            Describe a strategy in plain English — STOIC compiles + backtests it
+                        </div>
+                        <div className="text-xs text-[#A1A1AA] mt-1">
+                            Try: <span className="text-[#FFB000]">&quot;Conservative gold scalping during London session, max 2 trades&quot;</span>
+                        </div>
+                    </div>
+                </div>
+                <div className="font-mono text-xs text-[#FFB000] tracking-widest inline-flex items-center gap-1.5">
+                    OPEN GENERATOR <ArrowRight className="w-3.5 h-3.5" />
+                </div>
+            </div>
+        </Link>
+    );
+}
+
 function AgentRoster() {
+    // Show only the active 7-agent pipeline (hide legacy + broker_execution).
+    const active = Object.entries(AGENT_META).filter(
+        ([k]) => !["research", "execution"].includes(k)
+    );
     return (
         <section className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="agent-roster">
             <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
                 <Cpu className="w-4 h-4 text-[#00FF41]" />
                 <div>
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest">ARCHITECTURE</div>
-                    <div className="font-display font-bold text-lg tracking-tight">The four agents</div>
+                    <div className="font-display font-bold text-lg tracking-tight">The seven agents</div>
                 </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-[#1F1F1F]">
-                {Object.entries(AGENT_META).map(([key, meta]) => {
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-[#1F1F1F]">
+                {active.map(([key, meta]) => {
                     const Icon = meta.icon;
                     return (
                         <div key={key} className="p-5" data-testid={`agent-card-${key}`}>

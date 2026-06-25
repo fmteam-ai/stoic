@@ -25,6 +25,7 @@ import FAQ from "@/pages/FAQ";
 import Guide from "@/pages/Guide";
 import SafetyBlocks from "@/pages/SafetyBlocks";
 import Agents from "@/pages/Agents";
+import Strategies from "@/pages/Strategies";
 import AffiliateLanding from "@/pages/AffiliateLanding";
 
 function App() {
@@ -60,6 +61,7 @@ function App() {
                         <Route path="/faq" element={<ProtectedRoute><FAQ /></ProtectedRoute>} />
                         <Route path="/guide" element={<ProtectedRoute><Guide /></ProtectedRoute>} />
                         <Route path="/agents" element={<ProtectedRoute><Agents /></ProtectedRoute>} />
+                        <Route path="/strategies" element={<ProtectedRoute><Strategies /></ProtectedRoute>} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>

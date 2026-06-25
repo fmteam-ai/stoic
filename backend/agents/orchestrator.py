@@ -27,8 +27,13 @@ from datetime import datetime, timezone
 
 from database import get_db
 from agents.research_agent import ResearchAgent
+from agents.technical_agent import TechnicalAnalysisAgent
+from agents.macro_agent import MacroAnalysisAgent
+from agents.news_sentiment_agent import NewsSentimentAgent
 from agents.strategy_agent import StrategyAgent
 from agents.risk_agent import RiskAgent
+from agents.portfolio_allocator_agent import PortfolioAllocatorAgent
+from agents.execution_optimizer_agent import ExecutionOptimizerAgent
 from agents.execution_agent import ExecutionAgent
 
 logger = logging.getLogger("agent.orchestrator")
@@ -36,9 +41,17 @@ logger = logging.getLogger("agent.orchestrator")
 
 class Orchestrator:
     def __init__(self):
+        # Legacy Research kept for callers (StrategyAgent prompt enrichment).
         self.research = ResearchAgent()
+        # New specialized analysers — run in parallel before Strategy.
+        self.technical = TechnicalAnalysisAgent()
+        self.macro = MacroAnalysisAgent()
+        self.news = NewsSentimentAgent()
         self.strategy = StrategyAgent()
         self.risk = RiskAgent()
+        # New post-Risk shapers — run sequentially before Execution.
+        self.allocator = PortfolioAllocatorAgent()
+        self.exec_optimizer = ExecutionOptimizerAgent()
         self.execution = ExecutionAgent()
 
     async def _log(self, doc: dict) -> None:
@@ -56,37 +69,38 @@ class Orchestrator:
         risk_level: str,
         active_positions: list[dict] | None = None,
         user_cfg: dict | None = None,
+        account: dict | None = None,
     ) -> dict:
-        """Run Research → Strategy → Risk for a single (user, symbol) tick.
+        """Run the full agent pipeline for a single (user, symbol) tick.
 
-        Returns the final post-risk signal dict plus an activity-log doc id.
-        Execution is NOT performed here — the caller (bot_runner) handles
-        spread filter, auto-tune block, account selection.
+        Pipeline (parallel where independent):
+          1. Technical + Macro + News  ─ parallel ─┐
+          2. Strategy                    ←─────────┘
+          3. Risk
+          4. PortfolioAllocator   (mutates lot_size)
+          5. ExecutionOptimizer   (may defer)
+
+        Execution itself is NOT performed here — the caller (bot_runner)
+        decides whether to fire based on the activity log.
         """
         tick_id = uuid.uuid4().hex
         started = datetime.now(timezone.utc).isoformat()
         t0 = time.monotonic()
         steps: list[dict] = []
 
-        # 1. Research
-        ra_t0 = time.monotonic()
-        try:
-            research = await self.research.gather(symbol)
-            steps.append({
-                "agent": "research", "status": "ok",
-                "summary": _summarise_research(research),
-                "took_ms": int((time.monotonic() - ra_t0) * 1000),
-            })
-        except Exception as e:
-            logger.exception("ResearchAgent failed: %s", e)
-            research = {}
-            steps.append({"agent": "research", "status": "failed", "error": str(e),
-                          "took_ms": int((time.monotonic() - ra_t0) * 1000)})
+        # 1. Parallel analysers — Technical / Macro / NewsSentiment
+        analyser_results = await self._run_analysers_parallel(symbol, steps)
+        technical = analyser_results["technical"]
+        macro = analyser_results["macro"]
+        news = analyser_results["news"]
+
+        # Compose the research payload Strategy still consumes.
+        research_payload = self._compose_research(technical, macro, news)
 
         # 2. Strategy
         st_t0 = time.monotonic()
         try:
-            signal = await self.strategy.propose(symbol, risk_level, research, user_cfg=user_cfg)
+            signal = await self.strategy.propose(symbol, risk_level, research_payload, user_cfg=user_cfg)
             steps.append({
                 "agent": "strategy", "status": "ok",
                 "summary": f"{signal.get('action')} {signal.get('confidence')}%",
@@ -124,6 +138,61 @@ class Orchestrator:
             steps.append({"agent": "risk", "status": "failed", "error": str(e),
                           "took_ms": int((time.monotonic() - rk_t0) * 1000)})
 
+        # 4. Portfolio Allocator — adjust lot_size when warranted
+        if (signal or {}).get("action") in ("BUY", "SELL"):
+            pa_t0 = time.monotonic()
+            try:
+                alloc = await self.allocator.allocate(
+                    user_id=user_id, signal=signal, technical=technical,
+                    active_positions=active_positions or [],
+                )
+                if alloc.get("applied"):
+                    signal["original_lot_size_proposed"] = alloc["original_lot"]
+                    signal["lot_size"] = alloc["adjusted_lot"]
+                    signal["portfolio_allocator"] = alloc
+                steps.append({
+                    "agent": "portfolio_allocator",
+                    "status": "ok" if alloc.get("applied") else "skipped",
+                    "summary": alloc.get("bias", "no adjustment"),
+                    "details": alloc,
+                    "took_ms": int((time.monotonic() - pa_t0) * 1000),
+                })
+            except Exception as e:
+                logger.exception("PortfolioAllocator failed: %s", e)
+                steps.append({"agent": "portfolio_allocator", "status": "failed",
+                              "error": str(e),
+                              "took_ms": int((time.monotonic() - pa_t0) * 1000)})
+
+        # 5. Execution Optimizer — may defer this tick (caller respects via `final_action`)
+        if (signal or {}).get("action") in ("BUY", "SELL"):
+            eo_t0 = time.monotonic()
+            try:
+                eo = await self.exec_optimizer.optimize(
+                    signal=signal, account=account,
+                    aggressive_mode=bool((user_cfg or {}).get("aggressive_mode")),
+                )
+                if not eo.get("approved"):
+                    signal["execution_deferred"] = True
+                    signal["execution_defer_reason"] = eo.get("deferred_reason")
+                    # Convert to HOLD so downstream callers respect the defer
+                    signal["action"] = "HOLD"
+                    signal["tradeable"] = False
+                if eo.get("slice_plan"):
+                    signal["slice_plan"] = eo["slice_plan"]
+                signal["execution_optimizer"] = eo
+                steps.append({
+                    "agent": "execution_optimizer",
+                    "status": "ok" if eo.get("approved") else "vetoed",
+                    "summary": eo.get("bias", ""),
+                    "details": eo,
+                    "took_ms": int((time.monotonic() - eo_t0) * 1000),
+                })
+            except Exception as e:
+                logger.exception("ExecutionOptimizer failed: %s", e)
+                steps.append({"agent": "execution_optimizer", "status": "failed",
+                              "error": str(e),
+                              "took_ms": int((time.monotonic() - eo_t0) * 1000)})
+
         duration_ms = int((time.monotonic() - t0) * 1000)
         await self._log({
             "user_id": user_id,
@@ -137,6 +206,63 @@ class Orchestrator:
             "final_confidence": signal.get("confidence") if signal else 0,
         })
         return {"signal": signal, "tick_id": tick_id, "activity": steps}
+
+    async def _run_analysers_parallel(self, symbol: str, steps: list) -> dict:
+        """Run TechnicalAnalysis + MacroAnalysis + NewsSentiment concurrently.
+
+        Each emits its own activity-log entry. Failures degrade gracefully —
+        a missing analyser returns {} so Strategy can still compose its prompt.
+        """
+        async def _run(agent, key):
+            t0 = time.monotonic()
+            try:
+                result = await agent.analyze(symbol)
+                steps.append({
+                    "agent": agent.name, "status": "ok",
+                    "summary": result.get("bias", "ok"),
+                    "took_ms": int((time.monotonic() - t0) * 1000),
+                })
+                return key, result
+            except Exception as e:  # noqa: BLE001
+                logger.exception("%s analyser failed: %s", agent.name, e)
+                steps.append({"agent": agent.name, "status": "failed",
+                              "error": str(e),
+                              "took_ms": int((time.monotonic() - t0) * 1000)})
+                return key, {}
+
+        results = await asyncio.gather(
+            _run(self.technical, "technical"),
+            _run(self.macro, "macro"),
+            _run(self.news, "news"),
+            return_exceptions=False,
+        )
+        return {k: v for k, v in results}
+
+    def _compose_research(self, technical: dict, macro: dict, news: dict) -> dict:
+        """Compose the dict that StrategyAgent forwards as `research_payload`.
+
+        Keeps the legacy shape the prompt expects so the change is invisible
+        to ai_signals.analyze_symbol.
+        """
+        return {
+            "symbol": (technical or {}).get("symbol")
+                       or (macro or {}).get("symbol")
+                       or (news or {}).get("symbol"),
+            "sentiment": {
+                "score": (news or {}).get("score"),
+                "label": (news or {}).get("label"),
+                "summary": (news or {}).get("summary"),
+                "article_count": (news or {}).get("article_count"),
+            },
+            "macro_freeze": (macro or {}).get("macro_freeze"),
+            "upcoming_macro": (macro or {}).get("upcoming_events") or [],
+            "cot_positioning": (macro or {}).get("cot_positioning"),
+            "real_yield_10y": (macro or {}).get("real_yield_10y"),
+            "dxy": (macro or {}).get("dxy"),
+            "fred": (macro or {}).get("fred"),
+            "macro_gate": (macro or {}).get("macro_gate"),
+            "technical": technical or {},
+        }
 
 
 def _summarise_research(r: dict) -> str:

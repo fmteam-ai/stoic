@@ -14,6 +14,7 @@ const items = [
     { to: "/", label: "Dashboard", icon: ChartLineUp, testid: "nav-dashboard" },
     { to: "/signals", label: "AI Signals", icon: Activity, testid: "nav-signals" },
     { to: "/agents", label: "Agents", icon: Cpu, testid: "nav-agents" },
+    { to: "/strategies", label: "Strategies", icon: Sparkles, testid: "nav-strategies" },
     { to: "/commander", label: "Risk Commander", icon: MessageSquare, testid: "nav-commander" },
     { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
     { to: "/accounts", label: "MT5 Accounts", icon: Wallet, testid: "nav-accounts" },

@@ -8,6 +8,20 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-25 (iter-29) — **7-agent pipeline + standalone AI Strategy Generator page**:
+  - **3 new specialised analysers** (run in parallel before Strategy):
+    - `TechnicalAnalysisAgent` (`agents/technical_agent.py`): trend (MA20 vs MA200), RSI extremes, ATR%, regime — pure deterministic from cached indicators
+    - `MacroAnalysisAgent` (`agents/macro_agent.py`): FRED + real-yield + DXY + COT + **consults macro_gate** for XAUUSD
+    - `NewsSentimentAgent` (`agents/news_sentiment_agent.py`): wraps `score_sentiment` with deterministic label + bias digest
+  - **2 new post-decision shapers**:
+    - `PortfolioAllocatorAgent` (`agents/portfolio_allocator_agent.py`): blended **vol-parity × Kelly** trim of the proposed lot size. Reads last-30d win-rate from `db.trades`, neutral 1.0 on no data. Never inflates above strategy's proposed size, MIN_SCALE=0.25 floor.
+    - `ExecutionOptimizerAgent` (`agents/execution_optimizer_agent.py`): three guards — spread (>2.5× rolling median refuses), session (defer XAUUSD off-hours 22-06 UTC + weekends unless aggressive_mode), slice planner (split lots > 0.10 into 0.05 chunks). Env-overridable thresholds.
+  - **Orchestrator rewired**: `Technical + Macro + News (parallel)` → `Strategy` → `Risk` → `PortfolioAllocator` → `ExecutionOptimizer` → broker engine. Each agent emits its own activity-log step with bias digest + duration_ms. Legacy `ResearchAgent` kept for back-compat with pre-iter29 activity rows.
+  - **/strategies — new standalone page** (`pages/Strategies.jsx` + `routes/strategies_routes.py`): prompt input → COMPILE (via existing `/api/nl/strategy`) → BACKTEST 30d (via iter-27 endpoint) → SAVE to library (new `db.strategies` CRUD) → APPLY TO BOT. Library lists saved strategies with per-symbol win-rate + LOAD/DELETE.
+  - **/agents page revamp**: replaces "4 agents" with "7 agents" grid + adds gradient AI Strategy Generator CTA at top linking to /strategies.
+  - **Sidebar**: new "Strategies" entry (Sparkles icon) between Agents and Risk Commander.
+  - **Tests**: 14 new tests in `test_iter29_new_agents.py` covering all 5 new agents' core behaviours + updated iter17 orchestrator pipeline test (now asserts 7 agent names). **59/59 across iter-17/27/29 + safety_guardian regression suite passing.**
+
 - 2026-06-25 (iter-28) — **Broker-real-time prices on the Trades page**:
   - **(b) Quote-cache TTL tightened** (`market.py::ttl_seconds_for_quote`): crypto+commodity dropped from 60-120s → **5s**, so even users on the old EA see fresh prices within the 5s frontend poll. FX stays at 60s (low movement, conserves quota).
   - **(a) EA v1.27 → broker-exact ticks** (`EmergentTradingBridge.mq5`): position snapshot now carries `current_price` (`PositionGetDouble(POSITION_PRICE_CURRENT)`) alongside the existing `profit`. Version bumped 1.26→1.27, header changelog updated.

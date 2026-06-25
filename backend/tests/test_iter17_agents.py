@@ -163,21 +163,40 @@ def test_orchestrator_logs_full_pipeline():
 
     fake_db = MagicMock()
     fake_db.agent_activity.insert_one = fake_insert
+    # Allocator's win-rate query needs a trades cursor
+    fake_db.trades.find = MagicMock(return_value=MagicMock(
+        limit=MagicMock(return_value=MagicMock(to_list=AsyncMock(return_value=[]))),
+    ))
 
     fake_signal = {
         "action": "BUY", "confidence": 78.0, "tradeable": True,
-        "symbol": "XAUUSD", "reasoning": "ok",
+        "symbol": "XAUUSD", "lot_size": 0.05, "reasoning": "ok",
     }
 
     with patch("agents.orchestrator.get_db", return_value=fake_db), \
-         patch.object(orch.research, "gather",
-                      AsyncMock(return_value={"sentiment": {"score": 0.1}})), \
+         patch("agents.portfolio_allocator_agent.get_db", return_value=fake_db), \
+         patch.object(orch.technical, "analyze",
+                      AsyncMock(return_value={"symbol": "XAUUSD", "bias": "trend=UP",
+                                              "atr_pct": 1.0, "indicators": {}})), \
+         patch.object(orch.macro, "analyze",
+                      AsyncMock(return_value={"symbol": "XAUUSD", "bias": "neutral",
+                                              "macro_freeze": {"frozen": False},
+                                              "upcoming_events": [], "fred": None,
+                                              "real_yield_10y": None, "dxy": None,
+                                              "cot_positioning": None,
+                                              "macro_gate": None})), \
+         patch.object(orch.news, "analyze",
+                      AsyncMock(return_value={"symbol": "XAUUSD", "score": 0.1,
+                                              "label": "NEUTRAL", "article_count": 5,
+                                              "summary": "", "bias": "NEUTRAL"})), \
          patch.object(orch.strategy, "propose",
                       AsyncMock(return_value=fake_signal)), \
          patch.object(orch.risk, "review",
                       AsyncMock(return_value={
                           "approved": True, "signal": fake_signal, "overrides": [],
-                      })):
+                      })), \
+         patch("agents.execution_optimizer_agent._is_xau_off_hours",
+               lambda *a, **kw: False):
         out = _arun(orch.analyze_tick(
             user_id="u1", symbol="XAUUSD", risk_level="medium",
             active_positions=[],
@@ -185,10 +204,16 @@ def test_orchestrator_logs_full_pipeline():
 
     assert out["signal"] is fake_signal
     assert out["tick_id"]
-    # One log entry persisted with all 3 steps
     assert len(inserted) == 1
     steps = inserted[0]["steps"]
     agent_names = [s["agent"] for s in steps]
-    assert agent_names == ["research", "strategy", "risk"]
+    # New 7-agent pipeline: 3 parallel analysers → strategy → risk → allocator → exec_optimizer
+    assert "technical" in agent_names
+    assert "macro" in agent_names
+    assert "news_sentiment" in agent_names
+    assert "strategy" in agent_names
+    assert "risk" in agent_names
+    assert "portfolio_allocator" in agent_names
+    assert "execution_optimizer" in agent_names
     assert inserted[0]["final_action"] == "BUY"
     assert inserted[0]["final_confidence"] == 78.0
