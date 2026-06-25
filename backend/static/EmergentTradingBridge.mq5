@@ -36,9 +36,14 @@
 //|         Catches closes that OnTradeTransaction missed (other      |
 //|         terminal, network blip, EA reload) so STOIC stays fully   |
 //|         autopilot — no manual "Backfill Exit" needed ever again.  |
+//| v1.27 — Position snapshot now carries current_price                |
+//|         (PositionGetDouble(POSITION_PRICE_CURRENT)) so STOIC's UI  |
+//|         can show broker-real-time prices + unrealised P&L on the   |
+//|         Trades page, refreshed every PollSeconds (3-5s) instead    |
+//|         of relying on a stale 60-120s external quote cache.        |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.26"
+#property version   "1.27"
 #property strict
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
@@ -62,7 +67,7 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.26 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.27 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -282,13 +287,16 @@ string BuildPositionsJson() {
       long   timeOpen  = (long)PositionGetInteger(POSITION_TIME);
       long   magic     = (long)PositionGetInteger(POSITION_MAGIC);
       double profit    = PositionGetDouble(POSITION_PROFIT);
+      double priceCur  = PositionGetDouble(POSITION_PRICE_CURRENT);  // v1.27 — broker-live tick
       string typeStr   = (ptype == POSITION_TYPE_BUY) ? "BUY" : "SELL";
       if (!first) out += ",";
       out += StringFormat(
          "{\"ticket\":%I64u,\"symbol\":\"%s\",\"type\":\"%s\","
          "\"volume\":%.2f,\"price_open\":%.5f,\"sl\":%.5f,\"tp\":%.5f,"
-         "\"time_open\":%I64d,\"magic\":%I64d,\"profit\":%.2f}",
-         ticket, sym, typeStr, volume, priceOpen, sl, tp, timeOpen, magic, profit);
+         "\"time_open\":%I64d,\"magic\":%I64d,\"profit\":%.2f,"
+         "\"current_price\":%.5f}",
+         ticket, sym, typeStr, volume, priceOpen, sl, tp, timeOpen, magic, profit,
+         priceCur);
       first = false;
    }
    out += "]";
@@ -313,7 +321,7 @@ void SendHeartbeat() {
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
-      "\"positions\":%s,\"client_version\":\"1.26\"}",
+      "\"positions\":%s,\"client_version\":\"1.27\"}",
       BridgeToken, balance, equity, openPos, spreads, login, ccy, positions);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }

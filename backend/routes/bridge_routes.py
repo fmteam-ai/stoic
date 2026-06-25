@@ -185,9 +185,21 @@ async def heartbeat(payload: BridgeHeartbeat):
     # STOIC profile they were misrouted to.
     backfilled = 0
     revived = 0
+    live_ticks: list[dict] = []  # v1.27 broker-real-time price relay
     if payload.positions is not None and not mismatch:
         account_id = str(acc["_id"])
         for p in payload.positions:
+            # EA v1.27+: relay the broker-live tick to the UI regardless of
+            # whether the trade is already tracked or being backfilled. We
+            # accumulate then broadcast once at the end so a 4-position
+            # heartbeat sends ONE WS frame, not four.
+            if p.current_price is not None:
+                live_ticks.append({
+                    "ticket": int(p.ticket),
+                    "symbol": p.symbol,
+                    "current_price": float(p.current_price),
+                    "profit": float(p.profit or 0.0),
+                })
             # Already tracked?
             existing = await db.trades.find_one({
                 "account_id": account_id, "mt5_ticket": int(p.ticket),
@@ -252,6 +264,13 @@ async def heartbeat(payload: BridgeHeartbeat):
         if revived > 0:
             await ws_manager.broadcast(acc["user_id"], "trades_revived", {
                 "account_id": account_id, "count": revived,
+            })
+        # v1.27 — broker-live ticks for the Trades page. Single frame per HB.
+        if live_ticks:
+            await ws_manager.broadcast(acc["user_id"], "position_ticks", {
+                "account_id": account_id,
+                "ticks": live_ticks,
+                "ts": now_iso,
             })
 
     await ws_manager.broadcast(acc["user_id"], "account_heartbeat", {

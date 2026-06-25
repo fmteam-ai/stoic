@@ -386,12 +386,18 @@ async def get_quote(symbol: str) -> dict:
 
 
 def ttl_seconds_for_quote(asset: str) -> int:
-    # Crypto moves fast — 60s. Gold spot moves slow — 120s. FX rates daily — 600s.
+    # Live-tick goal: every Trades-page open position needs sub-10s quote
+    # freshness so unrealized P&L matches the broker. The EA heartbeat (every
+    # ~3-5s) is the broker-exact source — these polled fallback quotes are
+    # only used when the EA isn't reporting that symbol yet.
+    #   crypto    →  5s  (volatile)
+    #   commodity →  5s  (was 120s — too stale for live UI)
+    #   forex     → 60s  (FX moves slower, but we still need responsiveness)
     if asset == "crypto":
-        return 60
+        return 5
     if asset == "commodity":
-        return 120
-    return 600
+        return 5
+    return 60
 
 
 async def _history_save_to_mongo(sym: str, history: list) -> None:

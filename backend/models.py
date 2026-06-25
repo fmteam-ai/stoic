@@ -222,6 +222,10 @@ class BridgePosition(BaseModel):
     time_open: int = 0          # unix seconds
     magic: int = 0              # 0 = manual broker-side
     profit: float = 0.0         # current floating P&L
+    # EA v1.27+: broker-live tick (PositionGetDouble(POSITION_PRICE_CURRENT)).
+    # When present, the Trades UI overlays this onto the row INSTEAD of the
+    # 5s-polled external-feed quote → display matches MT5 to the tick.
+    current_price: Optional[float] = None
 
 
 class BridgeHeartbeat(BaseModel):

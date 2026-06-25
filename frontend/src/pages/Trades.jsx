@@ -170,9 +170,13 @@ export default function Trades() {
     const [filter, setFilter] = useState("");
     const [accountFilter, setAccountFilter] = useState("");   // "" = all accounts; otherwise account_id
     const [accounts, setAccounts] = useState([]);             // for filter pills + label lookup
-    const [quotes, setQuotes] = useState({}); // {SYMBOL: price}
+    const [quotes, setQuotes] = useState({}); // {SYMBOL: price}  ← polled fallback
     const quoteHistoryRef = useRef({}); // {SYMBOL: [{ts, price}]}
     const [velocities, setVelocities] = useState({}); // {SYMBOL: priceUnitsPerSec}
+    // EA v1.27+ broker-real-time tick relay. Keyed by mt5_ticket so each
+    // open position carries its own broker-exact current_price + profit,
+    // refreshed every PollSeconds (3-5s) via the WS `position_ticks` event.
+    const [liveTicks, setLiveTicks] = useState({}); // {ticket: {current_price, profit, ts, symbol}}
 
     // Account_id → label map for inline display on each trade row.
     const accountLabelById = useMemo(() => {
@@ -207,11 +211,32 @@ export default function Trades() {
         api.get("/accounts").then(r => setAccounts(r.data || [])).catch(() => {});
     }, []);
 
-    // Live: refresh on any trade event
+    // Live: refresh on any trade event + ingest broker-real-time ticks.
     const { lastEvent } = useLiveStream();
     useEffect(() => {
         if (!lastEvent) return;
         if (lastEvent.type === "trade_created" || lastEvent.type === "trade_updated") load();
+        // EA v1.27+: every heartbeat carries per-position broker-live ticks.
+        // Replace the bucket for each ticket so we never accumulate stale entries.
+        if (lastEvent.type === "position_ticks") {
+            const ticks = lastEvent.payload?.ticks || [];
+            if (!ticks.length) return;
+            const ts = lastEvent.payload?.ts || new Date().toISOString();
+            setLiveTicks(prev => {
+                const next = { ...prev };
+                for (const t of ticks) {
+                    if (t.ticket != null && t.current_price != null) {
+                        next[String(t.ticket)] = {
+                            current_price: Number(t.current_price),
+                            profit: Number(t.profit ?? 0),
+                            symbol: t.symbol,
+                            ts,
+                        };
+                    }
+                }
+                return next;
+            });
+        }
     }, [lastEvent, load]);
 
     // Poll quotes for any open-trade symbols every 5s — drives live price + P&L.
@@ -396,12 +421,23 @@ export default function Trades() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
 
                 {stats && (() => {
+                    // Prefer the EA's broker-real-time tick (per-ticket, 3-5s) over the
+                    // 5s-polled external quote. Falls back to the polled quote when the
+                    // user is on an older EA (<v1.27) that doesn't emit current_price.
+                    const priceFor = (t) => {
+                        const tick = t.mt5_ticket != null ? liveTicks[String(t.mt5_ticket)] : null;
+                        if (tick && tick.current_price != null) return tick.current_price;
+                        return quotes[t.symbol];
+                    };
                     const openLive = trades.reduce((acc, t) => {
                         if (t.status !== "open") return acc;
-                        const p = computeLivePnl(t, quotes[t.symbol]);
+                        // Broker-reported profit is broker-exact — prefer it when available.
+                        const tick = t.mt5_ticket != null ? liveTicks[String(t.mt5_ticket)] : null;
+                        if (tick && Number.isFinite(tick.profit)) return acc + tick.profit;
+                        const p = computeLivePnl(t, priceFor(t));
                         return p == null ? acc : acc + p;
                     }, 0);
-                    const hasAnyLive = trades.some(t => t.status === "open" && quotes[t.symbol] != null);
+                    const hasAnyLive = trades.some(t => t.status === "open" && priceFor(t) != null);
                     const liveAccent = hasAnyLive
                         ? (openLive >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]")
                         : undefined;
@@ -411,7 +447,7 @@ export default function Trades() {
                     let closestTP = null;
                     for (const t of trades) {
                         if (t.status !== "open") continue;
-                        const px = quotes[t.symbol];
+                        const px = priceFor(t);
                         if (!px) continue;
                         const vel = velocities[t.symbol]; // price units / second
                         const slLevel = parseFloat(t.stop_loss);
@@ -519,11 +555,25 @@ export default function Trades() {
                                         <td className="px-3 py-2 font-mono">{t.lot_size}</td>
                                         <td className="px-3 py-2 font-mono">{fmtPrice(t.symbol, t.entry_price)}</td>
                                         <td className="px-3 py-2 font-mono" data-testid={`current-${t.id}`}>
-                                            {t.status === "open" && quotes[t.symbol] != null ? (
-                                                <span className="text-white">{fmtPrice(t.symbol, quotes[t.symbol])}</span>
-                                            ) : (
-                                                <span className="text-[#52525B]">—</span>
-                                            )}
+                                            {(() => {
+                                                if (t.status !== "open") return <span className="text-[#52525B]">—</span>;
+                                                const tick = t.mt5_ticket != null ? liveTicks[String(t.mt5_ticket)] : null;
+                                                const px = tick?.current_price ?? quotes[t.symbol];
+                                                if (px == null) return <span className="text-[#52525B]">—</span>;
+                                                // Green dot when sourced from broker-live EA tick; faint white when fallback feed.
+                                                return (
+                                                    <span className="inline-flex items-center gap-1.5">
+                                                        {tick && (
+                                                            <span
+                                                                title="Broker-live (EA tick)"
+                                                                data-testid={`tick-live-${t.id}`}
+                                                                className="inline-block w-1.5 h-1.5 rounded-full bg-[#00FF41] animate-pulse"
+                                                            />
+                                                        )}
+                                                        <span className="text-white">{fmtPrice(t.symbol, px)}</span>
+                                                    </span>
+                                                );
+                                            })()}
                                         </td>
                                         <td className="px-3 py-2 font-mono text-[#FF3B30]">{fmtPrice(t.symbol, t.stop_loss)}</td>
                                         <td className="px-3 py-2 font-mono text-[#00FF41]">{fmtPrice(t.symbol, t.take_profit)}</td>
@@ -531,7 +581,14 @@ export default function Trades() {
                                         <td className="px-3 py-2 font-mono" data-testid={`live-pnl-${t.id}`}>
                                             {(() => {
                                                 if (t.status !== "open") return <span className="text-[#52525B]">—</span>;
-                                                const live = computeLivePnl(t, quotes[t.symbol]);
+                                                // Prefer broker-reported profit (EA tick) — broker-exact incl. swap/commission.
+                                                const tick = t.mt5_ticket != null ? liveTicks[String(t.mt5_ticket)] : null;
+                                                let live;
+                                                if (tick && Number.isFinite(tick.profit)) {
+                                                    live = tick.profit;
+                                                } else {
+                                                    live = computeLivePnl(t, quotes[t.symbol]);
+                                                }
                                                 if (live == null) return <span className="text-[#52525B]">…</span>;
                                                 const cls = live >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]";
                                                 return <span className={cls}>{fmtPnl(live)}</span>;
