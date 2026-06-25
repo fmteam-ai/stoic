@@ -29,6 +29,7 @@ from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
 from risk import get_profile, compute_lot_for_account
+from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 
 logger = logging.getLogger("bot-runner")
 
@@ -529,6 +530,17 @@ async def loop():
                     logger.warning("Pre-news protect flattened %d trade(s)", protected)
             except Exception as e:
                 logger.exception("Pre-news protect sweep failed: %s", e)
+            # Autonomous portfolio deleveraging — fires on hard DD, sector cap,
+            # combined-corr bucket, or VaR breach. Per-account cooldown built-in.
+            try:
+                dl = await sweep_auto_deleverage(db)
+                if dl.get("triggered"):
+                    logger.warning(
+                        "Auto-deleverage sweep · checked=%d triggered=%d closed=%d",
+                        dl["checked"], dl["triggered"], dl["closed"],
+                    )
+            except Exception as e:
+                logger.exception("Auto-deleverage sweep failed: %s", e)
         except Exception as e:
             logger.exception("Bot runner tick failed: %s", e)
         await asyncio.sleep(interval)

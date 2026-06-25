@@ -8,6 +8,16 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-25 (iter-32) — **Autonomous deleveraging + Execution Intelligence (Phase 1)**:
+  - **Autonomous deleveraging cron** (`portfolio/auto_deleverage.py` + wired into `bot_runner.loop()`): every loop tick (~60s) walks accounts with open positions, builds the snapshot, executes the action list when `needs_deleveraging` fires. Per-account cooldown (`AUTO_DELEVERAGE_COOLDOWN_MIN` default 15min) prevents thrashing. Broadcasts `auto_deleverage` WS event + Telegram alert with triggers/closed-count/DD%/VaR%. Env toggle `AUTO_DELEVERAGE_ENABLED` (default ON).
+  - **Liquidity Scoring** (`execution_intel/liquidity.py`): 0-100 composite — 50% spread quality + 30% tick velocity + 20% session window. Returns tier (EXCELLENT/GOOD/FAIR/POOR/AVOID), component breakdown, and human-readable reason.
+  - **Smart Order Router** (`execution_intel/smart_router.py`): picks `venue` + `order_type` (MARKET vs LIMIT vs DEFER) + slice strategy based on liquidity tier. EXCELLENT/GOOD → MARKET. FAIR → LIMIT ±N pips. AVOID → DEFER. Large lots (≥0.10) get sliced via TWAP/VWAP regardless of tier.
+  - **TWAP/VWAP scheduler** (`execution_intel/twap_vwap.py`): TWAP = equal lots over equal intervals; VWAP = lots weighted by a 24h volume profile (london/NY overlap = peak). Persists schedules to `db.slice_schedules` with `due_slices()` helper for the bot_runner to consume each tick.
+  - **Order-Book Pulse** (`execution_intel/order_book.py`): L1 proxy until EA v1.28 ships real DOM. Classifies ACTIVE/NORMAL/THIN/FROZEN from tick velocity + spread ratio; produces a depth_score 0-100. Marks `real_dom_available=false` so the UI is honest about the proxy.
+  - **API**: `GET /api/execution/quality?symbols=...`, `POST /api/execution/preview`, `POST /api/execution/schedule`, `GET /api/execution/schedules`.
+  - **`/execution` page** (`pages/Execution.jsx`): Live Execution Quality cards (one per symbol with score bar + spread ratio + ticks/min + session + book pulse + depth), Smart Order Router probe (form to test what the router would do for any hypothetical signal — returns Venue/Order Type/Slice/Liquidity tiles + reason + the proposed TWAP/VWAP schedule with fire times), Active TWAP/VWAP Schedules list. Sidebar entry added (Zap icon).
+  - **Tests**: 22 new tests in `test_iter32_execution_intel.py` (liquidity components, SOR decisions, TWAP/VWAP schedules, order-book classifier, auto-deleverage disabled flag / cooldown / end-to-end fire). **95/95 across iter-17/27/29/30/31/32 + safety_guardian regression suite passing.** Live end-to-end verified.
+
 - 2026-06-25 (iter-31) — **Portfolio Risk Manager · full account-wide oversight**:
   - **Sector classification** (`portfolio/sectors.py`): closed-vocab map for XAUUSD→commodity, BTCUSD→crypto, EURUSD→fx_major, NAS100→equity_index, etc. + heuristic fallback for unknown symbols.
   - **VaR calculator** (`portfolio/var.py`): parametric 1-day **95% AND 99%** Value-at-Risk via variance-covariance method. Uses ATR%/price as daily vol proxy + pairwise Pearson correlation from 30-day closes. Returns absolute USD VaR + % of equity + per-position weights + full correlation matrix.

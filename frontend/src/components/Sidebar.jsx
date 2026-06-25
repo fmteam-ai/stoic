@@ -5,7 +5,7 @@ import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
-    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield
+    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield, Zap
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -21,6 +21,7 @@ const items = [
     { to: "/trades", label: "Trades", icon: ListChecks, testid: "nav-trades" },
     { to: "/safety-blocks", label: "Safety Blocks", icon: ShieldCheck, testid: "nav-safety-blocks" },
     { to: "/portfolio", label: "Portfolio Risk", icon: Shield, testid: "nav-portfolio" },
+    { to: "/execution", label: "Execution Intel", icon: Zap, testid: "nav-execution" },
     { to: "/analytics", label: "Analytics", icon: BarChart3, testid: "nav-analytics" },
     { to: "/symbols", label: "Symbols", icon: CurrencyCircleDollar, testid: "nav-symbols" },
     { to: "/notifications", label: "Notifications", icon: Bell, testid: "nav-notifications" },

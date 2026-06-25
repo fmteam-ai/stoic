@@ -27,6 +27,7 @@ import SafetyBlocks from "@/pages/SafetyBlocks";
 import Agents from "@/pages/Agents";
 import Strategies from "@/pages/Strategies";
 import Portfolio from "@/pages/Portfolio";
+import Execution from "@/pages/Execution";
 import AffiliateLanding from "@/pages/AffiliateLanding";
 
 function App() {
@@ -64,6 +65,7 @@ function App() {
                         <Route path="/agents" element={<ProtectedRoute><Agents /></ProtectedRoute>} />
                         <Route path="/strategies" element={<ProtectedRoute><Strategies /></ProtectedRoute>} />
                         <Route path="/portfolio" element={<ProtectedRoute><Portfolio /></ProtectedRoute>} />
+                        <Route path="/execution" element={<ProtectedRoute><Execution /></ProtectedRoute>} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>
