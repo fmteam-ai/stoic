@@ -25,6 +25,7 @@ export default function Execution() {
     const [quality, setQuality] = useState(null);
     const [schedules, setSchedules] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [err, setErr] = useState("");
 
     // Preview probe
@@ -36,6 +37,7 @@ export default function Execution() {
 
     const load = useCallback(async () => {
         setErr("");
+        setRefreshing(true);
         try {
             const [q, s] = await Promise.allSettled([
                 api.get("/execution/quality?symbols=XAUUSD,BTCUSD"),
@@ -44,7 +46,7 @@ export default function Execution() {
             if (q.status === "fulfilled") setQuality(q.value.data);
             if (s.status === "fulfilled") setSchedules(s.value.data.items || []);
         } catch (e) { setErr(formatApiError(e)); }
-        finally { setLoading(false); }
+        finally { setLoading(false); setRefreshing(false); }
     }, []);
 
     useEffect(() => { load(); }, [load]);
@@ -74,9 +76,10 @@ export default function Execution() {
                 subtitle="Smart routing · TWAP/VWAP · liquidity · order-book pulse"
                 testid="execution-header"
                 action={
-                    <button onClick={load} data-testid="execution-refresh"
-                        className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest">
-                        <RefreshCw className="w-3.5 h-3.5" /> REFRESH
+                    <button onClick={load} disabled={refreshing} data-testid="execution-refresh"
+                        className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#00FF41]/40 text-xs font-mono tracking-widest disabled:opacity-60">
+                        <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin text-[#00FF41]" : ""}`} />
+                        {refreshing ? "REFRESHING…" : "REFRESH"}
                     </button>
                 }
             />

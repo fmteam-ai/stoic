@@ -14,8 +14,10 @@ export default function Research() {
     const [running, setRunning] = useState(false);
     const [latest, setLatest] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
 
     const load = useCallback(async () => {
+        setRefreshing(true);
         try {
             const [p, l, aa] = await Promise.allSettled([
                 api.get("/research/proposals"),
@@ -26,7 +28,7 @@ export default function Research() {
             if (l.status === "fulfilled") setLastRun(l.value.data);
             if (aa.status === "fulfilled") setAutoAccept(aa.value.data);
         } catch { /* silent — page surfaces errors elsewhere */ }
-        finally { setLoading(false); }
+        finally { setLoading(false); setRefreshing(false); }
     }, []);
 
     useEffect(() => { load(); }, [load]);
@@ -97,9 +99,10 @@ export default function Research() {
                 testid="research-header"
                 action={
                     <div className="flex gap-2">
-                        <button onClick={load} data-testid="research-refresh"
-                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest">
-                            <RefreshCw className="w-3.5 h-3.5" /> REFRESH
+                        <button onClick={load} disabled={refreshing} data-testid="research-refresh"
+                            className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#00FF41]/40 text-xs font-mono tracking-widest disabled:opacity-60">
+                            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin text-[#00FF41]" : ""}`} />
+                            {refreshing ? "REFRESHING…" : "REFRESH"}
                         </button>
                         <button onClick={runNow} disabled={running}
                             data-testid="research-run-now"
