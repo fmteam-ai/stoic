@@ -52,6 +52,16 @@ async def test_auto_accept_applies_when_threshold_cleared():
         "_id": "u1",
         "research_auto_accept": {"enabled": True, "min_delta_pct": 10.0},
     })
+    # iter-36: auto-accept now uses the shared targeting helper, which calls
+    # bot_configs.find(...).to_list() and accounts.find(...).to_list().
+    bot_cfg_doc = {"_id": ObjectId(), "user_id": "u1", "account_id": None,
+                   "symbols": ["XAUUSD"], "risk_level": "middle"}
+    _bc_cursor = MagicMock()
+    _bc_cursor.to_list = AsyncMock(return_value=[bot_cfg_doc])
+    db.bot_configs.find = MagicMock(return_value=_bc_cursor)
+    _acc_cursor = MagicMock()
+    _acc_cursor.to_list = AsyncMock(return_value=[])
+    db.accounts.find = MagicMock(return_value=_acc_cursor)
     db.bot_configs.update_one = AsyncMock()
     db.improvement_proposals.update_one = AsyncMock()
     db.improvement_proposals.update_many = AsyncMock()
@@ -70,7 +80,7 @@ async def test_auto_accept_applies_when_threshold_cleared():
         inserted_ids=[top_id],
     )
     assert applied is True
-    # bot_configs updated
+    # bot_configs updated (now via the helper, still update_one per touched doc)
     db.bot_configs.update_one.assert_called_once()
     # accepted proposal marked
     db.improvement_proposals.update_one.assert_called_once()

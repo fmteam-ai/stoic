@@ -3,18 +3,28 @@
   GET  /api/research/proposals              — list pending + recent proposals
   POST /api/research/run                    — manual trigger (admin/user)
   GET  /api/research/last-run               — last_run_at metadata for the dashboard
-  POST /api/research/proposals/{id}/accept  — apply to bot config
+  GET  /api/research/proposals/{id}/targets — list candidate bots + which match this proposal
+  POST /api/research/proposals/{id}/accept  — apply to bot config(s) — body: {target: "matching"|"all"|"default"|"<account_id>"}
   POST /api/research/proposals/{id}/dismiss — reject
 """
 from datetime import datetime, timezone
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from auth import get_current_user
 from database import get_db
 from research_agent.self_improver import run_for_user
+from research_agent.proposal_targeting import (
+    list_candidate_bots, resolve_target_configs, apply_proposal_to_configs,
+)
 from route_utils import parse_object_id
 
 router = APIRouter(prefix="/research", tags=["research-agent"])
+
+
+class AcceptBody(BaseModel):
+    target: Optional[str] = "matching"
 
 
 def _serialise_proposal(d: dict) -> dict:
@@ -114,8 +124,32 @@ async def manual_run(user=Depends(get_current_user)):
     }
 
 
+@router.get("/proposals/{proposal_id}/targets")
+async def list_proposal_targets(proposal_id: str, user=Depends(get_current_user)):
+    """List the user's bot_configs annotated with whether each one matches
+    the proposal's symbol scope. Powers the target-selector dropdown.
+    """
+    db = get_db()
+    oid = parse_object_id(proposal_id, "Proposal")
+    doc = await db.improvement_proposals.find_one(
+        {"_id": oid, "user_id": user["id"]},
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    proposal_symbols = (doc.get("compiled") or {}).get("symbols") or []
+    candidates = await list_candidate_bots(db, user["id"], proposal_symbols)
+    matching_count = sum(1 for c in candidates if c["matches_proposal_symbols"])
+    return {
+        "proposal_symbols": proposal_symbols,
+        "candidates": candidates,
+        "matching_count": matching_count,
+        "total_count": len(candidates),
+    }
+
+
 @router.post("/proposals/{proposal_id}/accept")
-async def accept_proposal(proposal_id: str, user=Depends(get_current_user)):
+async def accept_proposal(proposal_id: str, body: AcceptBody | None = None,
+                          user=Depends(get_current_user)):
     db = get_db()
     oid = parse_object_id(proposal_id, "Proposal")
     doc = await db.improvement_proposals.find_one({
@@ -127,29 +161,56 @@ async def accept_proposal(proposal_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=f"proposal already {doc.get('status')}")
 
     compiled = doc.get("compiled") or {}
-    now_iso = datetime.now(timezone.utc).isoformat()
+    proposal_symbols = compiled.get("symbols") or []
+    target = (body.target if body else None) or "matching"
 
-    # Apply to bot_config — same fields nl_routes /strategy/apply uses
-    update = {
+    # Resolve which bot_configs to update.
+    configs, resolved_mode = await resolve_target_configs(
+        db, user["id"], proposal_symbols, target,
+    )
+    if not configs:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No matching bot configs for target='{target}'. "
+                "Try target='all' or pick a specific bot."
+            ),
+        )
+
+    update_fields = {k: v for k, v in {
         "symbols": compiled.get("symbols"),
         "session_preference": compiled.get("session_preference"),
         "risk_level": compiled.get("risk_level"),
         "strategy_style": compiled.get("strategy_style"),
         "max_concurrent_trades": compiled.get("max_concurrent_trades"),
-        "updated_at": now_iso,
-        "last_research_proposal_id": str(oid),
-    }
-    update = {k: v for k, v in update.items() if v is not None}
-    await db.bot_configs.update_one(
-        {"user_id": user["id"]},
-        {"$set": update},
-        upsert=False,
+    }.items() if v is not None}
+
+    audit = await apply_proposal_to_configs(
+        db, configs,
+        update_fields=update_fields,
+        proposal_id=str(oid),
+        target_mode=resolved_mode,
+        auto=False,
     )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
     await db.improvement_proposals.update_one(
         {"_id": oid},
-        {"$set": {"status": "accepted", "accepted_at": now_iso}},
+        {"$set": {
+            "status": "accepted",
+            "accepted_at": now_iso,
+            "applied_target_mode": resolved_mode,
+            "applied_to_count": len(audit),
+            "applied_audit": audit,
+        }},
     )
-    return {"ok": True, "applied": update}
+    return {
+        "ok": True,
+        "applied_count": len(audit),
+        "target_mode": resolved_mode,
+        "applied_to": audit,
+        "applied_fields": update_fields,
+    }
 
 
 @router.post("/proposals/{proposal_id}/dismiss")

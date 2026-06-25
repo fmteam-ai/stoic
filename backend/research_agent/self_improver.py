@@ -210,31 +210,50 @@ async def _maybe_auto_accept(db, *, user_id: str, proposals: list[dict],
     if (top.get("delta_vs_baseline") or 0) < (min_delta / 100.0):
         return False
 
-    # Apply
+    # Apply via the shared targeting helper — auto-accept uses the
+    # "matching" target mode (only bots whose symbols overlap the
+    # proposal's symbols; falls back to all if the proposal has no scope).
     from datetime import datetime, timezone
+    from research_agent.proposal_targeting import (
+        resolve_target_configs, apply_proposal_to_configs,
+    )
     now_iso = datetime.now(timezone.utc).isoformat()
     compiled = top.get("compiled") or {}
-    update = {k: v for k, v in {
+    proposal_symbols = compiled.get("symbols") or []
+    update_fields = {k: v for k, v in {
         "symbols": compiled.get("symbols"),
         "session_preference": compiled.get("session_preference"),
         "risk_level": compiled.get("risk_level"),
         "strategy_style": compiled.get("strategy_style"),
         "max_concurrent_trades": compiled.get("max_concurrent_trades"),
-        "updated_at": now_iso,
-        "last_auto_accepted_at": now_iso,
     }.items() if v is not None}
-    await db.bot_configs.update_one({"user_id": user_id}, {"$set": update})
+
+    top_id = inserted_ids[0] if inserted_ids else None
+    configs, resolved_mode = await resolve_target_configs(
+        db, user_id, proposal_symbols, "matching",
+    )
+    audit: list = []
+    if configs and top_id:
+        audit = await apply_proposal_to_configs(
+            db, configs,
+            update_fields=update_fields,
+            proposal_id=str(top_id),
+            target_mode=resolved_mode,
+            auto=True,
+        )
 
     # Mark the accepted proposal + dismiss the rest
     if inserted_ids:
         from bson import ObjectId
-        top_id = inserted_ids[0]
         try:
             await db.improvement_proposals.update_one(
                 {"_id": ObjectId(top_id)},
                 {"$set": {"status": "auto_accepted",
                           "accepted_at": now_iso,
-                          "auto_accepted": True}},
+                          "auto_accepted": True,
+                          "applied_target_mode": resolved_mode,
+                          "applied_to_count": len(audit),
+                          "applied_audit": audit}},
             )
             other_ids = [ObjectId(x) for x in inserted_ids[1:]]
             if other_ids:
@@ -246,8 +265,9 @@ async def _maybe_auto_accept(db, *, user_id: str, proposals: list[dict],
         except Exception as e:  # noqa: BLE001
             logger.warning("auto-accept persist failed: %s", e)
 
-    logger.warning("AUTO-ACCEPT applied for user=%s name=%s delta=%.3f",
-                   user_id, top.get("name"), top.get("delta_vs_baseline"))
+    logger.warning("AUTO-ACCEPT applied for user=%s name=%s delta=%.3f mode=%s touched=%d",
+                   user_id, top.get("name"), top.get("delta_vs_baseline"),
+                   resolved_mode, len(audit))
     return True
 
 

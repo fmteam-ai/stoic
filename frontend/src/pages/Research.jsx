@@ -49,10 +49,20 @@ export default function Research() {
         } finally { setRunning(false); }
     };
 
-    const accept = async (id) => {
+    const accept = async (id, target) => {
         try {
-            await api.post(`/research/proposals/${id}/accept`);
-            toast.success("Proposal applied to bot config");
+            const { data } = await api.post(`/research/proposals/${id}/accept`,
+                { target: target || "matching" });
+            const labels = (data.applied_to || [])
+                .map(a => a.is_default ? "Default profile" : `acct ${String(a.account_id).slice(-6)}`)
+                .join(", ");
+            if (data.applied_count === 0) {
+                toast.warning("No bots matched that target — nothing was applied");
+            } else if (data.applied_count === 1) {
+                toast.success(`Applied to 1 bot — ${labels}`);
+            } else {
+                toast.success(`Applied to ${data.applied_count} bots — ${labels}`);
+            }
             load();
         } catch (e) {
             toast.error("Accept failed", { description: formatApiError(e) });
@@ -333,6 +343,21 @@ function LatestRunPanel({ latest }) {
 
 function ProposalCard({ p, onAccept, onDismiss }) {
     const beats = p.beats_baseline;
+    const [targets, setTargets] = useState(null);
+    const [target, setTarget] = useState("matching");
+
+    useEffect(() => {
+        let cancelled = false;
+        api.get(`/research/proposals/${p.id}/targets`).then(r => {
+            if (!cancelled) setTargets(r.data);
+        }).catch(() => { /* dropdown stays in default mode */ });
+        return () => { cancelled = true; };
+    }, [p.id]);
+
+    const matchingCount = targets?.matching_count ?? null;
+    const totalCount = targets?.total_count ?? null;
+    const hasMultiple = (totalCount || 0) > 1;
+
     return (
         <div className={`border p-4 ${beats ? "border-[#00FF41]/40 bg-[#00FF41]/5" : "border-[#1F1F1F]"}`}
              data-testid={`proposal-${p.id}`}>
@@ -350,17 +375,36 @@ function ProposalCard({ p, onAccept, onDismiss }) {
                     </div>
                     <div className="text-xs text-[#A1A1AA] leading-snug">{p.rationale}</div>
                 </div>
-                <div className="flex gap-1.5">
-                    <button onClick={onDismiss}
-                        data-testid={`proposal-dismiss-${p.id}`}
-                        className="px-3 py-1.5 text-[10px] font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#FF3B30] hover:text-[#FF3B30] flex items-center gap-1">
-                        <X className="w-3 h-3" /> DISMISS
-                    </button>
-                    <button onClick={onAccept}
-                        data-testid={`proposal-accept-${p.id}`}
-                        className="px-3 py-1.5 text-[10px] font-mono tracking-widest bg-[#FFB000] hover:bg-[#E59E00] text-black flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> APPLY TO BOT
-                    </button>
+                <div className="flex flex-col gap-1.5 items-end">
+                    {hasMultiple && (
+                        <select value={target} onChange={(e) => setTarget(e.target.value)}
+                            data-testid={`proposal-target-${p.id}`}
+                            className="bg-[#050505] border border-[#1F1F1F] focus:border-[#FFB000] text-[10px] font-mono tracking-widest px-2 py-1.5 outline-none min-w-[180px]">
+                            <option value="matching">
+                                Matching-symbol bots ({matchingCount ?? "…"})
+                            </option>
+                            <option value="all">
+                                All bots ({totalCount ?? "…"})
+                            </option>
+                            {(targets?.candidates || []).map(c => (
+                                <option key={c.key} value={c.key}>
+                                    Only · {c.label}{c.matches_proposal_symbols ? " ✓" : ""}
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                    <div className="flex gap-1.5">
+                        <button onClick={onDismiss}
+                            data-testid={`proposal-dismiss-${p.id}`}
+                            className="px-3 py-1.5 text-[10px] font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#FF3B30] hover:text-[#FF3B30] flex items-center gap-1">
+                            <X className="w-3 h-3" /> DISMISS
+                        </button>
+                        <button onClick={() => onAccept(target)}
+                            data-testid={`proposal-accept-${p.id}`}
+                            className="px-3 py-1.5 text-[10px] font-mono tracking-widest bg-[#FFB000] hover:bg-[#E59E00] text-black flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" /> APPLY TO BOT
+                        </button>
+                    </div>
                 </div>
             </div>
 
