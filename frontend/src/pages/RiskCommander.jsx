@@ -5,7 +5,7 @@ import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import {
     Send, Sparkles, ShieldAlert, Bell, X, Clock, CheckCircle2,
-    Bot, MessageSquare
+    Bot, MessageSquare, BarChart3, TrendingUp, TrendingDown
 } from "lucide-react";
 
 const EXAMPLE_COMMANDS = [
@@ -42,6 +42,8 @@ export default function RiskCommander() {
     const newMsg = (m) => ({ id: ++msgIdRef.current, ...m });
     const [triggers, setTriggers] = useState([]);
     const [compiledPreview, setCompiledPreview] = useState(null);
+    const [backtestLoading, setBacktestLoading] = useState(false);
+    const [backtest, setBacktest] = useState(null);
     const { lastEvent } = useLiveStream();
 
     const loadTriggers = async () => {
@@ -94,6 +96,7 @@ export default function RiskCommander() {
                     setHistory(h => [...h, newMsg({ role: "ai", content: data.compiled.clarification_needed, isQuestion: true })]);
                 } else {
                     setCompiledPreview(data.compiled);
+                    setBacktest(null);
                     setHistory(h => [...h, newMsg({
                         role: "ai",
                         content: data.compiled.notes || "Strategy compiled — review below.",
@@ -113,8 +116,24 @@ export default function RiskCommander() {
             await api.post("/nl/strategy/apply", { compiled: compiledPreview });
             toast.success("Strategy applied to bot config");
             setCompiledPreview(null);
+            setBacktest(null);
         } catch (e) {
             toast.error("Apply failed", { description: formatApiError(e) });
+        }
+    };
+
+    const runBacktest = async () => {
+        if (!compiledPreview) return;
+        setBacktestLoading(true);
+        try {
+            const { data } = await api.post("/nl/strategy/backtest", {
+                compiled: compiledPreview, lookback_days: 30,
+            });
+            setBacktest(data);
+        } catch (e) {
+            toast.error("Backtest failed", { description: formatApiError(e) });
+        } finally {
+            setBacktestLoading(false);
         }
     };
 
@@ -264,13 +283,20 @@ export default function RiskCommander() {
                             <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-1">
                                 READY TO APPLY
                             </div>
-                            <div>Compiled strategy is ready. Applying will overwrite your current bot configuration.</div>
+                            <div>Compiled strategy is ready. Run a backtest preview first, or apply directly to overwrite your bot config.</div>
                         </div>
                         <div className="flex gap-2">
-                            <button onClick={() => setCompiledPreview(null)}
+                            <button onClick={() => { setCompiledPreview(null); setBacktest(null); }}
                                 data-testid="dismiss-strategy"
                                 className="px-3 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]">
                                 DISMISS
+                            </button>
+                            <button onClick={runBacktest}
+                                disabled={backtestLoading}
+                                data-testid="run-backtest-button"
+                                className="px-4 py-2 text-xs font-mono tracking-widest border border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/10 disabled:opacity-40 flex items-center gap-1.5">
+                                <BarChart3 className="w-3.5 h-3.5" />
+                                {backtestLoading ? "BACKTESTING…" : "BACKTEST 30d"}
                             </button>
                             <button onClick={applyStrategy}
                                 data-testid="apply-strategy-button"
@@ -278,6 +304,97 @@ export default function RiskCommander() {
                                 APPLY TO BOT
                             </button>
                         </div>
+                    </div>
+                )}
+
+                {/* Backtest results */}
+                {backtest && (
+                    <div className="border border-[#00FF41]/30 bg-[#00FF41]/5 p-4 space-y-3"
+                         data-testid="backtest-results">
+                        <div className="flex items-center justify-between">
+                            <div className="font-mono text-[10px] text-[#00FF41] tracking-widest flex items-center gap-1.5">
+                                <BarChart3 className="w-3.5 h-3.5" />
+                                BACKTEST PREVIEW · LAST {backtest.lookback_days}d
+                            </div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                                {backtest.matched_trades}/{backtest.total_trades} TRADES MATCHED
+                            </div>
+                        </div>
+
+                        {backtest.matched_trades === 0 ? (
+                            <div className="text-xs text-[#A1A1AA] font-mono"
+                                 data-testid="backtest-empty">
+                                No closed trades match these filters in the last {backtest.lookback_days}d.
+                                Run the bot in paper mode to build history first.
+                            </div>
+                        ) : (
+                            <>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    <div data-testid="bt-win-rate">
+                                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">WIN RATE</div>
+                                        <div className="text-xl font-mono font-bold"
+                                             style={{ color: (backtest.win_rate ?? 0) >= 0.5 ? "#00FF41" : "#FFB000" }}>
+                                            {backtest.win_rate != null ? `${(backtest.win_rate * 100).toFixed(1)}%` : "—"}
+                                        </div>
+                                        <div className="text-[10px] text-[#52525B] font-mono mt-0.5">
+                                            {backtest.wins}W · {backtest.losses}L
+                                        </div>
+                                    </div>
+                                    <div data-testid="bt-total-pnl">
+                                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">TOTAL P&L</div>
+                                        <div className="text-xl font-mono font-bold flex items-center gap-1"
+                                             style={{ color: backtest.total_pnl_usd >= 0 ? "#00FF41" : "#FF3B30" }}>
+                                            {backtest.total_pnl_usd >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                                            ${backtest.total_pnl_usd.toFixed(2)}
+                                        </div>
+                                    </div>
+                                    <div data-testid="bt-avg-pnl">
+                                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">AVG / TRADE</div>
+                                        <div className="text-xl font-mono font-bold text-[#E4E4E7]">
+                                            {backtest.avg_pnl_usd != null ? `$${backtest.avg_pnl_usd.toFixed(2)}` : "—"}
+                                        </div>
+                                    </div>
+                                    <div data-testid="bt-best-worst">
+                                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">BEST / WORST</div>
+                                        <div className="text-xs font-mono font-bold">
+                                            <span className="text-[#00FF41]">+${backtest.best_trade?.toFixed(2) ?? "—"}</span>
+                                            <span className="text-[#52525B] mx-1.5">·</span>
+                                            <span className="text-[#FF3B30]">${backtest.worst_trade?.toFixed(2) ?? "—"}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {Object.keys(backtest.by_symbol || {}).length > 0 && (
+                                    <div data-testid="bt-by-symbol" className="border-t border-[#00FF41]/20 pt-3">
+                                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-2">PER SYMBOL</div>
+                                        <div className="space-y-1">
+                                            {Object.entries(backtest.by_symbol).map(([sym, row]) => (
+                                                <div key={sym} className="flex items-center gap-3 font-mono text-[11px]">
+                                                    <span className="text-[#FFB000] w-16">{sym}</span>
+                                                    <span className="text-[#A1A1AA]">{row.trades} trades</span>
+                                                    <span className="text-[#52525B]">·</span>
+                                                    <span className="text-[#A1A1AA]">{row.win_rate != null ? `${(row.win_rate * 100).toFixed(0)}% wins` : "—"}</span>
+                                                    <span className="text-[#52525B]">·</span>
+                                                    <span style={{ color: row.pnl >= 0 ? "#00FF41" : "#FF3B30" }}>
+                                                        ${row.pnl.toFixed(2)}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
+
+                        {backtest.notes?.length > 0 && (
+                            <div data-testid="bt-notes" className="border-t border-[#00FF41]/20 pt-3 space-y-1">
+                                {backtest.notes.map((n) => (
+                                    <div key={n} className="text-[10px] text-[#A1A1AA] font-mono leading-snug">
+                                        · {n}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
 

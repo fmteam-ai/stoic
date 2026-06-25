@@ -15,6 +15,7 @@ from auth import get_current_user
 from database import get_db
 from ws_manager import manager as ws_manager
 from nl_commander import build_strategy, interpret_command
+from strategy_backtest import run_backtest
 from route_utils import parse_object_id
 
 router = APIRouter(prefix="/nl", tags=["nl-commander"])
@@ -38,6 +39,24 @@ async def nl_strategy(payload: dict, user=Depends(get_current_user)):
         raise HTTPException(status_code=502, detail=result["error"])
 
     return {"compiled": result, "prompt": prompt}
+
+
+@router.post("/strategy/backtest")
+async def nl_strategy_backtest(payload: dict, user=Depends(get_current_user)):
+    """Replay a compiled strategy against the user's own closed-trade history.
+
+    Body: {"compiled": {...}, "lookback_days": 30}
+    Returns: win_rate, total/avg P&L, per-symbol breakdown, sample size, notes.
+    Refuses to run on an empty/clarification-only compile.
+    """
+    compiled = payload.get("compiled") or {}
+    if not compiled or compiled.get("clarification_needed"):
+        raise HTTPException(status_code=400, detail="No usable compiled strategy")
+    lookback_days = int(payload.get("lookback_days") or 30)
+    result = await run_backtest(
+        compiled=compiled, user_id=user["id"], lookback_days=lookback_days,
+    )
+    return result
 
 
 @router.post("/strategy/apply")

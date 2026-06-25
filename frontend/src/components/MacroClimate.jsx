@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
-import { TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, AlertTriangle, ShieldOff, ShieldCheck } from "lucide-react";
 
 function Delta({ value, label }) {
     const v = Number(value) || 0;
@@ -44,14 +44,20 @@ function SeriesCard({ s }) {
 
 export function MacroClimate() {
     const [snap, setSnap] = useState(null);
+    const [gate, setGate] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         let mounted = true;
         const load = async () => {
             try {
-                const { data } = await api.get("/macro/snapshot");
-                if (mounted) setSnap(data);
+                const [snapRes, gateRes] = await Promise.allSettled([
+                    api.get("/macro/snapshot"),
+                    api.get("/macro/gate"),
+                ]);
+                if (!mounted) return;
+                if (snapRes.status === "fulfilled") setSnap(snapRes.value.data);
+                if (gateRes.status === "fulfilled") setGate(gateRes.value.data);
             } catch {
                 /* silent — widget self-hides on error */
             } finally {
@@ -76,6 +82,8 @@ export function MacroClimate() {
         return null;  // graceful hide on no data / no API key
     }
 
+    const gateBlocked = gate && (!gate.buy_ok || !gate.sell_ok);
+
     return (
         <div data-testid="macro-climate">
             <div className="flex items-center justify-between px-1 mb-2">
@@ -86,6 +94,45 @@ export function MacroClimate() {
                     </div>
                 )}
             </div>
+
+            {gate && (
+                <div
+                    data-testid="macro-gate-status"
+                    className={`mb-2 px-3 py-2 border flex items-start gap-2 ${
+                        gateBlocked
+                            ? "border-[#FF3B30]/40 bg-[#FF3B30]/5"
+                            : "border-[#00FF41]/30 bg-[#00FF41]/5"
+                    }`}
+                >
+                    {gateBlocked ? (
+                        <ShieldOff className="w-3.5 h-3.5 text-[#FF3B30] mt-0.5 shrink-0" />
+                    ) : (
+                        <ShieldCheck className="w-3.5 h-3.5 text-[#00FF41] mt-0.5 shrink-0" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                        <div className="font-mono text-[10px] tracking-widest mb-0.5"
+                             style={{ color: gateBlocked ? "#FF3B30" : "#00FF41" }}>
+                            XAUUSD MACRO GATE · {gateBlocked ? "BLOCKING" : "OPEN"}
+                        </div>
+                        {gateBlocked ? (
+                            <div className="space-y-0.5">
+                                {(gate.blocked || []).map((b) => (
+                                    <div key={b.action} className="text-[11px] text-[#E4E4E7] font-mono leading-snug">
+                                        <span className="text-[#FF3B30]">{b.action}</span>
+                                        <span className="text-[#52525B] mx-1.5">·</span>
+                                        <span className="text-[#A1A1AA]">{b.reason}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="text-[11px] text-[#A1A1AA] font-mono leading-snug">
+                                10Y yields + USD index within neutral range — gold trades unblocked.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
                 {snap.series.map((s) => <SeriesCard key={s.series_id} s={s} />)}
             </div>

@@ -17,6 +17,7 @@ import logging
 import os
 
 from pip_utils import price_to_pips, pip_value_usd_per_lot
+from macro_gate import evaluate as macro_gate_evaluate
 
 logger = logging.getLogger("safety-guardian")
 
@@ -210,6 +211,24 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
                             "open_count": len(open_trades)}}
     audit.append(_ok("total_open_risk_cap",
                      value=f"${aggregate_risk:.2f} <= ${max_total_risk:.2f}"))
+
+    # 8. Macro-regime gate (XAUUSD only — symbol-aware, returns ok=True on
+    # non-gold). Deterministic block when 10Y yields surge or USD rallies
+    # against gold longs (or the inverse for shorts). Fail-open if no FRED
+    # data cached yet.
+    macro = await macro_gate_evaluate(signal.get("symbol") or "",
+                                      signal.get("action") or "",
+                                      db=db)
+    if not macro["ok"]:
+        audit.append(_fail("macro_regime_gate",
+                           macro.get("reason") or "Macro regime adverse",
+                           macro.get("regime")))
+        audit.extend(macro.get("audit") or [])
+        return {"ok": False, "blocked_by": "macro_regime_gate", "audit": audit,
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "context": {**context, "macro_regime": macro.get("regime"),
+                            "macro_blocked_by": macro.get("blocked_by")}}
+    audit.append(_ok("macro_regime_gate", value=macro.get("regime")))
 
     return {"ok": True, "blocked_by": None, "audit": audit,
             "evaluated_at": datetime.now(timezone.utc).isoformat(),

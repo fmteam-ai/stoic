@@ -37,6 +37,8 @@ def _empty_db():
     fake_db.trades.find = MagicMock(return_value=MagicMock(
         to_list=AsyncMock(return_value=[]),
     ))
+    # No FRED cache → macro gate fails-open (regime="no_macro_data")
+    fake_db.fred_cache.find_one = AsyncMock(return_value=None)
     return fake_db
 
 
