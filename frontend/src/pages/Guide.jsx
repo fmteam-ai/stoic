@@ -4,7 +4,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
-    Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign, Server,
+    Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign, Server, Bitcoin,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
@@ -14,16 +14,20 @@ const SECTIONS = [
     { id: "engine",       title: "3. The Dual-AI engine",              icon: Brain },
     { id: "agents",       title: "4. The Multi-Agent Architecture",    icon: Cpu },
     { id: "cascade",      title: "5. The 10-Layer Veto Cascade",       icon: Layers },
-    { id: "risk",         title: "6. Risk & Capital Preservation",     icon: ShieldCheck },
-    { id: "setup",        title: "7. Setup — sign-up to autopilot",    icon: Rocket },
-    { id: "autopilot",    title: "8. Autopilot mode explained",        icon: Plane },
-    { id: "daily",        title: "9. Daily 5-min routine",             icon: Clock },
-    { id: "advanced",     title: "10. Advanced — tuning & auditing",   icon: SettingsIcon },
-    { id: "presets",      title: "11. Strategy Presets",                icon: Bookmark },
-    { id: "vps",          title: "12. VPS — 24/7 uptime",              icon: Server },
-    { id: "going-live",   title: "13. Going live (paper → real)",      icon: TrendingUp },
-    { id: "affiliate",    title: "14. Earn 20% recurring (affiliate)", icon: DollarSign },
-    { id: "faq",          title: "15. Quick links",                    icon: Zap },
+    { id: "explain",      title: "6. Explainable AI Trading",          icon: Sparkles },
+    { id: "multi-bot",    title: "7. Multi-Bot · Multi-Account",       icon: Layers },
+    { id: "risk",         title: "8. Risk & Capital Preservation",     icon: ShieldCheck },
+    { id: "setup",        title: "9. Setup — sign-up to autopilot",    icon: Rocket },
+    { id: "autopilot",    title: "10. Autopilot mode explained",       icon: Plane },
+    { id: "shadow",       title: "11. Paper Shadow Mode + Report",     icon: Eye },
+    { id: "daily",        title: "12. Daily 5-min routine",            icon: Clock },
+    { id: "advanced",     title: "13. Advanced — tuning & auditing",   icon: SettingsIcon },
+    { id: "presets",      title: "14. Strategy Presets",               icon: Bookmark },
+    { id: "crypto",       title: "15. Crypto · Binance Spot",          icon: Bitcoin },
+    { id: "vps",          title: "16. VPS — 24/7 uptime",              icon: Server },
+    { id: "going-live",   title: "17. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "18. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "19. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -85,12 +89,16 @@ export default function Guide() {
                     <Engine />
                     <Agents />
                     <Cascade />
+                    <ExplainSection />
+                    <MultiBotSection />
                     <RiskSection />
                     <SetupSteps />
                     <Autopilot />
+                    <ShadowSection />
                     <DailyFlow />
                     <Advanced />
                     <PresetsSection />
+                    <CryptoSection />
                     <VpsSection />
                     <GoingLive />
                     <AffiliateSection />
@@ -114,11 +122,14 @@ function H2({ id, icon: Icon, children }) {
 function P({ children }) { return <p className="text-sm text-[#A1A1AA] leading-relaxed">{children}</p>; }
 
 function Callout({ kind = "info", children }) {
-    const palette = {
-        info: { bd: "border-[#1F1F1F]", bg: "bg-[#0A0A0A]", fg: "text-[#A1A1AA]" },
-        good: { bd: "border-[#00FF41]/30", bg: "bg-[#00FF41]/10", fg: "text-[#00FF41]" },
-        warn: { bd: "border-[#FFB000]/30", bg: "bg-[#FFB000]/10", fg: "text-[#FFB000]" },
-    }[kind];
+    const palettes = {
+        info:    { bd: "border-[#1F1F1F]",     bg: "bg-[#0A0A0A]",     fg: "text-[#A1A1AA]" },
+        good:    { bd: "border-[#00FF41]/30",  bg: "bg-[#00FF41]/10",  fg: "text-[#00FF41]" },
+        success: { bd: "border-[#00FF41]/30",  bg: "bg-[#00FF41]/10",  fg: "text-[#00FF41]" },
+        warn:    { bd: "border-[#FFB000]/30",  bg: "bg-[#FFB000]/10",  fg: "text-[#FFB000]" },
+        warning: { bd: "border-[#FFB000]/30",  bg: "bg-[#FFB000]/10",  fg: "text-[#FFB000]" },
+    };
+    const palette = palettes[kind] || palettes.info;
     return (
         <div className={`px-4 py-3 border ${palette.bd} ${palette.bg} text-sm ${palette.fg} leading-relaxed`}>
             {children}
@@ -538,7 +549,7 @@ function Autopilot() {
     ];
     return (
         <section>
-            <H2 id="autopilot" icon={Plane}>8. Autopilot mode explained</H2>
+            <H2 id="autopilot" icon={Plane}>10. Autopilot mode explained</H2>
             <P>
                 Once you complete Step 6, STOIC operates on a closed loop with no human in the middle. Here&apos;s
                 exactly what happens on every cycle:
@@ -611,7 +622,7 @@ function DailyFlow() {
     ];
     return (
         <section>
-            <H2 id="daily" icon={Clock}>9. Daily 5-min routine</H2>
+            <H2 id="daily" icon={Clock}>12. Daily 5-min routine</H2>
             <P>Autopilot doesn&apos;t mean &quot;set and forget forever&quot;. About <strong className="text-white">5 minutes a day</strong> keeps you in the loop:</P>
             <ol className="space-y-1.5 mt-3 list-decimal list-inside marker:text-[#52525B] marker:font-mono">
                 {checks.map(([t, sub]) => (
@@ -632,7 +643,7 @@ function DailyFlow() {
 function Advanced() {
     return (
         <section>
-            <H2 id="advanced" icon={SettingsIcon}>10. Advanced — tuning & auditing</H2>
+            <H2 id="advanced" icon={SettingsIcon}>13. Advanced — tuning & auditing</H2>
             <div className="space-y-4 mt-3">
                 <div>
                     <div className="font-display font-bold text-base mb-1.5">🔍 Auditing a specific signal</div>
@@ -664,7 +675,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>13. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>17. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -683,7 +694,7 @@ function GoingLive() {
 function VpsSection() {
     return (
         <section>
-            <H2 id="vps" icon={Server}>12. VPS — 24/7 uptime (eliminate disconnects)</H2>
+            <H2 id="vps" icon={Server}>16. VPS — 24/7 uptime (eliminate disconnects)</H2>
             <P>
                 Autopilot only works while your <strong className="text-white">MT5 terminal is running and online</strong>.
                 If your PC sleeps, closes its lid, reboots, or loses internet — the bot loses contact with your broker,
@@ -813,7 +824,7 @@ function PresetsSection() {
     ];
     return (
         <section>
-            <H2 id="presets" icon={Bookmark}>11. Strategy Presets</H2>
+            <H2 id="presets" icon={Bookmark}>14. Strategy Presets</H2>
             <P>
                 Presets are <strong className="text-white">one-click personality profiles</strong> for the bot. They overlay
                 behaviour knobs (confidence floor, trade cap, trailing stop, cooldowns, news protector) onto your config — but
@@ -856,7 +867,7 @@ function PresetsSection() {
 function AffiliateSection() {
     return (
         <section>
-            <H2 id="affiliate" icon={DollarSign}>14. Earn 20% recurring (affiliate program)</H2>
+            <H2 id="affiliate" icon={DollarSign}>18. Earn 20% recurring (affiliate program)</H2>
             <P>
                 Refer one trader — get paid every month they stay subscribed. STOIC pays{" "}
                 <strong className="text-[#FFD700]">20% recurring commission</strong> on the base subscription fee for the
@@ -932,7 +943,12 @@ function QuickLinks() {
         { to: "/signals", label: "AI Signals" },
         { to: "/bot", label: "Bot Config" },
         { to: "/accounts", label: "MT5 Accounts" },
+        { to: "/crypto", label: "Crypto · Binance" },
         { to: "/trades", label: "Trades" },
+        { to: "/shadow-performance", label: "Shadow Report" },
+        { to: "/research", label: "Research Agent" },
+        { to: "/portfolio", label: "Portfolio Risk" },
+        { to: "/execution", label: "Execution Intel" },
         { to: "/analytics", label: "Analytics" },
         { to: "/affiliate", label: "Affiliate" },
         { to: "/billing", label: "Billing" },
@@ -941,7 +957,7 @@ function QuickLinks() {
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>15. Quick links</H2>
+            <H2 id="faq" icon={Zap}>19. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (
@@ -956,6 +972,169 @@ function QuickLinks() {
                 Still stuck? Open <Link to="/faq" className="text-[#00FF41] hover:underline">FAQ</Link> for the 40 most common
                 questions, or use the <Link to="/commander" className="text-[#00FF41] hover:underline">Risk Commander</Link> chat for ad-hoc questions about market state, the bot&apos;s reasoning, or your portfolio.
             </Callout>
+        </section>
+    );
+}
+
+
+// ─── New sections (iter-34 → iter-40) ──────────────────────────────────────
+
+function ExplainSection() {
+    return (
+        <section>
+            <H2 id="explain" icon={Sparkles}>6. Explainable AI Trading</H2>
+            <P>
+                Every trade STOIC opens carries a full reasoning trail — no black-box decisions.
+                Click <strong className="text-[#00FF41]">EXPLAIN</strong> on any row in the
+                <Link to="/trades" className="text-[#00FF41] hover:underline mx-1">Trades</Link>
+                page to open a 4-section breakdown:
+            </P>
+            <ol className="text-sm text-[#A1A1AA] space-y-2 mt-3 ml-4 list-decimal">
+                <li><strong className="text-white">WHY DID I ENTER?</strong> — strategy summary + technical / macro / news bias scores that nudged the AI toward BUY or SELL.</li>
+                <li><strong className="text-white">WHY THIS SIZE?</strong> — original lot, vol-parity scaling, Kelly fraction, blended sizing multiplier, 30-day win-rate, and the human-readable reason.</li>
+                <li><strong className="text-white">WHAT FACTORS MATTERED?</strong> — top-3 ranked contributors tagged <span className="text-[#FFD700]">HIGH</span> or <span className="text-[#0099FF]">MEDIUM</span> impact (regime, session, macro alignment, etc.).</li>
+                <li><strong className="text-white">WHAT RISKS EXIST?</strong> — exact SL/TP prices, pip distance, max-loss in USD, % of equity at risk, and macro-gate state.</li>
+            </ol>
+            <Callout kind="info">
+                Snapshots are frozen at entry, so the explanation never drifts even if the bot
+                changes config later. Older trades fall back to a live-composition view.
+            </Callout>
+            <Callout kind="success">
+                Combine with the <strong>opt-in auto-accept</strong> on the Research Agent —
+                proposals with ≥ 10% backtest improvement can auto-apply to your bot. The explainer
+                shows exactly why the new strategy thinks it&apos;ll do better.
+            </Callout>
+            <CTAButton to="/trades" testid="cta-trades-explain">Open Trades →</CTAButton>
+        </section>
+    );
+}
+
+function MultiBotSection() {
+    return (
+        <section>
+            <H2 id="multi-bot" icon={Layers}>7. Multi-Bot · Multi-Account</H2>
+            <P>
+                You can attach as many MT5 accounts and Binance Spot accounts as you want.
+                Each one gets its own independent bot config — different risk levels,
+                different symbols, different strategy styles — all running in parallel.
+            </P>
+            <Step n="1" title="Pick the scope per page" testid="multi-bot-scope">
+                On <Link to="/bot" className="text-[#00FF41] hover:underline">Bot Config</Link>,
+                a scope selector at the top lets you edit the <strong>default profile</strong> (applies to every account that has no override) or a specific account. The same pattern shows up on Trades, Safety Blocks, Portfolio Risk, and Execution Intel.
+            </Step>
+            <Step n="2" title="Apply strategies smartly" testid="multi-bot-apply">
+                When you click <strong>DEPLOY</strong> on the Strategies page or
+                <strong> APPLY TO BOT</strong> on a Research proposal, you&apos;ll see a
+                target dropdown:
+                <ul className="text-xs text-[#A1A1AA] mt-2 ml-4 list-disc space-y-1">
+                    <li><strong className="text-white">Matching-symbol bots (default)</strong> — only updates bots whose symbols overlap the proposal. Safe & smart.</li>
+                    <li><strong className="text-white">All bots</strong> — broadcast to everything.</li>
+                    <li><strong className="text-white">Only · &lt;account name&gt;</strong> — surgical single-account update.</li>
+                </ul>
+            </Step>
+            <Step n="3" title="Audit trail on every change" testid="multi-bot-audit">
+                Every config update stamps the bot doc with <code className="text-[#FFD700]">last_change_source</code>
+                (research / nl_strategy / risk_commander / ui_manual),
+                <code className="text-[#FFD700] mx-1">last_change_target_mode</code>,
+                and <code className="text-[#FFD700]">last_change_applied_at</code>. You can
+                always answer &quot;why is this bot set up like this?&quot;.
+            </Step>
+            <Callout kind="info">
+                <strong>Telegram quick controls</strong> (<code>/run</code>, <code>/stop</code>, <code>/panic</code>)
+                broadcast to ALL bots by default. Toast / Telegram reply tells you
+                exactly how many bots were affected.
+            </Callout>
+        </section>
+    );
+}
+
+function ShadowSection() {
+    return (
+        <section>
+            <H2 id="shadow" icon={Eye}>11. Paper Shadow Mode + Performance Report</H2>
+            <P>
+                The fastest, safest way to validate your bot config before risking $1.
+                Shadow Mode runs the <em>full</em> AI pipeline — every signal, every veto,
+                every sizing decision — but skips execution. Signals are logged with
+                <code className="text-[#06B6D4] mx-1">origin=&quot;shadow&quot;</code>.
+                After 1-2 weeks you have a real personal backtest of YOUR config against the live market.
+            </P>
+            <Step n="1" title="Enable Shadow Mode" testid="shadow-enable">
+                Open <Link to="/bot" className="text-[#00FF41] hover:underline">Bot Config</Link>,
+                scroll to the <strong>Paper Shadow Mode</strong> toggle (eye icon). Turn it ON.
+                You can leave the bot itself OFF — Shadow Mode runs even when the bot is paused.
+            </Step>
+            <Step n="2" title="Wait for signals to accumulate" testid="shadow-wait">
+                The bot ticks once per minute. Expect ~5-15 shadow signals per day depending on
+                volatility and your symbols. HOLD signals don&apos;t count toward the report.
+            </Step>
+            <Step n="3" title="Open the Shadow Performance Report" testid="shadow-report">
+                <Link to="/shadow-performance" className="text-[#00FF41] hover:underline">Shadow Report</Link>
+                {" "}aggregates everything into actionable quant metrics:
+                <ul className="text-xs text-[#A1A1AA] mt-2 ml-4 list-disc space-y-1">
+                    <li><strong className="text-white">Win rate, expectancy (R), total R</strong> — the only numbers that matter.</li>
+                    <li><strong className="text-white">Sharpe-lite</strong> — mean ÷ stdev of per-signal R, gives a feel for consistency.</li>
+                    <li><strong className="text-white">Per-symbol breakdown</strong> — see whether your gold edge is better than your BTC edge.</li>
+                    <li><strong className="text-white">Full signal log</strong> with each signal&apos;s outcome (TP / SL / open) and R-multiple.</li>
+                </ul>
+            </Step>
+            <Callout kind="warning">
+                Outcomes resolve at <strong>daily-candle granularity</strong>. When both TP and SL
+                are hit in the same day, the report conservatively assumes SL filled first
+                (bad-case for you). Real intraday execution would resolve faster.
+            </Callout>
+            <Callout kind="success">
+                After 2 weeks of shadow data showing positive expectancy + healthy win-rate, you can
+                flip Shadow Mode OFF and turn on the bot for real — with calibrated expectations
+                of how it&apos;ll perform.
+            </Callout>
+            <CTAButton to="/shadow-performance" testid="cta-shadow">Open Shadow Report →</CTAButton>
+        </section>
+    );
+}
+
+function CryptoSection() {
+    return (
+        <section>
+            <H2 id="crypto" icon={Bitcoin}>15. Crypto · Binance Spot</H2>
+            <P>
+                STOIC trades BTC/USDT on Binance Spot via the CCXT REST API — server-side,
+                no EA needed. Runs the same Safety Guardian veto cascade, the same Explainable AI
+                snapshot, and the same multi-agent pipeline as MT5.
+            </P>
+            <Step n="1" title="Get a Binance Testnet API key" testid="crypto-testnet-key">
+                Go to <a href="https://testnet.binance.vision/" target="_blank" rel="noopener noreferrer"
+                    className="text-[#FFD700] hover:underline">testnet.binance.vision</a>,
+                generate a key with <strong>Enable Spot Trading</strong> permission.
+                <strong className="text-[#FF3B30]"> Do NOT grant Withdrawals.</strong>
+            </Step>
+            <Step n="2" title="Link the account" testid="crypto-link">
+                Open <Link to="/crypto" className="text-[#00FF41] hover:underline">Crypto · Binance</Link>,
+                click <strong>ADD BINANCE ACCOUNT</strong>, paste your key + secret. The bot
+                verifies the keys against Binance before saving — if testnet is geo-blocked from your
+                location, you&apos;ll see a clear error. Keys are AES-256-GCM encrypted at rest.
+            </Step>
+            <Step n="3" title="Verify defence-in-depth" testid="crypto-defence">
+                A trade only goes live when ALL three of these are true:
+                <ul className="text-xs text-[#A1A1AA] mt-2 ml-4 list-disc space-y-1">
+                    <li><code className="text-[#FFD700]">account.testnet = false</code></li>
+                    <li><code className="text-[#FFD700]">account.live = true</code></li>
+                    <li><code className="text-[#FFD700]">BINANCE_LIVE_ENABLED=true</code> in backend env (admin-only kill-switch)</li>
+                </ul>
+                Any one false → testnet. The dashboard banner shows the master state.
+            </Step>
+            <Step n="4" title="Tighter crypto risk caps" testid="crypto-cap">
+                Crypto trades have a separate per-trade risk cap (default 0.5% of equity, vs
+                MT5&apos;s 1%). You can tighten it per-account in
+                <Link to="/bot" className="text-[#00FF41] hover:underline mx-1">Bot Config</Link>
+                via the <strong>Crypto Risk Cap (per-account override)</strong> field —
+                e.g. set 0.1% on a volatile altcoin pair.
+            </Step>
+            <Callout kind="info">
+                INSPECT modal on any Binance account shows live BTC/USDT ticker (bid/ask/last)
+                + your full balance breakdown.
+            </Callout>
+            <CTAButton to="/crypto" testid="cta-crypto">Open Crypto · Binance →</CTAButton>
         </section>
     );
 }

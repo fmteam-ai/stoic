@@ -8,6 +8,12 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-25 (iter-41) — **Guide documentation refresh (Iter 34-40 chapters live)**:
+  - Added 4 new chapters to `/guide` (`pages/Guide.jsx`) covering features shipped in iter 34-40 — section 6 *Explainable AI Trading*, section 7 *Multi-Bot · Multi-Account*, section 11 *Paper Shadow Mode + Report*, section 15 *Crypto · Binance Spot*. Table-of-contents renumbered (now 19 sections).
+  - **Bug fix**: React crash on `/guide` (`PAGEERROR: Cannot read properties of undefined (reading 'bd')`) was caused by the new sections passing `kind="success"` / `kind="warning"` to the local `Callout` palette which only had `info`/`good`/`warn` keys. Extended the palette with `success` (alias of `good`) and `warning` (alias of `warn`) and added an `info` fallback so unknown kinds never crash again.
+  - Verified live via screenshot tool — all 19 TOC anchors render, no console errors, page paints cleanly.
+
+
 - 2026-06-25 (iter-38) — **Live-simulation polish pass (4 user-visible bugs closed)**:
   - **HOLD-signal zero-stop footgun** (ai_signals.py line ~509): when `final_action == "HOLD"`, response now returns `entry_price=None, stop_loss=None, take_profit=None, tp1/2/3=None, sl_pips=0, tp_pips=[0,0,0], lot_size=0`. Previously the response had `entry=SL=TP=current_price` which would be a zero-risk trade if ever forced through execution. `tradeable=False` already prevented exec via UI but defence-in-depth says don't emit broken math.
   - **`/api/macro/freeze/{symbol}` 404 fix** (routes/macro_routes.py): added the route as an alias to `economic_calendar.macro_freeze_check`. The frontend MacroClimate widget was constantly hitting this 404 (visible in production logs). Identical response shape to `/api/calendar/freeze/{symbol}`.
