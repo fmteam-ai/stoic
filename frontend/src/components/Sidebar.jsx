@@ -42,7 +42,7 @@ export function Sidebar({ onNavigate }) {
 
     return (
         <aside className="w-full md:w-60 md:h-screen bg-[#0A0A0A] border-r border-[#1F1F1F] flex md:flex-col flex-row md:fixed md:left-0 md:top-0 z-30">
-            <div className="p-5 border-b border-[#1F1F1F] hidden md:block">
+            <div className="p-5 border-b border-[#1F1F1F] hidden md:block shrink-0">
                 <div className="flex items-center gap-2.5">
                     <StoicMark size={36} />
                     <div>
@@ -52,7 +52,7 @@ export function Sidebar({ onNavigate }) {
                 </div>
             </div>
 
-            <nav className="flex md:flex-col flex-row md:p-2 p-1 gap-0.5 flex-1 overflow-x-auto md:overflow-x-visible">
+            <nav className="stoic-sidebar-scroll flex md:flex-col flex-row md:p-2 p-1 gap-0.5 flex-1 min-h-0 overflow-x-auto md:overflow-x-visible md:overflow-y-auto">
                 {items.map(it => (
                     <NavLink
                         key={it.to}
@@ -83,7 +83,7 @@ export function Sidebar({ onNavigate }) {
                 </a>
             </nav>
 
-            <div className="hidden md:block p-3 border-t border-[#1F1F1F]">
+            <div className="hidden md:block p-3 border-t border-[#1F1F1F] shrink-0">
                 <div className="px-2 py-2 mb-2">
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">SIGNED IN AS</div>
                     <div className="text-sm truncate text-white" data-testid="sidebar-user-email">{user?.email}</div>

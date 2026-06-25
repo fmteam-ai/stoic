@@ -68,7 +68,7 @@ export function QuickActionsBar() {
 
     return (
         <>
-            <div className="fixed top-3 right-3 z-40 flex items-center gap-1.5 sm:gap-2 bg-[#0A0A0A]/95 backdrop-blur-md border border-[#1F1F1F] shadow-xl px-2 py-1.5"
+            <div className="fixed top-8 right-3 z-40 flex items-center gap-1.5 sm:gap-2 bg-[#0A0A0A]/95 backdrop-blur-md border border-[#1F1F1F] shadow-xl px-2 py-1.5"
                  data-testid="quick-actions-bar">
 
                 {/* Today's P&L */}
