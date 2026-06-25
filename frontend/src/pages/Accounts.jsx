@@ -551,15 +551,41 @@ function CredentialsPanel({ account, onUpdate, onError, onMessage }) {
     const [master, setMaster] = useState("");
     const [revealed, setRevealed] = useState(null);
     const [saving, setSaving] = useState(false);
+    const [revealPrompt, setRevealPrompt] = useState(null); // { kind } | null
+    const [pwInput, setPwInput] = useState("");
+    const [includeMaster, setIncludeMaster] = useState(false);
+    const [revealing, setRevealing] = useState(false);
 
     const hasAny = account.has_investor_password || account.has_master_password;
 
-    const reveal = async () => {
+    const openRevealPrompt = (kind) => {
+        // If already revealed, toggle off
+        if (revealed) {
+            setRevealed(null);
+            return;
+        }
+        setPwInput("");
+        setIncludeMaster(kind === "master");
+        setRevealPrompt({ kind });
+    };
+
+    const submitReveal = async () => {
+        if (!pwInput) {
+            onError("Enter your account password to continue.");
+            return;
+        }
+        setRevealing(true);
         try {
-            const { data } = await api.post(`/accounts/${account.id}/credentials/reveal`);
+            const { data } = await api.post(
+                `/accounts/${account.id}/credentials/reveal`,
+                { password: pwInput, include_master: includeMaster },
+            );
             setRevealed(data);
+            setRevealPrompt(null);
+            setPwInput("");
             setTimeout(() => setRevealed(null), 30_000); // auto-hide after 30s
         } catch (e) { onError(formatApiError(e)); }
+        finally { setRevealing(false); }
     };
 
     const save = async () => {
@@ -620,8 +646,8 @@ function CredentialsPanel({ account, onUpdate, onError, onMessage }) {
                                 </div>
                                 {stored && (
                                     <div className="flex items-center gap-1">
-                                        <button onClick={reveal} data-testid={`reveal-${kind}-${account.account_number}`}
-                                            className="p-1.5 border border-[#1F1F1F] hover:border-[#FFD700] text-[#A1A1AA] hover:text-[#FFD700]" title={value ? "Hide" : "Reveal (auto-hides in 30s)"}>
+                                        <button onClick={() => openRevealPrompt(kind)} data-testid={`reveal-${kind}-${account.account_number}`}
+                                            className="p-1.5 border border-[#1F1F1F] hover:border-[#FFD700] text-[#A1A1AA] hover:text-[#FFD700]" title={value ? "Hide" : "Reveal (requires password)"}>
                                             {value ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
                                         </button>
                                         <button onClick={() => clear(kind)} data-testid={`clear-${kind}-${account.account_number}`}
@@ -661,6 +687,54 @@ function CredentialsPanel({ account, onUpdate, onError, onMessage }) {
                             className="px-3 py-1.5 bg-[#FFD700] text-black font-bold text-[10px] tracking-widest disabled:opacity-50">
                             {saving ? "SAVING…" : "SAVE ENCRYPTED"}
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {revealPrompt && (
+                <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+                     data-testid={`reveal-modal-${account.account_number}`}
+                     onClick={() => !revealing && setRevealPrompt(null)}>
+                    <div className="bg-[#0A0A0A] border border-[#FFD700]/40 max-w-md w-full"
+                         onClick={(e) => e.stopPropagation()}>
+                        <div className="px-5 py-4 border-b border-[#1F1F1F] flex items-center gap-2">
+                            <Lock className="w-4 h-4 text-[#FFD700]" />
+                            <div>
+                                <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">CONFIRM TO REVEAL CREDENTIALS</div>
+                                <div className="text-xs text-[#A1A1AA] mt-1">Every reveal is audit-logged with your user, account, and timestamp.</div>
+                            </div>
+                        </div>
+                        <div className="px-5 py-4 space-y-3">
+                            <div>
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1.5">YOUR ACCOUNT PASSWORD</div>
+                                <input type="password" autoFocus
+                                       value={pwInput}
+                                       onChange={(e) => setPwInput(e.target.value)}
+                                       onKeyDown={(e) => e.key === "Enter" && submitReveal()}
+                                       data-testid={`reveal-pw-input-${account.account_number}`}
+                                       className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
+                                       placeholder="•••••••••" />
+                            </div>
+                            {account.has_master_password && (
+                                <label className="flex items-center gap-2 text-xs text-[#A1A1AA] cursor-pointer">
+                                    <input type="checkbox"
+                                           checked={includeMaster}
+                                           onChange={(e) => setIncludeMaster(e.target.checked)}
+                                           data-testid={`reveal-include-master-${account.account_number}`}
+                                           className="accent-[#FFD700]" />
+                                    Also reveal <span className="text-[#FF3B30] font-mono">master password</span> (highest-risk)
+                                </label>
+                            )}
+                        </div>
+                        <div className="px-5 py-3 border-t border-[#1F1F1F] flex justify-end gap-2">
+                            <button onClick={() => setRevealPrompt(null)} disabled={revealing}
+                                    className="px-3 py-1.5 border border-[#1F1F1F] text-[10px] font-mono tracking-widest disabled:opacity-40">CANCEL</button>
+                            <button onClick={submitReveal} disabled={revealing || !pwInput}
+                                    data-testid={`reveal-submit-${account.account_number}`}
+                                    className="px-3 py-1.5 bg-[#FFD700] text-black font-bold text-[10px] tracking-widest disabled:opacity-40">
+                                {revealing ? "REVEALING…" : "REVEAL"}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

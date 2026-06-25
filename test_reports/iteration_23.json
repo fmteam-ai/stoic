@@ -1,0 +1,49 @@
+{
+  "summary": "Iter23 — Verified the frontend fix for the credentials reveal flow flagged in iter22. The new password-prompt modal in /app/frontend/src/pages/Accounts.jsx (CredentialsPanel) is fully functional end-to-end. All 6 frontend criteria pass: (1) Eye-icon opens modal with header 'CONFIRM TO REVEAL CREDENTIALS', audit-log disclaimer, password input, CANCEL+REVEAL buttons. (2) Correct admin password (admin123) reveals investor_password in cleartext, no 422. (3) Wrong password → 403 → modal stays OPEN, formatApiError toast 'Password re-confirmation failed' shown. (4) CANCEL button closes the modal. (5) include_master checkbox visible only when has_master_password=true; when checked, response includes both investor + master. (6) Enter key in password input submits reveal. Backend regression: 18/18 of test_iter22_security_hardening + test_iter22_live_verification PASS. Audit log persistence verified in db.credential_reveals (result='ok' revealed=['investor','master'] for include_master path; result='wrong_password' revealed=[] for the 403 path).",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_security_hardening.py",
+    "/app/backend/tests/test_iter22_live_verification.py",
+    "/app/test_reports/pytest/iter27_iter22_regression.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "CredentialsPanel.submitReveal() (Accounts.jsx:572-589) correctly POSTs {password, include_master} and uses formatApiError(e) so 403 surfaces as a readable toast. On error the modal is NOT closed (setRevealPrompt(null) is only called inside the try-success branch) — exactly the desired retry-friendly behavior. ✅",
+    "openRevealPrompt(kind) (Accounts.jsx:561-570) auto-sets includeMaster=true when the user clicks the master eye icon — nice UX touch. ✅",
+    "Modal click-outside handler `onClick={() => !revealing && setRevealPrompt(null)}` is correctly gated by `revealing` to prevent accidental close during the in-flight request. ✅",
+    "include_master checkbox is conditionally rendered only when `account.has_master_password` is truthy (line 718). If the field is undefined the checkbox is hidden — no crash. ✅",
+    "Reveal auto-hides after 30s via setTimeout(() => setRevealed(null), 30_000). Note: the timeout is not cleared on unmount of the panel — minor memory-leak risk if the user navigates away during the 30s window but functionally harmless.",
+    "MINOR (carry-over from iter22, not in scope this iter): bot_routes.py / nl_routes.py / signal_routes.py / affiliate_routes.py still call raw ObjectId() on user-supplied IDs in many places. Migration to route_utils.parse_object_id is still pending."
+  ],
+
+  "updated_files": [],
+
+  "success_rate": {
+    "backend": "100% (18/18 iter22 regression suite)",
+    "frontend": "100% (all 6 reveal-modal criteria verified end-to-end via Playwright)"
+  },
+
+  "test_credentials": "admin@trading.bot / admin123",
+
+  "seed_data_creation": "Pre-test: PATCH /api/accounts/6a3ad0ef17f40ac1dd3eb3ef/credentials with {investor_password:'testpw123', master_password:'mastertest456'} to populate the admin's micro account credentials (previously empty). This is the supported seeding path described in the request's other_misc_info. No mongo-direct writes. Audit rows in db.credential_reveals are intentional side-effects of the tests and remain (permanent audit trail).",
+
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+
+  "context_for_next_testing_agent": "The iter22 frontend caller drift is fully resolved. To re-run the regression: `cd /app/backend && set -a && source .env && source /app/frontend/.env && set +a && python -m pytest tests/test_iter22_security_hardening.py tests/test_iter22_live_verification.py -v` → expect 18/18. UI smoke: login as admin → /accounts → expand admin's micro account (account_number 67198987) → eye icon on INVESTOR PASSWORD opens the modal at data-testid='reveal-modal-67198987'. Correct password 'admin123' reveals; wrong password keeps modal open with formatApiError toast. To re-seed credentials if cleared, PATCH /api/accounts/6a3ad0ef17f40ac1dd3eb3ef/credentials with {investor_password,'master_password'}.",
+
+  "rca of the issue": "Iter22 spec changed the /credentials/reveal endpoint signature from no-body to required {password, include_master?}. Iter22 caught the broken caller in Accounts.jsx:559 (POST with no body → 422). Iter23 confirms the fix: a modal prompts for the user's account password and optionally a 'Also reveal master password' checkbox, posts {password, include_master}, surfaces errors via formatApiError without closing the modal, and the audit log in db.credential_reveals correctly records result='ok' with revealed=['investor'] or ['investor','master'] on success, result='wrong_password' with revealed=[] on 403. End-to-end contract is now consistent."
+}
