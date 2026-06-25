@@ -30,6 +30,7 @@ from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
 from risk import get_profile, compute_lot_for_account
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
+from research_agent.self_improver import daily_sweep as sweep_research_agent
 
 logger = logging.getLogger("bot-runner")
 
@@ -541,6 +542,18 @@ async def loop():
                     )
             except Exception as e:
                 logger.exception("Auto-deleverage sweep failed: %s", e)
+            # Self-Improving Research Agent — once-per-24h per user. The
+            # per-user cooldown is enforced inside `run_for_user` so cheap to
+            # call on every tick; >99% of calls return immediately.
+            try:
+                rs = await sweep_research_agent(db)
+                if rs.get("ran"):
+                    logger.warning(
+                        "Self-improve sweep · ran=%d users · proposals=%d",
+                        rs["ran"], rs["proposals_total"],
+                    )
+            except Exception as e:
+                logger.exception("Self-improve sweep failed: %s", e)
         except Exception as e:
             logger.exception("Bot runner tick failed: %s", e)
         await asyncio.sleep(interval)

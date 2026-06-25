@@ -5,7 +5,7 @@ import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
-    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield, Zap
+    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield, Zap, Brain
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -15,6 +15,7 @@ const items = [
     { to: "/signals", label: "AI Signals", icon: Activity, testid: "nav-signals" },
     { to: "/agents", label: "Agents", icon: Cpu, testid: "nav-agents" },
     { to: "/strategies", label: "Strategies", icon: Sparkles, testid: "nav-strategies" },
+    { to: "/research", label: "Research Agent", icon: Brain, testid: "nav-research" },
     { to: "/commander", label: "Risk Commander", icon: MessageSquare, testid: "nav-commander" },
     { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
     { to: "/accounts", label: "MT5 Accounts", icon: Wallet, testid: "nav-accounts" },
