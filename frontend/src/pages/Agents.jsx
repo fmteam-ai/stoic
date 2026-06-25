@@ -64,10 +64,12 @@ export default function Agents() {
     const [activity, setActivity] = useState([]);
     const [macro, setMacro] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [err, setErr] = useState("");
 
     const load = useCallback(async () => {
         setErr("");
+        setRefreshing(true);
         try {
             const [act, mac] = await Promise.all([
                 api.get("/agents/activity?limit=30"),
@@ -76,7 +78,7 @@ export default function Agents() {
             setActivity(act.data.items || []);
             setMacro(mac.data);
         } catch (e) { setErr(formatApiError(e)); }
-        finally { setLoading(false); }
+        finally { setLoading(false); setRefreshing(false); }
     }, []);
 
     useEffect(() => { load(); }, [load]);
@@ -92,9 +94,10 @@ export default function Agents() {
                 subtitle="7 specialised agents · Technical + Macro + News → Strategy → Risk → Allocator → Execution Optimizer"
                 testid="agents-header"
                 action={
-                    <button onClick={load} data-testid="agents-refresh"
-                        className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
-                        <RefreshCw className="w-3.5 h-3.5" /> REFRESH
+                    <button onClick={load} disabled={refreshing} data-testid="agents-refresh"
+                        className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#00FF41]/40 text-xs font-mono tracking-widest transition-colors disabled:opacity-60">
+                        <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin text-[#00FF41]" : ""}`} />
+                        {refreshing ? "REFRESHING…" : "REFRESH"}
                     </button>
                 }
             />
