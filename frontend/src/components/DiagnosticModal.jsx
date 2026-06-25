@@ -152,7 +152,7 @@ function Section({ section, applyFix, fixing }) {
                 {section.checks.map((c, i) => {
                     const CS = STATUS_STYLE[c.status] || STATUS_STYLE.warn;
                     return (
-                        <div key={i} className="px-4 py-2.5 flex items-start gap-3" data-testid={`diag-check-${section.id}-${i}`}>
+                        <div key={`${c.label}-${i}`} className="px-4 py-2.5 flex items-start gap-3" data-testid={`diag-check-${section.id}-${i}`}>
                             <CS.Icon className="w-3.5 h-3.5 mt-0.5 shrink-0" style={{ color: CS.color }} />
                             <div className="flex-1 min-w-0">
                                 <div className="text-xs text-[#E4E4E7]">{c.label}</div>

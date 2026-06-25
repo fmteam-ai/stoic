@@ -41,7 +41,7 @@ function Sparkline({ data, color = "#00FF41" }) {
                 const x = i * step;
                 const y = h - (d.count / max) * (h - 6) - 3;
                 return (
-                    <g key={i}>
+                    <g key={d.date}>
                         <circle cx={x} cy={y} r={d.count > 0 ? 3 : 1.5}
                                 fill={d.count > 0 ? color : "#52525B"} />
                         <title>{`${d.date}: ${d.count} block${d.count !== 1 ? "s" : ""}`}</title>
@@ -143,8 +143,8 @@ function BlockRow({ block, expanded, onToggle }) {
                                     AUDIT TRAIL
                                 </div>
                                 <div className="space-y-1">
-                                    {(block.audit || []).map((a, i) => (
-                                        <div key={i} className="flex items-start gap-2">
+                                    {(block.audit || []).map((a) => (
+                                        <div key={a.name} className="flex items-start gap-2">
                                             <span className={`font-mono text-[9px] px-1 mt-0.5 ${
                                                 a.ok ? "text-[#00FF41]" : "text-[#FF3B30]"
                                             }`}>

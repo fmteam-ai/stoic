@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from auth import get_current_user
 from database import get_db
 from safety_guardian import get_guardian_config
+from route_utils import parse_object_id
 
 router = APIRouter(prefix="/safety-blocks", tags=["safety-blocks"])
 
@@ -254,10 +255,7 @@ async def apply_suggestion(payload: dict, user=Depends(get_current_user)):
 
     db = get_db()
     if scope_account_id:
-        try:
-            acct_oid = __import__("bson").ObjectId(scope_account_id)
-        except Exception:
-            raise HTTPException(status_code=404, detail="Account not found")
+        acct_oid = parse_object_id(scope_account_id, "Account")
         owns = await db.accounts.find_one({
             "_id": acct_oid, "user_id": user["id"],
         })
@@ -298,11 +296,7 @@ async def apply_suggestion(payload: dict, user=Depends(get_current_user)):
 async def block_detail(block_id: str, user=Depends(get_current_user)):
     """Return a single block with full audit trail. User can only view their own."""
     db = get_db()
-    from bson import ObjectId
-    try:
-        oid = ObjectId(block_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid block id")
+    oid = parse_object_id(block_id, "Block")
     doc = await db.safety_blocks.find_one({"_id": oid, "user_id": user["id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Block not found")

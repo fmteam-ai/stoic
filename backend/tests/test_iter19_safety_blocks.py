@@ -139,7 +139,8 @@ def test_stats_requires_auth():
 def test_block_detail_invalid_objectid(user_a):
     s, _ = user_a
     r = s.get(f"{BASE_URL}/api/safety-blocks/not-an-objectid", timeout=10)
-    assert r.status_code == 400
+    # Iter22 hardening normalized invalid-ObjectId → 404 across all resources
+    assert r.status_code == 404
 
 
 def test_block_detail_nonexistent(user_a):
