@@ -8,6 +8,7 @@ import { IntegrityWidget } from "@/components/IntegrityWidget";
 import { PerAccountComparison } from "@/components/PerAccountComparison";
 import { EaVersionStrip } from "@/components/EaVersionStrip";
 import { BotHealthScore } from "@/components/BotHealthScore";
+import { MacroClimate } from "@/components/MacroClimate";
 import { DiagnosticModal } from "@/components/DiagnosticModal";
 import { useAuth } from "@/context/AuthContext";
 import { Stethoscope } from "lucide-react";
@@ -516,6 +517,8 @@ export default function Dashboard() {
 
                 {/* Top of dashboard — single 0-100 score replaces "scan 7 strips" cognitive load. */}
                 <BotHealthScore refreshSignal={lastEvent?.ts} />
+
+                <MacroClimate />
 
                 {isAdmin && (
                     <div className="flex items-center justify-between px-1">
