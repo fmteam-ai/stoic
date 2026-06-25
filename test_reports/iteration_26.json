@@ -1,0 +1,44 @@
+{
+  "summary": "Iter-35 Binance Spot CCXT integration: backend HTTP smoke test pass. All 17 new HTTP tests pass + all 17 prior unit tests pass (34/34 total). Auth gates, validation, bad-keys rejection, defence-in-depth live toggle, and regression endpoints all verified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter35_crypto_routes_http.py",
+    "/app/backend/tests/test_iter35_binance_ccxt.py",
+    "/app/test_reports/pytest/iter35_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "crypto_routes.py POST /accounts catches Exception broadly during fetch_balance probe; consider narrowing to ccxt.AuthenticationError/NetworkError for clearer 422 vs 502 separation, but current 422-with-detail behaviour is acceptable for UX.",
+    "_serialize() decrypts api_key on every list call only for masking — fine for low cardinality (single-digit accounts per user) but could be cached if list size grows.",
+    "binance_engine.py line 156: account['_id'] used directly — assumes caller always passes a Mongo doc with _id; route layer satisfies this via _load_user_account, but the engine itself could KeyError if called from a future code path with a dict that omits _id. Defensive .get('_id') with explicit raise would be safer.",
+    "No rate limit on POST /api/crypto/accounts probe — a script could spam Binance via the sanity-fetch (and Binance will throttle/ban). Consider a per-user cooldown."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter35_crypto_routes_http.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (34/34)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — POST /crypto/accounts with garbage keys correctly rejects with 422 BEFORE persist, so no test rows created. Pre/post list-count assertion confirms no leak.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-35 crypto routes fully covered. HTTP smoke file at /app/backend/tests/test_iter35_crypto_routes_http.py is the regression file for future iters. Live exchange calls intentionally NOT exercised (no testnet keys). For iter-36 (Profitability Pack phase 2 / OCO orders), add tests for the SL/TP OCO branch in binance_engine.execute() and the limit-order pending→open transition.",
+  "verified_behaviours": [
+    "GET /api/crypto/status → 200 {live_enabled:false, default_testnet:true}",
+    "GET /api/crypto/accounts → 200 [] (no leak of `creds`)",
+    "POST /api/crypto/accounts with bad keys → 422, no row persisted (pre==post count)",
+    "POST /api/crypto/accounts validation: missing label/keys → 422; min_length=10 enforced",
+    "DELETE /api/crypto/accounts/{unknown-objectid} → 404",
+    "DELETE /api/crypto/accounts/{malformed-id} → 400",
+    "All /api/crypto/* require auth (401 without cookie)",
+    "BinanceCCXTEngine import: clean",
+    "Regression: /api/trades, /api/accounts, /api/research/proposals, /api/trades/{id}/explain all 200/expected"
+  ]
+}

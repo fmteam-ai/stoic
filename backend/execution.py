@@ -205,6 +205,12 @@ class PaperEngine(ExecutionEngine):
 
 def for_account(account: dict) -> ExecutionEngine:
     """Pick the right engine for an account."""
+    kind = (account.get("kind") or "mt5").lower()
+    if kind == "binance":
+        # Local import — avoids a circular dep (binance_engine imports from
+        # execution.ExecutionEngine).
+        from crypto_bridge.binance_engine import BinanceCCXTEngine
+        return BinanceCCXTEngine()
     mode = (account.get("mode") or "live").lower()
     if mode == "paper":
         return PaperEngine()

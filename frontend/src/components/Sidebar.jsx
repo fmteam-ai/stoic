@@ -5,7 +5,7 @@ import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
-    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield, Zap, Brain
+    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield, Zap, Brain, Bitcoin
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -19,6 +19,7 @@ const items = [
     { to: "/commander", label: "Risk Commander", icon: MessageSquare, testid: "nav-commander" },
     { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
     { to: "/accounts", label: "MT5 Accounts", icon: Wallet, testid: "nav-accounts" },
+    { to: "/crypto", label: "Crypto · Binance", icon: Bitcoin, testid: "nav-crypto" },
     { to: "/trades", label: "Trades", icon: ListChecks, testid: "nav-trades" },
     { to: "/safety-blocks", label: "Safety Blocks", icon: ShieldCheck, testid: "nav-safety-blocks" },
     { to: "/portfolio", label: "Portfolio Risk", icon: Shield, testid: "nav-portfolio" },

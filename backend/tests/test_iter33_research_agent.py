@@ -143,6 +143,9 @@ async def test_self_improver_full_run(monkeypatch):
         "max_concurrent_trades": 2,
     })
     db.research_runs.update_one = AsyncMock()
+    # iter-34 added _maybe_auto_accept which reads db.users.find_one.
+    # Default to no user/no setting → auto-accept stays disabled in this test.
+    db.users.find_one = AsyncMock(return_value=None)
     inserted = []
     async def fake_insert_many(docs):
         inserted.extend(docs)
