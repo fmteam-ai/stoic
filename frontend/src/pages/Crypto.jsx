@@ -13,6 +13,7 @@ export default function Crypto() {
     const [form, setForm] = useState(emptyForm);
     const [submitting, setSubmitting] = useState(false);
     const [err, setErr] = useState("");
+    const [formErr, setFormErr] = useState("");
     const [loading, setLoading] = useState(true);
     const [activeAccount, setActiveAccount] = useState(null);
 
@@ -32,13 +33,17 @@ export default function Crypto() {
 
     const submit = async (e) => {
         e.preventDefault();
-        setErr(""); setSubmitting(true);
+        setErr(""); setFormErr(""); setSubmitting(true);
         try {
             await api.post("/crypto/accounts", form);
             setShowForm(false); setForm(emptyForm);
             toast.success("Binance account verified & linked.");
             await load();
-        } catch (e2) { setErr(formatApiError(e2)); }
+        } catch (e2) {
+            const msg = formatApiError(e2);
+            setFormErr(msg);          // inline error inside the open modal
+            toast.error(msg);         // and a visible toast
+        }
         finally { setSubmitting(false); }
     };
 
@@ -140,7 +145,8 @@ export default function Crypto() {
 
             {showForm && (
                 <AddCryptoModal form={form} setForm={setForm} onSubmit={submit}
-                    onClose={() => setShowForm(false)} submitting={submitting} />
+                    onClose={() => { setShowForm(false); setFormErr(""); }}
+                    submitting={submitting} formErr={formErr} />
             )}
 
             {activeAccount && (
@@ -151,7 +157,7 @@ export default function Crypto() {
 }
 
 
-function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting }) {
+function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr }) {
     const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
     return (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
@@ -183,6 +189,13 @@ function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting }) {
                 </div>
 
                 <form onSubmit={onSubmit} className="p-5 space-y-4">
+                    {formErr && (
+                        <div className="border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-3 py-2 text-xs text-[#FF3B30] font-mono flex items-start gap-2"
+                            data-testid="add-crypto-form-error">
+                            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <span className="break-words">{formErr}</span>
+                        </div>
+                    )}
                     <div>
                         <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">LABEL</label>
                         <input type="text" required value={form.label}
