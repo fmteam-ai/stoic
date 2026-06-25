@@ -220,6 +220,23 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### ObjectId hardening carry-over (iter24)
+Completed the carry-over from iter22 — migrated remaining raw `ObjectId()` calls to `parse_object_id` across the 4 flagged route modules. Malformed ObjectIds on any user-supplied path/query param now return a clean **404** across the entire codebase instead of a 500.
+
+**Files migrated:**
+- `bot_routes.py` — 5 user-input `ObjectId(account_id)` calls → `parse_object_id`. Internal-data loop at `/bot/status` defensively wrapped in try/except so corrupt configs no longer crash status.
+- `nl_routes.py` — `ObjectId(trigger_id)` at DELETE `/nl/triggers/{id}` → `parse_object_id`.
+- `signal_routes.py` — `ObjectId(signal_id)` at DELETE `/signals/{id}` → `parse_object_id`.
+- `affiliate_routes.py` — admin endpoints `/admin/affiliate/payout-requests/{rid}/process` and `/admin/affiliate/commissions/{cid}/mark-paid` changed from 400 → 404 for consistency. Internal-data ObjectIds on `affiliate_id` from found docs defensively wrapped (log error + return 200 with `warning` field on corruption rather than 500).
+
+**Testing — verified by testing_agent_v3_fork (iter24):**
+- ✅ 10 iter24 ObjectId regressions pass
+- ✅ 43 backward regressions from iter22 + safety_guardian + max_concurrent_race + iter26 still pass
+- ✅ 7 new positive-path tests added by tester — all happy paths intact
+- ✅ Source-scan test confirms zero remaining unwrapped `ObjectId(<user_input>)` calls across the 4 files
+- ✅ No frontend callers depend on the affiliate admin 400→404 change (verified by tester grep)
+- ✅ 0 critical/0 minor issues
+
 ### Security & stability hardening (iter22 → iter23)
 **5 issues identified by user code-audit:**
 
