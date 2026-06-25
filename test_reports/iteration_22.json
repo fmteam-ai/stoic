@@ -1,0 +1,79 @@
+{
+  "summary": "Iter22 — security & stability hardening verified. All 5 fixes (P1.1 NameError in slippage_veto path, P1.2 credentialed CORS allowlist, P1.3 reveal endpoint requires password + audit log + include_master gate, P2.1 broker_deals catches DuplicateKeyError specifically, P2.2 invalid ObjectId → 404) PASS. 9/9 iter22 spec tests pass; 9/9 additional live HTTP verification tests pass (88/88 full regression incl. iter18-iter21 + safety_guardian + max_concurrent_race + iter22 suite). CRITICAL: Found a BREAKING-CHANGE frontend caller at /app/frontend/src/pages/Accounts.jsx line 559 that posts to /credentials/reveal with NO body — this will now 422 in the UI (main agent must update frontend to prompt for password and pass {password, include_master?}).",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "CORS preflight via deployed ingress",
+        "issue": "K8s ingress in front of FastAPI rewrites ACAO to '*' on actual (non-OPTIONS) responses while keeping `access-control-allow-credentials: true` from the app — i.e. the deployed response carries BOTH wildcard origin AND credentials, which browsers refuse. The app-level CORS is correct (verified by hitting localhost:8001 directly: evil origin OPTIONS → 400 no ACAO; whitelisted → 200 with ACAO=trusted + credentials:true). Net effect on security: SAFE (browsers refuse cookies on wildcard ACAO) but technically inconsistent. May want to align ingress to honor app CORS headers."
+      },
+      {
+        "endpoint": "Multiple route modules still call ObjectId() directly",
+        "issue": "parse_object_id was added to bridge/account/trade routes per spec, but bot_routes.py (~30 occurrences), nl_routes.py, signal_routes.py, affiliate_routes.py, bugs_routes.py, safety_blocks_routes.py still use raw ObjectId() on user-supplied IDs. Some are wrapped in try/except (bugs/affiliate/safety_blocks) but bot_routes.py is mostly unwrapped — garbage account_id on /api/bot/* endpoints can still 500. Not in P2.2 scope but worth a follow-up iter."
+      }
+    ]
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Accounts.jsx — CredentialsPanel.reveal",
+        "issue": "BREAKING CHANGE NOT PROPAGATED. Line 559 calls `api.post(/accounts/${account.id}/credentials/reveal)` with NO request body. The endpoint now requires `{password: str, include_master?: bool}` (Pydantic 422 otherwise). The Reveal button in the Accounts page will no longer work — user will see formatApiError(e) with a 422 validation error. Main agent must (a) add a password prompt modal/dialog before the call and (b) optionally add an 'include master password' checkbox.",
+        "selector": "Accounts page → CredentialsPanel → Reveal button",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Account credentials reveal",
+        "issue": "Frontend → backend contract drift on POST /api/accounts/{id}/credentials/reveal (was: no body; now: required body). Only one frontend caller found (Accounts.jsx:559).",
+        "affected_selectors": ["CredentialsPanel reveal button on /accounts page"]
+      }
+    ],
+    "design_issues": []
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_security_hardening.py",
+    "/app/backend/tests/test_iter22_live_verification.py",
+    "/app/test_reports/pytest/iter22_security.xml",
+    "/app/test_reports/pytest/iter22_live.xml",
+    "/app/test_reports/pytest/iter22_full.xml"
+  ],
+
+  "action_items": [
+    "Update /app/frontend/src/pages/Accounts.jsx CredentialsPanel.reveal() to prompt for the user's password (and optionally an include_master checkbox) before POSTing to /credentials/reveal. Without this fix, the Reveal button in the Accounts page is broken (returns 422).",
+    "OPTIONAL follow-up: migrate remaining raw ObjectId() calls in bot_routes.py, nl_routes.py, signal_routes.py, affiliate_routes.py to parse_object_id from /app/backend/route_utils.py — currently /api/bot/* endpoints with garbage account_id may still return 500.",
+    "OPTIONAL: review whether the K8s ingress should pass through the app's CORS headers instead of overwriting ACAO to '*'. Current behavior is safe (browsers refuse wildcard+credentials) but inconsistent with the app's intent."
+  ],
+
+  "critical_code_review_comments": [
+    "P1.1 fix is clean: line 472-476 of bridge_routes.py inlines datetime.now(timezone.utc).isoformat() — no more reference to undefined now_iso. AST check + live HTTP both pass.",
+    "P1.2 fix in server.py lines 150-169 is textbook: explicit allowlist + credentials, OR wildcard + no credentials, never both. Verified at app layer (localhost:8001 direct).",
+    "P1.3 reveal endpoint: defense-in-depth is solid — pydantic body validation (422), ObjectId try/except (404), password re-confirmation via auth.verify_password (403 + audit row), include_master gate, audit log includes wrong_password attempts for brute-force visibility, secrets never appear in audit log. One nit: when account exists but password is wrong, the 403 message ('Password re-confirmation failed') differs from the 404 ('Account not found') — this discloses account existence. Minor info leak; OK for owner-only endpoint.",
+    "P2.1 fix at bridge_routes.py:577-586 is correct: DuplicateKeyError → 200 duplicate:true; any other Exception → logger.exception + raise HTTPException(500). No silent swallow.",
+    "P2.2 fix is partial — parse_object_id added to bridge/account/trade routes, but ~30 other ObjectId() call sites remain across bot_routes/nl_routes/signal_routes/affiliate_routes. Spec only required the routes called out so this is in-scope, but flagging for completeness.",
+    "route_utils.parse_object_id is a clean abstraction (404 on InvalidId/TypeError/ValueError/empty) — recommend adopting across the codebase."
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iter22_live_verification.py (NEW — 9 live HTTP verification tests, complements test_iter22_security_hardening.py)"
+  ],
+
+  "success_rate": {
+    "backend": "100% (9/9 iter22_security_hardening + 9/9 iter22_live_verification + 88/88 full regression suite covering iter18-iter21 + safety_guardian + max_concurrent_race)",
+    "frontend": "N/A — not in scope; flagged 1 high-priority caller drift in Accounts.jsx that main agent must fix"
+  },
+
+  "test_credentials": "admin@trading.bot / admin123 (cookie session)",
+
+  "seed_data_creation": "None. Tests use the existing admin user + admin's 'micro' account (6a3ad0ef17f40ac1dd3eb3ef). The reveal-success test writes 2 audit rows into db.credential_reveals which is the EXPECTED side-effect (visible in db.credential_reveals.count_documents({'result':'ok'})). No cleanup performed as audit logs are intended to be permanent.",
+
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+
+  "context_for_next_testing_agent": "All 5 hardening fixes are verified end-to-end. To re-run: `cd /app/backend && set -a && source .env && source /app/frontend/.env && set +a && python -m pytest tests/test_iter22_security_hardening.py tests/test_iter22_live_verification.py -v` → expect 18/18. The frontend caller drift at Accounts.jsx:559 is the main outstanding risk; once fixed, do a UI smoke on /accounts → Reveal button → password prompt → see investor_password (and master if include_master checkbox toggled). Audit rows can be verified in Mongo at db.credential_reveals.find({user_id: '<admin _id>'}).sort({at:-1}).limit(5).",
+
+  "rca of the issue": "P1.1: NameError caused by orphaned `now_iso` reference inside slippage_veto branch where the variable was never defined in that scope — fixed by inlining datetime.now(timezone.utc).isoformat(). P1.2: original `allow_origin_regex='.*' + allow_credentials=True` was a textbook credentialed-CORS misconfig — any malicious page could read authenticated responses. Fixed by branching CORS config on CORS_ORIGINS env. P1.3: original endpoint returned all stored creds (including master) to any holder of a valid session, with no audit trail — fixed via pydantic body w/ password re-confirmation, include_master gate, and unconditional audit log. P2.1: bare `except Exception:` masked all insert failures as duplicates, losing real broker fills — fixed by narrowing to DuplicateKeyError and raising 500 on other exceptions. P2.2: ObjectId() raises InvalidId on malformed strings which surfaces as 500 — fixed via shared route_utils.parse_object_id helper that returns 404 with a clean resource label."
+}

@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 from pydantic import BaseModel, Field
 
-from auth import get_current_user, generate_bridge_token
+from auth import get_current_user, generate_bridge_token, verify_password
 from database import get_db
 from models import AccountCreate, AccountCredsUpdate
 from secrets_vault import encrypt as vault_encrypt, decrypt as vault_decrypt
+from route_utils import parse_object_id
 from account_limits import (
     get_broker_breakdown,
     check_can_add_live_account,
@@ -139,7 +140,7 @@ async def delete_account(account_id: str, force: bool = False,
                 ),
             )
     result = await db.accounts.delete_one(
-        {"_id": ObjectId(account_id), "user_id": user["id"]}
+        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
     )
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -156,7 +157,7 @@ async def rotate_token(account_id: str, user=Depends(get_current_user)):
     db = get_db()
     new_token = generate_bridge_token()
     result = await db.accounts.update_one(
-        {"_id": ObjectId(account_id), "user_id": user["id"]},
+        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
         {"$set": {"bridge_token": new_token, "status": "disconnected"}},
     )
     if result.matched_count == 0:
@@ -177,7 +178,7 @@ async def import_positions(account_id: str, payload: ImportPositionsRequest,
     """
     db = get_db()
     acc = await db.accounts.find_one(
-        {"_id": ObjectId(account_id), "user_id": user["id"]}
+        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
     )
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -229,7 +230,7 @@ async def test_connection(account_id: str, user=Depends(get_current_user)):
     """
     db = get_db()
     acc = await db.accounts.find_one(
-        {"_id": ObjectId(account_id), "user_id": user["id"]}
+        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
     )
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -301,7 +302,7 @@ async def update_credentials(account_id: str, payload: AccountCredsUpdate, user=
     Live accounts only — paper accounts have no broker credentials.
     """
     db = get_db()
-    account = await db.accounts.find_one({"_id": ObjectId(account_id), "user_id": user["id"]})
+    account = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     if (account.get("mode") or "live").lower() == "paper":
@@ -320,7 +321,7 @@ async def update_credentials(account_id: str, payload: AccountCredsUpdate, user=
             creds["master"] = vault_encrypt(payload.master_password)
 
     await db.accounts.update_one(
-        {"_id": ObjectId(account_id), "user_id": user["id"]},
+        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
         {"$set": {"creds": creds}},
     )
     return {
@@ -329,24 +330,63 @@ async def update_credentials(account_id: str, payload: AccountCredsUpdate, user=
     }
 
 
+class RevealRequest(BaseModel):
+    password: str = Field(..., min_length=1, description="Account password — re-confirm for credential reveal")
+    include_master: bool = Field(False, description="Set true to also reveal master password (highest-risk; use sparingly)")
+
+
 @router.post("/{account_id}/credentials/reveal")
-async def reveal_credentials(account_id: str, user=Depends(get_current_user)):
+async def reveal_credentials(account_id: str, payload: RevealRequest,
+                             user=Depends(get_current_user)):
     """Decrypt and return stored broker passwords for the owner.
 
-    Requires an authenticated session. The plaintext is returned ONCE and is never
-    logged. Use the returned values immediately — there is no caching.
+    Requires:
+      - Authenticated session (cookie)
+      - Re-confirmation of the user's account password (defense vs stolen session)
+      - include_master must be explicitly set to true to receive master_password
+    Every reveal is audit-logged to `credential_reveals` (user, account, IP, ts,
+    which secrets returned). Frequent reveal attempts can be rate-limited there.
     """
     db = get_db()
-    account = await db.accounts.find_one({"_id": ObjectId(account_id), "user_id": user["id"]})
+    try:
+        acct_oid = ObjectId(account_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Account not found")
+    account = await db.accounts.find_one({"_id": acct_oid, "user_id": user["id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+
+    # Re-confirm session password — prevents reveal via stolen/forgotten session
+    fresh_user = await db.users.find_one({"_id": ObjectId(user["id"])})
+    pwhash = (fresh_user or {}).get("password_hash") if fresh_user else None
+    if not pwhash or not verify_password(payload.password, pwhash):
+        # Audit failed attempts so brute-force shows up
+        await db.credential_reveals.insert_one({
+            "user_id": user["id"], "account_id": account_id,
+            "result": "wrong_password", "revealed": [],
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        raise HTTPException(status_code=403, detail="Password re-confirmation failed")
+
     creds = account.get("creds") or {}
-    out = {"investor_password": None, "master_password": None}
+    out = {"investor_password": None}
+    if payload.include_master:
+        out["master_password"] = None
+    revealed_keys: list[str] = []
     try:
         if creds.get("investor"):
             out["investor_password"] = vault_decrypt(creds["investor"])
-        if creds.get("master"):
+            revealed_keys.append("investor")
+        if payload.include_master and creds.get("master"):
             out["master_password"] = vault_decrypt(creds["master"])
+            revealed_keys.append("master")
     except Exception:
         raise HTTPException(status_code=500, detail="Could not decrypt stored credentials")
+
+    # Audit log — never includes the plaintext
+    await db.credential_reveals.insert_one({
+        "user_id": user["id"], "account_id": account_id,
+        "result": "ok", "revealed": revealed_keys,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
     return out

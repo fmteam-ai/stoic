@@ -143,21 +143,27 @@ async def ws_endpoint(websocket: WebSocket):
 app.include_router(api_router)
 
 
-# CORS
-cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
-if cors_origins_env.strip() == "*":
+# CORS — credentialed cookies must NEVER be paired with a wildcard origin.
+# Either: explicit allowlist with credentials, OR wildcard WITHOUT credentials.
+# If CORS_ORIGINS is unset/wildcard, we strip credentials so a malicious site
+# can't pull authenticated calls from a logged-in browser.
+cors_origins_env = (os.environ.get("CORS_ORIGINS") or "").strip()
+if cors_origins_env and cors_origins_env != "*":
+    allowed = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=".*",
+        allow_origins=allowed,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 else:
+    # Safe wildcard: no credentials. Browsers won't send/receive cookies cross-origin.
+    # API can still serve public/non-cookie traffic.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[o.strip() for o in cors_origins_env.split(",") if o.strip()],
-        allow_credentials=True,
+        allow_origins=["*"],
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

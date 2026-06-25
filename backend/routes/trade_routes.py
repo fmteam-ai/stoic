@@ -9,6 +9,7 @@ from database import get_db
 from market import get_quote
 from rate_limiter import check_and_record
 from execution import for_account as engine_for_account
+from route_utils import parse_object_id
 from trade_reconciler import reconcile_user
 
 router = APIRouter(prefix="/trades", tags=["trades"])
@@ -201,13 +202,15 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
         raise HTTPException(status_code=400, detail="account_id required")
 
     db = get_db()
-    signal = await db.signals.find_one({"_id": ObjectId(signal_id), "user_id": user["id"]})
+    signal = await db.signals.find_one({"_id": parse_object_id(signal_id, "Signal"),
+                                         "user_id": user["id"]})
     if not signal:
         raise HTTPException(status_code=404, detail="Signal not found")
     if signal.get("action") == "HOLD":
         raise HTTPException(status_code=400, detail="Cannot execute HOLD signal")
 
-    account = await db.accounts.find_one({"_id": ObjectId(account_id), "user_id": user["id"]})
+    account = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"),
+                                           "user_id": user["id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
@@ -236,7 +239,7 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
         },
     )
     await db.signals.update_one(
-        {"_id": ObjectId(signal_id), "user_id": user["id"]},
+        {"_id": parse_object_id(signal_id, "Signal"), "user_id": user["id"]},
         {"$set": {"consumed": True}},
     )
     return trade_doc
@@ -250,7 +253,8 @@ async def execute_manual_trade(payload: ManualTradeRequest, user=Depends(get_cur
     so that the EA bridge + risk vetoes apply.
     """
     db = get_db()
-    account = await db.accounts.find_one({"_id": ObjectId(payload.account_id), "user_id": user["id"]})
+    account = await db.accounts.find_one({"_id": parse_object_id(payload.account_id, "Account"),
+                                           "user_id": user["id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     if (account.get("mode") or "live").lower() != "paper":
@@ -319,7 +323,7 @@ async def trade_audit(trade_id: str, user=Depends(get_current_user)):
     """
     db = get_db()
     trade = await db.trades.find_one(
-        {"_id": ObjectId(trade_id), "user_id": user["id"]}
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]}
     )
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
@@ -496,7 +500,7 @@ async def revive_trade(trade_id: str, user=Depends(get_current_user)):
     """
     db = get_db()
     trade = await db.trades.find_one(
-        {"_id": ObjectId(trade_id), "user_id": user["id"]}
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]}
     )
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
@@ -509,7 +513,7 @@ async def revive_trade(trade_id: str, user=Depends(get_current_user)):
         )
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.trades.update_one(
-        {"_id": ObjectId(trade_id)},
+        {"_id": parse_object_id(trade_id, "Trade")},
         {"$set": {
             "status": "open",
             "closed_at": None,
@@ -530,7 +534,7 @@ async def close_trade(trade_id: str, user=Depends(get_current_user)):
     """Mark a trade as pending-close so the EA closes it on next poll."""
     db = get_db()
     result = await db.trades.update_one(
-        {"_id": ObjectId(trade_id), "user_id": user["id"], "status": "open"},
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"], "status": "open"},
         {"$set": {"status": "pending", "close_requested": True, "close_reason": "manual"}},
     )
     if result.matched_count == 0:

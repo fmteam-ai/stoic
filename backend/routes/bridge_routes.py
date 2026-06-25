@@ -471,7 +471,7 @@ async def report_trade(payload: BridgeTradeReport):
                 # can age this out after 10min if the EA ignores it.
                 update["pending_modification"] = {
                     "type": "FULL_CLOSE",
-                    "requested_at": now_iso,
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
                     "reason": "slippage_veto",
                 }
                 update["close_reason"] = "slippage_veto"
@@ -575,9 +575,15 @@ async def external_deal(payload: BridgeExternalDeal):
     }
     try:
         await db.broker_deals.insert_one(deal_doc)
-    except Exception:
-        # Duplicate key error → we already processed this deal_id. Safe no-op.
+    except DuplicateKeyError:
+        # We already processed this (deal_id, account_id). Safe no-op.
         return {"ok": True, "duplicate": True, "deal_id": payload.deal_id}
+    except Exception as e:
+        # Real failure — surface so the EA can retry. Silently swallowing here
+        # would lose broker fills.
+        logger.exception("broker_deals.insert_one failed deal_id=%s acct=%s: %s",
+                         payload.deal_id, account_id, e)
+        raise HTTPException(status_code=500, detail="Failed to persist broker deal")
 
     # Best-effort ISO timestamp from broker (unix seconds → UTC ISO).
     if payload.deal_time:
