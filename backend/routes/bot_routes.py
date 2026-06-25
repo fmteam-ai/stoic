@@ -7,6 +7,7 @@ from bson import ObjectId
 from auth import get_current_user
 from database import get_db
 from models import BotConfigUpdate, BotConfigOut
+from route_utils import parse_object_id
 from risk import get_profile, compute_lot_for_account
 from intelligence_counters import get_window_24h as intel_window_24h
 from strategy_presets import list_presets, get_preset
@@ -141,7 +142,7 @@ async def sizing_preview(
     acct = None
     if account_id:
         acct = await db.accounts.find_one(
-            {"_id": ObjectId(account_id), "user_id": user["id"]}
+            {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
         )
         if not acct:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -226,7 +227,7 @@ async def get_config(account_id: Optional[str] = None, user=Depends(get_current_
     if account_id:
         # Validate the account belongs to this user before touching the config.
         owns = await db.accounts.find_one(
-            {"_id": ObjectId(account_id), "user_id": user["id"]}
+            {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
         )
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -252,7 +253,7 @@ async def update_config(payload: BotConfigUpdate,
     db = get_db()
     if account_id:
         owns = await db.accounts.find_one(
-            {"_id": ObjectId(account_id), "user_id": user["id"]}
+            {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
         )
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -301,7 +302,7 @@ async def start_bot(account_id: Optional[str] = None, user=Depends(get_current_u
     db = get_db()
     if account_id:
         owns = await db.accounts.find_one(
-            {"_id": ObjectId(account_id), "user_id": user["id"]}
+            {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
         )
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -342,7 +343,7 @@ async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
     db = get_db()
     if account_id:
         owns = await db.accounts.find_one(
-            {"_id": ObjectId(account_id), "user_id": user["id"]}
+            {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
         )
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
@@ -661,8 +662,14 @@ async def get_bot_status(account_id: Optional[str] = None,
         if per_acc_cfgs:
             now_utc = datetime.now(timezone.utc)
             for pac in per_acc_cfgs:
-                acc = await db.accounts.find_one({"_id": ObjectId(pac["account_id"])}) \
-                    if pac.get("account_id") else None
+                pac_aid = pac.get("account_id")
+                if not pac_aid:
+                    continue
+                try:
+                    acc_oid = ObjectId(pac_aid)
+                except Exception:
+                    continue
+                acc = await db.accounts.find_one({"_id": acc_oid})
                 if not acc:
                     continue
                 if acc.get("mode") == "paper":

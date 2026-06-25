@@ -9,6 +9,7 @@ from database import get_db
 from bson import ObjectId
 from datetime import datetime, timezone
 from subscription_service import is_active as subscription_active
+from route_utils import parse_object_id
 from affiliate_service import (
     submit_application, get_application, get_affiliate, stats_for,
     record_click, approve_application, reject_application, list_applications,
@@ -172,10 +173,7 @@ async def admin_process_payout(rid: str, user=Depends(get_current_user)):
     """
     _admin_only(user)
     db = get_db()
-    try:
-        oid = ObjectId(rid)
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid id")
+    oid = parse_object_id(rid, "Payout request")
     req = await db.affiliate_payout_requests.find_one_and_update(
         {"_id": oid, "status": "pending"},
         {"$set": {"status": "paid",
@@ -194,8 +192,13 @@ async def admin_process_payout(rid: str, user=Depends(get_current_user)):
                   "payout_request_id": rid}},
     )
     # Zero out the running unpaid balance
+    try:
+        aff_oid = ObjectId(req["affiliate_id"])
+    except Exception:
+        logger.error("Corrupt affiliate_id in payout request %s: %r", rid, req.get("affiliate_id"))
+        return {"ok": True, "id": rid, "warning": "affiliate balance not zeroed (id corrupt)"}
     await db.affiliates.update_one(
-        {"_id": ObjectId(req["affiliate_id"])},
+        {"_id": aff_oid},
         {"$set": {"unpaid_balance_usd": 0.0}},
     )
     return {"ok": True, "id": rid}
@@ -284,10 +287,7 @@ async def admin_commissions(status: str = "", user=Depends(get_current_user)):
 async def admin_mark_paid(cid: str, user=Depends(get_current_user)):
     _admin_only(user)
     db = get_db()
-    try:
-        oid = ObjectId(cid)
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid id")
+    oid = parse_object_id(cid, "Commission")
     doc = await db.affiliate_commissions.find_one_and_update(
         {"_id": oid, "status": "pending"},
         {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat(),
@@ -296,8 +296,13 @@ async def admin_mark_paid(cid: str, user=Depends(get_current_user)):
     )
     if not doc:
         raise HTTPException(status_code=404, detail="not found or already paid")
+    try:
+        aff_oid = ObjectId(doc["affiliate_id"])
+    except Exception:
+        logger.error("Corrupt affiliate_id in commission %s: %r", cid, doc.get("affiliate_id"))
+        return {"ok": True, "warning": "affiliate balance not updated (id corrupt)"}
     await db.affiliates.update_one(
-        {"_id": ObjectId(doc["affiliate_id"])},
+        {"_id": aff_oid},
         {"$inc": {"unpaid_balance_usd": -float(doc["commission_usd"])}},
     )
     return {"ok": True}

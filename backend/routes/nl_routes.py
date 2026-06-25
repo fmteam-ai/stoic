@@ -15,6 +15,7 @@ from auth import get_current_user
 from database import get_db
 from ws_manager import manager as ws_manager
 from nl_commander import build_strategy, interpret_command
+from route_utils import parse_object_id
 
 router = APIRouter(prefix="/nl", tags=["nl-commander"])
 
@@ -112,7 +113,7 @@ async def list_triggers(user=Depends(get_current_user)):
 async def delete_trigger(trigger_id: str, user=Depends(get_current_user)):
     db = get_db()
     await db.conditional_triggers.update_one(
-        {"_id": ObjectId(trigger_id), "user_id": user["id"]},
+        {"_id": parse_object_id(trigger_id, "Trigger"), "user_id": user["id"]},
         {"$set": {"active": False}},
     )
     return {"ok": True}

@@ -1,0 +1,36 @@
+{
+  "summary": "Iter24 ObjectId hardening verification — all 10 iter24 tests + 43 regression tests + 7 new positive-path tests PASS. Malformed ObjectId on user-supplied path/query params (account_id, trigger_id, signal_id, rid, cid) now consistently returns 404 instead of 500 across bot_routes, nl_routes, signal_routes and affiliate_routes. Happy paths (bot/config without account_id, bot/status auto-scope, valid-hex deletes, admin affiliate endpoints with valid hex) still work and do NOT crash. Backend logs clean — no 500s during the suite.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter24_objectid_hardening.py",
+    "/app/backend/tests/test_iter24_positive_paths.py",
+    "/app/test_reports/pytest/iter24_objectid.xml",
+    "/app/test_reports/pytest/iter24_regression.xml",
+    "/app/test_reports/pytest/iter24_positive.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Affiliate admin endpoints (POST /api/admin/affiliate/payout-requests/{rid}/process, /commissions/{cid}/mark-paid) had a semantic change 400 → 404 for invalid ids. Verified by grepping frontend/src — NO frontend caller exists for these admin endpoints (only the user-facing /affiliate/* endpoints are wired up), so the change is safe.",
+    "Internal-data ObjectId wrapping in affiliate_routes.py (lines 198 and 300) now returns 200 with a 'warning' field on corrupt data. Behavior is sound for graceful degradation but worth noting as a new response shape — main agent should make sure any future admin UI consuming these endpoints expects the optional 'warning' key.",
+    "Static source-scan test (test_no_unwrapped_object_id_calls_in_user_input_paths) PASSES — confirms no remaining unwrapped `ObjectId(<user_input>)` calls in the 4 hardened files for the param names account_id/trigger_id/signal_id/trade_id/rid/cid.",
+    "bot/status endpoint correctly auto-selects scope when no account_id is supplied and does not crash even with stale per-account configs in admin data (verified end-to-end)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter24_positive_paths.py (NEW — 7 positive-path tests added by tester)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend-only request)"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — used existing admin account & syntactically valid non-existent hex ids (507f1f77bcf86cd799439011) for positive-no-crash checks.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter24 (ObjectId hardening carry-over from iter22) is fully verified. 60 tests total pass across iter22 security + iter22 live + safety_guardian + max_concurrent_race + iter26_max_concurrent_endpoints + iter24_objectid_hardening + iter24_positive_paths. The new positive-paths test file (/app/backend/tests/test_iter24_positive_paths.py) is reusable for future regression. Backend route_utils.parse_object_id is now consistently used across bot/nl/signal/affiliate routes for user-input ids. No frontend caller depends on the affiliate admin 400→404 change. Backend was hot-reloaded by supervisor; no restart needed.",
+  "rca_of_the_issue": "N/A — verification-only iteration, no new bugs found."
+}

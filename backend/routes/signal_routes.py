@@ -5,6 +5,7 @@ from bson import ObjectId
 from auth import get_current_user
 from database import get_db
 from ai_signals import analyze_symbol
+from route_utils import parse_object_id
 
 router = APIRouter(prefix="/signals", tags=["signals"])
 
@@ -71,7 +72,7 @@ async def generate_all(user=Depends(get_current_user)):
 @router.delete("/{signal_id}")
 async def delete_signal(signal_id: str, user=Depends(get_current_user)):
     db = get_db()
-    await db.signals.delete_one({"_id": ObjectId(signal_id), "user_id": user["id"]})
+    await db.signals.delete_one({"_id": parse_object_id(signal_id, "Signal"), "user_id": user["id"]})
     return {"ok": True}
 
 
