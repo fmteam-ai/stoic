@@ -128,11 +128,29 @@ export default function Strategies() {
         toast.success("Optimized filters merged into compiled strategy");
     };
 
+    const [applyTarget, setApplyTarget] = useState("matching");
+    const [applyTargets, setApplyTargets] = useState(null);
+
+    // Refresh candidate-bots list whenever the compiled strategy's symbols change.
+    useEffect(() => {
+        if (!compiled?.symbols?.length) { setApplyTargets(null); return; }
+        const syms = compiled.symbols.join(",");
+        api.get(`/nl/strategy/targets?symbols=${encodeURIComponent(syms)}`)
+            .then(r => setApplyTargets(r.data))
+            .catch(() => setApplyTargets(null));
+    }, [compiled?.symbols]);
+
     const applyToBot = async () => {
         if (!compiled) return;
         try {
-            await api.post("/nl/strategy/apply", { compiled });
-            toast.success("Strategy applied to bot config");
+            const { data } = await api.post("/nl/strategy/apply", {
+                compiled, target: applyTarget,
+            });
+            const n = data.applied_count ?? 1;
+            const names = (data.applied_to || [])
+                .map(a => a.is_default ? "Default profile" : `acct ${String(a.account_id).slice(-6)}`)
+                .join(", ");
+            toast.success(`Strategy deployed to ${n} bot${n === 1 ? "" : "s"}${names ? ` — ${names}` : ""}`);
         } catch (e) {
             toast.error("Apply failed", { description: formatApiError(e) });
         }
@@ -286,6 +304,24 @@ export default function Strategies() {
                                 className="px-3 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] hover:border-[#FFB000] text-[#A1A1AA] hover:text-[#FFB000] flex items-center gap-1.5">
                                 <Save className="w-3.5 h-3.5" /> SAVE
                             </button>
+                            {(applyTargets?.total_count ?? 0) > 1 && (
+                                <select value={applyTarget}
+                                    onChange={(e) => setApplyTarget(e.target.value)}
+                                    data-testid="strategy-apply-target"
+                                    className="bg-[#050505] border border-[#FFB000]/40 focus:border-[#FFB000] text-[10px] font-mono tracking-widest px-2 py-2 outline-none">
+                                    <option value="matching">
+                                        Matching bots ({applyTargets.matching_count})
+                                    </option>
+                                    <option value="all">
+                                        All bots ({applyTargets.total_count})
+                                    </option>
+                                    {(applyTargets.candidates || []).map(c => (
+                                        <option key={c.key} value={c.key}>
+                                            Only · {c.label}{c.matches_proposal_symbols ? " ✓" : ""}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
                             <button onClick={applyToBot}
                                 data-testid="strategy-apply-button"
                                 className="px-3 py-2 text-xs font-mono tracking-widest bg-[#FFB000] text-black hover:bg-[#E59E00] flex items-center gap-1.5">

@@ -636,11 +636,20 @@ export default function Signals() {
         }
     }, [lastEvent]);
 
+    const [genAccountId, setGenAccountId] = useState("");
+
     const handleGenerate = async () => {
         setGenerating(true); setErr(""); setMsg("");
         try {
-            const { data } = await api.post("/signals/generate-all", {});
-            setMsg(`Generated ${data.generated.length} signal(s).`);
+            // genAccountId="" → uses the user's default profile; otherwise scope to a bot
+            const url = genAccountId
+                ? `/signals/generate-all?account_id=${encodeURIComponent(genAccountId)}`
+                : "/signals/generate-all";
+            const { data } = await api.post(url, {});
+            const scope = genAccountId
+                ? ` for ${(accounts.find(a => a.id === genAccountId) || {}).label || "selected bot"}`
+                : "";
+            setMsg(`Generated ${data.generated.length} signal(s)${scope}.`);
             await load();
         } catch (e) { setErr(formatApiError(e)); }
         finally { setGenerating(false); }
@@ -666,8 +675,21 @@ export default function Signals() {
                 subtitle="Claude-generated trading signals across your configured symbols."
                 testid="signals-header"
                 action={
-                    <div className="flex gap-2 items-center">
+                    <div className="flex gap-2 items-center flex-wrap">
                         <ClearSignalsMenu signals={signals} onCleared={load} />
+                        {accounts.length > 1 && (
+                            <select value={genAccountId}
+                                onChange={(e) => setGenAccountId(e.target.value)}
+                                data-testid="signals-generate-account"
+                                className="bg-[#050505] border border-[#00FF41]/40 focus:border-[#00FF41] text-[10px] font-mono tracking-widest px-2 py-2 outline-none">
+                                <option value="">Default bot</option>
+                                {accounts.map(a => (
+                                    <option key={a.id} value={a.id}>
+                                        Bot · {a.label}
+                                    </option>
+                                ))}
+                            </select>
+                        )}
                         <button onClick={() => setShowManual(true)}
                             data-testid="manual-trade-open-button"
                             className="flex items-center gap-2 px-3 py-2 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 font-medium text-xs tracking-widest transition-colors duration-150">

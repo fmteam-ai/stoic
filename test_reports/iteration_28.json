@@ -1,0 +1,46 @@
+{
+  "summary": "Iter-37 multi-bot targeting extensions verified end-to-end. All 9 unit tests pass, plus a new 12-test HTTP smoke suite (test_iter37_http_smoke.py) covering auth gating, targets endpoint shape, apply-with-bad-target=422, apply target=all audit list, apply target=matching symbol filter, signals/generate with and without account_id, and research proposals regression. Full iter-33→iter-37 targeting suite: 83/83 pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter37_multi_bot_targeting_extensions.py",
+    "/app/backend/tests/test_iter37_http_smoke.py",
+    "/app/test_reports/pytest/iter37_regression.xml",
+    "/app/test_reports/pytest/iter37_http_smoke.xml",
+    "/app/test_reports/pytest/iter37_full_suite.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "nl_routes.nl_strategy_apply default risk_level falls back to 'medium' (line 139) but elsewhere the API canonicalises to 'low'/'middle'/'high' (see _set_risk_level VALID_LEVELS). If a NL-compiled strategy omits risk_level, the bot_config row is stamped with the legacy 'medium' string. Recommend aligning to {'low','middle','high'} or documenting the synonym.",
+    "signal_routes.generate_signal does the same fallback (risk_level='medium') — same alignment note. Low priority as analyze_symbol handles unknown levels.",
+    "nl_strategy_apply hard-codes default symbols ['XAUUSD','BTCUSD'] when compiled.symbols is missing (line 140). Silent default could pick wrong target set for users without those symbols configured. Consider 422 instead.",
+    "Audit row schema returned by apply_to_bot_configs is not documented in the route response model. The HTTP smoke test asserts 'config_id or _id or user_id' since the exact key was unclear from the route — recommend a Pydantic response_model so the frontend can rely on the shape."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter37_http_smoke.py (new — 12 HTTP smoke tests against live preview URL)"
+  ],
+  "success_rate": {"backend": "100% (83/83 across the full iter-33→37 targeting suite; 9/9 iter-37 unit + 12/12 iter-37 HTTP smoke)", "frontend": "skipped per request"},
+  "test_credentials": "admin@trading.bot / admin123",
+  "seed_data_creation": "None persistent. The test_apply_target_all test wrote stock-default fields (risk_level='medium', strategy_style='trend_following', etc.) to admin's bot_configs via the production route — values are all defaults the route itself emits in production usage so no restore needed. No proposals or signals were created beyond what the AI route generated naturally.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter-37 is fully green. Backend HTTP surface for multi-bot targeting verified: /api/nl/strategy/targets (auth 401, shape, matching_count<=total_count), /api/nl/strategy/apply (400 empty compiled, 400 clarification, 422 unknown account_id with helpful 'No matching bot configs' detail, 200 target=all returns applied_count==total_count, 200 target=matching filters by symbol overlap), /api/signals/generate?account_id=X stamps account_id on the doc, /api/research/proposals listable as regression. Use /app/backend/tests/test_iter37_http_smoke.py as the iter-37 HTTP regression file. Frontend smoke was deferred per the review_request (testing_type=backend only). When iter-38 lands, run that same suite + add any new HTTP cases.",
+  "verified_behaviours": [
+    "All 9 iter-37 unit tests pass (test_iter37_multi_bot_targeting_extensions.py): _set_risk_level broadcasts to all bots / rejects invalid level / handles 0 bots; nl_strategy_apply routes through targeting helper; telegram _cmd_run, _cmd_stop broadcast via update_many; signals/generate honours account_id; research path keeps legacy audit fields",
+    "GET /api/nl/strategy/targets?symbols=XAUUSD,BTCUSD → 200 with {candidates, matching_count, total_count, proposal_symbols:['XAUUSD','BTCUSD']}; each candidate has matches_proposal_symbols boolean",
+    "POST /api/nl/strategy/apply target='no-such-account-id' → 422 with detail containing 'No matching bot configs' (helpful error)",
+    "POST /api/nl/strategy/apply target='all' → applied_count==total_count, target_mode='all', applied_to[] audit list populated",
+    "POST /api/nl/strategy/apply target='matching' (symbols=['XAUUSD']) → applied_count==matching_count from /targets endpoint, target_mode starts with 'matching:'",
+    "POST /api/signals/generate?account_id=test-acct-iter37 → returned signal doc carries account_id field",
+    "Backwards-compat: research path apply_to_bot_configs still stamps last_research_proposal_id + last_research_target_mode on bot_config docs",
+    "Auth gating: both /strategy/targets and /strategy/apply return 401 without cookie",
+    "Regression: GET /api/research/proposals → 200 {pending, history} (iter-33/36 path intact)"
+  ]
+}

@@ -129,23 +129,44 @@ async def resolve_target_configs(db, user_id: str, proposal_symbols: list[str] |
 # Apply — single transactional step that updates every matched config
 # atomically (per-doc) and stamps the audit row.
 # ---------------------------------------------------------------------------
-async def apply_proposal_to_configs(db, configs: Iterable[dict], *, update_fields: dict,
-                                    proposal_id: str, target_mode: str,
-                                    auto: bool = False) -> list[dict]:
-    """Returns the audit list (one entry per touched config) for the API
-    response and for downstream notifications.
+async def apply_to_bot_configs(db, configs: Iterable[dict], *, update_fields: dict,
+                                source: str, source_id: str | None = None,
+                                target_mode: str, auto: bool = False) -> list[dict]:
+    """Apply `update_fields` to every config and stamp a unified audit row.
+
+    Parameters:
+      source       — what triggered the change. One of:
+                       "research" / "research_auto_accept" / "nl_strategy" /
+                       "risk_commander" / "ui_manual".
+      source_id    — proposal ObjectId / strategy hash / NL prompt hash /
+                     None for ad-hoc UI changes.
+      target_mode  — resolved target string ("matching:XAUUSD", "all", …)
+                     returned by `resolve_target_configs`.
+      auto         — True when the change was applied automatically (no
+                     human click). Powers the auto-accept badges in the UI.
+
+    Returns one audit entry per touched config (for the API response).
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     audit: list[dict] = []
-    audit_key = "last_auto_accepted_at" if auto else "last_research_applied_at"
 
     for cfg in configs:
         stamped = {
             **update_fields,
             "updated_at": now_iso,
-            "last_research_proposal_id": proposal_id,
-            "last_research_target_mode": target_mode,
-            audit_key: now_iso,
+            "last_change_source": source,
+            "last_change_source_id": source_id,
+            "last_change_target_mode": target_mode,
+            "last_change_applied_at": now_iso,
+            "last_change_auto": bool(auto),
+            # Backwards-compat: keep the iter-36 field names for the
+            # research-only pathway so older audit consumers don't break.
+            **({"last_research_proposal_id": source_id,
+                "last_research_target_mode": target_mode,
+                "last_research_applied_at": now_iso}
+               if source == "research" and not auto else {}),
+            **({"last_auto_accepted_at": now_iso}
+               if auto else {}),
         }
         await db.bot_configs.update_one(
             {"_id": cfg["_id"]},
@@ -162,3 +183,18 @@ async def apply_proposal_to_configs(db, configs: Iterable[dict], *, update_field
             "is_default": cfg.get("account_id") is None,
         })
     return audit
+
+
+# Backwards-compatible alias — iter-36 callers used this name. New code
+# should prefer `apply_to_bot_configs` so the audit row clearly records
+# the change source.
+async def apply_proposal_to_configs(db, configs, *, update_fields, proposal_id,
+                                    target_mode, auto=False):
+    return await apply_to_bot_configs(
+        db, configs,
+        update_fields=update_fields,
+        source="research_auto_accept" if auto else "research",
+        source_id=proposal_id,
+        target_mode=target_mode,
+        auto=auto,
+    )

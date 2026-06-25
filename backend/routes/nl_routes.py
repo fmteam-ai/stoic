@@ -99,31 +99,79 @@ async def nl_strategy_backtest(payload: dict, user=Depends(get_current_user)):
     )
     return result
 
+@router.get("/strategy/targets")
+async def nl_strategy_targets(symbols: str = "", user=Depends(get_current_user)):
+    """List candidate bot_configs annotated with whether each one's symbols
+    overlap the comma-separated `symbols` param. Powers the target-selector
+    dropdown on the Strategies page (no proposal_id required).
+    """
+    db = get_db()
+    from research_agent.proposal_targeting import list_candidate_bots
+    syms = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+    candidates = await list_candidate_bots(db, user["id"], syms)
+    matching = sum(1 for c in candidates if c["matches_proposal_symbols"])
+    return {
+        "proposal_symbols": syms,
+        "candidates": candidates,
+        "matching_count": matching,
+        "total_count": len(candidates),
+    }
+
+
 
 @router.post("/strategy/apply")
 async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
-    """Persist a compiled strategy into the user's bot_config."""
+    """Persist a compiled strategy into the user's bot_config(s).
+
+    Body: {compiled: dict, target: str (default 'matching')}
+      target ∈ "matching" | "all" | "default" | "<account_id>"
+    """
     compiled = payload.get("compiled") or {}
+    target = (payload.get("target") or "matching").strip()
     if not compiled or compiled.get("clarification_needed"):
         raise HTTPException(status_code=400, detail="No usable compiled strategy")
 
     db = get_db()
-    update = {
+    from research_agent.proposal_targeting import (
+        resolve_target_configs, apply_to_bot_configs,
+    )
+    update_fields = {
         "risk_level": compiled.get("risk_level", "medium"),
         "symbols": [s.upper() for s in (compiled.get("symbols") or ["XAUUSD", "BTCUSD"])],
         "max_concurrent_trades": int(compiled.get("max_concurrent_trades", 2)),
         "auto_execute": bool(compiled.get("auto_execute", True)),
         "session_preference": compiled.get("session_preference", "any"),
         "strategy_style": compiled.get("strategy_style", "trend_following"),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
         "source": "nl_strategy_builder",
     }
-    await db.bot_configs.update_one(
-        {"user_id": user["id"]}, {"$set": update}, upsert=True
+    configs, resolved_mode = await resolve_target_configs(
+        db, user["id"], update_fields["symbols"], target,
     )
-    cfg = await db.bot_configs.find_one({"user_id": user["id"]})
-    cfg["id"] = str(cfg.pop("_id"))
-    return {"ok": True, "config": cfg}
+    if not configs:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No matching bot configs for target='{target}'. "
+                   "Try target='all' or pick a specific bot.",
+        )
+    audit = await apply_to_bot_configs(
+        db, configs,
+        update_fields=update_fields,
+        source="nl_strategy",
+        source_id=None,
+        target_mode=resolved_mode,
+        auto=False,
+    )
+    # Return the first updated config for legacy clients that read `config`.
+    cfg = await db.bot_configs.find_one({"_id": configs[0]["_id"]})
+    if cfg:
+        cfg["id"] = str(cfg.pop("_id"))
+    return {
+        "ok": True,
+        "config": cfg,
+        "applied_count": len(audit),
+        "target_mode": resolved_mode,
+        "applied_to": audit,
+    }
 
 
 # ------------------- Risk Commander (NL Circuit Breakers) ------------------
@@ -267,16 +315,34 @@ async def _close_all_trades(user_id, target):
 
 
 async def _set_risk_level(user_id, risk_level):
+    """Risk Commander: set risk level on ALL bots the user owns.
+
+    Default behaviour is broadcast (matches the NL intent "set risk to low"
+    — the user means it for all their bots). If a per-bot target is ever
+    needed, the AI orchestrator can call `_apply_to_target` directly.
+    """
     if risk_level not in ("low", "medium", "high", "extreme"):
         return {"error": f"invalid risk_level {risk_level}"}
     db = get_db()
-    res = await db.bot_configs.update_one(
-        {"user_id": user_id},
-        {"$set": {"risk_level": risk_level,
-                  "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True,
+    from research_agent.proposal_targeting import (
+        resolve_target_configs, apply_to_bot_configs,
     )
-    return {"risk_level": risk_level, "modified": res.modified_count}
+    configs, resolved_mode = await resolve_target_configs(
+        db, user_id, [], "all",
+    )
+    if not configs:
+        return {"risk_level": risk_level, "modified": 0,
+                "note": "no bot configs found"}
+    audit = await apply_to_bot_configs(
+        db, configs,
+        update_fields={"risk_level": risk_level},
+        source="risk_commander",
+        source_id=None,
+        target_mode=resolved_mode,
+        auto=False,
+    )
+    return {"risk_level": risk_level, "modified": len(audit),
+            "target_mode": resolved_mode}
 
 
 async def _save_trigger(user_id, params):

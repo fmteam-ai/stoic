@@ -185,28 +185,41 @@ async def _cmd_balance(token, chat_id, user_id) -> None:
 
 async def _cmd_run(token, chat_id, user_id) -> None:
     db = get_db()
-    await db.bot_configs.update_one(
+    # Broadcast: turn ON every bot the user owns. Telegram has no concept
+    # of "which account" — the safe default is to control all of them.
+    res = await db.bot_configs.update_many(
         {"user_id": user_id},
         {"$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True,
     )
-    await _send_reply(token, chat_id, "*✅ Bot Started*\n\nThe bot is now active and scanning markets\\.")
+    n = res.modified_count
+    msg = (
+        f"*✅ Bot Started*\n\nAll {n} bot{'s' if n != 1 else ''} active and scanning markets\\."
+        if n > 0 else
+        "*⚠️ No bots to start*\n\nYou don't have any bot configs yet \\— add one in the dashboard\\."
+    )
+    await _send_reply(token, chat_id, msg)
 
 
 async def _cmd_stop(token, chat_id, user_id) -> None:
     db = get_db()
-    await db.bot_configs.update_one(
+    res = await db.bot_configs.update_many(
         {"user_id": user_id},
         {"$set": {"active": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
-    await _send_reply(token, chat_id, "*🛑 Bot Stopped*\n\nNo new signals will be generated\\. Open trades remain on their SL/TP\\.")
+    n = res.modified_count
+    msg = (
+        f"*🛑 Bot Stopped*\n\nAll {n} bot{'s' if n != 1 else ''} paused\\. No new signals\\. Open trades remain on their SL/TP\\."
+        if n > 0 else
+        "*⚠️ Nothing to stop*\n\nNo active bot configs found\\."
+    )
+    await _send_reply(token, chat_id, msg)
 
 
 async def _cmd_panic(token, chat_id, user_id) -> None:
     """Same logic as /api/panic but invoked from telegram (no http call needed)."""
     db = get_db()
-    # Stop bot
-    await db.bot_configs.update_one(
+    # Stop ALL bots (broadcast — PANIC's whole purpose is "stop everything")
+    bot_res = await db.bot_configs.update_many(
         {"user_id": user_id}, {"$set": {"active": False}}
     )
     # Cancel pending trades
@@ -222,7 +235,7 @@ async def _cmd_panic(token, chat_id, user_id) -> None:
     )
     text = (
         "*🚨 PANIC ENGAGED*\n\n"
-        f"Bot stopped\\.\n"
+        f"All {bot_res.modified_count} bot{'s' if bot_res.modified_count != 1 else ''} stopped\\.\n"
         f"Cancelled pending: `{cancel_res.modified_count}`\n"
         f"Marked open for close: `{close_res.modified_count}`"
     )

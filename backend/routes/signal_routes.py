@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 
@@ -6,6 +7,7 @@ from auth import get_current_user
 from database import get_db
 from ai_signals import analyze_symbol
 from route_utils import parse_object_id
+from routes.bot_routes import _config_filter
 
 router = APIRouter(prefix="/signals", tags=["signals"])
 
@@ -24,13 +26,19 @@ async def list_signals(limit: int = 50, user=Depends(get_current_user)):
 
 
 @router.post("/generate")
-async def generate_signal(payload: dict, user=Depends(get_current_user)):
-    """Generate AI signal for one symbol on demand."""
+async def generate_signal(payload: dict, account_id: Optional[str] = None,
+                          user=Depends(get_current_user)):
+    """Generate AI signal for one symbol on demand.
+
+    `account_id` (query param) — pick which bot_config to read risk_level from.
+    Omitted → default profile (account_id is None). Lets the Signals UI scope
+    the generation to a specific bot when the user has several.
+    """
     symbol = (payload.get("symbol") or "").upper()
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol required")
     db = get_db()
-    cfg = await db.bot_configs.find_one({"user_id": user["id"]}) or {}
+    cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id)) or {}
     risk_level = payload.get("risk_level") or cfg.get("risk_level", "medium")
 
     try:
@@ -41,16 +49,23 @@ async def generate_signal(payload: dict, user=Depends(get_current_user)):
     signal["user_id"] = user["id"]
     signal["consumed"] = False
     signal["created_at"] = datetime.now(timezone.utc).isoformat()
+    if account_id:
+        signal["account_id"] = account_id
     result = await db.signals.insert_one(signal)
     signal["_id"] = result.inserted_id
     return _serialize(signal)
 
 
 @router.post("/generate-all")
-async def generate_all(user=Depends(get_current_user)):
-    """Generate signals for all configured symbols."""
+async def generate_all(account_id: Optional[str] = None,
+                       user=Depends(get_current_user)):
+    """Generate signals for all configured symbols of a chosen bot.
+
+    `account_id` (query param) selects which bot_config drives the symbol
+    list + risk_level. Omitted → default profile.
+    """
     db = get_db()
-    cfg = await db.bot_configs.find_one({"user_id": user["id"]})
+    cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
     if not cfg or not cfg.get("symbols"):
         raise HTTPException(status_code=400, detail="No symbols configured")
     risk_level = cfg.get("risk_level", "medium")
@@ -61,12 +76,14 @@ async def generate_all(user=Depends(get_current_user)):
             sig["user_id"] = user["id"]
             sig["consumed"] = False
             sig["created_at"] = datetime.now(timezone.utc).isoformat()
+            if account_id:
+                sig["account_id"] = account_id
             r = await db.signals.insert_one(sig)
             sig["_id"] = r.inserted_id
             results.append(_serialize(sig))
         except Exception as e:
             results.append({"symbol": sym, "error": str(e)})
-    return {"generated": results}
+    return {"generated": results, "account_id": account_id}
 
 
 @router.delete("/{signal_id}")
