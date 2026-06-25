@@ -220,6 +220,27 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
+**Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.
+
+**Backend:**
+- New `/app/backend/macro_feeds.py` — async httpx pulls of 5 series (DGS10, DGS2, FEDFUNDS, DTWEXBGS, T10YIE) with day-over-day + week-over-week deltas. Filters FRED's holiday `.` sentinels before delta math.
+- Hourly cache to `db.fred_cache` (1h TTL) → ≤ 5 FRED calls/hour total regardless of dashboard load.
+- Single-flight async locks prevent stampede when multiple users hit Dashboard at once.
+- Graceful fallback: when FRED unreachable, serves stale cache with `stale_cache: true` flag instead of crashing.
+- New route `GET /api/macro/snapshot[?force=true]` (admin/user). 401 unauth.
+- `FRED_API_KEY` added to `/app/backend/.env`.
+
+**Frontend:**
+- New component `/app/frontend/src/components/MacroClimate.jsx` — 5-card grid below BotHealthScore on Dashboard. Each card: series_id label, full name, latest value with unit, DoD + WoW deltas with color/arrow, observation date.
+- Self-refreshes every 10min, self-hides when no data, shows amber STALE CACHE chip when backend fell back to stale.
+
+**Testing — verified by testing_agent_v3_fork (iter26):**
+- ✅ 110/110 pytest tests pass (9 new + 101 regression across all prior iterations)
+- ✅ Backend 100% · Frontend 100% · 0 critical · 0 minor (after cleanup of dead-code branch + legacy `_id='snapshot'` cache doc)
+- ✅ Live FRED data confirmed flowing: DGS10=4.50%, DGS2=4.16%, FEDFUNDS=3.63%, DTWEXBGS=120.40, T10YIE=2.18%
+- ✅ The existing AI REASONING strip on Dashboard already cites this exact data ("DXY regime bullish_usd 101.6 vs 100.2 EMA, real yields rising +0.09 over 5d in bearish_gold regime") — signal logic immediately benefits
+
 ### Global InvalidId exception handler (iter25 — belt-and-suspenders)
 Registered `bson.errors.InvalidId` exception handler on the FastAPI app in `server.py`. Any future route that forgets to use `route_utils.parse_object_id` and calls raw `ObjectId(user_input)` now returns a clean **404 `{detail: "Resource not found"}`** instead of a 500. Prevents the entire iter22 P2.2 class of bug from re-emerging when new routes are added.
 

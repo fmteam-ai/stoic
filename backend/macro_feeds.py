@@ -112,8 +112,7 @@ async def get_macro_snapshot(force_refresh: bool = False) -> dict:
         "stale_cache": bool,   # any series fell back to stale cache
       }
     """
-    from database import get_db as _get_db
-    db = _get_db() if "get_db" not in globals() else get_db()
+    db = get_db()
     now = datetime.now(timezone.utc)
     has_key = bool(_api_key())
 
