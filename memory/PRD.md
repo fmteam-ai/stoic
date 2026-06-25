@@ -220,6 +220,23 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### Security & stability hardening (iter22 → iter23)
+**5 issues identified by user code-audit:**
+
+- **P1.1** `bridge_routes.report_trade` — slippage_veto path referenced undefined `now_iso` → NameError 500. **Fix:** Inlined `datetime.now(timezone.utc).isoformat()` at the reference site. No more 500s when slippage > cap.
+
+- **P1.2** Credentialed CORS open to every origin (`allow_origin_regex='.*' + allow_credentials=True`). **Fix:** Rewrote CORS in server.py to enforce mutual exclusion — explicit allowlist + credentials, OR wildcard + NO credentials, never both. `CORS_ORIGINS` env now drives the policy; preview URL whitelisted.
+
+- **P1.3** Broker passwords revealable with just a session. **Fix:** `POST /accounts/{id}/credentials/reveal` now requires `{password, include_master?}` body. Password re-confirmed via `auth.verify_password` (403 on fail). `master_password` only returned when `include_master=true`. Every reveal attempt (success/failure) audit-logged to new `credential_reveals` collection with `{user_id, account_id, result, revealed[], at}`. Frontend now prompts via a modal with password input + include-master checkbox (only shown when master exists).
+
+- **P2.1** `broker_deals.insert_one` swallowed ALL exceptions as duplicate. **Fix:** Narrowed `except` to `DuplicateKeyError`. Other exceptions log + raise 500 so real broker fills no longer silently disappear.
+
+- **P2.2** Raw `ObjectId()` on user-supplied IDs → 500. **Fix:** New `/app/backend/route_utils.py` with `parse_object_id(value, resource)` helper that returns clean 404 on invalid hex. Applied to all bridge/account/trade route call sites. Remaining call sites in bot/nl/signal/affiliate routes flagged for follow-up.
+
+**Testing — iter22 + iter23 (testing_agent_v3_fork):**
+- ✅ **Iter22**: 88/88 backend tests pass · 0 critical issues · caught 1 frontend caller drift on Accounts.jsx CredentialsPanel
+- ✅ **Iter23**: 18/18 backend regression pass · 6/6 frontend criteria pass · audit log persistence verified
+
 ### Suggested Config Adjustment (auto-tune from safety-block patterns)
 **Why:** Passive observability (safety-blocks UI) isn't enough — users need a one-click bridge from "I see the bot is being clipped" to "my config is now within the envelope". The page now actively proposes the smallest config change that should reduce future blocks.
 
