@@ -34,6 +34,40 @@ def _serialise_proposal(d: dict) -> dict:
     }
 
 
+@router.get("/auto-accept")
+async def get_auto_accept(user=Depends(get_current_user)):
+    """Read the user's auto-accept settings (opt-in toggle + delta threshold)."""
+    db = get_db()
+    doc = await db.users.find_one({"_id": user["id"]}) or \
+          await db.users.find_one({"id": user["id"]}) or {}
+    s = doc.get("research_auto_accept") or {}
+    return {
+        "enabled": bool(s.get("enabled")),
+        "min_delta_pct": float(s.get("min_delta_pct") or 10.0),
+    }
+
+
+@router.post("/auto-accept")
+async def set_auto_accept(payload: dict, user=Depends(get_current_user)):
+    """Update auto-accept settings. Body: {enabled: bool, min_delta_pct: float}."""
+    enabled = bool(payload.get("enabled"))
+    try:
+        min_delta = float(payload.get("min_delta_pct") or 10.0)
+    except Exception:
+        raise HTTPException(status_code=400, detail="min_delta_pct must be numeric")
+    if min_delta < 1 or min_delta > 100:
+        raise HTTPException(status_code=400, detail="min_delta_pct must be 1-100")
+    db = get_db()
+    await db.users.update_one(
+        {"_id": user["id"]},
+        {"$set": {"research_auto_accept": {
+            "enabled": enabled, "min_delta_pct": min_delta,
+        }}},
+        upsert=False,
+    )
+    return {"enabled": enabled, "min_delta_pct": min_delta}
+
+
 @router.get("/proposals")
 async def list_proposals(user=Depends(get_current_user)):
     db = get_db()

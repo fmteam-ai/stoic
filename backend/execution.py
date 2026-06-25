@@ -114,6 +114,16 @@ class MT5BridgeEngine(ExecutionEngine):
             "trail_active": False,
             "safety_audit": safety,
         }
+        # Embed an Explainable AI snapshot — stable record of WHY this trade
+        # was fired, captured from the latest agent_activity tick.
+        try:
+            from trade_explainer import snapshot_for_trade_creation
+            trade_doc["explanation_snapshot"] = await snapshot_for_trade_creation(
+                db, user_id=user_id, symbol=signal["symbol"],
+                signal=signal, trade_doc=trade_doc,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # explanation is informational — never block a trade
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)

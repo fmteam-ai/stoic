@@ -311,6 +311,24 @@ async def execute_manual_trade(payload: ManualTradeRequest, user=Depends(get_cur
     return trade_doc
 
 
+@router.get("/{trade_id}/explain")
+async def trade_explain(trade_id: str, user=Depends(get_current_user)):
+    """Explainable AI breakdown for a trade.
+
+    4 sections: WHY DID I ENTER, WHY THIS SIZE, WHAT FACTORS MATTERED, RISKS.
+    Prefers the snapshot embedded on the trade doc at creation (stable across
+    agent_activity rotation); falls back to live composition for older trades.
+    """
+    from trade_explainer import explain_trade
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]}
+    )
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return await explain_trade(db, trade)
+
+
 @router.get("/{trade_id}/audit")
 async def trade_audit(trade_id: str, user=Depends(get_current_user)):
     """Full deal lineage for a single trade.

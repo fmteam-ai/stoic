@@ -151,7 +151,15 @@ async def run_for_user(db, user_id: str, *, force: bool = False) -> dict:
             "created_at": now_iso,
         })
     if proposals_to_save:
-        await db.improvement_proposals.insert_many(proposals_to_save)
+        inserted = await db.improvement_proposals.insert_many(proposals_to_save)
+        # Auto-accept opt-in: if user has flagged it AND top proposal beats
+        # the configured threshold, apply it immediately + dismiss the rest.
+        auto_applied = await _maybe_auto_accept(
+            db, user_id=user_id, proposals=proposals_to_save,
+            inserted_ids=[str(i) for i in inserted.inserted_ids],
+        )
+        if auto_applied:
+            scored[0]["auto_applied"] = True
 
     await _stamp_run(db, user_id,
                     status="ran",
@@ -173,6 +181,74 @@ async def run_for_user(db, user_id: str, *, force: bool = False) -> dict:
         "proposals": scored[:5],
         "hypothesis_notes": hypo.get("notes") or [],
     }
+
+
+async def _maybe_auto_accept(db, *, user_id: str, proposals: list[dict],
+                              inserted_ids: list[str]) -> bool:
+    """Opt-in auto-accept: if user enabled it AND top proposal's delta vs
+    baseline ≥ threshold AND beats_baseline, apply it to bot_configs and
+    mark the rest dismissed.
+
+    Reads settings from db.users.research_auto_accept:
+      {"enabled": bool, "min_delta_pct": float (default 10.0)}
+    """
+    user = await db.users.find_one({"_id": user_id}) or \
+           await db.users.find_one({"id": user_id})
+    if not user:
+        return False
+    settings = (user.get("research_auto_accept") or {})
+    if not settings.get("enabled"):
+        return False
+    min_delta = float(settings.get("min_delta_pct") or 10.0)
+
+    top = proposals[0]
+    if not top.get("beats_baseline"):
+        return False
+    # delta_vs_baseline is in absolute composite-score units; convert to %
+    # relative to score 1.0 floor. For a 10% delta criterion we just check
+    # the raw delta value crossed (≥ 0.10) since scores are typically 0..2.
+    if (top.get("delta_vs_baseline") or 0) < (min_delta / 100.0):
+        return False
+
+    # Apply
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    compiled = top.get("compiled") or {}
+    update = {k: v for k, v in {
+        "symbols": compiled.get("symbols"),
+        "session_preference": compiled.get("session_preference"),
+        "risk_level": compiled.get("risk_level"),
+        "strategy_style": compiled.get("strategy_style"),
+        "max_concurrent_trades": compiled.get("max_concurrent_trades"),
+        "updated_at": now_iso,
+        "last_auto_accepted_at": now_iso,
+    }.items() if v is not None}
+    await db.bot_configs.update_one({"user_id": user_id}, {"$set": update})
+
+    # Mark the accepted proposal + dismiss the rest
+    if inserted_ids:
+        from bson import ObjectId
+        top_id = inserted_ids[0]
+        try:
+            await db.improvement_proposals.update_one(
+                {"_id": ObjectId(top_id)},
+                {"$set": {"status": "auto_accepted",
+                          "accepted_at": now_iso,
+                          "auto_accepted": True}},
+            )
+            other_ids = [ObjectId(x) for x in inserted_ids[1:]]
+            if other_ids:
+                await db.improvement_proposals.update_many(
+                    {"_id": {"$in": other_ids}},
+                    {"$set": {"status": "dismissed_auto",
+                              "dismissed_at": now_iso}},
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("auto-accept persist failed: %s", e)
+
+    logger.warning("AUTO-ACCEPT applied for user=%s name=%s delta=%.3f",
+                   user_id, top.get("name"), top.get("delta_vs_baseline"))
+    return True
 
 
 async def _stamp_run(db, user_id: str, *, status: str, weaknesses: dict,

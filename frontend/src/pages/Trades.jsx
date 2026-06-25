@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 
@@ -187,6 +187,7 @@ export default function Trades() {
 
     const [refreshing, setRefreshing] = useState(false);
     const [auditTrade, setAuditTrade] = useState(null);  // trade whose audit trail modal is open
+    const [explainTrade, setExplainTrade] = useState(null);  // trade whose AI-explainability modal is open
     const load = useCallback(async () => {
         setRefreshing(true);
         try {
@@ -642,6 +643,11 @@ export default function Trades() {
                                                         <History className="w-3 h-3" /> AUDIT
                                                     </button>
                                                 )}
+                                                <button onClick={() => setExplainTrade(t)} data-testid={`explain-trade-${t.id}`}
+                                                    title="Show the AI reasoning, sizing, factors and risks for this trade"
+                                                    className="text-[#A1A1AA] hover:text-[#00FF41] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                    <Sparkles className="w-3 h-3" /> EXPLAIN
+                                                </button>
                                             </div>
                                         </td>
                                     </tr>
@@ -658,7 +664,148 @@ export default function Trades() {
                     onClose={() => setAuditTrade(null)}
                 />
             )}
+
+            {explainTrade && (
+                <ExplainModal
+                    trade={explainTrade}
+                    onClose={() => setExplainTrade(null)}
+                />
+            )}
         </AppLayout>
+    );
+}
+
+
+function ExplainModal({ trade, onClose }) {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState("");
+
+    useEffect(() => {
+        let cancelled = false;
+        api.get(`/trades/${trade.id}/explain`).then(r => {
+            if (!cancelled) setData(r.data);
+        }).catch(e => { if (!cancelled) setErr(formatApiError(e)); });
+        return () => { cancelled = true; };
+    }, [trade.id]);
+
+    const impactClass = (impact) => {
+        if (impact === "HIGH") return "text-[#FFD700] border-[#FFD700]/40 bg-[#FFD700]/10";
+        if (impact === "MEDIUM") return "text-[#0099FF] border-[#0099FF]/40 bg-[#0099FF]/10";
+        return "text-[#A1A1AA] border-[#1F1F1F]";
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+            data-testid="explain-modal"
+            onClick={onClose}>
+            <div className="bg-[#0A0A0A] border border-[#00FF41]/40 max-w-2xl w-full max-h-[85vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}>
+                <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2 sticky top-0 bg-[#0A0A0A]">
+                    <Sparkles className="w-5 h-5 text-[#00FF41]" />
+                    <div className="flex-1 min-w-0">
+                        <div className="font-mono text-[10px] text-[#00FF41] tracking-widest">EXPLAINABLE AI · TRADE REASONING</div>
+                        <div className="font-display font-bold text-lg tracking-tight truncate">
+                            {trade.symbol} · {trade.action} · {trade.lot_size} lots
+                            {trade.mt5_ticket && (
+                                <span className="font-mono text-xs text-[#52525B] ml-2">#{trade.mt5_ticket}</span>
+                            )}
+                        </div>
+                    </div>
+                    <button onClick={onClose} data-testid="explain-close"
+                        className="p-1.5 text-[#52525B] hover:text-white">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                {err && (
+                    <div className="border-b border-[#FF3B30]/30 bg-[#FF3B30]/10 px-5 py-2 text-xs text-[#FF3B30] font-mono" data-testid="explain-error">{err}</div>
+                )}
+
+                {!data && !err && (
+                    <div className="p-8 text-center font-mono text-xs text-[#52525B] tracking-widest" data-testid="explain-loading">
+                        LOADING…
+                    </div>
+                )}
+
+                {data && (
+                    <div className="p-5 space-y-5">
+                        {/* 1. ENTRY */}
+                        <section data-testid="explain-section-entry">
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">WHY DID I ENTER?</div>
+                            <div className="border border-[#1F1F1F] bg-[#050505] p-3 space-y-1.5">
+                                <Row k="Action" v={`${data.entry?.action || "—"} · conf ${data.entry?.confidence ?? "—"}`} />
+                                <Row k="Strategy" v={data.entry?.strategy_summary || "—"} />
+                                <Row k="Technical" v={data.entry?.technical_bias || "—"} />
+                                <Row k="Macro" v={data.entry?.macro_bias || "—"} />
+                                <Row k="News" v={data.entry?.news_bias || "—"} />
+                            </div>
+                        </section>
+
+                        {/* 2. SIZING */}
+                        <section data-testid="explain-section-sizing">
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">WHY THIS SIZE?</div>
+                            <div className="border border-[#1F1F1F] bg-[#050505] p-3 space-y-1.5">
+                                <Row k="Final lot" v={data.sizing?.final_lot ?? "—"} />
+                                <Row k="Original lot" v={data.sizing?.original_lot ?? "—"} />
+                                <Row k="Vol-parity ×" v={data.sizing?.vol_parity_scale ?? "—"} />
+                                <Row k="Kelly ×" v={data.sizing?.kelly_scale ?? "—"} />
+                                <Row k="Blended ×" v={data.sizing?.blended_scale ?? "—"} />
+                                <Row k="30d win rate" v={data.sizing?.win_rate_30d != null ? `${(data.sizing.win_rate_30d * 100).toFixed(1)}%` : "—"} />
+                                <Row k="Reason" v={data.sizing?.reason || "—"} />
+                            </div>
+                        </section>
+
+                        {/* 3. FACTORS */}
+                        <section data-testid="explain-section-factors">
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">WHAT FACTORS MATTERED?</div>
+                            {(data.factors || []).length === 0 ? (
+                                <div className="border border-[#1F1F1F] bg-[#050505] p-3 text-xs text-[#52525B] font-mono">
+                                    No standout factors recorded.
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {(data.factors || []).map((f, i) => (
+                                        <div key={i} className="border border-[#1F1F1F] bg-[#050505] p-3 flex items-start gap-3" data-testid={`explain-factor-${i}`}>
+                                            <span className={`font-mono text-[9px] tracking-widest px-2 py-0.5 border ${impactClass(f.impact)}`}>{f.impact}</span>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="font-mono text-xs text-white">{f.label}</div>
+                                                <div className="text-xs text-[#A1A1AA] mt-0.5">{f.detail}</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+
+                        {/* 4. RISKS */}
+                        <section data-testid="explain-section-risks">
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">WHAT RISKS EXIST?</div>
+                            <div className="border border-[#1F1F1F] bg-[#050505] p-3 space-y-1.5">
+                                <Row k="Stop loss" v={data.risks?.stop_loss ?? "—"} />
+                                <Row k="Take profit" v={data.risks?.take_profit ?? "—"} />
+                                <Row k="SL distance (pips)" v={data.risks?.sl_pips_risk ?? "—"} />
+                                <Row k="Max loss (USD)" v={data.risks?.max_loss_usd != null ? `$${data.risks.max_loss_usd}` : "—"} />
+                                <Row k="Risk % of equity" v={data.risks?.risk_pct_of_equity != null ? `${data.risks.risk_pct_of_equity}%` : "—"} />
+                                <Row k="Macro gate" v={data.risks?.macro_gate_open == null ? "—" : (data.risks.macro_gate_open ? "OPEN" : "CLOSED")} />
+                            </div>
+                        </section>
+
+                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest text-right">
+                            {data.live ? "LIVE COMPOSITION" : (data.snapshotted_at ? `SNAPSHOT · ${data.snapshotted_at}` : "")}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function Row({ k, v }) {
+    return (
+        <div className="flex items-baseline gap-3 text-xs">
+            <span className="font-mono text-[10px] text-[#52525B] tracking-widest min-w-[120px]">{String(k).toUpperCase()}</span>
+            <span className="text-[#E4E4E7] font-mono break-words flex-1">{v === null || v === undefined || v === "" ? "—" : v}</span>
+        </div>
     );
 }
 

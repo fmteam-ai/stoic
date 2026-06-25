@@ -8,6 +8,16 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-25 (iter-34) — **Explainable AI Trading + Opt-in Auto-Accept**:
+  - **Trade Explainer** (`trade_explainer.py`): builds a 4-section explanation per trade — (1) WHY DID I ENTER? strategy/technical/macro/news bias, (2) WHY THIS SIZE? original lot · vol-parity · Kelly · blended scale · 30d win-rate · reason, (3) WHAT FACTORS MATTERED? top-3 ranked contributors with HIGH/MEDIUM impact, (4) WHAT RISKS EXIST? SL/TP/pips/max-loss/macro gate. Prefers snapshot on `trade.explanation_snapshot` (frozen at insert time); falls back to live composition from `agent_activity`.
+  - **Trade route**: `GET /api/trades/{trade_id}/explain` returns the explanation JSON.
+  - **Auto-accept opt-in** (`research_agent/self_improver._maybe_auto_accept`): when `users.research_auto_accept.enabled=true` AND top proposal `beats_baseline` AND `delta_vs_baseline ≥ min_delta_pct/100`, immediately applies the compiled bot config to `bot_configs`, marks the proposal `auto_accepted`, dismisses the rest as `dismissed_auto`. Default threshold 10%. Disabled by default.
+  - **Research API additions**: `GET /api/research/auto-accept` and `POST /api/research/auto-accept` (toggle/threshold).
+  - **`/trades` page**: every row now has an "EXPLAIN" button (Sparkles icon) opening the 4-section modal with full reasoning trail. Live composition badge or snapshot timestamp shown.
+  - **`/research` page**: AUTO-ACCEPT · OPT-IN panel with `min_delta_pct` input + toggle button (DISABLED/ENABLED), wired to the new endpoints.
+  - **Tests**: 10 tests in `test_iter34_auto_accept_explain.py` (auto-accept disabled/below-threshold/applies/doesn't-beat-baseline; explainer entry/factors/sizing/risks/snapshot-preferred/live-fallback). **10/10 passing.** UI verified live: EXPLAIN modal renders with all 4 sections + factor impact chips; Research auto-accept panel renders with threshold input + toggle.
+
+
 - 2026-06-25 (iter-33) — **Self-Improving Research Agent · nightly daily-loop**:
   - **Trade Analyzer** (`research_agent/trade_analyzer.py`): pure-deterministic. Groups last-30d closed trades by symbol/session/hour/action → emits weaknesses (≥5-trade buckets with below-overall win-rate AND non-positive P&L) + strengths.
   - **Hypothesis Generator** (`research_agent/hypothesis_generator.py`): Claude Sonnet 4.5 prompt — given weaknesses + current strategy, returns 3-5 *focused* candidate strategies (one-dim changes only). Strict closed-vocab validator drops invalid symbols, clamps allowed-set fields, forces `auto_execute=false` on every proposal (safety — proposals never auto-fire).

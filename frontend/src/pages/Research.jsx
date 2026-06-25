@@ -10,18 +10,21 @@ import {
 export default function Research() {
     const [proposals, setProposals] = useState({ pending: [], history: [] });
     const [lastRun, setLastRun] = useState(null);
+    const [autoAccept, setAutoAccept] = useState({ enabled: false, min_delta_pct: 10.0 });
     const [running, setRunning] = useState(false);
     const [latest, setLatest] = useState(null);
     const [loading, setLoading] = useState(true);
 
     const load = useCallback(async () => {
         try {
-            const [p, l] = await Promise.allSettled([
+            const [p, l, aa] = await Promise.allSettled([
                 api.get("/research/proposals"),
                 api.get("/research/last-run"),
+                api.get("/research/auto-accept"),
             ]);
             if (p.status === "fulfilled") setProposals(p.value.data);
             if (l.status === "fulfilled") setLastRun(l.value.data);
+            if (aa.status === "fulfilled") setAutoAccept(aa.value.data);
         } catch { /* silent — page surfaces errors elsewhere */ }
         finally { setLoading(false); }
     }, []);
@@ -60,6 +63,29 @@ export default function Research() {
             load();
         } catch (e) {
             toast.error("Dismiss failed", { description: formatApiError(e) });
+        }
+    };
+
+    const toggleAutoAccept = async (enabled) => {
+        try {
+            const { data } = await api.post("/research/auto-accept", {
+                enabled, min_delta_pct: autoAccept.min_delta_pct,
+            });
+            setAutoAccept(data);
+            toast.success(enabled ? "Auto-accept enabled" : "Auto-accept disabled");
+        } catch (e) {
+            toast.error("Failed to update setting", { description: formatApiError(e) });
+        }
+    };
+
+    const updateMinDelta = async (val) => {
+        try {
+            const { data } = await api.post("/research/auto-accept", {
+                enabled: autoAccept.enabled, min_delta_pct: val,
+            });
+            setAutoAccept(data);
+        } catch (e) {
+            toast.error("Failed", { description: formatApiError(e) });
         }
     };
 
@@ -107,6 +133,41 @@ export default function Research() {
                         )}
                     </div>
                 )}
+
+                {/* Auto-accept opt-in */}
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="auto-accept-panel">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className="flex-1 min-w-[200px]">
+                            <div className="font-mono text-[10px] text-[#A855F7] tracking-widest mb-1">
+                                AUTO-ACCEPT · OPT-IN
+                            </div>
+                            <div className="text-sm text-[#E4E4E7]">
+                                Apply the top daily proposal automatically when its score delta
+                                clears your threshold. You can always rollback via the History panel.
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                                MIN DELTA %
+                                <input type="number" min="1" max="100" step="1"
+                                    value={autoAccept.min_delta_pct}
+                                    onChange={e => setAutoAccept(s => ({ ...s, min_delta_pct: parseFloat(e.target.value) || 10 }))}
+                                    onBlur={e => updateMinDelta(parseFloat(e.target.value) || 10)}
+                                    data-testid="auto-accept-min-delta"
+                                    className="ml-2 w-16 bg-[#050505] border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-[#E4E4E7]"/>
+                            </label>
+                            <button onClick={() => toggleAutoAccept(!autoAccept.enabled)}
+                                data-testid="auto-accept-toggle"
+                                className={`px-4 py-2 text-xs font-mono tracking-widest border transition-colors ${
+                                    autoAccept.enabled
+                                        ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]"
+                                        : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#A855F7]"
+                                }`}>
+                                {autoAccept.enabled ? "● ENABLED" : "○ DISABLED"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
 
                 {/* Latest run details */}
                 {latest && (
