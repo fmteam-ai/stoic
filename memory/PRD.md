@@ -8,6 +8,13 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-61) — **"Bot is patiently watching" dashboard tile + trailer voice sync**:
+  - **New feature** (user-requested): Dashboard widget that explains *why* the bot isn't trading — surfaces live entropy, news sentiment, RSI/volatility, the exact HOLD reason from `ai_signals.py`, plus "last eval / next eval in X" countdown and a HOLD-streak counter. Turns silent periods into a confidence-building view.
+    - **Backend**: `GET /api/signals/watch-status` (`signal_routes.py`) — returns latest signal per user-configured symbol with entropy parsed out of the reasoning string, plus sentiment, indicators, session, cooldown countdown, and HOLD streak since last actionable signal. Tests: `test_iter61_bot_watching.py` 3/3 passing.
+    - **Frontend**: `components/BotWatching.jsx` (new) — polls `/signals/watch-status` every 30s, renders per-symbol cards with an entropy meter that highlights threshold breaches, color-coded sentiment chip, indicators strip, "WHY I&apos;M NOT TRADING" reason block, and dual countdown footer. Mounted on Dashboard between BotPulsePanel and IntegrityWidget.
+    - **Bug caught & fixed**: initial `api.get("/api/signals/watch-status")` produced `/api/api/...` (404) because the axios instance already has `baseURL=${BACKEND_URL}/api`. Fixed by stripping the leading `/api`.
+  - **Trailer voice-slide sync fix** (`WelcomeTrailer.jsx`): re-anchored the SCENES array to real Whisper-transcribed timestamps from `trailer.mp3` (actual length 86.42s, not the assumed 70s). Added per-pillar highlight that lights up as the narrator counts "One… Two… Three… Four… Five." Click-to-play poster gate added to satisfy browser autoplay policy.
+
 - 2026-06-27 (iter-60) — **Tiered subscriptions (Starter / Pro / Elite)** with feature-gate plumbing:
   - **`subscription_plans.py`** rewritten — 12 SKUs (`{tier}_{duration}`): starter $29-209, pro $99-713, elite $199-1432. Legacy plan IDs (`monthly`/`quarterly`/`semi_annual`/`annual`) preserved as aliases → `pro_*` for backward compatibility. New `Features` dataclass with 15 capability flags per tier.
   - **`subscription_service.py`** — `get_user_tier(user_id)`: admin → `admin`, active paid → tier from plan_id, in-grace → `pro` (legacy customer protection), expired → `starter`.

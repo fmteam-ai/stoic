@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 
@@ -15,6 +16,94 @@ router = APIRouter(prefix="/signals", tags=["signals"])
 def _serialize(doc: dict) -> dict:
     doc["id"] = str(doc.pop("_id"))
     return doc
+
+
+# Entropy threshold above which the bot pre-filters HOLDs to save tokens.
+# Mirrors the ENTROPY_NOISY_THRESHOLD constant in ai_signals.py — kept here
+# as a local copy so the dashboard tile renders identical context.
+_ENTROPY_NOISY_THRESHOLD = 0.90
+
+
+def _extract_entropy(reasoning: str) -> Optional[float]:
+    """Parse `entropy=0.9441` out of bot_runner HOLD reasoning strings."""
+    if not reasoning:
+        return None
+    m = re.search(r"entropy=([\d.]+)", reasoning)
+    return float(m.group(1)) if m else None
+
+
+@router.get("/watch-status")
+async def watch_status(user=Depends(get_current_user)):
+    """Bot patient-watching status — "why the bot isn't trading right now."
+
+    Returns the latest signal per symbol the user's bot is configured to watch,
+    with entropy + sentiment + indicators surfaced for the dashboard tile.
+    Bot_runner-generated signals are global market state (no user_id), so we
+    grab the latest doc per symbol regardless of owner.
+    """
+    db = get_db()
+    cfg = await db.bot_configs.find_one(_config_filter(user["id"], None)) or {}
+    symbols = cfg.get("symbols") or ["XAUUSD"]
+    cooldown_min = cfg.get("signal_cooldown_minutes", 3)
+
+    out_symbols = []
+    now = datetime.now(timezone.utc)
+    for sym in symbols:
+        latest = await db.signals.find_one(
+            {"symbol": sym, "indicators": {"$exists": True}},
+            sort=[("created_at", -1)],
+        )
+        if not latest:
+            out_symbols.append({"symbol": sym, "status": "no_data"})
+            continue
+        reasoning = latest.get("reasoning") or ""
+        entropy = _extract_entropy(reasoning)
+        # Parse last evaluation timestamp (stored as ISO string)
+        last_ts_raw = latest.get("created_at")
+        last_ts = None
+        seconds_since = None
+        if isinstance(last_ts_raw, str):
+            try:
+                last_ts = datetime.fromisoformat(last_ts_raw.replace("Z", "+00:00"))
+                seconds_since = int((now - last_ts).total_seconds())
+            except ValueError:
+                pass
+        next_eval_in = None
+        if seconds_since is not None:
+            next_eval_in = max(0, cooldown_min * 60 - seconds_since)
+        out_symbols.append({
+            "symbol": sym,
+            "action": latest.get("action"),
+            "confidence": latest.get("confidence"),
+            "entropy": entropy,
+            "entropy_threshold": _ENTROPY_NOISY_THRESHOLD,
+            "noisy": entropy is not None and entropy >= _ENTROPY_NOISY_THRESHOLD,
+            "reason": reasoning,
+            "sentiment": latest.get("sentiment") or {},
+            "indicators": latest.get("indicators") or {},
+            "session": latest.get("session") or {},
+            "last_evaluated_at": last_ts_raw,
+            "seconds_since_last_eval": seconds_since,
+            "next_evaluation_in_seconds": next_eval_in,
+        })
+
+    # Count how many HOLDs in a row since user's last non-HOLD signal
+    last_non_hold = await db.signals.find_one(
+        {"user_id": user["id"], "action": {"$in": ["BUY", "SELL"]}},
+        sort=[("created_at", -1)],
+    )
+    hold_streak_query: dict = {"user_id": user["id"], "action": "HOLD"}
+    if last_non_hold and last_non_hold.get("created_at"):
+        hold_streak_query["created_at"] = {"$gt": last_non_hold["created_at"]}
+    hold_streak = await db.signals.count_documents(hold_streak_query)
+
+    return {
+        "symbols": out_symbols,
+        "cooldown_minutes": cooldown_min,
+        "hold_streak": hold_streak,
+        "last_actionable_signal_at": last_non_hold.get("created_at") if last_non_hold else None,
+        "philosophy": "STOIC refuses to trade in noisy regimes — every HOLD is a loss avoided.",
+    }
 
 
 @router.get("")
