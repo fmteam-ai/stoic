@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "@/styles/intro_trailer.css";
 
-/* Scene-by-scene state machine — timing in ms from t=0, matches the
-   70-second voiceover script in /app/memory/intro_trailer_script.md.
-   When the user drops a real ElevenLabs MP3 at /trailer.mp3 (public/),
-   the <audio> element's currentTime drives the visuals in lockstep. */
+/* Scene-by-scene state machine — timings in ms from t=0, anchored
+   to the ACTUAL trailer.mp3 (86.42s, transcribed via Whisper).
+   Each scene starts/ends precisely on a spoken phrase boundary. */
 const SCENES = [
     {
-        id: "hook", start: 0, end: 8000,
+        id: "hook", start: 0, end: 6680,
         kicker: "Trading is hard",
         render: () => (
             <h1 className="headline">
@@ -19,7 +18,7 @@ const SCENES = [
         sub: "Most trading bots make it worse.",
     },
     {
-        id: "pain", start: 8000, end: 22000,
+        id: "pain", start: 6680, end: 22760,
         kicker: "What you wanted vs what you got",
         render: () => (
             <h1 className="headline">
@@ -30,7 +29,7 @@ const SCENES = [
         sub: "Bots that fire trades the moment the market gets noisy. Bots that double-stack you into 5× leverage on gold — when gold is already moving against you.",
     },
     {
-        id: "pivot", start: 22000, end: 34000,
+        id: "pivot", start: 22760, end: 40640,
         kicker: "Introducing",
         render: () => (
             <h1 className="headline">
@@ -41,46 +40,57 @@ const SCENES = [
         sub: "Claude Sonnet 4.5. Calibrated probabilities. A 10-layer risk veto cascade that refuses dumb trades — even the ones the AI wants to take.",
     },
     {
-        id: "pillars", start: 34000, end: 58000,
+        id: "pillars", start: 40640, end: 76600,
         kicker: "Five reasons it's different",
-        render: () => (
-            <>
-                <h1 className="headline">Five reasons it's <em>different.</em></h1>
-                <div className="pillar-grid">
-                    {[
-                        ["01", "Calibrated probabilities",
-                            "Real win-rate forecasts — not LLM confidence theater. Platt-scaled, Brier-score validated."],
-                        ["02", "Loss Lab",
-                            "When you lose, the AI investigates the trade and auto-tightens the guardrails for next time."],
-                        ["03", "Correlation-aware Kelly",
-                            "Never double-stacks you into a moving market. Sizes per-position against your full open book."],
-                        ["04", "ADWIN drift detection",
-                            "Auto-retrains your model the moment the market regime shifts. No manual upkeep."],
-                        ["05", "Multi-account isolation",
-                            "RoboForex, VT Markets, Binance — each broker with its own circuit breaker. Per-account everything."],
-                    ].map(([n, title, body]) => (
-                        <div className="pillar" key={n} data-testid={`pillar-${n}`}>
-                            <div className="pillar-num">{n}</div>
-                            <div className="pillar-title">{title}</div>
-                            <div className="pillar-body">{body}</div>
-                        </div>
-                    ))}
-                </div>
-            </>
-        ),
+        /* Per-pillar beat timings anchored to "One.", "Two." ... "Five."
+           spoken in the audio. Pillar lights up the moment its number lands. */
+        pillarBeats: [40640, 47920, 54400, 60840, 67200],
+        render: (t) => {
+            const beats = [40640, 47920, 54400, 60840, 67200];
+            const activeBeat = beats.findIndex((s, i) =>
+                t >= s && (i === beats.length - 1 || t < beats[i + 1]));
+            return (
+                <>
+                    <h1 className="headline">Five reasons it&apos;s <em>different.</em></h1>
+                    <div className="pillar-grid">
+                        {[
+                            ["01", "Calibrated probabilities",
+                                "Real win-rate forecasts — not LLM confidence theater. Platt-scaled, Brier-score validated."],
+                            ["02", "Loss Lab",
+                                "When you lose, the AI investigates the trade and auto-tightens the guardrails for next time."],
+                            ["03", "Correlation-aware Kelly",
+                                "Never double-stacks you into a moving market. Sizes per-position against your full open book."],
+                            ["04", "ADWIN drift detection",
+                                "Auto-retrains your model the moment the market regime shifts. No manual upkeep."],
+                            ["05", "Multi-account isolation",
+                                "RoboForex, VT Markets, Binance — each broker with its own circuit breaker. Per-account everything."],
+                        ].map(([n, title, body], i) => (
+                            <div className={`pillar ${i === activeBeat ? "beat" : i < activeBeat ? "lit" : ""}`}
+                                 key={n} data-testid={`pillar-${n}`}>
+                                <div className="pillar-num">{n}</div>
+                                <div className="pillar-title">{title}</div>
+                                <div className="pillar-body">{body}</div>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            );
+        },
     },
     {
-        id: "close", start: 58000, end: 72000,
+        id: "close", start: 76600, end: 86420,
         kicker: "The promise",
         render: () => (
             <h1 className="headline">
-                STOIC doesn't promise you the moon.<br/>
+                STOIC doesn&apos;t promise you the moon.<br/>
                 It promises a bot that <em>refuses to lose stupidly.</em>
             </h1>
         ),
         sub: "Stop guessing. Start trading like a quant fund.",
     },
 ];
+
+const TRAILER_END_MS = 86420;
 
 export default function WelcomeTrailer() {
     const nav = useNavigate();
@@ -135,7 +145,7 @@ export default function WelcomeTrailer() {
     };
 
     const activeIdx = SCENES.findIndex(s => t >= s.start && t < s.end);
-    const finished = started && (t >= 72000 || (!playing && t > 0));
+    const finished = started && (t >= TRAILER_END_MS || (!playing && t > 0));
 
     const replay = () => {
         if (audioRef.current) {
@@ -181,15 +191,15 @@ export default function WelcomeTrailer() {
                 Audio cannot start until the user clicks something. */}
             {!started && (
                 <div className="scene active trailer-intro" data-testid="trailer-intro">
-                    <div className="kicker">STOIC · 70-second trailer</div>
+                    <div className="kicker">STOIC · 90-second trailer</div>
                     <h1 className="headline">
                         An AI hedge fund<br/>
                         that <em>refuses</em> to lose stupidly.
                     </h1>
                     <p className="subline">
-                        Sound on. 70 seconds. Watch how a 7-agent AI
-                        pipeline + a 10-layer risk veto cascade trades
-                        gold and bitcoin — so you don&apos;t have to.
+                        Sound on. Watch how a 7-agent AI pipeline +
+                        a 10-layer risk veto cascade trades gold and
+                        bitcoin — so you don&apos;t have to.
                     </p>
                     <div className="cta-block" style={{ marginTop: "2.5rem" }}>
                         <button
@@ -214,7 +224,7 @@ export default function WelcomeTrailer() {
                      className={`scene ${i === activeIdx ? "active" : ""}`}
                      data-testid={`scene-${s.id}`}>
                     <div className="kicker">{s.kicker}</div>
-                    {s.render()}
+                    {s.render(t)}
                     {s.sub && <p className="subline">{s.sub}</p>}
                 </div>
             ))}

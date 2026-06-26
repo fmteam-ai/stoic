@@ -87,7 +87,9 @@
     max-width: 700px; text-align: center;
 }
 
-/* Pillar card grid (Scene 4) */
+/* Pillar card grid (Scene 4) — each pillar lights up the moment its
+   number ("One", "Two"...) is spoken in the voiceover. JS toggles
+   `.beat` (currently spoken) and `.lit` (already spoken). */
 .pillar-grid {
     display: grid; gap: 1rem;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -99,16 +101,18 @@
     border: 1px solid rgba(255,255,255,0.06);
     padding: 1.5rem;
     border-radius: 8px;
-    opacity: 0; transform: translateY(20px);
-    animation: pillarIn 600ms cubic-bezier(0.16,1,0.3,1) forwards;
+    opacity: 0.35;
+    transform: translateY(0);
+    transition: opacity 400ms ease-out, border-color 400ms ease-out,
+                box-shadow 400ms ease-out, background 400ms ease-out;
 }
-.pillar:nth-child(1) { animation-delay: 200ms; }
-.pillar:nth-child(2) { animation-delay: 1000ms; }
-.pillar:nth-child(3) { animation-delay: 1800ms; }
-.pillar:nth-child(4) { animation-delay: 2600ms; }
-.pillar:nth-child(5) { animation-delay: 3400ms; }
-@keyframes pillarIn {
-    to { opacity: 1; transform: translateY(0); }
+.pillar.lit  { opacity: 0.7; border-color: rgba(0,255,65,0.2); }
+.pillar.beat {
+    opacity: 1;
+    border-color: rgba(0,255,65,0.6);
+    background: rgba(0,255,65,0.05);
+    box-shadow: 0 0 32px rgba(0,255,65,0.18);
+    transform: translateY(-2px);
 }
 .pillar-num {
     font-family: 'Space Grotesk', monospace;
