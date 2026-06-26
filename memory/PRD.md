@@ -8,6 +8,20 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-51) — **Correlation-aware portfolio allocation + dynamic CVaR risk budget**:
+  - **Why**: Existing per-trade Kelly sizing ignored book-level concentration — two highly correlated BUY trades (e.g., XAUUSD + BTCUSD when ρ>0.7) effectively doubled the bet without being flagged anywhere in the lot-sizing chain. Auto-deleverage only kicks AFTER a breach; this trims at the *entry* side proactively.
+  - **`portfolio/var.py`** — extended snapshot to also surface **CVaR (Expected Shortfall)** at 95% and 99% using parametric multipliers (ES_MULT_95=2.0627, ES_MULT_99=2.6652). Empty-portfolio branch + populated branch both emit the new fields. Existing VaR math is unchanged.
+  - **`portfolio/correlation_kelly.py` (NEW)** — `compute_correlation_aware_scale()` returns a multiplicative trim in (MIN_SCALE, 1.0]:
+    1. **Correlation penalty** — `corr_pressure = Σ_i max(0, ρ_eff_i) × w_i` where ρ_eff = +ρ on matching-action positions, −ρ on opposing (genuine hedges → no penalty). `corr_scale = 1 / (1 + α × corr_pressure)`, α=2.0 by default.
+    2. **CVaR budget** — builds a hypothetical "with new trade" book using existing correlation+ATR plumbing, forecasts portfolio CVaR_95, and if forecast > target (default 2%/day) → `cvar_scale = target / forecast`. Combined scale = corr_scale × cvar_scale, clamped at MIN_SCALE=0.25.
+    - Same-symbol stacking forces ρ=1.0 (anti-pyramid is the primary guard but defence-in-depth).
+    - Returns a human-readable `reason` for logging/UI surfacing.
+  - **`bot_runner.py`** — wired AFTER `effective_lot` is computed (post Kelly + max-lot-cap, pre engine.execute). Reads open book scoped to the cfg account, computes the trim, multiplies `effective_lot` by the scale (never inflates), logs the trim with reason, persists `corr_kelly_trim` on the consumed signal doc for UI deep-link. Disabled-by-default behind `CORRELATION_KELLY_ENABLED` env (defaults to `true`; failure-mode → skip silently with debug log).
+  - **Env knobs**: `CORRELATION_KELLY_ENABLED=true` · `CORRELATION_KELLY_ALPHA=2.0` · `CORRELATION_KELLY_MIN_SCALE=0.25` · `PORTFOLIO_CVAR_TARGET_PCT=2.0`.
+  - **Tests** (`tests/test_iter51_correlation_kelly.py`): 8 unit tests — VaR/CVaR field presence + proportionality, no-positions pass-through, same-symbol stacking trims, opposite-direction = hedge (no penalty), CVaR overshoot triggers trim, MIN_SCALE clamp, reason string sanity. **8/8 passing.** Full regression: 55/55 portfolio + execution + safety + bias-trap + full sweep tests still green.
+  - **Verified live**: `GET /api/portfolio/snapshot` now returns `cvar_95_usd`, `cvar_95_pct_equity`, `cvar_99_usd`, `cvar_99_pct_equity` alongside the existing VaR fields. Lint clean.
+
+
 - 2026-06-26 (iter-50) — **Auto-Heal scheduler + Simple Mode + grouped sidebar (UX simplification)**:
 
   ### Auto-Heal (1a)

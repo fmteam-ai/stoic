@@ -30,6 +30,7 @@ from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
 from risk import get_profile, compute_lot_for_account
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
+from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
 
 logger = logging.getLogger("bot-runner")
@@ -622,6 +623,43 @@ async def _process_user_account_locked(db, cfg: dict):
             absolute_lot, max_lot_cap, effective_lot, sizing_method,
         )
 
+        # iter-51 · Correlation-aware portfolio allocation + dynamic CVaR
+        # risk budget. Defence-in-depth lot trim AFTER Kelly + max-lot cap.
+        # Disabled-by-default behind env flag so the wire-up is opt-in.
+        corr_kelly_scale = 1.0
+        corr_kelly_info: dict | None = None
+        if os.environ.get("CORRELATION_KELLY_ENABLED", "true").lower() == "true":
+            try:
+                open_q = {"user_id": user_id, "status": {"$in": ["open", "pending"]}}
+                if cfg_account_id:
+                    open_q["account_id"] = cfg_account_id
+                open_book = await db.trades.find(open_q).to_list(length=50)
+                # Notional = lot × entry × (100 if XAU else 1) — matches var.py
+                hypothetical_notional = (
+                    effective_lot * float(signal["entry_price"])
+                    * (100 if sym == "XAUUSD" else 1)
+                )
+                ck = await compute_correlation_aware_scale(
+                    new_symbol=sym,
+                    new_action=signal["action"],
+                    new_notional=hypothetical_notional,
+                    open_positions=open_book,
+                    equity=float(target_account.get("equity") or target_account.get("balance") or 0),
+                )
+                corr_kelly_scale = float(ck.get("scale") or 1.0)
+                corr_kelly_info = ck
+                if corr_kelly_scale < 1.0:
+                    trimmed = max(round(effective_lot * corr_kelly_scale, 2), 0.01)
+                    logger.info(
+                        "Correlation-Kelly trim acct=%s sym=%s lot=%s × scale=%.3f → %s · %s",
+                        cfg_account_id or "default", sym, effective_lot,
+                        corr_kelly_scale, trimmed, ck.get("reason"),
+                    )
+                    effective_lot = trimmed
+                    sizing_method = sizing_method + "+corr_kelly"
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Correlation-Kelly skipped (%s) — proceeding without trim", e)
+
         engine = engine_for_account(target_account)
         trade_doc = await engine.execute(
             user_id=user_id,
@@ -651,7 +689,10 @@ async def _process_user_account_locked(db, cfg: dict):
             continue
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
                     user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
-        await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {"consumed": True}})
+        await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {
+            "consumed": True,
+            **({"corr_kelly_trim": corr_kelly_info} if corr_kelly_info else {}),
+        }})
         await _record_pulse(db, cfg, symbol=sym,
             action="EXEC", level="info",
             reason=f"Executed {signal['action']} {sym} {effective_lot} lots @ {signal.get('entry_price')} (conf {signal.get('confidence')}%).",

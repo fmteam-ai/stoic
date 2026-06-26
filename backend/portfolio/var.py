@@ -24,6 +24,14 @@ Z_95 = 1.645
 # 99% one-tail z-score (also returned for stress view)
 Z_99 = 2.326
 
+# Parametric Expected-Shortfall (CVaR) multipliers for a Normal distribution:
+#   ES_α = σ × φ(z_α) / (1 − α)
+# where φ is the standard-normal PDF. Pre-computed:
+#   φ(1.645) / (1 − 0.95) ≈ 0.10314 / 0.05 ≈ 2.0627
+#   φ(2.326) / (1 − 0.99) ≈ 0.02665 / 0.01 ≈ 2.6652
+ES_MULT_95 = 2.0627
+ES_MULT_99 = 2.6652
+
 
 async def _atr_pct(symbol: str) -> float | None:
     """Best-effort daily-vol proxy = ATR14 / current price."""
@@ -88,6 +96,8 @@ async def calculate_var(
     if not positions or equity <= 0:
         return {"var_95_usd": 0.0, "var_95_pct_equity": 0.0,
                 "var_99_usd": 0.0, "var_99_pct_equity": 0.0,
+                "cvar_95_usd": 0.0, "cvar_95_pct_equity": 0.0,
+                "cvar_99_usd": 0.0, "cvar_99_pct_equity": 0.0,
                 "portfolio_sigma_pct": 0.0,
                 "horizon_days": horizon_days, "equity": equity,
                 "positions": [], "correlation_matrix": {},
@@ -119,6 +129,8 @@ async def calculate_var(
     if not rows:
         return {"var_95_usd": 0.0, "var_95_pct_equity": 0.0,
                 "var_99_usd": 0.0, "var_99_pct_equity": 0.0,
+                "cvar_95_usd": 0.0, "cvar_95_pct_equity": 0.0,
+                "cvar_99_usd": 0.0, "cvar_99_pct_equity": 0.0,
                 "portfolio_sigma_pct": 0.0,
                 "horizon_days": horizon_days, "equity": equity,
                 "positions": [], "correlation_matrix": {},
@@ -153,11 +165,17 @@ async def calculate_var(
 
     var_95_usd = Z_95 * sigma_pct * total_notional
     var_99_usd = Z_99 * sigma_pct * total_notional
+    cvar_95_usd = ES_MULT_95 * sigma_pct * total_notional
+    cvar_99_usd = ES_MULT_99 * sigma_pct * total_notional
     return {
         "var_95_usd": round(var_95_usd, 2),
         "var_95_pct_equity": round((var_95_usd / equity) * 100.0, 3) if equity else 0.0,
         "var_99_usd": round(var_99_usd, 2),
         "var_99_pct_equity": round((var_99_usd / equity) * 100.0, 3) if equity else 0.0,
+        "cvar_95_usd": round(cvar_95_usd, 2),
+        "cvar_95_pct_equity": round((cvar_95_usd / equity) * 100.0, 3) if equity else 0.0,
+        "cvar_99_usd": round(cvar_99_usd, 2),
+        "cvar_99_pct_equity": round((cvar_99_usd / equity) * 100.0, 3) if equity else 0.0,
         "portfolio_sigma_pct": round(sigma_pct * 100.0, 3),
         "horizon_days": horizon_days,
         "equity": equity,
