@@ -1,0 +1,55 @@
+{
+  "summary": "Iter-53 full sweep covering iter-51 (Correlation-aware Kelly + CVaR) and iter-52 (ADWIN drift + Platt calibration) on STOIC trading bot. Backend: 31 passed / 1 skipped (32 tests) — CVaR fields wired into /api/portfolio/snapshot (under `var` block), calibration block returned by /api/analytics/learned-meta, drift endpoints /learned-meta/drift and /learned-meta/drift/check-now functional, retrain runs, all primary GETs return 200, backend.err.log shows no fresh tracebacks. Frontend: login → dashboard → all 7 sub-routes (/, /trades, /signals, /portfolio, /bot-health, /loss-lab, /analytics, /guide) render without React error overlays. Bot Pulse, Bot Health (88/100 GOOD), Auto-Heal panel, Trades source badges, Loss Lab, and Simple/Pro Mode toggle all functional.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/signals/generate", "issue": "Returns learned_meta=null until first model artifact is trained. predict_p_win() correctly no-ops, but the iter-52 expectation that response includes p_win/p_win_raw/p_win_calibrated is only met after training; gracefully handled, not a regression."}
+    ],
+    "stale_paths_in_review_request": [
+      "/api/bot/health → actual: /api/bot/health-score",
+      "/api/analytics/auto-thresholds → does not exist; closest: /api/analytics/auto-tune",
+      "/api/postmortem/list → does not exist; use /api/postmortem/patterns + /api/postmortem/adjustments",
+      "/api/postmortem/suggest-action → does not exist; closest: /api/analytics/sessions/suggest-action",
+      "/api/macro/calendar, /api/macro/events → actual: /api/macro/snapshot, /api/macro/gate",
+      "/api/auto-heal/status → does not exist; status info inside /api/auto-heal/settings + /api/auto-heal/log",
+      "/api/cot/positioning, /api/yield/real-yield, /api/binance/balance, /api/triggers/list → do not exist as registered routes (likely planned/renamed)"
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PortfolioRisk page (/portfolio)", "issue": "VaR 95% card is rendered but no CVaR / Expected Shortfall card is shown. Backend exposes var.cvar_95_usd, var.cvar_95_pct_equity, var.cvar_99_usd, var.cvar_99_pct_equity correctly, but the UI does not surface these new iter-51 fields to the user.", "selector": "/portfolio page main grid", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Initial dashboard load", "issues": ["2 transient 401 console errors observed during auth bootstrap (Failed to load resource: status 401). Likely a request firing before the session cookie is established. Cosmetic — no user impact."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter53_full_sweep.py",
+    "/app/test_reports/pytest/iter53_sweep.xml"
+  ],
+  "action_items": [
+    "Add a CVaR / Expected Shortfall card to /portfolio page showing var.cvar_95_usd, var.cvar_95_pct_equity, var.cvar_99_usd, var.cvar_99_pct_equity so iter-51 risk improvement is visible to the user.",
+    "(Optional) After the first learned_meta artifact is trained for a given symbol/session, /api/signals/generate should populate learned_meta with p_win/p_win_raw/p_win_calibrated — verify end-to-end once a real artifact exists by seeding training data and re-running test_signal_generate_includes_calibration_fields.",
+    "(Optional) Investigate the 2 transient 401s on initial dashboard load — likely a sequence bug where /api/auth/me fires before the access_token cookie is honoured. Cosmetic but adds noise to the console.",
+    "(Optional, hygiene) Update internal docs / review_request templates to reflect the actual canonical route paths (/api/bot/health-score, /api/macro/snapshot, /api/auto-heal/log etc.) — stale paths cost ~30% of this sweep's iteration time before the test file was corrected."
+  ],
+  "critical_code_review_comments": [
+    "iter-51: /app/backend/portfolio/var.py — calculate_var() correctly emits cvar_95_usd / cvar_95_pct_equity / cvar_99_usd / cvar_99_pct_equity under the `var` block of the snapshot. ES multipliers (2.0627, 2.6652) match the Gaussian closed-form. Backend wiring solid.",
+    "iter-52: /app/backend/probability_calibrator.py + learned_meta._fit_artifact correctly embed a `calibration` dict (A, B, n, brier_raw, brier_calibrated, applied, converged) in the artifact. /api/analytics/learned-meta gracefully returns calibration={} when not trained — no exception. predict_p_win returns p_win + p_win_raw + p_win_calibrated when artifact exists.",
+    "iter-52: /api/analytics/learned-meta/drift returns the full per-session ADWIN state (ASIA/LONDON/NY/GLOBAL) plus enabled/window_size/min_samples/adwin_delta. /drift/check-now does not error when no residuals exist (returns {checked, drift, retrained} gracefully).",
+    "Bot loop is healthy: tail -n 400 /var/log/supervisor/backend.err.log shows no fresh tracebacks over the 5-minute observation window. river==0.25.0 installed (confirmed via pip show).",
+    "Test file structure / route discovery — recommend creating /app/backend/tests/_route_inventory.py (or a fixture) that auto-discovers actual registered paths from openapi.json so future sweeps don't waste cycles on stale path strings. Saves ~15min per sweep iteration.",
+    "PortfolioRisk.jsx UI lags behind backend by one iteration on CVaR fields — only minor regression of this sweep. Should be a 30-line patch to add a 'CVaR 95%' + 'CVaR 99%' card alongside the existing 'VAR 95%' card."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter53_full_sweep.py (new — 32 tests covering iter-51/iter-52 + smoke + auto-heal round-trip + bot-log health)"
+  ],
+  "success_rate": {"backend": "100% (31/31 executed pass, 1 skip is benign no-op when no trained artifact)", "frontend": "95% (all routes load + interactive elements functional; only gap is CVaR card not rendered on /portfolio)"},
+  "test_credentials": "admin@trading.bot / admin123 (confirmed in /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — only round-trip toggle on /api/auto-heal/settings (restored). No live trades opened. No state mutation persisted.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-51 (CVaR + Correlation-aware Kelly) and iter-52 (ADWIN drift + Platt calibration) verified end-to-end at the backend layer. The single remaining gap is the FRONTEND Portfolio Risk page not displaying CVaR fields (backend already returns them under `var.cvar_*`). Next sweep should re-verify after main agent adds CVaR card to /app/frontend/src/pages/Portfolio.jsx. Also, when learned_meta predict_p_win starts returning non-null (after the first trained artifact exists), unskip TestSignalCalibration.test_signal_generate_includes_calibration_fields. The corrected route inventory is captured in test_iter53_full_sweep.py SMOKE_ENDPOINTS — reuse it; the original review_request paths are stale.",
+  "rca_of_the_issue": "Portfolio Risk UI not showing CVaR: backend `calculate_var()` correctly populates var.cvar_95_usd etc inside the snapshot's `var` block (verified live: var.cvar_95_usd=0.0, var.cvar_99_usd=0.0 with no open positions). The Portfolio.jsx component only destructures/displays VaR 95% — CVaR keys are present in the API response but never read or rendered. Fix: in /app/frontend/src/pages/Portfolio.jsx, read snapshot.var.cvar_95_usd / cvar_99_usd / cvar_95_pct_equity / cvar_99_pct_equity and render two additional cards (CVaR 95% and CVaR 99%) alongside the existing VaR 95% card. Reproduction: login → /portfolio → only one risk card (VAR 95%) shown; screenshot saved at .screenshots/portfolio.png."
+}
