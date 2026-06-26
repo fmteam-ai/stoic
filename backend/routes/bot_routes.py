@@ -589,12 +589,35 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "label": "Bot is paused (not generating signals)",
                        "fix": "Go to BotConfig and toggle the bot ON to start trading."})
 
+    # --- 6b. Aggressive mode bypasses safety filters (max -15, P1 warning) --
+    # On 2026-06-26 a customer lost $1121 in 22 minutes because aggressive_mode
+    # silently disabled entropy + learned classifier vetoes, letting the bot
+    # fire 5 same-direction signals into a 0.94-entropy noisy market. The
+    # flag is a power-user knob — surface it LOUDLY so it isn't left on by
+    # accident.
+    tilt_cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=20)
+    aggressive_cfgs = [c for c in tilt_cfgs if c.get("aggressive_mode")]
+    if aggressive_cfgs:
+        score -= 15
+        labels = [
+            (str(c.get("account_id"))[-6:] if c.get("account_id") else "Default")
+            for c in aggressive_cfgs
+        ]
+        issues.append({
+            "severity": "warning",
+            "code": "aggressive_mode_on",
+            "label": (f"Aggressive mode enabled on {len(aggressive_cfgs)} config(s): "
+                      f"{', '.join(labels)} — entropy + learned-classifier vetoes "
+                      f"are BYPASSED."),
+            "fix": ("Turn off aggressive_mode in Bot Config unless you understand "
+                    "you are trading without noise/learned-model protection."),
+        })
+
     # --- 7. Anti-tilt freeze active (max -5, advisory only) --------------
     # The bot is functioning correctly — anti-tilt is a designed risk halt
     # after N consecutive losses. We surface it explicitly so the user knows
     # *why* no trades are firing, with a small deduction to make sure the
     # widget catches their eye instead of showing a misleading "100/100".
-    tilt_cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=20)
     tilt_frozen_accounts = []
     for tc in tilt_cfgs:
         if not tc.get("anti_tilt_enabled", True):

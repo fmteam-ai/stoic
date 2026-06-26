@@ -373,6 +373,35 @@ async def analyze_symbol(symbol: str, risk_level: str,
         regime_veto = "Regime CHOP detected — high vol without direction. Trade vetoed."
         final_action = "HOLD"
 
+    # 2b. SELF-CONTRADICTION veto — when the LLM's own reasoning explicitly
+    # says the trade is blocked but `action` came back BUY/SELL anyway, trust
+    # the prose, not the tag. This caught a P0 footgun in iter-48 where the
+    # bot fired 5 losing SELLs in 22 min while its reasoning literally read
+    # "CAUTIOUS_WAIT mode blocks new positions". See PRD.md iter-48.
+    #
+    # IMPORTANT: this veto deliberately IGNORES `aggressive_mode`. The flag
+    # exists to relax *probabilistic* filters (entropy, learned classifier).
+    # A model contradicting itself is a sanity bug, not a probability — no
+    # amount of "aggressive" setting should let the bot trade on it.
+    self_contra_veto = ""
+    if action != "HOLD":
+        rtxt = (parsed.get("reasoning") or "").lower()
+        block_phrases = [
+            "cautious_wait", "cautious wait",
+            "blocks new positions", "blocks trading", "blocks trade execution",
+            "non-tradeable environment", "do not enter", "do not trade",
+            "no entry", "mandates no entry", "mandates patience",
+            "prohibit entry", "prohibits entry",
+            "red-light noise filter blocks",
+        ]
+        hits = [p for p in block_phrases if p in rtxt]
+        if hits:
+            self_contra_veto = (
+                f"Self-contradiction veto: model emitted {action} but its own "
+                f"reasoning contains blocking language: {hits[:2]}. Honouring prose."
+            )
+            final_action = "HOLD"
+
     # 3. Macro-event freeze veto
     macro_veto = ""
     if macro.get("frozen") and action != "HOLD":
@@ -570,6 +599,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         reasoning = f"{reasoning}\n\nVETO (R:R): {rr_veto}"
     if dxy_veto:
         reasoning = f"{reasoning}\n\nVETO (DXY gate): {dxy_veto}"
+    if self_contra_veto:
+        reasoning = f"{reasoning}\n\nVETO (self-contradiction): {self_contra_veto}"
 
     # On HOLD, clear price levels so consumers (UI, execution) don't see
     # a misleading entry=SL=TP that would be a zero-risk trade if forced
@@ -619,7 +650,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "liquidity_window": liquidity_window,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto) or bool(dxy_veto),
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(self_contra_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto) or bool(dxy_veto),
         "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

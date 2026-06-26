@@ -487,6 +487,53 @@ async def _process_user_account_locked(db, cfg: dict):
                 reason=f"Max concurrent trades reached ({inflight}/{max_concurrent}) — close one to fire next signal.",
             )
             continue
+
+        # Anti-pyramid (P0, iter-48) — refuse a second trade in the SAME
+        # direction on the SAME symbol while a prior is still open.
+        # On 2026-06-26 the bot fired 5 losing SELLs in 22min stacking ever
+        # deeper into a rallying gold market because nothing prevented same-
+        # direction pyramiding. Per-account scope to mirror inflight counting.
+        pyramid_q = {
+            "user_id": user_id,
+            "symbol": sym,
+            "action": signal["action"],
+            "status": {"$in": ["pending", "open"]},
+        }
+        if cfg_account_id:
+            pyramid_q["account_id"] = cfg_account_id
+        same_dir_open = await db.trades.count_documents(pyramid_q)
+        if same_dir_open > 0:
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="warn",
+                reason=(f"Anti-pyramid: {same_dir_open} {signal['action']} {sym} "
+                        f"already open — refusing to stack same-direction risk."),
+            )
+            continue
+
+        # Same-direction loss circuit-breaker (P0, iter-48) — if the LAST
+        # `LOSS_STREAK_THRESHOLD` closed trades on this (symbol, action) all
+        # lost, pause same-direction entries for `LOSS_STREAK_COOLDOWN_HRS`
+        # hours. Stops the bot from doubling down into a clearly-wrong bias.
+        LOSS_STREAK_THRESHOLD = 2
+        LOSS_STREAK_COOLDOWN_HRS = 4
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=LOSS_STREAK_COOLDOWN_HRS)).isoformat()
+        recent_closed = await db.trades.find(
+            {
+                "user_id": user_id, "symbol": sym, "action": signal["action"],
+                "status": "closed", "closed_at": {"$gte": cutoff},
+            },
+        ).sort("closed_at", -1).limit(LOSS_STREAK_THRESHOLD).to_list(LOSS_STREAK_THRESHOLD)
+        if (len(recent_closed) >= LOSS_STREAK_THRESHOLD
+                and all(float(t.get("pnl") or 0) < 0 for t in recent_closed)):
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="warn",
+                reason=(f"Loss-streak circuit-breaker: last {LOSS_STREAK_THRESHOLD} "
+                        f"{signal['action']} {sym} trades lost. "
+                        f"Pausing same-direction entries for {LOSS_STREAK_COOLDOWN_HRS}h "
+                        f"to break the bias trap."),
+            )
+            continue
+
         if not connected:
             await _record_pulse(db, cfg, symbol=sym,
                 action="BLOCKED", level="block",

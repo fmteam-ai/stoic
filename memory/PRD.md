@@ -8,6 +8,30 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-26 (iter-48) — **Bias-trap forensics + 4 durable fixes** (`-$1121 loss postmortem`):
+
+  **Forensic findings on the 7-trade loss series** (admin account, 06:21–06:43 UTC):
+  - All 7 trades were SELLs on XAUUSD while gold rallied from 4010 → 4039 (+0.7%).
+  - 5/7 SELL signals had LLM `reasoning` literally containing *"TRANSITIONAL regime with CAUTIOUS_WAIT mode blocks new positions"* / *"red-light noise filter blocks trading"* / *"non-tradeable environment"* — yet returned `action=SELL, conf=58, tradeable=True`.
+  - Bot opened 5 same-direction trades in 22 min (no anti-pyramid filter existed).
+  - Portfolio auto-deleverage closed the **LARGEST** positions (= deepest underwater after gold rallied), compounding the bleed.
+  - **Real root cause: `aggressive_mode=True` on both bot configs** — disables entropy filter, learned-classifier veto, and the historically-respectful "no trades in NOISY entropy" gate.
+
+  **Fix A — Self-contradiction veto** (`ai_signals.py:2b`): regex-scans the LLM's reasoning for blocking phrases (`cautious_wait`, `blocks new positions`, `no entry`, `prohibit entry`, etc.) and force-HOLDs if any are present. **Deliberately ignores `aggressive_mode`** — it's a sanity check, not a probabilistic filter. Surfaces in signal.reasoning as `VETO (self-contradiction):`.
+
+  **Fix B — Anti-pyramid filter** (`bot_runner.py:_process_user_account_locked`): before executing, counts open trades on (user, symbol, action). If `>0`, records pulse `Anti-pyramid: N {ACTION} {SYM} already open — refusing to stack same-direction risk` and skips. Per-account scoped to mirror inflight counting.
+
+  **Fix C — Loss-streak circuit-breaker** (`bot_runner.py`, constants `LOSS_STREAK_THRESHOLD=2`, `LOSS_STREAK_COOLDOWN_HRS=4`): queries the last 2 closed trades on `(user, symbol, action)` — if both lost in the cooldown window, pauses same-direction entries for 4h. Records pulse `Loss-streak circuit-breaker: …pausing to break the bias trap`.
+
+  **Fix D — Auto-deleverage prefers worst loser** (`portfolio/risk_manager.py:_sector_exposure` + sector_cap branch): positions now carry `live_pnl`. When sector-cap fires, picks the position with **worst live_pnl** (cuts the bleeding) instead of largest notional. Falls back to largest-notional when live P&L isn't available yet.
+
+  **Fix + — Aggressive-mode warning on Bot Health** (`routes/bot_routes.py` health-score): scans all bot_configs for `aggressive_mode=True`, deducts 15 from health score, surfaces a loud P1 warning explaining that entropy + learned-classifier vetoes are BYPASSED. The admin account now shows score 90 → 75 with the warning visible immediately on `/bot-health`.
+
+  **Tests** (`tests/test_iter48_bias_trap.py`): 8 pytest cases covering block-phrase detector (5 paraphrases all hit, clean text passes), anti-pyramid query shape, loss-streak query shape, win-mixed-in skip path, sector-cap-prefers-loser, fallback-to-largest. **51/51 cases passing** across iter-43/45/48 suites.
+
+  **Verified live**: post-fix signal generation correctly returns `HOLD` with `veto_applied=True`; health-score correctly drops to 75 with the aggressive-mode amber warning rendered on `/bot-health`.
+
+
 - 2026-06-26 (iter-47) — **Source badges + auto-loosen + Suggest-action (3 P1s in one batch)**:
 
   **Task 1 · Source badge on Trades UI** (`pages/Trades.jsx`)

@@ -66,6 +66,9 @@ async def _sector_exposure(positions: list[dict], equity: float) -> dict:
             "symbol": sym,
             "lot": lot,
             "notional": notional,
+            # Used by auto-deleverage to prefer culling losers — iter-48 fix.
+            # Currently-broker-reported live P&L (may be None on paper trades).
+            "live_pnl": float(p.get("live_pnl") if p.get("live_pnl") is not None else 0.0),
             "mt5_ticket": p.get("mt5_ticket"),
         })
     for sec, data in grouped.items():
@@ -148,10 +151,17 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict]) -> di
     for sec, data in sectors.items():
         if data["over_cap"]:
             triggers.append(f"sector_cap_{sec}")
-            # Trim worst-of-sector to bring under cap. Cheap version: close the
-            # single largest position in the over-cap sector.
+            # iter-48 fix — prefer closing the WORST LOSER in the over-cap
+            # sector rather than the largest position. Previous "largest"
+            # rule kept culling underwater pyramids, locking in losses while
+            # the bot opened more same-direction trades into the trap.
+            # Fallback to largest by notional when live P&L is unavailable.
             if data["positions"]:
-                worst = max(data["positions"], key=lambda x: x["notional"])
+                has_pnl = any(p.get("live_pnl") for p in data["positions"])
+                if has_pnl:
+                    worst = min(data["positions"], key=lambda x: x.get("live_pnl") or 0)
+                else:
+                    worst = max(data["positions"], key=lambda x: x["notional"])
                 actions.append({
                     "kind": "close_trade", "trade_id": worst["trade_id"],
                     "symbol": worst["symbol"], "lot_size": worst["lot"],
