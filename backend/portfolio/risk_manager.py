@@ -30,16 +30,36 @@ def _f(k, d):
         return d
 
 
-# Sector exposure caps (% of equity, applied to combined sector notional × leverage proxy).
-# Reading from env so power-users can override without code changes.
+# Sector exposure caps (% of equity, applied to combined sector NOTIONAL).
+# These are notional-to-equity ratios, which for leveraged products are
+# routinely 100%+ even on a single sensible position. Defaults chosen for
+# retail leveraged accounts (1:30–1:500); power users can override via env
+# or PER-ACCOUNT via `cfg.sector_caps_pct_override = {"commodity": 800, …}`.
 SECTOR_CAPS_PCT = {
-    "crypto":       _f("PORTFOLIO_SECTOR_CAP_CRYPTO_PCT",   25.0),
-    "commodity":    _f("PORTFOLIO_SECTOR_CAP_COMMODITY_PCT", 40.0),
-    "equity_index": _f("PORTFOLIO_SECTOR_CAP_EQUITY_PCT",   30.0),
-    "fx_major":     _f("PORTFOLIO_SECTOR_CAP_FX_MAJOR_PCT", 60.0),
-    "fx_minor":     _f("PORTFOLIO_SECTOR_CAP_FX_MINOR_PCT", 30.0),
-    "other":        _f("PORTFOLIO_SECTOR_CAP_OTHER_PCT",    10.0),
+    "crypto":       _f("PORTFOLIO_SECTOR_CAP_CRYPTO_PCT",   300.0),
+    "commodity":    _f("PORTFOLIO_SECTOR_CAP_COMMODITY_PCT", 500.0),
+    "equity_index": _f("PORTFOLIO_SECTOR_CAP_EQUITY_PCT",   300.0),
+    "fx_major":     _f("PORTFOLIO_SECTOR_CAP_FX_MAJOR_PCT", 600.0),
+    "fx_minor":     _f("PORTFOLIO_SECTOR_CAP_FX_MINOR_PCT", 300.0),
+    "other":        _f("PORTFOLIO_SECTOR_CAP_OTHER_PCT",    100.0),
 }
+
+
+def _resolve_sector_caps(cfg_override: dict | None) -> dict:
+    """Merge global SECTOR_CAPS_PCT with a per-account override dict.
+
+    Override shape: {"commodity": 800.0, "crypto": 200.0, ...}. Unknown keys
+    are ignored; missing keys fall back to the global default.
+    """
+    if not cfg_override or not isinstance(cfg_override, dict):
+        return SECTOR_CAPS_PCT
+    out = dict(SECTOR_CAPS_PCT)
+    for k, v in cfg_override.items():
+        try:
+            out[k] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 # Combined-sector cap (e.g., "crypto + equity_index ≤ 50%") when they're correlated.
 # Triggered only if avg pairwise corr across the bucket ≥ HIGH_CORR_THRESHOLD.
@@ -51,8 +71,14 @@ HIGH_CORR_THRESHOLD = _f("PORTFOLIO_HIGH_CORR_THRESHOLD", 0.70)
 VAR_CAP_PCT = _f("PORTFOLIO_VAR_CAP_PCT", 5.0)
 
 
-async def _sector_exposure(positions: list[dict], equity: float) -> dict:
-    """Group notional by sector. Returns {sector: {notional, pct_equity, positions: [...]}}"""
+async def _sector_exposure(positions: list[dict], equity: float,
+                           caps: dict | None = None) -> dict:
+    """Group notional by sector. Returns {sector: {notional, pct_equity, positions: [...]}}
+
+    `caps` may be a merged per-account override dict; defaults to module
+    SECTOR_CAPS_PCT when None.
+    """
+    caps = caps or SECTOR_CAPS_PCT
     grouped: dict[str, dict] = defaultdict(lambda: {"notional": 0.0, "positions": []})
     for p in positions:
         sym = (p.get("symbol") or "").upper()
@@ -73,7 +99,7 @@ async def _sector_exposure(positions: list[dict], equity: float) -> dict:
         })
     for sec, data in grouped.items():
         data["pct_equity"] = (data["notional"] / equity * 100.0) if equity > 0 else 0.0
-        data["cap_pct"] = SECTOR_CAPS_PCT.get(sec, 50.0)
+        data["cap_pct"] = caps.get(sec, 100.0)
         data["over_cap"] = data["pct_equity"] > data["cap_pct"]
     return dict(grouped)
 
@@ -94,16 +120,22 @@ async def _avg_pairwise_corr(symbols: list[str]) -> float:
     return (total / pairs) if pairs else 0.0
 
 
-async def build_snapshot(db, *, account: dict, open_positions: list[dict]) -> dict:
-    """Single dispatch — returns the full portfolio risk snapshot."""
+async def build_snapshot(db, *, account: dict, open_positions: list[dict],
+                         cfg: dict | None = None) -> dict:
+    """Single dispatch — returns the full portfolio risk snapshot.
+
+    `cfg` is the per-account bot_config; `cfg.sector_caps_pct_override`
+    layers on top of SECTOR_CAPS_PCT.
+    """
     equity = float(account.get("equity") or account.get("balance") or 0)
     account_id = str(account.get("_id") or "")
+    caps = _resolve_sector_caps((cfg or {}).get("sector_caps_pct_override"))
 
     # 1. Drawdown
     dd = await get_drawdown(db, account_id, equity)
 
     # 2. Sectors
-    sectors = await _sector_exposure(open_positions, equity)
+    sectors = await _sector_exposure(open_positions, equity, caps=caps)
 
     # 3. VaR + correlation matrix
     var = await calculate_var(open_positions, equity=equity)
@@ -230,7 +262,7 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict]) -> di
             "breach": bucket_breach,
         },
         "limits": {
-            "sector_caps_pct": SECTOR_CAPS_PCT,
+            "sector_caps_pct": caps,
             "var_cap_pct": VAR_CAP_PCT,
             "combined_risk_cap_pct": COMBINED_RISK_BUCKET_CAP_PCT,
             "corr_threshold": HIGH_CORR_THRESHOLD,

@@ -42,7 +42,10 @@ async def portfolio_snapshot(
     q = {"user_id": user["id"], "status": {"$in": ["open", "pending"]},
          "account_id": str(acc["_id"])}
     open_positions = await db.trades.find(q).to_list(length=200)
-    snap = await build_snapshot(db, account=acc, open_positions=open_positions)
+    cfg = await db.bot_configs.find_one({
+        "user_id": user["id"], "account_id": str(acc["_id"]),
+    }) or await db.bot_configs.find_one({"user_id": user["id"]})
+    snap = await build_snapshot(db, account=acc, open_positions=open_positions, cfg=cfg)
     snap["account_id"] = str(acc["_id"])
     snap["account_label"] = acc.get("label") or acc.get("account_number")
     return snap
@@ -72,7 +75,10 @@ async def trigger_deleverage(
         q = {"user_id": user["id"], "status": {"$in": ["open", "pending"]},
              "account_id": str(acc["_id"])}
         open_positions = await db.trades.find(q).to_list(length=200)
-        snap = await build_snapshot(db, account=acc, open_positions=open_positions)
+        cfg = await db.bot_configs.find_one({
+            "user_id": user["id"], "account_id": str(acc["_id"]),
+        }) or await db.bot_configs.find_one({"user_id": user["id"]})
+        snap = await build_snapshot(db, account=acc, open_positions=open_positions, cfg=cfg)
         actions = snap.get("actions") or []
 
     if not actions:

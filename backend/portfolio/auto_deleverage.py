@@ -86,7 +86,14 @@ async def sweep(db) -> dict:
             continue
 
         try:
-            snap = await build_snapshot(db, account=acc, open_positions=positions)
+            # Pull this account's bot_config so per-account sector_caps_pct
+            # overrides are honoured during the snapshot build.
+            cfg = await db.bot_configs.find_one({
+                "user_id": acc["user_id"],
+                "account_id": acc_id_str,
+            }) or await db.bot_configs.find_one({"user_id": acc["user_id"]})
+            snap = await build_snapshot(db, account=acc,
+                                        open_positions=positions, cfg=cfg)
         except Exception as e:  # noqa: BLE001
             logger.exception("snapshot build failed for %s: %s", acc_id_str, e)
             continue

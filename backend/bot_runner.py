@@ -679,6 +679,46 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception as e:  # noqa: BLE001
                 logger.debug("Correlation-Kelly skipped (%s) — proceeding without trim", e)
 
+        # iter-58 · Pre-trade sector-cap fit. Prevents the bot from opening
+        # trades that would immediately breach the per-account sector cap
+        # (e.g., XAU notional > 500% of equity) and get auto-deleveraged
+        # 100ms later. Trims the lot to fit, or skips when the cap is
+        # already saturated.
+        sector_fit_info: dict | None = None
+        try:
+            from portfolio.sector_cap_fit import fit_lot_to_sector_cap
+            open_q = {"user_id": user_id, "status": {"$in": ["open", "pending"]}}
+            if cfg_account_id:
+                open_q["account_id"] = cfg_account_id
+            open_book_for_cap = await db.trades.find(open_q).to_list(length=200)
+            fit = fit_lot_to_sector_cap(
+                new_symbol=sym, new_lot=effective_lot,
+                new_entry_price=float(signal["entry_price"]),
+                open_positions=open_book_for_cap,
+                equity=float(target_account.get("equity")
+                             or target_account.get("balance") or 0),
+                cfg=cfg,
+            )
+            sector_fit_info = fit
+            if fit["lot"] <= 0:
+                logger.warning("Sector-cap skip acct=%s sym=%s — %s",
+                               cfg_account_id or "default", sym, fit["reason"])
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn",
+                    reason=f"Sector-cap fit: {fit['reason']}",
+                )
+                continue
+            if fit["lot"] < effective_lot:
+                logger.info(
+                    "Sector-cap trim acct=%s sym=%s lot=%s → %s · %s",
+                    cfg_account_id or "default", sym,
+                    effective_lot, fit["lot"], fit["reason"],
+                )
+                effective_lot = fit["lot"]
+                sizing_method = sizing_method + "+sector_cap_fit"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Sector-cap fit skipped (%s) — proceeding without trim", e)
+
         engine = engine_for_account(target_account)
         trade_doc = await engine.execute(
             user_id=user_id,
@@ -711,6 +751,7 @@ async def _process_user_account_locked(db, cfg: dict):
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {
             "consumed": True,
             **({"corr_kelly_trim": corr_kelly_info} if corr_kelly_info else {}),
+            **({"sector_cap_fit": sector_fit_info} if sector_fit_info else {}),
         }})
         await _record_pulse(db, cfg, symbol=sym,
             action="EXEC", level="info",
