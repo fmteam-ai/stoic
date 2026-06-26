@@ -32,6 +32,7 @@ import Research from "@/pages/Research";
 import Crypto from "@/pages/Crypto";
 import ShadowPerformance from "@/pages/ShadowPerformance";
 import LossLab from "@/pages/LossLab";
+import BotHealth from "@/pages/BotHealth";
 import AffiliateLanding from "@/pages/AffiliateLanding";
 
 function App() {
@@ -56,6 +57,7 @@ function App() {
                         <Route path="/shadow-performance" element={<ProtectedRoute><ShadowPerformance /></ProtectedRoute>} />
                         <Route path="/trades" element={<ProtectedRoute><Trades /></ProtectedRoute>} />
                         <Route path="/loss-lab" element={<ProtectedRoute><LossLab /></ProtectedRoute>} />
+                        <Route path="/bot-health" element={<ProtectedRoute><BotHealth /></ProtectedRoute>} />
                         <Route path="/safety-blocks" element={<ProtectedRoute><SafetyBlocks /></ProtectedRoute>} />
                         <Route path="/symbols" element={<ProtectedRoute><Symbols /></ProtectedRoute>} />
                         <Route path="/commander" element={<ProtectedRoute><RiskCommander /></ProtectedRoute>} />

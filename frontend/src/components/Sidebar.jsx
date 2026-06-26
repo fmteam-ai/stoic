@@ -5,13 +5,14 @@ import {
     LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
-    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield, Zap, Brain, Bitcoin, Eye, FlaskConical
+    CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck, Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
 
 const items = [
     { to: "/", label: "Dashboard", icon: ChartLineUp, testid: "nav-dashboard" },
+    { to: "/bot-health", label: "Bot Health", icon: Stethoscope, testid: "nav-bot-health" },
     { to: "/signals", label: "AI Signals", icon: Activity, testid: "nav-signals" },
     { to: "/agents", label: "Agents", icon: Cpu, testid: "nav-agents" },
     { to: "/strategies", label: "Strategies", icon: Sparkles, testid: "nav-strategies" },

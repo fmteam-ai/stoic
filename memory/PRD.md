@@ -8,6 +8,14 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-26 (iter-46) — **Bot Health page · live check + self-improvements feed (single screen)**:
+  - **Live check now** (admin account snapshot): score 90/100 EXCELLENT · 1/1 brokers connected · EA v1.27. Diagnostic FAIL 3/6 OK — trade sync DB=1 vs broker 0, Daily PnL –$1121.69 deep-red, Bot ON toggle (paused by user), Telegram not configured. 7 trades all in Asia · 14.3% win · –0.69R · 1 loss pattern detected (`XAUUSD|TRANSITIONAL|TOKYO|SELL`) · 0 auto-adjustments (auto-tighten still opt-in OFF) · 1 Safety-Guardian block (per_trade_risk_cap from yesterday's simulation).
+  - **New page `/bot-health`** (sidebar entry, Stethoscope icon, just under Dashboard) aggregates 7 existing endpoints in parallel — `bot/health-score`, `diagnostic/run`, `bot/pulse`, `analytics/sessions`, `postmortem/patterns`, `postmortem/adjustments`, `safety-blocks/stats` — into a single screen the trader can re-check anytime.
+  - **Layout**: headline score card (big-number + status chip + issue→fix bullets) → 2-column grid (Live Diagnostic + Bot Pulse) → 2-column grid (Session Edge with `EDGE LIVES IN` insight + Self-Improvements feed combining auto-tightens, recurring loss patterns, Safety-Guardian block tallies).
+  - **Auto-refresh** every 60s. Manual `RE-CHECK` button. Color-coded by severity (excellent/healthy green · degraded/warning amber · critical red).
+  - All sub-cards deep-link to the source pages (Analytics, Loss Lab, etc) for full drill-down.
+
+
 - 2026-06-26 (iter-45) — **Loss Lab · auto-investigate losing trades + opt-in guardrail tightening**:
   - **User ask** (1d + 2b + 3c + 4c): trigger on SL hits OR consecutive losses · quantitative diff + Claude LLM narrative · auto-tighten min_confidence after recurring pattern · dedicated page + per-trade button.
   - **New module `loss_postmortem.py`** with the full pipeline:
