@@ -8,6 +8,16 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-26 (iter-49) — **Bot Health hardening: 75 → 90 (excellent)**:
+  - Applied user-approved hardening on the admin account after the iter-48 forensics:
+    - Set `aggressive_mode=false` on both bot_configs (Default + RoboForex). +15 health.
+    - Raised `min_confidence_override` 55 → 60 on both configs (matches the existing Bot-Health *"SUGGEST ACTION"* for ASIA-worst-session).
+    - Ran `POST /api/trades/reconcile` — closed the orphan DB=1↔Broker=0 mismatch (now DB=1↔Broker=1, no auto-closes needed).
+  - **Result**: health-score `/api/bot/health-score` jumped from 75 → 90, status `good` → `excellent`, headline returned to *"All systems nominal — the bot is in control."* The only remaining issue is the `info`-level "Bot is paused" deduction (-10), intentionally left for the user to flip back on themselves after the loss series.
+  - **Bot left OFF deliberately** — declined to auto-enable since it just lost $1121; user must opt in to resume trading. Telegram-alerts warning also untouched (requires user-supplied bot token).
+  - The 4 iter-48 protective fixes (self-contradiction veto, anti-pyramid, loss-streak circuit-breaker, deleverage-prefers-loser) are active and will guard the next live cycle.
+
+
 - 2026-06-26 (iter-48) — **Bias-trap forensics + 4 durable fixes** (`-$1121 loss postmortem`):
 
   **Forensic findings on the 7-trade loss series** (admin account, 06:21–06:43 UTC):
