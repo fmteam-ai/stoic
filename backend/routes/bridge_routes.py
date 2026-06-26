@@ -252,8 +252,10 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "mt5_ticket": int(p.ticket),
                 "opened_at": opened_iso,
                 "closed_at": None,
-                "origin": "external" if p.magic == 0 else "auto",
-                "external_open": p.magic == 0,
+                "origin": ("manual" if p.magic == 0 else
+                           "auto" if p.magic == 901234 else "other_ea"),
+                "magic_number": int(p.magic or 0),
+                "external_open": p.magic != 901234,
                 "backfilled_from_snapshot": True,
             })
             backfilled += 1
@@ -553,12 +555,14 @@ async def report_trade(payload: BridgeTradeReport):
     except Exception:
         pass
 
-    # Loss post-mortem — fire-and-forget. Skips itself if pnl≥0 or not on SL.
+    # Loss post-mortem + auto-loosen on winners — fire-and-forget. Skips itself
+    # if not eligible.
     if payload.status == "closed":
         try:
-            from loss_postmortem import maybe_record_postmortem
+            from loss_postmortem import maybe_record_postmortem, maybe_record_winner
             import asyncio
             asyncio.create_task(maybe_record_postmortem(db, payload.trade_id))
+            asyncio.create_task(maybe_record_winner(db, payload.trade_id))
         except Exception:
             pass
 
@@ -626,7 +630,19 @@ async def external_deal(payload: BridgeExternalDeal):
     })
 
     realized = float(payload.profit) + float(payload.commission) + float(payload.swap)
-    is_external = (payload.magic == 0)   # 0 = NOT our EA's magic → opened manually on MT5
+    # STOIC's MT5 EA stamps every order with magic=901234. Anything else means
+    # the trade did NOT originate from the bot:
+    #   • magic == 0           → manually opened in the MT5 terminal
+    #   • magic == STOIC_MAGIC → STOIC bot
+    #   • any other non-zero   → a DIFFERENT EA running on the same account
+    STOIC_MAGIC = 901234
+    if payload.magic == 0:
+        trade_origin = "manual"
+    elif payload.magic == STOIC_MAGIC:
+        trade_origin = "auto"
+    else:
+        trade_origin = "other_ea"
+    is_external = (trade_origin != "auto")
 
     if payload.deal_entry == "in":
         # OPEN event — only insert if STOIC doesn't already track this ticket.
@@ -649,7 +665,8 @@ async def external_deal(payload: BridgeExternalDeal):
             "mt5_ticket": payload.mt5_ticket,
             "opened_at": deal_iso,
             "closed_at": None,
-            "origin": "external" if is_external else "auto",
+            "origin": trade_origin,
+            "magic_number": int(payload.magic or 0),
             "external_open": is_external,
         }
         result = await db.trades.insert_one(trade_doc)

@@ -104,6 +104,25 @@ const CLOSE_REASON_BADGE = {
     broker:          { label: "BROKER",   cls: "border-[#1F1F1F] bg-[#0A0A0A] text-[#A1A1AA]",               icon: "·" },
 };
 
+// Source-of-truth for trade origin classification. The MT5 EA stamps every
+// STOIC order with magic=901234; magic=0 means a click in the MT5 terminal
+// (Manual); any other magic means a DIFFERENT EA running on the same account.
+const STOIC_MAGIC = 901234;
+const SOURCE_BADGE_FOR = (t) => {
+    const origin = t.origin || "";
+    const mag = Number(t.magic_number) || 0;
+    if (origin === "paper" || t.account_mode === "paper")
+        return { label: "PAPER",    cls: "border-[#9333EA]/40 bg-[#9333EA]/10 text-[#9333EA]", title: "Paper account — no real money" };
+    if (origin === "shadow")
+        return { label: "SHADOW",   cls: "border-[#52525B] bg-[#1F1F1F] text-[#A1A1AA]",       title: "Shadow signal — not executed" };
+    if (origin === "manual" || mag === 0)
+        return { label: "MANUAL",   cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]", title: "Opened manually in the MT5 terminal" };
+    if (origin === "other_ea" || (mag !== 0 && mag !== STOIC_MAGIC))
+        return { label: "OTHER EA", cls: "border-[#FFB000]/40 bg-[#FFB000]/10 text-[#FFB000]", title: `Opened by another EA on this account (magic=${mag})` };
+    // origin=auto OR magic=STOIC_MAGIC OR unset on a STOIC-managed open
+    return { label: "STOIC",    cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]", title: "Opened by STOIC bot" };
+};
+
 function fmtDateTime(iso) {
     if (!iso) return "—";
     try {
@@ -623,6 +642,19 @@ export default function Trades() {
                                                         {CLOSE_REASON_BADGE[t.close_reason].label}
                                                     </span>
                                                 )}
+                                                {(() => {
+                                                    // Source badge — STOIC vs Manual vs Other EA, derived from
+                                                    // origin field + magic_number. Color-coded so the user can
+                                                    // tell at a glance who opened a position on a shared account.
+                                                    const src = SOURCE_BADGE_FOR(t);
+                                                    if (!src) return null;
+                                                    return (
+                                                        <span data-testid={`source-${t.id}`} title={src.title}
+                                                            className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border ${src.cls}`}>
+                                                            {src.label}
+                                                        </span>
+                                                    );
+                                                })()}
                                             </div>
                                         </td>
                                         <td className="px-3 py-2">

@@ -2,9 +2,10 @@ import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { toast } from "sonner";
 import {
     RefreshCw, Activity, AlertTriangle, CheckCircle2, ShieldCheck, TrendingDown,
-    Brain, Clock, FlaskConical, BarChart3, Stethoscope, Zap,
+    Brain, Clock, FlaskConical, BarChart3, Stethoscope, Zap, Wand2,
 } from "lucide-react";
 
 const SEV_STYLE = {
@@ -151,18 +152,93 @@ function PulsePanel({ pulse }) {
     );
 }
 
-function SessionsPanel({ sessions }) {
+function SessionsPanel({ sessions, onReload }) {
+    const [suggestion, setSuggestion] = useState(null);
+    const [busy, setBusy] = useState(false);
+
     if (!sessions) return null;
     const buckets = (sessions.buckets || []).filter(b => b.count > 0);
+
+    const suggest = async () => {
+        setBusy(true);
+        try {
+            const r = await api.post("/analytics/sessions/suggest-action");
+            setSuggestion(r.data);
+            if (r.data.action === "no_action") {
+                toast.info(r.data.rationale);
+            }
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const applySuggestion = async () => {
+        if (!suggestion || suggestion.action !== "tighten_worst") return;
+        setBusy(true);
+        try {
+            await api.post("/analytics/sessions/apply-action", {
+                field: suggestion.field, to: suggestion.to,
+            });
+            toast.success(`Applied: ${suggestion.field} → ${suggestion.to}`);
+            setSuggestion(null);
+            if (onReload) onReload();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="health-sessions-panel">
             <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
                 <BarChart3 className="w-3.5 h-3.5 text-[#FFD700]" />
                 <span className="font-display font-bold text-sm">Session Edge</span>
-                <Link to="/analytics" className="ml-auto font-mono text-[10px] tracking-widest text-[#A1A1AA] hover:text-white">
-                    DRILL DOWN →
-                </Link>
+                <div className="ml-auto flex items-center gap-3">
+                    <button onClick={suggest} disabled={busy}
+                        data-testid="suggest-action-btn"
+                        className="flex items-center gap-1.5 px-2.5 py-1 border border-[#FFD700]/40 text-[#FFD700] hover:bg-[#FFD700]/10 text-[10px] font-mono tracking-widest transition-colors disabled:opacity-50">
+                        <Wand2 className={`w-3 h-3 ${busy ? "animate-pulse" : ""}`} />
+                        SUGGEST ACTION
+                    </button>
+                    <Link to="/analytics" className="font-mono text-[10px] tracking-widest text-[#A1A1AA] hover:text-white">
+                        DRILL DOWN →
+                    </Link>
+                </div>
             </div>
+
+            {/* Suggestion modal/banner */}
+            {suggestion && suggestion.action === "tighten_worst" && (
+                <div className="border-b border-[#FFD700]/30 bg-[#FFD700]/5 px-4 py-3" data-testid="suggestion-banner">
+                    <div className="flex items-start gap-3">
+                        <Wand2 className="w-4 h-4 text-[#FFD700] shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                            <div className="font-mono text-[10px] tracking-widest text-[#FFD700] mb-1">
+                                SUGGESTED · TIGHTEN {suggestion.session}
+                            </div>
+                            <div className="text-xs text-[#A1A1AA] leading-relaxed">{suggestion.rationale}</div>
+                            <div className="font-mono text-xs text-[#FFD700] mt-2">
+                                {suggestion.field}: {suggestion.from} → <span className="font-bold">{suggestion.to}</span>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            <button onClick={() => setSuggestion(null)} disabled={busy}
+                                data-testid="suggestion-dismiss"
+                                className="px-2 py-1 border border-[#1F1F1F] hover:border-[#52525B] text-[10px] font-mono tracking-widest text-[#A1A1AA]">
+                                DISMISS
+                            </button>
+                            <button onClick={applySuggestion} disabled={busy}
+                                data-testid="suggestion-apply"
+                                className="px-2 py-1 border border-[#00FF41]/40 bg-[#00FF41]/10 hover:bg-[#00FF41]/20 text-[10px] font-mono tracking-widest text-[#00FF41]">
+                                APPLY
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="p-4 grid grid-cols-2 md:grid-cols-3 gap-2">
                 <Kpi label="OVERALL TRADES" value={sessions.overall?.count ?? 0} />
                 <Kpi label="OVERALL WIN%" value={`${sessions.overall?.win_rate ?? 0}%`}
@@ -341,7 +417,7 @@ export default function BotHealth() {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <SessionsPanel sessions={data.sessions} />
+                    <SessionsPanel sessions={data.sessions} onReload={load} />
                     <ImprovementsPanel
                         adjustments={data.adjustments}
                         patterns={data.patterns}

@@ -323,10 +323,12 @@ async def _maybe_autotighten(db, trade: dict, signal: dict, pattern_key: str) ->
         "user_id": user_id,
         "config_id": str(cfg["_id"]),
         "pattern_key": pattern_key,
+        "direction": "tighten",
         "field": "min_confidence_override",
         "from": cur_min,
         "to": new_min,
         "trigger_count": count,
+        "trigger_kind": "losing_pattern",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.guardrail_adjustments.insert_one(adj_doc)
@@ -345,6 +347,149 @@ async def _maybe_autotighten(db, trade: dict, signal: dict, pattern_key: str) ->
             [
                 f"Pattern: {pattern_key}",
                 f"{count} losses in 30d — bot self-tightened.",
+                f"min_confidence_override: {cur_min} → {new_min}",
+                "View at /loss-lab",
+            ],
+        )
+    except Exception:
+        pass
+
+    return adj_doc
+
+
+async def maybe_record_winner(db, trade_id) -> dict | None:
+    """Auto-loosen counterpart to `maybe_record_postmortem`.
+
+    Called on EVERY trade close. If the trade was a winner AND its pattern_key
+    had previously been auto-tightened, we count winners after the most recent
+    tighten — when that count hits 3, ease `min_confidence_override` back by
+    -3 (clamped at 50) so the bot doesn't get trapped at an over-cautious
+    threshold once the market conditions that caused the tighten have passed.
+
+    Mirrors `_maybe_autotighten`'s guards:
+      • only fires when the user has `auto_tighten_enabled=true` (same opt-in)
+      • 7-day per-pattern cooldown against re-loosening
+      • clamped at 50 (never below the user-configurable floor)
+    """
+    if isinstance(trade_id, str):
+        try:
+            trade_id = ObjectId(trade_id)
+        except Exception:
+            return None
+    trade = await db.trades.find_one({"_id": trade_id})
+    if not trade or trade.get("status") != "closed":
+        return None
+    if float(trade.get("pnl") or 0) <= 0:
+        return None  # losses are handled by `maybe_record_postmortem`
+
+    user_id = trade["user_id"]
+    user = await _user_doc(db, user_id)
+    settings = (user or {}).get("postmortem_settings") or {}
+    if not settings.get("auto_tighten_enabled"):
+        return None  # opt-in gate — same flag governs both directions
+
+    # Reconstruct the trade's pattern_key from its origin signal (best-effort).
+    signal = {}
+    sig_id = trade.get("signal_id")
+    if sig_id:
+        try:
+            signal = await db.signals.find_one({"_id": ObjectId(sig_id)}) or {}
+        except Exception:
+            pass
+    pattern_key = _pattern_key(trade, signal)
+
+    # Find the most recent TIGHTEN for this pattern (the one we'd un-do).
+    last_tighten = await db.guardrail_adjustments.find_one(
+        {
+            "user_id": user_id,
+            "pattern_key": pattern_key,
+            "$or": [{"direction": "tighten"}, {"direction": {"$exists": False}}],
+        },
+        sort=[("created_at", -1)],
+    )
+    if not last_tighten:
+        return None
+    # If the most recent adjustment for this pattern is already a loosen, skip.
+    last_any = await db.guardrail_adjustments.find_one(
+        {"user_id": user_id, "pattern_key": pattern_key},
+        sort=[("created_at", -1)],
+    )
+    if last_any and last_any.get("direction") == "loosen":
+        return None
+
+    # Count winning closed trades on this pattern AFTER the tighten.
+    win_cutoff = last_tighten["created_at"]
+    wins_after = await db.trades.count_documents({
+        "user_id": user_id,
+        "status": "closed",
+        "symbol": trade["symbol"],
+        "pnl": {"$gt": 0},
+        "closed_at": {"$gte": win_cutoff},
+    })
+    if wins_after < 3:
+        return None
+
+    # 7-day cooldown — don't ratchet loosen ↔ tighten on edge-case streaks.
+    cooldown_cut = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    recent_loosen = await db.guardrail_adjustments.find_one({
+        "user_id": user_id,
+        "pattern_key": pattern_key,
+        "direction": "loosen",
+        "created_at": {"$gte": cooldown_cut},
+    })
+    if recent_loosen:
+        return None
+
+    # Pick the matching cfg
+    cfg_filter = {"user_id": user_id}
+    acct_id = trade.get("account_id")
+    if acct_id:
+        cfg_filter["account_id"] = acct_id
+    cfg = await db.bot_configs.find_one(cfg_filter)
+    if not cfg and acct_id:
+        cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": None})
+    if not cfg:
+        return None
+
+    cur_min = int(cfg.get("min_confidence_override") or 0)
+    if cur_min == 0:
+        return None  # nothing to loosen — never had a tighten applied
+    new_min = max(50, cur_min - 3)
+    if new_min >= cur_min:
+        return None  # already at floor
+
+    await db.bot_configs.update_one(
+        {"_id": cfg["_id"]},
+        {"$set": {"min_confidence_override": new_min,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    adj_doc = {
+        "user_id": user_id,
+        "config_id": str(cfg["_id"]),
+        "pattern_key": pattern_key,
+        "direction": "loosen",
+        "field": "min_confidence_override",
+        "from": cur_min,
+        "to": new_min,
+        "trigger_count": wins_after,
+        "trigger_kind": "winning_streak",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.guardrail_adjustments.insert_one(adj_doc)
+    logger.info(
+        "Auto-loosened user=%s cfg=%s pattern=%s min_confidence %d→%d (after %d wins)",
+        user_id, cfg["_id"], pattern_key, cur_min, new_min, wins_after,
+    )
+
+    try:
+        from notifier import send_telegram
+        await send_telegram(
+            user_id,
+            "auto_guardrail",
+            "Auto-Guardrail Loosened",
+            [
+                f"Pattern: {pattern_key}",
+                f"{wins_after} wins after the last tighten — bot self-loosened.",
                 f"min_confidence_override: {cur_min} → {new_min}",
                 "View at /loss-lab",
             ],

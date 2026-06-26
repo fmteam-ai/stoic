@@ -143,3 +143,144 @@ async def test_auto_tighten_clamps_at_95():
     out = await lp._maybe_autotighten(db, trade, {}, "X|R|S|A")
     assert out is not None
     assert out["to"] == 95  # 94 + 5 → clamp at 95
+
+
+
+# --------------------- AUTO-LOOSEN COUNTERPART ---------------------
+
+@pytest.mark.asyncio
+async def test_winner_with_no_prior_tighten_no_loosen():
+    db = MagicMock()
+    db.trades.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY",
+        "status": "closed", "pnl": 50, "signal_id": None,
+    })
+    db.users.find_one = AsyncMock(return_value={
+        "_id": "u1", "postmortem_settings": {"auto_tighten_enabled": True},
+    })
+    db.guardrail_adjustments.find_one = AsyncMock(return_value=None)
+    db.signals.find_one = AsyncMock(return_value=None)
+    out = await lp.maybe_record_winner(db, ObjectId())
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_winner_loosen_requires_three_wins_after_tighten():
+    """When prior tighten exists but only 2 wins followed, do NOT loosen yet."""
+    db = MagicMock()
+    db.trades.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY",
+        "status": "closed", "pnl": 50, "closed_at": "2026-06-26T05:00:00+00:00",
+        "signal_id": None, "account_id": None,
+    })
+    db.users.find_one = AsyncMock(return_value={
+        "_id": "u1", "postmortem_settings": {"auto_tighten_enabled": True},
+    })
+    db.signals.find_one = AsyncMock(return_value=None)
+    tighten_doc = {"_id": ObjectId(), "direction": "tighten",
+                   "created_at": "2026-06-25T10:00:00+00:00"}
+    db.guardrail_adjustments.find_one = AsyncMock(side_effect=[tighten_doc, tighten_doc])
+    db.trades.count_documents = AsyncMock(return_value=2)
+    out = await lp.maybe_record_winner(db, ObjectId())
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_winner_loosen_applies_when_three_wins():
+    db = MagicMock()
+    db.trades.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY",
+        "status": "closed", "pnl": 50, "closed_at": "2026-06-26T05:00:00+00:00",
+        "signal_id": None, "account_id": None,
+    })
+    db.users.find_one = AsyncMock(return_value={
+        "_id": "u1", "postmortem_settings": {"auto_tighten_enabled": True},
+    })
+    db.signals.find_one = AsyncMock(return_value=None)
+    tighten_doc = {"_id": ObjectId(), "direction": "tighten",
+                   "created_at": "2026-06-25T10:00:00+00:00"}
+    # Three find_one calls: last_tighten → last_any (still tighten) → recent_loosen=None
+    db.guardrail_adjustments.find_one = AsyncMock(side_effect=[tighten_doc, tighten_doc, None])
+    db.trades.count_documents = AsyncMock(return_value=3)
+    cfg_id = ObjectId()
+    db.bot_configs.find_one = AsyncMock(return_value={
+        "_id": cfg_id, "min_confidence_override": 70,
+    })
+    db.bot_configs.update_one = AsyncMock()
+    db.guardrail_adjustments.insert_one = AsyncMock()
+    out = await lp.maybe_record_winner(db, ObjectId())
+    assert out is not None
+    assert out["from"] == 70 and out["to"] == 67  # 70 - 3 = 67
+    assert out["direction"] == "loosen"
+    db.bot_configs.update_one.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_winner_loosen_clamps_at_floor_50():
+    db = MagicMock()
+    db.trades.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY",
+        "status": "closed", "pnl": 50, "closed_at": "2026-06-26T05:00:00+00:00",
+        "signal_id": None, "account_id": None,
+    })
+    db.users.find_one = AsyncMock(return_value={
+        "_id": "u1", "postmortem_settings": {"auto_tighten_enabled": True},
+    })
+    db.signals.find_one = AsyncMock(return_value=None)
+    tighten_doc = {"_id": ObjectId(), "direction": "tighten",
+                   "created_at": "2026-06-25T10:00:00+00:00"}
+    db.guardrail_adjustments.find_one = AsyncMock(side_effect=[tighten_doc, tighten_doc, None])
+    db.trades.count_documents = AsyncMock(return_value=5)
+    db.bot_configs.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "min_confidence_override": 52,
+    })
+    db.bot_configs.update_one = AsyncMock()
+    db.guardrail_adjustments.insert_one = AsyncMock()
+    out = await lp.maybe_record_winner(db, ObjectId())
+    assert out is not None
+    assert out["to"] == 50  # 52 - 3 = 49 → clamped to floor 50
+
+
+@pytest.mark.asyncio
+async def test_winner_loosen_skipped_when_already_loose():
+    db = MagicMock()
+    db.trades.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY",
+        "status": "closed", "pnl": 50, "signal_id": None,
+    })
+    db.users.find_one = AsyncMock(return_value={
+        "_id": "u1", "postmortem_settings": {"auto_tighten_enabled": True},
+    })
+    db.signals.find_one = AsyncMock(return_value=None)
+    tighten_doc = {"_id": ObjectId(), "direction": "tighten",
+                   "created_at": "2026-06-25T10:00:00+00:00"}
+    loosen_doc = {"_id": ObjectId(), "direction": "loosen",
+                  "created_at": "2026-06-25T14:00:00+00:00"}
+    db.guardrail_adjustments.find_one = AsyncMock(side_effect=[tighten_doc, loosen_doc])
+    out = await lp.maybe_record_winner(db, ObjectId())
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_winner_loosen_respects_opt_in_off():
+    db = MagicMock()
+    db.trades.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY",
+        "status": "closed", "pnl": 50, "signal_id": None,
+    })
+    db.users.find_one = AsyncMock(return_value={
+        "_id": "u1", "postmortem_settings": {"auto_tighten_enabled": False},
+    })
+    out = await lp.maybe_record_winner(db, ObjectId())
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_winner_loosen_skips_losses():
+    db = MagicMock()
+    db.trades.find_one = AsyncMock(return_value={
+        "_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD",
+        "status": "closed", "pnl": -10, "signal_id": None,
+    })
+    out = await lp.maybe_record_winner(db, ObjectId())
+    assert out is None

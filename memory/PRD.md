@@ -8,6 +8,25 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-26 (iter-47) — **Source badges + auto-loosen + Suggest-action (3 P1s in one batch)**:
+
+  **Task 1 · Source badge on Trades UI** (`pages/Trades.jsx`)
+  - Added `SOURCE_BADGE_FOR(t)` derivation in `Trades.jsx` — classifies every trade as **STOIC** (green) / **MANUAL** (gold) / **OTHER EA** (amber) / **PAPER** (purple) / **SHADOW** (grey) based on `origin` + `magic_number`. Renders next to status pill on every row.
+  - Backend (`routes/bridge_routes.py`) — replaced binary `is_external = (magic == 0)` with 3-way classification using `STOIC_MAGIC = 901234`: magic=0 → manual, magic=901234 → auto, anything else → `other_ea`. The `magic_number` is now persisted on the trade doc so the UI can disambiguate. Applied to both `deal_received` insert path and the open-positions backfill path.
+
+  **Task 2 · Auto-loosen counterpart** (`loss_postmortem.py`)
+  - New `maybe_record_winner(db, trade_id)` mirrors `maybe_record_postmortem` but for winners. Hooked into the same two close paths (bridge + paper-settle).
+  - Logic: if the trade's `pattern_key` had a previous tighten (queried from `guardrail_adjustments`) AND ≥3 wins followed AND no loosen in last 7 days AND `auto_tighten_enabled=true` → eases `min_confidence_override` by **-3** (clamped at floor 50). Records audit row with `direction: "loosen"` and `trigger_kind: "winning_streak"`. Telegram alert fires.
+  - Tighten path now also writes `direction: "tighten"` (was untagged) so the queries discriminate cleanly.
+  - **7 new pytest cases** (no prior tighten → skip · only 2 wins → skip · 3 wins → applies → -3 · floor clamp at 50 · already-loose-skip · opt-in-off → skip · loss → skip). All passing (19/19 in the suite).
+
+  **Task 3 · "Suggest Action" on Session Edge** (`routes/analytics_routes.py` + `pages/BotHealth.jsx`)
+  - Backend: `POST /api/analytics/sessions/suggest-action` inspects buckets, finds any with ≥5 trades AND <40% win-rate, returns `{action, session, from, to, rationale}`. Falls back to `{action: "no_action"}` when no bucket qualifies.
+  - Backend: `POST /api/analytics/sessions/apply-action` writes the proposed `min_confidence_override` to the user's default bot_config (creates the doc if missing). Validates field allowlist + clamps 50-95.
+  - Frontend: `SessionsPanel` in BotHealth gets a golden `SUGGEST ACTION` button (`Wand2` icon). On click → fetches the suggestion → renders an in-panel banner with the rationale + `APPLY` / `DISMISS` buttons. Apply hits the backend and re-loads the panel so the trader sees the change reflected.
+  - Verified live with admin account: returned `tighten_worst ASIA · min_confidence_override 55 → 60` with the full rationale ("ASIA has 7 trades at 14.3% win-rate, avg-R -0.69, P&L -$1121.69"). UI banner renders correctly with both action buttons.
+
+
 - 2026-06-26 (iter-46) — **Bot Health page · live check + self-improvements feed (single screen)**:
   - **Live check now** (admin account snapshot): score 90/100 EXCELLENT · 1/1 brokers connected · EA v1.27. Diagnostic FAIL 3/6 OK — trade sync DB=1 vs broker 0, Daily PnL –$1121.69 deep-red, Bot ON toggle (paused by user), Telegram not configured. 7 trades all in Asia · 14.3% win · –0.69R · 1 loss pattern detected (`XAUUSD|TRANSITIONAL|TOKYO|SELL`) · 0 auto-adjustments (auto-tighten still opt-in OFF) · 1 Safety-Guardian block (per_trade_risk_cap from yesterday's simulation).
   - **New page `/bot-health`** (sidebar entry, Stethoscope icon, just under Dashboard) aggregates 7 existing endpoints in parallel — `bot/health-score`, `diagnostic/run`, `bot/pulse`, `analytics/sessions`, `postmortem/patterns`, `postmortem/adjustments`, `safety-blocks/stats` — into a single screen the trader can re-check anytime.

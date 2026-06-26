@@ -1,5 +1,6 @@
 """Analytics routes — performance attribution endpoints."""
-from fastapi import APIRouter, Depends
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
 from analytics import compute_attribution, compute_sessions
@@ -25,6 +26,86 @@ async def get_sessions(user=Depends(get_current_user)):
     the trader can see which session their edge actually lives in.
     """
     return await compute_sessions(user["id"])
+
+
+@router.post("/sessions/suggest-action")
+async def suggest_session_action(user=Depends(get_current_user)):
+    """Inspect the session breakdown and propose a single config tweak the
+    user can apply with one click. Returns:
+        {
+          "action":  "tighten_worst" | "no_action",
+          "session": "<bucket key>",
+          "field":   "min_confidence_override",
+          "from":    int, "to": int,
+          "rationale": "<plain english>",
+        }
+    Strategy: if at least one bucket has ≥5 trades AND a win-rate below 40%,
+    suggest tightening min_confidence by +5 for that session (clamped 95).
+    """
+    from database import get_db
+    sessions = await compute_sessions(user["id"])
+    buckets = sessions.get("buckets") or []
+    worst = None
+    for b in buckets:
+        if b["count"] < 5:
+            continue
+        if b["win_rate"] >= 40:
+            continue
+        if worst is None or b["win_rate"] < worst["win_rate"]:
+            worst = b
+    if not worst:
+        return {"action": "no_action",
+                "rationale": "All sessions either trade above 40% win-rate or have fewer than 5 sampled trades."}
+
+    db = get_db()
+    cfg = await db.bot_configs.find_one({"user_id": user["id"], "account_id": None})
+    cur_min = int((cfg or {}).get("min_confidence_override") or 65)
+    new_min = min(95, cur_min + 5)
+    return {
+        "action": "tighten_worst",
+        "session": worst["key"],
+        "field": "min_confidence_override",
+        "from": cur_min,
+        "to": new_min,
+        "rationale": (f"{worst['key']} has {worst['count']} trades at {worst['win_rate']}% win-rate "
+                      f"(avg-R {worst['avg_r']}, P&L ${worst['total_pnl']}). "
+                      f"Raising min_confidence to {new_min} will reduce signal volume "
+                      f"in this session and require stronger conviction to fire."),
+    }
+
+
+@router.post("/sessions/apply-action")
+async def apply_session_action(payload: dict, user=Depends(get_current_user)):
+    """Apply the suggested config tweak returned by `suggest-action`. Body:
+        {field: "min_confidence_override", to: 70}
+    Only writes the default bot_config (account_id=None). Per-account
+    overrides remain editable via the existing Bot Config page.
+    """
+    from database import get_db
+    field = payload.get("field")
+    if field != "min_confidence_override":
+        raise HTTPException(status_code=400, detail="Only min_confidence_override is supported")
+    try:
+        new_val = int(payload.get("to"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="`to` must be an integer")
+    new_val = max(50, min(95, new_val))
+    db = get_db()
+    res = await db.bot_configs.update_one(
+        {"user_id": user["id"], "account_id": None},
+        {"$set": {"min_confidence_override": new_val,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        # Create the default config if it doesn't exist yet
+        await db.bot_configs.insert_one({
+            "user_id": user["id"],
+            "account_id": None,
+            "min_confidence_override": new_val,
+            "active": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    return {"ok": True, "field": field, "to": new_val}
 
 
 @router.get("/by-account")
