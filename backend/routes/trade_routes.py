@@ -11,6 +11,7 @@ from rate_limiter import check_and_record
 from execution import for_account as engine_for_account
 from route_utils import parse_object_id
 from trade_reconciler import reconcile_user
+from risk import get_profile, compute_lot_for_account
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -222,6 +223,39 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
             detail=f"Rate limit: max {rl['limit']} orders/min reached. Retry in {rl['retry_in_s']}s.",
         )
 
+    # Recompute lot size against the TARGET account's real equity (mirrors
+    # bot_runner._process_user_account_locked) — the signal's lot was sized
+    # against a hardcoded $1000 placeholder which over-shoots on small live
+    # accounts and would otherwise be blocked by Safety Guardian's per-trade
+    # risk cap. Honour any user-set `max_lot_size` cap on the matching bot_cfg.
+    risk_level = signal.get("risk_level") or "medium"
+    profile = get_profile(risk_level)
+    sized = compute_lot_for_account(
+        account=account,
+        symbol=signal["symbol"],
+        entry_price=signal.get("entry_price") or 0,
+        stop_loss=signal.get("stop_loss") or 0,
+        confidence_pct=float(signal.get("confidence") or 0),
+        profile=profile,
+    )
+    absolute_lot = float(sized.get("lot_size") or signal.get("lot_size", 0.01))
+    # Optional per-account cap with kelly-scaled selection (same rule as runner)
+    bot_cfg = await db.bot_configs.find_one({
+        "user_id": user["id"],
+        "$or": [{"account_id": account_id}, {"account_id": None}],
+    }) or {}
+    max_lot_cap = float(bot_cfg.get("max_lot_size") or 0.0)
+    kelly_f = float(sized.get("kelly_f") or 0)
+    kelly_cap = float(profile.get("kelly_cap") or 0)
+    if max_lot_cap > 0 and kelly_cap > 0:
+        conf_scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
+        scaled_lot = max(round(max_lot_cap * conf_scale, 2), 0.01)
+        effective_lot = min(absolute_lot, scaled_lot)
+    elif max_lot_cap > 0 and absolute_lot > max_lot_cap:
+        effective_lot = max_lot_cap
+    else:
+        effective_lot = absolute_lot
+
     # Execution Factory — paper vs live engine
     engine = engine_for_account(account)
     trade_doc = await engine.execute(
@@ -231,7 +265,7 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
             "signal_id": signal_id,
             "symbol": signal["symbol"],
             "action": signal["action"],
-            "lot_size": signal.get("lot_size", 0.01),
+            "lot_size": effective_lot,
             "entry_price": signal.get("entry_price", 0),
             "stop_loss": signal.get("stop_loss", 0),
             "take_profit": signal.get("take_profit", 0),

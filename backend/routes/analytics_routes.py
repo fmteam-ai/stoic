@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends
 
 from auth import get_current_user
-from analytics import compute_attribution
+from analytics import compute_attribution, compute_sessions
 from account_analytics import per_account_stats
 from auto_tune import get_all_thresholds, get_auto_threshold, invalidate_cache
 from learned_meta import retrain as learned_retrain, get_artifact as learned_artifact
@@ -15,6 +15,16 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 async def get_attribution(user=Depends(get_current_user)):
     """Full performance attribution across every dimension."""
     return await compute_attribution(user["id"])
+
+
+@router.get("/sessions")
+async def get_sessions(user=Depends(get_current_user)):
+    """Per-session breakdown — Asia / London / Overlap / NY / Off-hours.
+
+    Returns win-rate, avg-R, expectancy-R and P&L per UTC session window so
+    the trader can see which session their edge actually lives in.
+    """
+    return await compute_sessions(user["id"])
 
 
 @router.get("/by-account")

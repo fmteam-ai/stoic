@@ -126,8 +126,9 @@ async def evaluate(symbol: str, action: str, db=None) -> dict:
                 "audit": [_ok("non_directional_action", value=act)],
                 "evaluated_at": now_iso, "thresholds": thresholds()}
 
-    yields = await _cached_series(db or get_db(), "DGS10")
-    dxy    = await _cached_series(db or get_db(), "DTWEXBGS")
+    db_ref = db if db is not None else get_db()
+    yields = await _cached_series(db_ref, "DGS10")
+    dxy    = await _cached_series(db_ref, "DTWEXBGS")
 
     audit: list[dict] = []
 

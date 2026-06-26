@@ -89,6 +89,40 @@ def _summarise(rows: List[dict]) -> dict:
     }
 
 
+# MT5-standard contract sizes — used to derive USD-risk-at-entry per trade.
+# (Mirrors the table in Trades.jsx so SL distance × lot × contract = $ risk.)
+_CONTRACT_SIZE = {
+    "XAUUSD": 100,     # 1 lot = 100 oz
+    "XAGUSD": 5000,    # 1 lot = 5000 oz
+    "BTCUSD": 1,
+    "ETHUSD": 1,
+}
+
+
+def _r_multiple(row: dict):
+    """Return realized R-multiple for a closed trade, or None if SL is missing.
+
+    R = pnl / risk_at_entry,  where  risk_at_entry = |entry - SL| × lot × contract.
+    Capped at ±10R to keep outliers from skewing the average.
+    """
+    try:
+        entry = float(row.get("entry_price") or 0)
+        sl = float(row.get("stop_loss") or 0)
+        lot = float(row.get("lot_size") or 0)
+        pnl = float(row.get("pnl") or 0)
+        if entry <= 0 or sl <= 0 or lot <= 0:
+            return None
+        cs = _CONTRACT_SIZE.get((row.get("symbol") or "").upper(), 1)
+        risk = abs(entry - sl) * lot * cs
+        if risk <= 0:
+            return None
+        r = pnl / risk
+        # Clamp pathological outliers
+        return max(-10.0, min(10.0, r))
+    except Exception:
+        return None
+
+
 def _bucketize(rows: List[dict], key_fn) -> List[dict]:
     groups: Dict[str, list] = defaultdict(list)
     for r in rows:
@@ -183,4 +217,133 @@ async def compute_attribution(user_id: str) -> dict:
             f"{r['symbol']} · conf {_confidence_bucket(r['confidence'])}"
             if r["symbol"] and r["confidence"] is not None else None
         )),
+    }
+
+
+
+# UTC hour ranges for the dedicated session-breakdown card.
+# Matches _session_label() — kept here so the UI can render the time window
+# under each bucket without a second round-trip.
+SESSION_WINDOWS = [
+    ("ASIA",    "Tokyo · 00:00–07:00 UTC",       set(range(0, 7))),
+    ("LONDON",  "London · 07:00–13:00 UTC",      set(range(7, 13))),
+    ("OVERLAP", "London-NY · 13:00–16:00 UTC",   set(range(13, 16))),
+    ("NY",      "New York · 16:00–21:00 UTC",    set(range(16, 21))),
+    ("OFF",     "Off-hours · 21:00–24:00 UTC",   set(range(21, 24))),
+]
+
+
+def _session_key_4buckets(dt: Optional[datetime]) -> Optional[str]:
+    """Split the London-NY overlap as its own bucket (the user explicitly asked
+    for Asia / London / NY / **Overlap**). Differs from _session_label which
+    folds the overlap into 'NEW YORK' for the existing legacy slice.
+    """
+    if dt is None:
+        return None
+    h = dt.hour
+    for key, _label, hours in SESSION_WINDOWS:
+        if h in hours:
+            return key
+    return None
+
+
+async def compute_sessions(user_id: str) -> dict:
+    """Per-session performance summary — Asia / London / Overlap / NY / Off-hours.
+
+    Returns 5 buckets always (even if count=0) so the UI can render placeholders
+    instead of hiding sessions the bot hasn't traded yet. Each bucket carries:
+        count, wins, losses, win_rate, avg_pnl, total_pnl,
+        avg_r, expectancy_r, best_r, worst_r,
+        r_sample_count   (number of trades with valid SL → R could be computed)
+    Plus the headline `best_session_by_r` and `best_session_by_pnl`.
+    """
+    db = get_db()
+    cursor = db.trades.find({"user_id": user_id, "status": "closed"})
+    closed = await cursor.to_list(length=5000)
+
+    enriched = []
+    for t in closed:
+        opened = _parse_iso(t.get("opened_at"))
+        bucket = _session_key_4buckets(opened)
+        if bucket is None:
+            continue
+        row = {
+            "pnl": float(t.get("pnl") or 0),
+            "symbol": t.get("symbol"),
+            "entry_price": t.get("entry_price"),
+            "stop_loss": t.get("stop_loss"),
+            "lot_size": t.get("lot_size"),
+        }
+        row["r_multiple"] = _r_multiple(row)
+        row["bucket"] = bucket
+        enriched.append(row)
+
+    by_bucket: Dict[str, list] = defaultdict(list)
+    for r in enriched:
+        by_bucket[r["bucket"]].append(r)
+
+    out_buckets = []
+    for key, label, _hours in SESSION_WINDOWS:
+        items = by_bucket.get(key, [])
+        n = len(items)
+        if n == 0:
+            out_buckets.append({
+                "key": key, "label": label, "count": 0, "wins": 0, "losses": 0,
+                "win_rate": 0.0, "avg_pnl": 0.0, "total_pnl": 0.0,
+                "avg_r": None, "expectancy_r": None,
+                "best_r": None, "worst_r": None, "r_sample_count": 0,
+            })
+            continue
+        pnls = [it["pnl"] for it in items]
+        wins = sum(1 for p in pnls if p > 0)
+        losses = sum(1 for p in pnls if p < 0)
+        rs = [it["r_multiple"] for it in items if it["r_multiple"] is not None]
+        avg_r = round(sum(rs) / len(rs), 2) if rs else None
+        # Expectancy-R = (win_rate × avg_win_R) + (loss_rate × avg_loss_R)
+        wins_r = [r for r in rs if r > 0]
+        losses_r = [r for r in rs if r < 0]
+        expectancy_r = None
+        if rs:
+            wr = len(wins_r) / len(rs)
+            avg_win_r = (sum(wins_r) / len(wins_r)) if wins_r else 0
+            avg_loss_r = (sum(losses_r) / len(losses_r)) if losses_r else 0
+            expectancy_r = round(wr * avg_win_r + (1 - wr) * avg_loss_r, 2)
+        out_buckets.append({
+            "key": key, "label": label,
+            "count": n, "wins": wins, "losses": losses,
+            "win_rate": round(100 * wins / n, 1),
+            "avg_pnl": round(sum(pnls) / n, 2),
+            "total_pnl": round(sum(pnls), 2),
+            "avg_r": avg_r,
+            "expectancy_r": expectancy_r,
+            "best_r": round(max(rs), 2) if rs else None,
+            "worst_r": round(min(rs), 2) if rs else None,
+            "r_sample_count": len(rs),
+        })
+
+    # Overall (rolled-up) summary across all sessions for the headline tiles
+    all_rows = enriched
+    overall = {
+        "count": len(all_rows),
+        "win_rate": round(100 * sum(1 for r in all_rows if r["pnl"] > 0) / len(all_rows), 1) if all_rows else 0,
+        "total_pnl": round(sum(r["pnl"] for r in all_rows), 2),
+    }
+    all_rs = [r["r_multiple"] for r in all_rows if r["r_multiple"] is not None]
+    overall["avg_r"] = round(sum(all_rs) / len(all_rs), 2) if all_rs else None
+    overall["r_sample_count"] = len(all_rs)
+
+    # Headline ranks — only consider buckets with ≥3 sampled trades to avoid
+    # ranking by one lucky outlier. Falls back to None when nobody qualifies.
+    def _rank(metric_key):
+        eligible = [b for b in out_buckets if b["count"] >= 3 and b.get(metric_key) is not None]
+        if not eligible:
+            return None
+        return max(eligible, key=lambda b: b[metric_key])["key"]
+
+    return {
+        "overall": overall,
+        "buckets": out_buckets,
+        "best_session_by_r": _rank("avg_r"),
+        "best_session_by_pnl": _rank("total_pnl"),
+        "min_sample_for_ranking": 3,
     }

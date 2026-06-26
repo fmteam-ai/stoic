@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { BarChart3, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Target, Gauge, Cpu } from "lucide-react";
+import { BarChart3, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Target, Gauge, Cpu, Clock } from "lucide-react";
 
 function pnlColor(v) {
     if (v > 0) return "text-[#00FF41]";
@@ -72,24 +72,162 @@ function SliceTable({ title, rows, subtitle, testid }) {
     );
 }
 
+// Per-session edge card — Asia / London / Overlap / NY / Off-hours.
+// Surfaces which UTC session window the trader's edge actually lives in
+// (win-rate, avg-R, expectancy-R, total P&L) so risk can be weighted toward it.
+const SESSION_ACCENT = {
+    ASIA:    "border-l-[#FFB000]",
+    LONDON:  "border-l-[#00FF41]",
+    OVERLAP: "border-l-[#FFD700]",
+    NY:      "border-l-[#0099FF]",
+    OFF:     "border-l-[#52525B]",
+};
+
+function rColor(v) {
+    if (v == null) return "text-[#52525B]";
+    if (v >= 0.3) return "text-[#00FF41]";
+    if (v <= -0.3) return "text-[#FF3B30]";
+    return "text-[#FFB000]";
+}
+
+function SessionCard({ b, isBestR, isBestPnl, minSample }) {
+    const accent = SESSION_ACCENT[b.key] || "border-l-[#52525B]";
+    const insufficient = b.count < minSample;
+    return (
+        <div className={`border border-[#1F1F1F] border-l-4 ${accent} bg-[#0A0A0A] p-4 space-y-2`}
+             data-testid={`session-card-${b.key}`}>
+            <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                    <div className="font-display font-bold text-base tracking-tight">{b.key}</div>
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest truncate">{b.label}</div>
+                </div>
+                <div className="flex flex-col items-end gap-1 shrink-0">
+                    {isBestR && (
+                        <span className="px-1.5 py-0.5 border border-[#00FF41]/40 text-[#00FF41] text-[9px] font-mono tracking-widest">
+                            BEST AVG-R
+                        </span>
+                    )}
+                    {isBestPnl && (
+                        <span className="px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] text-[9px] font-mono tracking-widest">
+                            BEST P&amp;L
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#1F1F1F]">
+                <div>
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest">TRADES</div>
+                    <div className="font-mono text-sm">{b.count}</div>
+                </div>
+                <div>
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest">WIN RATE</div>
+                    <div className={`font-mono text-sm ${b.count === 0 ? "text-[#52525B]" : b.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FFB000]"}`}>
+                        {b.count === 0 ? "—" : `${b.win_rate}%`}
+                    </div>
+                </div>
+                <div>
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest">AVG R</div>
+                    <div className={`font-mono text-sm ${rColor(b.avg_r)}`}>
+                        {b.avg_r == null ? "—" : `${b.avg_r >= 0 ? "+" : ""}${b.avg_r}R`}
+                    </div>
+                </div>
+                <div>
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest">EXPECTANCY</div>
+                    <div className={`font-mono text-sm ${rColor(b.expectancy_r)}`}>
+                        {b.expectancy_r == null ? "—" : `${b.expectancy_r >= 0 ? "+" : ""}${b.expectancy_r}R`}
+                    </div>
+                </div>
+                <div className="col-span-2">
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest">TOTAL P&amp;L</div>
+                    <div className={`font-mono text-sm ${pnlColor(b.total_pnl)}`}>
+                        {b.count === 0 ? "—" : `${b.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(b.total_pnl).toFixed(2)}`}
+                    </div>
+                </div>
+            </div>
+
+            {insufficient && b.count > 0 && (
+                <div className="font-mono text-[9px] text-[#52525B] tracking-widest pt-1">
+                    NEEDS ≥{minSample} TRADES TO RANK
+                </div>
+            )}
+        </div>
+    );
+}
+
+function SessionBreakdown({ sessions }) {
+    if (!sessions) return null;
+    const buckets = sessions.buckets || [];
+    const totalTrades = sessions.overall?.count || 0;
+    const minSample = sessions.min_sample_for_ranking || 3;
+
+    return (
+        <div data-testid="session-breakdown">
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-3 flex items-center gap-2">
+                <Clock className="w-3 h-3" /> SESSION BREAKDOWN · WHERE YOUR EDGE LIVES
+            </div>
+
+            {totalTrades === 0 ? (
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-5 text-xs text-[#A1A1AA] leading-relaxed"
+                     data-testid="session-breakdown-empty">
+                    No closed trades yet. Once the bot has a few sessions of data, this card will show which UTC window
+                    (Asia / London / Overlap / NY / Off-hours) your strategy actually wins in — so you can weight risk
+                    toward the session your edge lives in.
+                </div>
+            ) : (
+                <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3" data-testid="session-cards">
+                        {buckets.map(b => (
+                            <SessionCard
+                                key={b.key}
+                                b={b}
+                                isBestR={sessions.best_session_by_r === b.key}
+                                isBestPnl={sessions.best_session_by_pnl === b.key}
+                                minSample={minSample}
+                            />
+                        ))}
+                    </div>
+                    {(sessions.best_session_by_r || sessions.best_session_by_pnl) && (
+                        <div className="mt-3 p-3 border border-[#1F1F1F] bg-[#0A0A0A] text-xs text-[#A1A1AA] leading-relaxed">
+                            {sessions.best_session_by_r && (
+                                <div>
+                                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest">INSIGHT · </span>
+                                    Highest avg-R is <span className="text-[#00FF41] font-mono">{sessions.best_session_by_r}</span>
+                                    {sessions.best_session_by_pnl && sessions.best_session_by_pnl !== sessions.best_session_by_r && (
+                                        <> · highest cumulative P&amp;L is <span className="text-[#FFD700] font-mono">{sessions.best_session_by_pnl}</span></>
+                                    )}.
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </>
+            )}
+        </div>
+    );
+}
+
+
 export default function Analytics() {
     const [data, setData] = useState(null);
     const [tune, setTune] = useState(null);
     const [learned, setLearned] = useState(null);
+    const [sessions, setSessions] = useState(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
 
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
-            const [attr, autoTune, learned] = await Promise.all([
+            const [attr, autoTune, learned, sess] = await Promise.all([
                 api.get("/analytics/attribution"),
                 api.get("/analytics/auto-tune").catch(() => ({ data: null })),
                 api.get("/analytics/learned-meta").catch(() => ({ data: null })),
+                api.get("/analytics/sessions").catch(() => ({ data: null })),
             ]);
             setData(attr.data);
             setTune(autoTune.data);
             setLearned(learned.data);
+            setSessions(sess.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
     }, []);
@@ -178,6 +316,9 @@ export default function Analytics() {
                         </div>
                     </div>
                 )}
+
+                {/* Per-session edge — Asia / London / Overlap / NY / Off-hours */}
+                <SessionBreakdown sessions={sessions} />
 
                 {/* Learned Meta Classifier */}
                 <div className="border border-[#0099FF]/30 bg-[#0A0A0A]" data-testid="learned-meta-card">

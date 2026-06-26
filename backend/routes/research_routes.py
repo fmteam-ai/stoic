@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from auth import get_current_user
 from database import get_db
+from bson import ObjectId
 from research_agent.self_improver import run_for_user
 from research_agent.proposal_targeting import (
     list_candidate_bots, resolve_target_configs, apply_proposal_to_configs,
@@ -21,6 +22,21 @@ from research_agent.proposal_targeting import (
 from route_utils import parse_object_id
 
 router = APIRouter(prefix="/research", tags=["research-agent"])
+
+
+async def _find_user(db, user_id: str) -> dict | None:
+    """Find the user doc by id — tries `_id=ObjectId(...)`, then `_id=<str>`,
+    then a legacy `id=<str>` field. Mirrors the auth seeding history."""
+    try:
+        d = await db.users.find_one({"_id": ObjectId(user_id)})
+        if d:
+            return d
+    except Exception:
+        pass
+    d = await db.users.find_one({"_id": user_id})
+    if d:
+        return d
+    return await db.users.find_one({"id": user_id})
 
 
 class AcceptBody(BaseModel):
@@ -48,8 +64,7 @@ def _serialise_proposal(d: dict) -> dict:
 async def get_auto_accept(user=Depends(get_current_user)):
     """Read the user's auto-accept settings (opt-in toggle + delta threshold)."""
     db = get_db()
-    doc = await db.users.find_one({"_id": user["id"]}) or \
-          await db.users.find_one({"id": user["id"]}) or {}
+    doc = await _find_user(db, user["id"]) or {}
     s = doc.get("research_auto_accept") or {}
     return {
         "enabled": bool(s.get("enabled")),
@@ -68,13 +83,20 @@ async def set_auto_accept(payload: dict, user=Depends(get_current_user)):
     if min_delta < 1 or min_delta > 100:
         raise HTTPException(status_code=400, detail="min_delta_pct must be 1-100")
     db = get_db()
-    await db.users.update_one(
-        {"_id": user["id"]},
+    # users are stored with both `_id` (ObjectId) and a legacy string `id`
+    # field — match on whichever exists so the write actually lands (the prior
+    # implementation matched on `{"_id": <string>}` which silently no-op'd).
+    doc = await _find_user(db, user["id"])
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    res = await db.users.update_one(
+        {"_id": doc["_id"]},
         {"$set": {"research_auto_accept": {
             "enabled": enabled, "min_delta_pct": min_delta,
         }}},
-        upsert=False,
     )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=500, detail="Update failed — user row missing")
     return {"enabled": enabled, "min_delta_pct": min_delta}
 
 
