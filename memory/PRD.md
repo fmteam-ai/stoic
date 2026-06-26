@@ -8,6 +8,19 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-60) — **Tiered subscriptions (Starter / Pro / Elite)** with feature-gate plumbing:
+  - **`subscription_plans.py`** rewritten — 12 SKUs (`{tier}_{duration}`): starter $29-209, pro $99-713, elite $199-1432. Legacy plan IDs (`monthly`/`quarterly`/`semi_annual`/`annual`) preserved as aliases → `pro_*` for backward compatibility. New `Features` dataclass with 15 capability flags per tier.
+  - **`subscription_service.py`** — `get_user_tier(user_id)`: admin → `admin`, active paid → tier from plan_id, in-grace → `pro` (legacy customer protection), expired → `starter`.
+  - **`entitlements.py` (new)** — `enforce_feature`, `enforce_account_quota`, `enforce_symbol_allowed`, `cooldown_floor`, `require_feature` (Depends factory). All raise HTTP 402 with structured `{error, feature, current_tier, minimum_tier, message}` payload.
+  - **Gates applied**: `POST /api/accounts` (quota Starter=1/Pro=3/Elite=∞), `/api/postmortem/*` (Pro+), `/api/auto-heal/*` (Pro+), `/api/analytics/learned-meta/drift*` (Elite only).
+  - **New API**: `GET /api/entitlements/me` and `GET /api/entitlements/tiers`.
+  - **`Subscription.jsx`** rewritten — 3-tier card grid, duration selector, "MOST POPULAR" Pro badge, color-coded accents, 15-row comparison table.
+  - **Tests** (`test_iter60_tiered_subscriptions.py`): **19/19 passing.** Curated regression sweep **143/143 green.** Lint clean. Live-verified.
+
+
+- 2026-06-27 (iter-58/59) — Sector caps, EA filling mode, version bump (see iter-58/59 entries below for full details).
+
+
 - 2026-06-27 (iter-55) — **Multi-account circuit-breaker isolation**:
   - **Bug** (user-reported): User started bot for new VT Markets account → received Telegram "🚨 CIRCUIT BREAKER TRIPPED · Daily drawdown -11.41% breached -8.00% limit · Today's P&L: -3033.47 · Equity: 26596.41". The equity ($26,596.41) was the SUM of both accounts ($16,596.41 Roboforex + $10,000 VT Markets), and P&L summed losses from BOTH accounts. So Roboforex losses (-$1,384.42) + VT Markets losses (-$1,649.05) were aggregated and divided by combined equity, falsely tripping the VT Markets cfg.
   - **RCA**: Two circuit-breaker code paths both ignored `cfg.account_id` when computing P&L:

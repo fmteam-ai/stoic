@@ -18,8 +18,12 @@ from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
 from loss_postmortem import maybe_record_postmortem, _user_doc
+from entitlements import require_feature
 
-router = APIRouter(prefix="/postmortem", tags=["postmortem"])
+# iter-60: Loss Lab is a Pro+ feature. All endpoints below require the
+# `loss_lab` flag — Starter users see 402 with an upgrade prompt.
+router = APIRouter(prefix="/postmortem", tags=["postmortem"],
+                   dependencies=[Depends(require_feature("loss_lab"))])
 
 
 def _serialize(d: dict) -> dict:

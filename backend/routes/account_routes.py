@@ -71,6 +71,13 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
     db = get_db()
     is_paper = payload.mode == "paper"
 
+    # iter-60 tier-based account quota (Starter=1, Pro=3, Elite=unlimited).
+    # Paper accounts count too — a Starter user shouldn't be able to spawn
+    # dozens of paper bots to game the cap. Admins bypass entirely.
+    from entitlements import enforce_account_quota
+    current_count = await db.accounts.count_documents({"user_id": user["id"]})
+    await enforce_account_quota(user, current_count)
+
     # Per-user limits — paper accounts are exempt (sandbox).
     if not is_paper:
         allowed, err = await check_can_add_live_account(db, user["id"], payload.broker)

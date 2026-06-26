@@ -187,6 +187,8 @@ async def get_drift_status(user=Depends(get_current_user)):
     """ADWIN drift status across session buckets (iter-52)."""
     from drift_detector import check_drift
     from database import get_db
+    from entitlements import enforce_feature
+    await enforce_feature(user, "drift_auto_retrain")
     return await check_drift(get_db())
 
 
@@ -195,4 +197,6 @@ async def check_drift_now(user=Depends(get_current_user)):
     """Force a drift check (respects cooldown). Returns whether a retrain fired."""
     from drift_detector import maybe_trigger_retrain
     from database import get_db
+    from entitlements import enforce_feature
+    await enforce_feature(user, "drift_auto_retrain")
     return await maybe_trigger_retrain(get_db())

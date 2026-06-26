@@ -5,8 +5,11 @@ from auth import get_current_user
 from database import get_db
 from auto_heal import sweep_user, _user_doc
 from datetime import datetime, timezone
+from entitlements import require_feature
 
-router = APIRouter(prefix="/auto-heal", tags=["auto-heal"])
+# iter-60: Auto-Heal is a Pro+ feature.
+router = APIRouter(prefix="/auto-heal", tags=["auto-heal"],
+                   dependencies=[Depends(require_feature("auto_heal"))])
 
 
 @router.get("/settings")

@@ -11,7 +11,7 @@ all other pre-existing users get a 30-day grace period from now.
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from database import get_db
-from subscription_plans import get_plan
+from subscription_plans import get_plan, get_tier_features, Features
 
 
 # Existing users created BEFORE this timestamp get a 30-day grace period.
@@ -23,6 +23,40 @@ _ROLLOUT_AT = datetime.now(timezone.utc)
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def get_user_tier(user_id: str) -> str:
+    """Resolve the user's effective subscription tier — returns
+    `"admin" | "elite" | "pro" | "starter"`. Used by entitlement gates.
+
+    Resolution order:
+      1. Admin role → "admin" (full bypass).
+      2. Active paid subscription → tier from current_plan_id.
+      3. In legacy grace period → "pro" (existing paying customers
+         pre-tier-rollout get grandfathered into Pro until grace expires).
+      4. Otherwise → "starter".
+    """
+    db = get_db()
+    sub = await get_subscription(user_id)
+    state = await is_active(user_id)
+    plan_id = (sub.get("current_plan_id") or "") if sub else ""
+    if plan_id == "admin_grandfather":
+        return "admin"
+    if not state.get("active"):
+        return "starter"
+    # In-grace legacy customers get Pro
+    if state.get("in_grace"):
+        return "pro"
+    # Active paid subscription — derive tier from plan_id
+    plan = get_plan(plan_id)
+    if plan:
+        return plan.tier
+    return "starter"
+
+
+async def get_user_features(user_id: str) -> Features:
+    """Convenience: resolve the user's tier + return the Features dataclass."""
+    return get_tier_features(await get_user_tier(user_id))
 
 
 async def get_subscription(user_id: str) -> dict:
