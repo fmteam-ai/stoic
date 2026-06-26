@@ -30,6 +30,7 @@ from bson import ObjectId
 import numpy as np
 
 from database import get_db
+from probability_calibrator import fit_platt, apply_platt, brier_score
 
 logger = logging.getLogger("learned_meta")
 
@@ -213,6 +214,16 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
         if (y[rejected] == 0).mean() >= 0.6:
             threshold = float(cand)
             break
+
+    # iter-52 · Platt scaling for calibrated probabilities.
+    # Raw sigmoid outputs are class-membership scores, not real frequencies.
+    brier_raw = brier_score(p_final, y)
+    platt = fit_platt(p_final, y)
+    if not platt.get("skipped"):
+        p_cal = np.array([apply_platt(float(pi), platt) for pi in p_final])
+        brier_cal = brier_score(p_cal, y)
+        platt["brier_raw"] = round(brier_raw, 4)
+        platt["brier_calibrated"] = round(brier_cal, 4)
     return {
         "key": key,
         "label": label,
@@ -223,6 +234,7 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
         "train_auc": round(auc, 4),
         "n_samples": int(n),
         "n_wins": int(y.sum()),
+        "calibration": platt,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "feature_names": [
             "confidence_norm", "is_buy", "kalman_vel_norm",
@@ -324,12 +336,20 @@ async def predict_p_win(signal: dict) -> Optional[dict]:
         x = (np.array(feats) - mu) / sd
         xb = np.append(x, 1.0)
         p = float(_sigmoid(xb @ w))
+        # iter-52 · apply Platt calibration if available
+        calib = art.get("calibration") or {}
+        p_cal = apply_platt(p, calib) if calib and not calib.get("skipped") else p
         return {
-            "p_win": round(p, 4),
+            "p_win": round(p_cal, 4),                  # calibrated (default consumer field)
+            "p_win_raw": round(p, 4),                  # uncalibrated sigmoid score
+            "p_win_calibrated": round(p_cal, 4),       # alias of p_win for explicitness
+            "calibrated": bool(calib) and not calib.get("skipped"),
             "threshold": round(threshold, 4),
-            "verdict": "REJECT" if p < threshold else "ACCEPT",
+            "verdict": "REJECT" if p_cal < threshold else "ACCEPT",
             "n_samples": int(art.get("n_samples", 0)),
             "train_auc": float(art.get("train_auc", 0.5)),
+            "brier_raw": (calib or {}).get("brier_raw"),
+            "brier_calibrated": (calib or {}).get("brier_calibrated"),
             "model_used": art.get("label", "GLOBAL"),
             "current_session": current_session_label,
         }

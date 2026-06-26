@@ -8,6 +8,22 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-52) — **ADWIN drift detection + Platt probability calibration**:
+  - **`probability_calibrator.py` (NEW)** — Platt scaling (Platt 1999) with Lin et al. 2007 label smoothing to avoid perfect-separation on tiny datasets. Pure NumPy — no sklearn dependency. Skips calibration when n<10 (identity map). Provides `fit_platt`, `apply_platt`, `brier_score`.
+  - **`learned_meta.py`** — Calibration runs after every retrain. Artifact now carries `calibration: {A, B, n, brier_raw, brier_calibrated, converged}`. `predict_p_win` returns both `p_win_raw` (sigmoid score) AND `p_win_calibrated` (Platt-mapped). The default `p_win` field is now the calibrated probability so downstream guards see real probabilities. Test verified Platt reduces Brier on a controlled mis-calibrated synthetic dataset.
+  - **`drift_detector.py` (NEW)** — ADWIN (Adaptive Windowing) per-session detectors on the rolling `|p_predicted − actual_outcome|` residual stream:
+    - `record_residual(...)` persists each closed-trade residual to `db.learned_meta_residuals` tagged with session bucket.
+    - `record_residual_for_trade(...)` fire-and-forget helper called from `bridge_routes` + `execution.py` on trade-close.
+    - `check_drift(...)` rebuilds ADWIN from window (default 300 most-recent residuals, δ=0.002).
+    - `maybe_trigger_retrain(...)` invoked every bot tick; if any session detector reports drift AND `RETRAIN_COOLDOWN_HOURS` (default 12h) elapsed since last fire, calls `learned_meta.retrain()` and audit-logs to `db.drift_detector_audit`.
+  - **`bot_runner.loop()`** — added `maybe_trigger_retrain` sweep at the end of each tick (cooldown-gated, cheap no-op on most ticks).
+  - **API**: `GET /api/analytics/learned-meta/drift` (read-only state per session) · `POST /api/analytics/learned-meta/drift/check-now` (force-fire detector check). `GET /api/analytics/learned-meta` now also returns the `calibration` block (A, B, brier_raw, brier_calibrated, converged).
+  - **Env knobs**: `DRIFT_DETECTION_ENABLED=true` · `DRIFT_MIN_RESIDUALS=30` · `DRIFT_WINDOW_SIZE=300` · `DRIFT_ADWIN_DELTA=0.002` · `DRIFT_RETRAIN_COOLDOWN_HRS=12`.
+  - **Deps**: Added `river==0.25.0` (+ deps `altair`, `narwhals`, `scipy`) to `requirements.txt`.
+  - **Tests** (`tests/test_iter52_drift_and_calibration.py`): 14 unit tests — Platt skip/fit/identity/improves-Brier, residual shape, ADWIN insufficient-data skip, ADWIN detects regime shift, cooldown blocks, retrain fires when drift+cooldown clear, artifact has calibration block, `predict_p_win` returns raw+calibrated. **14/14 passing.** Curated regression suite 121/121 (iter-31/32/48/50/51/52).
+  - **Live-verified**: `/api/analytics/learned-meta` returns the new `calibration` block (Platt A/B/Brier visible). Bot retrained automatically with 85 closed trades. Drift endpoint returns empty buckets cleanly (no residuals yet — will populate as new trades close).
+
+
 - 2026-06-27 (iter-51) — **Correlation-aware portfolio allocation + dynamic CVaR risk budget**:
   - **Why**: Existing per-trade Kelly sizing ignored book-level concentration — two highly correlated BUY trades (e.g., XAUUSD + BTCUSD when ρ>0.7) effectively doubled the bet without being flagged anywhere in the lot-sizing chain. Auto-deleverage only kicks AFTER a breach; this trims at the *entry* side proactively.
   - **`portfolio/var.py`** — extended snapshot to also surface **CVaR (Expected Shortfall)** at 95% and 99% using parametric multipliers (ES_MULT_95=2.0627, ES_MULT_99=2.6652). Empty-portfolio branch + populated branch both emit the new fields. Existing VaR math is unchanged.

@@ -775,6 +775,19 @@ async def loop():
                     )
             except Exception as e:
                 logger.exception("Self-improve sweep failed: %s", e)
+            # ADWIN drift detection on the learned-meta residual stream
+            # (iter-52). Detector is internally cooldown-gated so this is a
+            # cheap no-op on most ticks.
+            try:
+                from drift_detector import maybe_trigger_retrain
+                dr = await maybe_trigger_retrain(db)
+                if dr.get("retrained"):
+                    logger.warning(
+                        "ADWIN drift → learned_meta retrained · result=%s",
+                        dr.get("retrain_result", {}).get("trained"),
+                    )
+            except Exception as e:
+                logger.exception("Drift detection sweep failed: %s", e)
         except Exception as e:
             logger.exception("Bot runner tick failed: %s", e)
         await asyncio.sleep(interval)

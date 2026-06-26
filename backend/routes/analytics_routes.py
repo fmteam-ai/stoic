@@ -167,4 +167,32 @@ async def get_learned_meta(user=Depends(get_current_user)):
         "trained_at", "feature_names",
     ) if k in art}
     out["trained"] = True
+    # iter-52 · expose calibration stats so the UI can show Brier improvement
+    calib = art.get("calibration") or {}
+    if calib:
+        out["calibration"] = {
+            "applied": not calib.get("skipped"),
+            "A": calib.get("A"), "B": calib.get("B"),
+            "n": calib.get("n"),
+            "brier_raw": calib.get("brier_raw"),
+            "brier_calibrated": calib.get("brier_calibrated"),
+            "converged": calib.get("converged"),
+            "reason": calib.get("reason"),
+        }
     return out
+
+
+@router.get("/learned-meta/drift")
+async def get_drift_status(user=Depends(get_current_user)):
+    """ADWIN drift status across session buckets (iter-52)."""
+    from drift_detector import check_drift
+    from database import get_db
+    return await check_drift(get_db())
+
+
+@router.post("/learned-meta/drift/check-now")
+async def check_drift_now(user=Depends(get_current_user)):
+    """Force a drift check (respects cooldown). Returns whether a retrain fired."""
+    from drift_detector import maybe_trigger_retrain
+    from database import get_db
+    return await maybe_trigger_retrain(get_db())

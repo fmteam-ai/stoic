@@ -1,0 +1,112 @@
+"""Probabilistic calibration for the learned-meta classifier (iter-52).
+
+Raw logistic-regression sigmoid outputs are NOT calibrated probabilities —
+they're class-membership scores. A model predicting `p=0.7` does not
+necessarily mean wins occur 70% of the time at that score.
+
+This module implements **Platt scaling** (Platt 1999): fit a 2-parameter
+logistic on the (logit, label) pairs to map raw scores → calibrated
+probabilities.
+
+Algorithm
+=========
+1. After training the base model, compute predicted scores p_i on a
+   held-out fold (we use the same training data for now since data is
+   tiny — TODO upgrade to true held-out when sample count >= 100).
+2. Compute logits z_i = logit(p_i).
+3. Fit `p_cal = 1 / (1 + exp(A*z + B))` by minimising NLL via GD.
+4. Persist (A, B) alongside the artifact.
+
+At inference, calibrated p_win = sigmoid(-(A*z + B)).
+
+Notes
+-----
+* The "Platt prior" smoothing (Lin et al. 2007) replaces 0/1 labels with
+  (1/(N⁻+2), (N⁺+1)/(N⁺+2)) to avoid the perfect-separation problem
+  on tiny datasets. Implemented below.
+* When N < 10 we skip calibration entirely (A=1, B=0 → identity).
+* Pure NumPy — no sklearn dependency to keep the stack lean.
+"""
+from __future__ import annotations
+import logging
+import numpy as np
+
+logger = logging.getLogger("probability_calibrator")
+
+_EPS = 1e-12
+
+
+def _logit(p: float | np.ndarray) -> float | np.ndarray:
+    p = np.clip(p, _EPS, 1.0 - _EPS)
+    return np.log(p / (1.0 - p))
+
+
+def _sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-np.clip(z, -30, 30)))
+
+
+def fit_platt(scores: np.ndarray, labels: np.ndarray,
+              max_iter: int = 200, lr: float = 0.05) -> dict:
+    """Fit Platt scaling. Returns {A, B, n, converged, label_smooth}.
+
+    `scores` are model probability outputs in (0,1). `labels` ∈ {0,1}.
+    """
+    n = len(labels)
+    if n < 10:
+        return {"A": 1.0, "B": 0.0, "n": int(n),
+                "converged": False, "skipped": True,
+                "reason": f"need ≥10 samples for calibration (have {n})"}
+
+    # Platt's smoothed targets to prevent overfitting on small data.
+    n_pos = float(np.sum(labels == 1))
+    n_neg = float(np.sum(labels == 0))
+    t_pos = (n_pos + 1.0) / (n_pos + 2.0) if n_pos > 0 else 0.5
+    t_neg = 1.0 / (n_neg + 2.0) if n_neg > 0 else 0.5
+    targets = np.where(labels == 1, t_pos, t_neg)
+
+    z = _logit(scores)
+    A = 1.0
+    B = 0.0
+    prev_loss = float("inf")
+    for it in range(max_iter):
+        # p = sigmoid(-(A*z + B)) — Platt's parameterisation matches the
+        # classic +A,+B sign convention from the original paper.
+        lin = A * z + B
+        p = _sigmoid(-lin)
+        # NLL = -[t*log(p) + (1-t)*log(1-p)]
+        loss = -np.mean(targets * np.log(p + _EPS) +
+                        (1 - targets) * np.log(1 - p + _EPS))
+        # ∂loss/∂A and ∂B  (derived from chain rule of sigmoid(-(A z + B)))
+        grad_A = np.mean((p - targets) * (-z))
+        grad_B = np.mean(p - targets) * (-1.0)
+        A -= lr * grad_A
+        B -= lr * grad_B
+        if abs(prev_loss - loss) < 1e-7:
+            return {"A": float(A), "B": float(B), "n": int(n),
+                    "converged": True, "skipped": False, "iters": it + 1,
+                    "final_nll": float(loss)}
+        prev_loss = loss
+    return {"A": float(A), "B": float(B), "n": int(n),
+            "converged": False, "skipped": False, "iters": max_iter,
+            "final_nll": float(loss)}
+
+
+def apply_platt(raw_p: float, calib: dict | None) -> float:
+    """Map a raw probability through the persisted (A, B). No-op if missing."""
+    if not calib or calib.get("skipped"):
+        return float(raw_p)
+    A = float(calib.get("A", 1.0))
+    B = float(calib.get("B", 0.0))
+    z = _logit(np.asarray(raw_p, dtype=float))
+    p_cal = _sigmoid(-(A * z + B))
+    return float(p_cal)
+
+
+def brier_score(scores: np.ndarray, labels: np.ndarray) -> float:
+    """Mean-squared error between predicted probability and outcome.
+
+    Lower = better-calibrated. Used to confirm post-calibration improves.
+    """
+    if len(labels) == 0:
+        return 0.0
+    return float(np.mean((np.asarray(scores) - np.asarray(labels)) ** 2))
