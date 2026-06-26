@@ -170,29 +170,45 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             return
 
 
-async def _check_daily_drawdown(user_id: str, cfg: dict) -> None:
+async def _check_daily_drawdown(cfg: dict) -> None:
     """If today's realised P&L falls below -daily_drawdown_pct of starting equity,
-    auto-stop the bot for this user and trip the circuit breaker."""
+    auto-stop the bot for this cfg and trip the circuit breaker.
+
+    Multi-account isolation: when `cfg.account_id` is set the check is scoped
+    to that single account — losses on a different broker won't trip this
+    cfg. Only the matching cfg is disabled (not all of the user's cfgs).
+    """
     if not cfg.get("daily_drawdown_enabled", True):
         return
     if not cfg.get("active"):
         return
     db = get_db()
+    user_id = cfg["user_id"]
+    cfg_account_id = cfg.get("account_id")
 
     today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_iso = today_utc.isoformat()
 
-    # Sum today's realised P&L across all of this user's accounts
-    cursor = db.trades.find({
+    # Sum today's realised P&L — account-scoped if cfg is per-account.
+    trade_q: dict = {
         "user_id": user_id,
         "status": "closed",
         "closed_at": {"$gte": today_iso},
-    })
-    closed = await cursor.to_list(length=500)
+    }
+    if cfg_account_id:
+        trade_q["account_id"] = cfg_account_id
+    closed = await db.trades.find(trade_q).to_list(length=500)
     today_pnl = sum(float(t.get("pnl") or 0) for t in closed)
 
-    # Sum starting equity from all user's accounts
-    accts = await db.accounts.find({"user_id": user_id}).to_list(length=20)
+    # Starting equity — account-scoped if cfg is per-account, else user-wide.
+    acct_q: dict = {"user_id": user_id}
+    if cfg_account_id:
+        from bson import ObjectId
+        try:
+            acct_q["_id"] = ObjectId(cfg_account_id)
+        except Exception:
+            return
+    accts = await db.accounts.find(acct_q).to_list(length=20)
     equity = sum(float(a.get("balance") or a.get("initial_balance") or 0) for a in accts) or 0
     if equity <= 0:
         return
@@ -200,70 +216,72 @@ async def _check_daily_drawdown(user_id: str, cfg: dict) -> None:
     limit_pct = float(cfg.get("daily_drawdown_pct", 3.0))
     drawdown_pct = (today_pnl / equity) * 100.0
     if drawdown_pct <= -limit_pct:
-        # Trip — disable every active bot_config for this user (default + all
-        # per-account overrides). Drawdown is user-level so all bots stop.
-        await db.bot_configs.update_many(
-            {"user_id": user_id, "active": True},
+        # Trip — disable only THIS cfg (not every active cfg user-wide).
+        reason = f"Daily drawdown {drawdown_pct:.2f}% breached -{limit_pct:.2f}% limit"
+        await db.bot_configs.update_one(
+            {"_id": cfg["_id"]},
             {"$set": {
                 "active": False,
                 "circuit_breaker_tripped_at": datetime.now(timezone.utc).isoformat(),
-                "circuit_breaker_reason": (
-                    f"Daily drawdown {drawdown_pct:.2f}% breached -{limit_pct:.2f}% limit"
-                ),
+                "circuit_breaker_reason": reason,
             }},
         )
         await ws_manager.broadcast(user_id, "circuit_breaker_tripped", {
-            "reason": f"Daily drawdown {drawdown_pct:.2f}% breached -{limit_pct:.2f}% limit",
+            "reason": reason,
             "today_pnl": round(today_pnl, 2),
             "equity": round(equity, 2),
+            "account_id": cfg_account_id,
         })
         try:
             await notify_circuit_breaker(
-                user_id,
-                f"Daily drawdown {drawdown_pct:.2f}% breached -{limit_pct:.2f}% limit",
-                round(today_pnl, 2),
-                round(equity, 2),
+                user_id, reason, round(today_pnl, 2), round(equity, 2),
             )
         except Exception:
             pass
-        logger.warning("circuit breaker tripped for user=%s drawdown=%.2f%%", user_id, drawdown_pct)
+        logger.warning(
+            "circuit breaker tripped user=%s acct=%s drawdown=%.2f%%",
+            user_id, cfg_account_id or "default", drawdown_pct,
+        )
 
 
 async def _tick() -> None:
     """One pass of the trade manager loop."""
     db = get_db()
-    # Collect all unique active user_ids with at least one open trade
+    # Collect all open trades
     open_trades = await db.trades.find({
         "status": "open",
         "mt5_ticket": {"$ne": None},
     }).to_list(length=200)
 
-    # Daily drawdown check — group by user
-    user_ids = set(t["user_id"] for t in open_trades)
-    # Also include users with active bot but no open trades (to catch DD from closed trades)
+    # Daily drawdown check — iterate over EACH active bot_config so that
+    # per-account configs get their checks scoped to that single account.
     active_cfgs = await db.bot_configs.find({"active": True}).to_list(length=200)
-    user_ids.update(c["user_id"] for c in active_cfgs)
-
-    cfg_by_user = {c["user_id"]: c for c in active_cfgs}
-    # Fetch missing configs
-    for uid in user_ids:
-        if uid not in cfg_by_user:
-            c = await db.bot_configs.find_one({"user_id": uid})
-            if c:
-                cfg_by_user[uid] = c
-
-    for uid in user_ids:
-        cfg = cfg_by_user.get(uid)
-        if not cfg:
-            continue
+    for cfg in active_cfgs:
         try:
-            await _check_daily_drawdown(uid, cfg)
+            await _check_daily_drawdown(cfg)
         except Exception as e:
-            logger.exception("daily drawdown check failed for user=%s: %s", uid, e)
+            logger.exception(
+                "daily drawdown check failed cfg=%s acct=%s: %s",
+                cfg.get("_id"), cfg.get("account_id") or "default", e,
+            )
 
-    # Per-trade management
+    # Per-trade management — pick the cfg matching the trade's account_id
+    # (or the default cfg) so trade management honours per-account settings.
+    cfgs_by_user_acct: dict = {}
+    for c in active_cfgs:
+        cfgs_by_user_acct[(c["user_id"], c.get("account_id"))] = c
+    # Also fetch inactive default cfgs for users who have one (still want
+    # trade-management even if the bot is paused after a manual stop).
+    extra_users = {t["user_id"] for t in open_trades} - {c["user_id"] for c in active_cfgs}
+    for uid in extra_users:
+        c = await db.bot_configs.find_one({"user_id": uid})
+        if c:
+            cfgs_by_user_acct[(uid, c.get("account_id"))] = c
+
     for t in open_trades:
-        cfg = cfg_by_user.get(t["user_id"])
+        acct_id = t.get("account_id")
+        cfg = (cfgs_by_user_acct.get((t["user_id"], acct_id))
+               or cfgs_by_user_acct.get((t["user_id"], None)))
         if not cfg:
             continue
         try:

@@ -8,6 +8,20 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-55) — **Multi-account circuit-breaker isolation**:
+  - **Bug** (user-reported): User started bot for new VT Markets account → received Telegram "🚨 CIRCUIT BREAKER TRIPPED · Daily drawdown -11.41% breached -8.00% limit · Today's P&L: -3033.47 · Equity: 26596.41". The equity ($26,596.41) was the SUM of both accounts ($16,596.41 Roboforex + $10,000 VT Markets), and P&L summed losses from BOTH accounts. So Roboforex losses (-$1,384.42) + VT Markets losses (-$1,649.05) were aggregated and divided by combined equity, falsely tripping the VT Markets cfg.
+  - **RCA**: Two circuit-breaker code paths both ignored `cfg.account_id` when computing P&L:
+    1. `circuit_breakers.check_and_trip` — `realised_pnl_since` summed user-wide trades.
+    2. `trade_manager._check_daily_drawdown` — summed both equity AND P&L user-wide, AND `update_many` disabled every active cfg on a single trip (so a Roboforex-driven drawdown would kill VT Markets bot too).
+  - **Fix**: Both paths now honour `cfg.account_id`:
+    - `realised_pnl_since(db, user_id, since, account_id=None)` — new optional param adds `account_id` to the Mongo query when provided.
+    - `check_and_trip` passes `cfg.account_id` through. Disable filter already account-scoped (correct).
+    - `trade_manager._check_daily_drawdown(cfg)` — refactored signature, scopes BOTH equity query AND trades query to the cfg's account_id when set. Disable now `update_one({"_id": cfg["_id"]}, …)` so only THIS cfg is killed on its own drawdown breach.
+    - `_tick` iterates over each active cfg (not each user), so per-account checks run independently. Trade management picks the cfg matching the trade's account_id with default-cfg fallback.
+  - **Tests** (`tests/test_iter55_circuit_breaker_isolation.py`): 6 unit tests covering both code paths — query filter assertions, no-trip when cross-account losses bleed in, only-own-cfg disabled on trip. **6/6 passing.** Curated regression 107/107 green.
+  - **Data fix**: cleared the false-positive `tripped_at`/`tripped_reason`/`circuit_breaker_*` flags on both per-account bot_configs so the user can restart cleanly. Default cfg PANIC LOCK left intact (that one was set by the user manually earlier).
+
+
 - 2026-06-27 (iter-54) — **Multi-account balance leak via heartbeat WS broadcast**:
   - **Bug** (user-reported): User has two MT5 accounts connected (`micro` on Roboforex with $16,596.41 · `vtmarkets` on VT Markets demo, expected $10,000). Both rows displayed the **same** Roboforex balance in the UI.
   - **RCA**: `bridge_routes.heartbeat` correctly nulls `balance`/`equity` on the DB write when `payload.account_login != acc.account_number` (broker mismatch detection), but the subsequent **WebSocket broadcast** sent the raw `payload.balance`/`payload.equity` regardless. The frontend's `account_heartbeat` handler in `Accounts.jsx` then overwrote the correct DB-side `null` with the wrong-account's value as soon as the next heartbeat from the other terminal arrived. The DB was always correct (`/api/accounts` returned `balance=null` for VT Markets) — only the live UI was wrong.
