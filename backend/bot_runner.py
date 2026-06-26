@@ -43,8 +43,27 @@ def _loop_interval() -> int:
     return int(os.environ.get("BOT_LOOP_INTERVAL_SEC", "60"))
 
 
-def _cooldown_minutes() -> int:
-    return int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "15"))
+def _cooldown_minutes(cfg: dict | None = None) -> int:
+    """Minutes the bot waits between successive signals on the same symbol.
+
+    Resolution order (highest priority first):
+      1. `cfg.signal_cooldown_minutes` (per-bot override from UI / API).
+      2. `BOT_SIGNAL_COOLDOWN_MIN` env var.
+      3. Default 5.
+    Clamped to the loop interval (60s) — values below 1 minute are
+    pointless because the loop only ticks once per 60s.
+    """
+    val = None
+    if cfg is not None:
+        v = cfg.get("signal_cooldown_minutes")
+        if v is not None:
+            try:
+                val = int(v)
+            except (TypeError, ValueError):
+                val = None
+    if val is None:
+        val = int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
+    return max(1, val)
 
 
 def _sl_cooldown_minutes_default() -> int:
@@ -91,9 +110,9 @@ def _on_cooldown(user_id: str, symbol: str) -> bool:
     return bool(next_at) and datetime.now(timezone.utc) < next_at
 
 
-def _mark_cooldown(user_id: str, symbol: str):
+def _mark_cooldown(user_id: str, symbol: str, cfg: dict | None = None):
     _next_signal_at[(user_id, symbol)] = (
-        datetime.now(timezone.utc) + timedelta(minutes=_cooldown_minutes())
+        datetime.now(timezone.utc) + timedelta(minutes=_cooldown_minutes(cfg))
     )
 
 
@@ -323,7 +342,7 @@ async def _process_user_account_locked(db, cfg: dict):
         if _on_cooldown(cooldown_scope, sym):
             await _record_pulse(db, cfg, symbol=sym,
                 action="SKIP", level="info",
-                reason=f"Signal cooldown active for {sym} ({_cooldown_minutes()}min between signals).",
+                reason=f"Signal cooldown active for {sym} ({_cooldown_minutes(cfg)}min between signals).",
                 next_eligible_at=_next_signal_at.get((cooldown_scope, sym)),
             )
             continue
@@ -445,7 +464,7 @@ async def _process_user_account_locked(db, cfg: dict):
         broadcast_payload = {**signal, "id": signal_id}
         broadcast_payload.pop("_id", None)
         await ws_manager.broadcast(user_id, "signal_created", broadcast_payload)
-        _mark_cooldown(cooldown_scope, sym)
+        _mark_cooldown(cooldown_scope, sym, cfg)
 
         try:
             if signal.get("action") in ("BUY", "SELL") and (signal.get("confidence") or 0) >= 75:
