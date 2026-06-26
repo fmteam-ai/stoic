@@ -56,7 +56,8 @@ async def sweep(db) -> dict:
         return {"checked": 0, "triggered": 0, "closed": 0, "skipped": 0,
                 "disabled": True}
 
-    summary = {"checked": 0, "triggered": 0, "closed": 0, "skipped": 0}
+    summary = {"checked": 0, "triggered": 0, "closed": 0,
+               "cancelled": 0, "skipped": 0}
     # Only run on live/paper accounts that have at least one open position
     open_trade_accounts = await db.trades.distinct(
         "account_id", {"status": {"$in": ["open", "pending"]}},
@@ -98,6 +99,7 @@ async def sweep(db) -> dict:
             db, user_id=acc["user_id"], actions=snap["actions"],
         )
         summary["closed"] += result["closed"]
+        summary["cancelled"] += result.get("cancelled", 0)
         summary["skipped"] += result["skipped"]
 
         # Persist cooldown stamp

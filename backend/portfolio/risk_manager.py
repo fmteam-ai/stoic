@@ -242,11 +242,22 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict]) -> di
 
 
 async def execute_deleveraging_actions(db, *, user_id: str, actions: list[dict]) -> dict:
-    """Mark selected trades for close. The reconciler / EA picks them up."""
+    """Mark selected trades for close. The reconciler / EA picks them up.
+
+    Behaviour differs by trade status:
+      • status='open'    → set `close_requested=True` (EA closes via OrderClose).
+      • status='pending' → set `status='cancelled'` directly. The EA polls
+        only `pending` trades for OPEN, so cancelling removes the order
+        before it's ever sent to the broker. Setting `close_requested` on a
+        pending trade caused MT5 retcode 10013 INVALID_REQUEST because the
+        EA received an OPEN+close instruction simultaneously.
+    """
     from datetime import datetime, timezone
     from bson import ObjectId
     closed = 0
+    cancelled = 0
     skipped = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
     for a in actions:
         if a.get("kind") != "close_trade":
             continue
@@ -256,17 +267,31 @@ async def execute_deleveraging_actions(db, *, user_id: str, actions: list[dict])
         except Exception:
             skipped += 1
             continue
-        res = await db.trades.update_one(
-            {"_id": oid, "user_id": user_id,
-             "status": {"$in": ["open", "pending"]}},
+        # Close open trades (real broker position exists).
+        res_open = await db.trades.update_one(
+            {"_id": oid, "user_id": user_id, "status": "open"},
             {"$set": {
                 "close_requested": True,
                 "close_reason": a.get("reason") or "auto_deleverage",
-                "close_requested_at": datetime.now(timezone.utc).isoformat(),
+                "close_requested_at": now_iso,
             }},
         )
-        if res.modified_count:
+        if res_open.modified_count:
             closed += 1
+            continue
+        # Cancel pending trades (not yet filled — no broker position).
+        res_pending = await db.trades.update_one(
+            {"_id": oid, "user_id": user_id, "status": "pending"},
+            {"$set": {
+                "status": "cancelled",
+                "close_reason": a.get("reason") or "auto_deleverage_cancel_pending",
+                "closed_at": now_iso,
+                "error": "Pending order cancelled by auto-deleverage before fill.",
+            }},
+        )
+        if res_pending.modified_count:
+            cancelled += 1
         else:
             skipped += 1
-    return {"closed": closed, "skipped": skipped, "actions": len(actions)}
+    return {"closed": closed, "cancelled": cancelled,
+            "skipped": skipped, "actions": len(actions)}
