@@ -8,6 +8,41 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-26 (iter-50) — **Auto-Heal scheduler + Simple Mode + grouped sidebar (UX simplification)**:
+
+  ### Auto-Heal (1a)
+  - New module `auto_heal.py` with 4 safe + reversible checks: disable `aggressive_mode` after daily PnL ≤ −2% of equity · raise `min_confidence_override` +5 on patterns recurring ≥3× / 30d · reconcile DB↔broker drift · clear pulses older than 1h. Each action audit-logged to `auto_heal_actions`.
+  - Background scheduler in `server.py` startup runs `sweep_all_users()` every 5 min (`AUTO_HEAL_INTERVAL_SEC=300`). Iterates users with `auto_heal_settings.enabled=true` (opt-in, default OFF).
+  - **NEVER touches**: bot ON/OFF, open trades, position sizing, risk profile, money flow.
+  - Routes (`routes/auto_heal_routes.py`): `GET/POST /api/auto-heal/settings` (opt-in toggle) · `POST /api/auto-heal/run-now` (manual trigger, bypasses opt-in for this run only) · `GET /api/auto-heal/log` (audit trail).
+  - **Auto-Heal panel** on `/bot-health` page (`BotHealth.jsx`) — opt-in toggle + RUN NOW button + last 8 actions with timestamps + plain-English description of what gets touched.
+  - **Verified live**: first manual run cleared 1 stale pulse on admin account; backend scheduler task wired into startup/shutdown lifecycle correctly.
+
+  ### Simple Mode (2d-a)
+  - Per-user preference `users.preferences.simple_mode` (default false). Sidebar toggle at top, syncs to server + localStorage cache.
+  - When ON, hides 20 advanced pages and shows only 5 essentials: Dashboard · Trades · Bot Health · Bot Config · Settings. One-click switch to Pro Mode anytime.
+  - New route `GET/POST /api/settings/preferences` for the toggle (whitelist-only field validation).
+
+  ### Grouped sidebar (2d-b)
+  - Sidebar refactored into 6 collapsible sections:
+    - **TRADING** — Dashboard · Trades · AI Signals · Risk Commander
+    - **INSIGHTS** — Bot Health · Analytics · Loss Lab · Shadow Report
+    - **AUTOMATION** — Bot Config · Strategies · Agents · Research Agent
+    - **INFRASTRUCTURE** — MT5 Accounts · Crypto · Portfolio Risk · Safety Blocks · Execution Intel · Symbols
+    - **ACCOUNT** — Notifications · Subscription · Billing · Affiliate · Settings
+    - **LEARN** — Guide · FAQ
+  - Default-open: TRADING + INSIGHTS (daily-use). User-preferred open state persisted in localStorage (`stoic_sidebar_open`).
+  - Each section header is clickable to collapse/expand; the 16-item flat list is now 4 visible categories on first load.
+
+  ### Onboarding tour (2d-c) — deferred
+  - First-login tour is non-trivial (needs target-element refs across 4 pages + tooltip lib). Tracking as P2 follow-up; the Simple Mode default + the existing Onboarding Banner provide most of the value for new users right now.
+
+  ### Verified
+  - Both Simple ↔ Pro mode toggles confirmed live (Crypto/Loss Lab nav items disappear/reappear correctly).
+  - Auto-heal opt-in toggle round-trips through `/api/auto-heal/settings`.
+  - Bot Health score remained at 90/100 EXCELLENT after the changes; diagnostic improved from 3/6 OK to 4/6 OK (reconcile cleared Trade Sync).
+
+
 - 2026-06-26 (iter-49) — **Bot Health hardening: 75 → 90 (excellent)**:
   - Applied user-approved hardening on the admin account after the iter-48 forensics:
     - Set `aggressive_mode=false` on both bot_configs (Default + RoboForex). +15 health.

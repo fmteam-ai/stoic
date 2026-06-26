@@ -50,6 +50,8 @@ from routes.crypto_routes import router as crypto_router
 from routes.data_freshness_routes import router as data_freshness_router
 from routes.shadow_routes import router as shadow_router
 from routes.postmortem_routes import router as postmortem_router
+from routes.auto_heal_routes import router as auto_heal_router
+from routes.preferences_routes import router as preferences_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -117,6 +119,8 @@ api_router.include_router(crypto_router)
 api_router.include_router(data_freshness_router)
 api_router.include_router(shadow_router)
 api_router.include_router(postmortem_router)
+api_router.include_router(auto_heal_router)
+api_router.include_router(preferences_router)
 
 
 # ---------- WebSocket ----------
@@ -204,11 +208,27 @@ else:
 _bot_runner_task = None
 _warmer_task = None
 _trade_manager_task = None
+_auto_heal_task = None
+
+
+async def _auto_heal_loop():
+    """Background sweep — every 5 min, runs all opted-in users through the
+    safe-fix cascade (auto_heal.sweep_all_users)."""
+    import auto_heal
+    INTERVAL = int(os.environ.get("AUTO_HEAL_INTERVAL_SEC", "300"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            await auto_heal.sweep_all_users()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("auto-heal sweep failed: %s", e)
 
 
 @app.on_event("startup")
 async def on_startup():
-    global _bot_runner_task, _warmer_task, _trade_manager_task
+    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task
     try:
         await ensure_indexes()
         await seed_admin()
@@ -216,14 +236,15 @@ async def on_startup():
         _bot_runner_task = asyncio.create_task(bot_runner.loop())
         _warmer_task = asyncio.create_task(warmer.loop())
         _trade_manager_task = asyncio.create_task(trade_manager.run_loop())
-        logger.info("Bot runner + warmer + trade manager scheduled.")
+        _auto_heal_task = asyncio.create_task(_auto_heal_loop())
+        logger.info("Bot runner + warmer + trade manager + auto-heal scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    for task in (_bot_runner_task, _warmer_task, _trade_manager_task):
+    for task in (_bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task):
         if task and not task.done():
             task.cancel()
             try:

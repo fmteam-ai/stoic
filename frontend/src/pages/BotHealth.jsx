@@ -5,7 +5,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { toast } from "sonner";
 import {
     RefreshCw, Activity, AlertTriangle, CheckCircle2, ShieldCheck, TrendingDown,
-    Brain, Clock, FlaskConical, BarChart3, Stethoscope, Zap, Wand2,
+    Brain, Clock, FlaskConical, BarChart3, Stethoscope, Zap, Wand2, HeartPulse,
 } from "lucide-react";
 
 const SEV_STYLE = {
@@ -346,6 +346,94 @@ function ImprovementsPanel({ adjustments, patterns, blocks }) {
     );
 }
 
+function AutoHealPanel({ data, onChange }) {
+    const [busy, setBusy] = useState(false);
+    const enabled = !!data?.settings?.enabled;
+    const log = data?.log || [];
+
+    const toggle = async () => {
+        setBusy(true);
+        try {
+            await api.post("/auto-heal/settings", { enabled: !enabled });
+            toast.success(`Auto-Heal ${!enabled ? "ENABLED" : "disabled"} — sweeps every 5 min`);
+            if (onChange) await onChange();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally { setBusy(false); }
+    };
+    const runNow = async () => {
+        setBusy(true);
+        try {
+            const r = await api.post("/auto-heal/run-now");
+            const n = r.data?.actions_taken || 0;
+            toast.success(n ? `Auto-Heal ran — ${n} fix(es) applied` : "Auto-Heal ran — everything looks healthy");
+            if (onChange) await onChange();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally { setBusy(false); }
+    };
+
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="auto-heal-panel">
+            <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+                <HeartPulse className={`w-3.5 h-3.5 ${enabled ? "text-[#00FF41]" : "text-[#52525B]"}`} />
+                <span className="font-display font-bold text-sm">Auto-Heal</span>
+                <span className="ml-auto flex items-center gap-2">
+                    <button onClick={runNow} disabled={busy}
+                        data-testid="auto-heal-run-now"
+                        className="px-2.5 py-1 border border-[#1F1F1F] hover:border-[#52525B] text-[10px] font-mono tracking-widest text-[#A1A1AA] disabled:opacity-50">
+                        RUN NOW
+                    </button>
+                    <button onClick={toggle} disabled={busy}
+                        data-testid="auto-heal-toggle"
+                        className={`px-2.5 py-1 border text-[10px] font-mono tracking-widest transition-colors ${
+                            enabled
+                                ? "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]"
+                                : "border-[#52525B] text-[#A1A1AA] hover:border-white hover:text-white"
+                        }`}>
+                        {enabled ? "● ENABLED" : "○ DISABLED"}
+                    </button>
+                </span>
+            </div>
+
+            <div className="px-4 py-3 text-xs text-[#A1A1AA] leading-relaxed border-b border-[#1F1F1F]">
+                When enabled, every 5 minutes the bot scans for fixable issues and applies <em>safe, reversible</em> patches —
+                disables <code className="px-1 bg-[#1F1F1F]">aggressive_mode</code> after a loss spike,
+                raises <code className="px-1 bg-[#1F1F1F]">min_confidence</code> on recurring loss patterns,
+                runs <code className="px-1 bg-[#1F1F1F]">reconcile</code> on DB/broker drift,
+                clears stale pulses. <strong>Never touches</strong> open trades or the bot ON/OFF state.
+            </div>
+
+            {log.length > 0 ? (
+                <div className="divide-y divide-[#1F1F1F]">
+                    <div className="px-4 py-2 font-mono text-[10px] text-[#52525B] tracking-widest">
+                        RECENT ACTIONS · LAST {log.length}
+                    </div>
+                    {log.slice(0, 8).map(l => (
+                        <div key={l.id} className="px-4 py-2 flex items-start gap-3 text-xs">
+                            <Wand2 className="w-3 h-3 text-[#FFD700] shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                                <div className="font-mono text-white">{l.kind}</div>
+                                <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5 truncate">
+                                    {JSON.stringify(l.detail).slice(0, 150)}
+                                </div>
+                            </div>
+                            <span className="font-mono text-[9px] text-[#52525B] tracking-widest shrink-0">
+                                {new Date(l.created_at).toLocaleTimeString()}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="px-4 py-3 text-xs text-[#52525B] font-mono">
+                    No actions yet. {enabled ? "Sweeps run every 5 minutes." : "Enable to start protective sweeps."}
+                </div>
+            )}
+        </div>
+    );
+}
+
+
 export default function BotHealth() {
     const [data, setData] = useState({});
     const [loading, setLoading] = useState(true);
@@ -355,7 +443,7 @@ export default function BotHealth() {
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
-            const [hs, diag, pulse, sess, pats, adj, blocks] = await Promise.all([
+            const [hs, diag, pulse, sess, pats, adj, blocks, ahSet, ahLog] = await Promise.all([
                 api.get("/bot/health-score"),
                 api.get("/diagnostic/run"),
                 api.get("/bot/pulse"),
@@ -363,11 +451,14 @@ export default function BotHealth() {
                 api.get("/postmortem/patterns"),
                 api.get("/postmortem/adjustments"),
                 api.get("/safety-blocks/stats").catch(() => ({ data: null })),
+                api.get("/auto-heal/settings").catch(() => ({ data: { enabled: false } })),
+                api.get("/auto-heal/log").catch(() => ({ data: { items: [] } })),
             ]);
             setData({
                 healthScore: hs.data, diagnostic: diag.data, pulse: pulse.data,
                 sessions: sess.data, patterns: pats.data, adjustments: adj.data,
                 blocks: blocks.data,
+                autoHeal: { settings: ahSet.data, log: ahLog.data?.items || [] },
             });
             setLast(new Date());
         } catch (e) {
@@ -410,6 +501,8 @@ export default function BotHealth() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
 
                 <HeadlineScore data={data.healthScore} />
+
+                <AutoHealPanel data={data.autoHeal} onChange={load} />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <DiagnosticPanel diag={data.diagnostic} />
