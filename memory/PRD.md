@@ -8,6 +8,32 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-26 (iter-45) — **Loss Lab · auto-investigate losing trades + opt-in guardrail tightening**:
+  - **User ask** (1d + 2b + 3c + 4c): trigger on SL hits OR consecutive losses · quantitative diff + Claude LLM narrative · auto-tighten min_confidence after recurring pattern · dedicated page + per-trade button.
+  - **New module `loss_postmortem.py`** with the full pipeline:
+    1. `maybe_record_postmortem(db, trade_id)` — idempotent. Eligible when `close_reason=="stop_loss"` AND `pnl<0` (trigger `sl_hit`) OR `pnl<0` AND the prior closed trade on (user, symbol) also lost (trigger `consecutive_loss`).
+    2. Quantitative diff — regime, session, macro freeze, macro gate, sentiment flip, DXY/VIX/yields, MTF aligned, A+ passed, confidence (entry vs now).
+    3. Claude (`claude-sonnet-4-5-20250929`, Emergent LLM key) returns structured JSON: summary, why_it_looked_good, what_actually_happened, what_changed, lessons[], suggested_guardrail. Pattern key is always derived locally (`symbol|regime|session|action`) for reliable clustering.
+    4. **Auto-tightener** `_maybe_autotighten()` — when pattern_key has ≥3 post-mortems in last 30d AND `users.postmortem_settings.auto_tighten_enabled=true` AND no adjustment in last 7d (cooldown), bumps `min_confidence_override` by +5 (clamped 50–95), records to `guardrail_adjustments`, fires Telegram alert.
+  - **Triggers wired**: bridge close path (`routes/bridge_routes.py:status=='closed'`) and paper-trade settle path (`execution.py.settle_paper_trades_against_price`) both spawn `asyncio.create_task(maybe_record_postmortem(...))` — fire-and-forget so trade close latency stays sub-100ms.
+  - **API** (`routes/postmortem_routes.py`):
+    - `GET /api/postmortem` — paginated list (filter by `pattern_key`)
+    - `GET /api/postmortem/patterns?days=30` — aggregate by pattern_key for the Loss Lab pattern sidebar
+    - `GET /api/postmortem/{trade_id}` — single investigation
+    - `POST /api/postmortem/{trade_id}/regenerate` — manual re-run (used by Trades→LossLab deep-link)
+    - `GET/POST /api/postmortem/settings` — auto-tighten opt-in toggle (uses `_user_doc` for the ObjectId/string `_id` fallback pattern)
+    - `GET /api/postmortem/adjustments` — audit history of all auto-tightens
+  - **Frontend** new page `pages/LossLab.jsx` + sidebar entry `Loss Lab` (FlaskConical icon):
+    - Auto-tighten opt-in card with toggle
+    - Recurring patterns sidebar — ranked by count, click to filter
+    - Per-postmortem card: TL;DR, "why it looked good", "what happened", "what changed", lessons (bulleted), **SUGGESTED GUARDRAIL** (amber highlight), expandable quantitative diff
+    - Auto-adjustments audit panel (recent `from → to` changes per pattern)
+    - URL deep-link `/loss-lab?trade=<id>` auto-regenerates if missing + scrolls to that card; shows "INVESTIGATING…" banner during the ~10-15s Claude call
+  - **Trades page** integration: POST-MORTEM button renders next to EXPLAIN only on `status==='closed' && pnl<0` rows. Links straight to `/loss-lab?trade=<id>`.
+  - **Tests** (`tests/test_iter45_postmortem.py`): 12 pytest cases — winner skipped · SL-hit eligible · consecutive-loss eligible · winner-prior not eligible · pattern_key stable · idempotent insert · auto-tighten respects opt-in / threshold / cooldown / clamp-at-95. All passing.
+  - **Verified live**: triggered post-mortem on the simulation's manual-test loss → Claude correctly identified *"TRANSITIONAL regime with CAUTIOUS_WAIT mode explicitly blocked entries yet trade was taken anyway"* with suggested guardrail *"raise min_confidence to 70 for XAUUSD SELL in tokyo session during TRANSITIONAL regime"*. Pattern key `XAUUSD|TRANSITIONAL|TOKYO|SELL` correctly recorded for future clustering.
+
+
 - 2026-06-26 (iter-44) — **Full e2e simulation + 3 bugs fixed**:
   - Walked every major endpoint of the production app (auth → bot pulse → signals → trades → safety → research → analytics → crypto → telegram → affiliate → diagnostic). Found 3 real bugs + 1 improvement, all fixed and verified live.
   - **🔴 Bug A (P1) — `macro_gate.py:129`**: `db or get_db()` raised `NotImplementedError: Database objects do not implement truth value testing` because Motor's `Database` rejects truthiness. Every manual `/trades/execute/{signal_id}` call crashed Safety Guardian with HTTP 500. **Fix**: `db_ref = db if db is not None else get_db()`. Audited the rest of the codebase — no other occurrences.

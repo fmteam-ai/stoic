@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles, FlaskConical } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import BotPulsePanel from "@/components/BotPulsePanel";
+import { Link } from "react-router-dom";
 
 const STATUS_STYLE = {
     pending: "border-[#FFB000]/40 text-[#FFB000]",
@@ -651,6 +652,14 @@ export default function Trades() {
                                                     className="text-[#A1A1AA] hover:text-[#00FF41] text-xs font-mono tracking-widest flex items-center gap-1">
                                                     <Sparkles className="w-3 h-3" /> EXPLAIN
                                                 </button>
+                                                {t.status === "closed" && parseFloat(t.pnl) < 0 && (
+                                                    <Link to={`/loss-lab?trade=${t.id}`}
+                                                        data-testid={`postmortem-trade-${t.id}`}
+                                                        title="Investigate why this losing trade failed"
+                                                        className="text-[#A1A1AA] hover:text-[#FF3B30] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                        <FlaskConical className="w-3 h-3" /> POST-MORTEM
+                                                    </Link>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>

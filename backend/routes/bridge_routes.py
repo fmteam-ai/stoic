@@ -553,6 +553,15 @@ async def report_trade(payload: BridgeTradeReport):
     except Exception:
         pass
 
+    # Loss post-mortem — fire-and-forget. Skips itself if pnl≥0 or not on SL.
+    if payload.status == "closed":
+        try:
+            from loss_postmortem import maybe_record_postmortem
+            import asyncio
+            asyncio.create_task(maybe_record_postmortem(db, payload.trade_id))
+        except Exception:
+            pass
+
     return {"ok": True}
 
 
