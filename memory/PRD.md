@@ -8,6 +8,12 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-53) — **Full E2E sweep + Portfolio Risk UI surfaces CVaR fields**:
+  - Testing-agent full sweep: backend 31/31 pass · frontend 95% (only gap was missing CVaR card on `/portfolio`).
+  - **`/app/frontend/src/pages/Portfolio.jsx`**: added a second KPI row exposing `CVAR 95%`, `CVAR 99%`, `PORT. σ`, and `POSITIONS` so iter-51 risk improvements are visible to users. Color-coded against the 2%/day CVaR target (green ≤1%, amber ≤2%, red >2%). Defensive nullish-coalescing (`?? 0`) on every new field so the cards render cleanly even when backend returns 0/null. New testids: `kpi-cvar-95`, `kpi-cvar-99`, `kpi-port-sigma`, `kpi-positions`.
+  - Live-verified via Playwright: all 4 new cards render, login flow + dashboard + portfolio navigation works end-to-end.
+
+
 - 2026-06-27 (iter-52) — **ADWIN drift detection + Platt probability calibration**:
   - **`probability_calibrator.py` (NEW)** — Platt scaling (Platt 1999) with Lin et al. 2007 label smoothing to avoid perfect-separation on tiny datasets. Pure NumPy — no sklearn dependency. Skips calibration when n<10 (identity map). Provides `fit_platt`, `apply_platt`, `brier_score`.
   - **`learned_meta.py`** — Calibration runs after every retrain. Artifact now carries `calibration: {A, B, n, brier_raw, brier_calibrated, converged}`. `predict_p_win` returns both `p_win_raw` (sigmoid score) AND `p_win_calibrated` (Platt-mapped). The default `p_win` field is now the calibrated probability so downstream guards see real probabilities. Test verified Platt reduces Brier on a controlled mis-calibrated synthetic dataset.

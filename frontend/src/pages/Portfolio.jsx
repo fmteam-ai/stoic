@@ -116,6 +116,33 @@ export default function Portfolio() {
                                  testid="kpi-var" />
                         </div>
 
+                        {/* iter-51 · CVaR (Expected Shortfall) — the AVERAGE loss
+                            beyond VaR. Always ≥ VaR. Drives the dynamic-budget
+                            trim on new trade entries. */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <Kpi label="CVAR 95%"
+                                 value={`$${(snap.var.cvar_95_usd ?? 0).toFixed(2)}`}
+                                 color={(snap.var.cvar_95_pct_equity ?? 0) > 2.0 ? "#FF3B30"
+                                         : (snap.var.cvar_95_pct_equity ?? 0) > 1.0 ? "#FFB000" : "#A855F7"}
+                                 sub={`${(snap.var.cvar_95_pct_equity ?? 0).toFixed(2)}% of equity · target ≤2%/day`}
+                                 testid="kpi-cvar-95" />
+                            <Kpi label="CVAR 99%"
+                                 value={`$${(snap.var.cvar_99_usd ?? 0).toFixed(2)}`}
+                                 color={(snap.var.cvar_99_pct_equity ?? 0) > 3.0 ? "#FF3B30"
+                                         : (snap.var.cvar_99_pct_equity ?? 0) > 1.5 ? "#FFB000" : "#A855F7"}
+                                 sub={`${(snap.var.cvar_99_pct_equity ?? 0).toFixed(2)}% of equity · tail stress`}
+                                 testid="kpi-cvar-99" />
+                            <Kpi label="PORT. σ"
+                                 value={`${(snap.var.portfolio_sigma_pct ?? 0).toFixed(2)}%`}
+                                 color="#06B6D4"
+                                 sub="1-day daily volatility (correlation-weighted)"
+                                 testid="kpi-port-sigma" />
+                            <Kpi label="POSITIONS"
+                                 value={`${snap.var.positions?.length ?? 0}`}
+                                 sub={`${snap.var.horizon_days ?? 1}-day horizon`}
+                                 testid="kpi-positions" />
+                        </div>
+
                         {/* Drawdown thresholds */}
                         <Section icon={TrendingDown} color="#FF3B30" title="Max-Drawdown Controls">
                             <div className="grid grid-cols-2 gap-3 text-sm">
