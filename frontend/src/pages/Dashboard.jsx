@@ -11,6 +11,7 @@ import { BotHealthScore } from "@/components/BotHealthScore";
 import DataFreshnessStrip from "@/components/DataFreshnessStrip";
 import { MacroClimate } from "@/components/MacroClimate";
 import { DiagnosticModal } from "@/components/DiagnosticModal";
+import BotPulsePanel from "@/components/BotPulsePanel";
 import { useAuth } from "@/context/AuthContext";
 import { Stethoscope } from "lucide-react";
 import { toast } from "sonner";
@@ -492,6 +493,8 @@ export default function Dashboard() {
 
             <div className="p-4 md:p-8 space-y-6">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="dashboard-error">{err}</div>}
+
+                <BotPulsePanel />
 
                 <IntegrityWidget refreshSignal={lastEvent?.ts} />
 

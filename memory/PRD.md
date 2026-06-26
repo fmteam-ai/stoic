@@ -8,6 +8,12 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-26 (iter-42b) — **Bot Pulse on Dashboard + multi-session trading enabled**:
+  - User asked for the bot-inactivity explanation on the **Dashboard** (not just /trades) and confirmed they want trading on all sessions (Asia / London / NY).
+  - **Multi-session audit**: confirmed `asia_session_skip_xau` is the only session-based hard veto in `bot_runner.py`. With the user toggling it OFF in Bot Config, all three sessions are tradeable. Other "session" references (`learned_meta.py` session-bucketing learner, `analytics.py` reporting, `twap_vwap.py` execution-pacing weights) are analytics/learning only — not vetoes — and continue to bucket data correctly across Asia/London/NY.
+  - **Dashboard wiring**: same reusable `BotPulsePanel` component injected at the top of `pages/Dashboard.jsx` (above IntegrityWidget). Now surfaces the latest cycle verdict on Dashboard *and* Trades pages — both polling independently every 30s. Verified live: with `asia_session_skip_xau=false` the bot now ticks at 06:03 UTC and the pulse correctly shows the next gate (`Signal cooldown active · NEXT IN 10M`) instead of the previous Asia-skip block.
+
+
 - 2026-06-26 (iter-42) — **Bot Pulse · explain why an enabled bot is silent**:
   - **User pain**: "bot is enabled and I don't see activity, and there is no explanation for the lack of activity" — bot_runner had 13+ silent-skip exit points (cooldown, anti-tilt, asia-skip, daily-cap, SL-cooldown, max-concurrent, rate-limit, spread-block, no-connected-accounts, circuit-breaker, subscription-inactive, auto-tune-block, AI-HOLD) and none were surfaced anywhere.
   - **Backend** (`bot_runner.py`): new `_record_pulse(db, cfg, action, reason, level, symbol, next_eligible_at)` helper writes the latest cycle verdict to `bot_configs._last_pulse` on every exit point. Wired at all 13 skip points + the EXEC happy path. Level palette: `info` (grey, AI-HOLD / cooldown / cap / paper-shadow), `warn` (amber, anti-tilt / max-concurrent / rate-limit / orchestrator-failure / no-connected-accounts), `block` (red, circuit-breaker / no-account / subscription-inactive / Safety-Guardian-block).
