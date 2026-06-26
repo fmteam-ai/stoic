@@ -1,5 +1,5 @@
 {
-  "summary": "Iter-37 multi-bot targeting extensions verified end-to-end. All 9 unit tests pass, plus a new 12-test HTTP smoke suite (test_iter37_http_smoke.py) covering auth gating, targets endpoint shape, apply-with-bad-target=422, apply target=all audit list, apply target=matching symbol filter, signals/generate with and without account_id, and research proposals regression. Full iter-33→iter-37 targeting suite: 83/83 pass.",
+  "summary": "Iter-50 full sweep on STOIC trading bot — verified all features in review_request without opening any live trades. Backend: 55/55 new sweep tests pass; pre-existing 51/51 regression (iter43/45/48) still green. Frontend: login, grouped sidebar (6 sections), Simple Mode toggle round-trip (Crypto/Loss-Lab/Research hidden in simple mode, restored in pro), /bot-health (score 90/100 EXCELLENT, Auto-Heal panel with RUN NOW + DISABLED toggle + recent actions log, Live Diagnostic 4/6 OK, Bot Pulse panel), /loss-lab (Auto-Tighten card + patterns sidebar + full post-mortem card with TL;DR/why_it_looked_good/what_actually_happened/lessons/suggested_guardrail), /trades (8 source badges + 7 POST-MORTEM deep-links on losing closed trades only), /analytics session breakdown (Asia/London/Overlap/NY/Off all rendered with win-rate + avg-R + expectancy), /guide (all 19 chapters render — no React crash, success+warning callouts intact).",
   "backend_issues": {
     "critical": [],
     "minor": []
@@ -7,40 +7,44 @@
   "frontend_issues": {
     "ui_bugs": [],
     "integration_issues": [],
-    "design_issues": []
+    "design_issues": [
+      {"screen": "/dashboard", "issues": ["Recharts width(-1)/height(-1) warning logged in console on initial render (cosmetic; chart still renders after layout settles)"]}
+    ]
   },
   "test_report_links": [
-    "/app/backend/tests/test_iter37_multi_bot_targeting_extensions.py",
-    "/app/backend/tests/test_iter37_http_smoke.py",
-    "/app/test_reports/pytest/iter37_regression.xml",
-    "/app/test_reports/pytest/iter37_http_smoke.xml",
-    "/app/test_reports/pytest/iter37_full_suite.xml"
+    "/app/backend/tests/test_iter50_full_sweep.py",
+    "/app/test_reports/pytest/iter50_sweep.xml"
   ],
   "action_items": [],
   "critical_code_review_comments": [
-    "nl_routes.nl_strategy_apply default risk_level falls back to 'medium' (line 139) but elsewhere the API canonicalises to 'low'/'middle'/'high' (see _set_risk_level VALID_LEVELS). If a NL-compiled strategy omits risk_level, the bot_config row is stamped with the legacy 'medium' string. Recommend aligning to {'low','middle','high'} or documenting the synonym.",
-    "signal_routes.generate_signal does the same fallback (risk_level='medium') — same alignment note. Low priority as analyze_symbol handles unknown levels.",
-    "nl_strategy_apply hard-codes default symbols ['XAUUSD','BTCUSD'] when compiled.symbols is missing (line 140). Silent default could pick wrong target set for users without those symbols configured. Consider 422 instead.",
-    "Audit row schema returned by apply_to_bot_configs is not documented in the route response model. The HTTP smoke test asserts 'config_id or _id or user_id' since the exact key was unclear from the route — recommend a Pydantic response_model so the frontend can rely on the shape."
+    "PUT /api/bot/config takes min_confidence_override as int (0-100 percentage). Pydantic rejects floats with 422. UI / API docs should make this explicit so callers don't pass 0.7.",
+    "Bridge endpoints are POST-only (/heartbeat, /poll-trades, /external-deal, /report, /modification-ack). The review_request mentioned 'GET /api/bridge/poll' which does not exist — recommend documenting the actual EA-facing surface to avoid confusion.",
+    "Auto-heal background loop confirmed scheduled at startup (server.py:_auto_heal_task = asyncio.create_task(_auto_heal_loop())). Loop interval is hard-coded inside _auto_heal_loop; would be cleaner as AUTO_HEAL_INTERVAL_SEC env var.",
+    "tests/test_iter45_postmortem.py imports loss_postmortem directly — only collectable when pytest runs from /app/backend (not /app). Pre-existing pattern in this repo, fine for now, but adding conftest.py sys.path bootstrapping at /app would unify test invocation."
   ],
   "updated_files": [
-    "/app/backend/tests/test_iter37_http_smoke.py (new — 12 HTTP smoke tests against live preview URL)"
+    "/app/backend/tests/test_iter50_full_sweep.py (new)"
   ],
-  "success_rate": {"backend": "100% (83/83 across the full iter-33→37 targeting suite; 9/9 iter-37 unit + 12/12 iter-37 HTTP smoke)", "frontend": "skipped per request"},
+  "success_rate": {"backend": "100% (55/55 sweep + 51/51 regression)", "frontend": "100% on all critical iter-50 features"},
   "test_credentials": "admin@trading.bot / admin123",
-  "seed_data_creation": "None persistent. The test_apply_target_all test wrote stock-default fields (risk_level='medium', strategy_style='trend_following', etc.) to admin's bot_configs via the production route — values are all defaults the route itself emits in production usage so no restore needed. No proposals or signals were created beyond what the AI route generated naturally.",
+  "seed_data_creation": "None — only round-trip toggles on /api/auto-heal/settings, /api/settings/preferences, /api/research/auto-accept, /api/bot/config; all restored to pre-test state.",
   "retest_needed": false,
-  "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "Iter-37 is fully green. Backend HTTP surface for multi-bot targeting verified: /api/nl/strategy/targets (auth 401, shape, matching_count<=total_count), /api/nl/strategy/apply (400 empty compiled, 400 clarification, 422 unknown account_id with helpful 'No matching bot configs' detail, 200 target=all returns applied_count==total_count, 200 target=matching filters by symbol overlap), /api/signals/generate?account_id=X stamps account_id on the doc, /api/research/proposals listable as regression. Use /app/backend/tests/test_iter37_http_smoke.py as the iter-37 HTTP regression file. Frontend smoke was deferred per the review_request (testing_type=backend only). When iter-38 lands, run that same suite + add any new HTTP cases.",
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter-50 work (Bot Pulse, Loss Lab, Bot Health page, Auto-Heal scheduler, Simple/Pro Mode sidebar toggle, source badges on Trades, session breakdown, post-mortem regenerate) verified end-to-end on the live preview URL. NO live trades were opened during testing. The full sweep file /app/backend/tests/test_iter50_full_sweep.py is reusable for future regression — covers 34 sanity GETs + auth/preferences/bot-config/postmortem/signal/bridge shape checks. When extending, remember (1) PUT /api/bot/config takes integer min_confidence_override, (2) bridge endpoints are POST-only and require bridge_token API key, (3) tests/test_iter45_postmortem.py needs cwd=/app/backend to resolve imports.",
   "verified_behaviours": [
-    "All 9 iter-37 unit tests pass (test_iter37_multi_bot_targeting_extensions.py): _set_risk_level broadcasts to all bots / rejects invalid level / handles 0 bots; nl_strategy_apply routes through targeting helper; telegram _cmd_run, _cmd_stop broadcast via update_many; signals/generate honours account_id; research path keeps legacy audit fields",
-    "GET /api/nl/strategy/targets?symbols=XAUUSD,BTCUSD → 200 with {candidates, matching_count, total_count, proposal_symbols:['XAUUSD','BTCUSD']}; each candidate has matches_proposal_symbols boolean",
-    "POST /api/nl/strategy/apply target='no-such-account-id' → 422 with detail containing 'No matching bot configs' (helpful error)",
-    "POST /api/nl/strategy/apply target='all' → applied_count==total_count, target_mode='all', applied_to[] audit list populated",
-    "POST /api/nl/strategy/apply target='matching' (symbols=['XAUUSD']) → applied_count==matching_count from /targets endpoint, target_mode starts with 'matching:'",
-    "POST /api/signals/generate?account_id=test-acct-iter37 → returned signal doc carries account_id field",
-    "Backwards-compat: research path apply_to_bot_configs still stamps last_research_proposal_id + last_research_target_mode on bot_config docs",
-    "Auth gating: both /strategy/targets and /strategy/apply return 401 without cookie",
-    "Regression: GET /api/research/proposals → 200 {pending, history} (iter-33/36 path intact)"
+    "Login admin@trading.bot/admin123 → cookie auth → /api/auth/me returns admin payload",
+    "Sidebar simple-mode toggle: PRO MODE → click → SIMPLE MODE (Crypto/Loss-Lab/Research hidden); click again → PRO MODE (all restored). POST /api/settings/preferences persists simple_mode round-trip verified.",
+    "Bot Pulse panel renders on Dashboard + Trades; /api/bot/pulse returns items[]",
+    "/bot-health: 90/100 EXCELLENT badge + Auto-Heal panel (RUN NOW + DISABLED opt-in) + Live Diagnostic (4/6 OK) + Bot Pulse + Session Edge + Improvements panels all render",
+    "Auto-Heal: POST /api/auto-heal/settings {enabled:true} persists; GET confirms; POST /api/auto-heal/run-now returns 200; GET /api/auto-heal/log returns items[]. Background task scheduled at startup via server.py _auto_heal_loop.",
+    "/loss-lab: Auto-Tighten card + Patterns sidebar (1 pattern: XAUUSD|TRANSITIONAL|tokyo|SELL) + full postmortem card with all required fields rendered",
+    "/trades: 8 trade rows · CLOSED/MANUAL pills · 8 source badges (data-testid=source-*) · 7 POST-MORTEM links (only on losing closed trades; the +$0.01 winner has no link — correct)",
+    "/analytics: Session Breakdown card shows Asia(7,14.3%,best avg-R,best P&L,-$1121.69), London(1,0%), Overlap(0), NY(0), Off(0) with proper formatting",
+    "/guide: all 19 chapters rendered (28999 chars body text); no React crash; success+warning callouts working (iter-41 fix intact)",
+    "POST /api/signals/generate {XAUUSD, medium} returns valid signal with action/confidence/reasoning",
+    "Bridge endpoints reject unauthenticated calls with 401 (not 500)",
+    "PUT /api/bot/config partial PATCH: {aggressive_mode:false, min_confidence_override:70} persists; values returned correctly",
+    "POST /api/research/auto-accept {enabled:true, min_delta_pct:12.5} round-trip via GET works (iter-44 fix intact)",
+    "All 34 sanity GET endpoints return 200 (portfolio, safety-blocks, strategies, presets, research, macro, calendar, sentiment, data-freshness, notifications, telegram, affiliate, subscription, shadow, agents, analytics sessions+attribution, execution quality, crypto status+accounts, bot configs+quick-actions+pulse+health-score, auto-heal settings+log, postmortem list+patterns+adjustments+settings, diagnostic)"
   ]
 }
