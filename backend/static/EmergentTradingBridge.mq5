@@ -41,9 +41,15 @@
 //|         can show broker-real-time prices + unrealised P&L on the   |
 //|         Trades page, refreshed every PollSeconds (3-5s) instead    |
 //|         of relying on a stale 60-120s external quote cache.        |
+//| v1.28 — Auto-selects broker-supported filling mode per symbol.     |
+//|         Previously hardcoded ORDER_FILLING_IOC, which made VT      |
+//|         Markets (and other FOK-only brokers) return retcode 10013  |
+//|         (INVALID_REQUEST) on every trade. Now queries              |
+//|         SYMBOL_FILLING_MODE and picks FOK > IOC > RETURN whichever |
+//|         the broker accepts.                                        |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.27"
+#property version   "1.28"
 #property strict
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
@@ -236,6 +242,19 @@ double SymbolPipSize(string sym) {
    if (sym == "ETHUSD") return 0.10;
    if (StringFind(sym, "JPY") >= 0) return 0.01;
    return 0.0001;
+}
+
+// v1.28 — Broker-supported filling mode picker.
+// Different brokers support different filling modes for the same symbol.
+// VT Markets, IC Markets and many ECN brokers only support FOK on certain
+// symbols, which made the previous hardcoded IOC return retcode 10013
+// (INVALID_REQUEST). This queries SYMBOL_FILLING_MODE and picks one the
+// broker actually accepts: FOK first (most strict), then IOC, then RETURN.
+ENUM_ORDER_TYPE_FILLING PickFillingMode(string sym) {
+   long modes = SymbolInfoInteger(sym, SYMBOL_FILLING_MODE);
+   if ((modes & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
+   if ((modes & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
 }
 
 // Build {"XAUUSD":3.2,"BTCUSD":85.0} from the comma list, using current symbol spread
@@ -443,7 +462,7 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    req.volume       = NormalizeDouble(lot, 2);
    req.deviation    = Slippage;
    req.magic        = MagicNumber;
-   req.type_filling = ORDER_FILLING_IOC;
+   req.type_filling = PickFillingMode(symbol);
 
    double price = (action == "BUY") ? SymbolInfoDouble(symbol, SYMBOL_ASK)
                                     : SymbolInfoDouble(symbol, SYMBOL_BID);
@@ -476,7 +495,7 @@ void ClosePosition(string trade_id, long ticket) {
    req.deviation = Slippage;
    req.magic     = MagicNumber;
    req.position  = ticket;
-   req.type_filling = ORDER_FILLING_IOC;
+   req.type_filling = PickFillingMode(symbol);
    if (type == POSITION_TYPE_BUY) {
       req.type  = ORDER_TYPE_SELL;
       req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
@@ -536,7 +555,7 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol) {
    req.deviation = Slippage;
    req.magic     = MagicNumber;
    req.position  = ticket;
-   req.type_filling = ORDER_FILLING_IOC;
+   req.type_filling = PickFillingMode(symbol);
    if (type == POSITION_TYPE_BUY) {
       req.type  = ORDER_TYPE_SELL;
       req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
