@@ -73,7 +73,7 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.27 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.28 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -340,7 +340,7 @@ void SendHeartbeat() {
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
-      "\"positions\":%s,\"client_version\":\"1.27\"}",
+      "\"positions\":%s,\"client_version\":\"1.28\"}",
       BridgeToken, balance, equity, openPos, spreads, login, ccy, positions);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
