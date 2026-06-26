@@ -96,6 +96,42 @@ def _mark_cooldown(user_id: str, symbol: str):
     )
 
 
+async def _record_pulse(
+    db, cfg: dict, *,
+    action: str, reason: str, level: str = "info",
+    symbol: str | None = None, next_eligible_at=None,
+):
+    """Persist the latest bot-cycle verdict on the cfg doc.
+
+    This is what surfaces on the Trades page so the user can see *why*
+    an enabled bot is silent. We overwrite (no history) — the page polls
+    /api/bot/pulse to render the current state.
+
+    Args:
+        action: HOLD | BUY | SELL | SKIP | EXEC | BLOCKED
+        level:  info | warn | block — drives UI color (grey/amber/red)
+    """
+    try:
+        nxt_iso = None
+        if next_eligible_at:
+            nxt_iso = (next_eligible_at.isoformat()
+                       if hasattr(next_eligible_at, "isoformat") else str(next_eligible_at))
+        pulse = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "symbol": symbol,
+            "action": action,
+            "reason": reason,
+            "level": level,
+            "next_eligible_at": nxt_iso,
+        }
+        await db.bot_configs.update_one(
+            {"_id": cfg["_id"]},
+            {"$set": {"_last_pulse": pulse}},
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to persist pulse cfg=%s: %s", cfg.get("_id"), e)
+
+
 async def _connected_accounts(db, user_id: str) -> list:
     """Return list of accounts ready to accept trades.
 
@@ -188,6 +224,10 @@ async def _process_user_account_locked(db, cfg: dict):
             all_accounts = [a for a in all_accounts if str(a["_id"]) not in ov_ids]
 
     if not all_accounts:
+        await _record_pulse(db, cfg,
+            action="BLOCKED", level="block",
+            reason="No accounts configured for this bot — connect an MT5 or Binance account.",
+        )
         return
 
     # 1. Circuit breaker check first — never analyse if tripped
@@ -196,12 +236,20 @@ async def _process_user_account_locked(db, cfg: dict):
         await ws_manager.broadcast(user_id, "circuit_breaker_tripped", cb)
         logger.warning("Circuit breaker tripped for user=%s acct=%s: %s",
                        user_id, cfg_account_id or "default", cb["reason"])
+        await _record_pulse(db, cfg,
+            action="BLOCKED", level="block",
+            reason=f"Circuit breaker tripped — {cb.get('reason', 'drawdown limit hit')}",
+        )
         return
 
     # Paper-mode-only fallback when subscription is inactive
     if not entitlement["active"]:
         all_accounts = [a for a in all_accounts if (a.get("mode") or "live") == "paper"]
         if not all_accounts:
+            await _record_pulse(db, cfg,
+                action="BLOCKED", level="block",
+                reason="Subscription inactive — add a paper account or renew to resume.",
+            )
             return
 
     connected = [a for a in all_accounts
@@ -264,10 +312,19 @@ async def _process_user_account_locked(db, cfg: dict):
     inflight = await db.trades.count_documents(inflight_q)
 
     if anti_tilt_active:
+        await _record_pulse(db, cfg,
+            action="BLOCKED", level="warn",
+            reason=f"Anti-tilt freeze — last {anti_tilt_n} trades lost. Resumes in <{anti_tilt_hours}h.",
+        )
         return
 
     for sym in symbols:
         if _on_cooldown(cooldown_scope, sym):
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="info",
+                reason=f"Signal cooldown active for {sym} ({_cooldown_minutes()}min between signals).",
+                next_eligible_at=_next_signal_at.get((cooldown_scope, sym)),
+            )
             continue
 
         # Capital-preservation guards (skip BEFORE expensive AI analysis)
@@ -275,6 +332,10 @@ async def _process_user_account_locked(db, cfg: dict):
             now_h = datetime.now(timezone.utc).hour
             if now_h < 7:
                 logger.info("Asia-session skip user=%s sym=%s hour=%d", user_id, sym, now_h)
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="info",
+                    reason="Asia-session skip — XAUUSD pauses until 07:00 UTC (low liquidity).",
+                )
                 continue
 
         if trade_of_day_cap > 0:
@@ -290,6 +351,10 @@ async def _process_user_account_locked(db, cfg: dict):
             if today_count >= trade_of_day_cap:
                 logger.info("Trade-of-day cap reached user=%s sym=%s count=%d/%d",
                             user_id, sym, today_count, trade_of_day_cap)
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="info",
+                    reason=f"Daily trade cap reached ({today_count}/{trade_of_day_cap}) for {sym}. Resets at 00:00 UTC.",
+                )
                 continue
 
         if sl_cooldown_enabled and sl_cooldown_min > 0:
@@ -298,6 +363,10 @@ async def _process_user_account_locked(db, cfg: dict):
                 logger.info("SL cooldown user=%s sym=%s resumes in %smin",
                             user_id, sym, sl_cd["resumes_in_min"])
                 await inc_intel_counter(user_id, "sl_cooldown_block")
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="info",
+                    reason=f"Stop-loss cooldown — {sym} resumes in {sl_cd['resumes_in_min']}min (avoiding revenge re-entry).",
+                )
                 continue
 
         try:
@@ -316,9 +385,17 @@ async def _process_user_account_locked(db, cfg: dict):
             )
             signal = tick_out.get("signal")
             if not signal:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="HOLD", level="warn",
+                    reason="Analyser pipeline returned no signal (Strategy or Risk agent failed). Check logs.",
+                )
                 continue
         except Exception as e:
             logger.exception("orchestrator.analyze_tick failed user=%s sym=%s: %s", user_id, sym, e)
+            await _record_pulse(db, cfg, symbol=sym,
+                action="HOLD", level="warn",
+                reason=f"Analyser exception: {type(e).__name__}",
+            )
             continue
 
         # Auto-Tune
@@ -377,21 +454,53 @@ async def _process_user_account_locked(db, cfg: dict):
             pass
 
         if not (auto_exec and signal["tradeable"]):
+            sig_act = signal.get("action") or "HOLD"
+            sig_conf = signal.get("confidence") or 0
+            if shadow_only:
+                p_reason = f"Paper-shadow mode: signal {sig_act} {sig_conf}% logged (no live execution)."
+                p_level = "info"
+            elif not auto_exec:
+                p_reason = f"Auto-execute disabled on this bot — signal {sig_act} {sig_conf}% not fired."
+                p_level = "info"
+            else:
+                # Not tradeable — surface the AI's stated reasoning if present
+                reason_blob = (signal.get("reasoning") or "")[:140].strip()
+                p_reason = (f"AI {sig_act} {sig_conf}% — {reason_blob}"
+                            if reason_blob else f"AI {sig_act} {sig_conf}% — signal not tradeable.")
+                p_level = "info"
+            await _record_pulse(db, cfg, symbol=sym,
+                action=sig_act, level=p_level, reason=p_reason,
+            )
             continue
         if auto_tune_block_reason:
             logger.info("Auto-tune block user=%s sym=%s: %s", user_id, sym, auto_tune_block_reason)
             await inc_intel_counter(user_id, "auto_tune_block")
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="info", reason=auto_tune_block_reason,
+            )
             continue
         if inflight >= max_concurrent:
             logger.info("Max concurrent (%s) reached user=%s acct=%s",
                         max_concurrent, user_id, cfg_account_id or "default")
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="warn",
+                reason=f"Max concurrent trades reached ({inflight}/{max_concurrent}) — close one to fire next signal.",
+            )
             continue
         if not connected:
+            await _record_pulse(db, cfg, symbol=sym,
+                action="BLOCKED", level="block",
+                reason="No connected accounts — EA heartbeat stale (>5min). Check MT5 EA / network.",
+            )
             continue
         rl = rl_check(user_id)
         if not rl["allowed"]:
             logger.warning("Rate-limited user=%s, count_60s=%s/%s, skip auto-execute",
                            user_id, rl["count_60s"], rl["limit"])
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="warn",
+                reason=f"Rate-limited ({rl['count_60s']}/{rl['limit']} per 60s) — execution paused briefly.",
+            )
             continue
 
         # Target account: per-account cfg pins one; default cfg picks the first connected.
@@ -413,6 +522,10 @@ async def _process_user_account_locked(db, cfg: dict):
                     }}},
                 )
                 await inc_intel_counter(user_id, "spread_block")
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="info",
+                    reason=f"Spread filter block — {sym} spread {current_sp:.1f}p > cap {cap:.1f}p.",
+                )
                 continue
 
         # Recompute lot size against the TARGET account's real equity and the
@@ -484,10 +597,18 @@ async def _process_user_account_locked(db, cfg: dict):
                 "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
                 user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
             )
+            await _record_pulse(db, cfg, symbol=sym,
+                action="BLOCKED", level="block",
+                reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
+            )
             continue
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
                     user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {"consumed": True}})
+        await _record_pulse(db, cfg, symbol=sym,
+            action="EXEC", level="info",
+            reason=f"Executed {signal['action']} {sym} {effective_lot} lots @ {signal.get('entry_price')} (conf {signal.get('confidence')}%).",
+        )
         inflight += 1
 
 

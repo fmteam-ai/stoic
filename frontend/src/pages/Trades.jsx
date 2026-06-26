@@ -4,6 +4,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
+import BotPulsePanel from "@/components/BotPulsePanel";
 
 const STATUS_STYLE = {
     pending: "border-[#FFB000]/40 text-[#FFB000]",
@@ -420,6 +421,8 @@ export default function Trades() {
 
             <div className="p-4 md:p-8 space-y-4">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
+
+                <BotPulsePanel />
 
                 {stats && (() => {
                     // Prefer the EA's broker-real-time tick (per-ticket, 3-5s) over the

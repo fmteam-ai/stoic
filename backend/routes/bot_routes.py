@@ -250,6 +250,64 @@ async def list_configs(user=Depends(get_current_user)):
     return [_serialize(d) for d in docs]
 
 
+@router.get("/pulse")
+async def get_bot_pulse(user=Depends(get_current_user)):
+    """Return the latest cycle verdict for every bot_config the user owns.
+
+    Lets the UI explain *why* an enabled bot is currently silent (cooldown,
+    macro freeze, anti-tilt, AI HOLD, daily cap, etc) instead of leaving the
+    trader staring at an empty trades table.
+
+    Shape per pulse:
+        {
+          "config_id": str, "account_id": str|None, "label": str,
+          "active": bool, "paper_shadow_mode": bool, "symbols": [str],
+          "pulse": { "ts", "symbol", "action", "reason",
+                     "level", "next_eligible_at" } | None,
+          "stale_seconds": int|None,   # age of last pulse, None if never recorded
+        }
+    """
+    db = get_db()
+    cursor = db.bot_configs.find({"user_id": user["id"]})
+    docs = await cursor.to_list(length=100)
+    out: list[dict] = []
+    now = datetime.now(timezone.utc)
+    for d in docs:
+        pulse = d.get("_last_pulse") or None
+        stale = None
+        if pulse and pulse.get("ts"):
+            try:
+                ts = datetime.fromisoformat(str(pulse["ts"]).replace("Z", "+00:00"))
+                stale = int((now - ts).total_seconds())
+            except Exception:
+                stale = None
+        # Friendly label for the UI — account-scoped or "Default"
+        acct_id = d.get("account_id")
+        label = "Default profile"
+        if acct_id:
+            try:
+                acct = await db.accounts.find_one(
+                    {"_id": ObjectId(acct_id), "user_id": user["id"]}
+                )
+                if acct:
+                    label = acct.get("login") or acct.get("broker") or f"Account {acct_id[:6]}"
+            except Exception:
+                pass
+        out.append({
+            "config_id": str(d["_id"]),
+            "account_id": acct_id,
+            "label": label,
+            "active": bool(d.get("active")),
+            "paper_shadow_mode": bool(d.get("paper_shadow_mode")),
+            "symbols": d.get("symbols") or [],
+            "pulse": pulse,
+            "stale_seconds": stale,
+        })
+    # Sort: active first, then shadow, then inactive
+    out.sort(key=lambda x: (not x["active"], not x["paper_shadow_mode"], x["label"]))
+    return {"items": out, "loop_interval_sec": int(os.environ.get("BOT_LOOP_INTERVAL_SEC", "60"))}
+
+
 @router.put("/config")
 async def update_config(payload: BotConfigUpdate,
                         account_id: Optional[str] = None,
