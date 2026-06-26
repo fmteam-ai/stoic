@@ -183,3 +183,19 @@
     color: #52525B; letter-spacing: 0.2em;
     z-index: 10;
 }
+
+
+/* Intro poster — shown before user clicks Play (required by browser
+   autoplay policy: audio can't start without a real user gesture). */
+.trailer-intro { z-index: 20; }
+.trailer-play-btn {
+    font-size: 1.05rem !important;
+    padding: 1.1rem 2.5rem !important;
+    letter-spacing: 0.18em !important;
+    box-shadow: 0 0 40px rgba(0,255,65,0.25);
+    animation: playPulse 2.4s ease-in-out infinite;
+}
+@keyframes playPulse {
+    0%, 100% { box-shadow: 0 0 32px rgba(0,255,65,0.25); }
+    50%      { box-shadow: 0 0 56px rgba(0,255,65,0.55); }
+}

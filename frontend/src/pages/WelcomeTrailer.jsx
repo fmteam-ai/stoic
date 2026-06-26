@@ -85,9 +85,11 @@ const SCENES = [
 export default function WelcomeTrailer() {
     const nav = useNavigate();
     const [t, setT] = useState(0);
-    const [playing, setPlaying] = useState(true);
+    const [playing, setPlaying] = useState(false);   // gated until user clicks "Play"
+    const [started, setStarted] = useState(false);   // false → show intro poster
     const audioRef = useRef(null);
     const [audioReady, setAudioReady] = useState(false);
+    const [audioFailed, setAudioFailed] = useState(false);
     const tickerRef = useRef(null);
 
     /* Master clock — driven by either the audio element (if MP3 present)
@@ -96,7 +98,7 @@ export default function WelcomeTrailer() {
     useEffect(() => {
         if (!playing) return;
         let id;
-        if (audioReady && audioRef.current) {
+        if (audioReady && audioRef.current && !audioFailed) {
             id = setInterval(() => {
                 setT(Math.floor((audioRef.current?.currentTime || 0) * 1000));
             }, 80);
@@ -112,15 +114,33 @@ export default function WelcomeTrailer() {
             }, 80);
         }
         return () => clearInterval(id);
-    }, [playing, audioReady]);  // eslint-disable-line react-hooks/exhaustive-deps
+    }, [playing, audioReady, audioFailed]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+    /* User-gesture-gated start — required by browser autoplay policy.
+       Clicking "Play" attaches audio playback to a real user interaction,
+       which is the ONLY reliable way to start audio in Chrome/Safari/Firefox. */
+    const startTrailer = async () => {
+        setStarted(true);
+        setT(0);
+        if (audioRef.current) {
+            try {
+                audioRef.current.currentTime = 0;
+                await audioRef.current.play();
+            } catch (err) {
+                // Audio blocked or missing — fall back to silent timer
+                setAudioFailed(true);
+            }
+        }
+        setPlaying(true);
+    };
 
     const activeIdx = SCENES.findIndex(s => t >= s.start && t < s.end);
-    const finished = t >= 72000 || (!playing && t > 0);
+    const finished = started && (t >= 72000 || (!playing && t > 0));
 
     const replay = () => {
         if (audioRef.current) {
             audioRef.current.currentTime = 0;
-            audioRef.current.play().catch(() => {});
+            audioRef.current.play().catch(() => setAudioFailed(true));
         }
         setT(0); setPlaying(true);
     };
@@ -134,29 +154,62 @@ export default function WelcomeTrailer() {
             <div className="ticker-rail" style={{ left: "68%", animationDelay: "2.5s" }} />
             <div className="ticker-rail" style={{ left: "88%", animationDelay: "0.6s" }} />
 
-            {/* Skip button — top-right */}
-            <div className="trailer-skip">
-                <button className="cta-secondary"
-                        onClick={() => nav("/login")}
-                        data-testid="trailer-skip">
-                    Skip → Sign in
-                </button>
-            </div>
+            {/* Skip button — top-right (hidden while intro poster is shown) */}
+            {started && (
+                <div className="trailer-skip">
+                    <button className="cta-secondary"
+                            onClick={() => nav("/login")}
+                            data-testid="trailer-skip">
+                        Skip → Sign in
+                    </button>
+                </div>
+            )}
 
             {/* Audio element — drops the ElevenLabs MP3 in when ready. The
-                file should live at frontend/public/trailer.mp3 — autoplay
-                muted on mount, full sound once the user clicks play. */}
+                file lives at frontend/public/trailer.mp3. Browser autoplay
+                policy means we MUST wait for a real click before .play(). */}
             <audio
                 ref={audioRef}
                 src="/trailer.mp3"
                 preload="auto"
-                onCanPlay={() => setAudioReady(true)}
-                onError={() => setAudioReady(false)}
+                onCanPlayThrough={() => setAudioReady(true)}
+                onError={() => { setAudioReady(false); setAudioFailed(true); }}
                 onEnded={() => setPlaying(false)}
             />
 
-            {/* Scene cards — only the active one is visible */}
-            {!finished && SCENES.map((s, i) => (
+            {/* Intro poster — required by browser autoplay policy.
+                Audio cannot start until the user clicks something. */}
+            {!started && (
+                <div className="scene active trailer-intro" data-testid="trailer-intro">
+                    <div className="kicker">STOIC · 70-second trailer</div>
+                    <h1 className="headline">
+                        An AI hedge fund<br/>
+                        that <em>refuses</em> to lose stupidly.
+                    </h1>
+                    <p className="subline">
+                        Sound on. 70 seconds. Watch how a 7-agent AI
+                        pipeline + a 10-layer risk veto cascade trades
+                        gold and bitcoin — so you don&apos;t have to.
+                    </p>
+                    <div className="cta-block" style={{ marginTop: "2.5rem" }}>
+                        <button
+                            className="cta-button trailer-play-btn"
+                            onClick={startTrailer}
+                            data-testid="trailer-play">
+                            ▶ Play trailer
+                        </button>
+                        <button
+                            className="cta-secondary"
+                            onClick={() => nav("/login")}
+                            data-testid="trailer-skip-intro">
+                            Skip → Sign in
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Scene cards — only the active one is visible (post-start) */}
+            {started && !finished && SCENES.map((s, i) => (
                 <div key={s.id}
                      className={`scene ${i === activeIdx ? "active" : ""}`}
                      data-testid={`scene-${s.id}`}>
@@ -196,7 +249,7 @@ export default function WelcomeTrailer() {
             )}
 
             {/* Scene-progress dots */}
-            {!finished && (
+            {started && !finished && (
                 <div className="scene-rail">
                     {SCENES.map((s, i) => (
                         <div key={s.id}
@@ -206,9 +259,12 @@ export default function WelcomeTrailer() {
                 </div>
             )}
 
-            <div className="audio-status">
-                {audioReady ? "▶ NARRATION SYNCED" : "▶ SILENT PREVIEW"}
-            </div>
+            {started && (
+                <div className="audio-status">
+                    {audioFailed ? "▶ SILENT PREVIEW" :
+                     audioReady ? "▶ NARRATION SYNCED" : "▶ LOADING AUDIO…"}
+                </div>
+            )}
         </div>
     );
 }
