@@ -43,7 +43,19 @@ export default function Accounts() {
         if (lastEvent.type === "account_heartbeat") {
             const p = lastEvent.payload;
             setAccounts(prev => prev.map(a => a.id === p.account_id
-                ? { ...a, balance: p.balance, equity: p.equity, last_heartbeat: p.last_heartbeat, status: "connected" }
+                ? {
+                    ...a,
+                    // balance/equity can legitimately be null when the EA is
+                    // attached to the wrong MT5 terminal (mismatch detection).
+                    // Preserve null so the UI shows "—" instead of stale data.
+                    balance: p.balance ?? null,
+                    equity: p.equity ?? null,
+                    last_heartbeat: p.last_heartbeat,
+                    status: p.status || (p.broker_account_mismatch ? "disconnected" : "connected"),
+                    broker_account_mismatch: p.broker_account_mismatch ?? a.broker_account_mismatch,
+                    broker_account_mismatch_reason: p.broker_account_mismatch_reason ?? a.broker_account_mismatch_reason,
+                    broker_account_id_reported: p.broker_account_id_reported ?? a.broker_account_id_reported,
+                }
                 : a));
         }
     }, [lastEvent]);

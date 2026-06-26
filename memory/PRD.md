@@ -8,6 +8,15 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-54) — **Multi-account balance leak via heartbeat WS broadcast**:
+  - **Bug** (user-reported): User has two MT5 accounts connected (`micro` on Roboforex with $16,596.41 · `vtmarkets` on VT Markets demo, expected $10,000). Both rows displayed the **same** Roboforex balance in the UI.
+  - **RCA**: `bridge_routes.heartbeat` correctly nulls `balance`/`equity` on the DB write when `payload.account_login != acc.account_number` (broker mismatch detection), but the subsequent **WebSocket broadcast** sent the raw `payload.balance`/`payload.equity` regardless. The frontend's `account_heartbeat` handler in `Accounts.jsx` then overwrote the correct DB-side `null` with the wrong-account's value as soon as the next heartbeat from the other terminal arrived. The DB was always correct (`/api/accounts` returned `balance=null` for VT Markets) — only the live UI was wrong.
+  - **Fix (backend)**: `/app/backend/routes/bridge_routes.py` WS broadcast now applies the same `... if not mismatch else None` filter as the DB write. Additionally surfaces `broker_account_mismatch`, `broker_account_mismatch_reason`, `broker_account_id_reported`, and `status: "connected"|"disconnected"` so the UI can render the warning banner live without waiting for a page refresh.
+  - **Fix (frontend)**: `/app/frontend/src/pages/Accounts.jsx` heartbeat handler now propagates the mismatch fields into local state (so the warning banner appears in real-time) and preserves `null` balance/equity (so the row shows "—" instead of stale data).
+  - **Underlying user-side cause** (still requires user action): Their VT Markets EA is reporting MT5 login **67198987** (the Roboforex account). Either both EAs are attached to the same MT5 terminal, OR the VT Markets terminal is logged into the wrong broker account. The mismatch warning on the Accounts page now flags this clearly.
+  - **Tests** (`tests/test_iter54_heartbeat_ws_mismatch.py`): 2 unit tests — (1) WS broadcast nulls balance + flags mismatch when EA is on the wrong MT5 account; (2) sanity check that matched accounts pass balance through cleanly. **2/2 passing.** Curated regression 79/79 still green (iter-50/51/52/54).
+
+
 - 2026-06-27 (iter-53) — **Full E2E sweep + Portfolio Risk UI surfaces CVaR fields**:
   - Testing-agent full sweep: backend 31/31 pass · frontend 95% (only gap was missing CVaR card on `/portfolio`).
   - **`/app/frontend/src/pages/Portfolio.jsx`**: added a second KPI row exposing `CVAR 95%`, `CVAR 99%`, `PORT. σ`, and `POSITIONS` so iter-51 risk improvements are visible to users. Color-coded against the 2%/day CVaR target (green ≤1%, amber ≤2%, red >2%). Defensive nullish-coalescing (`?? 0`) on every new field so the cards render cleanly even when backend returns 0/null. New testids: `kpi-cvar-95`, `kpi-cvar-99`, `kpi-port-sigma`, `kpi-positions`.

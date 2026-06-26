@@ -275,13 +275,24 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "ts": now_iso,
             })
 
+    # The DB write (above) already nulls balance/equity on broker_account
+    # mismatch so the user can't be fooled by a wrong-terminal heartbeat. The
+    # WebSocket broadcast MUST honour the same filter — otherwise the live
+    # UI update would happily overwrite "—" with the wrong account's balance
+    # the moment a stray heartbeat arrived. This caused two STOIC rows
+    # (Roboforex + VT Markets) to mirror the same $-value when both EAs
+    # were attached to the same MT5 terminal.
     await ws_manager.broadcast(acc["user_id"], "account_heartbeat", {
         "account_id": str(acc["_id"]),
-        "balance": payload.balance,
-        "equity": payload.equity,
+        "balance": payload.balance if not mismatch else None,
+        "equity": payload.equity if not mismatch else None,
         "open_positions": payload.open_positions,
         "last_heartbeat": now_iso,
         "spreads": set_doc.get("current_spreads"),
+        "broker_account_mismatch": mismatch,
+        "broker_account_mismatch_reason": mismatch_reason,
+        "broker_account_id_reported": payload.account_login,
+        "status": "connected" if not mismatch else "disconnected",
     })
     resp = {"ok": True, "server_time": now_iso}
     if reconcile_summary and reconcile_summary["closed_count"] > 0:
