@@ -34,6 +34,7 @@ import ShadowPerformance from "@/pages/ShadowPerformance";
 import LossLab from "@/pages/LossLab";
 import BotHealth from "@/pages/BotHealth";
 import AffiliateLanding from "@/pages/AffiliateLanding";
+import WelcomeTrailer from "@/pages/WelcomeTrailer";
 
 function App() {
     return (
@@ -43,6 +44,8 @@ function App() {
                     <Routes>
                         <Route path="/login" element={<Login />} />
                         <Route path="/register" element={<Register />} />
+                        {/* Public marketing trailer — no auth required */}
+                        <Route path="/welcome" element={<WelcomeTrailer />} />
                         {/* Public affiliate marketing page — no auth required */}
                         <Route path="/affiliates" element={<AffiliateLanding />} />
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />

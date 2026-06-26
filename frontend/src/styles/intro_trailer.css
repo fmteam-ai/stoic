@@ -1,0 +1,185 @@
+/* STOIC intro trailer — auto-playing scene state machine.
+   All scene timings are in MILLISECONDS from t=0 of the trailer.
+   They mirror the 70-second voiceover in /app/memory/intro_trailer_script.md
+   so when the user drops in the ElevenLabs MP3, audio + visuals sync. */
+.trailer-stage {
+    position: relative;
+    min-height: 100vh;
+    background: #050505;
+    color: #FAFAFA;
+    overflow: hidden;
+    font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Background particle field — abstract "AI thinking" effect */
+.particle-field {
+    position: absolute; inset: 0;
+    background-image:
+        radial-gradient(circle at 25% 15%, rgba(0,255,65,0.05) 0%, transparent 50%),
+        radial-gradient(circle at 75% 50%, rgba(168,85,247,0.05) 0%, transparent 50%),
+        radial-gradient(circle at 35% 85%, rgba(0,255,65,0.04) 0%, transparent 50%);
+    animation: drift 18s ease-in-out infinite alternate;
+}
+@keyframes drift {
+    0%   { transform: scale(1) rotate(0deg); }
+    100% { transform: scale(1.1) rotate(2deg); }
+}
+
+/* Vertical ticker rail — gives the "lots of live data" feel */
+.ticker-rail {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: linear-gradient(180deg, transparent, rgba(0,255,65,0.3), transparent);
+    animation: ticker 4s linear infinite;
+}
+@keyframes ticker {
+    0%   { transform: translateY(-100%); opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    100% { transform: translateY(100%); opacity: 0; }
+}
+
+/* Scene base — each scene fades in/out under <script> control */
+.scene {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 4rem 2rem;
+    opacity: 0;
+    transition: opacity 800ms ease-in-out;
+    pointer-events: none;
+}
+.scene.active { opacity: 1; pointer-events: auto; }
+
+/* Typography */
+.kicker {
+    font-family: 'Space Grotesk', 'Inter', monospace;
+    font-size: 12px; font-weight: 500;
+    letter-spacing: 0.4em; text-transform: uppercase;
+    color: #00FF41; margin-bottom: 2rem;
+    animation: kickerIn 1200ms ease-out;
+}
+@keyframes kickerIn {
+    from { opacity: 0; letter-spacing: 0.1em; }
+    to   { opacity: 1; letter-spacing: 0.4em; }
+}
+.headline {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: clamp(2rem, 5vw, 4rem);
+    font-weight: 700; line-height: 1.05;
+    text-align: center; max-width: 880px;
+    margin: 0 auto;
+}
+.headline em {
+    font-style: normal; color: #00FF41;
+    font-weight: 800;
+}
+.headline .strike {
+    text-decoration: line-through 3px #FF3B30;
+    text-decoration-skip-ink: none;
+    color: #A1A1AA;
+    opacity: 0.7;
+}
+.subline {
+    margin-top: 1.5rem;
+    color: #A1A1AA;
+    font-size: clamp(1rem, 1.8vw, 1.25rem);
+    line-height: 1.5;
+    max-width: 700px; text-align: center;
+}
+
+/* Pillar card grid (Scene 4) */
+.pillar-grid {
+    display: grid; gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    max-width: 1100px; width: 100%;
+    margin-top: 2rem;
+}
+.pillar {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 1.5rem;
+    border-radius: 8px;
+    opacity: 0; transform: translateY(20px);
+    animation: pillarIn 600ms cubic-bezier(0.16,1,0.3,1) forwards;
+}
+.pillar:nth-child(1) { animation-delay: 200ms; }
+.pillar:nth-child(2) { animation-delay: 1000ms; }
+.pillar:nth-child(3) { animation-delay: 1800ms; }
+.pillar:nth-child(4) { animation-delay: 2600ms; }
+.pillar:nth-child(5) { animation-delay: 3400ms; }
+@keyframes pillarIn {
+    to { opacity: 1; transform: translateY(0); }
+}
+.pillar-num {
+    font-family: 'Space Grotesk', monospace;
+    font-size: 0.75rem; color: #00FF41;
+    margin-bottom: 0.5rem;
+}
+.pillar-title {
+    font-size: 1rem; font-weight: 600;
+    color: #FAFAFA; margin-bottom: 0.5rem;
+}
+.pillar-body {
+    font-size: 0.875rem; color: #A1A1AA;
+    line-height: 1.4;
+}
+
+/* CTA scene */
+.cta-block {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 1.5rem;
+}
+.cta-button {
+    background: #00FF41; color: black;
+    padding: 1rem 2.5rem;
+    font-family: 'Space Grotesk', monospace;
+    font-size: 0.875rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    border-radius: 4px;
+    text-decoration: none;
+    transition: all 200ms;
+    cursor: pointer; border: none;
+}
+.cta-button:hover {
+    background: #33FF66;
+    box-shadow: 0 0 32px rgba(0,255,65,0.4);
+    transform: translateY(-1px);
+}
+.cta-secondary {
+    color: #71717A; font-size: 0.75rem;
+    cursor: pointer; background: transparent; border: none;
+    text-transform: uppercase; letter-spacing: 0.15em;
+    transition: color 200ms;
+}
+.cta-secondary:hover { color: #FAFAFA; }
+
+/* Progress dot rail (bottom) */
+.scene-rail {
+    position: absolute; bottom: 2rem; left: 50%;
+    transform: translateX(-50%);
+    display: flex; gap: 0.5rem;
+    z-index: 10;
+}
+.scene-dot {
+    width: 24px; height: 2px;
+    background: #1F1F1F;
+    border-radius: 1px;
+    transition: background 300ms;
+}
+.scene-dot.active { background: #00FF41; }
+.scene-dot.played { background: #52525B; }
+
+/* Skip control */
+.trailer-skip {
+    position: absolute; top: 2rem; right: 2rem;
+    z-index: 10;
+}
+
+/* Audio readiness — `data-audio-ready` toggled by JS once MP3 loaded */
+.audio-status {
+    position: absolute; bottom: 1rem; left: 1rem;
+    font-family: 'Space Grotesk', monospace;
+    font-size: 10px;
+    color: #52525B; letter-spacing: 0.2em;
+    z-index: 10;
+}
