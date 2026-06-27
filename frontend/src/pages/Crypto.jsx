@@ -1,14 +1,23 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Bitcoin, Plus, Trash2, RefreshCw, ShieldCheck, ExternalLink, AlertTriangle, X, Zap } from "lucide-react";
+import { Bitcoin, Plus, Trash2, RefreshCw, ShieldCheck, AlertTriangle, X, Zap } from "lucide-react";
 import { toast } from "sonner";
 
-const emptyForm = { label: "", api_key: "", api_secret: "", testnet: true, initial_balance: 10000 };
+const emptyForm = {
+    label: "",
+    api_key: "",
+    api_secret: "",
+    api_passphrase: "",
+    testnet: true,
+    initial_balance: 10000,
+    exchange_id: "binance",
+};
 
 export default function Crypto() {
     const [accounts, setAccounts] = useState([]);
     const [status, setStatus] = useState({ live_enabled: false, default_testnet: true });
+    const [exchanges, setExchanges] = useState([]);
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState(emptyForm);
     const [submitting, setSubmitting] = useState(false);
@@ -19,12 +28,14 @@ export default function Crypto() {
 
     const load = useCallback(async () => {
         try {
-            const [a, s] = await Promise.all([
+            const [a, s, x] = await Promise.all([
                 api.get("/crypto/accounts"),
                 api.get("/crypto/status"),
+                api.get("/crypto/exchanges"),
             ]);
             setAccounts(a.data || []);
             setStatus(s.data || status);
+            setExchanges(x.data?.exchanges || []);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
     }, []);
@@ -35,9 +46,12 @@ export default function Crypto() {
         e.preventDefault();
         setErr(""); setFormErr(""); setSubmitting(true);
         try {
-            await api.post("/crypto/accounts", form);
+            // Drop empty passphrase so backend default-None applies.
+            const payload = { ...form };
+            if (!payload.api_passphrase) delete payload.api_passphrase;
+            await api.post("/crypto/accounts", payload);
             setShowForm(false); setForm(emptyForm);
-            toast.success("Binance account verified & linked.");
+            toast.success("Account verified & linked.");
             await load();
         } catch (e2) {
             const msg = formatApiError(e2);
@@ -48,7 +62,7 @@ export default function Crypto() {
     };
 
     const remove = async (id) => {
-        if (!confirm("Detach this Binance account? Stored API keys will be permanently erased.")) return;
+        if (!confirm("Detach this crypto account? Stored API keys will be permanently erased.")) return;
         try {
             await api.delete(`/crypto/accounts/${id}`);
             toast.success("Account detached.");
@@ -67,12 +81,12 @@ export default function Crypto() {
     return (
         <AppLayout>
             <PageHeader
-                title="Crypto · Binance Spot"
-                subtitle="Live BTC/ETH execution via CCXT. Testnet by default — flip to live only after explicit verification."
+                title="Crypto · Spot Trading"
+                subtitle="Live BTC/ETH execution via CCXT. Binance · Binance.US · Kraken · OKX · KuCoin. Testnet first — flip to live only after verification."
                 action={
                     <button onClick={() => setShowForm(true)} data-testid="add-crypto-account-btn"
                         className="bg-[#FFD700] text-black px-4 py-2 font-mono text-xs tracking-widest hover:bg-[#FFB000] flex items-center gap-2">
-                        <Plus className="w-4 h-4" /> ADD BINANCE ACCOUNT
+                        <Plus className="w-4 h-4" /> ADD CRYPTO ACCOUNT
                     </button>
                 }
             />
@@ -101,10 +115,10 @@ export default function Crypto() {
             ) : accounts.length === 0 ? (
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-10 text-center" data-testid="crypto-empty">
                     <Bitcoin className="w-12 h-12 text-[#FFD700] mx-auto mb-3 opacity-50" />
-                    <div className="font-display font-bold text-lg mb-1">No Binance accounts yet</div>
+                    <div className="font-display font-bold text-lg mb-1">No crypto accounts yet</div>
                     <div className="text-sm text-[#A1A1AA] max-w-md mx-auto">
-                        Add your testnet API key+secret from <a href="https://testnet.binance.vision/" target="_blank" rel="noopener noreferrer"
-                            className="text-[#FFD700] underline">testnet.binance.vision</a> to enable real-time BTC/ETH execution alongside MT5.
+                        Connect any supported exchange (Binance · Binance.US · Kraken · OKX · KuCoin)
+                        to enable real-time BTC/ETH execution alongside MT5.
                     </div>
                 </div>
             ) : (
@@ -119,7 +133,7 @@ export default function Crypto() {
                                         <span className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border ${a.testnet ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#FF3B30]/40 text-[#FF3B30]"}`}>
                                             {a.testnet ? "TESTNET" : "LIVE"}
                                         </span>
-                                        <span className="font-mono text-[10px] text-[#52525B] tracking-widest">{a.broker || "BINANCE_SPOT"}</span>
+                                        <span className="font-mono text-[10px] text-[#52525B] tracking-widest">{a.exchange_label || a.broker || "BINANCE_SPOT"}</span>
                                         <span className="font-mono text-[10px] text-[#52525B] tracking-widest">KEY: {a.api_key_masked || "•••• ????"}</span>
                                     </div>
                                 </div>
@@ -145,6 +159,7 @@ export default function Crypto() {
 
             {showForm && (
                 <AddCryptoModal form={form} setForm={setForm} onSubmit={submit}
+                    exchanges={exchanges}
                     onClose={() => { setShowForm(false); setFormErr(""); }}
                     submitting={submitting} formErr={formErr} />
             )}
@@ -157,8 +172,11 @@ export default function Crypto() {
 }
 
 
-function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr }) {
+function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr, exchanges }) {
     const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+    const selected = exchanges.find(e => e.id === form.exchange_id) || {};
+    const needsPassphrase = !!selected.requires_passphrase;
+    const supportsSandbox = selected.supports_sandbox !== false;
     return (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
             data-testid="add-crypto-modal" onClick={onClose}>
@@ -167,7 +185,7 @@ function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr 
                 <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
                     <Bitcoin className="w-5 h-5 text-[#FFD700]" />
                     <div className="flex-1">
-                        <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">ADD BINANCE ACCOUNT</div>
+                        <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">ADD CRYPTO ACCOUNT</div>
                         <div className="font-display font-bold text-lg">Connect via CCXT</div>
                     </div>
                     <button onClick={onClose} data-testid="add-crypto-close"
@@ -178,12 +196,15 @@ function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr 
                     <div className="flex items-start gap-2">
                         <AlertTriangle className="w-4 h-4 text-[#FFD700] shrink-0 mt-0.5" />
                         <div>
-                            <strong className="text-[#FFD700]">Testnet first.</strong> Generate keys at{" "}
-                            <a href="https://testnet.binance.vision/" target="_blank" rel="noopener noreferrer"
-                                className="text-[#FFD700] underline inline-flex items-center gap-1">
-                                testnet.binance.vision <ExternalLink className="w-3 h-3" />
-                            </a>. Required permissions: <code className="text-white">Enable Spot Trading</code>.
+                            <strong className="text-[#FFD700]">Testnet first.</strong>{" "}
+                            Required permissions: <code className="text-white">Read</code> + <code className="text-white">Spot Trading</code>.
                             <span className="text-[#FF3B30]"> Never grant Withdrawals.</span> Keys are AES-256-GCM encrypted before storage.
+                            {!supportsSandbox && form.exchange_id && (
+                                <div className="mt-1.5 text-[#FFB000]">
+                                    ⚠ {selected.label} has no public sandbox. Testnet flag here keeps the route-layer kill-switch on
+                                    (no real orders without <code>BINANCE_LIVE_ENABLED=true</code>) but API calls hit live endpoints.
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -197,31 +218,58 @@ function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr 
                         </div>
                     )}
                     <div>
+                        <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">EXCHANGE</label>
+                        <select required value={form.exchange_id}
+                            onChange={(e) => set("exchange_id", e.target.value)} data-testid="form-exchange"
+                            className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none">
+                            {exchanges.map(x => (
+                                <option key={x.id} value={x.id}>
+                                    {x.label}
+                                    {x.requires_passphrase ? " (passphrase required)" : ""}
+                                    {!x.supports_sandbox ? " · live only" : ""}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
                         <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">LABEL</label>
                         <input type="text" required value={form.label}
                             onChange={(e) => set("label", e.target.value)} data-testid="form-label"
-                            placeholder="My Testnet Account"
+                            placeholder={`My ${selected.label || "Crypto"} Account`}
                             className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
                     </div>
                     <div>
                         <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">API KEY</label>
                         <input type="text" required value={form.api_key}
                             onChange={(e) => set("api_key", e.target.value)} data-testid="form-api-key"
-                            placeholder="paste 64-char API key"
+                            placeholder="paste API key"
                             className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
                     </div>
                     <div>
                         <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">API SECRET</label>
                         <input type="password" required value={form.api_secret}
                             onChange={(e) => set("api_secret", e.target.value)} data-testid="form-api-secret"
-                            placeholder="paste 64-char secret"
+                            placeholder="paste API secret"
                             className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
                     </div>
+                    {needsPassphrase && (
+                        <div data-testid="form-passphrase-wrap">
+                            <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">
+                                API PASSPHRASE <span className="text-[#FFD700]">(required for {selected.label})</span>
+                            </label>
+                            <input type="password" required value={form.api_passphrase}
+                                onChange={(e) => set("api_passphrase", e.target.value)} data-testid="form-api-passphrase"
+                                placeholder="the passphrase you chose when generating the API key"
+                                className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                        </div>
+                    )}
                     <label className="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" checked={form.testnet}
                             onChange={(e) => set("testnet", e.target.checked)} data-testid="form-testnet"
                             className="accent-[#FFD700]" />
-                        <span className="font-mono text-xs">Testnet (recommended)</span>
+                        <span className="font-mono text-xs">
+                            Testnet {supportsSandbox ? "(recommended)" : "(safe-mode flag — no sandbox available for this exchange)"}
+                        </span>
                     </label>
 
                     <div className="pt-2 flex items-center justify-end gap-2">
@@ -250,9 +298,10 @@ function InspectAccountModal({ account, onClose }) {
         let cancelled = false;
         const run = async () => {
             try {
+                const tickerSymbol = (account.base_currency || "USDT") === "USD" ? "BTC/USD" : "BTC/USDT";
                 const [b, t] = await Promise.all([
                     api.get(`/crypto/accounts/${account.id}/balance`),
-                    api.get(`/crypto/accounts/${account.id}/ticker?symbol=BTC/USDT`),
+                    api.get(`/crypto/accounts/${account.id}/ticker?symbol=${encodeURIComponent(tickerSymbol)}`),
                 ]);
                 if (!cancelled) { setBalance(b.data); setTicker(t.data); }
             } catch (e) { if (!cancelled) setErr(formatApiError(e)); }
@@ -260,7 +309,7 @@ function InspectAccountModal({ account, onClose }) {
         };
         run();
         return () => { cancelled = true; };
-    }, [account.id]);
+    }, [account.id, account.base_currency]);
 
     return (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
@@ -270,7 +319,7 @@ function InspectAccountModal({ account, onClose }) {
                 <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
                     <Zap className="w-5 h-5 text-[#0099FF]" />
                     <div className="flex-1 min-w-0">
-                        <div className="font-mono text-[10px] text-[#0099FF] tracking-widest">INSPECT · LIVE BINANCE STATE</div>
+                        <div className="font-mono text-[10px] text-[#0099FF] tracking-widest">INSPECT · LIVE EXCHANGE STATE</div>
                         <div className="font-display font-bold text-lg truncate">{account.label}</div>
                     </div>
                     <button onClick={onClose} data-testid="inspect-close"
@@ -287,7 +336,9 @@ function InspectAccountModal({ account, onClose }) {
                     <div className="p-5 space-y-4">
                         {ticker && (
                             <div data-testid="inspect-ticker">
-                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">BTC/USDT · LIVE TICKER</div>
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">
+                                    {ticker.symbol || "BTC/USDT"} · LIVE TICKER
+                                </div>
                                 <div className="grid grid-cols-3 gap-2 font-mono text-xs">
                                     <Stat label="BID" v={ticker.bid?.toFixed?.(2)} />
                                     <Stat label="ASK" v={ticker.ask?.toFixed?.(2)} />

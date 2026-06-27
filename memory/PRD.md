@@ -8,6 +8,14 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-27 (iter-62) — **Multi-exchange CCXT support** (Kraken / OKX / KuCoin / Binance.US / Binance):
+  - **User-blocker fixed**: Emergent's outbound IP is in Iowa/US, so Binance global (`.com` + testnet `.vision`) returned HTTP 451 to all key-verification probes. Confirmed by reachability test: Kraken/OKX/KuCoin/Binance.US all return 200 from the cluster.
+  - **`crypto_bridge/ccxt_engine.py` (new)** — generic CCXT client with an `EXCHANGES` registry: per-exchange ccxt class, sandbox availability, passphrase requirement, default quote (USD for Kraken, USDT elsewhere). `_new_exchange()` dispatches by `account['exchange_id']` (defaults to `binance` for legacy docs). Passphrase decryption added to `_decrypt_creds()` for OKX/KuCoin.
+  - **`crypto_bridge/binance_ccxt.py`** — collapsed to a thin re-export shim so all existing imports keep working.
+  - **`routes/crypto_routes.py`** — `BinanceAccountCreate` gains `exchange_id` + optional `api_passphrase`. Create endpoint validates exchange_id is supported, enforces passphrase for OKX/KuCoin (HTTP 422 with friendly message), routes verify-probe through `CCXTClient`, persists `exchange_id` on the doc. New endpoint `GET /api/crypto/exchanges` powers the UI dropdown. Inspect ticker now picks `BTC/USD` vs `BTC/USDT` per account's `base_currency`.
+  - **`pages/Crypto.jsx`** — Exchange dropdown, conditional Passphrase field (shows for OKX/KuCoin, hidden for Binance/Kraken/Binance.US), exchange label rendered on each account card, "live only · no sandbox" warning for Kraken/Binance.US. Page title generalised from "Binance Spot" → "Crypto · Spot Trading".
+  - **Tests** (`test_iter62_multi_exchange.py`): 7/7 passing — exchanges-endpoint shape, passphrase enforcement, Kraken quote=USD, OKX-no-passphrase 422, Kraken dispatch verified by error message contents. Curated regression 46/46 green across crypto + tiered subs + bot-watching tests.
+
 - 2026-06-27 (iter-61) — **"Bot is patiently watching" dashboard tile + trailer voice sync**:
   - **New feature** (user-requested): Dashboard widget that explains *why* the bot isn't trading — surfaces live entropy, news sentiment, RSI/volatility, the exact HOLD reason from `ai_signals.py`, plus "last eval / next eval in X" countdown and a HOLD-streak counter. Turns silent periods into a confidence-building view.
     - **Backend**: `GET /api/signals/watch-status` (`signal_routes.py`) — returns latest signal per user-configured symbol with entropy parsed out of the reasoning string, plus sentiment, indicators, session, cooldown countdown, and HOLD streak since last actionable signal. Tests: `test_iter61_bot_watching.py` 3/3 passing.

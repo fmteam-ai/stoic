@@ -23,8 +23,9 @@ from bson import ObjectId
 from auth import get_current_user, generate_bridge_token
 from database import get_db
 from secrets_vault import encrypt as vault_encrypt, mask as vault_mask
-from crypto_bridge.binance_ccxt import (
-    BinanceClient, normalize_symbol, _live_enabled,
+from crypto_bridge.ccxt_engine import (
+    CCXTClient, normalize_symbol, _live_enabled,
+    EXCHANGES, SUPPORTED_EXCHANGES, DEFAULT_EXCHANGE_ID,
 )
 from crypto_bridge.binance_engine import BinanceCCXTEngine
 
@@ -39,6 +40,8 @@ class BinanceAccountCreate(BaseModel):
     api_secret: str = Field(min_length=10)
     testnet: bool = True  # default-safe: testnet unless explicitly flipped
     initial_balance: float = 10000.0  # bookkeeping starting value (testnet has dummy funds)
+    exchange_id: str = Field(default=DEFAULT_EXCHANGE_ID)  # binance / binanceus / kraken / okx / kucoin
+    api_passphrase: Optional[str] = None  # required for OKX/KuCoin only
 
 
 class CryptoSignal(BaseModel):
@@ -60,6 +63,13 @@ def _serialize(doc: dict) -> dict:
     creds = out.pop("creds", {}) or {}
     # Never echo the encrypted blob — just confirm presence.
     out["has_credentials"] = bool(creds.get("api_key") and creds.get("api_secret"))
+    out["has_passphrase"] = bool(creds.get("api_passphrase"))
+    # Default exchange_id to "binance" for legacy docs written before
+    # multi-exchange support landed.
+    out.setdefault("exchange_id", DEFAULT_EXCHANGE_ID)
+    out["exchange_label"] = EXCHANGES.get(out["exchange_id"], {}).get(
+        "label", out["exchange_id"]
+    )
     # Mask the key fingerprint (decrypt+mask) so the UI can show "•••• ABCD"
     # without exposing the secret.
     try:
@@ -95,41 +105,58 @@ async def list_crypto_accounts(user=Depends(get_current_user)):
 async def create_crypto_account(payload: BinanceAccountCreate, user=Depends(get_current_user)):
     db = get_db()
 
+    # Validate exchange_id up front
+    exchange_id = (payload.exchange_id or DEFAULT_EXCHANGE_ID).lower()
+    meta = EXCHANGES.get(exchange_id)
+    if not meta:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported exchange. Choose one of: {', '.join(SUPPORTED_EXCHANGES)}",
+        )
+    if meta["passphrase"] and not (payload.api_passphrase and payload.api_passphrase.strip()):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{meta['label']} requires an API passphrase. Paste it into the Passphrase field.",
+        )
+
     # Encrypt creds at rest.
     enc_key = vault_encrypt(payload.api_key.strip())
     enc_sec = vault_encrypt(payload.api_secret.strip())
+    enc_pass = vault_encrypt(payload.api_passphrase.strip()) if payload.api_passphrase else None
 
     # Sanity probe: do a fetch_balance immediately to verify keys before persist.
     probe_account = {
-        "creds": {"api_key": enc_key, "api_secret": enc_sec},
+        "creds": {"api_key": enc_key, "api_secret": enc_sec, "api_passphrase": enc_pass},
         "testnet": payload.testnet,
         "live": not payload.testnet,
+        "exchange_id": exchange_id,
     }
     try:
-        async with BinanceClient(probe_account) as client:
+        async with CCXTClient(probe_account) as client:
             await client.fetch_balance()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(
             status_code=422,
-            detail=f"Could not verify keys against Binance: {str(e)[:200]}",
+            detail=f"Could not verify keys against {meta['label']}: {str(e)[:200]}",
         )
 
     doc = {
         "user_id": user["id"],
-        "kind": "binance",
+        "kind": "binance",                          # legacy "kind" field reused as the crypto-account marker
+        "exchange_id": exchange_id,
         "label": payload.label,
-        "broker": "BINANCE_SPOT",
-        "server": "spot-testnet" if payload.testnet else "spot-live",
+        "broker": meta["label"].upper().replace(" ", "_") + "_SPOT",
+        "server": f"{exchange_id}-{'testnet' if payload.testnet else 'live'}",
         "account_number": "—",            # n/a for ccxt
         "account_type": "standard",       # crypto has no microcent convention
-        "base_currency": "USDT",
+        "base_currency": meta.get("default_quote", "USDT"),
         "mode": "paper" if payload.testnet else "live",
         "testnet": payload.testnet,
         "live": not payload.testnet,
         "balance": float(payload.initial_balance),
         "equity": float(payload.initial_balance),
         "free_margin": float(payload.initial_balance),
-        "creds": {"api_key": enc_key, "api_secret": enc_sec},
+        "creds": {"api_key": enc_key, "api_secret": enc_sec, "api_passphrase": enc_pass},
         "bridge_token": generate_bridge_token(),  # reused as a generic account-secret
         "status": "connected",
         "last_heartbeat": datetime.now(timezone.utc).isoformat(),
@@ -153,10 +180,10 @@ async def crypto_balance(account_id: str, user=Depends(get_current_user)):
     db = get_db()
     acc = await _load_user_account(db, user, account_id)
     try:
-        async with BinanceClient(acc) as client:
+        async with CCXTClient(acc) as client:
             bal = await client.fetch_balance()
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Binance error: {str(e)[:200]}")
+        raise HTTPException(status_code=502, detail=f"Exchange error: {str(e)[:200]}")
     total = bal.get("total") or {}
     free = bal.get("free") or {}
     used = bal.get("used") or {}
@@ -179,12 +206,12 @@ async def crypto_ticker(account_id: str, symbol: str = "BTC/USDT",
                        user=Depends(get_current_user)):
     db = get_db()
     acc = await _load_user_account(db, user, account_id)
-    ccxt_sym = normalize_symbol(symbol)
+    ccxt_sym = normalize_symbol(symbol, acc.get("exchange_id", DEFAULT_EXCHANGE_ID))
     try:
-        async with BinanceClient(acc) as client:
+        async with CCXTClient(acc) as client:
             t = await client.fetch_ticker(ccxt_sym)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Binance error: {str(e)[:200]}")
+        raise HTTPException(status_code=502, detail=f"Exchange error: {str(e)[:200]}")
     return {
         "symbol": ccxt_sym,
         "bid": t.get("bid"),
@@ -231,7 +258,7 @@ async def crypto_verify(account_id: str, user=Depends(get_current_user)):
     db = get_db()
     acc = await _load_user_account(db, user, account_id)
     try:
-        async with BinanceClient(acc) as client:
+        async with CCXTClient(acc) as client:
             bal = await client.fetch_balance()
         ok = True
         msg = "Keys verified."
@@ -251,4 +278,24 @@ async def crypto_status(user=Depends(get_current_user)):
     return {
         "live_enabled": _live_enabled(),
         "default_testnet": True,
+    }
+
+
+@router.get("/exchanges")
+async def crypto_exchanges(user=Depends(get_current_user)):
+    """List of CCXT exchanges supported by this deployment, with the metadata
+    the UI needs to render the Add-Account dropdown + conditional fields."""
+    _ = user
+    return {
+        "default": DEFAULT_EXCHANGE_ID,
+        "exchanges": [
+            {
+                "id": eid,
+                "label": meta["label"],
+                "requires_passphrase": meta["passphrase"],
+                "supports_sandbox": meta["sandbox"],
+                "default_quote": meta.get("default_quote", "USDT"),
+            }
+            for eid, meta in EXCHANGES.items()
+        ],
     }
