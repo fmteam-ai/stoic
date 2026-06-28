@@ -101,6 +101,9 @@ def _serialize(cfg: dict) -> dict:
         "daily_drawdown_enabled": cfg.get("daily_drawdown_enabled", True),
         "weekly_drawdown_pct": cfg.get("weekly_drawdown_pct", 7.0),
         "weekly_drawdown_enabled": cfg.get("weekly_drawdown_enabled", True),
+        # iter-65 — Daily profit target with lock/stop semantics
+        "daily_profit_target_r": float(cfg.get("daily_profit_target_r") or 0.0),
+        "daily_profit_target_action": cfg.get("daily_profit_target_action") or "lock",
         "spread_filter_enabled": cfg.get("spread_filter_enabled", False),
         "max_spread_pips": cfg.get("max_spread_pips") or {"XAUUSD": 50.0, "BTCUSD": 100.0},
         "auto_tune_enabled": cfg.get("auto_tune_enabled", True),
@@ -584,6 +587,17 @@ async def update_config(payload: BotConfigUpdate,
         }
     if "max_lot_size" in update:
         update["max_lot_size"] = max(0.0, float(update["max_lot_size"]))
+    # iter-65: Coerce bogus profit-target-action values at write time so the
+    # DB never carries garbage like "TURBO_LOCK". The runtime evaluator also
+    # coerces, but cleaning at the boundary keeps stored state honest.
+    if "daily_profit_target_action" in update:
+        v = (update["daily_profit_target_action"] or "").lower()
+        update["daily_profit_target_action"] = v if v in ("lock", "stop") else "lock"
+    if "daily_profit_target_r" in update:
+        try:
+            update["daily_profit_target_r"] = max(0.0, min(20.0, float(update["daily_profit_target_r"])))
+        except (TypeError, ValueError):
+            update["daily_profit_target_r"] = 0.0
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     # Ensure the target doc exists, then PATCH.

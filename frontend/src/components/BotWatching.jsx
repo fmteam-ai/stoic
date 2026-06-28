@@ -32,8 +32,15 @@ const SENTIMENT_STYLE = {
     very_bearish: { fg: "text-[#FF3B30]", Icon: TrendingDown, label: "VERY BEARISH" },
 };
 
-function EntropyBar({ entropy, threshold }) {
+function EntropyBar({ entropy, threshold, marketClosed }) {
     if (entropy == null) {
+        if (marketClosed) {
+            return (
+                <div className="font-mono text-[10px] text-[#FFB000]" data-testid="entropy-market-closed">
+                    market closed · entropy paused
+                </div>
+            );
+        }
         return <div className="font-mono text-[10px] text-[#52525B]">entropy: n/a</div>;
     }
     const pct = Math.min(100, Math.round(entropy * 100));
@@ -93,7 +100,8 @@ function SymbolCard({ s, cooldownMin }) {
             </div>
 
             {/* Entropy meter — the headline metric */}
-            <EntropyBar entropy={s.entropy} threshold={s.entropy_threshold ?? 0.9} />
+            <EntropyBar entropy={s.entropy} threshold={s.entropy_threshold ?? 0.9}
+                        marketClosed={(s.reason || "").toLowerCase().includes("market closed")} />
 
             {/* Indicators strip */}
             <div className="grid grid-cols-3 gap-3 pt-1 border-t border-[#1F1F1F]">
