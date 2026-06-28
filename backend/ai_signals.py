@@ -20,7 +20,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from market import get_quote, get_history, compute_indicators, asset_type_of
 from risk import get_profile, derive_sl_tp, compute_kelly_position_size
 from news import score_sentiment
-from microstructure import current_session, session_bias_for, classify_regime
+from microstructure import current_session, session_bias_for, classify_regime, is_market_closed
 from economic_calendar import macro_freeze_check, upcoming_for
 from entropy_filter import classify_noise
 from regime_adapter import adapt_profile_for_regime
@@ -239,13 +239,29 @@ async def analyze_symbol(symbol: str, risk_level: str,
     }, separators=(",", ":"))
 
     # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    # MARKET-HOURS HARD VETO (iter-63) — applied BEFORE aggressive_mode bypass.
+    # When the symbol's market is closed, broker will reject any order with
+    # MT5 error 10018 MARKET_CLOSED. There is no LLM gymnastics that fixes
+    # a closed exchange. So we short-circuit HOLD unconditionally.
+    # XAUUSD/forex: Fri 21:00 UTC → Sun 22:00 UTC.  Crypto: never closed.
+    # ------------------------------------------------------------------------
+    market_closure = is_market_closed(symbol)
+
     # CHEAP HOLD pre-filter (iter-39) — skip the LLM call entirely when the
     # deterministic gates already guarantee HOLD. Saves ~$0.01-0.03 per call
     # plus 2-5s latency. The Claude pass would have HOLD'd anyway via the
     # 10-layer veto cascade below; this just short-circuits earlier.
     # ------------------------------------------------------------------------
     cheap_hold_reason = None
-    if not aggressive_mode:
+    # Market closure ALWAYS wins — even aggressive_mode cannot trade a
+    # closed exchange. Other soft vetoes remain gated by aggressive_mode.
+    if market_closure:
+        cheap_hold_reason = (
+            f"{market_closure['reason']} "
+            f"(reopens in {market_closure['reopens_in_hours']}h)"
+        )
+    elif not aggressive_mode:
         if macro.get("frozen"):
             cheap_hold_reason = f"Macro freeze in effect: {macro.get('reason') or 'high-impact event window'}"
         elif regime.get("regime") == "CHOP":
@@ -299,6 +315,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
             "min_confidence_required": adapted_profile["min_confidence"],
             "veto_applied": True,
             "cheap_hold": True,  # tag for cost analytics / UI badge
+            "market_closure": market_closure,  # populated iff this HOLD was triggered by closed market
             "tradeable": False,
             "created_at": datetime.now(timezone.utc),
         }

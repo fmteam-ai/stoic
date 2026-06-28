@@ -28,6 +28,20 @@ class MT5BridgeEngine(ExecutionEngine):
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+
+        # MARKET-HOURS HARD VETO (iter-63) — block at execution layer too, so
+        # any in-flight signal from before the analyze_symbol fix can't fire.
+        # XAUUSD / forex: closed Fri 21:00 → Sun 22:00 UTC. Broker would
+        # return MT5 10018 MARKET_CLOSED otherwise.
+        from microstructure import is_market_closed
+        closure = is_market_closed(signal.get("symbol", ""))
+        if closure:
+            logger.warning(
+                "MT5 execute blocked by market-hours veto user=%s acct=%s sym=%s reason=%s",
+                user_id, cfg_account_id or "default", signal.get("symbol"), closure["reason"],
+            )
+            return {"blocked": "market_closed", **closure}
+
         # Atomic last-line-of-defense cap check. bot_runner.py reads `inflight`
         # ONCE per loop iteration — hot reloads can spawn duplicate loops that
         # all see stale counts. Re-counting right before insert closes the race.
@@ -137,6 +151,16 @@ class PaperEngine(ExecutionEngine):
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+        # Mirror MT5 path's market-hours veto so paper-shadow PnL stays
+        # consistent with live behaviour (no phantom weekend fills).
+        from microstructure import is_market_closed
+        closure = is_market_closed(signal.get("symbol", ""))
+        if closure:
+            logger.info(
+                "paper execute blocked by market-hours veto user=%s acct=%s sym=%s reason=%s",
+                user_id, cfg_account_id or "default", signal.get("symbol"), closure["reason"],
+            )
+            return {"blocked": "market_closed", **closure}
         if max_concurrent > 0:
             cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
             if cfg_account_id:

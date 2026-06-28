@@ -8,7 +8,8 @@ Regime classification labels the current market state from indicators so the
 AI can adapt its strategy (trend / range / high-vol-chop) instead of using one
 model for every environment.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 # UTC trading session ranges
 SESSIONS = {
@@ -16,6 +17,70 @@ SESSIONS = {
     "london": (7, 16),  # 07:00 - 16:00 UTC
     "ny":     (13, 22), # 13:00 - 22:00 UTC
 }
+
+# Crypto trades 24/7. Everything else (forex/metals) inherits the
+# Fri 21:00 → Sun 22:00 UTC weekly close. We list the explicit crypto
+# bases so a typo in a non-crypto symbol never accidentally bypasses the
+# market-hours gate.
+_CRYPTO_BASES = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "LTC", "AVAX", "DOT"}
+
+
+def is_crypto_symbol(symbol: str) -> bool:
+    sym = (symbol or "").upper()
+    if "/" in sym:  # ccxt-style "BTC/USDT"
+        return True
+    # Strip trailing fiat for matching: BTCUSD → BTC, BTCUSDT → BTC, ETHUSD → ETH
+    for tail in ("USDT", "USDC", "USD"):
+        if sym.endswith(tail):
+            return sym[: -len(tail)] in _CRYPTO_BASES
+    return False
+
+
+def is_market_closed(symbol: str, now: Optional[datetime] = None) -> Optional[dict]:
+    """Return None if `symbol` is currently tradeable, else a dict
+    ``{"reason", "reopens_at_utc", "reopens_in_hours"}`` describing the closure.
+
+    Conservative forex/metals weekly window (matches MT5 broker behaviour):
+      • OPEN  — Sunday 22:00 UTC → Friday 21:00 UTC
+      • CLOSED — Friday 21:00 UTC → Sunday 22:00 UTC
+
+    Crypto symbols (BTC/ETH/SOL/etc.) are never closed.
+
+    Sending an order during a closed session = guaranteed broker rejection
+    (MT5 error 10018 MARKET_CLOSED), so this is a HARD veto applied even
+    under aggressive_mode.
+    """
+    if is_crypto_symbol(symbol):
+        return None
+    now = now or datetime.now(timezone.utc)
+    weekday = now.weekday()  # 0=Mon … 6=Sun
+    hour = now.hour
+    sym = symbol.upper()
+
+    def _payload(reason: str, reopens: datetime) -> dict:
+        hours = max(0.0, (reopens - now).total_seconds() / 3600.0)
+        return {
+            "reason": reason,
+            "reopens_at_utc": reopens.isoformat(),
+            "reopens_in_hours": round(hours, 1),
+        }
+
+    # Saturday — closed all day; reopens Sunday 22:00 UTC
+    if weekday == 5:
+        reopens = (now + timedelta(days=1)).replace(hour=22, minute=0, second=0, microsecond=0)
+        return _payload(f"{sym} market closed — Saturday (forex/metals weekly close)", reopens)
+
+    # Sunday before 22:00 UTC — still in weekend window
+    if weekday == 6 and hour < 22:
+        reopens = now.replace(hour=22, minute=0, second=0, microsecond=0)
+        return _payload(f"{sym} market closed — Sunday {hour:02d}:xx UTC (reopens 22:00 UTC)", reopens)
+
+    # Friday at/after 21:00 UTC — weekly close already triggered
+    if weekday == 4 and hour >= 21:
+        reopens = (now + timedelta(days=2)).replace(hour=22, minute=0, second=0, microsecond=0)
+        return _payload(f"{sym} market closed — Friday {hour:02d}:xx UTC (weekly close)", reopens)
+
+    return None
 
 
 def current_session(now: datetime = None) -> dict:
