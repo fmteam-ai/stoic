@@ -8,6 +8,16 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-28 (iter-69) — **P2 Batch: Breakout Scalper + VWAP Pullback + XGBoost + LLM Reflection + Email Digest**:
+  - **Breakout Scalper** (`breakout_scalper.py`) — Donchian-20 channel break + ≥0.25 ATR confirmation. Returns `{signal, channel_high/low, atr, break_distance_atr, ...}` to AI dict and prompt.
+  - **VWAP Pullback** (`vwap_pullback.py`) — Rolling-20 typical-price × volume VWAP proxy (falls back to typical-price SMA when volume missing). Surfaces `{vwap, pullback_pct, regime, pullback_signal}` and produces actionable BUY/SELL pullback hints when trend-aligned. Five regimes: near / above / below / above_extended / below_extended.
+  - **XGBoost meta-learner** (`learned_meta.py`) — `_fit_artifact()` now branches on sample count: ≥100 → `xgb.train` native API (no sklearn dep), <100 → logistic regression. Artifact discriminator field `backend: "xgboost"|"logreg"`. Predict path supports both via base64-encoded booster JSON. Platt calibration kept across both backends.
+  - **LLM-written Weekly Digest reflection** (`routes/insights_routes.py::_generate_ai_reflection`) — Claude Sonnet 4.5 generates a 3-paragraph narrative (what happened / patterns / focus for next week). Opt-in via `?include_ai=true` query param to keep dashboard refresh fast.
+  - **Email-delivered Weekly Digest via Resend** (`email_sender.py` + `POST /api/insights/weekly-digest/email`) — async helper wrapping the synchronous Resend SDK in `asyncio.to_thread`. Renders inline-styled dark-themed HTML email with stats / best-worst / HOLD reasons / AI reflection. Live-verified: message ID `8b6174e1-...` delivered to verified Resend address. RESEND_API_KEY + SENDER_EMAIL added to backend/.env.
+  - **Frontend** (`WeeklyDigestPanel.jsx`) — "GENERATE AI REFLECTION" button lazy-loads the Claude narrative; "EMAIL ME" button triggers POST with success/error banners. Both surface using existing dark+gold aesthetic.
+  - **Testing**: 19 new unit tests + 5 HTTP integration tests added by testing agent. **155/155 backend tests passing**. Frontend interactions verified end-to-end. Lint clean.
+
+
 - 2026-06-28 (iter-68) — **Per-veto reject counter + Auto-escalating profit target**:
   - **Per-veto reject counter** (`routes/signal_routes.py` + `BotWatching.jsx`):
     - Added regex-based veto classifier mapping HOLD `reasoning` strings into 17 named buckets (market_closed, entropy, macro_freeze, regime_chop, self_contra, news, meta_label, mtf, learned_meta, a_plus, rr_ratio, dxy, sector_cap, anti_pyramid, loss_streak, cooldown, low_confidence).
