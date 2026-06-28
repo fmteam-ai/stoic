@@ -120,6 +120,14 @@ class BotConfigUpdate(BaseModel):
     daily_drawdown_enabled: bool = True
     weekly_drawdown_pct: float = 7.0          # auto-stop bot if rolling 7-day P&L drops below -7%
     weekly_drawdown_enabled: bool = True
+    # Daily profit target (iter-65) — upside mirror of the drawdown breaker.
+    # When today's realised P&L reaches `daily_profit_target_r * R_$`, the bot
+    # either locks the profit (`lock` mode — subsequent sizing uses
+    # equity minus locked amount, so the locked $ can't be lost), or pauses
+    # the bot until 00:00 UTC next day (`stop` mode). Resets daily at 00:00 UTC.
+    # `0` / `null` = disabled.
+    daily_profit_target_r: float = 0.0
+    daily_profit_target_action: str = "lock"  # "lock" | "stop"
     # Spread Filter — block auto-execution when current MT5 spread > threshold
     spread_filter_enabled: bool = False
     max_spread_pips: Dict[str, float] = Field(

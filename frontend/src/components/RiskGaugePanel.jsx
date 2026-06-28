@@ -104,11 +104,58 @@ function AccountGaugeCard({ a }) {
             <GaugeRow label="DAILY DRAWDOWN" kind="daily" gauge={daily} equity={a.equity} />
             <GaugeRow label="WEEKLY DRAWDOWN" kind="weekly" gauge={weekly} equity={a.equity} />
 
+            {/* Daily profit target — upside gauge (iter-65) */}
+            {a.profit_target?.enabled && (
+                <ProfitTargetRow pt={a.profit_target} />
+            )}
+
             <div className="pt-2 border-t border-[#1F1F1F] flex items-center justify-between
                             font-mono text-[10px] text-[#52525B] tracking-widest">
                 <span>EQUITY</span>
                 <span>${a.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
+        </div>
+    );
+}
+
+function ProfitTargetRow({ pt }) {
+    const pct = pt.progress_pct || 0;
+    const hit = pt.hit;
+    return (
+        <div className="space-y-1.5" data-testid="gauge-profit-target">
+            <div className="flex items-center justify-between font-mono text-[10px] tracking-widest">
+                <span className="text-[#00FF41]">
+                    DAILY PROFIT TARGET · {pt.target_r}R
+                    <span className="ml-2 text-[#52525B]/80 normal-case">
+                        ({pt.mode === "stop" ? "stop-on-hit" : "lock-on-hit"})
+                    </span>
+                </span>
+                <span className={hit ? "text-[#00FF41] font-bold" : "text-[#A1A1AA]"}>
+                    {pct}% {hit && "· HIT ✓"}
+                </span>
+            </div>
+            <div className="relative h-2 bg-[#1F1F1F] overflow-hidden">
+                <div
+                    className={`absolute inset-y-0 left-0 transition-all duration-700 ${
+                        hit ? "bg-[#00FF41]" : pct >= 50 ? "bg-[#FFD700]" : "bg-[#00FF41]/60"
+                    }`}
+                    style={{ width: `${pct}%` }}
+                />
+            </div>
+            <div className="flex items-center justify-between font-mono text-[9px] text-[#52525B]">
+                <span>
+                    +${pt.current_pnl.toFixed(2)} earned today
+                </span>
+                <span>
+                    target ${pt.target_amount.toFixed(2)} (1R = ${pt.r_dollar_value.toFixed(2)})
+                </span>
+            </div>
+            {pt.locked_amount > 0 && (
+                <div className="font-mono text-[10px] text-[#00FF41] flex items-center gap-1.5 mt-1"
+                     data-testid="profit-target-locked">
+                    🔒 ${pt.locked_amount.toFixed(2)} locked — subsequent trades size against reduced equity
+                </div>
+            )}
         </div>
     );
 }

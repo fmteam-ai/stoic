@@ -262,6 +262,30 @@ async def _process_user_account_locked(db, cfg: dict):
         )
         return
 
+    # 1b. Daily profit target check — upside mirror of the circuit breaker.
+    # If hit + mode=stop → bot disables itself for the day.
+    # If hit + mode=lock → persist lock state (sizing reads it later).
+    from profit_target import apply_profit_target
+    pt = await apply_profit_target(db, user_id, cfg, all_accounts)
+    if pt and pt.get("hit"):
+        await ws_manager.broadcast(user_id, "daily_profit_target_hit", pt)
+        if pt["should_stop"]:
+            logger.info("Profit target STOP for user=%s acct=%s: +$%.2f ≥ %sR",
+                        user_id, cfg_account_id or "default",
+                        pt["current_pnl"], pt["target_r"])
+            await _record_pulse(db, cfg,
+                action="BLOCKED", level="block",
+                reason=(f"Daily profit target hit: +${pt['current_pnl']:.2f} "
+                        f"≥ {pt['target_r']}R — bot paused until 00:00 UTC."),
+            )
+            return
+        # lock mode → refresh in-memory cfg so the rest of this cycle sees it
+        from profit_target import locked_profit_amount  # noqa: F401  (used downstream)
+        # Re-read the freshly-updated cfg so sizing picks up the new lock.
+        cfg_fresh = await db.bot_configs.find_one({"_id": cfg["_id"]})
+        if cfg_fresh:
+            cfg["_profit_lock"] = cfg_fresh.get("_profit_lock")
+
     # Paper-mode-only fallback when subscription is inactive
     if not entitlement["active"]:
         all_accounts = [a for a in all_accounts if (a.get("mode") or "live") == "paper"]
@@ -601,6 +625,10 @@ async def _process_user_account_locked(db, cfg: dict):
         # on live accounts and made the user's max_lot_size cap permanently
         # binding. Doing it here ties sizing to actual risk management.
         profile = get_profile(risk_level)
+        # Iter-65: pass today's locked daily-profit so it's removed from the
+        # equity pool used for Kelly sizing. The locked $ becomes untouchable.
+        from profit_target import locked_profit_amount
+        locked = locked_profit_amount(cfg)
         sized = compute_lot_for_account(
             account=target_account,
             symbol=signal["symbol"],
@@ -608,6 +636,7 @@ async def _process_user_account_locked(db, cfg: dict):
             stop_loss=signal["stop_loss"],
             confidence_pct=float(signal.get("confidence") or 0),
             profile=profile,
+            locked_profit=locked,
         )
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)

@@ -98,7 +98,7 @@ def derive_sl_tp(action: str, entry: float, atr: float, profile: dict) -> tuple:
 
 def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                             stop_loss: float, confidence_pct: float,
-                            profile: dict) -> dict:
+                            profile: dict, locked_profit: float = 0.0) -> dict:
     """Account-aware Kelly position sizing — runs at execute time.
 
     Uses the broker's real equity (not a hardcoded $1000), converts the SL
@@ -111,6 +111,10 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
     with a fake $1000 equity and pip_value=1.0, which always over-shoots on
     larger live accounts — making the user's max_lot_size cap permanently
     binding (which feels like "the bot uses my max every trade").
+
+    `locked_profit` (iter-65): subtracted from equity BEFORE sizing so that
+    the daily-profit-target lock prevents that $ from being risked on later
+    trades today. Defaults to 0 — no behaviour change when feature is off.
     """
     equity = float(
         account.get("equity")
@@ -118,6 +122,11 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         or account.get("initial_balance")
         or 0
     )
+    # Iter-65: shave off the locked daily profit so subsequent trades can
+    # never lose it. Floor at $0 — never go negative even if locked > equity
+    # (defensive only; shouldn't happen in practice).
+    if locked_profit > 0:
+        equity = max(0.0, equity - float(locked_profit))
     if equity <= 0:
         return {"lot_size": 0.01, "method": "fallback_no_equity"}
 

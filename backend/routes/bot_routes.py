@@ -456,6 +456,7 @@ async def get_risk_gauge(user=Depends(get_current_user)):
     from circuit_breakers import (
         _daily_limit, _weekly_limit, realised_pnl_since, today_iso, week_ago_iso,
     )
+    from profit_target import evaluate_profit_target, locked_profit_amount
 
     db = get_db()
     cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=100)
@@ -486,6 +487,15 @@ async def get_risk_gauge(user=Depends(get_current_user)):
         pnl_week = await realised_pnl_since(db, user["id"], week_ago_iso(), account_id=acct_id)
         daily_limit_pct = _daily_limit(cfg)
         weekly_limit_pct = _weekly_limit(cfg)
+
+        # Profit target evaluation — surfaces upside mirror of drawdown.
+        # Pass the same accounts list so the helper can compute equity.
+        scoped_accounts = (
+            [a for a in (await db.accounts.find({"user_id": user["id"]}).to_list(50))
+             if not acct_id or str(a.get("_id")) == acct_id]
+        )
+        pt = await evaluate_profit_target(db, user["id"], cfg, scoped_accounts)
+        locked_amount = locked_profit_amount(cfg)
 
         # Convert limits to $ amounts so the UI can show "‑$47 of ‑$120 cap"
         daily_limit_amount = -(daily_limit_pct / 100.0) * equity if equity > 0 else 0
@@ -524,6 +534,22 @@ async def get_risk_gauge(user=Depends(get_current_user)):
                 "limit_pct": weekly_limit_pct,
                 "limit_amount": round(weekly_limit_amount, 2),
                 "consumed_pct": weekly_consumed_pct,
+            },
+            "profit_target": {
+                "enabled": pt["enabled"],
+                "mode": pt["mode"],
+                "target_r": pt["target_r"],
+                "target_amount": pt["target_amount"],
+                "current_pnl": pt["current_pnl"],
+                "r_dollar_value": pt["r_dollar_value"],
+                "hit": pt["hit"],
+                "locked_amount": locked_amount,
+                # 0–100% progress toward target (0 if disabled or no profit yet)
+                "progress_pct": (
+                    min(100, round((pt["current_pnl"] / pt["target_amount"]) * 100, 1))
+                    if pt["enabled"] and pt["target_amount"] > 0 and pt["current_pnl"] > 0
+                    else 0
+                ),
             },
         })
     out.sort(key=lambda x: (not x["active"], x["label"]))

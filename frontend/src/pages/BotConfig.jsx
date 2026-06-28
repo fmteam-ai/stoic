@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target } from "lucide-react";
 import { toast } from "sonner";
 
 const RISK_DESCRIPTIONS = {
@@ -141,6 +141,8 @@ export default function BotConfig() {
                 trailing_distance_r: cfg.trailing_distance_r,
                 daily_drawdown_pct: cfg.daily_drawdown_pct,
                 daily_drawdown_enabled: cfg.daily_drawdown_enabled,
+                daily_profit_target_r: cfg.daily_profit_target_r ?? 0,
+                daily_profit_target_action: cfg.daily_profit_target_action || "lock",
                 weekly_drawdown_pct: cfg.weekly_drawdown_pct,
                 weekly_drawdown_enabled: cfg.weekly_drawdown_enabled,
                 spread_filter_enabled: cfg.spread_filter_enabled,
@@ -791,6 +793,56 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="weekly_drawdown_pct" label="WEEKLY LOSS LIMIT" suffix="% of equity" step={0.5} min={1} max={40} />
                         </div>
                     )}
+                </div>
+
+                {/* Daily profit target — upside mirror of drawdown breaker (iter-65) */}
+                <div>
+                    <div className="flex items-start gap-3 mb-2">
+                        <Target className="w-5 h-5 text-[#00FF41] shrink-0 mt-0.5" />
+                        <div>
+                            <div className="font-mono text-sm font-medium tracking-tight">Daily Profit Target</div>
+                            <div className="text-[11px] text-[#A1A1AA] mt-0.5 max-w-2xl">
+                                Lock or stop on a daily upside target — measured in R-multiples
+                                of your base risk-per-trade. <span className="text-[#FAFAFA]">1R</span>{" "}
+                                = (risk % of equity). Set <code className="text-white">0</code> to disable.
+                                Resets at 00:00 UTC daily.
+                            </div>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="daily_profit_target_r"
+                            label="DAILY PROFIT TARGET" suffix="R" step={0.5} min={0} max={20} />
+                        <div className="border border-[#1F1F1F] bg-[#050505] p-3">
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">ON TARGET HIT</div>
+                            <div className="flex gap-2">
+                                <button type="button"
+                                    onClick={() => setCfg({ ...cfg, daily_profit_target_action: "lock" })}
+                                    data-testid="profit-target-action-lock"
+                                    className={`flex-1 px-2 py-1.5 font-mono text-[11px] tracking-widest border ${
+                                        (cfg.daily_profit_target_action || "lock") === "lock"
+                                            ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]"
+                                            : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#A1A1AA]"
+                                    }`}>
+                                    LOCK & CONTINUE
+                                </button>
+                                <button type="button"
+                                    onClick={() => setCfg({ ...cfg, daily_profit_target_action: "stop" })}
+                                    data-testid="profit-target-action-stop"
+                                    className={`flex-1 px-2 py-1.5 font-mono text-[11px] tracking-widest border ${
+                                        cfg.daily_profit_target_action === "stop"
+                                            ? "border-[#FFD700] bg-[#FFD700]/10 text-[#FFD700]"
+                                            : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#A1A1AA]"
+                                    }`}>
+                                    STOP FOR DAY
+                                </button>
+                            </div>
+                            <div className="text-[10px] text-[#52525B] mt-2 leading-tight">
+                                {(cfg.daily_profit_target_action || "lock") === "lock"
+                                    ? "Today's profit becomes untouchable. Subsequent trades size against equity − locked. Bot keeps trading."
+                                    : "Auto-execute pauses for the rest of the UTC day. Open positions still exit on their own SL/TP."}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
