@@ -28,6 +28,8 @@ from meta_labeler import predict_true_signal_probability
 from feature_compressor import compress_history
 from mtf_check import multi_timeframe_gate
 from mtf_tiers import compute_mtf_tiers
+from breakout_scalper import compute_breakout_scalper
+from vwap_pullback import compute_vwap_pullback
 from kalman import kalman_features
 from macro.cot import get_gold_positioning
 from macro.tips import get_real_yield
@@ -73,6 +75,16 @@ Rules:
     while SHORT=UP you are fighting the structural trend — prefer HOLD.
     `alignment.dominant` summarises the vote; `all_aligned_up/down` flags
     the strongest setups.
+- Breakout Scalper (`breakout_scalper`):
+    Donchian-20 break + ≥0.25 ATR confirmation. If `signal=BUY/SELL` and
+    aligned with MTF trend, treat as a continuation entry — boost confidence
+    by ~5-10 points. If `signal=NONE` ignore. Counter-trend breakouts
+    (e.g. signal=BUY but LONG tier DOWN) are usually fake-outs — do NOT
+    boost on those.
+- VWAP Pullback (`vwap_pullback`):
+    Rolling 20-bar VWAP proxy. `regime=near` + trend-aligned `pullback_signal`
+    = high-quality re-entry. `above_extended` / `below_extended` regimes
+    (>1.5% from VWAP) are mean-reversion-risk — prefer HOLD or fade.
 - Note: a Meta-Labeler will re-verify your output; conservative is safer.
 - Gold-specific (XAUUSD only): when `kalman_filter`, `cot_positioning`, and
   `real_yield_10y` are present in the payload, use them as macro context:
@@ -147,6 +159,13 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # snapshots from the same daily series, consumed by both the LLM prompt
     # and the MTF gate below (iter-67).
     mtf_tiers = compute_mtf_tiers(history)
+
+    # iter-69 · Breakout Scalper feature (Donchian-20 + ATR confirmation)
+    breakout = compute_breakout_scalper(history)
+    # iter-69 · VWAP-proxy pullback feature, contextualised by HTF trend
+    vwap = compute_vwap_pullback(
+        history, htf_trend=(mtf_tiers.get("alignment") or {}).get("dominant", "FLAT")
+    )
 
     # Gold-specific institutional features (no-op on non-gold or on failure)
     kalman_feat = kalman_features([c["close"] for c in history]) if history else {}
@@ -224,6 +243,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "noise_filter": entropy,
         "compressed_history_features": compressed_features,
         "mtf_tiers": mtf_tiers,
+        "breakout_scalper": breakout,
+        "vwap_pullback": vwap,
         "regime_execution_mode": regime_meta,
         # Gold-specific institutional intel (None on non-gold)
         "kalman_filter": kalman_feat,
@@ -319,6 +340,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
             "meta_label": None,
             "mtf_gate": None,
             "mtf_tiers": mtf_tiers,
+            "breakout_scalper": breakout,
+            "vwap_pullback": vwap,
             "learned_meta": None,
             "aplus_confluence": None,
             "rr_ratio": None,
@@ -674,6 +697,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "meta_label": meta_label,
         "mtf_gate": mtf,
         "mtf_tiers": mtf_tiers,
+        "breakout_scalper": breakout,
+        "vwap_pullback": vwap,
         "learned_meta": learned_meta,
         "aplus_confluence": confluence,
         "rr_ratio": rr_ratio,

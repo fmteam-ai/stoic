@@ -29,6 +29,12 @@ from typing import Optional
 from bson import ObjectId
 import numpy as np
 
+try:
+    import xgboost as xgb
+    _XGB_AVAILABLE = True
+except ImportError:  # pragma: no cover — only when xgboost not installed
+    _XGB_AVAILABLE = False
+
 from database import get_db
 from probability_calibrator import fit_platt, apply_platt, brier_score
 
@@ -36,6 +42,7 @@ logger = logging.getLogger("learned_meta")
 
 MIN_SAMPLES = 30                    # global minimum to train at all
 MIN_SAMPLES_PER_SESSION = 25        # per-session minimum to train a session-specific model
+MIN_SAMPLES_XGB = 100               # iter-69 · XGBoost only kicks in above this sample count
 N_FEATURES = 8     # excluding bias
 L2 = 0.5
 LR = 0.05
@@ -197,15 +204,81 @@ def _auc(y: np.ndarray, p: np.ndarray) -> float:
     return float(score / (pos.size * neg.size))
 
 
-def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
-    """Train one logistic model on (X, y) and return the persistable artifact dict.
+def _train_xgb(X: np.ndarray, y: np.ndarray) -> tuple[bytes, np.ndarray, float]:
+    """Train a small XGBoost classifier (iter-69). Returns (model_bytes, p_train, train_auc).
 
-    Caller is responsible for sample-count gating + persistence.
+    Uses the low-level `xgb.train` API (no sklearn dependency). Capacity is
+    deliberately small — the dataset is small (100-5000 rows) and we want to
+    avoid overfitting.
     """
     n = len(y)
-    w, mu, sd, auc = _train_logreg(X, y)
+    pos = float((y == 1).sum())
+    neg = float((y == 0).sum())
+    spw = (neg / pos) if pos > 0 else 1.0
+
+    dmat = xgb.DMatrix(X, label=y)
+    params = {
+        "objective": "binary:logistic",
+        "max_depth": 3,
+        "eta": 0.08,
+        "subsample": 0.85,
+        "colsample_bytree": 0.85,
+        "reg_lambda": 1.0,
+        "scale_pos_weight": spw,
+        "tree_method": "hist",
+        "eval_metric": "logloss",
+        "verbosity": 0,
+        "nthread": 1,
+    }
+    booster = xgb.train(params, dmat, num_boost_round=120)
+    p = booster.predict(dmat)
+    auc = _auc(y, p) if len(set(y.tolist())) == 2 else 0.5
+
+    raw = booster.save_raw(raw_format="json")
+    if isinstance(raw, bytearray):
+        raw = bytes(raw)
+    return raw, p, auc
+
+
+def _xgb_predict_proba(model_bytes: bytes, X: np.ndarray) -> np.ndarray:
+    """Reconstitute a saved XGBoost booster and predict probabilities."""
+    booster = xgb.Booster()
+    booster.load_model(bytearray(model_bytes))
+    dmat = xgb.DMatrix(X)
+    return booster.predict(dmat)
+
+
+def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
+    """Train one classifier on (X, y) and return the persistable artifact dict.
+
+    iter-69 · For samples ≥100 we use XGBoost; below that we fall back to
+    L2-regularised logistic regression so the model still trains on small
+    per-session slices. Both paths feed through identical Platt calibration.
+    """
+    n = len(y)
+    use_xgb = _XGB_AVAILABLE and n >= MIN_SAMPLES_XGB
+
+    if use_xgb:
+        model_bytes, p_train, auc = _train_xgb(X, y)
+        backend = "xgboost"
+        # XGBoost takes raw features — no standardisation needed.
+        model_payload = {
+            "xgb_model_b64": _b64encode_bytes(model_bytes),
+        }
+        p_final = p_train
+    else:
+        w, mu, sd, auc = _train_logreg(X, y)
+        backend = "logreg"
+        p_final = _sigmoid(
+            np.hstack([(X - mu) / sd, np.ones((n, 1))]) @ w
+        )
+        model_payload = {
+            "weights": w.tolist(),
+            "mu": mu.tolist(),
+            "sd": sd.tolist(),
+        }
+
     # Calibrate threshold: lowest p_win below which precision_of_rejection >= 0.6
-    p_final = _sigmoid(np.hstack([(X - mu) / sd, np.ones((n, 1))]) @ w)
     threshold = 0.45
     for cand in np.arange(0.30, 0.50, 0.01):
         rejected = p_final < cand
@@ -216,7 +289,6 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
             break
 
     # iter-52 · Platt scaling for calibrated probabilities.
-    # Raw sigmoid outputs are class-membership scores, not real frequencies.
     brier_raw = brier_score(p_final, y)
     platt = fit_platt(p_final, y)
     if not platt.get("skipped"):
@@ -224,12 +296,12 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
         brier_cal = brier_score(p_cal, y)
         platt["brier_raw"] = round(brier_raw, 4)
         platt["brier_calibrated"] = round(brier_cal, 4)
+
     return {
         "key": key,
         "label": label,
-        "weights": w.tolist(),
-        "mu": mu.tolist(),
-        "sd": sd.tolist(),
+        "backend": backend,
+        **model_payload,
         "threshold": threshold,
         "train_auc": round(auc, 4),
         "n_samples": int(n),
@@ -242,6 +314,16 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
             "mtf_aligned", "macro_event_24h",
         ],
     }
+
+
+def _b64encode_bytes(b: bytes) -> str:
+    import base64
+    return base64.b64encode(b).decode("ascii")
+
+
+def _b64decode_bytes(s: str) -> bytes:
+    import base64
+    return base64.b64decode(s.encode("ascii"))
 
 
 async def retrain() -> dict:
@@ -319,7 +401,8 @@ async def predict_p_win(signal: dict) -> Optional[dict]:
     """Return {p_win, threshold, verdict, model_used} or None if no model.
 
     Picks the session-specific model for the CURRENT session if available;
-    otherwise falls back to the global model.
+    otherwise falls back to the global model. iter-69 · supports both
+    `backend="xgboost"` and `backend="logreg"` artifacts.
     """
     current_session_label = session_bucket(datetime.now(timezone.utc))
     art = await get_artifact(session_label=current_session_label)
@@ -329,20 +412,29 @@ async def predict_p_win(signal: dict) -> Optional[dict]:
     if feats is None:
         return None
     try:
-        w = np.array(art["weights"])
-        mu = np.array(art["mu"])
-        sd = np.array(art["sd"])
+        x_row = np.array(feats, dtype=float).reshape(1, -1)
+        backend = art.get("backend", "logreg")
+
+        if backend == "xgboost" and _XGB_AVAILABLE:
+            model_bytes = _b64decode_bytes(art["xgb_model_b64"])
+            p = float(_xgb_predict_proba(model_bytes, x_row)[0])
+        else:
+            # Logistic regression fallback (works also for any legacy
+            # iter-52..68 artifact without a `backend` field).
+            w = np.array(art["weights"])
+            mu = np.array(art["mu"])
+            sd = np.array(art["sd"])
+            x = (x_row[0] - mu) / sd
+            xb = np.append(x, 1.0)
+            p = float(_sigmoid(xb @ w))
+
         threshold = float(art["threshold"])
-        x = (np.array(feats) - mu) / sd
-        xb = np.append(x, 1.0)
-        p = float(_sigmoid(xb @ w))
-        # iter-52 · apply Platt calibration if available
         calib = art.get("calibration") or {}
         p_cal = apply_platt(p, calib) if calib and not calib.get("skipped") else p
         return {
-            "p_win": round(p_cal, 4),                  # calibrated (default consumer field)
-            "p_win_raw": round(p, 4),                  # uncalibrated sigmoid score
-            "p_win_calibrated": round(p_cal, 4),       # alias of p_win for explicitness
+            "p_win": round(p_cal, 4),
+            "p_win_raw": round(p, 4),
+            "p_win_calibrated": round(p_cal, 4),
             "calibrated": bool(calib) and not calib.get("skipped"),
             "threshold": round(threshold, 4),
             "verdict": "REJECT" if p_cal < threshold else "ACCEPT",
@@ -350,6 +442,7 @@ async def predict_p_win(signal: dict) -> Optional[dict]:
             "train_auc": float(art.get("train_auc", 0.5)),
             "brier_raw": (calib or {}).get("brier_raw"),
             "brier_calibrated": (calib or {}).get("brier_calibrated"),
+            "backend": backend,
             "model_used": art.get("label", "GLOBAL"),
             "current_session": current_session_label,
         }

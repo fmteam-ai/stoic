@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="5" time="24.201" timestamp="2026-06-28T07:38:16.836886+00:00" hostname="agent-env-958cc085-5d52-44fe-9d2d-21189da82be7"><testcase classname="tests.test_iter69_http_integration" name="test_signals_generate_has_breakout_and_vwap[XAUUSD]" time="0.574"><failure message="AssertionError: XAUUSD: 405 {&quot;detail&quot;:&quot;Method Not Allowed&quot;}&#10;assert 405 == 200&#10; +  where 405 = &lt;Response [405]&gt;.status_code">tests/test_iter69_http_integration.py:42: in test_signals_generate_has_breakout_and_vwap
+    assert r.status_code == 200, f"{symbol}: {r.status_code} {r.text[:300]}"
+E   AssertionError: XAUUSD: 405 {"detail":"Method Not Allowed"}
+E   assert 405 == 200
+E    +  where 405 = &lt;Response [405]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter69_http_integration" name="test_signals_generate_has_breakout_and_vwap[BTCUSD]" time="0.042"><failure message="AssertionError: BTCUSD: 405 {&quot;detail&quot;:&quot;Method Not Allowed&quot;}&#10;assert 405 == 200&#10; +  where 405 = &lt;Response [405]&gt;.status_code">tests/test_iter69_http_integration.py:42: in test_signals_generate_has_breakout_and_vwap
+    assert r.status_code == 200, f"{symbol}: {r.status_code} {r.text[:300]}"
+E   AssertionError: BTCUSD: 405 {"detail":"Method Not Allowed"}
+E   assert 405 == 200
+E    +  where 405 = &lt;Response [405]&gt;.status_code</failure></testcase><testcase classname="tests.test_iter69_http_integration" name="test_weekly_digest_no_ai_by_default" time="0.086" /><testcase classname="tests.test_iter69_http_integration" name="test_weekly_digest_with_ai" time="11.629" /><testcase classname="tests.test_iter69_http_integration" name="test_weekly_digest_email_endpoint_shape" time="11.775" /></testsuite></testsuites>

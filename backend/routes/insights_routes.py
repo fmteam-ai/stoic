@@ -1,17 +1,67 @@
 """Insights aggregation routes — Weekly AI Digest and related analytical
 summaries the dashboard surfaces to users.
 """
+import os
+import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 
 from auth import get_current_user
 from database import get_db
+from email_sender import send_email, is_configured as email_is_configured
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
+
+
+_REFLECTION_SYSTEM_PROMPT = """You are STOIC's Weekly Reflection writer — a calm, pragmatic
+trading coach. Given a JSON digest of the last 7 days, write a 3-paragraph
+reflection in plain English (no markdown). 80-120 words per paragraph.
+
+Paragraph 1 — What happened: trade count, win rate, net P&L, best/worst.
+Paragraph 2 — Patterns: recurring HOLD reasons, auto-heal kinds, any session
+   bias visible in the data. Acknowledge wins without bragging.
+Paragraph 3 — Focus for next week: one specific, actionable adjustment
+   (NEVER advise raising risk on a losing week). End with one sentence of
+   stoic encouragement.
+
+Tone: composed, factual, never alarmist. Refer to the user as "you".
+Output: plain text only. No markdown, no JSON, no headings."""
+
+
+async def _generate_ai_reflection(digest_payload: dict) -> Optional[str]:
+    """Ask Claude Sonnet 4.5 for a narrative reflection on the digest data."""
+    key = os.environ.get("EMERGENT_LLM_KEY")
+    if not key:
+        return None
+    try:
+        chat = LlmChat(
+            api_key=key,
+            session_id=f"weekly-digest-{uuid.uuid4().hex[:8]}",
+            system_message=_REFLECTION_SYSTEM_PROMPT,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        # Pass a slim payload — Claude doesn't need the raw trade list.
+        slim = {
+            "stats": digest_payload.get("stats"),
+            "best_trade": digest_payload.get("best_trade"),
+            "worst_trade": digest_payload.get("worst_trade"),
+            "auto_heal_breakdown": digest_payload.get("auto_heal_breakdown"),
+            "hold_reasons": digest_payload.get("hold_reasons"),
+            "window_days": digest_payload.get("window_days"),
+        }
+        prompt = f"Here is this week's digest:\n\n{slim}\n\nWrite the reflection."
+        response = await chat.send_message(UserMessage(text=prompt))
+        text = str(response).strip()
+        return text or None
+    except Exception as e:
+        logger.warning("weekly-digest reflection failed: %s", e)
+        return None
 
 
 def _safe_dt(s: str) -> Optional[datetime]:
@@ -73,7 +123,8 @@ def _suggest_action(stats: dict) -> str:
 
 
 @router.get("/weekly-digest")
-async def weekly_digest(days: int = 7, user=Depends(get_current_user)):
+async def weekly_digest(days: int = 7, include_ai: bool = False,
+                        user=Depends(get_current_user)):
     """Aggregated 7-day (or N-day) recap of the user's bot activity.
 
     Powers the dashboard's Weekly AI Digest widget. Returns:
@@ -142,7 +193,7 @@ async def weekly_digest(days: int = 7, user=Depends(get_current_user)):
         "auto_heals": len(heals),
     }
 
-    return {
+    payload = {
         "window_days": days,
         "window_start": since_iso,
         "stats": stats,
@@ -153,3 +204,109 @@ async def weekly_digest(days: int = 7, user=Depends(get_current_user)):
         "suggested_action": _suggest_action(stats),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # iter-69 · Optional LLM-written reflection (Claude Sonnet 4.5).
+    # Frontend opts in via ?include_ai=true to avoid a slow LLM call on
+    # every dashboard refresh.
+    if include_ai:
+        payload["ai_reflection"] = await _generate_ai_reflection(payload)
+    return payload
+
+
+def _render_digest_html(payload: dict, user_name: str = "Trader") -> str:
+    """Render a Resend-friendly inline-styled HTML body for the digest."""
+    stats = payload.get("stats") or {}
+    best = payload.get("best_trade") or {}
+    worst = payload.get("worst_trade") or {}
+    reflection = payload.get("ai_reflection") or payload.get("suggested_action") or ""
+    holds = payload.get("hold_reasons") or []
+    heals = payload.get("auto_heal_breakdown") or []
+    win_color = "#00FF41" if (stats.get("pnl_total") or 0) >= 0 else "#FF3030"
+    days = payload.get("window_days") or 7
+
+    rows_html = "".join(
+        f'<tr><td style="padding:6px 10px;color:#A1A1AA;font-family:monospace;font-size:11px;'
+        f'border-bottom:1px solid #1F1F1F;">{h["label"]}</td>'
+        f'<td style="padding:6px 10px;color:#FAFAFA;font-family:monospace;font-size:11px;'
+        f'border-bottom:1px solid #1F1F1F;text-align:right;">{h["count"]}×</td></tr>'
+        for h in holds[:5]
+    ) or '<tr><td colspan="2" style="padding:8px;color:#52525B;font-family:monospace;font-size:11px;text-align:center;">No HOLDs in window</td></tr>'
+
+    heal_html = ", ".join(f"{h['kind']} ({h['count']}×)" for h in heals[:5]) or "None"
+
+    return f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#0A0A0A;font-family:-apple-system,sans-serif;">
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#0A0A0A;padding:24px;">
+<tr><td align="center">
+  <table cellpadding="0" cellspacing="0" border="0" width="560" style="background:#050505;border:1px solid #1F1F1F;">
+    <tr><td style="padding:24px 28px;border-bottom:1px solid #1F1F1F;">
+      <div style="font-family:monospace;font-size:10px;color:#52525B;letter-spacing:3px;">STOIC · WEEKLY DIGEST</div>
+      <div style="font-family:monospace;font-size:22px;color:#FAFAFA;letter-spacing:-1px;margin-top:6px;">
+        Hello {user_name}, here is your last {days} days
+      </div>
+    </td></tr>
+    <tr><td style="padding:24px 28px;">
+      <table cellpadding="0" cellspacing="0" border="0" width="100%">
+        <tr>
+          <td style="padding:6px 0;font-family:monospace;font-size:10px;color:#52525B;letter-spacing:2px;">NET P&amp;L</td>
+          <td style="padding:6px 0;font-family:monospace;font-size:18px;color:{win_color};text-align:right;">${stats.get('pnl_total', 0):.2f}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 0;font-family:monospace;font-size:10px;color:#52525B;letter-spacing:2px;">TRADES · WIN RATE</td>
+          <td style="padding:6px 0;font-family:monospace;font-size:14px;color:#FAFAFA;text-align:right;">{stats.get('trades', 0)} · {stats.get('win_rate', 0)}%</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 0;font-family:monospace;font-size:10px;color:#52525B;letter-spacing:2px;">BEST</td>
+          <td style="padding:6px 0;font-family:monospace;font-size:11px;color:#00FF41;text-align:right;">{best.get('symbol') or '—'} {('+$%.2f' % best.get('pnl', 0)) if best else ''}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 0;font-family:monospace;font-size:10px;color:#52525B;letter-spacing:2px;">WORST</td>
+          <td style="padding:6px 0;font-family:monospace;font-size:11px;color:#FF3030;text-align:right;">{worst.get('symbol') or '—'} {('-$%.2f' % abs(worst.get('pnl', 0))) if worst else ''}</td>
+        </tr>
+      </table>
+    </td></tr>
+    <tr><td style="padding:20px 28px;border-top:1px solid #1F1F1F;">
+      <div style="font-family:monospace;font-size:10px;color:#52525B;letter-spacing:3px;margin-bottom:12px;">WHY THE BOT HELD OFF</div>
+      <table cellpadding="0" cellspacing="0" border="0" width="100%">{rows_html}</table>
+    </td></tr>
+    <tr><td style="padding:20px 28px;border-top:1px solid #1F1F1F;">
+      <div style="font-family:monospace;font-size:10px;color:#52525B;letter-spacing:3px;margin-bottom:8px;">AUTO-HEAL</div>
+      <div style="font-family:monospace;font-size:11px;color:#A1A1AA;">{heal_html}</div>
+    </td></tr>
+    <tr><td style="padding:24px 28px;border-top:1px solid #1F1F1F;background:#0A0A0A;">
+      <div style="font-family:monospace;font-size:10px;color:#52525B;letter-spacing:3px;margin-bottom:10px;">REFLECTION</div>
+      <div style="font-family:Georgia,serif;font-size:14px;color:#FAFAFA;line-height:1.6;white-space:pre-wrap;">{reflection}</div>
+    </td></tr>
+    <tr><td style="padding:14px 28px;border-top:1px solid #1F1F1F;text-align:center;">
+      <div style="font-family:monospace;font-size:9px;color:#52525B;letter-spacing:2px;">STOIC · {payload.get('generated_at', '')[:10]}</div>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>"""
+
+
+@router.post("/weekly-digest/email")
+async def email_weekly_digest(days: int = 7, user=Depends(get_current_user)):
+    """Render the weekly digest with AI reflection and email it to the user.
+
+    Returns: {ok: bool, email_id?: str, error?: str, configured: bool}
+    """
+    if not email_is_configured():
+        return {"ok": False, "configured": False,
+                "error": "RESEND_API_KEY not configured on the backend"}
+
+    recipient = user.get("email")
+    if not recipient:
+        raise HTTPException(status_code=400, detail="User has no email on file")
+
+    # Build the same payload as the GET, with AI reflection enabled.
+    payload = await weekly_digest(days=days, include_ai=True, user=user)
+    html = _render_digest_html(payload, user_name=user.get("name") or "Trader")
+    plain_fallback = (payload.get("ai_reflection")
+                      or payload.get("suggested_action") or "")
+    subject = f"STOIC · Weekly Digest · {payload.get('window_days', 7)}-day recap"
+
+    result = await send_email(
+        recipient=recipient, subject=subject,
+        html=html, text=plain_fallback,
+    )
+    return {**result, "configured": True, "recipient": recipient}

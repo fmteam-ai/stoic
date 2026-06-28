@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import {
     Newspaper, TrendingUp, TrendingDown, Activity, Wrench, Lightbulb,
+    Sparkles, Mail, CheckCircle2, AlertCircle,
 } from "lucide-react";
 
 /* Weekly AI Digest — a 7-day recap of the user's bot activity.
@@ -51,16 +52,44 @@ export default function WeeklyDigestPanel() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState(null);
+    const [reflectionLoading, setReflectionLoading] = useState(false);
+    const [emailStatus, setEmailStatus] = useState(null);
 
-    const fetchDigest = useCallback(async () => {
+    const fetchDigest = useCallback(async (includeAi = false) => {
         try {
-            const res = await api.get("/insights/weekly-digest");
+            const res = await api.get(`/insights/weekly-digest${includeAi ? "?include_ai=true" : ""}`);
             setData(res.data);
             setErr(null);
         } catch (e) {
             setErr(e?.response?.data?.detail || e.message || "Failed to load digest");
         } finally {
             setLoading(false);
+        }
+    }, []);
+
+    const generateReflection = useCallback(async () => {
+        setReflectionLoading(true);
+        try { await fetchDigest(true); }
+        finally { setReflectionLoading(false); }
+    }, [fetchDigest]);
+
+    const emailDigest = useCallback(async () => {
+        setEmailStatus({ state: "sending" });
+        try {
+            const res = await api.post("/insights/weekly-digest/email");
+            if (res.data?.ok) {
+                setEmailStatus({ state: "sent", recipient: res.data.recipient });
+            } else {
+                setEmailStatus({
+                    state: "error",
+                    error: res.data?.error || "Failed to send",
+                });
+            }
+        } catch (e) {
+            setEmailStatus({
+                state: "error",
+                error: e?.response?.data?.detail || e.message || "Email failed",
+            });
         }
     }, []);
 
@@ -193,6 +222,61 @@ export default function WeeklyDigestPanel() {
                                 {data.suggested_action}
                             </p>
                         </div>
+                    </div>
+                )}
+
+                {/* iter-69 — Claude-written reflection (lazy on-demand) */}
+                {data.ai_reflection ? (
+                    <div className="border border-[#FFD700]/20 bg-[#FFD700]/5 p-4 space-y-2"
+                         data-testid="digest-ai-reflection">
+                        <div className="font-mono text-[10px] text-[#FFD700] tracking-widest flex items-center gap-1.5">
+                            <Sparkles className="w-3 h-3" /> AI REFLECTION · CLAUDE SONNET 4.5
+                        </div>
+                        <div className="text-[13px] text-[#FAFAFA] leading-relaxed whitespace-pre-line"
+                             style={{ fontFamily: "Georgia, serif" }}>
+                            {data.ai_reflection}
+                        </div>
+                    </div>
+                ) : (
+                    <button onClick={generateReflection} disabled={reflectionLoading}
+                            data-testid="digest-generate-reflection-btn"
+                            className="w-full border border-[#1F1F1F] hover:border-[#FFD700]/40 hover:bg-[#FFD700]/5
+                                       p-3 font-mono text-[11px] text-[#A1A1AA] tracking-widest
+                                       flex items-center justify-center gap-2 transition-colors
+                                       disabled:opacity-50 disabled:cursor-not-allowed">
+                        <Sparkles className={`w-3.5 h-3.5 ${reflectionLoading ? "animate-pulse" : ""}`} />
+                        {reflectionLoading ? "CLAUDE IS THINKING…" : "GENERATE AI REFLECTION"}
+                    </button>
+                )}
+
+                {/* iter-69 — Email me this digest (Resend) */}
+                <div className="border-t border-[#1F1F1F] pt-3 flex items-center justify-between gap-3">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest leading-tight">
+                        Get the digest delivered to your inbox.
+                    </div>
+                    <button onClick={emailDigest}
+                            disabled={emailStatus?.state === "sending"}
+                            data-testid="digest-email-btn"
+                            className="shrink-0 border border-[#1F1F1F] hover:border-[#FFD700]/40 hover:bg-[#FFD700]/5
+                                       px-3 py-1.5 font-mono text-[10px] text-[#FFD700] tracking-widest
+                                       flex items-center gap-1.5 transition-colors
+                                       disabled:opacity-50 disabled:cursor-not-allowed">
+                        <Mail className="w-3 h-3" />
+                        {emailStatus?.state === "sending" ? "SENDING…" : "EMAIL ME"}
+                    </button>
+                </div>
+                {emailStatus?.state === "sent" && (
+                    <div className="flex items-start gap-2 text-[10px] font-mono text-[#00FF41]"
+                         data-testid="digest-email-success">
+                        <CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0" />
+                        <span>Sent to {emailStatus.recipient}. Check your inbox in ~30s.</span>
+                    </div>
+                )}
+                {emailStatus?.state === "error" && (
+                    <div className="flex items-start gap-2 text-[10px] font-mono text-[#FF3030]"
+                         data-testid="digest-email-error">
+                        <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                        <span>{emailStatus.error}</span>
                     </div>
                 )}
             </div>
