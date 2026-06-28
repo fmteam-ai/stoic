@@ -8,6 +8,15 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-28 (iter-70) — **Smarter Bot Health diagnostic**:
+  - Heartbeat stale > 1h → account auto-flipped to `status="disconnected"` + `dormant: true` (single -5 advisory on flip, info-only afterwards). Previous behaviour was -10 per stale account indefinitely.
+  - Ghost trades closed-with-no-exit-price older than 24h auto-acknowledged (`ghost_auto_ack_reason: "older_than_24h"`).
+  - `bot_inactive` demoted from -10 → -5 (user choice, not a malfunction).
+  - "All accounts dormant" no longer fires the -35 `no_connected_account` panic.
+  - **User impact**: admin Bot Health: **53 → 78** (degraded → good). Remaining deductions are honest user-controllable signals (`aggressive_mode_on` -15, `bot_inactive` -5, `ghost_trades` -2).
+  - Tests: `test_iter70_bot_health.py` 3/3 (shape, dormant auto-flip, ghost auto-ack). **158/158** curated regression green excluding flaky LLM-latency test in iter-69 HTTP suite (passes in isolation).
+
+
 - 2026-06-28 (iter-69) — **P2 Batch: Breakout Scalper + VWAP Pullback + XGBoost + LLM Reflection + Email Digest**:
   - **Breakout Scalper** (`breakout_scalper.py`) — Donchian-20 channel break + ≥0.25 ATR confirmation. Returns `{signal, channel_high/low, atr, break_distance_atr, ...}` to AI dict and prompt.
   - **VWAP Pullback** (`vwap_pullback.py`) — Rolling-20 typical-price × volume VWAP proxy (falls back to typical-price SMA when volume missing). Surfaces `{vwap, pullback_pct, regime, pullback_signal}` and produces actionable BUY/SELL pullback hints when trend-aligned. Five regimes: near / above / below / above_extended / below_extended.

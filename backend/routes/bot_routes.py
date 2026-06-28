@@ -762,37 +762,89 @@ async def bot_health_score(user=Depends(get_current_user)):
         "$or": [{"mode": "live"}, {"mode": {"$exists": False}}],
     }).to_list(length=20)
     connected = [a for a in accs if a.get("status") == "connected"]
+    # iter-70 · accounts marked dormant by the heartbeat check (below) shouldn't
+    # tank the score with the broader "no connected account" penalty — they
+    # were online once, the user just closed MT5. Count them in a separate
+    # bucket and apply a softer deduction.
+    non_dormant_accs = [a for a in accs if not a.get("dormant")]
     if not accs:
         score -= 40
         issues.append({"severity": "error", "code": "no_accounts",
                        "label": "No live accounts connected",
                        "fix": "Go to Accounts → Connect MT5 to link a broker."})
-    elif not connected:
+    elif not connected and non_dormant_accs:
+        # User has accounts but none online — and they're not dormant, meaning
+        # the user expects them to be online. This IS broken.
         score -= 35
         issues.append({"severity": "error", "code": "no_connected_account",
                        "label": "No accounts currently online",
                        "fix": "Restart MetaTrader 5 and attach the STOIC EA to a chart."})
 
     # --- 2. EA heartbeat freshness (max -20) -----------------------------
+    # Distinguish 3 states:
+    #   • fresh           (< 90s)                  → no deduction
+    #   • stale           (90s — 1h)               → -5 each (max -10), warning
+    #   • dormant         (> 1h, account abandoned) → single -5 advisory,
+    #                                                 NOT counted as broken
+    # Dormant accounts are flipped to status="disconnected" with `dormant:true`
+    # so the dashboard and downstream code see reality.
+    DORMANT_AFTER_SEC = 3600  # 1h with no EA ping → user closed MT5, not a bug
     stale_accounts = []
+    dormant_account_ids: list = []
     for a in connected:
         hb = a.get("last_heartbeat")
-        if not hb:
-            stale_accounts.append(a.get("label"))
+        age: float = float("inf")
+        if hb:
+            try:
+                dt = datetime.fromisoformat(str(hb).replace("Z", "+00:00"))
+                age = (now - dt).total_seconds()
+            except Exception:
+                age = float("inf")
+        if age <= 90:
             continue
-        try:
-            dt = datetime.fromisoformat(str(hb).replace("Z", "+00:00"))
-            age = (now - dt).total_seconds()
-            if age > 90:
-                stale_accounts.append(a.get("label"))
-        except Exception:
-            stale_accounts.append(a.get("label"))
+        if age > DORMANT_AFTER_SEC:
+            dormant_account_ids.append(a.get("_id"))
+            continue
+        stale_accounts.append(a.get("label"))
+
+    # Auto-mark dormant accounts as disconnected so reality reflects state.
+    if dormant_account_ids:
+        await db.accounts.update_many(
+            {"_id": {"$in": dormant_account_ids}},
+            {"$set": {"status": "disconnected", "dormant": True}},
+        )
+        # Refresh `connected` view to match the new reality.
+        connected = [a for a in connected if a.get("_id") not in dormant_account_ids]
+
     if stale_accounts:
-        score -= min(20, 10 * len(stale_accounts))
+        score -= min(10, 5 * len(stale_accounts))
         issues.append({"severity": "warning", "code": "stale_heartbeat",
                        "label": f"EA heartbeat stale on {len(stale_accounts)} account(s)",
                        "fix": f"Check {', '.join(stale_accounts)} in MT5 — the EA may have detached.",
                        "details": stale_accounts})
+
+    if dormant_account_ids:
+        score -= 5
+        dormant_labels = [str(a.get("label")) for a in accs
+                          if a.get("_id") in dormant_account_ids]
+        issues.append({"severity": "info", "code": "dormant_accounts",
+                       "label": f"{len(dormant_account_ids)} account(s) dormant (offline >1h)",
+                       "fix": (f"Auto-marked as disconnected: {', '.join(dormant_labels)}. "
+                               "Open MT5 + attach the EA to reactivate, or ignore if "
+                               "these are old test accounts."),
+                       "details": dormant_labels})
+    else:
+        # No newly-dormant flip this call, but already-dormant accounts
+        # should still be surfaced as an info advisory (no deduction).
+        already_dormant = [a for a in accs if a.get("dormant")]
+        if already_dormant:
+            issues.append({
+                "severity": "info", "code": "dormant_accounts",
+                "label": f"{len(already_dormant)} account(s) currently dormant",
+                "fix": ("Re-attach the EA in MT5 to reactivate, or archive these "
+                        "if they're no longer in use."),
+                "details": [a.get("label") for a in already_dormant],
+            })
 
     # --- 3. EA version currency (max -10) --------------------------------
     LATEST_EA = "1.28"
@@ -837,6 +889,16 @@ async def bot_health_score(user=Depends(get_current_user)):
     # Acknowledged ghosts (panic / account_deleted / reconciler-only closes
     # that will never have a broker exit_price) don't count — penalising the
     # user for unrecoverable history is just noise.
+    # AUTO-CLEAN: ghosts older than 24h are unrecoverable — the EA history
+    # sweep on connection only backfills recent state. Mark them
+    # ghost_acknowledged so they stop polluting the score.
+    day_ago_iso = (now - timedelta(hours=24)).isoformat()
+    await db.trades.update_many({
+        "user_id": user["id"], "status": "closed", "exit_price": None,
+        "ghost_acknowledged": {"$ne": True},
+        "closed_at": {"$lt": day_ago_iso},
+    }, {"$set": {"ghost_acknowledged": True, "ghost_auto_ack_reason": "older_than_24h"}})
+
     ghosts = await db.trades.count_documents({
         "user_id": user["id"], "status": "closed", "exit_price": None,
         "ghost_acknowledged": {"$ne": True},
@@ -847,7 +909,11 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "label": f"{ghosts} closed trade(s) missing exit price",
                        "fix": "EA v1.26 history sweep will auto-fill these within ~60s of connecting."})
 
-    # --- 6. Bot active flag (max -10) ------------------------------------
+    # --- 6. Bot active flag (max -5, advisory) ----------------------------
+    # When the user has *explicitly* paused the bot (any config with active=False)
+    # this is a deliberate state, not a malfunction. Surface it but with a
+    # light advisory deduction so the score doesn't tank just because the
+    # user chose to pause.
     cfg = await db.bot_configs.find_one({"user_id": user["id"], "account_id": None})
     any_active = bool(cfg and cfg.get("active"))
     if not any_active:
@@ -856,7 +922,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         })
         any_active = per_acc_active > 0
     if not any_active:
-        score -= 10
+        score -= 5
         issues.append({"severity": "info", "code": "bot_inactive",
                        "label": "Bot is paused (not generating signals)",
                        "fix": "Go to BotConfig and toggle the bot ON to start trading."})
