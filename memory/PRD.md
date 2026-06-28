@@ -8,6 +8,17 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-28 (iter-67) — **Multi-Timeframe (MTF) tier pack**:
+  - **`mtf_tiers.py` (new)** — computes SHORT/MEDIUM/LONG indicator snapshots from the same daily OHLC series. Each tier exposes `sma_fast`, `sma_slow`, `sma_fast_slope_pct`, `rsi`, `close_vs_sma_fast_pct`, and a `direction` (UP/DOWN/FLAT) derived from slope + structure confluence. Tier params:
+    - SHORT  (5/10 SMA, RSI-7, ~last week) — intraday/H4 proxy
+    - MEDIUM (20/50 SMA, RSI-14, ~last month) — D1
+    - LONG   (50/200 SMA, RSI-21, ~last quarter+) — W1/structural
+  - **`mtf_check.py` refactor** — now consumes the tier pack as the primary path (`mode: "tiered"`), with the legacy slope-on-daily logic kept as a safe fallback when tiers aren't ready (cold start, <30 bars). Veto fires when ≥2 tiers disagree with the action.
+  - **`ai_signals.py` wiring** — `mtf_tiers` computed once per signal cycle, passed into the LLM prompt (with explicit guidance in SYSTEM_PROMPT on how SHORT/MEDIUM/LONG should inform conviction) AND into the MTF gate so both consume the same structured view. Surfaced in the returned signal dict so frontend / postmortems can deep-link to it.
+  - **Tests** (`test_iter67_mtf_tiers.py`): **15/15 passing.** Covers empty/short history, uptrend/downtrend recognition, mixed-trend handling, alignment counters, tier vs legacy mode selection, counter-trend veto, HOLD no-op, explicit tiers override, indicator key contract.
+  - **Live verified**: XAUUSD signal now returns `mtf_tiers.alignment={buy:0,sell:2,dominant:DOWN}` with SHORT/MEDIUM DOWN + LONG FLAT (RSI 26.66/37.84/37.74). BTCUSD shows full 3/3 DOWN alignment. Gate mode is `tiered` end-to-end.
+
+
 - 2026-06-28 (iter-64) — **P2 backlog cleared: 4 dashboard widgets**:
   - **(a) Reachability indicator** — `crypto_bridge/ccxt_engine.py` runs a 5-min-cached httpx probe against each exchange's public ping endpoint. `GET /api/crypto/exchanges` now returns `reachable` + `reach_error` per exchange + a smart default that skips unreachable. UI: dropdown shows ●/○ markers, disables unreachable options, surfaces inline error like "Geo-blocked (451)".
   - **(b) Cooldown widget** — `GET /api/bot/cooldowns` returns per-account cards with `cooldown_seconds_left`, `loss_streak`, `win_streak`, `anti_tilt_threshold`, `anti_tilt_active`, per-symbol `market_closed`, and `last_trade` summary. `CooldownPanel.jsx` renders an animated streak-bar, freeze banners, and per-symbol cooldown countdowns. Mounted on Dashboard.

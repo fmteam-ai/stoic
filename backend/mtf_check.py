@@ -1,30 +1,25 @@
 """Multi-Timeframe (MTF) trend confirmation gate.
 
-Given a candidate signal (BUY/SELL) on the primary timeframe (here Claude's
-analysis of the daily indicator snapshot), we require the *higher* timeframe
-trend to agree before letting the trade through. This is a well-known
-edge-preserver: trades aligned with the dominant trend have materially higher
-expectancy than counter-trend trades.
+A candidate BUY/SELL signal must agree with the dominant higher-timeframe
+trend before passing. Trades aligned with the broader trend show materially
+higher expectancy than counter-trend trades.
 
-Since our data feed is daily candles, the "higher timeframe" is approximated
-with two confluence checks on the same series:
+Two paths are supported:
 
-  1. **SMA20 slope** (≈ short-trend / "H4 proxy"):
-        slope_short > 0  → uptrend
-        slope_short < 0  → downtrend
+1. **Tier-based** (preferred, iter-67+) — consumes the `mtf_tiers` pack
+   produced by `mtf_tiers.compute_mtf_tiers(history)`. The gate looks at the
+   per-tier direction (SHORT / MEDIUM / LONG) and the aggregated alignment
+   vote. The gate is permissive on weak chop (one tier disagreeing is fine)
+   but strict in clearly counter-trend setups (≥2 tiers disagree with the
+   signal direction).
 
-  2. **SMA50 vs SMA200** (≈ medium-trend / "D1 proxy"):
-        SMA50 > SMA200    → structural uptrend
-        SMA50 < SMA200    → structural downtrend
-
-  3. **Current price vs SMA50** as a final tie-breaker.
-
-A BUY is GATED OUT (vetoed) when *any two of three* checks disagree with the
-signal direction. SELL is gated symmetrically. This makes the filter
-permissive on weak chop (one disagreement is fine) but strict in clearly
-counter-trend setups (everything pointing the other way).
+2. **Legacy slope-on-daily** — kept as a safety fallback if `mtf_tiers` is
+   not supplied or has insufficient history. Same 2-of-3 majority rule
+   (SMA20 slope · SMA50 vs SMA200 · price vs SMA50).
 """
 from typing import Optional
+
+from mtf_tiers import compute_mtf_tiers
 
 
 def _slope(values: list, lookback: int = 5) -> Optional[float]:
@@ -47,29 +42,24 @@ def _direction_label(d: Optional[float]) -> str:
     return "FLAT"
 
 
-def multi_timeframe_gate(action: str, history: list, indicators: dict) -> dict:
-    """Return a dict with: aligned (bool), htf_trend (UP/DOWN/FLAT), votes, reason."""
+def _legacy_gate(action: str, history: list, indicators: dict) -> dict:
+    """Legacy 3-vote gate on the daily series only — used when tiered data
+    is unavailable (cold start, insufficient bars)."""
     if not history or len(history) < 60 or action not in ("BUY", "SELL"):
-        # Not enough data, or HOLD: filter is a no-op pass.
         return {
-            "aligned": True,
-            "htf_trend": "FLAT",
+            "aligned": True, "htf_trend": "FLAT",
             "votes": {"sma20_slope": "FLAT", "sma50_vs_200": "FLAT", "price_vs_sma50": "FLAT"},
-            "reason": "",
-            "checked": False,
+            "reason": "", "checked": False, "mode": "legacy",
         }
 
     closes = [c["close"] for c in history if c.get("close") is not None]
     if len(closes) < 60:
         return {
-            "aligned": True,
-            "htf_trend": "FLAT",
+            "aligned": True, "htf_trend": "FLAT",
             "votes": {"sma20_slope": "FLAT", "sma50_vs_200": "FLAT", "price_vs_sma50": "FLAT"},
-            "reason": "",
-            "checked": False,
+            "reason": "", "checked": False, "mode": "legacy",
         }
 
-    # Build SMA series (last N points) needed for slope
     def _sma_series(period: int, length: int = 6) -> list:
         out = []
         for i in range(len(closes) - length, len(closes)):
@@ -102,37 +92,98 @@ def multi_timeframe_gate(action: str, history: list, indicators: dict) -> dict:
         "sma50_vs_200": sma50_vs_200_dir,
         "price_vs_sma50": price_vs_sma50_dir,
     }
-
-    # Tally: BUY needs majority UP; SELL needs majority DOWN.
     up_votes = sum(1 for v in votes.values() if v == "UP")
     down_votes = sum(1 for v in votes.values() if v == "DOWN")
-
-    if up_votes > down_votes:
-        htf_trend = "UP"
-    elif down_votes > up_votes:
-        htf_trend = "DOWN"
-    else:
-        htf_trend = "FLAT"
+    htf_trend = "UP" if up_votes > down_votes else ("DOWN" if down_votes > up_votes else "FLAT")
 
     aligned = True
     reason = ""
     if action == "BUY" and down_votes >= 2:
         aligned = False
-        reason = (
-            f"H-TF trend is DOWN ({down_votes}/3 checks bearish). "
-            f"BUY counter-trend — vetoed by MTF gate."
-        )
+        reason = f"H-TF trend is DOWN ({down_votes}/3 checks bearish). BUY counter-trend — vetoed by MTF gate."
     elif action == "SELL" and up_votes >= 2:
         aligned = False
+        reason = f"H-TF trend is UP ({up_votes}/3 checks bullish). SELL counter-trend — vetoed by MTF gate."
+
+    return {
+        "aligned": aligned, "htf_trend": htf_trend,
+        "votes": votes, "reason": reason,
+        "checked": True, "mode": "legacy",
+    }
+
+
+def _tier_gate(action: str, mtf_tiers: dict) -> dict:
+    """Tier-based gate (preferred). Uses the SHORT/MEDIUM/LONG direction
+    votes from `mtf_tiers.compute_mtf_tiers`."""
+    if action not in ("BUY", "SELL"):
+        return {
+            "aligned": True, "htf_trend": "FLAT",
+            "votes": {}, "reason": "", "checked": False, "mode": "tiered",
+            "tier_directions": {},
+        }
+
+    alignment = mtf_tiers.get("alignment") or {}
+    up_votes = int(alignment.get("buy_support") or 0)
+    down_votes = int(alignment.get("sell_support") or 0)
+
+    tier_dirs = {
+        name: (mtf_tiers.get(name) or {}).get("direction", "FLAT")
+        for name in ("SHORT", "MEDIUM", "LONG")
+    }
+
+    htf_trend = "UP" if up_votes > down_votes else ("DOWN" if down_votes > up_votes else "FLAT")
+
+    aligned = True
+    reason = ""
+    if action == "BUY" and down_votes >= 2:
+        bearish_tiers = [n for n, d in tier_dirs.items() if d == "DOWN"]
+        aligned = False
         reason = (
-            f"H-TF trend is UP ({up_votes}/3 checks bullish). "
-            f"SELL counter-trend — vetoed by MTF gate."
+            f"MTF tier check: {down_votes}/3 tiers bearish "
+            f"({', '.join(bearish_tiers)}). BUY counter-trend — vetoed."
+        )
+    elif action == "SELL" and up_votes >= 2:
+        bullish_tiers = [n for n, d in tier_dirs.items() if d == "UP"]
+        aligned = False
+        reason = (
+            f"MTF tier check: {up_votes}/3 tiers bullish "
+            f"({', '.join(bullish_tiers)}). SELL counter-trend — vetoed."
         )
 
     return {
         "aligned": aligned,
         "htf_trend": htf_trend,
-        "votes": votes,
+        "votes": {
+            "short": tier_dirs["SHORT"],
+            "medium": tier_dirs["MEDIUM"],
+            "long": tier_dirs["LONG"],
+        },
+        "tier_directions": tier_dirs,
         "reason": reason,
         "checked": True,
+        "mode": "tiered",
+        "buy_support": up_votes,
+        "sell_support": down_votes,
     }
+
+
+def multi_timeframe_gate(action: str, history: list, indicators: dict,
+                         mtf_tiers: Optional[dict] = None) -> dict:
+    """Return MTF gate decision. Prefer tiered analysis when available.
+
+    Returns dict with: aligned (bool), htf_trend (UP/DOWN/FLAT), votes,
+    reason, checked, mode ("tiered"|"legacy").
+    """
+    # If caller didn't pass tiers, try to derive them from history.
+    if mtf_tiers is None:
+        try:
+            mtf_tiers = compute_mtf_tiers(history)
+        except Exception:
+            mtf_tiers = None
+
+    # Use tiered path only when MEDIUM tier has enough data.
+    if mtf_tiers and mtf_tiers.get("ready"):
+        return _tier_gate(action, mtf_tiers)
+
+    # Fall back to legacy 3-vote on daily series.
+    return _legacy_gate(action, history, indicators)

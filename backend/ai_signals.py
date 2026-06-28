@@ -27,6 +27,7 @@ from regime_adapter import adapt_profile_for_regime
 from meta_labeler import predict_true_signal_probability
 from feature_compressor import compress_history
 from mtf_check import multi_timeframe_gate
+from mtf_tiers import compute_mtf_tiers
 from kalman import kalman_features
 from macro.cot import get_gold_positioning
 from macro.tips import get_real_yield
@@ -63,6 +64,15 @@ Rules:
     TRANSITIONAL    -> wait for confirmation
 - Session guide: respect the symbol-session bias when sizing conviction.
 - Use compressed_history_features (acf, spectral bands, kurtosis) for context.
+- Multi-Timeframe context (`mtf_tiers`):
+    • SHORT tier  ≈ intraday / H4 proxy  (5/10 SMA, RSI-7, ~last week)
+    • MEDIUM tier ≈ D1 structure        (20/50 SMA, RSI-14, ~last month)
+    • LONG tier   ≈ W1 / structural     (50/200 SMA, RSI-21, ~last quarter+)
+    Use these together: a high-conviction BUY needs MEDIUM and LONG agreeing
+    UP, ideally with SHORT also turning UP for entry timing. If LONG=DOWN
+    while SHORT=UP you are fighting the structural trend — prefer HOLD.
+    `alignment.dominant` summarises the vote; `all_aligned_up/down` flags
+    the strongest setups.
 - Note: a Meta-Labeler will re-verify your output; conservative is safer.
 - Gold-specific (XAUUSD only): when `kalman_filter`, `cot_positioning`, and
   `real_yield_10y` are present in the payload, use them as macro context:
@@ -132,6 +142,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
     }
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
+
+    # Multi-timeframe tier pack — structured short/medium/long indicator
+    # snapshots from the same daily series, consumed by both the LLM prompt
+    # and the MTF gate below (iter-67).
+    mtf_tiers = compute_mtf_tiers(history)
 
     # Gold-specific institutional features (no-op on non-gold or on failure)
     kalman_feat = kalman_features([c["close"] for c in history]) if history else {}
@@ -208,6 +223,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         ],
         "noise_filter": entropy,
         "compressed_history_features": compressed_features,
+        "mtf_tiers": mtf_tiers,
         "regime_execution_mode": regime_meta,
         # Gold-specific institutional intel (None on non-gold)
         "kalman_filter": kalman_feat,
@@ -302,6 +318,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
             "regime_execution_mode": regime_meta,
             "meta_label": None,
             "mtf_gate": None,
+            "mtf_tiers": mtf_tiers,
             "learned_meta": None,
             "aplus_confluence": None,
             "rr_ratio": None,
@@ -455,7 +472,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         final_action = "HOLD"
 
     # 6. Multi-Timeframe trend confluence gate
-    mtf = multi_timeframe_gate(action, history, indicators)
+    mtf = multi_timeframe_gate(action, history, indicators, mtf_tiers=mtf_tiers)
     mtf_veto = ""
     if action != "HOLD" and not mtf["aligned"] and not aggressive_mode:
         mtf_veto = mtf["reason"]
@@ -656,6 +673,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "regime_execution_mode": regime_meta,
         "meta_label": meta_label,
         "mtf_gate": mtf,
+        "mtf_tiers": mtf_tiers,
         "learned_meta": learned_meta,
         "aplus_confluence": confluence,
         "rr_ratio": rr_ratio,
