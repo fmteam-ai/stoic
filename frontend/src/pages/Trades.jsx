@@ -107,6 +107,10 @@ const CLOSE_REASON_BADGE = {
 // Source-of-truth for trade origin classification. The MT5 EA stamps every
 // STOIC order with magic=901234; magic=0 means a click in the MT5 terminal
 // (Manual); any other magic means a DIFFERENT EA running on the same account.
+// Priority: trust the `origin` field FIRST (set by the backend at trade
+// creation). Fall back to magic-number heuristics ONLY when origin is
+// missing/empty — historical trades from before magic_number was persisted
+// may have origin="auto" but magic_number=null which used to mis-tag as MANUAL.
 const STOIC_MAGIC = 901234;
 const SOURCE_BADGE_FOR = (t) => {
     const origin = t.origin || "";
@@ -115,12 +119,20 @@ const SOURCE_BADGE_FOR = (t) => {
         return { label: "PAPER",    cls: "border-[#9333EA]/40 bg-[#9333EA]/10 text-[#9333EA]", title: "Paper account — no real money" };
     if (origin === "shadow")
         return { label: "SHADOW",   cls: "border-[#52525B] bg-[#1F1F1F] text-[#A1A1AA]",       title: "Shadow signal — not executed" };
-    if (origin === "manual" || mag === 0)
-        return { label: "MANUAL",   cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]", title: "Opened manually in the MT5 terminal" };
-    if (origin === "other_ea" || (mag !== 0 && mag !== STOIC_MAGIC))
+    if (origin === "manual" || origin === "manual_telegram")
+        return { label: origin === "manual_telegram" ? "TELEGRAM" : "MANUAL",
+                 cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]",
+                 title: "Opened manually in the MT5 terminal" };
+    if (origin === "auto" || origin === "auto_telegram" || t.signal_id) {
+        return { label: "STOIC", cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]",
+                 title: "Opened by STOIC bot" };
+    }
+    // origin is missing/unknown — fall back to magic-number heuristic
+    if (mag === STOIC_MAGIC)
+        return { label: "STOIC",    cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]", title: "Opened by STOIC bot (magic=901234)" };
+    if (mag !== 0)
         return { label: "OTHER EA", cls: "border-[#FFB000]/40 bg-[#FFB000]/10 text-[#FFB000]", title: `Opened by another EA on this account (magic=${mag})` };
-    // origin=auto OR magic=STOIC_MAGIC OR unset on a STOIC-managed open
-    return { label: "STOIC",    cls: "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]", title: "Opened by STOIC bot" };
+    return { label: "MANUAL", cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]", title: "Opened manually in the MT5 terminal (no magic, no origin)" };
 };
 
 function fmtDateTime(iso) {
