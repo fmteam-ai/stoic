@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Eye, Activity, TrendingDown, TrendingUp, Minus, Clock, ShieldCheck } from "lucide-react";
+import { Eye, Activity, TrendingDown, TrendingUp, Minus, Clock, ShieldCheck, ShieldOff } from "lucide-react";
 
 /* "Bot is patiently watching" tile — explains WHY the bot isn't trading.
    Polls /api/signals/watch-status every 30s. Surfaces live entropy +
@@ -179,6 +179,58 @@ function SymbolCard({ s, cooldownMin }) {
     );
 }
 
+function VetoBreakdown({ vetoCounts }) {
+    if (!vetoCounts || !vetoCounts.by_tag?.length) {
+        return null;
+    }
+    const total = vetoCounts.classified || 0;
+    const topFive = vetoCounts.by_tag.slice(0, 5);
+    const maxCount = topFive[0]?.count || 1;
+    return (
+        <div className="px-5 py-4 border-t border-[#1F1F1F] space-y-3"
+             data-testid="bot-watching-veto-breakdown">
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <ShieldOff className="w-3.5 h-3.5 text-[#FFB000]" />
+                    <span className="font-mono text-[10px] tracking-widest text-[#FAFAFA]">
+                        WHY THE BOT HELD OFF
+                    </span>
+                </div>
+                <span className="font-mono text-[10px] text-[#52525B] tracking-widest"
+                      data-testid="veto-window-label">
+                    LAST {vetoCounts.window_hours || 24}H · {total} VETOES
+                </span>
+            </div>
+            <div className="space-y-1.5">
+                {topFive.map(({ tag, label, count }) => {
+                    const widthPct = Math.round((count / maxCount) * 100);
+                    return (
+                        <div key={tag} className="space-y-0.5"
+                             data-testid={`veto-row-${tag}`}>
+                            <div className="flex items-center justify-between font-mono text-[10px]">
+                                <span className="text-[#A1A1AA] tracking-tight">{label}</span>
+                                <span className="text-[#FAFAFA] tracking-widest"
+                                      data-testid={`veto-count-${tag}`}>
+                                    {count}×
+                                </span>
+                            </div>
+                            <div className="relative h-1 bg-[#1F1F1F]">
+                                <div className="absolute inset-y-0 left-0 bg-[#FFB000]/60"
+                                     style={{ width: `${widthPct}%` }} />
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            {vetoCounts.total_holds > total && (
+                <div className="font-mono text-[9px] text-[#52525B] tracking-widest pt-1">
+                    + {vetoCounts.total_holds - total} UNCLASSIFIED HOLDS
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function BotWatching() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -250,6 +302,9 @@ export default function BotWatching() {
                     <SymbolCard key={s.symbol} s={s} cooldownMin={data.cooldown_minutes} />
                 ))}
             </div>
+
+            {/* iter-68 — Per-veto reject counter */}
+            <VetoBreakdown vetoCounts={data.veto_counts} />
 
             {/* Footer philosophy line */}
             <div className="px-5 py-3 border-t border-[#1F1F1F] flex items-center gap-2

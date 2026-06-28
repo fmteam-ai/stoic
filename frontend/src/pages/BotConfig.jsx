@@ -143,6 +143,8 @@ export default function BotConfig() {
                 daily_drawdown_enabled: cfg.daily_drawdown_enabled,
                 daily_profit_target_r: cfg.daily_profit_target_r ?? 0,
                 daily_profit_target_action: cfg.daily_profit_target_action || "lock",
+                daily_profit_target_escalate: cfg.daily_profit_target_escalate ?? false,
+                daily_profit_target_escalate_step_r: cfg.daily_profit_target_escalate_step_r ?? 1.0,
                 weekly_drawdown_pct: cfg.weekly_drawdown_pct,
                 weekly_drawdown_enabled: cfg.weekly_drawdown_enabled,
                 spread_filter_enabled: cfg.spread_filter_enabled,
@@ -842,6 +844,47 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                                     : "Auto-execute pauses for the rest of the UTC day. Open positions still exit on their own SL/TP."}
                             </div>
                         </div>
+                    </div>
+
+                    {/* iter-68 — Auto-escalating target ratchet */}
+                    <div className="border border-[#1F1F1F] bg-[#050505] p-3 mt-3"
+                         data-testid="profit-target-escalate-card">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1">
+                                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">
+                                    AUTO-ESCALATING TARGET
+                                </div>
+                                <div className="text-[11px] text-[#A1A1AA] leading-tight">
+                                    When the base target is hit, ratchet it up by the step amount
+                                    automatically. Each step locks more profit and pushes the next
+                                    target higher. Only meaningful in <span className="text-[#FAFAFA]">LOCK</span> mode.
+                                </div>
+                            </div>
+                            <button type="button"
+                                onClick={() => setCfg({ ...cfg,
+                                    daily_profit_target_escalate: !cfg.daily_profit_target_escalate })}
+                                data-testid="profit-target-escalate-toggle"
+                                className={`shrink-0 px-3 py-1.5 font-mono text-[11px] tracking-widest border ${
+                                    cfg.daily_profit_target_escalate
+                                        ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]"
+                                        : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#A1A1AA]"
+                                }`}>
+                                {cfg.daily_profit_target_escalate ? "ENABLED" : "DISABLED"}
+                            </button>
+                        </div>
+                        {cfg.daily_profit_target_escalate && (
+                            <div className="mt-3 pt-3 border-t border-[#1F1F1F]">
+                                <PPNumInput cfg={cfg} setCfg={setCfg}
+                                    field="daily_profit_target_escalate_step_r"
+                                    label="ESCALATION STEP" suffix="R"
+                                    step={0.25} min={0.25} max={10} />
+                                <div className="text-[10px] text-[#52525B] mt-1 leading-tight">
+                                    Each time realised P&L crosses a step boundary, the effective
+                                    target ratchets up by this amount. Base 2R + step 1R means
+                                    targets at 2R, 3R, 4R, 5R… as profits accumulate.
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

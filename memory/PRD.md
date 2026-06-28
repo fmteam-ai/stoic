@@ -8,6 +8,19 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-28 (iter-68) — **Per-veto reject counter + Auto-escalating profit target**:
+  - **Per-veto reject counter** (`routes/signal_routes.py` + `BotWatching.jsx`):
+    - Added regex-based veto classifier mapping HOLD `reasoning` strings into 17 named buckets (market_closed, entropy, macro_freeze, regime_chop, self_contra, news, meta_label, mtf, learned_meta, a_plus, rr_ratio, dxy, sector_cap, anti_pyramid, loss_streak, cooldown, low_confidence).
+    - `/api/signals/watch-status` now returns `veto_counts: {window_hours, total_holds, classified, by_tag:[{tag,label,count}…]}` aggregated over the last 24h across the global signals stream.
+    - New `VetoBreakdown` panel in `BotWatching.jsx` — top-5 reasons with horizontal amber progress bars, `+N unclassified` footer for transparency.
+    - **Live-verified**: admin account shows market_closed=124, entropy=63, mtf=40, self_contra=7 over last 24h. UI renders cleanly under the symbol card.
+  - **Auto-escalating profit target** (`profit_target.py` + `routes/bot_routes.py` + `BotConfig.jsx`):
+    - New cfg fields: `daily_profit_target_escalate` (bool, default false) + `daily_profit_target_escalate_step_r` (float, default 1R, clamped 0.25-10).
+    - `evaluate_profit_target()` ratchets up the effective target each time realised P&L crosses a step boundary. Step formula: `steps_absorbed = (pnl - base_target) // step_dollars + 1`. Returns `effective_target_r`, `next_target_r`, `next_target_amount`, `escalation_steps`.
+    - UI: new ENABLED/DISABLED toggle card + step-size numeric input inside the Profit Target section. Only meaningful in LOCK mode (clarified in help text).
+  - **Tests** (`tests/test_iter68_vetocount_and_escalating_target.py`): 27 unit tests — 16 parameterised veto-pattern recognitions, aggregation correctness, escalation across 6 scenarios (disabled, below, hit-no-escalate, 1 step, 2 steps, 7 steps, boundary, escalate-off). **27/27 passing. Curated iter-60→68 regression: 131/131 green.** Lint clean.
+
+
 - 2026-06-28 (iter-67) — **Multi-Timeframe (MTF) tier pack**:
   - **`mtf_tiers.py` (new)** — computes SHORT/MEDIUM/LONG indicator snapshots from the same daily OHLC series. Each tier exposes `sma_fast`, `sma_slow`, `sma_fast_slope_pct`, `rsi`, `close_vs_sma_fast_pct`, and a `direction` (UP/DOWN/FLAT) derived from slope + structure confluence. Tier params:
     - SHORT  (5/10 SMA, RSI-7, ~last week) — intraday/H4 proxy

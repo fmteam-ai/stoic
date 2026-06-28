@@ -37,26 +37,43 @@ async def evaluate_profit_target(
         {
           "enabled": bool,
           "mode": "lock" | "stop",
-          "target_r": float, "target_amount": float,
+          "target_r": float,              # base target from cfg
+          "effective_target_r": float,    # base + escalation steps (iter-68)
+          "target_amount": float,         # $ value of effective target
           "current_pnl": float, "r_dollar_value": float,
           "hit": bool,
-          "locked_amount": float,        # = current_pnl when hit AND mode="lock"
-          "should_stop": bool,           # True when hit AND mode="stop"
+          "escalate": bool,               # iter-68: ratchet enabled?
+          "escalation_step_r": float,     # R-multiple per ratchet step
+          "escalation_steps": int,        # how many steps already absorbed
+          "next_target_r": float,         # R-multiple of the NEXT step ahead
+          "next_target_amount": float,    # $ of next step
+          "locked_amount": float,         # = current_pnl when hit AND mode="lock"
+          "should_stop": bool,            # True when hit AND mode="stop"
         }
     """
     target_r = float(cfg.get("daily_profit_target_r") or 0.0)
     mode = (cfg.get("daily_profit_target_action") or "lock").lower()
     if mode not in ("lock", "stop"):
         mode = "lock"
+    escalate = bool(cfg.get("daily_profit_target_escalate"))
+    step_r = float(cfg.get("daily_profit_target_escalate_step_r") or 1.0)
+    if step_r <= 0:
+        step_r = 1.0
 
     base = {
         "enabled": target_r > 0,
         "mode": mode,
         "target_r": target_r,
+        "effective_target_r": target_r,
         "target_amount": 0.0,
         "current_pnl": 0.0,
         "r_dollar_value": 0.0,
         "hit": False,
+        "escalate": escalate,
+        "escalation_step_r": step_r,
+        "escalation_steps": 0,
+        "next_target_r": target_r + step_r if escalate else 0.0,
+        "next_target_amount": 0.0,
         "locked_amount": 0.0,
         "should_stop": False,
     }
@@ -78,18 +95,42 @@ async def evaluate_profit_target(
 
     profile = get_profile(cfg.get("risk_level", "medium"))
     r_dollar = _r_dollar_value(equity, profile)
-    target_amount = target_r * r_dollar
+    base_target_amount = target_r * r_dollar
     pnl_today = await realised_pnl_since(
         db, user_id, today_iso(), account_id=cfg_account_id
     )
-    hit = target_amount > 0 and pnl_today >= target_amount
+
+    # Auto-escalation: each time realised P&L crosses a step boundary, the
+    # effective target ratchets up by another step. So if base = 2R and
+    # step = 1R, after the bot pulls +3.2R the effective target sits at
+    # 3R (one step absorbed), `next_target` shows 4R, and the locked amount
+    # tracks the ratcheting P&L. Setting `escalate=false` keeps legacy
+    # single-shot behaviour (iter-65).
+    steps_absorbed = 0
+    effective_target_r = target_r
+    if escalate and r_dollar > 0 and pnl_today > base_target_amount:
+        overshoot_dollars = pnl_today - base_target_amount
+        steps_absorbed = int(overshoot_dollars // (step_r * r_dollar)) + 1
+        effective_target_r = target_r + steps_absorbed * step_r
+
+    effective_target_amount = effective_target_r * r_dollar
+    next_target_r = effective_target_r + step_r if escalate else effective_target_r
+    next_target_amount = next_target_r * r_dollar
+
+    # "hit" semantics: base target was crossed at least once. Lock + escalate
+    # mode keeps trading; stop mode still halts on the base hit.
+    hit = base_target_amount > 0 and pnl_today >= base_target_amount
 
     return {
         **base,
-        "target_amount": round(target_amount, 2),
+        "effective_target_r": round(effective_target_r, 2),
+        "target_amount": round(effective_target_amount, 2),
         "current_pnl": round(pnl_today, 2),
         "r_dollar_value": round(r_dollar, 2),
         "hit": hit,
+        "escalation_steps": steps_absorbed,
+        "next_target_r": round(next_target_r, 2),
+        "next_target_amount": round(next_target_amount, 2),
         "locked_amount": round(pnl_today, 2) if (hit and mode == "lock") else 0.0,
         "should_stop": hit and mode == "stop",
     }

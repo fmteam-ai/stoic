@@ -104,6 +104,8 @@ def _serialize(cfg: dict) -> dict:
         # iter-65 — Daily profit target with lock/stop semantics
         "daily_profit_target_r": float(cfg.get("daily_profit_target_r") or 0.0),
         "daily_profit_target_action": cfg.get("daily_profit_target_action") or "lock",
+        "daily_profit_target_escalate": bool(cfg.get("daily_profit_target_escalate", False)),
+        "daily_profit_target_escalate_step_r": float(cfg.get("daily_profit_target_escalate_step_r") or 1.0),
         "spread_filter_enabled": cfg.get("spread_filter_enabled", False),
         "max_spread_pips": cfg.get("max_spread_pips") or {"XAUUSD": 50.0, "BTCUSD": 100.0},
         "auto_tune_enabled": cfg.get("auto_tune_enabled", True),
@@ -598,6 +600,14 @@ async def update_config(payload: BotConfigUpdate,
             update["daily_profit_target_r"] = max(0.0, min(20.0, float(update["daily_profit_target_r"])))
         except (TypeError, ValueError):
             update["daily_profit_target_r"] = 0.0
+    if "daily_profit_target_escalate" in update:
+        update["daily_profit_target_escalate"] = bool(update["daily_profit_target_escalate"])
+    if "daily_profit_target_escalate_step_r" in update:
+        try:
+            v = float(update["daily_profit_target_escalate_step_r"])
+            update["daily_profit_target_escalate_step_r"] = max(0.25, min(10.0, v))
+        except (TypeError, ValueError):
+            update["daily_profit_target_escalate_step_r"] = 1.0
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     # Ensure the target doc exists, then PATCH.

@@ -32,6 +32,88 @@ def _extract_entropy(reasoning: str) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
+# ─── Veto classifier (iter-68) ─────────────────────────────────────────────
+# Each veto type maps a regex against the signal's `reasoning` field. Order
+# matters — the first match wins (most specific tags appear first). All
+# patterns are evaluated case-insensitively.
+_VETO_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+    # tag,            label,                pattern
+    ("market_closed", "Market closed",     re.compile(r"market[\s_-]*close", re.I)),
+    ("macro_freeze",  "Macro freeze",      re.compile(r"\bVETO \(macro\)|macro freeze", re.I)),
+    ("entropy",       "Entropy / noise",   re.compile(r"\bVETO \(entropy\)|noise filter|entropy=", re.I)),
+    ("regime_chop",   "Regime CHOP",       re.compile(r"\bVETO \(regime\)|regime chop", re.I)),
+    ("self_contra",   "Self-contradiction", re.compile(r"\bVETO \(self-contradiction\)", re.I)),
+    ("news",          "News disagreement", re.compile(r"\bVETO \(news\)", re.I)),
+    ("meta_label",    "Meta-Labeler",      re.compile(r"\bVETO \(meta-labeler\)|fake_out", re.I)),
+    ("mtf",           "Multi-timeframe",   re.compile(r"\bVETO \(multi-timeframe\)|counter-trend", re.I)),
+    ("learned_meta",  "Learned classifier", re.compile(r"\bVETO \(learned-meta\)|learned classifier", re.I)),
+    ("a_plus",        "A+ confluence",     re.compile(r"\bVETO \(A\+ confluence\)|a\+ confluence", re.I)),
+    ("rr_ratio",      "R:R too low",       re.compile(r"\bVETO \(R:R\)|R:R", re.I)),
+    ("dxy",           "DXY headwind",      re.compile(r"\bVETO \(DXY gate\)|dxy", re.I)),
+    ("sector_cap",    "Sector cap",        re.compile(r"sector[\s_-]*cap|sector exposure", re.I)),
+    ("anti_pyramid",  "Anti-pyramid",      re.compile(r"anti[\s_-]*pyramid", re.I)),
+    ("loss_streak",   "Loss-streak cooldown", re.compile(r"loss[\s_-]*streak", re.I)),
+    ("cooldown",      "Cooldown",          re.compile(r"signal cooldown|cooldown active", re.I)),
+    ("low_confidence", "Low confidence",   re.compile(r"confidence below|conf=\d+ < ", re.I)),
+]
+
+
+def _classify_veto(reasoning: str) -> Optional[tuple[str, str]]:
+    """Map a HOLD signal's reasoning string to (tag, label). Returns None
+    for un-tagged HOLDs (e.g. plain AI HOLD with no specific veto)."""
+    if not reasoning:
+        return None
+    for tag, label, pattern in _VETO_PATTERNS:
+        if pattern.search(reasoning):
+            return tag, label
+    return None
+
+
+async def _compute_veto_counts(db, user_id: str, since: datetime) -> dict:
+    """Aggregate veto counts across the user's HOLD signals since `since`.
+
+    Returns:
+        {
+          "window_hours": int,
+          "total_holds": int,
+          "classified": int,                       # holds matched a veto pattern
+          "by_tag":   [{tag, label, count}, ...]   # sorted desc by count
+        }
+    """
+    # bot_runner-generated signals carry no user_id (global market state) AND
+    # the user's own generated signals carry user_id. Both should count — the
+    # user wants to see what the bot has been holding off on globally.
+    cursor = db.signals.find(
+        {
+            "action": "HOLD",
+            "created_at": {"$gte": since.isoformat()},
+        },
+        projection={"reasoning": 1, "symbol": 1},
+    ).limit(2000)
+
+    counts: dict = {}
+    total = 0
+    classified = 0
+    async for doc in cursor:
+        total += 1
+        cls = _classify_veto(doc.get("reasoning") or "")
+        if not cls:
+            continue
+        classified += 1
+        tag, label = cls
+        if tag not in counts:
+            counts[tag] = {"tag": tag, "label": label, "count": 0}
+        counts[tag]["count"] += 1
+
+    by_tag = sorted(counts.values(), key=lambda x: x["count"], reverse=True)
+    return {
+        "window_hours": int((datetime.now(timezone.utc) - since).total_seconds() / 3600),
+        "total_holds": total,
+        "classified": classified,
+        "by_tag": by_tag,
+    }
+
+
 @router.get("/watch-status")
 async def watch_status(user=Depends(get_current_user)):
     """Bot patient-watching status — "why the bot isn't trading right now."
@@ -97,11 +179,16 @@ async def watch_status(user=Depends(get_current_user)):
         hold_streak_query["created_at"] = {"$gt": last_non_hold["created_at"]}
     hold_streak = await db.signals.count_documents(hold_streak_query)
 
+    # iter-68 — per-veto reject counters over the last 24h.
+    since = now - timedelta(hours=24)
+    veto_counts = await _compute_veto_counts(db, user["id"], since)
+
     return {
         "symbols": out_symbols,
         "cooldown_minutes": cooldown_min,
         "hold_streak": hold_streak,
         "last_actionable_signal_at": last_non_hold.get("created_at") if last_non_hold else None,
+        "veto_counts": veto_counts,
         "philosophy": "STOIC refuses to trade in noisy regimes — every HOLD is a loss avoided.",
     }
 
