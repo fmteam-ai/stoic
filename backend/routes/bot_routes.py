@@ -766,6 +766,29 @@ async def bot_health_score(user=Depends(get_current_user)):
     # tank the score with the broader "no connected account" penalty — they
     # were online once, the user just closed MT5. Count them in a separate
     # bucket and apply a softer deduction.
+    # iter-70b · Auto-clear the dormant flag for accounts that have come back
+    # online with a fresh heartbeat — keeps the advisory honest.
+    revived_ids: list = []
+    for a in accs:
+        if not a.get("dormant"):
+            continue
+        hb = a.get("last_heartbeat")
+        if not hb:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(hb).replace("Z", "+00:00"))
+            age = (now - dt).total_seconds()
+        except Exception:
+            continue
+        # Fresh heartbeat (< 5 min) AND status is back to connected? Revive.
+        if age < 300 and a.get("status") == "connected":
+            revived_ids.append(a.get("_id"))
+            a["dormant"] = False  # mirror in-memory so the rest of this call sees reality
+    if revived_ids:
+        await db.accounts.update_many(
+            {"_id": {"$in": revived_ids}},
+            {"$set": {"dormant": False, "revived_at": now.isoformat()}},
+        )
     non_dormant_accs = [a for a in accs if not a.get("dormant")]
     if not accs:
         score -= 40
