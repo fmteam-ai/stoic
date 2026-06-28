@@ -301,6 +301,34 @@ async def _process_user_account_locked(db, cfg: dict):
                  or (a.get("last_heartbeat") and
                      a["last_heartbeat"] >= (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat())]
 
+    # iter-71 · Broker-rejection circuit breaker — skip accounts the broker
+    # keeps rejecting orders on (e.g. VT Markets with symbol-suffix mismatch
+    # returning retcode 10013 repeatedly). Stops the bleeding until the user
+    # fixes the underlying issue and explicitly unblocks the account.
+    from broker_reject_breaker import evaluate_account as _eval_broker_reject
+    survivors: list = []
+    for a in connected:
+        verdict = await _eval_broker_reject(db, a)
+        if verdict["blocked"]:
+            if verdict["tripped_this_call"]:
+                await ws_manager.broadcast(user_id, "account_trading_blocked", {
+                    "account_id": str(a["_id"]),
+                    "label": a.get("label"),
+                    "retcode": verdict["retcode"],
+                    "label_human": verdict["label"],
+                    "hint": verdict["hint"],
+                    "reason": verdict["block_reason"],
+                })
+                logger.warning("Auto-halted account=%s user=%s — %s",
+                               a.get("label"), user_id, verdict["block_reason"])
+            await _record_pulse(db, cfg,
+                action="BLOCKED", level="block",
+                reason=f"Account {a.get('label')} halted: {verdict['block_reason']}",
+            )
+            continue
+        survivors.append(a)
+    connected = survivors
+
     risk_level = cfg.get("risk_level", "medium")
     auto_exec = bool(cfg.get("auto_execute", True))
     # Paper-shadow mode (iter-39): when the cfg is in shadow mode but not

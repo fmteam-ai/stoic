@@ -47,9 +47,18 @@
 //|         (INVALID_REQUEST) on every trade. Now queries              |
 //|         SYMBOL_FILLING_MODE and picks FOK > IOC > RETURN whichever |
 //|         the broker accepts.                                        |
+//| v1.29 — Symbol-suffix auto-detection + SymbolSelect.               |
+//|         Brokers like VT Markets / IC Markets / FXOpen rename       |
+//|         instruments with a suffix (XAUUSD.x, XAUUSD.raw,           |
+//|         XAUUSDpro, etc.). Before OrderSend, we now call            |
+//|         ResolveBrokerSymbol() which tries the bare symbol then     |
+//|         every common suffix, picking the first one with a valid    |
+//|         live tick. If nothing matches we abort with a clearly      |
+//|         tagged "symbol_not_found" error so STOIC's UI can guide    |
+//|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.28"
+#property version   "1.29"
 #property strict
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
@@ -257,6 +266,40 @@ ENUM_ORDER_TYPE_FILLING PickFillingMode(string sym) {
    return ORDER_FILLING_RETURN;
 }
 
+// v1.29 — Resolve the broker's actual symbol name for a base symbol.
+// Brokers rename instruments with suffixes (XAUUSD.x, XAUUSD.raw, XAUUSDpro,
+// XAUUSD.ecn, XAUUSD+, XAUUSDm, XAUUSD#, XAUUSD-PRO, etc.). When STOIC sends
+// "XAUUSD" but the terminal only knows "XAUUSD.x", SymbolInfoDouble returns 0
+// and OrderSend returns retcode 10013 (INVALID_REQUEST). This helper tries
+// the bare symbol then every common suffix, returning the first one that
+// has a valid live tick AND can be selected into MarketWatch. If nothing
+// resolves, returns "" so the caller can abort with a clear error.
+string ResolveBrokerSymbol(string base_symbol) {
+   // Try bare symbol first — most accounts will hit this path.
+   if (SymbolSelect(base_symbol, true)) {
+      MqlTick tick;
+      if (SymbolInfoTick(base_symbol, tick) && tick.bid > 0 && tick.ask > 0) {
+         return base_symbol;
+      }
+   }
+   // Common broker suffix variants observed in the wild
+   string suffixes[] = {
+      ".x", ".X", ".raw", ".RAW", ".r", ".m", ".ecn", ".ECN",
+      "pro", "Pro", "PRO", "+", "#", "m", "_pro", "-ECN", ".pro"
+   };
+   for (int i = 0; i < ArraySize(suffixes); i++) {
+      string candidate = base_symbol + suffixes[i];
+      if (SymbolSelect(candidate, true)) {
+         MqlTick tick;
+         if (SymbolInfoTick(candidate, tick) && tick.bid > 0 && tick.ask > 0) {
+            Print("[v1.29] ResolveBrokerSymbol: ", base_symbol, " -> ", candidate);
+            return candidate;
+         }
+      }
+   }
+   return "";  // signal "not found"
+}
+
 // Build {"XAUUSD":3.2,"BTCUSD":85.0} from the comma list, using current symbol spread
 string BuildSpreadsJson() {
    string out = "{";
@@ -457,15 +500,26 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    MqlTradeRequest req; MqlTradeResult res;
    ZeroMemory(req); ZeroMemory(res);
 
+   // v1.29 — Resolve the broker's actual symbol name (handles .x/.raw/pro/etc.)
+   string broker_symbol = ResolveBrokerSymbol(symbol);
+   if (broker_symbol == "") {
+      string body = StringFormat(
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":0,\"status\":\"failed\",\"entry_price\":0.0,\"error\":\"symbol_not_found:%s\"}",
+         BridgeToken, trade_id, symbol);
+      HttpPost(ServerUrl + "/api/bridge/report", body);
+      Print("[v1.29] ExecuteTrade aborted — broker has no symbol matching '", symbol, "' (tried bare + 18 suffixes)");
+      return;
+   }
+
    req.action       = TRADE_ACTION_DEAL;
-   req.symbol       = symbol;
+   req.symbol       = broker_symbol;
    req.volume       = NormalizeDouble(lot, 2);
    req.deviation    = Slippage;
    req.magic        = MagicNumber;
-   req.type_filling = PickFillingMode(symbol);
+   req.type_filling = PickFillingMode(broker_symbol);
 
-   double price = (action == "BUY") ? SymbolInfoDouble(symbol, SYMBOL_ASK)
-                                    : SymbolInfoDouble(symbol, SYMBOL_BID);
+   double price = (action == "BUY") ? SymbolInfoDouble(broker_symbol, SYMBOL_ASK)
+                                    : SymbolInfoDouble(broker_symbol, SYMBOL_BID);
    req.price = price;
    req.sl    = NormalizeDouble(sl, _Digits);
    req.tp    = NormalizeDouble(tp, _Digits);

@@ -34,7 +34,7 @@ async function computeSteps() {
         },
         {
             key: "ea",
-            label: "Install the STOIC EA (v1.28+)",
+            label: "Install the STOIC EA (v1.29+)",
             hint: "Download EmergentTradingBridge.mq5, compile in MetaEditor (F7), attach to a chart.",
             done: hasConnectedEa,
             to: "/accounts",

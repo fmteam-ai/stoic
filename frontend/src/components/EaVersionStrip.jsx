@@ -4,7 +4,7 @@ import { Cpu, ShieldAlert, ShieldCheck, AlertTriangle } from "lucide-react";
 
 // Latest EA build expected in production. Anything below this gets the
 // yellow "outdated" tint; nothing reported at all gets the red "unknown".
-export const LATEST_EA_VERSION = "1.28";
+export const LATEST_EA_VERSION = "1.29";
 
 // Lightweight semver compare — handles dotted numeric strings only (1.25, 1.26).
 // Returns -1 if a<b, 0 if equal, 1 if a>b. Non-numeric segments return 0.
@@ -37,7 +37,7 @@ function classifyEa(account) {
             label: "OLD EA · UPGRADE",
             icon: AlertTriangle,
             color: "#FF3B30",
-            detail: "Pre-v1.28 EA detected (no version reported). Recompile EmergentTradingBridge.mq5 to enable broker-real-time tick streaming, autonomous history sweep, and broker-aware filling-mode selection (fixes retcode 10013 on FOK-only brokers like VT Markets).",
+            detail: "Pre-v1.29 EA detected (no version reported). Recompile EmergentTradingBridge.mq5 to enable broker-real-time tick streaming, broker-symbol auto-detect (fixes retcode 10013 on VT Markets / IC Markets / FXOpen suffixed symbols), and broker-aware filling-mode selection.",
         };
     }
     const cmp = compareVersions(v, LATEST_EA_VERSION);

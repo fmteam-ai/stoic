@@ -8,6 +8,17 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-28 (iter-71) — **Broker-rejection circuit breaker + EA v1.29 symbol auto-detect**:
+  - **Root cause** of vtmarkets failed trades (7 consecutive retcode=10013 INVALID_REQUEST): VT Markets uses a suffixed symbol name (e.g. `XAUUSD.x`, `XAUUSDpro`, `XAUUSD.raw`) but the EA was sending bare `XAUUSD`. `SymbolInfoDouble` returned 0 → invalid price → broker rejected every order.
+  - **`broker_reject_breaker.py` (new)** — auto-halt logic: ≥3 same-retcode failures within 30min flips the account to `trading_blocked: True` with structured `block_reason`/`block_retcode`/`block_hint` fields. Bot runner skips blocked accounts. Recognises both numeric retcodes (10013/10014/10016/10018/10019/10027) and the new v1.29 `symbol_not_found:` tag.
+  - **`bot_runner.py`** — runs the breaker before every account tick, broadcasts `account_trading_blocked` WebSocket event on trip, records a BLOCKED pulse so the dashboard shows the halt.
+  - **Bot Health** — new `broker_rejecting_trades` issue (severity=error, −15) so users see this loudly above the fold.
+  - **`POST /api/accounts/{id}/unblock`** + **`GET /api/accounts/{id}/block-status`** — manual reset after the user has fixed the underlying broker issue.
+  - **EA v1.29** (`static/EmergentTradingBridge.mq5`) — new `ResolveBrokerSymbol()` probes the bare symbol then 18 common suffix variants (.x/.raw/.r/.m/.ecn/pro/+/#/m/_pro/-ECN/.pro etc.), uses `SymbolSelect()` to add to MarketWatch, validates a live tick exists before OrderSend. Reports explicit `symbol_not_found:XAUUSD` if nothing matches (instead of looping retcode 10013).
+  - **Tests**: `test_iter71_broker_reject_breaker.py` 12/12 (retcode extraction, hints table, threshold, mixed-codes no-trip, already-blocked short-circuit, unblock, window expiry).
+  - **Live verification**: vtmarkets auto-halted with full reason chain visible on Bot Health endpoint.
+
+
 - 2026-06-28 (iter-70) — **Smarter Bot Health diagnostic**:
   - Heartbeat stale > 1h → account auto-flipped to `status="disconnected"` + `dormant: true` (single -5 advisory on flip, info-only afterwards). Previous behaviour was -10 per stale account indefinitely.
   - Ghost trades closed-with-no-exit-price older than 24h auto-acknowledged (`ghost_auto_ack_reason: "older_than_24h"`).

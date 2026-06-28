@@ -397,3 +397,43 @@ async def reveal_credentials(account_id: str, payload: RevealRequest,
         "at": datetime.now(timezone.utc).isoformat(),
     })
     return out
+
+
+@router.post("/{account_id}/unblock")
+async def unblock_account_route(account_id: str, user=Depends(get_current_user)):
+    """Clear the trading_blocked flag set by the broker-rejection circuit
+    breaker (iter-71). Use after fixing the underlying issue (recompiling
+    EA v1.29+, fixing broker symbol config, etc.)."""
+    db = get_db()
+    acct_oid = parse_object_id(account_id, "Account")
+    account = await db.accounts.find_one({"_id": acct_oid, "user_id": user["id"]})
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not account.get("trading_blocked"):
+        return {"ok": True, "was_blocked": False,
+                "message": "Account was not blocked"}
+    from broker_reject_breaker import unblock_account
+    ok = await unblock_account(db, acct_oid)
+    return {"ok": ok, "was_blocked": True,
+            "message": f"Trading re-enabled on {account.get('label')}"}
+
+
+@router.get("/{account_id}/block-status")
+async def block_status(account_id: str, user=Depends(get_current_user)):
+    """Read-only check — surfaces the broker-rejection breaker state for
+    the dashboard tile."""
+    db = get_db()
+    acct_oid = parse_object_id(account_id, "Account")
+    account = await db.accounts.find_one({"_id": acct_oid, "user_id": user["id"]})
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {
+        "account_id": account_id,
+        "label": account.get("label"),
+        "trading_blocked": bool(account.get("trading_blocked")),
+        "block_reason": account.get("block_reason"),
+        "block_retcode": account.get("block_retcode"),
+        "block_retcode_label": account.get("block_retcode_label"),
+        "block_hint": account.get("block_hint"),
+        "blocked_at": account.get("blocked_at"),
+    }

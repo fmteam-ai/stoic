@@ -870,7 +870,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.28"
+    LATEST_EA = "1.29"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:
@@ -973,6 +973,30 @@ async def bot_health_score(user=Depends(get_current_user)):
             "fix": ("Turn off aggressive_mode in Bot Config unless you understand "
                     "you are trading without noise/learned-model protection."),
         })
+
+    # --- 6c. Broker-rejecting accounts (iter-71, max -25 critical) ----------
+    # Any account auto-halted by the broker-reject circuit breaker — the
+    # broker has rejected our last 3+ orders with the same retcode. Surfaces
+    # high in the issue list so the user immediately knows the bot can't
+    # trade on that account until they intervene.
+    blocked_accs = [a for a in accs if a.get("trading_blocked")]
+    if blocked_accs:
+        score -= min(25, 15 * len(blocked_accs))
+        for ba in blocked_accs:
+            issues.append({
+                "severity": "error",
+                "code": "broker_rejecting_trades",
+                "label": (f"Broker auto-halted {ba.get('label')}: "
+                          f"{ba.get('block_retcode_label') or 'unknown'} "
+                          f"({ba.get('block_retcode') or '?'})"),
+                "fix": (ba.get("block_hint") or "Check MT5 Experts tab for details.") +
+                        f"  After fixing, click 'Resume Trading' on this account.",
+                "details": {
+                    "account_id": str(ba["_id"]),
+                    "blocked_at": ba.get("blocked_at"),
+                    "reason": ba.get("block_reason"),
+                },
+            })
 
     # --- 7. Anti-tilt freeze active (max -5, advisory only) --------------
     # The bot is functioning correctly — anti-tilt is a designed risk halt
