@@ -45,7 +45,9 @@ def test_exchanges_endpoint_returns_all_five(session):
     r = session.get(f"{BASE_URL}/api/crypto/exchanges", timeout=10)
     assert r.status_code == 200
     body = r.json()
-    assert body["default"] == "binance"
+    # Default is "binance" only if binance is reachable from this server.
+    # Otherwise it shifts to the first reachable exchange (smart default).
+    assert body["default"] in {"binance", "binanceus", "kraken", "okx", "kucoin"}
     ids = {x["id"] for x in body["exchanges"]}
     assert ids == {"binance", "binanceus", "kraken", "okx", "kucoin"}
     # Schema sanity for each
@@ -70,6 +72,32 @@ def test_kraken_quote_is_usd(session):
     by_id = {x["id"]: x for x in r.json()["exchanges"]}
     assert by_id["kraken"]["default_quote"] == "USD"
     assert by_id["binance"]["default_quote"] == "USDT"
+
+
+def test_exchanges_endpoint_returns_reachability_per_exchange(session):
+    r = session.get(f"{BASE_URL}/api/crypto/exchanges", timeout=15)
+    assert r.status_code == 200
+    body = r.json()
+    for x in body["exchanges"]:
+        # `reachable` must be present and a bool (probe completed)
+        assert "reachable" in x, f"exchange {x['id']} missing 'reachable' field"
+        assert isinstance(x["reachable"], bool), f"reachable for {x['id']} not bool"
+        # When unreachable, reach_error explains why
+        if x["reachable"] is False:
+            assert x.get("reach_error"), f"{x['id']} unreachable but no error message"
+
+
+def test_default_skips_unreachable_exchange(session):
+    """If Binance Global is blocked, default must shift to a reachable one."""
+    r = session.get(f"{BASE_URL}/api/crypto/exchanges", timeout=15)
+    body = r.json()
+    by_id = {x["id"]: x for x in body["exchanges"]}
+    default_meta = by_id[body["default"]]
+    # The default exchange must itself be reachable.
+    assert default_meta["reachable"] is True, (
+        f"Default exchange '{body['default']}' is not reachable — "
+        f"smart-default logic broken"
+    )
 
 
 def test_create_account_with_unknown_exchange_returns_422(session):

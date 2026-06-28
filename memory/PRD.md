@@ -8,6 +8,19 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-28 (iter-64) — **P2 backlog cleared: 4 dashboard widgets**:
+  - **(a) Reachability indicator** — `crypto_bridge/ccxt_engine.py` runs a 5-min-cached httpx probe against each exchange's public ping endpoint. `GET /api/crypto/exchanges` now returns `reachable` + `reach_error` per exchange + a smart default that skips unreachable. UI: dropdown shows ●/○ markers, disables unreachable options, surfaces inline error like "Geo-blocked (451)".
+  - **(b) Cooldown widget** — `GET /api/bot/cooldowns` returns per-account cards with `cooldown_seconds_left`, `loss_streak`, `win_streak`, `anti_tilt_threshold`, `anti_tilt_active`, per-symbol `market_closed`, and `last_trade` summary. `CooldownPanel.jsx` renders an animated streak-bar, freeze banners, and per-symbol cooldown countdowns. Mounted on Dashboard.
+  - **(c) P&L vs Limit gauge** — `GET /api/bot/risk-gauge` reuses `_daily_limit()`/`_weekly_limit()` + `realised_pnl_since()` from `circuit_breakers.py` (dry-run, never trips). `RiskGaugePanel.jsx` shows daily/weekly gauges per account with a red 80% danger marker.
+  - **(d) Weekly AI Digest** — new `routes/insights_routes.py` with `GET /api/insights/weekly-digest?days=N` (clamped 1-30) returning trade stats (count, win rate, P&L, best, worst), auto-heal action breakdown, HOLD reason histogram, and a rule-based suggested action. `WeeklyDigestPanel.jsx` renders 4 KPI tiles, best/worst-trade chips, a horizontal-bar HOLD breakdown, and a lightbulb suggestion card.
+  - Tests: `test_iter64_dashboard_widgets.py` 8/8 + `test_iter62_multi_exchange.py` updated for new reachability fields. Curated regression **65/65** across crypto/market-hours/bot-watching/widgets suites.
+
+- 2026-06-27 (iter-63) — **Market-hours hard veto** (weekend gold trade attempt fix):
+  - Root cause: bot generated `XAUUSD SELL` on Sunday 04:49 UTC; broker rejected MARKET_CLOSED. `is_weekend` was detected but never consumed as a hard stop.
+  - `microstructure.is_market_closed(symbol, now=None)` returns `{reason, reopens_at_utc, reopens_in_hours}` for forex/metals; crypto = always open. Window: Fri 21:00 UTC → Sun 22:00 UTC.
+  - Hard veto added at top of `ai_signals.py` cheap-HOLD pre-filter (**bypasses aggressive_mode** — market closure is physical, not a soft veto). Also added defense-in-depth in both `MT5BridgeEngine.execute()` and `PaperEngine.execute()` returning `{"blocked": "market_closed", ...}`.
+  - 23 boundary tests cover Fri 20:59/21:00, Sat, Sun 21:59/22:00 for XAUUSD/EURUSD/XAGUSD and crypto 24/7. **All passing.**
+
 - 2026-06-27 (iter-62) — **Multi-exchange CCXT support** (Kraken / OKX / KuCoin / Binance.US / Binance):
   - **User-blocker fixed**: Emergent's outbound IP is in Iowa/US, so Binance global (`.com` + testnet `.vision`) returned HTTP 451 to all key-verification probes. Confirmed by reachability test: Kraken/OKX/KuCoin/Binance.US all return 200 from the cluster.
   - **`crypto_bridge/ccxt_engine.py` (new)** — generic CCXT client with an `EXCHANGES` registry: per-exchange ccxt class, sandbox availability, passphrase requirement, default quote (USD for Kraken, USDT elsewhere). `_new_exchange()` dispatches by `account['exchange_id']` (defaults to `binance` for legacy docs). Passphrase decryption added to `_decrypt_creds()` for OKX/KuCoin.

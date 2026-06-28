@@ -308,6 +308,228 @@ async def get_bot_pulse(user=Depends(get_current_user)):
     return {"items": out, "loop_interval_sec": int(os.environ.get("BOT_LOOP_INTERVAL_SEC", "60"))}
 
 
+@router.get("/cooldowns")
+async def get_cooldowns(user=Depends(get_current_user)):
+    """Per-account cooldown + loss-streak snapshot for the Cooldown UX widget.
+
+    Surfaces the data a trader needs to understand *why* a specific account is
+    silent: how long until the next signal eval, how many consecutive losses
+    have accumulated against the anti-tilt threshold, and what the last trade
+    on each account closed at.
+
+    One card per (user, bot_config) so per-account overrides each get their
+    own tile.
+    """
+    from microstructure import is_market_closed
+
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=100)
+    out: list[dict] = []
+    for cfg in cfgs:
+        acct_id = cfg.get("account_id")
+        # Account metadata (label, broker)
+        label = "Default profile"
+        broker = "—"
+        if acct_id:
+            try:
+                acct = await db.accounts.find_one(
+                    {"_id": ObjectId(acct_id), "user_id": user["id"]}
+                )
+                if acct:
+                    label = acct.get("label") or acct.get("login") or acct.get("broker") or f"Account {acct_id[:6]}"
+                    broker = acct.get("broker") or "—"
+            except Exception:
+                pass
+
+        cooldown_min = int(cfg.get("signal_cooldown_minutes", 3) or 3)
+        symbols = cfg.get("symbols") or []
+        pulse = cfg.get("_last_pulse") or {}
+        last_eval_ts = pulse.get("ts")
+        seconds_since_eval = None
+        cooldown_seconds_left = None
+        if last_eval_ts:
+            try:
+                ts = datetime.fromisoformat(str(last_eval_ts).replace("Z", "+00:00"))
+                seconds_since_eval = int((now - ts).total_seconds())
+                cooldown_seconds_left = max(0, cooldown_min * 60 - seconds_since_eval)
+            except Exception:
+                pass
+
+        # Per-symbol market closure (so the UI can show "market closed instead
+        # of cooldown" when XAUUSD is in the Fri 21 → Sun 22 UTC window).
+        symbol_states = []
+        for sym in symbols:
+            closure = is_market_closed(sym)
+            symbol_states.append({
+                "symbol": sym,
+                "market_closed": closure is not None,
+                "market_closure_reason": closure["reason"] if closure else None,
+                "reopens_in_hours": closure["reopens_in_hours"] if closure else None,
+            })
+
+        # Loss streak — consecutive closed losing trades on this account.
+        anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3) or 0)
+        anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4) or 0)
+        anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
+
+        trade_q: dict = {"user_id": user["id"], "status": "closed"}
+        if acct_id:
+            trade_q["account_id"] = acct_id
+        recent = await db.trades.find(trade_q).sort("closed_at", -1).limit(
+            max(anti_tilt_n, 5)
+        ).to_list(length=max(anti_tilt_n, 5))
+
+        loss_streak = 0
+        win_streak = 0
+        for t in recent:
+            pnl = float(t.get("pnl") or 0)
+            if pnl < 0 and win_streak == 0:
+                loss_streak += 1
+            elif pnl > 0 and loss_streak == 0:
+                win_streak += 1
+            else:
+                break
+
+        # Anti-tilt status — freeze active iff last N trades all lost AND most
+        # recent loss is within the freeze window.
+        anti_tilt_active = False
+        freeze_unfreeze_in_seconds = None
+        if anti_tilt_enabled and anti_tilt_n > 0 and loss_streak >= anti_tilt_n:
+            last_close = recent[0].get("closed_at") if recent else None
+            if last_close:
+                try:
+                    lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
+                    elapsed = (now - lc).total_seconds()
+                    if elapsed < anti_tilt_hours * 3600:
+                        anti_tilt_active = True
+                        freeze_unfreeze_in_seconds = int(anti_tilt_hours * 3600 - elapsed)
+                except Exception:
+                    pass
+
+        # Last closed trade summary (any symbol on this account)
+        last_trade = None
+        if recent:
+            lt = recent[0]
+            last_trade = {
+                "symbol": lt.get("symbol"),
+                "action": lt.get("action"),
+                "pnl": float(lt.get("pnl") or 0),
+                "closed_at": lt.get("closed_at"),
+            }
+
+        out.append({
+            "config_id": str(cfg["_id"]),
+            "account_id": acct_id,
+            "label": label,
+            "broker": broker,
+            "active": bool(cfg.get("active")),
+            "paper_shadow_mode": bool(cfg.get("paper_shadow_mode")),
+            "cooldown_minutes": cooldown_min,
+            "cooldown_seconds_left": cooldown_seconds_left,
+            "seconds_since_eval": seconds_since_eval,
+            "symbols": symbol_states,
+            "loss_streak": loss_streak,
+            "win_streak": win_streak,
+            "anti_tilt_threshold": anti_tilt_n,
+            "anti_tilt_enabled": anti_tilt_enabled,
+            "anti_tilt_active": anti_tilt_active,
+            "anti_tilt_unfreeze_in_seconds": freeze_unfreeze_in_seconds,
+            "last_trade": last_trade,
+        })
+    # Active accounts first, then by label
+    out.sort(key=lambda x: (not x["active"], x["label"]))
+    return {"items": out}
+
+
+@router.get("/risk-gauge")
+async def get_risk_gauge(user=Depends(get_current_user)):
+    """Per-account P&L vs circuit-breaker limit, for the dashboard risk gauge.
+
+    Renders how close each account is to tripping its daily / weekly drawdown
+    breaker. Uses the same check_and_trip() logic as the live circuit breaker
+    (in dry-run mode — does NOT actually trip anything).
+
+    Multi-account isolated: per-account cfg + per-account equity + per-account
+    realised P&L. A loss on broker A never inflates broker B's gauge.
+    """
+    from circuit_breakers import (
+        _daily_limit, _weekly_limit, realised_pnl_since, today_iso, week_ago_iso,
+    )
+
+    db = get_db()
+    cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=100)
+    out: list[dict] = []
+    for cfg in cfgs:
+        acct_id = cfg.get("account_id")
+        # Account metadata + equity
+        equity = 0.0
+        label = "Default profile"
+        broker = "—"
+        if acct_id:
+            try:
+                acct = await db.accounts.find_one(
+                    {"_id": ObjectId(acct_id), "user_id": user["id"]}
+                )
+                if acct:
+                    label = acct.get("label") or acct.get("login") or acct.get("broker") or f"Account {acct_id[:6]}"
+                    broker = acct.get("broker") or "—"
+                    equity = float(acct.get("equity") or acct.get("balance") or 0)
+            except Exception:
+                pass
+        else:
+            # Default profile sums equity across all the user's accounts
+            accts = await db.accounts.find({"user_id": user["id"]}).to_list(length=50)
+            equity = sum(float(a.get("equity") or a.get("balance") or 0) for a in accts)
+
+        pnl_today = await realised_pnl_since(db, user["id"], today_iso(), account_id=acct_id)
+        pnl_week = await realised_pnl_since(db, user["id"], week_ago_iso(), account_id=acct_id)
+        daily_limit_pct = _daily_limit(cfg)
+        weekly_limit_pct = _weekly_limit(cfg)
+
+        # Convert limits to $ amounts so the UI can show "‑$47 of ‑$120 cap"
+        daily_limit_amount = -(daily_limit_pct / 100.0) * equity if equity > 0 else 0
+        weekly_limit_amount = -(weekly_limit_pct / 100.0) * equity if equity > 0 else 0
+
+        # % of limit consumed (0 → 100). PnL > 0 → 0% consumed.
+        # Negative PnL closer to limit → 100% consumed.
+        def _pct_consumed(pnl, limit_amount):
+            if limit_amount >= 0 or pnl >= 0:
+                return 0.0
+            return min(100.0, round((pnl / limit_amount) * 100, 1))
+
+        daily_consumed_pct = _pct_consumed(pnl_today, daily_limit_amount)
+        weekly_consumed_pct = _pct_consumed(pnl_week, weekly_limit_amount)
+
+        out.append({
+            "config_id": str(cfg["_id"]),
+            "account_id": acct_id,
+            "label": label,
+            "broker": broker,
+            "active": bool(cfg.get("active")),
+            "tripped": bool(cfg.get("tripped_at")),
+            "tripped_reason": cfg.get("tripped_reason"),
+            "tripped_kind": cfg.get("tripped_kind"),
+            "equity": round(equity, 2),
+            "daily": {
+                "enabled": bool(cfg.get("daily_drawdown_enabled", True)),
+                "pnl": round(pnl_today, 2),
+                "limit_pct": daily_limit_pct,
+                "limit_amount": round(daily_limit_amount, 2),
+                "consumed_pct": daily_consumed_pct,
+            },
+            "weekly": {
+                "enabled": bool(cfg.get("weekly_drawdown_enabled", True)),
+                "pnl": round(pnl_week, 2),
+                "limit_pct": weekly_limit_pct,
+                "limit_amount": round(weekly_limit_amount, 2),
+                "consumed_pct": weekly_consumed_pct,
+            },
+        })
+    out.sort(key=lambda x: (not x["active"], x["label"]))
+    return {"items": out}
+
+
 @router.put("/config")
 async def update_config(payload: BotConfigUpdate,
                         account_id: Optional[str] = None,

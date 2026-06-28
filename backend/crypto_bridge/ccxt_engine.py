@@ -34,15 +34,77 @@ logger = logging.getLogger("crypto.ccxt")
 # whether a passphrase is required (OKX, KuCoin), and how internal STOIC
 # symbols map to the exchange's preferred quote currency. Kraken quotes
 # BTC against fiat USD natively (BTC/USD), every other exchange uses USDT.
+# `ping_url` is hit by the reachability probe — a public, unauthenticated
+# endpoint that returns quickly on success.
 EXCHANGES = {
-    "binance":   {"klass": "binance",   "sandbox": True,  "passphrase": False, "default_quote": "USDT", "label": "Binance Global"},
-    "binanceus": {"klass": "binanceus", "sandbox": False, "passphrase": False, "default_quote": "USDT", "label": "Binance.US"},
-    "kraken":    {"klass": "kraken",    "sandbox": False, "passphrase": False, "default_quote": "USD",  "label": "Kraken"},
-    "okx":       {"klass": "okx",       "sandbox": True,  "passphrase": True,  "default_quote": "USDT", "label": "OKX"},
-    "kucoin":    {"klass": "kucoin",    "sandbox": True,  "passphrase": True,  "default_quote": "USDT", "label": "KuCoin"},
+    "binance":   {"klass": "binance",   "sandbox": True,  "passphrase": False, "default_quote": "USDT", "label": "Binance Global",
+                  "ping_url": "https://api.binance.com/api/v3/ping"},
+    "binanceus": {"klass": "binanceus", "sandbox": False, "passphrase": False, "default_quote": "USDT", "label": "Binance.US",
+                  "ping_url": "https://api.binance.us/api/v3/ping"},
+    "kraken":    {"klass": "kraken",    "sandbox": False, "passphrase": False, "default_quote": "USD",  "label": "Kraken",
+                  "ping_url": "https://api.kraken.com/0/public/Time"},
+    "okx":       {"klass": "okx",       "sandbox": True,  "passphrase": True,  "default_quote": "USDT", "label": "OKX",
+                  "ping_url": "https://www.okx.com/api/v5/public/time"},
+    "kucoin":    {"klass": "kucoin",    "sandbox": True,  "passphrase": True,  "default_quote": "USDT", "label": "KuCoin",
+                  "ping_url": "https://api.kucoin.com/api/v1/timestamp"},
 }
 SUPPORTED_EXCHANGES = list(EXCHANGES.keys())
 DEFAULT_EXCHANGE_ID = "binance"
+
+
+# ─────────────────────── Reachability probe ───────────────────────
+# Cluster outbound IP is fixed (Iowa/US right now), so reachability is
+# stable across requests. Cache the probe results to avoid hammering
+# exchange ping endpoints. TTL = 5 minutes.
+_REACHABILITY_CACHE: dict = {"checked_at": 0.0, "results": {}}
+_REACHABILITY_TTL_SEC = 300  # 5 min
+
+
+async def check_reachability(force: bool = False) -> dict:
+    """Probe each supported exchange's public ping endpoint with a tight
+    timeout, returning ``{exchange_id: {reachable: bool, status_code, error}}``.
+
+    Results are cached for 5 minutes — the cluster IP rarely changes, so
+    re-probing every page load is wasteful and could trip rate limits.
+    """
+    import time
+    import asyncio
+    import httpx
+
+    now = time.time()
+    cache = _REACHABILITY_CACHE
+    if not force and cache["results"] and (now - cache["checked_at"]) < _REACHABILITY_TTL_SEC:
+        return cache["results"]
+
+    async def _probe(eid: str, url: str) -> tuple[str, dict]:
+        try:
+            async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as c:
+                r = await c.get(url)
+            # Binance global returns HTTP 451 when geo-blocked; treat any 4xx
+            # except 401/403 (which mean reachable but auth-required) as
+            # unreachable for the purpose of "can the cluster talk to this API".
+            ok = r.status_code == 200
+            return eid, {
+                "reachable": ok,
+                "status_code": r.status_code,
+                "error": None if ok else (
+                    "Geo-blocked (451)" if r.status_code == 451
+                    else f"HTTP {r.status_code}"
+                ),
+            }
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            return eid, {"reachable": False, "status_code": None, "error": f"Network: {type(e).__name__}"}
+        except Exception as e:  # noqa: BLE001
+            return eid, {"reachable": False, "status_code": None, "error": str(e)[:120]}
+
+    pairs = await asyncio.gather(*[
+        _probe(eid, meta["ping_url"])
+        for eid, meta in EXCHANGES.items() if meta.get("ping_url")
+    ])
+    results = dict(pairs)
+    cache["checked_at"] = now
+    cache["results"] = results
+    return results
 
 
 def _exchange_meta(exchange_id: str) -> dict:

@@ -36,6 +36,12 @@ export default function Crypto() {
             setAccounts(a.data || []);
             setStatus(s.data || status);
             setExchanges(x.data?.exchanges || []);
+            // Adopt the backend's smart default (first reachable exchange)
+            // so the modal doesn't preselect a known-blocked option.
+            const smartDefault = x.data?.default;
+            if (smartDefault) {
+                setForm(f => f.exchange_id === "binance" ? { ...f, exchange_id: smartDefault } : f);
+            }
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
     }, []);
@@ -218,18 +224,47 @@ function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr,
                         </div>
                     )}
                     <div>
-                        <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">EXCHANGE</label>
+                        <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5 flex items-center justify-between">
+                            <span>EXCHANGE</span>
+                            <span className="font-mono text-[9px] text-[#52525B] normal-case tracking-normal">
+                                ● reachable from this server · ○ blocked
+                            </span>
+                        </label>
                         <select required value={form.exchange_id}
                             onChange={(e) => set("exchange_id", e.target.value)} data-testid="form-exchange"
                             className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none">
-                            {exchanges.map(x => (
-                                <option key={x.id} value={x.id}>
-                                    {x.label}
-                                    {x.requires_passphrase ? " (passphrase required)" : ""}
-                                    {!x.supports_sandbox ? " · live only" : ""}
-                                </option>
-                            ))}
+                            {exchanges.map(x => {
+                                // Plain-text reachability marker that survives <option> styling
+                                // restrictions (HTML <option> can't render coloured spans).
+                                const reachMark = x.reachable === false ? "○ "
+                                                : x.reachable === true ? "● " : "  ";
+                                const reachSuffix = x.reachable === false ?
+                                    ` · ${x.reach_error || "unreachable"}` : "";
+                                return (
+                                    <option key={x.id} value={x.id} disabled={x.reachable === false}>
+                                        {reachMark}{x.label}
+                                        {x.requires_passphrase ? " (passphrase required)" : ""}
+                                        {!x.supports_sandbox ? " · live only" : ""}
+                                        {reachSuffix}
+                                    </option>
+                                );
+                            })}
                         </select>
+                        {selected.id && selected.reachable === false && (
+                            <div className="mt-1.5 text-[10px] text-[#FF3B30] font-mono flex items-center gap-1.5"
+                                 data-testid="exchange-unreachable-warning">
+                                <AlertTriangle className="w-3 h-3 shrink-0" />
+                                Cannot reach {selected.label} from this server ({selected.reach_error || "blocked"}).
+                                Pick a different exchange above.
+                            </div>
+                        )}
+                        {selected.id && selected.reachable === true && (
+                            <div className="mt-1.5 text-[10px] text-[#00FF41] font-mono flex items-center gap-1.5"
+                                 data-testid="exchange-reachable-ok">
+                                <ShieldCheck className="w-3 h-3 shrink-0" />
+                                {selected.label} API reachable from this server.
+                            </div>
+                        )}
                     </div>
                     <div>
                         <label className="font-mono text-[10px] tracking-widest text-[#52525B] block mb-1.5">LABEL</label>

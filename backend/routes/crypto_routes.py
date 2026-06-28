@@ -26,6 +26,7 @@ from secrets_vault import encrypt as vault_encrypt, mask as vault_mask
 from crypto_bridge.ccxt_engine import (
     CCXTClient, normalize_symbol, _live_enabled,
     EXCHANGES, SUPPORTED_EXCHANGES, DEFAULT_EXCHANGE_ID,
+    check_reachability,
 )
 from crypto_bridge.binance_engine import BinanceCCXTEngine
 
@@ -282,12 +283,30 @@ async def crypto_status(user=Depends(get_current_user)):
 
 
 @router.get("/exchanges")
-async def crypto_exchanges(user=Depends(get_current_user)):
+async def crypto_exchanges(refresh: bool = False, user=Depends(get_current_user)):
     """List of CCXT exchanges supported by this deployment, with the metadata
-    the UI needs to render the Add-Account dropdown + conditional fields."""
+    the UI needs to render the Add-Account dropdown + conditional fields.
+
+    Includes a **reachability probe** per exchange so the UI can flag which
+    APIs the cluster's outbound IP can actually talk to (e.g. Binance global
+    is 451-geoblocked from US-hosted clusters). Cached for 5 min unless
+    `?refresh=true`.
+    """
     _ = user
+    reachability = await check_reachability(force=refresh)
+
+    # Pick a smart default: prefer the configured DEFAULT (binance) if it's
+    # reachable, otherwise fall back to the first reachable exchange so the
+    # UI never preselects a known-broken option.
+    default_id = DEFAULT_EXCHANGE_ID
+    if reachability and not reachability.get(default_id, {}).get("reachable", False):
+        for eid in SUPPORTED_EXCHANGES:
+            if reachability.get(eid, {}).get("reachable"):
+                default_id = eid
+                break
+
     return {
-        "default": DEFAULT_EXCHANGE_ID,
+        "default": default_id,
         "exchanges": [
             {
                 "id": eid,
@@ -295,6 +314,8 @@ async def crypto_exchanges(user=Depends(get_current_user)):
                 "requires_passphrase": meta["passphrase"],
                 "supports_sandbox": meta["sandbox"],
                 "default_quote": meta.get("default_quote", "USDT"),
+                "reachable": reachability.get(eid, {}).get("reachable"),
+                "reach_error": reachability.get(eid, {}).get("error"),
             }
             for eid, meta in EXCHANGES.items()
         ],

@@ -53,6 +53,7 @@ from routes.shadow_routes import router as shadow_router
 from routes.postmortem_routes import router as postmortem_router
 from routes.auto_heal_routes import router as auto_heal_router
 from routes.preferences_routes import router as preferences_router
+from routes.insights_routes import router as insights_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -123,6 +124,7 @@ api_router.include_router(shadow_router)
 api_router.include_router(postmortem_router)
 api_router.include_router(auto_heal_router)
 api_router.include_router(preferences_router)
+api_router.include_router(insights_router)
 
 
 # ---------- WebSocket ----------
