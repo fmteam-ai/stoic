@@ -742,6 +742,26 @@ async def adaptive_status(account_id: Optional[str] = None,
     }
 
 
+@router.get("/doctor")
+async def bot_doctor(account_id: Optional[str] = None,
+                     force_refresh: bool = False,
+                     user=Depends(get_current_user)):
+    """iter-75 · Bot Doctor self-diagnosis (LITE).
+
+    LLM-powered analysis of the last hour of telemetry. Returns a
+    structured diagnosis (status / headline / findings / hypothesis /
+    recommendations). No auto-apply — surfaces to the dashboard tile so
+    the user stays in the loop on every fix.
+
+    Cached for 5 min per (user_id, account_id). Pass force_refresh=true
+    to bust the cache (e.g. after fixing an issue).
+    """
+    from bot_doctor import diagnose
+    db = get_db()
+    return await diagnose(db, user_id=user["id"],
+                          account_id=account_id, force_refresh=force_refresh)
+
+
 @router.post("/preset/{key}")
 async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
                                 user=Depends(get_current_user)):
