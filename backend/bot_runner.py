@@ -307,9 +307,16 @@ async def _process_user_account_locked(db, cfg: dict):
     # fixes the underlying issue and explicitly unblocks the account.
     from broker_reject_breaker import evaluate_account as _eval_broker_reject
     survivors: list = []
+    blocked_summaries: list = []
     for a in connected:
         verdict = await _eval_broker_reject(db, a)
         if verdict["blocked"]:
+            blocked_summaries.append({
+                "label": a.get("label"),
+                "retcode": verdict.get("retcode"),
+                "retcode_label": verdict.get("label"),
+                "hint": verdict.get("hint"),
+            })
             if verdict["tripped_this_call"]:
                 await ws_manager.broadcast(user_id, "account_trading_blocked", {
                     "account_id": str(a["_id"]),
@@ -328,6 +335,28 @@ async def _process_user_account_locked(db, cfg: dict):
             continue
         survivors.append(a)
     connected = survivors
+    # Cached on cfg for the inner loop's "no connected accounts" branch so the
+    # pulse there can show "broker auto-halted" instead of the generic
+    # "EA heartbeat stale" message.
+    cfg["_blocked_account_summaries"] = blocked_summaries
+
+    # iter-71b · If every account on this cfg is auto-halted by the broker
+    # breaker, record the precise reason at cfg-level NOW (before any
+    # per-symbol cooldown short-circuits) so the dashboard pulse shows the
+    # actionable error instead of a misleading "cooldown active" or
+    # "EA heartbeat stale".
+    if not connected and blocked_summaries:
+        bs = blocked_summaries[0]
+        await _record_pulse(db, cfg,
+            action="BLOCKED", level="block",
+            reason=(
+                f"All accounts auto-halted by broker: "
+                f"{bs.get('retcode_label') or 'broker rejection'} "
+                f"({bs.get('retcode') or '?'}) on {bs.get('label')}. "
+                f"{bs.get('hint') or 'Open Accounts → Resume Trading once fixed.'}"
+            ),
+        )
+        return
 
     risk_level = cfg.get("risk_level", "medium")
     auto_exec = bool(cfg.get("auto_execute", True))
@@ -607,9 +636,26 @@ async def _process_user_account_locked(db, cfg: dict):
             continue
 
         if not connected:
+            blocked_summaries = cfg.get("_blocked_account_summaries") or []
+            if blocked_summaries:
+                # All live accounts on this cfg were auto-halted by the broker
+                # circuit breaker. Surface the FIRST account's reason — it's
+                # the actionable one for the user.
+                bs = blocked_summaries[0]
+                pulse_reason = (
+                    f"All accounts auto-halted by broker: "
+                    f"{bs.get('retcode_label') or 'broker rejection'} "
+                    f"({bs.get('retcode') or '?'}) on {bs.get('label')}. "
+                    f"{bs.get('hint') or 'See Accounts page → Resume Trading after fixing.'}"
+                )
+            else:
+                pulse_reason = (
+                    "No connected accounts — EA heartbeat stale (>5min). "
+                    "Check MT5 EA / network."
+                )
             await _record_pulse(db, cfg, symbol=sym,
                 action="BLOCKED", level="block",
-                reason="No connected accounts — EA heartbeat stale (>5min). Check MT5 EA / network.",
+                reason=pulse_reason,
             )
             continue
         rl = rl_check(user_id)
