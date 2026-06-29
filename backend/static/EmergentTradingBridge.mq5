@@ -58,6 +58,10 @@
 //|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| v1.32 — Added .fx/.FX/.Fx suffix variants (Tauro Markets /        |
+//|         JMFinancial-Server demo accounts).                         |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| v1.31 — Expanded broker symbol-suffix probe list from 17 → 30.    |
 //|         Adds .c/.cent (Tauro/JMFinancial cent accounts), .s/.std  |
 //|         (FBS/Roboforex standard), .i (IC Markets institutional),  |
@@ -70,14 +74,14 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.31"
+#property version   "1.32"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.31"
+#define EA_CLIENT_VERSION "1.32"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -100,7 +104,7 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.31 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.32 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -302,13 +306,15 @@ string ResolveBrokerSymbol(string base_symbol) {
    }
    // Common broker suffix variants observed in the wild.
    // v1.31 — added .c/.cent (Tauro/JMFinancial cent accounts), .s/.std
-   // (FBS/Roboforex standard), .i (IC Markets institutional), ~ (some ECN),
-   // ".spot" (Vantage), "_x"/"_raw"/"_ecn" (underscore-style brokers).
+   //         (FBS/Roboforex standard), .i (IC Markets institutional), ~ (some ECN),
+   //         ".spot" (Vantage), "_x"/"_raw"/"_ecn" (underscore-style brokers).
+   // v1.32 — added .fx/.FX (Tauro Markets / JMFinancial-Server demo accounts).
    string suffixes[] = {
       ".x", ".X", ".raw", ".RAW", ".r", ".m", ".ecn", ".ECN",
       "pro", "Pro", "PRO", "+", "#", "m", "_pro", "-ECN", ".pro",
       ".c", ".C", ".cent", "cent", ".s", ".S", ".std", ".STD",
-      ".i", ".I", "~", ".spot", "_x", "_raw", "_ecn"
+      ".i", ".I", "~", ".spot", "_x", "_raw", "_ecn",
+      ".fx", ".FX", ".Fx"
    };
    for (int i = 0; i < ArraySize(suffixes); i++) {
       string candidate = base_symbol + suffixes[i];
