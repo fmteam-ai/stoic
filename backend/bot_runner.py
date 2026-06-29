@@ -378,6 +378,30 @@ async def _process_user_account_locked(db, cfg: dict):
     shadow_only = bool(cfg.get("paper_shadow_mode")) and not bool(cfg.get("active"))
     if shadow_only:
         auto_exec = False
+
+    # iter-74 · Phase 3 — Regime-aware auto-preset overlay.
+    # When `auto_preset_enabled` is on, pick the preset matching the LAST
+    # tick's regime/execution-mode and overlay its config knobs onto cfg
+    # in-memory. Uses cached regime (from previous tick) to avoid a
+    # chicken-and-egg cycle where the signal-needed-to-pick-preset depends
+    # on the preset-needed-to-shape-the-signal.
+    auto_preset_active = bool(cfg.get("auto_preset_enabled"))
+    if auto_preset_active:
+        from adaptive_mode import pick_preset_for_regime
+        from strategy_presets import PRESETS as _PRESETS
+        pick = pick_preset_for_regime(
+            cfg.get("_last_execution_mode"),
+            cfg.get("_last_regime"),
+        )
+        preset_cfg = (_PRESETS.get(pick["preset_key"]) or {}).get("config", {})
+        if preset_cfg:
+            cfg = {**cfg, **preset_cfg,
+                   "active_preset": f"{pick['preset_key']}_auto",
+                   "_auto_preset_source": pick["preset_key"]}
+            logger.info("Auto-preset overlay user=%s acct=%s → %s (%s)",
+                        user_id, cfg_account_id or "default",
+                        pick["preset_key"], pick["reason"])
+
     max_concurrent = int(cfg.get("max_concurrent_trades", 3))
     max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
@@ -502,6 +526,29 @@ async def _process_user_account_locked(db, cfg: dict):
                     reason="Analyser pipeline returned no signal (Strategy or Risk agent failed). Check logs.",
                 )
                 continue
+            # iter-74 · Cache the regime so the NEXT tick can pick a preset
+            # for auto_preset_enabled without re-querying the orchestrator.
+            try:
+                rexec = (signal.get("regime_execution_mode") or {}).get("execution_mode")
+                rname = (signal.get("regime") or {}).get("regime")
+                if rexec or rname:
+                    await db.bot_configs.update_one(
+                        {"_id": cfg["_id"]},
+                        {"$set": {"_last_execution_mode": rexec,
+                                  "_last_regime": rname}},
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+            # iter-74 · Phase 1 — Profit-Taking Mode + TP cap.
+            # Clips TP per max_tp_pips_per_symbol (and 100-pip default in
+            # win_rate mode), and tightens TP in choppy regimes. Persists
+            # the adaptive_profit_taking telemetry onto the signal so the
+            # UI can show "TP clipped to 100p (regime DEFENSIVE_SCALP)".
+            try:
+                from adaptive_mode import apply_profit_taking_mode
+                signal, _eff_cfg_pt = apply_profit_taking_mode(signal, cfg)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("apply_profit_taking_mode failed sym=%s: %s — using raw signal", sym, e)
         except Exception as e:
             logger.exception("orchestrator.analyze_tick failed user=%s sym=%s: %s", user_id, sym, e)
             await _record_pulse(db, cfg, symbol=sym,
@@ -573,6 +620,12 @@ async def _process_user_account_locked(db, cfg: dict):
         signal["consumed"] = False
         signal["created_at"] = datetime.now(timezone.utc).isoformat()
         signal["origin"] = "shadow" if shadow_only else "auto"
+        # iter-74 · audit trail for adaptive overlays
+        if auto_preset_active:
+            signal["adaptive_auto_preset"] = {
+                "selected": cfg.get("_auto_preset_source"),
+                "active_preset": cfg.get("active_preset"),
+            }
         result = await db.signals.insert_one(signal)
         signal_id = str(result.inserted_id)
         broadcast_payload = {**signal, "id": signal_id}
@@ -732,6 +785,30 @@ async def _process_user_account_locked(db, cfg: dict):
         # on live accounts and made the user's max_lot_size cap permanently
         # binding. Doing it here ties sizing to actual risk management.
         profile = get_profile(risk_level)
+        # iter-74 · Phase 2 — Rolling adaptive risk multiplier.
+        # Scales profile.risk_pct by a multiplier derived from the last N
+        # closed trades' win rate. Multiplier ∈ [0.5, 1.3]. Neutral when
+        # fewer than 5 closed samples exist on the account.
+        adaptive_risk_info: dict | None = None
+        if cfg.get("adaptive_risk_enabled"):
+            try:
+                from adaptive_mode import compute_risk_multiplier
+                adaptive_risk_info = await compute_risk_multiplier(
+                    user_id=user_id, account_id=cfg_account_id,
+                    window=int(cfg.get("adaptive_risk_window") or 20),
+                )
+                mult = float(adaptive_risk_info.get("multiplier") or 1.0)
+                if mult != 1.0:
+                    profile = {**profile,
+                               "risk_pct": float(profile.get("risk_pct") or 0) * mult}
+                    logger.info(
+                        "Adaptive risk mult=%.2f×  win_rate=%s%%  samples=%s  user=%s acct=%s",
+                        mult, adaptive_risk_info.get("win_rate_pct"),
+                        adaptive_risk_info.get("samples"),
+                        user_id, cfg_account_id or "default",
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("adaptive_risk lookup failed: %s — using base risk", e)
         # Iter-65: pass today's locked daily-profit so it's removed from the
         # equity pool used for Kelly sizing. The locked $ becomes untouchable.
         from profit_target import locked_profit_amount
@@ -888,6 +965,7 @@ async def _process_user_account_locked(db, cfg: dict):
             "consumed": True,
             **({"corr_kelly_trim": corr_kelly_info} if corr_kelly_info else {}),
             **({"sector_cap_fit": sector_fit_info} if sector_fit_info else {}),
+            **({"adaptive_risk": adaptive_risk_info} if adaptive_risk_info else {}),
         }})
         await _record_pulse(db, cfg, symbol=sym,
             action="EXEC", level="info",

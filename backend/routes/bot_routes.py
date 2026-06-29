@@ -125,6 +125,12 @@ def _serialize(cfg: dict) -> dict:
         "mtf_strict": cfg.get("mtf_strict", False),
         "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
+        # iter-74 · Adaptive Mode visibility
+        "profit_taking_mode": cfg.get("profit_taking_mode", "expected_value"),
+        "max_tp_pips_per_symbol": cfg.get("max_tp_pips_per_symbol") or {},
+        "adaptive_risk_enabled": bool(cfg.get("adaptive_risk_enabled")),
+        "adaptive_risk_window": int(cfg.get("adaptive_risk_window") or 20),
+        "auto_preset_enabled": bool(cfg.get("auto_preset_enabled")),
         # iter-39 — Paper Shadow Mode (run pipeline, never execute) +
         # per-account crypto risk cap override.
         "paper_shadow_mode": bool(cfg.get("paper_shadow_mode", False)),
@@ -611,6 +617,24 @@ async def update_config(payload: BotConfigUpdate,
             update["daily_profit_target_escalate_step_r"] = max(0.25, min(10.0, v))
         except (TypeError, ValueError):
             update["daily_profit_target_escalate_step_r"] = 1.0
+    # iter-74 — Adaptive Mode field coercion
+    if "profit_taking_mode" in update:
+        v = (update["profit_taking_mode"] or "").lower()
+        update["profit_taking_mode"] = v if v in ("expected_value", "win_rate", "trend_follow") else "expected_value"
+    if "max_tp_pips_per_symbol" in update:
+        update["max_tp_pips_per_symbol"] = {
+            str(k).upper(): max(0.0, float(v))
+            for k, v in (update["max_tp_pips_per_symbol"] or {}).items()
+        }
+    if "adaptive_risk_enabled" in update:
+        update["adaptive_risk_enabled"] = bool(update["adaptive_risk_enabled"])
+    if "adaptive_risk_window" in update:
+        try:
+            update["adaptive_risk_window"] = max(5, min(200, int(update["adaptive_risk_window"])))
+        except (TypeError, ValueError):
+            update["adaptive_risk_window"] = 20
+    if "auto_preset_enabled" in update:
+        update["auto_preset_enabled"] = bool(update["auto_preset_enabled"])
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     # Ensure the target doc exists, then PATCH.
@@ -666,6 +690,56 @@ async def get_strategy_presets(user=Depends(get_current_user)):
     """Return built-in presets + the user's own saved presets, in one payload."""
     custom = await list_user_presets(user["id"])
     return {"presets": list_presets(), "custom": custom}
+
+
+@router.get("/adaptive-status")
+async def adaptive_status(account_id: Optional[str] = None,
+                          user=Depends(get_current_user)):
+    """iter-74 · Live snapshot of the Win-Rate Adaptive Mode subsystem.
+
+    Returns the current adaptive risk multiplier (based on rolling win
+    rate), the regime-auto-selected preset (if enabled), and the user's
+    profit-taking mode + TP cap settings. Designed for the dashboard's
+    "Adaptive Mode" card.
+    """
+    from adaptive_mode import compute_risk_multiplier, pick_preset_for_regime
+    db = get_db()
+    cfg_q = {"user_id": user["id"]}
+    cfg_q["account_id"] = account_id if account_id else None
+    cfg = await db.bot_configs.find_one(cfg_q) or {}
+
+    # Most-recent signal so we can show which preset auto would pick now
+    last_sig_q = {"user_id": user["id"]}
+    last_sig = await db.signals.find_one(last_sig_q, sort=[("created_at", -1)])
+    regime_exec = None
+    regime = None
+    if last_sig:
+        regime_exec = (last_sig.get("regime_execution_mode") or {}).get("execution_mode")
+        regime = (last_sig.get("regime") or {}).get("regime")
+
+    risk_info = await compute_risk_multiplier(
+        user_id=user["id"], account_id=account_id,
+        window=int(cfg.get("adaptive_risk_window") or 20),
+    )
+
+    auto_pick = pick_preset_for_regime(regime_exec, regime)
+    return {
+        "profit_taking_mode": cfg.get("profit_taking_mode", "expected_value"),
+        "max_tp_pips_per_symbol": cfg.get("max_tp_pips_per_symbol") or {},
+        "adaptive_risk": {
+            "enabled": bool(cfg.get("adaptive_risk_enabled")),
+            **risk_info,
+        },
+        "auto_preset": {
+            "enabled": bool(cfg.get("auto_preset_enabled")),
+            "would_select": auto_pick["preset_key"],
+            "reason": auto_pick["reason"],
+            "regime_execution_mode": regime_exec,
+            "regime": regime,
+        },
+        "active_preset": cfg.get("active_preset"),
+        "account_id": account_id,
+    }
 
 
 @router.post("/preset/{key}")
@@ -993,7 +1067,7 @@ async def bot_health_score(user=Depends(get_current_user)):
                           f"{ba.get('block_retcode_label') or 'unknown'} "
                           f"({ba.get('block_retcode') or '?'})"),
                 "fix": (ba.get("block_hint") or "Check MT5 Experts tab for details.") +
-                        f"  After fixing, click 'Resume Trading' on this account.",
+                        "  After fixing, click 'Resume Trading' on this account.",
                 "details": {
                     "account_id": str(ba["_id"]),
                     "blocked_at": ba.get("blocked_at"),

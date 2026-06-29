@@ -64,6 +64,34 @@ PRESETS = {
             "sl_cooldown_minutes": 15,
         },
     },
+    "fast_scalp": {
+        "label": "Fast Scalp",
+        "tagline": "Quick in, ≤100-pip out — pure win-rate hunter.",
+        "description": (
+            "Maximises the number of green trades. Locks 70% off at 0.5R, "
+            "trails the runner tight, and hard-caps profit at 100 pips per "
+            "trade. Pair with profit_taking_mode='win_rate' for the full effect."
+        ),
+        "icon": "Zap",
+        "color": "#10F2C5",
+        "config": {
+            "aggressive_mode": True,
+            "min_confidence_override": 60,
+            "trade_of_day_cap": 8,
+            "max_concurrent_trades": 4,
+            "trailing_enabled": True,
+            "trailing_start_r": 0.5,
+            "trailing_distance_r": 0.25,
+            "partial_close_enabled": True,
+            "partial_close_trigger_r": 0.5,
+            "partial_close_fraction": 0.7,
+            "breakeven_enabled": True,
+            "breakeven_trigger_r": 0.4,
+            "sl_cooldown_enabled": False,
+            "profit_taking_mode": "win_rate",
+            "max_tp_pips_per_symbol": {"XAUUSD": 100, "BTCUSD": 100},
+        },
+    },
     "trend_rider": {
         "label": "Trend Rider",
         "tagline": "Catch the wave, hold the line.",
@@ -193,7 +221,7 @@ def get_preset(key: str) -> dict | None:
 
 def list_presets() -> list[dict]:
     """Return presets as a JSON-friendly array, ordered."""
-    order = ["sniper", "scalper", "trend_rider", "breakout", "mean_reversion", "aggressive", "balanced"]
+    order = ["sniper", "scalper", "fast_scalp", "trend_rider", "breakout", "mean_reversion", "aggressive", "balanced"]
     out = []
     for k in order:
         if k in PRESETS:

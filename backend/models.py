@@ -171,6 +171,29 @@ class BotConfigUpdate(BaseModel):
     # iter-39 — Per-account crypto risk cap override (% of equity per trade).
     # Overrides the global env CRYPTO_MAX_RISK_PCT_PER_TRADE. None → fall back to env.
     crypto_risk_pct_per_trade: Optional[float] = None
+    # ───── iter-74 · Win-Rate Adaptive Mode (Phases 1-3) ────────────────
+    # Phase 1 — Profit-taking shape: how the bot harvests winners.
+    #   "expected_value" (default) → ATR-driven TPs, existing partial/trail.
+    #   "win_rate"                 → tight partials (0.5R/70%), tight trail,
+    #                                hard TP cap (100 pips default) → maximises
+    #                                count of green trades.
+    #   "trend_follow"             → wide partials (1.5R/30%), wide trail —
+    #                                lets winners stretch.
+    profit_taking_mode: str = "expected_value"
+    # Per-symbol hard ceiling on TP distance (pips). 0 / missing = uncapped.
+    # Applies regardless of profit_taking_mode, but win_rate mode also
+    # supplies a 100-pip default when this dict is empty.
+    max_tp_pips_per_symbol: Dict[str, float] = Field(default_factory=dict)
+    # Phase 2 — Rolling adaptive risk. When enabled, the bot scales the
+    # risk_pct by a multiplier derived from the last-N closed trades'
+    # win rate. Multiplier ∈ [0.5, 1.3]; defaults to 1.0 below 5 samples.
+    adaptive_risk_enabled: bool = False
+    adaptive_risk_window: int = 20
+    # Phase 3 — Regime-aware auto-preset. When enabled, each tick the bot
+    # overlays the preset matching the live execution_mode (trend_rider,
+    # fast_scalp, scalper, mean_reversion). User's explicit `active_preset`
+    # is bypassed only while auto is enabled.
+    auto_preset_enabled: bool = False
 
 
 class BotConfigOut(BotConfigUpdate):
