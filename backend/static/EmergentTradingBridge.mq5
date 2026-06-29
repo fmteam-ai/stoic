@@ -90,7 +90,7 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.34"
+#property version   "1.35"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
