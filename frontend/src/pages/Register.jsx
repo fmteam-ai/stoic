@@ -82,6 +82,13 @@ export default function Register() {
                     >
                         {loading ? "CREATING..." : "CREATE ACCOUNT →"}
                     </button>
+
+                    <p className="text-[10px] text-[#52525B] font-mono tracking-wide leading-relaxed mt-2">
+                        By creating an account you agree to STOIC's{" "}
+                        <Link to="/terms" data-testid="register-terms-link"
+                            className="text-[#FFD700] hover:underline">Terms of Use</Link>.
+                        Trading carries risk of loss; STOIC is a tool, not financial advice.
+                    </p>
                 </form>
 
                 <div className="mt-6 text-sm text-[#A1A1AA]">

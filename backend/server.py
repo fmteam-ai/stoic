@@ -19,6 +19,7 @@ import trade_manager
 import warmer
 
 # Routers
+from routes.admin_routes import router as admin_router
 from routes.auth_routes import router as auth_router
 from routes.market_routes import router as market_router
 from routes.bot_routes import router as bot_router
@@ -97,6 +98,7 @@ async def ea_script():
 
 
 # Mount routers
+api_router.include_router(admin_router)
 api_router.include_router(auth_router)
 api_router.include_router(market_router)
 api_router.include_router(bot_router)

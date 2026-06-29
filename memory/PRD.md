@@ -8,6 +8,26 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-07-04 (iter-78) — **Terms of Use + Admin Moderation (suspend / terminate users & affiliates)**:
+  - **Terms of Use** — new `terms_of_use.py` (version `2026-07-04`) with 17 sections: Service definition, no-financial-advice, risk acknowledgement, eligibility, acceptable use, **§7 affiliate rules** (no self-referrals, no incentivized signups, no earnings claims, FTC disclosures), **§8 enforcement** (suspension halts login + freezes bots; termination is permanent + may forfeit affiliate unpaid balance), subscription & refund, IP, liability cap, indemnification, governing law. Public `GET /api/terms` returns version + markdown.
+  - **Backend** — new `routes/admin_routes.py` with 11 admin endpoints + 1 public:
+    - `GET /api/admin/users?status=&q=&limit=` (filterable list with bot/account/affiliate counts)
+    - `GET /api/admin/users/{uid}` (detail + audit timeline)
+    - `POST /api/admin/users/{uid}/{suspend,unsuspend,terminate,restore}` (reason required for suspend/terminate; admins protected from each other)
+    - `GET /api/admin/affiliates?status=` and `POST /api/admin/affiliates/{aid}/{suspend,unsuspend,terminate}` — termination forfeits unpaid balance to `forfeited_balance_usd`, cancels pending payout requests
+    - `GET /api/admin/audit-log?kind=&limit=` (admin_audit_log collection)
+  - **Side-effects on suspend/terminate user**: all `bot_configs` flipped `active=false` with `deactivated_reason=user_<status>`; if user is an affiliate, that row is also deactivated (and `terminated=true` on terminate).
+  - **Login + auth gating** — `routes/auth_routes.py:login` blocks suspended/terminated users with HTTP 403 + structured `{code: account_suspended|account_terminated, reason}`. `auth.py:get_current_user` blocks mid-session requests from suspended/terminated non-admin users.
+  - **Bot runner gating** — `bot_runner._process_user_account_locked` checks user status at the top of each cfg tick, disables the cfg and emits a BLOCKED pulse if the owner is suspended/terminated. Defence-in-depth: even if a bot stayed `active=true` somehow, no trade can fire.
+  - **Frontend**:
+    - `pages/Terms.jsx` — public route at `/terms` (no auth required), markdown-rendered with dark/gold styling, fetches via raw axios so it works pre-login. Link added to Register page consent line + Sidebar LEARN section.
+    - `pages/AdminUsers.jsx` — admin-only console with search + status filter + per-row SUSPEND/TERMINATE/UNSUSPEND/RESTORE buttons + modal that requires reason. Audit-log drawer button.
+    - `pages/AdminAffiliates.jsx` — symmetric admin console for affiliates; terminate modal warns about balance forfeiture per Terms §7.
+    - `components/Sidebar.jsx` — new conditional ADMIN section (only renders for `user.role==='admin'`) with "User Management" + "Affiliate Mgmt" links.
+    - `components/ProtectedRoute.jsx` — new `requireAdmin` prop; non-admins redirected to `/` when navigating to `/admin/*`.
+  - **Tests** (`tests/test_iter78_admin_moderation.py`): 9 HTTP tests against the live backend — public terms, non-admin 403, suspend→login-blocked→audit→unsuspend→login-works, terminate disables bot+affiliate+blocks login, cannot suspend admin, reason required, affiliate terminate forfeits balance + cancels payout, affiliate suspend+unsuspend, user listing filters. **9/9 passing.** Curated regression (iter-60/71/77/78): 52/52 green.
+
+
 - 2026-06-29 (iter-73) — **Conservative profile activated + Strict MTF gate**:
   - **Post-mortem of 60d trade history** revealed a hidden ~$3,011 net loss across 21 "invalidated" trades (the `closed` filter masked them). Single-day cluster (June 26) was 11 consecutive XAUUSD SELLs as gold rallied — classic averaging-into-a-loser pattern that slipped through because `aggressive_mode=True` was bypassing the entropy filter + learned-meta veto + classifier safety net.
   - **All 3 active configs** (`micro`, `vtmarkets`, `MT5 Demo`) updated to:

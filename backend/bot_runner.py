@@ -221,6 +221,29 @@ async def _process_user_account_locked(db, cfg: dict):
     cfg_account_id = cfg.get("account_id")
     symbols = cfg.get("symbols") or []
 
+    # 0a. User moderation gate — suspended/terminated accounts NEVER trade.
+    try:
+        user_doc = await db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        user_doc = None
+    if user_doc:
+        ustatus = user_doc.get("status") or "active"
+        if ustatus in ("suspended", "terminated"):
+            # Defence-in-depth: also flip cfg inactive so this isn't re-tried.
+            await db.bot_configs.update_one(
+                {"_id": cfg["_id"]},
+                {"$set": {
+                    "active": False,
+                    "deactivated_reason": f"user_{ustatus}",
+                    "deactivated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            await _record_pulse(db, cfg,
+                action="BLOCKED", level="block",
+                reason=f"Account {ustatus} — bot disabled per STOIC Terms of Use.",
+            )
+            return
+
     # 0. Subscription gate — paper accounts always allowed; live execution requires active sub
     entitlement = await subscription_active(user_id)
 

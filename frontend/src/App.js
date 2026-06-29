@@ -35,6 +35,10 @@ import LossLab from "@/pages/LossLab";
 import BotHealth from "@/pages/BotHealth";
 import AffiliateLanding from "@/pages/AffiliateLanding";
 import WelcomeTrailer from "@/pages/WelcomeTrailer";
+import Terms from "@/pages/Terms";
+import AdminUsers from "@/pages/AdminUsers";
+import AdminAffiliates from "@/pages/AdminAffiliates";
+
 
 function App() {
     return (
@@ -46,8 +50,13 @@ function App() {
                         <Route path="/register" element={<Register />} />
                         {/* Public marketing trailer — no auth required */}
                         <Route path="/welcome" element={<WelcomeTrailer />} />
+                        {/* Public marketing TOS — must be reachable pre-login */}
+                        <Route path="/terms" element={<Terms />} />
                         {/* Public affiliate marketing page — no auth required */}
                         <Route path="/affiliates" element={<AffiliateLanding />} />
+                        {/* Admin-only moderation console */}
+                        <Route path="/admin/users" element={<ProtectedRoute requireAdmin><AdminUsers /></ProtectedRoute>} />
+                        <Route path="/admin/affiliates" element={<ProtectedRoute requireAdmin><AdminAffiliates /></ProtectedRoute>} />
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/signals" element={<ProtectedRoute><Signals /></ProtectedRoute>} />
                         <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />

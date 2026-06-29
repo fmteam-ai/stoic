@@ -83,6 +83,17 @@ async def get_current_user(request: Request) -> dict:
         user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
+        # Block requests from suspended/terminated users mid-session (Terms §8).
+        # Admins are never auto-blocked by their own suspension status.
+        status = user.get("status") or "active"
+        if status in ("suspended", "terminated") and user.get("role") != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": f"account_{status}",
+                    "message": f"Account {status}.",
+                },
+            )
         user["id"] = str(user["_id"])
         user.pop("_id", None)
         user.pop("password_hash", None)

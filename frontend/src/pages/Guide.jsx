@@ -5,6 +5,7 @@ import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
     Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign, Server, Bitcoin,
+    Stethoscope, Activity, Wand2,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
@@ -20,14 +21,17 @@ const SECTIONS = [
     { id: "setup",        title: "9. Setup — sign-up to autopilot",    icon: Rocket },
     { id: "autopilot",    title: "10. Autopilot mode explained",       icon: Plane },
     { id: "shadow",       title: "11. Paper Shadow Mode + Report",     icon: Eye },
-    { id: "daily",        title: "12. Daily 5-min routine",            icon: Clock },
-    { id: "advanced",     title: "13. Advanced — tuning & auditing",   icon: SettingsIcon },
-    { id: "presets",      title: "14. Strategy Presets",               icon: Bookmark },
-    { id: "crypto",       title: "15. Crypto · Binance Spot",          icon: Bitcoin },
-    { id: "vps",          title: "16. VPS — 24/7 uptime",              icon: Server },
-    { id: "going-live",   title: "17. Going live (paper → real)",      icon: TrendingUp },
-    { id: "affiliate",    title: "18. Earn 20% recurring (affiliate)", icon: DollarSign },
-    { id: "faq",          title: "19. Quick links",                    icon: Zap },
+    { id: "adaptive",     title: "12. Adaptive Intelligence (NEW)",    icon: Sparkles },
+    { id: "doctor",       title: "13. Bot Doctor — self-diagnosis",    icon: Stethoscope },
+    { id: "auto-broker",  title: "14. Auto Broker Detection (NEW)",    icon: Wand2 },
+    { id: "daily",        title: "15. Daily 5-min routine",            icon: Clock },
+    { id: "advanced",     title: "16. Advanced — tuning & auditing",   icon: SettingsIcon },
+    { id: "presets",      title: "17. Strategy Presets",               icon: Bookmark },
+    { id: "crypto",       title: "18. Crypto · Binance Spot",          icon: Bitcoin },
+    { id: "vps",          title: "19. VPS — 24/7 uptime",              icon: Server },
+    { id: "going-live",   title: "20. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "21. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "22. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -95,6 +99,9 @@ export default function Guide() {
                     <SetupSteps />
                     <Autopilot />
                     <ShadowSection />
+                    <AdaptiveSection />
+                    <BotDoctorSection />
+                    <AutoBrokerSection />
                     <DailyFlow />
                     <Advanced />
                     <PresetsSection />
@@ -607,6 +614,165 @@ function Autopilot() {
                 normal), and any executed trade lands in <Link to="/trades" className="text-[#00FF41] hover:underline">Trades</Link>{" "}
                 with a Telegram alert if you&apos;ve set that up.
             </Callout>
+        </section>
+    );
+}
+
+function AdaptiveSection() {
+    return (
+        <section id="adaptive">
+            <H2 id="adaptive" icon={Sparkles}>12. Adaptive Intelligence — the bot adjusts itself</H2>
+            <P>
+                STOIC&apos;s three adaptive layers make trades respond to live market conditions without
+                you touching a slider. All three are opt-in per account from the <strong>Win-Rate Adaptive Mode</strong> card
+                on the Dashboard. Default for every account is OFF (classic Plan A behaviour) — flip them
+                on when you want the bot to start adjusting itself.
+            </P>
+
+            <div className="space-y-4 mt-4">
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
+                    <div className="font-display text-base mb-1.5 flex items-center gap-2">
+                        <Target className="w-4 h-4 text-[#10F2C5]" /> 1. Profit-Taking Mode <span className="font-mono text-[10px] text-[#52525B] tracking-widest ml-auto">iter-74</span>
+                    </div>
+                    <P>
+                        Three closing styles, one click each:
+                    </P>
+                    <ul className="text-sm text-[#A1A1AA] mt-2 space-y-1.5">
+                        <li>• <strong className="text-white">EXPECTED VALUE</strong> (default) — ATR-driven TPs, existing partial-close / trail logic. The classic Plan A.</li>
+                        <li>• <strong className="text-[#10F2C5]">WIN RATE</strong> — tight partials (0.5R / 70%), tight trail (0.5R / 0.25R), <strong>Smart Cap</strong> hard ceiling. Maximises green-trade count.</li>
+                        <li>• <strong className="text-[#FFD700]">TREND FOLLOW</strong> — wide partials (1.5R / 30%), wide trail (2R / 1R). Lets runners stretch unchecked.</li>
+                    </ul>
+                </div>
+
+                <div className="border border-[#10F2C5]/30 bg-[#10F2C5]/5 p-4">
+                    <div className="font-display text-base mb-1.5 flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-[#10F2C5]" /> 2. Smart Cap (regime-aware TP cap) <span className="font-mono text-[10px] text-[#52525B] tracking-widest ml-auto">iter-77</span>
+                    </div>
+                    <P>
+                        The win-rate mode&apos;s most important upgrade. The 100-pip TP ceiling no longer fires
+                        blindly — it activates only when the market needs the discipline:
+                    </P>
+                    <ul className="text-sm text-[#A1A1AA] mt-2 space-y-1.5 font-mono text-[11px]">
+                        <li>🔓 <strong className="text-[#00FF41]">TRENDING / AGGRESSIVE</strong> → cap REMOVES itself, runners stretch like Plan A</li>
+                        <li>🔒 <strong className="text-[#10F2C5]">TRANSITIONAL / RANGING</strong> → 100p cap (disciplined in mixed conditions)</li>
+                        <li>🔒🔒 <strong className="text-[#FFB000]">CAUTIOUS_WAIT / DEFENSIVE_SCALP</strong> → 60p cap (strict in chop)</li>
+                    </ul>
+                    <P>
+                        <span className="text-[#A1A1AA]">Live regime + cap state shows on the Adaptive Mode card &mdash; e.g. <span className="text-[#10F2C5] font-mono">SMART CAP · 60p (CAUTIOUS_WAIT)</span> or <span className="text-[#00FF41] font-mono">SMART CAP · OFF (TRENDING → runners free)</span>. Updates every 30 s.</span>
+                    </P>
+                </div>
+
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
+                    <div className="font-display text-base mb-1.5 flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-[#FFD700]" /> 3. Rolling Adaptive Risk <span className="font-mono text-[10px] text-[#52525B] tracking-widest ml-auto">iter-74</span>
+                    </div>
+                    <P>
+                        Auto-scales risk-per-trade based on your last 20 closed trades&apos; win rate:
+                    </P>
+                    <ul className="text-sm text-[#A1A1AA] mt-2 space-y-1 font-mono text-[11px]">
+                        <li>• Win rate ≥ 70% → 1.30× (press the edge)</li>
+                        <li>• 60–70% → 1.15×</li>
+                        <li>• 50–60% → 1.00× (neutral)</li>
+                        <li>• 40–50% → 0.70×</li>
+                        <li>• &lt; 40% → 0.50× (capital protect)</li>
+                    </ul>
+                    <P>Needs ≥ 5 closed trades to activate; defaults to 1.0× otherwise. Live multiplier shown on the Adaptive card.</P>
+                </div>
+
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
+                    <div className="font-display text-base mb-1.5 flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-[#FFD700]" /> 4. Regime-Aware Auto-Preset <span className="font-mono text-[10px] text-[#52525B] tracking-widest ml-auto">iter-74</span>
+                    </div>
+                    <P>
+                        Bot auto-swaps Strategy Preset each tick based on live regime — no manual switching:
+                    </P>
+                    <ul className="text-sm text-[#A1A1AA] mt-2 space-y-1 font-mono text-[11px]">
+                        <li>• AGGRESSIVE / TRENDING → <strong className="text-white">trend_rider</strong></li>
+                        <li>• DEFENSIVE_SCALP → <strong className="text-white">fast_scalp</strong></li>
+                        <li>• CAUTIOUS_WAIT / TRANSITIONAL → <strong className="text-white">scalper</strong></li>
+                        <li>• RANGING → <strong className="text-white">mean_reversion</strong></li>
+                    </ul>
+                </div>
+            </div>
+            <Callout kind="success">
+                <strong>Recommended for live accounts:</strong> Smart Cap WIN-RATE + Adaptive Risk + Auto-Preset all ON.
+                Keep an Adaptive vs Plan A A/B running on at least one control account so you have evidence either way.
+            </Callout>
+            <CTAButton to="/" testid="adaptive-cta">Configure on Dashboard <ArrowRight className="w-4 h-4" /></CTAButton>
+        </section>
+    );
+}
+
+function BotDoctorSection() {
+    return (
+        <section id="doctor">
+            <H2 id="doctor" icon={Stethoscope}>13. Bot Doctor — self-diagnosis</H2>
+            <P>
+                STOIC analyses its own last hour of telemetry every 5 minutes (failed trades, blocked
+                accounts, regime context, vetos, signal patterns, win rate) and produces a structured
+                health diagnosis powered by <strong>Claude Sonnet 4.5</strong>. The result lives at the top
+                of your Dashboard as the <strong>Bot Doctor</strong> tile.
+            </P>
+            <div className="space-y-3 mt-4">
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4 space-y-2">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">WHAT YOU GET</div>
+                    <ul className="text-sm text-[#A1A1AA] space-y-1.5">
+                        <li>• <strong className="text-white">Status badge</strong> — healthy / watch / degraded / critical (color-coded)</li>
+                        <li>• <strong className="text-white">Headline</strong> — one-line summary of the situation</li>
+                        <li>• <strong className="text-white">Findings</strong> — 2–5 concrete observations (named symbols, retcodes, accounts)</li>
+                        <li>• <strong className="text-white">Root-cause hypothesis</strong> — best guess with confidence %</li>
+                        <li>• <strong className="text-white">Ranked actions</strong> — each tagged with effort (low/medium/high) and destructive flag</li>
+                    </ul>
+                </div>
+                <Callout kind="info">
+                    <strong>LITE mode</strong> — Bot Doctor diagnoses and recommends, but never auto-applies fixes.
+                    Every action requires your manual confirmation. Click <strong>CONSULT</strong> on the tile to force a fresh diagnosis at any time (bypasses the 5 min cache).
+                </Callout>
+                <P>
+                    <strong>When the LLM is unavailable</strong>, a deterministic rule-based fallback runs automatically — Doctor is
+                    never silent. You&apos;ll see <span className="font-mono text-[10px] text-[#FFB000]">LLM FALLBACK</span> in the header when this kicks in.
+                </P>
+            </div>
+        </section>
+    );
+}
+
+function AutoBrokerSection() {
+    return (
+        <section id="auto-broker">
+            <H2 id="auto-broker" icon={Wand2}>14. Auto Broker Detection</H2>
+            <P>
+                Every broker renames common symbols differently — <code className="font-mono text-[#10F2C5]">XAUUSD</code> becomes
+                <code className="font-mono text-[#10F2C5]"> XAUUSD.fx</code> on Tauro, <code className="font-mono text-[#10F2C5]">XAUUSD.e</code> on OnEquity,
+                <code className="font-mono text-[#10F2C5]"> XAUUSD.raw</code> on IC Markets. STOIC handles this automatically
+                via a two-tier system so you almost never have to dig through MT5 Market Watch again.
+            </P>
+            <div className="space-y-3 mt-4">
+                <Step n="1" title="EA v1.34 scans MarketWatch every hour" testid="auto-broker-step-1">
+                    The EA enumerates your broker&apos;s instrument list and reports symbols matching 23 known bases
+                    (XAU, BTC, EUR, GBP, USD pairs, indices, oil...) on each heartbeat.
+                </Step>
+                <Step n="2" title="Backend infers the broker&apos;s suffix convention" testid="auto-broker-step-2">
+                    The <code className="font-mono">broker_symbol_detector</code> votes across distinct base names — if it sees
+                    <code className="font-mono"> XAUUSD.fx</code>, <code className="font-mono">EURUSD.fx</code>, <code className="font-mono">BTCUSD.fx</code> all together, it concludes the broker uses <code className="font-mono">.fx</code>.
+                </Step>
+                <Step n="3" title="Trades route with the correct symbol" testid="auto-broker-step-3">
+                    Precedence: <strong className="text-[#FFD700]">your manual override</strong> &gt; <strong className="text-[#10F2C5]">auto-detected suffix</strong> &gt; bare name.
+                    You can always override from the Accounts page if auto-detect picks wrong.
+                </Step>
+            </div>
+            <Callout kind="info">
+                <strong>UI surface:</strong> On the Accounts page each MT5 account shows its current suffix with a badge —
+                <span className="font-mono text-[10px] text-[#FFD700] mx-1">MANUAL</span> /
+                <span className="font-mono text-[10px] text-[#10F2C5] mx-1">AUTO-DETECTED</span> /
+                <span className="font-mono text-[10px] text-[#52525B] mx-1">BARE</span> — plus how many symbols the detector matched and the confidence %.
+            </Callout>
+            <Callout kind="success">
+                <strong>Tested across 5 brokers:</strong> Tauro Markets (<code>.fx</code>), OnEquity (<code>.e</code>),
+                IC Markets (<code>.raw</code>), FBS / RoboForex (<code>.std</code> or bare), FXTM (<code>pro</code>).
+                The detector also handles 33 case-and-prefix variants automatically inside the EA.
+            </Callout>
+            <CTAButton to="/accounts" testid="auto-broker-cta">View Accounts &amp; Suffixes <ArrowRight className="w-4 h-4" /></CTAButton>
         </section>
     );
 }

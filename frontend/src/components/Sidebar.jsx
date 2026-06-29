@@ -9,6 +9,7 @@ import {
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers,
+    FileText, ShieldAlert,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -81,9 +82,20 @@ const SECTIONS = [
         items: [
             { to: "/guide", label: "Guide", icon: BookOpen, testid: "nav-guide" },
             { to: "/faq", label: "FAQ", icon: HelpCircle, testid: "nav-faq" },
+            { to: "/terms", label: "Terms of Use", icon: FileText, testid: "nav-terms" },
         ],
     },
 ];
+
+// Admin-only section — appended dynamically when user.role === 'admin'.
+const ADMIN_SECTION = {
+    key: "admin",
+    label: "ADMIN",
+    items: [
+        { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
+        { to: "/admin/affiliates", label: "Affiliate Mgmt", icon: ShieldAlert, testid: "nav-admin-affiliates" },
+    ],
+};
 
 // Default-open: TRADING + INSIGHTS (the daily-use sections).
 const DEFAULT_OPEN = new Set(["trading", "insights"]);
@@ -168,7 +180,7 @@ export function Sidebar({ onNavigate }) {
             items: SECTIONS.flatMap(s => s.items).filter(it => SIMPLE_MODE_ROUTES.has(it.to))
                 .sort((a, b) => [...SIMPLE_MODE_ROUTES].indexOf(a.to) - [...SIMPLE_MODE_ROUTES].indexOf(b.to)),
           }]
-        : SECTIONS;
+        : (user?.role === "admin" ? [...SECTIONS, ADMIN_SECTION] : SECTIONS);
 
     return (
         <aside className="w-full md:w-60 md:h-screen bg-[#0A0A0A] border-r border-[#1F1F1F] flex md:flex-col flex-row md:fixed md:left-0 md:top-0 z-30">

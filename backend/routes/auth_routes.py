@@ -88,6 +88,27 @@ async def login(payload: LoginRequest, response: Response):
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    # Block suspended/terminated accounts (Terms §8)
+    status = user.get("status") or "active"
+    if status == "suspended":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "account_suspended",
+                "message": "Your account has been suspended for violating the STOIC Terms of Use. Contact support to appeal.",
+                "reason": user.get("suspension_reason") or "",
+            },
+        )
+    if status == "terminated":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "account_terminated",
+                "message": "Your account has been permanently terminated for violating the STOIC Terms of Use.",
+                "reason": user.get("terminated_reason") or "",
+            },
+        )
+
     # 2FA gate — if enabled, require a valid TOTP or recovery code on this same call
     if user.get("two_factor_enabled"):
         provided = (payload.totp_code or "").strip()
