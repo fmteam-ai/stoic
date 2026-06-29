@@ -122,6 +122,7 @@ def _serialize(cfg: dict) -> dict:
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
         "aggressive_mode": cfg.get("aggressive_mode", False),
         "min_confidence_override": cfg.get("min_confidence_override", 0),
+        "mtf_strict": cfg.get("mtf_strict", False),
         "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
         # iter-39 — Paper Shadow Mode (run pipeline, never execute) +
@@ -595,6 +596,8 @@ async def update_config(payload: BotConfigUpdate,
     if "daily_profit_target_action" in update:
         v = (update["daily_profit_target_action"] or "").lower()
         update["daily_profit_target_action"] = v if v in ("lock", "stop") else "lock"
+    if "mtf_strict" in update:
+        update["mtf_strict"] = bool(update["mtf_strict"])
     if "daily_profit_target_r" in update:
         try:
             update["daily_profit_target_r"] = max(0.0, min(20.0, float(update["daily_profit_target_r"])))

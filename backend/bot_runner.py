@@ -545,6 +545,28 @@ async def _process_user_account_locked(db, cfg: dict):
         except Exception:
             pass
 
+        # iter-73 · STRICT MTF mode (cfg.mtf_strict=True). On top of the
+        # existing veto (which fires when ≥2/3 tiers disagree), this requires
+        # ≥2/3 tiers to ACTIVELY AGREE with the trade direction. Counter-trend
+        # AND drift-into-chop trades are both blocked.
+        if signal.get("action") in ("BUY", "SELL") and bool(cfg.get("mtf_strict")):
+            tiers = signal.get("mtf_tiers") or {}
+            alignment = (tiers.get("alignment") or {})
+            buy_sup = int(alignment.get("buy_support") or 0)
+            sell_sup = int(alignment.get("sell_support") or 0)
+            need = 2  # minimum tiers that must back the direction
+            ok = (signal["action"] == "BUY" and buy_sup >= need) or \
+                 (signal["action"] == "SELL" and sell_sup >= need)
+            if not ok:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn",
+                    reason=(f"MTF strict mode: {signal['action']} needs ≥{need}/3 "
+                            f"tiers agreeing — got buy={buy_sup} sell={sell_sup}. "
+                            f"Trade skipped."),
+                )
+                await inc_intel_counter(user_id, "mtf_strict_veto")
+                continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter

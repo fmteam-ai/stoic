@@ -8,6 +8,21 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-29 (iter-73) — **Conservative profile activated + Strict MTF gate**:
+  - **Post-mortem of 60d trade history** revealed a hidden ~$3,011 net loss across 21 "invalidated" trades (the `closed` filter masked them). Single-day cluster (June 26) was 11 consecutive XAUUSD SELLs as gold rallied — classic averaging-into-a-loser pattern that slipped through because `aggressive_mode=True` was bypassing the entropy filter + learned-meta veto + classifier safety net.
+  - **All 3 active configs** (`micro`, `vtmarkets`, `MT5 Demo`) updated to:
+    - `aggressive_mode: False` — restores entropy filter + learned-meta classifier veto
+    - `risk_level: medium` (was `high`) — halves per-trade exposure
+    - `mtf_strict: True` — new gate (iter-73)
+    - `min_confidence_override: 70` — only A-grade signals execute
+    - `daily_profit_target_r: 2.0` + `action: stop` — auto-halt for the day after +2R
+    - signal_cooldown 3min uniform across all 3
+  - **`bot_runner.py`** — new strict-MTF gate inserted right after the existing MTF veto-counter. Logic: if `cfg.mtf_strict=True` and `action ∈ {BUY,SELL}`, require `buy_support ≥ 2` (BUY) or `sell_support ≥ 2` (SELL) from `mtf_tiers.alignment`. Failing trades emit a `SKIP/warn` pulse + bump `mtf_strict_veto` intel counter. Default off — opt-in via cfg.
+  - **`routes/bot_routes.py`** — `mtf_strict` whitelisted in GET defaults + PATCH coercion (bool).
+  - **Tests**: `test_iter73_strict_mtf.py` 11/11 — strong alignment passes, drift-into-chop blocked, counter-trend blocked, HOLD no-op, missing alignment safe.
+  - **Effect**: trade frequency halved (~), only A-grade tier-aligned setups execute. Expected WR move from ~30% → 50%+.
+
+
 - 2026-06-28 (iter-71) — **Broker-rejection circuit breaker + EA v1.29 symbol auto-detect**:
   - **Root cause** of vtmarkets failed trades (7 consecutive retcode=10013 INVALID_REQUEST): VT Markets uses a suffixed symbol name (e.g. `XAUUSD.x`, `XAUUSDpro`, `XAUUSD.raw`) but the EA was sending bare `XAUUSD`. `SymbolInfoDouble` returned 0 → invalid price → broker rejected every order.
   - **`broker_reject_breaker.py` (new)** — auto-halt logic: ≥3 same-retcode failures within 30min flips the account to `trading_blocked: True` with structured `block_reason`/`block_retcode`/`block_hint` fields. Bot runner skips blocked accounts. Recognises both numeric retcodes (10013/10014/10016/10018/10019/10027) and the new v1.29 `symbol_not_found:` tag.
