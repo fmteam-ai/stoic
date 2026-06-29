@@ -28,9 +28,22 @@ export function AuthProvider({ children }) {
         return data;
     }, []);
 
-    const register = useCallback(async (email, password, name) => {
-        const { data } = await api.post("/auth/register", { email, password, name });
-        setUser(data);
+    const register = useCallback(async (email, password, name, opts = {}) => {
+        const body = { email, password, name, ...opts };
+        const { data } = await api.post("/auth/register", body);
+        // Do NOT setUser here — the user must verify email before being
+        // considered authenticated. Caller routes to the "check inbox" screen.
+        return data;
+    }, []);
+
+    const verifyEmail = useCallback(async (token) => {
+        const { data } = await api.post("/auth/verify-email", { token });
+        if (data?.user) setUser(data.user);
+        return data;
+    }, []);
+
+    const resendActivation = useCallback(async (email) => {
+        const { data } = await api.post("/auth/resend-activation", { email });
         return data;
     }, []);
 
@@ -41,8 +54,8 @@ export function AuthProvider({ children }) {
     }, []);
 
     const value = useMemo(
-        () => ({ user, login, register, logout, refresh, formatApiError }),
-        [user, login, register, logout, refresh],
+        () => ({ user, login, register, verifyEmail, resendActivation, logout, refresh, formatApiError }),
+        [user, login, register, verifyEmail, resendActivation, logout, refresh],
     );
 
     return (

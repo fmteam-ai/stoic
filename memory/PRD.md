@@ -8,6 +8,24 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-07-04 (iter-79) — **Email Activation + Terms Acceptance at signup**:
+  - **Terms gate on register**: `POST /api/auth/register` now requires `terms_agreed=true` in the body and stamps `accepted_terms_version` + `accepted_terms_at` on the user doc. 400 + `terms_required` if missing.
+  - **Email verification gate**: New users are created with `email_verified=false`, a single-use `activation_token` (urlsafe 32-byte), and `activation_expires_at` 24h out. Register no longer auto-logs the user in — they MUST click the email link.
+  - **Login block**: `POST /api/auth/login` returns 403 + `account_unverified` for unverified users. Admins are grandfathered (admin@trading.bot still works). `get_current_user` also enforces (defence-in-depth).
+  - **New endpoints**:
+    - `POST /api/auth/verify-email` — consumes token, flips `email_verified=true`, sets auth cookies, returns the user.
+    - `POST /api/auth/resend-activation` — generates a fresh token + re-sends. 60s cooldown (429). Returns generic success for unknown/already-verified emails to prevent enumeration.
+  - **`activation.py`**: token generator + branded HTML/text activation email rendered via existing Resend integration. Dev fallback returns the activation link in the API response when `RESEND_API_KEY` isn't configured so local flows still complete.
+  - **DOMPurify on Terms page**: defence-in-depth XSS sanitization on `Terms.jsx` `dangerouslySetInnerHTML` even though markdown source is server-controlled.
+  - **Frontend**:
+    - `Register.jsx` rewritten — Terms checkbox (required, disables submit) + post-register "Check your inbox" screen with email address echo, dev-only link surfacing, "Resend activation email" button with 60s cooldown counter.
+    - New `VerifyEmail.jsx` at `/verify-email?token=...` — loading → success (auto-redirect to dashboard) / expired / invalid states, all with friendly recovery links.
+    - `Login.jsx` — unverified login attempt surfaces an amber MailWarning block with the email + Resend button (same 60s cooldown).
+    - `AuthContext` — register no longer setUsers (gates dashboard until verify), new `verifyEmail` + `resendActivation` exposed.
+  - **Tests** (`test_iter79_activation_flow.py`): 9/9 — terms-required, register creates unverified+token+terms-version, login blocked, verify-email bad token, verify-email happy path (sets cookies + /me works), token is single-use, resend generic for unknown emails, resend cooldown 429, resend generates new token after cooldown. Curated regression 42/42 green.
+  - **Operational note**: with the default Resend sender `onboarding@resend.dev`, emails only deliver to the verified Resend account email (free-tier limitation). To send to real users, verify a domain on resend.com/domains and update `SENDER_EMAIL` in backend/.env.
+
+
 - 2026-07-04 (iter-78) — **Terms of Use + Admin Moderation (suspend / terminate users & affiliates)**:
   - **Terms of Use** — new `terms_of_use.py` (version `2026-07-04`) with 17 sections: Service definition, no-financial-advice, risk acknowledgement, eligibility, acceptable use, **§7 affiliate rules** (no self-referrals, no incentivized signups, no earnings claims, FTC disclosures), **§8 enforcement** (suspension halts login + freezes bots; termination is permanent + may forfeit affiliate unpaid balance), subscription & refund, IP, liability cap, indemnification, governing law. Public `GET /api/terms` returns version + markdown.
   - **Backend** — new `routes/admin_routes.py` with 11 admin endpoints + 1 public:

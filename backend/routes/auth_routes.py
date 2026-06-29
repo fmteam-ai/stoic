@@ -12,12 +12,18 @@ from models import (
     RegisterRequest, LoginRequest, UserOut,
     ProfileUpdateRequest, ChangePasswordRequest,
     TOTPVerifyRequest, TOTPDisableRequest,
+    VerifyEmailRequest, ResendActivationRequest,
 )
 from totp import (
     new_secret, provisioning_uri, qr_png_data_url,
     verify_code, generate_recovery_codes, hash_recovery_codes,
     consume_recovery_code,
 )
+from activation import (
+    new_activation_token, send_activation_email,
+    RESEND_COOLDOWN_SECONDS,
+)
+from terms_of_use import TERMS_VERSION
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -30,30 +36,53 @@ def _user_to_out(user_doc: dict) -> UserOut:
         role=user_doc.get("role", "user"),
         created_at=user_doc.get("created_at") if isinstance(user_doc.get("created_at"), datetime) else None,
         two_factor_enabled=bool(user_doc.get("two_factor_enabled", False)),
+        email_verified=bool(user_doc.get("email_verified", True)),
     )
 
 
-@router.post("/register", response_model=UserOut)
+@router.post("/register")
 async def register(payload: RegisterRequest, request: Request, response: Response):
     db = get_db()
     email = payload.email.lower()
+
+    # Terms of Use must be accepted.
+    if not payload.terms_agreed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "terms_required",
+                "message": "You must accept the Terms of Use to create an account.",
+            },
+        )
+
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
 
     ref_code = request.cookies.get("stoic_ref")
     ref_at = request.cookies.get("stoic_ref_at")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    token, exp_iso = new_activation_token()
 
     user_doc = {
         "email": email,
         "password_hash": hash_password(payload.password),
         "name": payload.name or email.split("@")[0],
         "role": "user",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": "active",
+        "created_at": now_iso,
         "two_factor_enabled": False,
+        # Terms acceptance audit trail
+        "accepted_terms_version": payload.terms_version or TERMS_VERSION,
+        "accepted_terms_at": now_iso,
+        # Email verification gate
+        "email_verified": False,
+        "activation_token": token,
+        "activation_expires_at": exp_iso,
+        "activation_sent_at": now_iso,
     }
     if ref_code:
         user_doc["referred_by_code"] = ref_code.upper()
-        user_doc["referred_at"] = ref_at or datetime.now(timezone.utc).isoformat()
+        user_doc["referred_at"] = ref_at or now_iso
     result = await db.users.insert_one(user_doc)
     uid = str(result.inserted_id)
 
@@ -69,15 +98,30 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
             "max_concurrent_trades": 3,
             "auto_execute": True,
             "max_lot_size": 0.0,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": now_iso,
         }},
         upsert=True,
     )
 
-    access = create_access_token(uid, email)
-    refresh = create_refresh_token(uid)
-    set_auth_cookies(response, access, refresh)
-    return UserOut(id=uid, email=email, name=user_doc["name"], role="user", two_factor_enabled=False)
+    # Fire activation email (async, non-blocking on errors)
+    send_result = await send_activation_email(
+        recipient=email, name=user_doc["name"], token=token,
+    )
+
+    # We deliberately DO NOT set auth cookies — the user must verify their
+    # email before the dashboard becomes accessible. This blocks accidental
+    # auto-login and forces the explicit "click the link" step.
+    return {
+        "id": uid,
+        "email": email,
+        "name": user_doc["name"],
+        "email_verified": False,
+        "activation_email_sent": bool(send_result.get("ok")),
+        "activation_email_error": send_result.get("error"),
+        # In dev (no Resend key), surface the link so the user can finish flow.
+        "activation_link_dev_only": send_result.get("activation_link_dev_only"),
+        "message": "Account created. Check your inbox to activate your STOIC membership.",
+    }
 
 
 @router.post("/login")
@@ -109,6 +153,17 @@ async def login(payload: LoginRequest, response: Response):
             },
         )
 
+    # Block until email is verified — admins are grandfathered through.
+    if user.get("email_verified") is False and user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "account_unverified",
+                "message": "Please verify your email to activate your account. Check your inbox for the activation link.",
+                "email": email,
+            },
+        )
+
     # 2FA gate — if enabled, require a valid TOTP or recovery code on this same call
     if user.get("two_factor_enabled"):
         provided = (payload.totp_code or "").strip()
@@ -133,6 +188,114 @@ async def login(payload: LoginRequest, response: Response):
 async def logout(response: Response):
     clear_auth_cookies(response)
     return {"ok": True}
+
+
+# ---------- Email verification / activation ----------
+@router.post("/verify-email")
+async def verify_email(payload: VerifyEmailRequest, response: Response):
+    """Activate a user account via the token from the welcome email.
+
+    On success, sets auth cookies so the user lands authenticated on the
+    dashboard. Tokens are single-use (cleared after consumption) and
+    expire 24h after issuance.
+    """
+    db = get_db()
+    user = await db.users.find_one({"activation_token": payload.token})
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_token",
+                    "message": "Activation link is invalid or already used."},
+        )
+
+    # Expiry check (compare ISO strings safely via datetime parse).
+    exp_raw = user.get("activation_expires_at")
+    try:
+        exp_dt = datetime.fromisoformat(exp_raw.replace("Z", "+00:00")) if exp_raw else None
+    except Exception:
+        exp_dt = None
+    if exp_dt and exp_dt < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "expired_token",
+                    "message": "Activation link has expired. Request a new one."},
+        )
+
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "email_verified": True,
+                "email_verified_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "$unset": {"activation_token": "", "activation_expires_at": ""},
+        },
+    )
+
+    uid = str(user["_id"])
+    access = create_access_token(uid, user["email"])
+    refresh = create_refresh_token(uid)
+    set_auth_cookies(response, access, refresh)
+    return {
+        "ok": True,
+        "user": _user_to_out({**user, "_id": uid, "email_verified": True}),
+        "message": "Email verified. Welcome to STOIC.",
+    }
+
+
+@router.post("/resend-activation")
+async def resend_activation(payload: ResendActivationRequest):
+    """Re-send the activation email. Rate-limited 1/min per account.
+
+    To avoid email-enumeration, we always return the same generic success
+    response — even when the email isn't on file or is already verified.
+    """
+    generic_ok = {
+        "ok": True,
+        "message": "If an unverified account exists for that email, an activation link has been sent.",
+    }
+    db = get_db()
+    user = await db.users.find_one({"email": payload.email.lower()})
+    if not user:
+        return generic_ok
+    if user.get("email_verified"):
+        return generic_ok
+
+    # Cooldown
+    sent_raw = user.get("activation_sent_at")
+    if sent_raw:
+        try:
+            sent_dt = datetime.fromisoformat(sent_raw.replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - sent_dt).total_seconds()
+            if age < RESEND_COOLDOWN_SECONDS:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "rate_limited",
+                        "message": f"Please wait {int(RESEND_COOLDOWN_SECONDS - age)}s before requesting another activation email.",
+                    },
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # ignore parse issues, allow resend
+
+    token, exp_iso = new_activation_token()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "activation_token": token,
+            "activation_expires_at": exp_iso,
+            "activation_sent_at": now_iso,
+        }},
+    )
+    await send_activation_email(
+        recipient=user["email"],
+        name=user.get("name") or user["email"].split("@")[0],
+        token=token,
+    )
+    return generic_ok
 
 
 @router.get("/me", response_model=UserOut)

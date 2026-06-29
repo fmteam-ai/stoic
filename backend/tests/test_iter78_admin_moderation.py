@@ -65,15 +65,24 @@ def _admin_session() -> requests.Session:
 
 
 def _register() -> tuple[str, str, str]:
+    """Register a user, mark email_verified so login works for tests."""
     suffix = uuid.uuid4().hex[:10]
     email = f"iter78_{suffix}@example.com"
     password = "password123"
     r = requests.post(f"{BASE_URL}/api/auth/register",
                       json={"email": email, "password": password,
-                            "name": f"iter78-{suffix}"},
+                            "name": f"iter78-{suffix}",
+                            "terms_agreed": True},
                       timeout=TIMEOUT)
     assert r.status_code == 200, f"register {email}: {r.status_code} {r.text}"
-    return email, password, r.json()["id"]
+    uid = r.json()["id"]
+    # Tests bypass the email-verification gate by flipping the flag directly.
+    _mongo().users.update_one(
+        {"_id": ObjectId(uid)},
+        {"$set": {"email_verified": True},
+         "$unset": {"activation_token": "", "activation_expires_at": ""}},
+    )
+    return email, password, uid
 
 
 @pytest.fixture

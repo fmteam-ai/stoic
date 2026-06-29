@@ -12,6 +12,16 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
     name: Optional[str] = None
+    terms_agreed: bool = False
+    terms_version: Optional[str] = None
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=120)
+
+
+class ResendActivationRequest(BaseModel):
+    email: EmailStr
 
 
 class LoginRequest(BaseModel):
@@ -45,6 +55,7 @@ class UserOut(BaseModel):
     role: str = "user"
     created_at: Optional[datetime] = None
     two_factor_enabled: bool = False
+    email_verified: bool = True
 
 
 # ---------- Symbols ----------

@@ -2,27 +2,37 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
-import { Mail as EnvelopeSimple, Lock as LockKey, ShieldCheck } from "lucide-react";
+import { Mail as EnvelopeSimple, Lock as LockKey, ShieldCheck, MailWarning, RefreshCw } from "lucide-react";
 import { StoicMark } from "@/components/StoicLogo";
 
 export default function Login() {
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const { login, resendActivation } = useAuth();
     const [email, setEmail] = useState("admin@trading.bot");
     const [password, setPassword] = useState("admin123");
     const [totpCode, setTotpCode] = useState("");
     const [needs2fa, setNeeds2fa] = useState(false);
     const [error, setError] = useState("");
+    const [unverifiedEmail, setUnverifiedEmail] = useState("");
+    const [resendCooldown, setResendCooldown] = useState(0);
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError("");
+        setUnverifiedEmail("");
         setLoading(true);
         try {
             await login(email, password, needs2fa ? totpCode : undefined);
             navigate("/");
         } catch (err) {
+            const detail = err?.response?.data?.detail;
+            // Unverified account: surface friendly UI with resend link
+            if (detail?.code === "account_unverified") {
+                setUnverifiedEmail(detail.email || email);
+                setError("");
+                return;
+            }
             const msg = formatApiError(err);
             // Backend returns 401 + detail "2FA code required" → show TOTP input
             if (!needs2fa && msg && msg.toLowerCase().includes("2fa code required")) {
@@ -32,6 +42,26 @@ export default function Login() {
                 setError(msg);
             }
         } finally { setLoading(false); }
+    };
+
+    const handleResend = async () => {
+        if (resendCooldown > 0 || !unverifiedEmail) return;
+        try {
+            await resendActivation(unverifiedEmail);
+            setResendCooldown(60);
+            const t = setInterval(() => {
+                setResendCooldown(c => {
+                    if (c <= 1) { clearInterval(t); return 0; }
+                    return c - 1;
+                });
+            }, 1000);
+        } catch (err) {
+            const detail = err?.response?.data?.detail;
+            if (detail?.code === "rate_limited") {
+                const m = (detail.message || "").match(/(\d+)s/);
+                if (m) setResendCooldown(parseInt(m[1], 10));
+            }
+        }
     };
 
     return (
@@ -144,6 +174,28 @@ export default function Login() {
                         {error && (
                             <div className="bg-[#FF3B30]/10 border border-[#FF3B30]/30 px-3 py-2 text-xs text-[#FF3B30]" data-testid="login-error">
                                 {error}
+                            </div>
+                        )}
+
+                        {unverifiedEmail && (
+                            <div className="bg-amber-500/10 border border-amber-500/30 p-3 text-xs space-y-2" data-testid="login-unverified-block">
+                                <div className="flex items-center gap-2 text-amber-400">
+                                    <MailWarning className="w-4 h-4" />
+                                    <strong>Activate your account</strong>
+                                </div>
+                                <p className="text-[#A1A1AA] leading-5">
+                                    We sent an activation link to <strong className="text-white">{unverifiedEmail}</strong>. Click it to unlock your dashboard.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={handleResend}
+                                    disabled={resendCooldown > 0}
+                                    data-testid="login-resend-activation-btn"
+                                    className="w-full border border-amber-500/40 hover:bg-amber-500/10 disabled:opacity-50 text-amber-400 py-2 font-mono tracking-widest flex items-center justify-center gap-2"
+                                >
+                                    <RefreshCw className="w-3 h-3" />
+                                    {resendCooldown > 0 ? `RESEND IN ${resendCooldown}s` : "RESEND ACTIVATION EMAIL"}
+                                </button>
                             </div>
                         )}
 

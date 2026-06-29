@@ -38,6 +38,7 @@ import WelcomeTrailer from "@/pages/WelcomeTrailer";
 import Terms from "@/pages/Terms";
 import AdminUsers from "@/pages/AdminUsers";
 import AdminAffiliates from "@/pages/AdminAffiliates";
+import VerifyEmail from "@/pages/VerifyEmail";
 
 
 function App() {
@@ -52,6 +53,8 @@ function App() {
                         <Route path="/welcome" element={<WelcomeTrailer />} />
                         {/* Public marketing TOS — must be reachable pre-login */}
                         <Route path="/terms" element={<Terms />} />
+                        {/* Public email-verification landing page */}
+                        <Route path="/verify-email" element={<VerifyEmail />} />
                         {/* Public affiliate marketing page — no auth required */}
                         <Route path="/affiliates" element={<AffiliateLanding />} />
                         {/* Admin-only moderation console */}

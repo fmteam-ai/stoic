@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Loader2, FileText, ShieldAlert } from "lucide-react";
 import axios from "axios";
+import DOMPurify from "dompurify";
 
 // Tiny markdown→html renderer good enough for the curated TOS source.
 // Handles: # h1, ## h2, ### h3, **bold**, lists (- / 1.), --- hr, paragraphs.
@@ -122,7 +123,12 @@ export default function Terms() {
                         </div>
                         <div
                             className="prose-stoic"
-                            dangerouslySetInnerHTML={{ __html: renderMarkdown(data?.markdown || "") }}
+                            dangerouslySetInnerHTML={{
+                                __html: DOMPurify.sanitize(
+                                    renderMarkdown(data?.markdown || ""),
+                                    { USE_PROFILES: { html: true } },
+                                ),
+                            }}
                         />
                     </article>
                 )}
