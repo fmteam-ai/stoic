@@ -104,6 +104,13 @@ async def heartbeat(payload: BridgeHeartbeat):
         set_doc["auto_detected_suffix_confidence"] = detection["confidence"]
         set_doc["auto_detected_suffix_bases"] = detection["matched_bases"]
         set_doc["auto_detected_suffix_at"] = now_iso
+        # iter-81: also persist the raw inventory so the admin UI and
+        # diagnostic flows can SEE what the broker actually offers (e.g.
+        # `XAUUSD.b`, `GOLDcfd`, `XAU/USD`). Without this, when detection
+        # gives a wrong answer we have no way to recover short of asking
+        # the user to dig into MetaTrader manually. Cap at 200 symbols.
+        set_doc["available_symbols"] = list(payload.available_symbols)[:200]
+        set_doc["available_symbols_at"] = now_iso
 
     # EA v1.22+: persist the ticket list so the user can later trigger
     # manual reconciliation even if a heartbeat isn't currently in flight.

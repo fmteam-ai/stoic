@@ -63,6 +63,12 @@
 //|         the list in `available_symbols` on heartbeat. Backend    |
 //|         infers the broker's naming convention so user never      |
 //|         needs to manually configure symbol_suffix per broker.    |
+//| v1.35 — Faster suffix-discovery on fresh accounts: emit the      |
+//|         MarketWatch symbol inventory on every heartbeat for the  |
+//|         first 600s after EA attach, then throttle to once/hour.  |
+//|         Fixes the "added a new broker, EA emitted symbols once   |
+//|         in a noisy moment, backend learned the wrong suffix and  |
+//|         then had to wait an hour for the next sample" bug.       |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
 //| v1.33 — Added .e/.E suffix variants (OnEquity ECN accounts).      |
@@ -91,7 +97,7 @@
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.34"
+#define EA_CLIENT_VERSION "1.35"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -114,7 +120,11 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.34 started. Polling: ", ServerUrl);
+   // EA v1.35: record boot time so the SendHeartbeat() symbol-emit throttle
+   // can stream the MarketWatch inventory aggressively for the first 10 min
+   // (suffix discovery converges quickly on a freshly attached account).
+   _ea_boot_time = TimeCurrent();
+   Print("STOIC Bridge EA v1.35 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -418,6 +428,10 @@ string BuildPositionsJson() {
 //| AND once per hour after that — symbol lists almost never change. |
 //+------------------------------------------------------------------+
 datetime _last_symbols_emit = 0;
+// EA v1.35: track boot time so the symbols-emit throttle can be relaxed
+// during the first 10 minutes after EA attach (rapid discovery), then
+// settle into the once/hour baseline. Initialised in OnInit().
+datetime _ea_boot_time = 0;
 string CACHED_AVAILABLE_SYMBOLS = "";
 
 string BuildAvailableSymbolsJson() {
@@ -468,10 +482,15 @@ void SendHeartbeat() {
    // stale terminals (no manual MT5 inspection required).
    // EA v1.29: route the version through %s so the literal can never drift
    // from EA_CLIENT_VERSION (previous hardcoded "1.28" caused stale dashboards).
-   // EA v1.34: include MarketWatch symbol inventory (throttled to once/hour)
-   // so the backend can auto-detect the broker's suffix convention.
+   // EA v1.34: include MarketWatch symbol inventory.
+   // EA v1.35: faster suffix-discovery — emit symbols every PollSeconds for
+   //   the first 600s after EA boot (so the backend knows the broker's
+   //   symbol layout within a minute of attaching the EA to a new account),
+   //   then throttle to once per hour to keep heartbeat payloads small.
    datetime now_t = TimeCurrent();
-   if (now_t - _last_symbols_emit > 3600 || _last_symbols_emit == 0) {
+   long age = (long)(now_t - _ea_boot_time);
+   long throttle = (age < 600) ? 0 : 3600;  // 0 = every heartbeat for first 10 min
+   if (now_t - _last_symbols_emit >= throttle || _last_symbols_emit == 0) {
       CACHED_AVAILABLE_SYMBOLS = BuildAvailableSymbolsJson();
       _last_symbols_emit = now_t;
    }

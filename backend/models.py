@@ -179,6 +179,9 @@ class BotConfigUpdate(BaseModel):
     # a clear directional bias, override to BUY/SELL. Increases trade frequency at the cost
     # of per-trade edge. Use carefully.
     aggressive_mode: bool = False
+    # iter-67: stricter MTF gate — when True, signals require alignment on
+    # H1 + H4 in addition to the base timeframe. Reduces false breakouts.
+    mtf_strict: bool = False
     # Custom minimum-confidence override (1-95). 0 = use the risk_level default.
     min_confidence_override: int = 0
     # Per-account lot-size cap. 0 = uncapped (use signal's computed lot size).
