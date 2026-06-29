@@ -130,8 +130,10 @@ def test_expected_value_mode_no_mutation():
 
 
 def test_win_rate_mode_applies_default_100p_cap():
-    """win_rate mode + no per-symbol cap → 100p default cap used."""
-    sig = _xauusd_signal("BUY", entry=4000.0, tp_distance_pips=300)
+    """win_rate mode + no per-symbol cap + CHOPPY regime → 100p default cap.
+    iter-77 Smart Cap: the default cap now requires a choppy regime context."""
+    sig = _xauusd_signal("BUY", entry=4000.0, tp_distance_pips=300,
+                         regime_exec="TRANSITIONAL")
     cfg = {"profit_taking_mode": "win_rate"}
     new_sig, eff_cfg = apply_profit_taking_mode(sig, cfg)
     assert new_sig["take_profit"] == pytest.approx(4010.0, abs=0.01)
@@ -141,6 +143,7 @@ def test_win_rate_mode_applies_default_100p_cap():
     assert eff_cfg["trailing_start_r"] == 0.5
     assert eff_cfg["trailing_distance_r"] == 0.25
     assert new_sig["adaptive_profit_taking"]["tp_cap_pips"] == DEFAULT_WIN_RATE_TP_CAP_PIPS
+    assert new_sig["adaptive_profit_taking"]["smart_cap_applied"] is True
 
 
 def test_win_rate_explicit_cap_overrides_default():

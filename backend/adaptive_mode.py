@@ -88,10 +88,18 @@ PROFIT_TAKING_OVERLAYS: dict[str, dict] = {
 # the box without forcing UI configuration.
 DEFAULT_WIN_RATE_TP_CAP_PIPS = 100.0
 
-# Extra TP cap tightening when the live regime is choppy (DEFENSIVE_SCALP
-# or CAUTIOUS_WAIT). Multiplier applied to the effective cap.
+# iter-77 · "Smart Cap" — the 100-pip TP cap fires ONLY in choppy regimes
+# (CAUTIOUS_WAIT / DEFENSIVE_SCALP / TRANSITIONAL / RANGING). In TRENDING
+# or AGGRESSIVE regimes the cap REMOVES itself so winners stretch like
+# Plan A — this fixes the iter-74 problem where the cap was too tight in
+# clean trend regimes (per-trade profit was ~10× smaller than Plan A's).
+# The user can still enforce a hard cap via max_tp_pips_per_symbol — that
+# per-symbol explicit cap is honored regardless of regime.
+CHOPPY_REGIMES = {"DEFENSIVE_SCALP", "CAUTIOUS_WAIT", "TRANSITIONAL", "RANGING"}
+TRENDING_REGIMES = {"TRENDING", "AGGRESSIVE"}
+# Multiplier still applied INSIDE a choppy regime so the 100p default
+# tightens to 60p when conditions are particularly noisy.
 CHOPPY_REGIME_TP_MULTIPLIER = 0.6
-CHOPPY_REGIMES = {"DEFENSIVE_SCALP", "CAUTIOUS_WAIT"}
 
 
 def _clip_tp_to_pip_cap(signal: dict, cap_pips: float) -> dict:
@@ -159,14 +167,26 @@ def apply_profit_taking_mode(signal: dict, cfg: dict) -> tuple[dict, dict]:
     except (TypeError, ValueError):
         per_symbol_cap = 0.0
 
-    cap_pips = per_symbol_cap
-    if mode == "win_rate" and cap_pips <= 0:
-        cap_pips = DEFAULT_WIN_RATE_TP_CAP_PIPS
-
-    # Regime-aware tightening (only applies when there IS a cap)
     regime_exec = (signal.get("regime_execution_mode") or {}).get("execution_mode")
+    regime_str = str(regime_exec or "").upper()
+
+    # iter-77 · Smart Cap precedence:
+    #   1. Explicit per-symbol cap → ALWAYS honored (user knows what they want)
+    #   2. win_rate mode default (100p) → applied ONLY in choppy regimes;
+    #      removed in TRENDING/AGGRESSIVE so runners stretch.
+    #   3. expected_value / trend_follow modes → no implicit cap.
+    cap_pips = per_symbol_cap
+    smart_cap_applied = False
+    if cap_pips <= 0 and mode == "win_rate":
+        if regime_str in CHOPPY_REGIMES:
+            cap_pips = DEFAULT_WIN_RATE_TP_CAP_PIPS
+            smart_cap_applied = True
+        # else: TRENDING / AGGRESSIVE / unknown → no cap, winners run.
+
+    # Regime-aware tightening (only applies when a cap is in force AND
+    # regime is in the choppiest bucket — DEFENSIVE_SCALP / CAUTIOUS_WAIT)
     regime_tightened = False
-    if cap_pips > 0 and regime_exec in CHOPPY_REGIMES:
+    if cap_pips > 0 and regime_str in ("DEFENSIVE_SCALP", "CAUTIOUS_WAIT"):
         cap_pips = round(cap_pips * CHOPPY_REGIME_TP_MULTIPLIER, 1)
         regime_tightened = True
 
@@ -180,6 +200,10 @@ def apply_profit_taking_mode(signal: dict, cfg: dict) -> tuple[dict, dict]:
         "mode": mode,
         "tp_cap_pips": cap_pips if cap_pips > 0 else None,
         "regime_tightened": regime_tightened,
+        "smart_cap_applied": smart_cap_applied,
+        "smart_cap_skipped_for_trend": (mode == "win_rate"
+                                        and per_symbol_cap <= 0
+                                        and regime_str in TRENDING_REGIMES),
         "regime_execution_mode": regime_exec,
     }
     return effective_signal, effective_cfg
