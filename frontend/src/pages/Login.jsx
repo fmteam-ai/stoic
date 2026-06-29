@@ -207,6 +207,13 @@ export default function Login() {
                         >
                             {loading ? "AUTHENTICATING..." : (needs2fa ? "VERIFY &amp; SIGN IN →" : "SIGN IN →")}
                         </button>
+
+                        <div className="text-right">
+                            <Link to="/forgot-password" data-testid="login-forgot-password-link"
+                                className="font-mono text-[10px] text-[#FFD700] tracking-widest hover:underline">
+                                FORGOT PASSWORD? →
+                            </Link>
+                        </div>
                     </form>
 
                     <div className="mt-6 text-sm text-[#A1A1AA]">

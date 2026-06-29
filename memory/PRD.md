@@ -8,6 +8,17 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-07-04 (iter-80) — **Forgot Password / Reset Password flow**:
+  - **`password_reset.py`** — token generator (urlsafe 32-byte, 1h TTL) + branded HTML/text email (gold accent vs activation's green) sent via the existing Resend integration. Dev fallback returns the reset link when `RESEND_API_KEY` is missing.
+  - **`POST /api/auth/forgot-password`** {email} — issues a single-use token + emails reset link. Returns generic success for unknown emails OR suspended/terminated users (no enumeration leak). 60s per-account cooldown returns 429 `rate_limited`. Suspended/terminated users get the generic-OK but no token is issued (so the bypass surface is closed).
+  - **`POST /api/auth/reset-password`** {token, new_password} — validates token + expiry (1h), bcrypt-hashes the new password, clears the token, stamps `password_reset_at`. Single-use enforced.
+  - **Frontend**:
+    - `ForgotPassword.jsx` at `/forgot-password` — email input → "Check your inbox" confirmation screen. Honours the 429 cooldown with live countdown.
+    - `ResetPassword.jsx` at `/reset-password?token=...` — new password + confirm fields, validation, success screen auto-redirects to `/login` after 2s. Invalid/expired tokens show inline error with "Request a new reset link" CTA.
+    - `Login.jsx` — added "FORGOT PASSWORD? →" gold link below the SIGN IN button.
+  - **Tests** (`test_iter80_password_reset.py`): 9/9 — generic-ok for unknown, token issued for known user, cooldown 429, suspended user skipped silently, reset bad token 400, reset expired token 400, happy path changes password (old fails, new works), single-use, min-length 6 enforced by Pydantic (422). Curated regression 27/27 across iter-78/79/80.
+
+
 - 2026-07-04 (iter-79) — **Email Activation + Terms Acceptance at signup**:
   - **Terms gate on register**: `POST /api/auth/register` now requires `terms_agreed=true` in the body and stamps `accepted_terms_version` + `accepted_terms_at` on the user doc. 400 + `terms_required` if missing.
   - **Email verification gate**: New users are created with `email_verified=false`, a single-use `activation_token` (urlsafe 32-byte), and `activation_expires_at` 24h out. Register no longer auto-logs the user in — they MUST click the email link.

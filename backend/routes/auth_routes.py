@@ -13,6 +13,7 @@ from models import (
     ProfileUpdateRequest, ChangePasswordRequest,
     TOTPVerifyRequest, TOTPDisableRequest,
     VerifyEmailRequest, ResendActivationRequest,
+    ForgotPasswordRequest, ResetPasswordRequest,
 )
 from totp import (
     new_secret, provisioning_uri, qr_png_data_url,
@@ -22,6 +23,10 @@ from totp import (
 from activation import (
     new_activation_token, send_activation_email,
     RESEND_COOLDOWN_SECONDS,
+)
+from password_reset import (
+    new_reset_token, send_reset_email,
+    RESET_RESEND_COOLDOWN_SECONDS,
 )
 from terms_of_use import TERMS_VERSION
 
@@ -296,6 +301,104 @@ async def resend_activation(payload: ResendActivationRequest):
         token=token,
     )
     return generic_ok
+
+
+# ---------- Password reset ----------
+@router.post("/forgot-password")
+async def forgot_password(payload: ForgotPasswordRequest):
+    """Request a password-reset email. Generic-success response so
+    attackers can't enumerate emails. 60s per-account cooldown."""
+    generic_ok = {
+        "ok": True,
+        "message": "If an account exists for that email, a reset link has been sent.",
+    }
+    db = get_db()
+    user = await db.users.find_one({"email": payload.email.lower()})
+    if not user:
+        return generic_ok
+
+    # Suspended/terminated users can't reset — would re-open access to
+    # accounts we've deliberately closed.
+    if (user.get("status") or "active") in ("suspended", "terminated"):
+        return generic_ok
+
+    # Cooldown
+    sent_raw = user.get("password_reset_sent_at")
+    if sent_raw:
+        try:
+            sent_dt = datetime.fromisoformat(sent_raw.replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - sent_dt).total_seconds()
+            if age < RESET_RESEND_COOLDOWN_SECONDS:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "rate_limited",
+                        "message": f"Please wait {int(RESET_RESEND_COOLDOWN_SECONDS - age)}s before requesting another reset email.",
+                    },
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    token, exp_iso = new_reset_token()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "password_reset_token": token,
+            "password_reset_expires_at": exp_iso,
+            "password_reset_sent_at": now_iso,
+        }},
+    )
+    await send_reset_email(
+        recipient=user["email"],
+        name=user.get("name") or user["email"].split("@")[0],
+        token=token,
+    )
+    return generic_ok
+
+
+@router.post("/reset-password")
+async def reset_password(payload: ResetPasswordRequest):
+    """Consume a reset token and set the new password."""
+    db = get_db()
+    user = await db.users.find_one({"password_reset_token": payload.token})
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_token",
+                    "message": "Reset link is invalid or already used."},
+        )
+
+    exp_raw = user.get("password_reset_expires_at")
+    try:
+        exp_dt = datetime.fromisoformat(exp_raw.replace("Z", "+00:00")) if exp_raw else None
+    except Exception:
+        exp_dt = None
+    if exp_dt and exp_dt < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "expired_token",
+                    "message": "Reset link has expired. Request a new one."},
+        )
+
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "password_hash": hash_password(payload.new_password),
+                "password_reset_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "$unset": {
+                "password_reset_token": "",
+                "password_reset_expires_at": "",
+            },
+        },
+    )
+    return {"ok": True,
+            "message": "Password updated. You can now sign in with your new password.",
+            "email": user["email"]}
 
 
 @router.get("/me", response_model=UserOut)

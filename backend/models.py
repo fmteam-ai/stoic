@@ -24,6 +24,15 @@ class ResendActivationRequest(BaseModel):
     email: EmailStr
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=120)
+    new_password: str = Field(min_length=6)
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
