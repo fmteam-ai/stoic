@@ -110,6 +110,13 @@ async def evaluate_account(db, account: dict) -> dict:
         }
 
     since = (now - timedelta(minutes=WINDOW_MINUTES)).isoformat()
+    # iter-74b · If the user manually cleared the block (via unblock endpoint
+    # OR via symbol_suffix update), ignore any failures that pre-date that
+    # action — those are stale evidence the user already addressed. Without
+    # this, the breaker re-trips the next tick on the same old failures.
+    unblocked_at = account.get("unblocked_at")
+    if unblocked_at and unblocked_at > since:
+        since = unblocked_at
     cursor = db.trades.find(
         {
             "account_id": account_id,

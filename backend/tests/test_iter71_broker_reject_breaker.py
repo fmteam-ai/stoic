@@ -311,3 +311,95 @@ def test_constants_sane():
     """Sanity checks on tunables."""
     assert TRIP_AFTER >= 2
     assert WINDOW_MINUTES > 0
+
+
+def test_unblocked_at_clears_stale_failures():
+    """iter-74b regression: after manual unblock (or symbol_suffix update),
+    failures that pre-date the unblock MUST NOT re-trip the breaker."""
+    acct_id = ObjectId()
+    user_id = f"test_user_{acct_id}"
+    trade_ids = [ObjectId() for _ in range(3)]
+    now = datetime.now(timezone.utc)
+    # 3 failures from 20 min ago — INSIDE the 30min window
+    failures_at = now - timedelta(minutes=20)
+    # User unblocked the account 10 min ago — AFTER those failures
+    unblock_at = now - timedelta(minutes=10)
+
+    async def _seed(db):
+        await db.accounts.insert_one({
+            "_id": acct_id, "user_id": user_id, "label": "iter74b_stale",
+            "bridge_token": f"iter74b_{acct_id}",
+            "mode": "live", "status": "connected",
+            "trading_blocked": False,                   # already unblocked
+            "unblocked_at": unblock_at.isoformat(),
+            "symbol_suffix": ".c",                      # user fixed the issue
+        })
+        await db.trades.insert_many([
+            {"_id": tid, "user_id": user_id, "account_id": str(acct_id),
+             "status": "failed", "error": "symbol_not_found:XAUUSD",
+             "opened_at": (failures_at - timedelta(seconds=i)).isoformat()}
+            for i, tid in enumerate(trade_ids)
+        ])
+
+    async def _run(db):
+        acct = await db.accounts.find_one({"_id": acct_id})
+        return await evaluate_account(db, acct)
+
+    async def _cleanup(db):
+        await db.accounts.delete_one({"_id": acct_id})
+        await db.trades.delete_many({"_id": {"$in": trade_ids}})
+
+    asyncio.run(_with_db(_seed))
+    try:
+        verdict = asyncio.run(_with_db(_run))
+        # The 3 stale failures pre-date unblocked_at → must not re-trip
+        assert verdict["blocked"] is False, \
+            f"Breaker re-tripped on stale failures (unblocked_at ignored): {verdict}"
+        assert verdict["consecutive_failures"] == 0
+    finally:
+        asyncio.run(_with_db(_cleanup))
+
+
+def test_unblocked_at_still_trips_on_fresh_failures():
+    """If failures occur AFTER unblock, breaker should still trip normally."""
+    acct_id = ObjectId()
+    user_id = f"test_user_{acct_id}"
+    trade_ids = [ObjectId() for _ in range(3)]
+    now = datetime.now(timezone.utc)
+    # User unblocked 20 min ago
+    unblock_at = now - timedelta(minutes=20)
+    # Then 3 failures happened 5 min ago — AFTER unblock
+    fail_at = now - timedelta(minutes=5)
+
+    async def _seed(db):
+        await db.accounts.insert_one({
+            "_id": acct_id, "user_id": user_id, "label": "iter74b_fresh",
+            "bridge_token": f"iter74b_fresh_{acct_id}",
+            "mode": "live", "status": "connected",
+            "trading_blocked": False,
+            "unblocked_at": unblock_at.isoformat(),
+        })
+        await db.trades.insert_many([
+            {"_id": tid, "user_id": user_id, "account_id": str(acct_id),
+             "status": "failed", "error": "retcode=10013",
+             "opened_at": (fail_at - timedelta(seconds=i)).isoformat()}
+            for i, tid in enumerate(trade_ids)
+        ])
+
+    async def _run(db):
+        acct = await db.accounts.find_one({"_id": acct_id})
+        return await evaluate_account(db, acct)
+
+    async def _cleanup(db):
+        await db.accounts.delete_one({"_id": acct_id})
+        await db.trades.delete_many({"_id": {"$in": trade_ids}})
+
+    asyncio.run(_with_db(_seed))
+    try:
+        verdict = asyncio.run(_with_db(_run))
+        # Fresh failures POST-unblock — breaker must trip again to protect.
+        assert verdict["blocked"] is True
+        assert verdict["tripped_this_call"] is True
+        assert verdict["retcode"] == "10013"
+    finally:
+        asyncio.run(_with_db(_cleanup))
