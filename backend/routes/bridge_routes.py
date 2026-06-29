@@ -93,6 +93,18 @@ async def heartbeat(payload: BridgeHeartbeat):
         set_doc["ea_version"] = str(payload.client_version)
         set_doc["ea_version_updated_at"] = now_iso
 
+    # iter-76 · EA v1.34+: auto-detect the broker's symbol-suffix convention
+    # from the MarketWatch inventory. Stored on the account so `execution.py`
+    # can route orders without the user having to set `symbol_suffix` by hand.
+    # User-set `symbol_suffix` (manual override) always takes precedence.
+    if payload.available_symbols:
+        from broker_symbol_detector import infer_broker_suffix
+        detection = infer_broker_suffix(payload.available_symbols)
+        set_doc["auto_detected_symbol_suffix"] = detection["suffix"]
+        set_doc["auto_detected_suffix_confidence"] = detection["confidence"]
+        set_doc["auto_detected_suffix_bases"] = detection["matched_bases"]
+        set_doc["auto_detected_suffix_at"] = now_iso
+
     # EA v1.22+: persist the ticket list so the user can later trigger
     # manual reconciliation even if a heartbeat isn't currently in flight.
     #

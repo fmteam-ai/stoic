@@ -293,6 +293,11 @@ class BridgeHeartbeat(BaseModel):
     # badge on the Dashboard so the user can tell at a glance which terminals
     # are running stale builds (e.g. missing the autonomous deal-history sweep).
     client_version: Optional[str] = None
+    # EA v1.34+: MarketWatch symbol inventory (filtered to instruments we
+    # care about — XAU/BTC/forex majors). Drives the iter-76 broker
+    # symbol-suffix auto-detector so the bot routes orders with the
+    # right name (`XAUUSD.fx`, `XAUUSD.e`, etc.) without manual setup.
+    available_symbols: Optional[list[str]] = None
 
 
 class BridgeTradeReport(BaseModel):

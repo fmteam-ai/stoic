@@ -1,10 +1,79 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal } from "lucide-react";
+import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X } from "lucide-react";
 const Warning = AlertTriangle;
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
+
+/** iter-76 · Symbol-suffix row.
+ *  Shows the per-account suffix in 3 possible states:
+ *    1. Manually set by user — yellow badge "MANUAL"
+ *    2. Auto-detected by EA v1.34+ — cyan badge "AUTO-DETECTED"
+ *    3. Neither (bare base name) — grey badge "BARE"
+ *  Includes an inline edit input so the user can override. */
+function SymbolSuffixRow({ account, onSet }) {
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(account.symbol_suffix || "");
+    const userSuffix = (account.symbol_suffix || "").trim();
+    const autoSuffix = (account.auto_detected_symbol_suffix || "").trim();
+    const autoConf = account.auto_detected_suffix_confidence;
+    const autoBases = account.auto_detected_suffix_bases || [];
+
+    const active = userSuffix || autoSuffix;
+    let source = "BARE";
+    let color = "#52525B";
+    if (userSuffix) { source = "MANUAL"; color = "#FFD700"; }
+    else if (autoSuffix) { source = "AUTO-DETECTED"; color = "#10F2C5"; }
+
+    return (
+        <div className="font-mono text-[10px] tracking-widest" data-testid={`symbol-suffix-row-${account.account_number}`}>
+            <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[#52525B]">SYMBOL SUFFIX</span>
+                <span className="text-[#A1A1AA]">
+                    XAUUSD<span style={{ color }} className="font-bold">{active || "(none)"}</span>
+                </span>
+                <span className="border px-1.5 py-0.5" style={{ color, borderColor: `${color}55` }}>
+                    {source}
+                </span>
+                {autoSuffix && !userSuffix && (
+                    <span className="text-[#52525B]">
+                        from {autoBases.length} symbol{autoBases.length !== 1 ? "s" : ""} · {Math.round((autoConf || 0) * 100)}% confidence
+                    </span>
+                )}
+                {!editing && (
+                    <button
+                        onClick={() => { setEditing(true); setDraft(userSuffix); }}
+                        data-testid={`edit-suffix-${account.account_number}`}
+                        className="ml-auto px-2 py-1 border border-[#1F1F1F] hover:border-[#FFD700]/40 hover:text-[#FFD700] text-[#A1A1AA] transition-colors flex items-center gap-1">
+                        <Wand2 className="w-3 h-3" /> {userSuffix ? "OVERRIDE" : "SET MANUAL"}
+                    </button>
+                )}
+            </div>
+            {editing && (
+                <div className="flex items-center gap-2 mt-2">
+                    <input
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        placeholder=".fx / .c / .raw / (leave empty = use auto)"
+                        data-testid={`suffix-input-${account.account_number}`}
+                        className="flex-1 px-3 py-1.5 bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700]/50 outline-none text-xs font-mono text-[#E4E4E7]" />
+                    <button
+                        onClick={async () => { await onSet(draft.trim()); setEditing(false); }}
+                        data-testid={`save-suffix-${account.account_number}`}
+                        className="px-3 py-1.5 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-[10px] tracking-widest flex items-center gap-1">
+                        <Save className="w-3 h-3" /> SAVE
+                    </button>
+                    <button
+                        onClick={() => setEditing(false)}
+                        className="px-3 py-1.5 border border-[#1F1F1F] hover:border-[#333333] text-[#52525B] text-[10px] tracking-widest flex items-center gap-1">
+                        <X className="w-3 h-3" /> CANCEL
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
 
 const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000, investor_password: "", master_password: "" };
 
@@ -407,7 +476,16 @@ export default function Accounts() {
                                     </div>
 
                                     <div className="mt-4 pt-4 border-t border-[#1F1F1F]">
-                                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">BRIDGE TOKEN · paste into MT5 EA inputs</div>
+                                        <SymbolSuffixRow account={a} onSet={async (suffix) => {
+                                            try {
+                                                await api.put(`/accounts/${a.id}/symbol-suffix`, { symbol_suffix: suffix });
+                                                toast.success(suffix ? `Suffix set: '${suffix}'` : "Suffix cleared (using auto-detected)");
+                                                load();
+                                            } catch (e) {
+                                                toast.error(e?.response?.data?.detail || "Failed to update suffix");
+                                            }
+                                        }} />
+                                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2 mt-4">BRIDGE TOKEN · paste into MT5 EA inputs</div>
                                         <div className="flex items-center gap-2 flex-wrap">
                                             <code className="font-mono text-xs px-3 py-2 bg-[#050505] border border-[#1F1F1F] flex-1 break-all" data-testid={`bridge-token-${a.account_number}`}>{a.bridge_token}</code>
                                             <button onClick={() => copyToken(a.bridge_token)} data-testid={`copy-token-${a.account_number}`}

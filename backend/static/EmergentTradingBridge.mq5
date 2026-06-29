@@ -58,6 +58,13 @@
 //|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| v1.34 — Auto broker-suffix detection. EA enumerates MarketWatch  |
+//|         symbols matching common bases (XAU/BTC/forex) and sends  |
+//|         the list in `available_symbols` on heartbeat. Backend    |
+//|         infers the broker's naming convention so user never      |
+//|         needs to manually configure symbol_suffix per broker.    |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| v1.33 — Added .e/.E suffix variants (OnEquity ECN accounts).      |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
@@ -77,14 +84,14 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.33"
+#property version   "1.34"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.33"
+#define EA_CLIENT_VERSION "1.34"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -107,7 +114,7 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.33 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.34 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -398,6 +405,53 @@ string BuildPositionsJson() {
    return out;
 }
 
+//+------------------------------------------------------------------+
+//| v1.34 · BuildAvailableSymbolsJson                                |
+//|                                                                  |
+//| Enumerate ALL symbols in MarketWatch (selected=true) and emit a  |
+//| JSON array of names whose core matches one of the bases STOIC    |
+//| cares about (XAU/BTC/forex majors). The backend's                |
+//| broker_symbol_detector turns this into an auto-detected suffix   |
+//| so the user never has to manually set symbol_suffix per broker.  |
+//|                                                                  |
+//| Throttled: only emitted on the FIRST heartbeat after EA start    |
+//| AND once per hour after that — symbol lists almost never change. |
+//+------------------------------------------------------------------+
+datetime _last_symbols_emit = 0;
+string CACHED_AVAILABLE_SYMBOLS = "";
+
+string BuildAvailableSymbolsJson() {
+   string bases[] = {
+      "XAUUSD","XAGUSD","BTCUSD","ETHUSD",
+      "EURUSD","GBPUSD","USDJPY","USDCHF","USDCAD","AUDUSD","NZDUSD",
+      "EURGBP","EURJPY","GBPJPY",
+      "USOIL","UKOIL","WTI","BRENT",
+      "NAS100","SPX500","GER40","UK100","JPN225"
+   };
+   int total = SymbolsTotal(true);   // true = MarketWatch only
+   string out = "[";
+   bool first = true;
+   for (int i = 0; i < total; i++) {
+      string name = SymbolName(i, true);
+      if (name == "") continue;
+      // Cheap prefix match: does this symbol start with any known base?
+      string upper = name;
+      StringToUpper(upper);
+      bool matched = false;
+      for (int b = 0; b < ArraySize(bases); b++) {
+         if (StringFind(upper, bases[b]) == 0) { matched = true; break; }
+      }
+      if (!matched) continue;
+      if (!first) out += ",";
+      // JSON-safe: replace " with nothing (no broker uses quotes in symbol names)
+      StringReplace(name, "\"", "");
+      out += "\"" + name + "\"";
+      first = false;
+   }
+   out += "]";
+   return out;
+}
+
 void SendHeartbeat() {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -414,12 +468,21 @@ void SendHeartbeat() {
    // stale terminals (no manual MT5 inspection required).
    // EA v1.29: route the version through %s so the literal can never drift
    // from EA_CLIENT_VERSION (previous hardcoded "1.28" caused stale dashboards).
+   // EA v1.34: include MarketWatch symbol inventory (throttled to once/hour)
+   // so the backend can auto-detect the broker's suffix convention.
+   datetime now_t = TimeCurrent();
+   if (now_t - _last_symbols_emit > 3600 || _last_symbols_emit == 0) {
+      CACHED_AVAILABLE_SYMBOLS = BuildAvailableSymbolsJson();
+      _last_symbols_emit = now_t;
+   }
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
-      "\"positions\":%s,\"client_version\":\"%s\"}",
-      BridgeToken, balance, equity, openPos, spreads, login, ccy, positions, EA_CLIENT_VERSION);
+      "\"positions\":%s,\"client_version\":\"%s\","
+      "\"available_symbols\":%s}",
+      BridgeToken, balance, equity, openPos, spreads, login, ccy, positions,
+      EA_CLIENT_VERSION, CACHED_AVAILABLE_SYMBOLS);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 
