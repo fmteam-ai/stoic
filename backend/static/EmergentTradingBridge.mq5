@@ -82,7 +82,7 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.28 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.29 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
