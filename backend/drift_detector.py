@@ -30,7 +30,17 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import Iterable
 
-from river.drift import ADWIN
+# iter-75b · river is heavyweight (~80MB) and is the only consumer of
+# ADWIN in this codebase. Make the import optional so the bot runs in
+# resource-constrained deployment environments without it. When absent,
+# drift detection is a no-op and the bot still self-trains on the
+# cadence dictated by MIN_SAMPLES thresholds in learned_meta.
+try:
+    from river.drift import ADWIN
+    _DRIFT_LIB_AVAILABLE = True
+except ImportError:
+    ADWIN = None  # type: ignore[assignment]
+    _DRIFT_LIB_AVAILABLE = False
 
 from database import get_db
 
@@ -44,8 +54,11 @@ WINDOW_SIZE = int(os.environ.get("DRIFT_WINDOW_SIZE", "300"))
 ADWIN_DELTA = float(os.environ.get("DRIFT_ADWIN_DELTA", "0.002"))
 # Cooldown — once we retrain, don't retrain again for this many hours.
 RETRAIN_COOLDOWN_HOURS = float(os.environ.get("DRIFT_RETRAIN_COOLDOWN_HRS", "12"))
-# Global toggle. Default ON.
-DRIFT_ENABLED = os.environ.get("DRIFT_DETECTION_ENABLED", "true").lower() == "true"
+# Global toggle. Default ON, but force OFF if `river` isn't available.
+DRIFT_ENABLED = (
+    os.environ.get("DRIFT_DETECTION_ENABLED", "true").lower() == "true"
+    and _DRIFT_LIB_AVAILABLE
+)
 
 
 async def record_residual(
