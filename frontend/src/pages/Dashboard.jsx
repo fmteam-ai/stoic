@@ -16,6 +16,7 @@ import BotWatching from "@/components/BotWatching";
 import CooldownPanel from "@/components/CooldownPanel";
 import RiskGaugePanel from "@/components/RiskGaugePanel";
 import WeeklyDigestPanel from "@/components/WeeklyDigestPanel";
+import AdaptiveModePanel from "@/components/AdaptiveModePanel";
 import { useAuth } from "@/context/AuthContext";
 import { Stethoscope } from "lucide-react";
 import { toast } from "sonner";
@@ -505,6 +506,8 @@ export default function Dashboard() {
                 <CooldownPanel />
 
                 <RiskGaugePanel />
+
+                <AdaptiveModePanel />
 
                 <WeeklyDigestPanel />
 

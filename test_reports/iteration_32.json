@@ -1,0 +1,28 @@
+{
+  "summary": "iter-74 Win-Rate Adaptive Mode smoke verified end-to-end. Backend: 33/33 pass (27 pre-existing unit/integration in test_iter74_adaptive_mode.py + 6 new HTTP smoke in test_iter74_smoke.py — adaptive-status shape, account_id echo, PUT persistence of all 5 fields, GARBAGE→expected_value coercion, window=9999→200 clamp, fast_scalp preset present). Frontend: Dashboard renders adaptive-mode-panel; 3 MT5 cards present (matches /api/accounts MT5 filter — Tauro 'MT5 Demo', vtmarkets, micro); adaptive-risk-toggle-<id> on vtmarkets correctly flipped OFF→ON within 2s and PUT /bot/config landed; adaptive-mode-toggle-<id> cycled EXPECTED_VALUE → WIN_RATE → TREND_FOLLOW → EXPECTED_VALUE with badge text updating each click. A/B test on Tauro (6a41c0fc…) preserved (win_rate / adaptive_risk:true / auto_preset:true); vtmarkets and micro restored to clean baseline (expected_value / false / false / caps:{}).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter74_smoke.py",
+    "/app/backend/tests/test_iter74_adaptive_mode.py",
+    "/app/test_reports/pytest/iter74_smoke.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "AdaptiveModePanel.cycleMode auto-injects max_tp_pips_per_symbol={XAUUSD:100,BTCUSD:100} when cycling INTO win_rate but never strips it when cycling back to expected_value/trend_follow. Side effect: cycling through win_rate leaks per-symbol caps onto accounts that did not explicitly opt in. Consider clearing the auto-injected caps when leaving win_rate, or only persist the cap when the user explicitly confirms.",
+    "/bot/adaptive-status returns full shape even on the default cfg (no account_id) — good fallback. The auto_preset.reason field is populated with a human-readable string which is useful for the would→ badge UX.",
+    "BotConfigUpdate field coercion is defensive — invalid profit_taking_mode silently coerced to expected_value with 200 instead of 422. This is the documented contract (and the iter-74 unit tests assert it), but consider surfacing a soft warning in the response so the frontend can show a toast if user typoed.",
+    "AdaptiveModePanel polls every 30s via setInterval inside useEffect — fine for a single-panel use case, but if user opens 5+ dashboards (multi-tab), every tab independently polls. Consider visibilitychange gate to pause polling on hidden tabs.",
+    "Panel correctly filters out crypto accounts (a.kind!=null) and disconnected accounts — the 3 connected MT5 accounts render exactly as expected. No card leak for kraken_spot or binance bridges."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter74_smoke.py (new — 6 HTTP smoke tests)"
+  ],
+  "success_rate": {"backend": "100% (33/33 — 27 existing + 6 new smoke)", "frontend": "100% — panel renders, 3/3 cards, risk toggle + mode cycle both functional"},
+  "test_credentials": "admin@trading.bot / admin123 (verified working)",
+  "seed_data_creation": "None — used existing MT5 accounts. All mutations restored.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-74 Win-Rate Adaptive Mode is fully green end-to-end. Three MT5 accounts on this env: Tauro/'MT5 Demo' (id 6a41c0fc…) is the ACTIVE A/B test running win_rate+adaptive_risk+auto_preset — DO NOT mutate. vtmarkets (6a3e9474…) and micro (6a3ad0ef…) are clean baselines safe for mutation. The frontend mode-badge cycle auto-sets {XAUUSD:100,BTCUSD:100} caps when transitioning INTO win_rate; if you mutate during a test, restore caps={} explicitly afterwards (PUT /api/bot/config with max_tp_pips_per_symbol:{} clears them). New smoke file at /app/backend/tests/test_iter74_smoke.py self-restores baseline on each PUT test.",
+  "rca_of_the_issue": "N/A — no issues found."
+}
