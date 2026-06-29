@@ -66,15 +66,52 @@ function AdaptiveAccountRow({ account, status, onPatch }) {
     const caps = status.max_tp_pips_per_symbol || {};
     const capEntries = Object.entries(caps).filter(([, v]) => Number(v) > 0);
 
+    // iter-77 · Live Smart Cap classification, mirroring backend
+    // adaptive_mode.apply_profit_taking_mode():
+    //   - win_rate + EXPLICIT cap → "EXPLICIT" badge (always applies)
+    //   - win_rate + no explicit + CHOPPY regime → "SMART CAP · 60p/100p" (active)
+    //   - win_rate + no explicit + TRENDING regime → "SMART CAP · OFF" (runners stretch)
+    //   - other modes → "UNCAPPED"
+    const CHOPPY = ["DEFENSIVE_SCALP", "CAUTIOUS_WAIT", "TRANSITIONAL", "RANGING"];
+    const TIGHTENED = ["DEFENSIVE_SCALP", "CAUTIOUS_WAIT"];  // 0.6× tightening
+    const TRENDING = ["TRENDING", "AGGRESSIVE"];
+    const regime = ap.regime_execution_mode;
+    let capLabel, capColor, capActive;
+    if (capEntries.length > 0) {
+        capLabel = "EXPLICIT · " + capEntries.map(([s, v]) => `${s} ≤${Math.round(v)}p`).join(" · ");
+        capColor = "text-[#FFD700]";
+        capActive = true;
+    } else if (ptMode === "win_rate") {
+        if (TIGHTENED.includes(regime)) {
+            capLabel = `SMART CAP · 60p (${regime})`;
+            capColor = "text-[#10F2C5]";
+            capActive = true;
+        } else if (CHOPPY.includes(regime)) {
+            capLabel = `SMART CAP · 100p (${regime})`;
+            capColor = "text-[#10F2C5]";
+            capActive = true;
+        } else if (TRENDING.includes(regime)) {
+            capLabel = `SMART CAP · OFF (${regime} → runners free)`;
+            capColor = "text-[#00FF41]";
+            capActive = false;
+        } else {
+            capLabel = "SMART CAP · OFF (no regime context)";
+            capColor = "text-[#A1A1AA]/80";
+            capActive = false;
+        }
+    } else {
+        capLabel = "UNCAPPED";
+        capColor = "text-[#52525B]/80";
+        capActive = false;
+    }
+
     const cycleMode = () => {
         const next = MODE_CYCLE[(MODE_CYCLE.indexOf(ptMode) + 1) % MODE_CYCLE.length];
-        const body = { profit_taking_mode: next };
-        // Auto-set the 100p default when flipping into win_rate so the
-        // mode is immediately useful with no further configuration.
-        if (next === "win_rate" && capEntries.length === 0) {
-            body.max_tp_pips_per_symbol = { XAUUSD: 100, BTCUSD: 100 };
-        }
-        onPatch(body, `Profit-taking mode → ${MODE_LABEL[next]}`);
+        // iter-77 · Pure Smart Cap by default — no longer force-set an
+        // explicit 100p cap when flipping to win_rate. Smart Cap will
+        // handle the cap dynamically based on regime. User can still
+        // set an explicit cap via the manual override.
+        onPatch({ profit_taking_mode: next }, `Profit-taking mode → ${MODE_LABEL[next]}`);
     };
 
     return (
@@ -100,16 +137,13 @@ function AdaptiveAccountRow({ account, status, onPatch }) {
                 </button>
             </div>
 
-            {/* TP cap row */}
-            <div className="flex items-center justify-between gap-3 font-mono text-[10px] tracking-widest">
+            {/* TP cap row — iter-77 Smart Cap aware */}
+            <div className="flex items-center justify-between gap-3 font-mono text-[10px] tracking-widest"
+                 data-testid={`smart-cap-${account.id}`}>
                 <span className="text-[#52525B] flex items-center gap-1.5">
-                    <Target className="w-3 h-3" /> TP CAP
+                    <Target className={`w-3 h-3 ${capActive ? "" : "opacity-40"}`} /> TP CAP
                 </span>
-                <span className={capEntries.length ? "text-[#10F2C5]" : "text-[#52525B]/80"}>
-                    {capEntries.length === 0
-                        ? "UNCAPPED"
-                        : capEntries.map(([sym, v]) => `${sym} ≤${Math.round(v)}p`).join(" · ")}
-                </span>
+                <span className={capColor}>{capLabel}</span>
             </div>
 
             {/* Adaptive risk row */}
