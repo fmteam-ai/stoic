@@ -57,9 +57,21 @@
 //|         tagged "symbol_not_found" error so STOIC's UI can guide    |
 //|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v1.30 — Fix: dashboard EA version was permanently stuck at 1.28  |
+//|         because the heartbeat JSON hardcoded "1.28" while        |
+//|         #property version said "1.29". Now driven by a single    |
+//|         EA_CLIENT_VERSION macro so the two can never drift.       |
+//+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.29"
+#property version   "1.30"
 #property strict
+
+// Single source of truth for the version string we report to STOIC on every
+// heartbeat. Keep this in sync with #property version above. Bumping ONLY
+// one of the two causes the dashboard to show a stale EA version even
+// though MT5 itself loads the new binary.
+#define EA_CLIENT_VERSION "1.30"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -82,7 +94,7 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.29 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.30 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -379,12 +391,14 @@ void SendHeartbeat() {
    string positions = BuildPositionsJson();
    // EA v1.26: report our own semantic version so the Dashboard can flag
    // stale terminals (no manual MT5 inspection required).
+   // EA v1.29: route the version through %s so the literal can never drift
+   // from EA_CLIENT_VERSION (previous hardcoded "1.28" caused stale dashboards).
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
-      "\"positions\":%s,\"client_version\":\"1.28\"}",
-      BridgeToken, balance, equity, openPos, spreads, login, ccy, positions);
+      "\"positions\":%s,\"client_version\":\"%s\"}",
+      BridgeToken, balance, equity, openPos, spreads, login, ccy, positions, EA_CLIENT_VERSION);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 

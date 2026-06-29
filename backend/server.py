@@ -85,8 +85,15 @@ async def ea_script():
     path = Path(__file__).parent / "static" / "EmergentTradingBridge.mq5"
     if not path.exists():
         return {"error": "EA file missing"}
+    # No-cache headers so MT5 / browsers always pull the latest version —
+    # otherwise users reinstall and still get an old cached .mq5.
     return FileResponse(path, media_type="text/plain",
-                        filename="EmergentTradingBridge.mq5")
+                        filename="EmergentTradingBridge.mq5",
+                        headers={
+                            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                            "Pragma": "no-cache",
+                            "Expires": "0",
+                        })
 
 
 # Mount routers
