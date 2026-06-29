@@ -328,6 +328,17 @@ async def _process_user_account_locked(db, cfg: dict):
                 })
                 logger.warning("Auto-halted account=%s user=%s — %s",
                                a.get("label"), user_id, verdict["block_reason"])
+                # iter-72 · Push Telegram alert (fire-and-forget).
+                try:
+                    from notifier import notify_account_blocked
+                    await notify_account_blocked(
+                        user_id, str(a["_id"]),
+                        verdict["retcode"] or "?",
+                        verdict["label"] or "broker rejection",
+                        verdict["hint"] or "",
+                    )
+                except Exception:
+                    pass
             await _record_pulse(db, cfg,
                 action="BLOCKED", level="block",
                 reason=f"Account {a.get('label')} halted: {verdict['block_reason']}",

@@ -235,6 +235,7 @@ async def _check_daily_drawdown(cfg: dict) -> None:
         try:
             await notify_circuit_breaker(
                 user_id, reason, round(today_pnl, 2), round(equity, 2),
+                account_id=cfg_account_id,
             )
         except Exception:
             pass

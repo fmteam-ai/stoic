@@ -61,6 +61,71 @@ def _esc(text: str) -> str:
     return text
 
 
+# iter-72 · Resolve a human-readable account label for any trade dict /
+# trade_id / explicit account_id. Cached per-call by the caller — every
+# notify_* helper calls this once before composing the title.
+async def _account_label_for(
+    trade_or_id=None, *, account_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Return the account's label (e.g. "vtmarkets", "micro") or "" if unknown.
+
+    Accepts either:
+      • a trade dict (must carry `account_id`),
+      • a string trade_id (will look up the trade), OR
+      • an explicit account_id kwarg.
+
+    Always returns a string; on any error returns "" so callers can
+    `if label: ...` cleanly.
+    """
+    db = get_db()
+    try:
+        # Resolve account_id from whatever was passed.
+        if account_id is None:
+            if isinstance(trade_or_id, dict):
+                account_id = trade_or_id.get("account_id")
+            elif trade_or_id:
+                try:
+                    oid = trade_or_id if isinstance(trade_or_id, ObjectId) \
+                          else ObjectId(str(trade_or_id))
+                    tdoc = await db.trades.find_one(
+                        {"_id": oid}, projection={"account_id": 1}
+                    )
+                    account_id = (tdoc or {}).get("account_id")
+                except (InvalidId, TypeError, ValueError):
+                    return ""
+        if not account_id:
+            return ""
+        try:
+            acc_oid = (account_id if isinstance(account_id, ObjectId)
+                       else ObjectId(str(account_id)))
+        except (InvalidId, TypeError, ValueError):
+            return ""
+        adoc = await db.accounts.find_one(
+            {"_id": acc_oid}, projection={"label": 1, "broker": 1}
+        )
+        if not adoc:
+            return ""
+        return adoc.get("label") or adoc.get("broker") or ""
+    except Exception as e:
+        logger.debug("account_label_for failed: %s", e)
+        return ""
+
+
+def _title_with_account(account_label: str, title: str) -> str:
+    """Prefix a title with the account label if present."""
+    if not account_label:
+        return title
+    # Format: "🟢 [vtmarkets] Trade Opened · XAUUSD BUY"
+    # If title starts with an emoji + space, insert label after the emoji.
+    if title and title[0] not in ("[", " ") and " " in title:
+        head, rest = title.split(" ", 1)
+        # Treat the first token as emoji if it's short and not ascii-letters.
+        if len(head) <= 3 and not head.isascii():
+            return f"{head} [{account_label}] {rest}"
+    return f"[{account_label}] {title}"
+
+
 async def send_telegram(user_id: str, event_type: str, title: str, lines: list) -> bool:
     """Fire a Telegram alert to a user. Returns True on 200 OK.
 
@@ -164,13 +229,15 @@ async def notify_trade_opened(user_id: str, trade: dict) -> bool:
         return False
     origin = trade.get("origin", "AI signal")
     is_external = (origin == "external") or bool(trade.get("external_open"))
+    account_label = await _account_label_for(trade)
 
     # External trades — opened on MT5 outside STOIC (manual click, another EA,
     # or a test). Use a visibly different title + event key so the user can
     # opt out separately and never confuses them with bot-initiated trades.
     if is_external:
         arrow = "📌"
-        title = f"{arrow} Manual Trade Detected · {trade.get('symbol')} {trade.get('action')}"
+        title = _title_with_account(account_label,
+            f"{arrow} Manual Trade Detected · {trade.get('symbol')} {trade.get('action')}")
         body_lines = [
             f"Lots: {trade.get('lot_size')}",
             f"Entry: {trade.get('entry_price')}",
@@ -179,14 +246,13 @@ async def notify_trade_opened(user_id: str, trade: dict) -> bool:
             "(manual click, another EA, or the broker). STOIC is tracking it",
             "for P&L reporting only.",
         ]
-        # Fire under a dedicated event key so users can mute these without
-        # losing notifications for their bot-initiated trades.
         return await send_telegram(user_id, "external_trade_opened", title, body_lines)
 
     # Bot-initiated trade — the normal STOIC alert.
     arrow = "🟢" if trade.get("action") == "BUY" else "🔴"
     return await send_telegram(user_id, "trade_opened",
-        f"{arrow} Trade Opened · {trade.get('symbol')} {trade.get('action')}",
+        _title_with_account(account_label,
+            f"{arrow} Trade Opened · {trade.get('symbol')} {trade.get('action')}"),
         [
             f"Lots: {trade.get('lot_size')}",
             f"Entry: {trade.get('entry_price')}",
@@ -206,8 +272,10 @@ async def notify_trade_closed(user_id: str, trade: dict) -> None:
     pnl = float(trade.get("pnl") or 0)
     emoji = "✅" if pnl >= 0 else "❌"
     sign = "+" if pnl >= 0 else ""
+    account_label = await _account_label_for(trade)
     await send_telegram(user_id, "trade_closed",
-        f"{emoji} Trade Closed · {trade.get('symbol')} {trade.get('action')}",
+        _title_with_account(account_label,
+            f"{emoji} Trade Closed · {trade.get('symbol')} {trade.get('action')}"),
         [
             f"P&L: {sign}{pnl:.2f}",
             f"Entry: {trade.get('entry_price')}  Exit: {trade.get('exit_price')}",
@@ -216,8 +284,9 @@ async def notify_trade_closed(user_id: str, trade: dict) -> None:
 
 
 async def notify_breakeven(user_id: str, trade_id: str, new_sl, r_multiple) -> None:
+    account_label = await _account_label_for(trade_id)
     await send_telegram(user_id, "breakeven",
-        "🛡 Break-Even Set",
+        _title_with_account(account_label, "🛡 Break-Even Set"),
         [
             f"Trade: {trade_id[-6:]}",
             f"SL moved to entry @ {new_sl}",
@@ -226,8 +295,9 @@ async def notify_breakeven(user_id: str, trade_id: str, new_sl, r_multiple) -> N
 
 
 async def notify_partial_close(user_id: str, trade_id: str, from_lot, to_lot, r_multiple) -> None:
+    account_label = await _account_label_for(trade_id)
     await send_telegram(user_id, "partial_close",
-        "✂️ Partial Close at TP1",
+        _title_with_account(account_label, "✂️ Partial Close at TP1"),
         [
             f"Trade: {trade_id[-6:]}",
             f"Closed: {round(from_lot - to_lot, 2)} lots @ +{r_multiple}R",
@@ -236,8 +306,9 @@ async def notify_partial_close(user_id: str, trade_id: str, from_lot, to_lot, r_
 
 
 async def notify_trail(user_id: str, trade_id: str, new_sl, r_multiple) -> None:
+    account_label = await _account_label_for(trade_id)
     await send_telegram(user_id, "trail",
-        "📈 SL Trailed",
+        _title_with_account(account_label, "📈 SL Trailed"),
         [
             f"Trade: {trade_id[-6:]}",
             f"New SL: {new_sl}",
@@ -245,9 +316,11 @@ async def notify_trail(user_id: str, trade_id: str, new_sl, r_multiple) -> None:
         ])
 
 
-async def notify_circuit_breaker(user_id: str, reason: str, today_pnl, equity) -> None:
+async def notify_circuit_breaker(user_id: str, reason: str, today_pnl, equity,
+                                 account_id: Optional[str] = None) -> None:
+    account_label = await _account_label_for(account_id=account_id, user_id=user_id)
     await send_telegram(user_id, "circuit_breaker",
-        "🚨 CIRCUIT BREAKER TRIPPED",
+        _title_with_account(account_label, "🚨 CIRCUIT BREAKER TRIPPED"),
         [
             "Bot has been auto-stopped.",
             f"Reason: {reason}",
@@ -260,8 +333,12 @@ async def notify_circuit_breaker(user_id: str, reason: str, today_pnl, equity) -
 
 
 async def notify_high_conf_signal(user_id: str, signal: dict) -> None:
+    # Signals are pre-trade — they may not yet know which account will execute.
+    # Tag with account label only if the signal carries an account_id hint.
+    account_label = await _account_label_for(signal) if signal.get("account_id") else ""
     await send_telegram(user_id, "high_conf_signal",
-        f"🎯 High-Confidence Signal · {signal.get('symbol')} {signal.get('action')}",
+        _title_with_account(account_label,
+            f"🎯 High-Confidence Signal · {signal.get('symbol')} {signal.get('action')}"),
         [
             f"Confidence: {signal.get('confidence')}%",
             f"Entry: {signal.get('entry_price')}",
@@ -270,10 +347,28 @@ async def notify_high_conf_signal(user_id: str, signal: dict) -> None:
 
 
 async def notify_pre_news_close(user_id: str, trade_id: str, symbol: str, event_title: str, minutes_until: float) -> None:
+    account_label = await _account_label_for(trade_id)
     await send_telegram(user_id, "pre_news_protect",
-        f"🛡 Pre-News Protect · {symbol}",
+        _title_with_account(account_label, f"🛡 Pre-News Protect · {symbol}"),
         [
             f"Trade: {trade_id[-6:]}",
             f"Flattening before '{event_title}' in {minutes_until:.0f}min.",
             "Position will be re-evaluated after the event settles.",
+        ])
+
+
+async def notify_account_blocked(user_id: str, account_id: str, retcode: str,
+                                 retcode_label: str, hint: str) -> None:
+    """iter-72 · Push alert when the broker-rejection breaker auto-halts an
+    account (e.g. VT Markets retcode 10013 ×3). Lets the user act in seconds
+    rather than discovering through Bot Health later."""
+    account_label = await _account_label_for(account_id=account_id, user_id=user_id)
+    await send_telegram(user_id, "account_blocked",
+        _title_with_account(account_label, "🚫 Account Auto-Halted"),
+        [
+            f"Broker error: {retcode_label} ({retcode})",
+            f"Cause: {hint}",
+            "",
+            "Bot will skip this account until you click 'Resume Trading'",
+            "(or set a symbol_suffix) on the Accounts page.",
         ])
