@@ -1,5 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
+
+// Bump together with backend `LATEST_EA` in bot_routes.py / diagnostic_routes.py.
+// Used in the download URL so the filename changes per release (e.g.
+// `EmergentTradingBridge_v1.35.mq5`) — defeats aggressive browser caching
+// of the prior .mq5, which otherwise re-downloads stale source.
+const LATEST_EA_VERSION = "1.35";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X } from "lucide-react";
 const Warning = AlertTriangle;
@@ -239,10 +245,10 @@ export default function Accounts() {
                 testid="accounts-header"
                 action={
                     <div className="flex gap-2">
-                        <a href={`${API}/ea-script`} target="_blank" rel="noopener noreferrer" download
+                        <a href={`${API}/ea-script?v=${LATEST_EA_VERSION}`} target="_blank" rel="noopener noreferrer" download={`EmergentTradingBridge_v${LATEST_EA_VERSION}.mq5`}
                             data-testid="download-ea-button"
                             className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
-                            <Download className="w-3.5 h-3.5" /> DOWNLOAD EA
+                            <Download className="w-3.5 h-3.5" /> DOWNLOAD EA v{LATEST_EA_VERSION}
                         </a>
                         <button onClick={() => setShowForm(!showForm)} data-testid="add-account-button"
                             className="flex items-center gap-2 px-3 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium text-xs tracking-widest transition-colors">
