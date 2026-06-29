@@ -58,20 +58,26 @@
 //|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| v1.31 — Expanded broker symbol-suffix probe list from 17 → 30.    |
+//|         Adds .c/.cent (Tauro/JMFinancial cent accounts), .s/.std  |
+//|         (FBS/Roboforex standard), .i (IC Markets institutional),  |
+//|         ~/.spot (Vantage), and underscore-style variants.          |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| v1.30 — Fix: dashboard EA version was permanently stuck at 1.28  |
 //|         because the heartbeat JSON hardcoded "1.28" while        |
 //|         #property version said "1.29". Now driven by a single    |
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.30"
+#property version   "1.31"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.30"
+#define EA_CLIENT_VERSION "1.31"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -94,7 +100,7 @@ int OnInit() {
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
    lastReportedDealTime = TimeCurrent() - HistoryLookbackSeconds;
-   Print("STOIC Bridge EA v1.30 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v1.31 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -294,17 +300,22 @@ string ResolveBrokerSymbol(string base_symbol) {
          return base_symbol;
       }
    }
-   // Common broker suffix variants observed in the wild
+   // Common broker suffix variants observed in the wild.
+   // v1.31 — added .c/.cent (Tauro/JMFinancial cent accounts), .s/.std
+   // (FBS/Roboforex standard), .i (IC Markets institutional), ~ (some ECN),
+   // ".spot" (Vantage), "_x"/"_raw"/"_ecn" (underscore-style brokers).
    string suffixes[] = {
       ".x", ".X", ".raw", ".RAW", ".r", ".m", ".ecn", ".ECN",
-      "pro", "Pro", "PRO", "+", "#", "m", "_pro", "-ECN", ".pro"
+      "pro", "Pro", "PRO", "+", "#", "m", "_pro", "-ECN", ".pro",
+      ".c", ".C", ".cent", "cent", ".s", ".S", ".std", ".STD",
+      ".i", ".I", "~", ".spot", "_x", "_raw", "_ecn"
    };
    for (int i = 0; i < ArraySize(suffixes); i++) {
       string candidate = base_symbol + suffixes[i];
       if (SymbolSelect(candidate, true)) {
          MqlTick tick;
          if (SymbolInfoTick(candidate, tick) && tick.bid > 0 && tick.ask > 0) {
-            Print("[v1.29] ResolveBrokerSymbol: ", base_symbol, " -> ", candidate);
+            Print("[v1.31] ResolveBrokerSymbol: ", base_symbol, " -> ", candidate);
             return candidate;
          }
       }
