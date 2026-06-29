@@ -2,9 +2,10 @@ import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { Cpu, ShieldAlert, ShieldCheck, AlertTriangle } from "lucide-react";
 
-// Latest EA build expected in production. Anything below this gets the
-// yellow "outdated" tint; nothing reported at all gets the red "unknown".
-export const LATEST_EA_VERSION = "1.29";
+// Fallback for the latest EA build expected in production. The component
+// also reads the live value from /api/bot/health-score so this constant
+// only matters if that endpoint is unreachable. iter-76: 1.34.
+export const LATEST_EA_VERSION = "1.34";
 
 // Lightweight semver compare — handles dotted numeric strings only (1.25, 1.26).
 // Returns -1 if a<b, 0 if equal, 1 if a>b. Non-numeric segments return 0.
@@ -22,7 +23,7 @@ function compareVersions(a, b) {
     return 0;
 }
 
-function classifyEa(account) {
+function classifyEa(account, latestVersion = LATEST_EA_VERSION) {
     // Paper accounts never run an EA — show as N/A.
     if ((account.mode || "live") === "paper") {
         return { kind: "paper", label: "PAPER · NO EA", icon: ShieldCheck, color: "#A1A1AA" };
@@ -37,10 +38,10 @@ function classifyEa(account) {
             label: "OLD EA · UPGRADE",
             icon: AlertTriangle,
             color: "#FF3B30",
-            detail: "Pre-v1.29 EA detected (no version reported). Recompile EmergentTradingBridge.mq5 to enable broker-real-time tick streaming, broker-symbol auto-detect (fixes retcode 10013 on VT Markets / IC Markets / FXOpen suffixed symbols), and broker-aware filling-mode selection.",
+            detail: `Pre-v${latestVersion} EA detected (no version reported). Recompile EmergentTradingBridge.mq5 in MetaEditor (F7) to enable broker-real-time tick streaming, broker-symbol auto-detect, and auto suffix discovery.`,
         };
     }
-    const cmp = compareVersions(v, LATEST_EA_VERSION);
+    const cmp = compareVersions(v, latestVersion);
     if (cmp >= 0) {
         return {
             kind: "current",
@@ -54,19 +55,28 @@ function classifyEa(account) {
         label: `v${v} · OUTDATED`,
         icon: AlertTriangle,
         color: "#FFB000",
-        detail: `Latest is v${LATEST_EA_VERSION}. Recompile in MetaEditor → press F7.`,
+        detail: `Latest is v${latestVersion}. Recompile in MetaEditor → press F7.`,
     };
 }
 
 export function EaVersionStrip({ refreshSignal }) {
     const [accounts, setAccounts] = useState([]);
     const [loading, setLoading] = useState(true);
+    // iter-76 · Live-fetched latest version from the backend so this component
+    // can never drift from the actual deployed EA. Falls back to LATEST_EA_VERSION
+    // if /api/bot/health-score is unreachable.
+    const [latestEa, setLatestEa] = useState(LATEST_EA_VERSION);
 
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const { data } = await api.get("/accounts");
-            setAccounts(Array.isArray(data) ? data : []);
+            const [accountsRes, healthRes] = await Promise.all([
+                api.get("/accounts"),
+                api.get("/bot/health-score").catch(() => null),
+            ]);
+            setAccounts(Array.isArray(accountsRes.data) ? accountsRes.data : []);
+            const serverLatest = healthRes?.data?.context?.ea_latest_version;
+            if (serverLatest) setLatestEa(String(serverLatest));
         } catch {
             setAccounts([]);
         } finally {
@@ -84,7 +94,7 @@ export function EaVersionStrip({ refreshSignal }) {
     if (liveAccounts.length === 0) return null;
 
     const outdatedCount = liveAccounts.filter(a => {
-        const c = classifyEa(a);
+        const c = classifyEa(a, latestEa);
         return c.kind === "outdated" || c.kind === "unknown";
     }).length;
 
@@ -94,7 +104,7 @@ export function EaVersionStrip({ refreshSignal }) {
                 <Cpu className="w-4 h-4 text-[#00FF41]" />
                 <div className="font-display text-base">EA Version</div>
                 <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
-                    LATEST · v{LATEST_EA_VERSION}
+                    LATEST · v{latestEa}
                 </div>
                 {outdatedCount > 0 && (
                     <div className="ml-auto font-mono text-[10px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-2.5 py-1"
@@ -105,7 +115,7 @@ export function EaVersionStrip({ refreshSignal }) {
             </div>
             <div className="divide-y divide-[#1F1F1F]" data-testid="ea-version-list">
                 {liveAccounts.map(a => {
-                    const c = classifyEa(a);
+                    const c = classifyEa(a, latestEa);
                     const Icon = c.icon;
                     return (
                         <div key={a.id} data-testid={`ea-row-${a.id}`}
