@@ -93,11 +93,23 @@ class MT5BridgeEngine(ExecutionEngine):
                     "safety_blocked_by": safety["blocked_by"],
                     "safety_audit": safety["audit"]}
 
+        # iter-71b · Per-account symbol_suffix override. Brokers like VT
+        # Markets rename `XAUUSD` to `XAUUSD.x` / `XAUUSDpro` / etc. and the
+        # EA's plain SymbolInfoDouble(symbol) returns 0 → retcode 10013.
+        # When the user sets `account.symbol_suffix`, we rewrite the symbol
+        # BEFORE inserting the trade so the EA receives the broker-correct
+        # name even on pre-v1.29 binaries.
+        base_symbol = signal["symbol"]
+        suffix = (account.get("symbol_suffix") or "").strip()
+        broker_symbol = (base_symbol + suffix) if suffix else base_symbol
+
         trade_doc = {
             "user_id": user_id,
             "account_id": str(account["_id"]),
             "signal_id": signal.get("signal_id"),
-            "symbol": signal["symbol"],
+            "symbol": broker_symbol,
+            "base_symbol": base_symbol,
+            "symbol_suffix_applied": suffix or None,
             "action": signal["action"],
             "lot_size": signal["lot_size"],
             "original_lot_size": signal["lot_size"],

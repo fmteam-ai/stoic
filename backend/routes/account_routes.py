@@ -437,3 +437,61 @@ async def block_status(account_id: str, user=Depends(get_current_user)):
         "block_hint": account.get("block_hint"),
         "blocked_at": account.get("blocked_at"),
     }
+
+
+@router.put("/{account_id}/symbol-suffix")
+async def set_symbol_suffix(account_id: str, payload: dict,
+                            user=Depends(get_current_user)):
+    """Set/clear a per-account symbol_suffix (iter-71b).
+
+    Brokers like VT Markets rename instruments — `XAUUSD` becomes
+    `XAUUSD.x` / `XAUUSDpro` / etc. The bot appends this suffix to every
+    trade symbol BEFORE sending to the EA, sidestepping the need to
+    recompile the MT5 binary.
+
+    Auto-unblocks the account if it was previously halted by the
+    broker-rejection circuit breaker — the suffix change is the user's
+    signal that they've fixed the underlying issue.
+
+    Body: {"symbol_suffix": ".x"}  or  {"symbol_suffix": ""}  to clear.
+    """
+    db = get_db()
+    acct_oid = parse_object_id(account_id, "Account")
+    account = await db.accounts.find_one({"_id": acct_oid, "user_id": user["id"]})
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    raw = (payload.get("symbol_suffix") or "").strip()
+    # Light validation — suffix must be short, ASCII-safe, no spaces.
+    if len(raw) > 12:
+        raise HTTPException(status_code=400,
+                            detail="symbol_suffix too long (max 12 chars)")
+    if any(c.isspace() for c in raw):
+        raise HTTPException(status_code=400,
+                            detail="symbol_suffix may not contain whitespace")
+
+    updates = {"symbol_suffix": raw}
+    was_blocked = bool(account.get("trading_blocked"))
+    if was_blocked:
+        updates["trading_blocked"] = False
+        updates["unblocked_at"] = datetime.now(timezone.utc).isoformat()
+
+    unset = {}
+    if was_blocked:
+        unset = {"block_reason": "", "block_retcode": "",
+                 "block_retcode_label": "", "block_hint": "",
+                 "block_failure_count": ""}
+
+    update_op = {"$set": updates}
+    if unset:
+        update_op["$unset"] = unset
+    await db.accounts.update_one({"_id": acct_oid}, update_op)
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "symbol_suffix": raw or None,
+        "auto_unblocked": was_blocked,
+        "message": (f"Suffix '{raw}' set" if raw else "Suffix cleared")
+                   + (" + trading re-enabled" if was_blocked else ""),
+    }
