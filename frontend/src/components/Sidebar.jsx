@@ -9,7 +9,7 @@ import {
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers,
-    FileText, ShieldAlert,
+    FileText, ShieldAlert, DatabaseBackup,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -94,6 +94,7 @@ const ADMIN_SECTION = {
     items: [
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
         { to: "/admin/affiliates", label: "Affiliate Mgmt", icon: ShieldAlert, testid: "nav-admin-affiliates" },
+        { to: "/admin/migration", label: "Migration", icon: DatabaseBackup, testid: "nav-admin-migration" },
     ],
 };
 
