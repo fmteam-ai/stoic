@@ -126,3 +126,22 @@ async def ensure_indexes():
         await db.signal_history.create_index([("user_symbol", 1), ("ts", -1)])
     except Exception:
         pass
+
+    # --- iter-91 · Heal stale panic / circuit-breaker trip flags ---------
+    # Background: the original POST /api/bot/start endpoint flipped
+    # `active=True` when a user re-enabled a panic-tripped bot but failed
+    # to clear `tripped_at` / `tripped_reason`. The bot ran fine, but the
+    # dashboard kept showing "PANIC LOCK — all trading halted by user/admin"
+    # forever. We fixed the endpoint, and now this startup hook self-heals
+    # any pre-existing stale flags so users don't have to toggle Stop/Start
+    # on every account post-deploy. Idempotent — runs every boot; no-op once
+    # the DB is clean.
+    try:
+        r = await db.bot_configs.update_many(
+            {"active": True, "tripped_reason": {"$exists": True}},
+            {"$unset": {"tripped_at": "", "tripped_reason": ""}},
+        )
+        if r.modified_count:
+            print(f"seed: auto-healed {r.modified_count} bot_config(s) with stale panic flags")
+    except Exception:
+        pass
