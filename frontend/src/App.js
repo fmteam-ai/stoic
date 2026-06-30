@@ -38,6 +38,7 @@ import WelcomeTrailer from "@/pages/WelcomeTrailer";
 import Terms from "@/pages/Terms";
 import AdminUsers from "@/pages/AdminUsers";
 import AdminAffiliates from "@/pages/AdminAffiliates";
+import AdminMigration from "@/pages/AdminMigration";
 import VerifyEmail from "@/pages/VerifyEmail";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
@@ -65,6 +66,7 @@ function App() {
                         {/* Admin-only moderation console */}
                         <Route path="/admin/users" element={<ProtectedRoute requireAdmin><AdminUsers /></ProtectedRoute>} />
                         <Route path="/admin/affiliates" element={<ProtectedRoute requireAdmin><AdminAffiliates /></ProtectedRoute>} />
+                        <Route path="/admin/migration" element={<ProtectedRoute requireAdmin><AdminMigration /></ProtectedRoute>} />
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/signals" element={<ProtectedRoute><Signals /></ProtectedRoute>} />
                         <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />

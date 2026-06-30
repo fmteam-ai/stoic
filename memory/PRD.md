@@ -8,6 +8,20 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-30 (iter-87) — **Migration Helper · Export/Import admin state across environments**:
+  - **Backend `routes/migration_routes.py`** with 2 admin-only endpoints (admin-only via `_admin_only()` guard):
+    - `GET /api/admin/export-state` → returns JSON with `schema_version=1`, exporter email, the admin's portable user fields (NO password_hash), and the full contents of `accounts` / `bot_configs` / `user_presets` filtered by `user_id`. ObjectIds are recursively serialised to hex strings; datetimes to ISO strings.
+    - `POST /api/admin/import-state` → idempotent upsert by `_id`. Remaps `user_id` to the currently-signed-in admin (so cross-env migrations where admin's `_id` differs still land cleanly). Schema mismatch returns 400 with `code=schema_mismatch`. Non-list collections return 400 `bad_payload`. Reports counts of received/inserted/updated per collection.
+    - **What's included**: portable user fields (email/name/role/status/email_verified/terms_agreed*/subscription*/two_fa*), accounts (incl. `bridge_token` + vault-encrypted creds → MT5 EAs on user's VPS keep authenticating without re-pairing), bot_configs, custom user_presets.
+    - **What's deliberately skipped**: password_hash (env-specific), trades / signals / agent_activity / heartbeats (transient and replayed live), audit log (env-specific), other users' data.
+  - **Frontend `pages/AdminMigration.jsx`** routed at `/admin/migration` (admin-only via `<ProtectedRoute requireAdmin>`):
+    - "EXPORT STATE" button → calls `/admin/export-state`, builds a `Blob`, triggers browser download as `stoic-state-<UTC-timestamp>.json`. Shows live counts in a toast + last-export summary chip.
+    - "CHOOSE FILE" button → opens hidden file picker → confirm dialog → reads JSON → POSTs to `/admin/import-state`. Shows inserted/updated counts per collection in a toast and a persistent summary chip.
+    - "Skipped vs Included" callout card so the user understands what crosses environments.
+  - **Tests (`test_iter87_migration_helper.py`)**: 6/6 passing — non-admin gets 403 on both endpoints; export returns expected shape (no password_hash leak); schema mismatch → 400; idempotent round-trip (re-import doesn't create duplicates); synthetic account import lands in DB with user_id remapped + bridge_token preserved.
+  - **UI smoke**: admin login → `/admin/migration` → EXPORT click → `stoic-state-2026-06-30-12-56-26.json` downloaded with 6 accounts, 7 bot configs, 0 presets. End-to-end verified.
+
+
 - 2026-06-30 (iter-86) — **Force Test Trade — backend fix + frontend button shipped**:
   - **Backend `routes/account_routes.py:557` `POST /api/accounts/{id}/test-trade`**: Fires a 0.01-lot BUY through the real execution pipe (safety guardian + per-base resolver + EA bridge) to validate broker connectivity without waiting for the AI to choose a direction. Tagged `is_test=true` + `origin="test_trade"` so it's excluded from analytics. Refuses when account is paper / not owned by caller / heartbeat is >120s stale / no tradeable base symbol in MarketWatch / unknown account id.
   - **Bugs fixed this session**:
