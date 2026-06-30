@@ -1019,6 +1019,42 @@ async def bot_health_score(user=Depends(get_current_user)):
         "closed_at": {"$lt": day_ago_iso},
     }, {"$set": {"ghost_acknowledged": True, "ghost_auto_ack_reason": "older_than_24h"}})
 
+    # AUTO-CLEAN: ghosts attached to an account that no longer exists are
+    # also unrecoverable — the EA on that account is gone (deleted/replaced),
+    # so the history sweep can never reach the broker to fill exit_price.
+    # Common cause: testing-agent synthetic accounts cleaned up after a run
+    # but leaving orphan trade rows behind.
+    candidate_orphans = await db.trades.find({
+        "user_id": user["id"], "status": "closed", "exit_price": None,
+        "ghost_acknowledged": {"$ne": True},
+    }, {"_id": 1, "account_id": 1}).to_list(length=200)
+    if candidate_orphans:
+        acct_ids = {t.get("account_id") for t in candidate_orphans if t.get("account_id")}
+        live_oids = set()
+        if acct_ids:
+            # Resolve which account_ids still exist (account_id is stored as str,
+            # accounts._id is ObjectId — convert defensively).
+            from bson.errors import InvalidId
+            try_oids = []
+            for aid in acct_ids:
+                try:
+                    try_oids.append(ObjectId(aid))
+                except (InvalidId, TypeError):
+                    pass
+            if try_oids:
+                live_docs = await db.accounts.find(
+                    {"_id": {"$in": try_oids}}, {"_id": 1}
+                ).to_list(length=len(try_oids))
+                live_oids = {str(d["_id"]) for d in live_docs}
+        orphan_ids = [t["_id"] for t in candidate_orphans
+                      if t.get("account_id") and t["account_id"] not in live_oids]
+        if orphan_ids:
+            await db.trades.update_many(
+                {"_id": {"$in": orphan_ids}},
+                {"$set": {"ghost_acknowledged": True,
+                          "ghost_auto_ack_reason": "account_deleted"}},
+            )
+
     ghosts = await db.trades.count_documents({
         "user_id": user["id"], "status": "closed", "exit_price": None,
         "ghost_acknowledged": {"$ne": True},
@@ -1027,7 +1063,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         score -= min(10, 2 * ghosts)
         issues.append({"severity": "info", "code": "ghost_trades",
                        "label": f"{ghosts} closed trade(s) missing exit price",
-                       "fix": "EA v1.26 history sweep will auto-fill these within ~60s of connecting."})
+                       "fix": "EA v1.36 history sweep will auto-fill these within ~60s of connecting."})
 
     # --- 6. Bot active flag (max -5, advisory) ----------------------------
     # When the user has *explicitly* paused the bot (any config with active=False)
