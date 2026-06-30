@@ -8,6 +8,16 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-30 (iter-86) — **Force Test Trade — backend fix + frontend button shipped**:
+  - **Backend `routes/account_routes.py:557` `POST /api/accounts/{id}/test-trade`**: Fires a 0.01-lot BUY through the real execution pipe (safety guardian + per-base resolver + EA bridge) to validate broker connectivity without waiting for the AI to choose a direction. Tagged `is_test=true` + `origin="test_trade"` so it's excluded from analytics. Refuses when account is paper / not owned by caller / heartbeat is >120s stale / no tradeable base symbol in MarketWatch / unknown account id.
+  - **Bugs fixed this session**:
+    1. `ImportError: cannot import name 'engine_for_account' from 'execution'` — execution module's factory is named `for_account`, not `engine_for_account`. Aliased on import.
+    2. `safety_guardian.audit_pre_trade` was rejecting the test signal with `risk_inputs_present: lot=0.01 entry=0 sl=0`. The endpoint now fetches a live price via `market.get_quote` (falls back to sane defaults — 2400/60000/1.10 for XAUUSD/BTCUSD/EURUSD) and stamps `entry_price`, `stop_loss`, `take_profit` on the signal before handing it to the engine.
+  - **Frontend `Accounts.jsx`**: Yellow "FORCE TRADE" button (data-testid `force-test-trade-<account_number>`) rendered between TEST and ROTATE for every live account. Click → native confirm dialog → POST `/api/accounts/{id}/test-trade` → toast with `data.message`. Hidden on paper accounts (nothing to validate). `Zap as Lightning` lucide icon imported.
+  - **Tests**: `test_iter86_test_trade.py` — 6/6 passing (happy path persists is_test+origin tags; paper→400; stale EA→409; cross-user→403; no tradeable base→409; unknown id→404). Curated regression suite **iter-78→iter-86: 75/75 green**.
+  - **Testing agent iteration 33**: full backend + frontend regression — **100% pass rate**, no critical or minor issues, FORCE TRADE button verified end-to-end via Playwright click → live trade_id returned from /accounts/<id>/test-trade.
+
+
 - 2026-06-30 (iter-85) — **EA v1.36 — token auto-load from `STOIC-Token.txt`** (closes the loop on the PowerShell installer):
   - `input string BridgeToken` declaration kept (so manual paste in MT5 inputs dialog still works as override).
   - New global `string EffectiveToken` + helper `ResolveBridgeToken()` — at `OnInit()` resolves the active bridge token from one of:
