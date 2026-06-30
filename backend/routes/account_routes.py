@@ -549,3 +549,135 @@ async def set_symbol_suffix(account_id: str, payload: dict,
         "message": (f"Suffix '{raw}' set" if raw else "Suffix cleared")
                    + (" + trading re-enabled" if was_blocked else ""),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# iter-86 · Test trade — proves end-to-end execution per account
+# ─────────────────────────────────────────────────────────────────────────
+@router.post("/{account_id}/test-trade")
+async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
+    """Fire a tiny 0.01-lot BUY with a tight TP to validate the full execution
+    pipe on demand — no need to wait for the AI to choose BUY/SELL.
+
+    What it does:
+      · BUY 0.01 lots of XAUUSD (or BTCUSD if account is on OnEquity / a
+        broker without gold in MarketWatch).
+      · TP set ~3 USD above the live ask (closes in seconds when price ticks
+        up); SL set ~30 USD below (wide buffer — we don't actually want this
+        to take a loss, just to validate routing).
+      · Bypasses the AI signal generator entirely. Still goes through the
+        iter-82 per-base resolver, safety guardian, and EA bridge — so a
+        green test trade confirms EVERYTHING in the live pipeline works.
+      · Tagged `origin="test_trade"` + `is_test=true` so it's excluded from
+        win-rate, PnL and analytics dashboards.
+
+    Refuses to fire if:
+      · Account not owned by caller.
+      · Paper account (use the bot directly — no execution pipe to validate).
+      · Heartbeat is stale > 120s (the EA needs to be alive to pick it up).
+      · The base symbol isn't offered by the broker (per-base resolver
+        returns None).
+    """
+    db = get_db()
+    oid = parse_object_id(account_id, "Account")
+    account = await db.accounts.find_one({"_id": oid})
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.get("user_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Account not yours")
+    if account.get("mode") == "paper":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "paper_account",
+                    "message": "Test trades are for validating the MT5 execution "
+                               "pipeline — paper accounts have nothing to test."},
+        )
+
+    # Heartbeat freshness gate (≤2 min)
+    hb = account.get("last_heartbeat")
+    if hb:
+        try:
+            hb_dt = datetime.fromisoformat(hb.replace("Z", "+00:00"))
+            age_s = (datetime.now(timezone.utc) - hb_dt).total_seconds()
+            if age_s > 120:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "stale_ea",
+                            "message": f"EA hasn't checked in for {int(age_s)}s. Open MT5 + ensure AutoTrading is ON, then retry."},
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # Pick a base symbol the broker actually offers.
+    from broker_symbol_detector import resolve_broker_symbol
+    available = account.get("available_symbols")
+    chosen_base = None
+    for candidate in ("XAUUSD", "BTCUSD", "EURUSD"):
+        if resolve_broker_symbol(candidate, available, account.get("auto_detected_symbol_suffix") or ""):
+            chosen_base = candidate
+            break
+    if chosen_base is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "no_tradeable_symbol",
+                    "message": "Broker's MarketWatch doesn't list XAUUSD, BTCUSD, or EURUSD. Add one in MT5 (right-click MarketWatch → Show All)."},
+        )
+
+    # Compose a tiny BUY signal. TP/SL are deliberately small/wide so the
+    # trade closes quickly via TP in normal liquid markets but never takes
+    # a meaningful loss if it sits open.
+    signal = {
+        "symbol": chosen_base,
+        "action": "BUY",
+        "lot_size": 0.01,
+        "confidence": 99,
+        "tp_pips": 30 if chosen_base == "XAUUSD" else 50,
+        "sl_pips": 300 if chosen_base == "XAUUSD" else 500,
+        "origin": "test_trade",
+        "is_test": True,
+        "test_initiated_by": user.get("email"),
+        "reason": "Manual test trade — validates execution pipeline (iter-86).",
+    }
+
+    from execution import engine_for_account
+    engine = engine_for_account(account)
+    try:
+        result = await engine.execute(
+            user_id=user["id"], account=account, signal=signal,
+            max_concurrent=999,           # bypass concurrent cap for test
+            cfg_account_id=account_id,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "execution_error", "message": str(e)},
+        )
+
+    if "blocked" in result:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": result["blocked"],
+                    "message": f"Test trade refused at execution layer: {result['blocked']}",
+                    "context": result},
+        )
+
+    # Mark the persisted trade as a test so analytics ignore it.
+    if result.get("id"):
+        await db.trades.update_one(
+            {"_id": ObjectId(result["id"])},
+            {"$set": {"is_test": True, "origin": "test_trade"}},
+        )
+
+    return {
+        "ok": True,
+        "trade_id": result.get("id"),
+        "symbol": result.get("symbol"),
+        "lot_size": signal["lot_size"],
+        "message": (
+            f"Test trade queued: BUY 0.01 {result.get('symbol')}. "
+            "The EA will pick it up on the next poll (~10s). "
+            "Watch the Trades page to see fill + close — it should close via TP within seconds in liquid markets."
+        ),
+    }
