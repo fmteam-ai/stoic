@@ -8,8 +8,8 @@ import { StoicMark } from "@/components/StoicLogo";
 export default function Login() {
     const navigate = useNavigate();
     const { login, resendActivation } = useAuth();
-    const [email, setEmail] = useState("admin@trading.bot");
-    const [password, setPassword] = useState("admin123");
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
     const [totpCode, setTotpCode] = useState("");
     const [needs2fa, setNeeds2fa] = useState(false);
     const [error, setError] = useState("");
@@ -226,13 +226,6 @@ export default function Login() {
                             className="font-mono text-[10px] text-[#FFD700] tracking-widest hover:underline">
                             EARN 20% RECURRING · BECOME AN AFFILIATE →
                         </Link>
-                    </div>
-
-                    <div className="mt-10 pt-6 border-t border-[#1F1F1F]">
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">DEMO CREDENTIALS</div>
-                        <div className="font-mono text-xs text-[#A1A1AA]">
-                            admin@trading.bot / admin123
-                        </div>
                     </div>
                 </div>
             </div>

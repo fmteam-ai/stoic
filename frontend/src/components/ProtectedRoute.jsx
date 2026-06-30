@@ -10,7 +10,7 @@ export function ProtectedRoute({ children, requireAdmin = false }) {
             </div>
         );
     }
-    if (user === false) return <Navigate to="/login" replace />;
+    if (user === false) return <Navigate to="/welcome" replace />;
     if (requireAdmin && user?.role !== "admin") return <Navigate to="/" replace />;
     return children;
 }

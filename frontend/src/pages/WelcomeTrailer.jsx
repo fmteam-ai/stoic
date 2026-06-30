@@ -166,11 +166,16 @@ export default function WelcomeTrailer() {
 
             {/* Skip button — top-right (hidden while intro poster is shown) */}
             {started && (
-                <div className="trailer-skip">
+                <div className="trailer-skip" style={{ display: "flex", gap: "0.75rem" }}>
                     <button className="cta-secondary"
                             onClick={() => nav("/login")}
                             data-testid="trailer-skip">
-                        Skip → Sign in
+                        Sign in
+                    </button>
+                    <button className="cta-secondary"
+                            onClick={() => nav("/register")}
+                            data-testid="trailer-create-account">
+                        Create account
                     </button>
                 </div>
             )}
@@ -212,7 +217,13 @@ export default function WelcomeTrailer() {
                             className="cta-secondary"
                             onClick={() => nav("/login")}
                             data-testid="trailer-skip-intro">
-                            Skip → Sign in
+                            Sign in
+                        </button>
+                        <button
+                            className="cta-secondary"
+                            onClick={() => nav("/register")}
+                            data-testid="trailer-create-account-intro">
+                            Create account
                         </button>
                     </div>
                 </div>
