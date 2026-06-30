@@ -69,6 +69,12 @@
 //|         Fixes the "added a new broker, EA emitted symbols once   |
 //|         in a noisy moment, backend learned the wrong suffix and  |
 //|         then had to wait an hour for the next sample" bug.       |
+//| v1.36 — Auto-read bridge token from MQL5\Files\STOIC-Token.txt   |
+//|         when the inputs field is empty/placeholder. Pairs with   |
+//|         the PowerShell STOIC-Installer.ps1: user runs one shell  |
+//|         command on their VPS, installer deploys EA + writes      |
+//|         token to the file, EA picks it up on attach. Zero manual |
+//|         paste required. (Manual paste still works as override.)  |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
 //| v1.33 — Added .e/.E suffix variants (OnEquity ECN accounts).      |
@@ -90,14 +96,14 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.35"
+#property version   "1.36"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.35"
+#define EA_CLIENT_VERSION "1.36"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -113,6 +119,59 @@ datetime lastPoll              = 0;
 datetime lastHistorySweep      = 0;
 datetime lastReportedDealTime  = 0;   // high-watermark — never re-push deals older than this
 
+// EA v1.36 · Resolved bridge token. `input string BridgeToken` is read-only
+// post-init in MQL5, so we copy the resolved value (either the user-pasted
+// input OR the contents of MQL5\Files\STOIC-Token.txt deployed by the
+// STOIC-Installer.ps1) into this mutable global at OnInit() and use it
+// everywhere downstream. This closes the loop on the PowerShell installer:
+// the user pastes one PowerShell line on their VPS, the installer drops the
+// token into the right file, the EA picks it up at attach — zero manual
+// paste in the MT5 inputs dialog required.
+string EffectiveToken = "";
+
+//+------------------------------------------------------------------+
+// Resolve the bridge token from input OR the auto-installer drop file.
+// Returns "" if neither source has a usable token (user needs to paste).
+string ResolveBridgeToken() {
+   string input_trim = BridgeToken;
+   StringTrimLeft(input_trim);
+   StringTrimRight(input_trim);
+   bool input_usable = (StringLen(input_trim) > 0
+                        && input_trim != "PASTE_YOUR_BRIDGE_TOKEN_HERE");
+   if (input_usable) {
+      Print("STOIC: using bridge token from EA inputs dialog.");
+      return input_trim;
+   }
+   // Fallback to the file dropped by STOIC-Installer.ps1.
+   // MQL5 sandboxes file I/O to MQL5\Files by default.
+   if (!FileIsExist("STOIC-Token.txt")) {
+      Print("STOIC: WARNING — no token in EA inputs AND no STOIC-Token.txt found in MQL5\\Files. Heartbeats will be rejected. Either paste BridgeToken in inputs, or run the PowerShell auto-installer from the dashboard.");
+      return "";
+   }
+   int fh = FileOpen("STOIC-Token.txt", FILE_READ | FILE_TXT | FILE_ANSI);
+   if (fh == INVALID_HANDLE) {
+      Print("STOIC: WARNING — STOIC-Token.txt exists but FileOpen failed (", GetLastError(), ").");
+      return "";
+   }
+   string token = "";
+   while (!FileIsEnding(fh)) {
+      string line = FileReadString(fh);
+      StringTrimLeft(line); StringTrimRight(line);
+      // Skip blank lines and comment lines written by the installer.
+      if (StringLen(line) == 0) continue;
+      if (StringGetCharacter(line, 0) == '#') continue;
+      token = line;
+      break;  // first non-comment, non-blank line is the token
+   }
+   FileClose(fh);
+   if (StringLen(token) == 0) {
+      Print("STOIC: WARNING — STOIC-Token.txt is empty or comments-only.");
+      return "";
+   }
+   Print("STOIC: bridge token auto-loaded from MQL5\\Files\\STOIC-Token.txt (length=", StringLen(token), ").");
+   return token;
+}
+
 //+------------------------------------------------------------------+
 int OnInit() {
    EventSetTimer(PollSeconds);
@@ -124,7 +183,9 @@ int OnInit() {
    // can stream the MarketWatch inventory aggressively for the first 10 min
    // (suffix discovery converges quickly on a freshly attached account).
    _ea_boot_time = TimeCurrent();
-   Print("STOIC Bridge EA v1.35 started. Polling: ", ServerUrl);
+   // EA v1.36: resolve token from inputs OR auto-installer drop file.
+   EffectiveToken = ResolveBridgeToken();
+   Print("STOIC Bridge EA v1.36 started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -189,7 +250,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
       "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
       "\"commission\":%.2f,\"swap\":%.2f,"
       "\"deal_time\":%I64d,\"magic\":%I64d}",
-      BridgeToken, position_id, deal_id,
+      EffectiveToken, position_id, deal_id,
       entry_str, symbol, action,
       volume, price, profit, commission, swap, deal_time, magic);
 
@@ -251,7 +312,7 @@ void SweepDealHistory() {
          "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
          "\"commission\":%.2f,\"swap\":%.2f,"
          "\"deal_time\":%I64d,\"magic\":%I64d}",
-         BridgeToken, position_id, deal_id,
+         EffectiveToken, position_id, deal_id,
          entry_str, symbol, action,
          volume, price, profit, commission, swap, deal_time, magic);
 
@@ -500,13 +561,13 @@ void SendHeartbeat() {
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
       "\"positions\":%s,\"client_version\":\"%s\","
       "\"available_symbols\":%s}",
-      BridgeToken, balance, equity, openPos, spreads, login, ccy, positions,
+      EffectiveToken, balance, equity, openPos, spreads, login, ccy, positions,
       EA_CLIENT_VERSION, CACHED_AVAILABLE_SYMBOLS);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 
 void PollPendingTrades() {
-   string body = StringFormat("{\"bridge_token\":\"%s\"}", BridgeToken);
+   string body = StringFormat("{\"bridge_token\":\"%s\"}", EffectiveToken);
    string resp = HttpPost(ServerUrl + "/api/bridge/poll-trades", body);
    if (StringLen(resp) == 0) return;
 
@@ -622,7 +683,7 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    if (broker_symbol == "") {
       string body = StringFormat(
          "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":0,\"status\":\"failed\",\"entry_price\":0.0,\"error\":\"symbol_not_found:%s\"}",
-         BridgeToken, trade_id, symbol);
+         EffectiveToken, trade_id, symbol);
       HttpPost(ServerUrl + "/api/bridge/report", body);
       Print("[v1.29] ExecuteTrade aborted — broker has no symbol matching '", symbol, "' (tried bare + 18 suffixes)");
       return;
@@ -648,7 +709,7 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
 
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":%I64u,\"status\":\"%s\",\"entry_price\":%.5f,\"error\":\"%s\"}",
-      BridgeToken, trade_id, res.order, status, res.price, err);
+      EffectiveToken, trade_id, res.order, status, res.price, err);
    HttpPost(ServerUrl + "/api/bridge/report", body);
 }
 
@@ -678,7 +739,7 @@ void ClosePosition(string trade_id, long ticket) {
    double pnl = PositionGetDouble(POSITION_PROFIT);
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"status\":\"closed\",\"exit_price\":%.5f,\"pnl\":%.2f}",
-      BridgeToken, trade_id, res.price, pnl);
+      EffectiveToken, trade_id, res.price, pnl);
    HttpPost(ServerUrl + "/api/bridge/report", body);
 }
 
@@ -702,7 +763,7 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl) {
 
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"MODIFY_SL\",\"success\":%s,\"new_sl\":%.5f,\"error\":\"%s\"}",
-      BridgeToken, trade_id, (success ? "true" : "false"), new_sl, err);
+      EffectiveToken, trade_id, (success ? "true" : "false"), new_sl, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
    if (success) Print("STOIC: SL modified ticket=", ticket, " new_sl=", new_sl);
 }
@@ -741,7 +802,7 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol) {
 
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":%s,\"new_volume\":%.2f,\"error\":\"%s\"}",
-      BridgeToken, trade_id, (success ? "true" : "false"), new_vol, err);
+      EffectiveToken, trade_id, (success ? "true" : "false"), new_vol, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
    if (success) Print("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", new_vol);
 }

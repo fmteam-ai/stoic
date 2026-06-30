@@ -8,6 +8,19 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-30 (iter-85) — **EA v1.36 — token auto-load from `STOIC-Token.txt`** (closes the loop on the PowerShell installer):
+  - `input string BridgeToken` declaration kept (so manual paste in MT5 inputs dialog still works as override).
+  - New global `string EffectiveToken` + helper `ResolveBridgeToken()` — at `OnInit()` resolves the active bridge token from one of:
+    1. Trimmed input value (if not empty AND not the placeholder `"PASTE_YOUR_BRIDGE_TOKEN_HERE"`).
+    2. `MQL5\Files\STOIC-Token.txt` — the file written by `STOIC-Installer.ps1`. Reader skips `#` comment lines and blank lines (the installer prepends an audit header). First non-comment, non-blank line is the token.
+    3. Empty string + `Print(...)` warning telling the user to either paste in inputs OR run the PowerShell installer.
+  - All outbound HTTP body builders (`SendHeartbeat`, `Open`, `Close`, `Modify SL`, `Partial Close`, `Trade Ack`, `Settled Ack`, deal-history reporter — 10 call sites) now build the JSON with `EffectiveToken` instead of the read-only `BridgeToken` input.
+  - Token resolution happens BEFORE the first `SendHeartbeat()` call in `OnInit()` (locked in by a regression test) so the very first heartbeat carries the right token.
+  - Version bumped to 1.36 in 3 spots inside the EA + `LATEST_EA` in `bot_routes.py` + `diagnostic_routes.py` + `ea_latest_version` in `setup_routes.py:claim-pairing` + `LATEST_EA_VERSION` in `Accounts.jsx`.
+  - **Tests** (`test_iter85_ea_token_autoload.py`): 13/13 — version coherence across `#property`/`#define`/`Print()`/served-file/route constants; ResolveBridgeToken helper presence + comment+blank-line skip; `EffectiveToken` global declared; OnInit assigns before first heartbeat; input declaration preserved; no leftover positional `BridgeToken,` arg sites; heartbeat uses EffectiveToken; served file md5 matches local; claim-pairing advertises v1.36.
+  - **Curated regression (iter-78/79/80/82/83/84/85): 69/69 green.**
+
+
 - 2026-06-30 (iter-84) — **PowerShell auto-installer + pairing-token flow**:
   - **Backend `routes/setup_routes.py`** with 3 endpoints:
     - `POST /api/setup/pairing-token` (auth'd) — issues a single-use 15-min UUID linked to one account. Re-issuing invalidates the previous outstanding token. Paper accounts rejected (no MT5 to install into).

@@ -967,7 +967,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.35"
+    LATEST_EA = "1.36"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:
