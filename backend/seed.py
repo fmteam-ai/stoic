@@ -95,33 +95,34 @@ async def ensure_indexes():
     except Exception:
         pass  # index may already exist with different settings
 
-    # --- Mongo Time-Series collections (TimescaleDB substitute) ---
-    # Built-in since Mongo 5.0 — auto-bucketed, columnar storage, blazing fast
-    # for time-windowed queries. Same RAM footprint as a regular insert.
+    # --- High-volume tick / signal history collections -------------------
+    # NOTE: We deliberately do NOT use MongoDB time-series collections here.
+    # On managed Atlas deployments, the dump-and-restore migration path the
+    # platform uses cannot write to the internal `system.buckets.*` namespaces
+    # (the restore user lacks the privileged role), which broke our first
+    # production deploy (see iter-89 root cause). Regular collections + a
+    # TTL index on `ts` give us identical auto-purge behaviour with a
+    # universally-portable schema.
     existing = await db.list_collection_names()
     if "price_ticks" not in existing:
         try:
-            await db.create_collection(
-                "price_ticks",
-                timeseries={
-                    "timeField": "ts",
-                    "metaField": "symbol",
-                    "granularity": "seconds",
-                },
-                expireAfterSeconds=60 * 60 * 24 * 7,  # auto-purge 7d
-            )
-        except Exception:
-            pass  # already exists / older Mongo — fall back silently
-    if "signal_history" not in existing:
-        try:
-            await db.create_collection(
-                "signal_history",
-                timeseries={
-                    "timeField": "ts",
-                    "metaField": "user_symbol",
-                    "granularity": "minutes",
-                },
-                expireAfterSeconds=60 * 60 * 24 * 90,  # 90d
-            )
+            await db.create_collection("price_ticks")
         except Exception:
             pass
+    try:
+        # auto-purge 7 days — matches the old timeseries expireAfterSeconds
+        await db.price_ticks.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 7)
+        await db.price_ticks.create_index([("symbol", 1), ("ts", -1)])
+    except Exception:
+        pass
+    if "signal_history" not in existing:
+        try:
+            await db.create_collection("signal_history")
+        except Exception:
+            pass
+    try:
+        # auto-purge 90 days
+        await db.signal_history.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 90)
+        await db.signal_history.create_index([("user_symbol", 1), ("ts", -1)])
+    except Exception:
+        pass
