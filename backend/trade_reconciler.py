@@ -31,6 +31,14 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
     db = get_db()
     open_set = {int(t) for t in (open_tickets or []) if t is not None}
 
+    # GRACE WINDOW (iter-90): trades opened in the last 45 seconds are skipped.
+    # The EA fills the order on broker, then sends a confirmation heartbeat —
+    # there is a short window where the trade exists in DB with an mt5_ticket
+    # but the next heartbeat hasn't included it in `positions` yet. Reaping
+    # those would close the position in DB while the broker is still running it.
+    from datetime import timedelta
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()
+
     # Orphan-able set:
     #   • status="open" with a real ticket (the original bug — SL hit, EA missed report)
     #   • status="pending" with close_requested=True and a real ticket (user clicked
@@ -38,7 +46,8 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
     cursor = db.trades.find({
         "account_id": account_id,
         "$or": [
-            {"status": "open", "mt5_ticket": {"$ne": None}},
+            {"status": "open", "mt5_ticket": {"$ne": None},
+             "$or": [{"opened_at": {"$lt": cutoff_iso}}, {"opened_at": None}]},
             {"status": "pending", "close_requested": True, "mt5_ticket": {"$ne": None}},
         ],
     })

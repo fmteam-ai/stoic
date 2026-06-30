@@ -120,7 +120,14 @@ async def heartbeat(payload: BridgeHeartbeat):
     # the reconciler keeps working on every heartbeat. Without this, the DB's
     # `open_tickets` would be permanently STUCK at whatever the last legacy
     # heartbeat sent (the original 696559793... bug).
-    if payload.open_tickets is None and payload.positions:
+    #
+    # `is not None` (not truthiness) matters: an EXPLICITLY-EMPTY positions
+    # array means "broker has zero open positions" — we must let that fall
+    # through to reconcile so orphans in the DB get closed. The original
+    # `and payload.positions:` check silently bypassed reconciliation when
+    # the broker had nothing open, leaving the 2 orphans we just hit
+    # (iter-90: VTMarkets + Tauro showing open in UI, gone on broker).
+    if payload.open_tickets is None and payload.positions is not None:
         payload.open_tickets = [int(p.ticket) for p in payload.positions
                                 if getattr(p, "ticket", None) is not None]
 

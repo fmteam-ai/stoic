@@ -668,9 +668,16 @@ async def start_bot(account_id: Optional[str] = None, user=Depends(get_current_u
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
     await _get_or_create_config(db, user["id"], account_id)
+    # CRITICAL: re-enabling a bot must clear the panic/circuit-breaker trip
+    # markers, otherwise the UI keeps showing "PANIC LOCK" forever even
+    # though `active=True` (iter-91 bug). The bot health doctor treats any
+    # bot_config with `tripped_at` set as tripped regardless of `active`.
     await db.bot_configs.update_one(
         _config_filter(user["id"], account_id),
-        {"$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {
+            "$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()},
+            "$unset": {"tripped_at": "", "tripped_reason": ""},
+        },
     )
     return {"active": True, "account_id": account_id}
 
