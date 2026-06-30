@@ -390,7 +390,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         if isinstance(kv, (int, float)) and kv != 0:
             bias_votes += 1 if kv > 0 else -1
         cp = indicators.get("current_price")
-        ma200 = indicators.get("ma_200") or indicators.get("ma200")
+        ma200 = indicators.get("ma_200") or indicators.get("ma200") or indicators.get("sma_200")
         if cp and ma200:
             bias_votes += 1 if cp > ma200 else -1
         dxy_dir = (dxy_feat or {}).get("regime") if dxy_feat else None
