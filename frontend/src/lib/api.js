@@ -16,6 +16,9 @@ export function formatApiError(err) {
     if (typeof detail === "string") return detail;
     if (Array.isArray(detail))
         return detail.map(e => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e))).filter(Boolean).join(" ");
+    // Structured error: backend now returns {code, message, ...} for friendly
+    // surfaces — duplicate_account, account_suspended, terms_required, etc.
+    if (detail && typeof detail.message === "string") return detail.message;
     if (detail && typeof detail.msg === "string") return detail.msg;
     return String(detail);
 }

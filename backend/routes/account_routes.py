@@ -84,6 +84,60 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         if not allowed:
             raise HTTPException(status_code=403, detail=err)
 
+    # iter-83 · Uniqueness guard. The same (broker, account_number) pair must
+    # not exist twice — when the same EA's heartbeats hit two account docs
+    # bot_configs split across them and the bot can double-fire trades on the
+    # real broker account (see STARTRADER #1610095364 duplicate observed in
+    # prod). Paper accounts are exempt (their `account_number` is a synthetic
+    # `PAPER1/PAPER2/...` slug per user). Admins are NOT exempt — there's no
+    # legitimate reason to register the same live account twice.
+    if not is_paper and payload.account_number:
+        acct_num = str(payload.account_number).strip()
+        # Within this user: hard block — re-adding their own broker account.
+        own_dup = await db.accounts.find_one({
+            "user_id": user["id"],
+            "broker": payload.broker,
+            "account_number": acct_num,
+            "mode": {"$ne": "paper"},
+        })
+        if own_dup:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "duplicate_account",
+                    "message": (
+                        f"You already have {payload.broker} account #{acct_num} "
+                        "connected. To re-pair the EA, rotate the bridge token "
+                        "from the existing account's menu instead of re-adding."
+                    ),
+                    "existing_account_id": str(own_dup["_id"]),
+                },
+            )
+        # Cross-user: only block if the OTHER user's EA is actively heartbeating
+        # (within the last 24h). A long-abandoned record shouldn't lock the
+        # broker account out for a new owner who legitimately took it over.
+        from datetime import timedelta
+        active_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        cross_dup = await db.accounts.find_one({
+            "user_id": {"$ne": user["id"]},
+            "broker": payload.broker,
+            "account_number": acct_num,
+            "mode": {"$ne": "paper"},
+            "last_heartbeat": {"$gte": active_cutoff},
+        })
+        if cross_dup:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "account_in_use",
+                    "message": (
+                        f"{payload.broker} account #{acct_num} is already linked "
+                        "to another active STOIC user. If this account belongs "
+                        "to you, contact support to reclaim it."
+                    ),
+                },
+            )
+
     starting = float(payload.initial_balance) if is_paper else 0.0
 
     creds = {}
