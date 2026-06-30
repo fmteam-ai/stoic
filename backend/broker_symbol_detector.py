@@ -114,3 +114,56 @@ def infer_broker_suffix(available_symbols: list[str]) -> dict:
         "matched_symbols": sorted(set(by_suffix_examples[winner]))[:10],
         "sample_size": len(available_symbols),
     }
+
+
+def resolve_broker_symbol(
+    base_symbol: str,
+    available_symbols: list[str] | None,
+    suffix_fallback: str = "",
+) -> str | None:
+    """Resolve the exact broker ticker for a base symbol.
+
+    The "one suffix per broker" model breaks on mixed-convention brokers
+    (e.g. VTMarkets: forex pairs are bare `EURUSD`, but gold is
+    `XAUUSD-ECN`). Per-base resolution looks at the actual MarketWatch
+    list and picks the entry whose stripped form matches `base_symbol`.
+
+    Args:
+        base_symbol: STOIC-internal symbol (e.g. "XAUUSD", "BTCUSD").
+        available_symbols: The broker's MarketWatch list as reported by
+            the EA. May be None/empty when the EA hasn't reported yet.
+        suffix_fallback: If `available_symbols` is empty, fall back to
+            the broker-wide auto-detected suffix.
+
+    Returns:
+        The exact broker ticker to send to the broker (e.g. "XAUUSD-ECN",
+        "XAUUSD.fx", "XAUUSD#"), OR `None` if the base isn't offered by
+        the broker (caller should NOT send the order — execution will
+        fail with symbol_not_found).
+    """
+    if not base_symbol:
+        return None
+    base_upper = base_symbol.upper()
+
+    # Path 1: per-base lookup using actual MarketWatch inventory (preferred)
+    if available_symbols:
+        # Prefer the BEST match: shortest tail (so plain `XAUUSD` beats
+        # `XAUUSDmicro` if both exist); then alphabetical for determinism.
+        candidates: list[tuple[int, str]] = []
+        for name in available_symbols:
+            if not isinstance(name, str):
+                continue
+            stripped = name.strip()
+            if not stripped:
+                continue
+            split = _split_base_suffix(stripped)
+            if split and split[0] == base_upper:
+                candidates.append((len(split[1]), stripped))
+        if candidates:
+            candidates.sort()
+            return candidates[0][1]
+        # MarketWatch is known AND base not in it → broker doesn't offer it.
+        return None
+
+    # Path 2: no MarketWatch data yet — best-effort using broker-wide suffix
+    return base_symbol + (suffix_fallback or "")

@@ -101,17 +101,39 @@ class MT5BridgeEngine(ExecutionEngine):
         #   2. `auto_detected_symbol_suffix`         (from EA v1.34 MarketWatch
         #                                             scan via broker_symbol_detector)
         #   3. bare base name                        (legacy fallback)
-        # User override wins so a knowledgeable user can always force a
-        # specific name when the auto-detector picks something wrong.
+        # iter-82 · Mixed-convention brokers (e.g. VTMarkets: forex pairs are
+        # bare `EURUSD` but gold is `XAUUSD-ECN`) break the "one suffix per
+        # broker" model. When the EA has reported `available_symbols`, prefer
+        # the per-base resolver — it looks up the EXACT broker ticker for the
+        # base we want to trade, regardless of suffix convention drift.
+        # Resolution order: manual → per-base from MarketWatch → broker-wide
+        # auto suffix → bare base.
+        from broker_symbol_detector import resolve_broker_symbol
         base_symbol = signal["symbol"]
         user_suffix = (account.get("symbol_suffix") or "").strip()
+        auto_suffix = (account.get("auto_detected_symbol_suffix") or "").strip()
+        available = account.get("available_symbols") or None
+
         if user_suffix:
+            broker_symbol = base_symbol + user_suffix
             suffix = user_suffix
             suffix_source = "manual"
         else:
-            suffix = (account.get("auto_detected_symbol_suffix") or "").strip()
-            suffix_source = "auto" if suffix else "none"
-        broker_symbol = (base_symbol + suffix) if suffix else base_symbol
+            resolved = resolve_broker_symbol(base_symbol, available, auto_suffix)
+            if resolved is None and available:
+                # MarketWatch is known AND base isn't in it → broker doesn't
+                # offer it. Hard-fail instead of sending an order that will
+                # 100% bounce back symbol_not_found.
+                logger.warning(
+                    "Skipping %s on account %s — base symbol not in MarketWatch (%d syms)",
+                    base_symbol, account.get("_id"), len(available),
+                )
+                return {"blocked": "symbol_not_offered_by_broker",
+                        "base_symbol": base_symbol,
+                        "available_count": len(available)}
+            broker_symbol = resolved or base_symbol
+            suffix = broker_symbol[len(base_symbol):] if broker_symbol.upper().startswith(base_symbol) else ""
+            suffix_source = "per_base" if available else ("auto" if auto_suffix else "none")
 
         trade_doc = {
             "user_id": user_id,
