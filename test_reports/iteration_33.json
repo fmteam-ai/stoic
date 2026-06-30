@@ -1,0 +1,41 @@
+{
+  "summary": "Comprehensive backend + frontend regression for iter-78 → iter-86 (Admin Moderation, Email Activation, Forgot/Reset Password, Per-base Symbol Resolver, Account Uniqueness Guard, Pairing Flow, MT5 EA v1.36 token auto-load, iter-86 Force Test Trade). Backend: 75/75 pytest pass (test_iter78_admin_moderation 9, test_iter79_activation_flow 9, test_iter80_password_reset 9, test_iter82_per_base_symbol_resolution 13, test_iter83_account_uniqueness_guard 5, test_iter84_pairing_flow 11, test_iter85_ea_token_autoload 13, test_iter86_test_trade 6). Frontend (Playwright on public preview URL): Login → admin@trading.bot/admin123 → 200 cookie set, dashboard renders. /accounts: ADD ACCOUNT button + DOWNLOAD EA v1.36 link both present; 5 FORCE TRADE buttons rendered with correct testid pattern force-test-trade-<account_number> (Start Trader/OnEquity/Tauro/VTMarkets/RoboForex — paper Kraken excluded). Clicked first FORCE TRADE → window.confirm shown ('Fire a small test trade…') → accepted → POST /api/accounts/{id}/test-trade returned 200 {ok:true, trade_id:6a438d3e61fa610aae31f6ec, symbol:XAUUSD, lot_size:0.01}. /terms renders 14KB markdown with 0 inline <script> in content area (DOMPurify defense verified). /forgot-password renders email input. /verify-email?token=invalid shows 'Activation failed' inline. /reset-password?token=x renders two password inputs. /admin/users renders user list (60+ users), per-row SUSPEND + TERMINATE buttons visible.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter78_admin_moderation.py",
+    "/app/backend/tests/test_iter79_activation_flow.py",
+    "/app/backend/tests/test_iter80_password_reset.py",
+    "/app/backend/tests/test_iter82_per_base_symbol_resolution.py",
+    "/app/backend/tests/test_iter83_account_uniqueness_guard.py",
+    "/app/backend/tests/test_iter84_pairing_flow.py",
+    "/app/backend/tests/test_iter85_ea_token_autoload.py",
+    "/app/backend/tests/test_iter86_test_trade.py",
+    "/app/test_reports/pytest/iter78_86.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Minor naming-discrepancy: review request spec calls for suspend-user-<id> / terminate-user-<id> testids on AdminUsers.jsx, but the actual implementation uses btn-suspend-<id> / btn-terminate-<id>. Buttons render and function correctly; consider aligning naming for spec consistency or update the spec.",
+    "Accounts.jsx: spec mentions a TEST button testid prefix test-account-<id>, but selector matched 0 elements. The TEST button is visually rendered (verified in screenshot between COPY and FORCE TRADE) so functionality is fine — likely the testid uses a different prefix (e.g., test-trade-<id>). Recommend adding the documented data-testid pattern to keep automated tests stable.",
+    "FORCE TRADE confirm uses native window.confirm() — works but is not a shadcn dialog, so it bypasses the app theme. For UX consistency consider switching to AlertDialog like other destructive actions.",
+    "/api/test-trade response message is verbose multi-line; consider a structured payload (trade_id + status) and let UI build the human string from i18n for easier toast layout."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (75/75 across 8 regression iters)",
+    "frontend": "100% — login, dashboard, accounts page, FORCE TRADE end-to-end (200), terms (DOMPurify clean), forgot-password, verify-email error path, reset-password, admin/users all rendered correctly"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (verified working). Email-verified=true; bypasses Resend.",
+  "seed_data_creation": "One iter-86 test trade was queued live against Start Trader account 6a435003545b76de9539d197 (XAUUSD BUY 0.01, trade_id 6a438d3e61fa610aae31f6ec) — tagged is_test=true / origin=test_trade per spec, excluded from analytics. No cleanup needed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "BLOCKER FIXED THIS SESSION (per main-agent note) verified: iter-86 POST /api/accounts/{id}/test-trade returns 200 happy-path with full trade payload — engine_for_account import alias resolved, entry_price/stop_loss/take_profit are populated via market.get_quote so safety_guardian.audit_pre_trade's risk_inputs_present check passes. All 4 live MT5 accounts on admin (Start Trader, OnEquity, Tauro/MT5 Demo, VTMarkets, RoboForex/micro) are connected with last_heartbeat <5s. Tauro/MT5 Demo (6a41c0fc...) is the active win-rate A/B test from iter-74; do NOT mutate its bot config. Public preview URL: https://risk-managed-trading-4.preview.emergentagent.com. Admin user list at /admin/users uses testid pattern btn-suspend-<id>/btn-terminate-<id> (NOT suspend-user-<id> as in spec).",
+  "rca_of_the_issue": "N/A — no issues found. iter-86 blocker was already resolved by main agent before this run; this session re-verified end-to-end via both pytest (test_iter86_test_trade.py 6/6) and live UI click (POST /accounts/<id>/test-trade returned 200 with valid trade_id and symbol=XAUUSD)."
+}

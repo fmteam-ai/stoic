@@ -8,7 +8,7 @@ import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 // of the prior .mq5, which otherwise re-downloads stale source.
 const LATEST_EA_VERSION = "1.36";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X } from "lucide-react";
+import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning } from "lucide-react";
 const Warning = AlertTriangle;
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
@@ -236,6 +236,30 @@ export default function Accounts() {
     const isFresh = (iso) => {
         if (!iso) return false;
         return (Date.now() - new Date(iso).getTime()) < 60_000;
+    };
+
+    // iter-86 · Manual "Force Test Trade" — fires a 0.01 BUY through the
+    // full execution pipe to prove the broker connection actually trades.
+    const [forcingTest, setForcingTest] = useState({});
+    const forceTestTrade = async (id, label) => {
+        if (!window.confirm(
+            `Fire a small test trade on "${label}"?\n\n` +
+            "• BUY 0.01 lot of XAUUSD/BTCUSD/EURUSD (whichever your broker offers).\n" +
+            "• Tight TP — closes within seconds in liquid markets.\n" +
+            "• Tagged as a test — excluded from win-rate & PnL analytics.\n\n" +
+            "Use this to validate that this broker can actually execute orders."
+        )) return;
+        setForcingTest(prev => ({ ...prev, [id]: true }));
+        try {
+            const { data } = await api.post(`/accounts/${id}/test-trade`);
+            toast.success("Test trade queued", {
+                description: data.message || `BUY ${data.lot_size} ${data.symbol} dispatched. Watch the Trades page.`,
+            });
+        } catch (e) {
+            toast.error("Test trade refused", { description: formatApiError(e) });
+        } finally {
+            setForcingTest(prev => ({ ...prev, [id]: false }));
+        }
     };
 
     return (
@@ -505,6 +529,15 @@ export default function Accounts() {
                                                 className="px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-50">
                                                 <PlugsConnected className="w-3.5 h-3.5" /> {testing[a.id] ? "TESTING…" : "TEST"}
                                             </button>
+                                            {a.mode !== "paper" && (
+                                                <button onClick={() => forceTestTrade(a.id, a.label)}
+                                                    disabled={!!forcingTest[a.id]}
+                                                    data-testid={`force-test-trade-${a.account_number}`}
+                                                    title="Fire a 0.01 lot test trade to validate this broker's execution path"
+                                                    className="px-3 py-2 border border-[#FFB020]/50 text-[#FFB020] hover:bg-[#FFB020]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-50">
+                                                    <Lightning className="w-3.5 h-3.5" /> {forcingTest[a.id] ? "FIRING…" : "FORCE TRADE"}
+                                                </button>
+                                            )}
                                             <button onClick={() => rotate(a.id)} data-testid={`rotate-token-${a.account_number}`}
                                                 className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
                                                 <ArrowsClockwise className="w-3.5 h-3.5" /> ROTATE

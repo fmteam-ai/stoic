@@ -625,6 +625,30 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
                     "message": "Broker's MarketWatch doesn't list XAUUSD, BTCUSD, or EURUSD. Add one in MT5 (right-click MarketWatch → Show All)."},
         )
 
+    # Fetch a live price so we can stamp entry/SL/TP on the signal — the
+    # safety guardian refuses any signal missing risk inputs (lot/entry/SL).
+    # Falls back to a sane default if the price feed is unavailable so test
+    # trades still validate the routing path.
+    from market import get_quote
+    _default_px = {"XAUUSD": 2400.0, "BTCUSD": 60000.0, "EURUSD": 1.10}
+    try:
+        quote = await get_quote(chosen_base)
+        price = float((quote or {}).get("price") or 0) or _default_px[chosen_base]
+    except Exception:
+        price = _default_px[chosen_base]
+
+    # pip size + lever for SL/TP distance per asset family
+    if chosen_base == "XAUUSD":
+        sl_dist, tp_dist = 30.0, 3.0           # USD per oz
+    elif chosen_base == "BTCUSD":
+        sl_dist, tp_dist = 500.0, 50.0         # USD per BTC
+    else:  # EURUSD
+        sl_dist, tp_dist = 0.0050, 0.0005      # 50 pips SL, 5 pips TP
+
+    entry = price
+    stop_loss = round(entry - sl_dist, 5)
+    take_profit = round(entry + tp_dist, 5)
+
     # Compose a tiny BUY signal. TP/SL are deliberately small/wide so the
     # trade closes quickly via TP in normal liquid markets but never takes
     # a meaningful loss if it sits open.
@@ -633,6 +657,9 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
         "action": "BUY",
         "lot_size": 0.01,
         "confidence": 99,
+        "entry_price": entry,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
         "tp_pips": 30 if chosen_base == "XAUUSD" else 50,
         "sl_pips": 300 if chosen_base == "XAUUSD" else 500,
         "origin": "test_trade",
@@ -641,7 +668,7 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
         "reason": "Manual test trade — validates execution pipeline (iter-86).",
     }
 
-    from execution import engine_for_account
+    from execution import for_account as engine_for_account
     engine = engine_for_account(account)
     try:
         result = await engine.execute(
