@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
+import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 
 // Bump together with backend `LATEST_EA` in bot_routes.py / diagnostic_routes.py.
 // Used in the download URL so the filename changes per release (e.g.
@@ -522,6 +523,12 @@ export default function Accounts() {
 
                                     {a.mode !== "paper" && (
                                         <CredentialsPanel account={a} onUpdate={load} onError={(e) => setErr(e)} onMessage={(m) => setMsg(m)} />
+                                    )}
+
+                                    {a.mode !== "paper" && (
+                                        <div className="mt-4">
+                                            <QuickInstallPanel accountId={a.id} accountLabel={a.label} />
+                                        </div>
                                     )}
                                 </div>
                             );

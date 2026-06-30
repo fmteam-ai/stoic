@@ -20,6 +20,7 @@ import warmer
 
 # Routers
 from routes.admin_routes import router as admin_router
+from routes.setup_routes import router as setup_router
 from routes.auth_routes import router as auth_router
 from routes.market_routes import router as market_router
 from routes.bot_routes import router as bot_router
@@ -97,8 +98,29 @@ async def ea_script():
                         })
 
 
+@api_router.get("/setup/installer.ps1")
+async def installer_script():
+    """Serve the PowerShell auto-installer for MT5 hosts.
+
+    The installer is intentionally public (no auth) — it carries no
+    secrets and only becomes useful when paired with a token via
+    POST /api/setup/claim-pairing. Surfaced as a top-level URL so users
+    can `irm <backend>/api/setup/installer.ps1 | iex` on their VPS.
+    """
+    path = Path(__file__).parent / "static" / "STOIC-Installer.ps1"
+    if not path.exists():
+        return {"error": "Installer missing"}
+    return FileResponse(path, media_type="text/plain",
+                        filename="STOIC-Installer.ps1",
+                        headers={
+                            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                            "Pragma": "no-cache",
+                        })
+
+
 # Mount routers
 api_router.include_router(admin_router)
+api_router.include_router(setup_router)
 api_router.include_router(auth_router)
 api_router.include_router(market_router)
 api_router.include_router(bot_router)

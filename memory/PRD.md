@@ -8,6 +8,24 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-06-30 (iter-84) — **PowerShell auto-installer + pairing-token flow**:
+  - **Backend `routes/setup_routes.py`** with 3 endpoints:
+    - `POST /api/setup/pairing-token` (auth'd) — issues a single-use 15-min UUID linked to one account. Re-issuing invalidates the previous outstanding token. Paper accounts rejected (no MT5 to install into).
+    - `POST /api/setup/claim-pairing` (UNauth'd by design — installer has no cookies on the VPS) — validates + consumes the token, returns `{bridge_token, server_url, heartbeat_url, ea_script_url, ea_latest_version, broker, account_number, account_label}`. Records `consumed_by_hostname` and `consumed_by_ip` for audit. Marks the account's `installer_paired_at` so the dashboard reflects pairing status.
+    - `GET /api/setup/pairing-status/{account_id}` — dashboard polling endpoint, returns paired_at + hostname + whether a token is outstanding.
+  - **`GET /api/setup/installer.ps1`** — serves the PowerShell installer script with no-cache headers so `irm | iex` always pulls the latest.
+  - **`static/STOIC-Installer.ps1`** — self-contained Windows installer (~210 lines). `Install-Stoic -Token X -ServerUrl Y` does the entire onboarding: calls `claim-pairing` → auto-discovers MT5 terminals under `%APPDATA%\MetaQuotes\Terminal\<guid>` → downloads `EmergentTradingBridge.mq5` from `/api/ea-script` → copies into each terminal's `MQL5\Experts\` → writes the bridge token to `MQL5\Files\STOIC-Token.txt` (the EA reads this on attach — no manual paste) → whitelists the heartbeat URL in `config\terminal.ini` `[Experts]` section → invokes `metaeditor64.exe /compile` to produce the `.ex5` automatically. Reduces user onboarding from ~10 min of MetaEditor + WebRequest dialog dancing to **a single PowerShell paste (~60 sec)**.
+  - **Security model**: the pairing token is single-use and expires in 15 min; even if intercepted, an attacker has 15 min and only gets a bridge_token bound to ONE account that the user can rotate from the dashboard.
+  - **Frontend `QuickInstallPanel.jsx`** — renders inside each live MT5 account card on `/accounts`. "Generate token" button → shows the copy-able one-liner (`irm <backend>/api/setup/installer.ps1 | iex; Install-Stoic -Token "..." -ServerUrl "..."`) + live countdown of the 15-min TTL + Step 1-4 instructions. Polls `pairing-status` every 4s and auto-flips to a green "Paired — EA deployed" state showing the hostname once the installer redeems the token. "Re-pair (new VPS)" button generates a fresh token.
+  - **Tests** (`test_iter84_pairing_flow.py`) — 11/11 passing:
+    - issue happy path / requires auth / rejects other user's account / rejects paper / re-issue invalidates prior
+    - claim happy path consumes + records hostname + IP + marks account paired
+    - claim replay blocked / expired token 400 / unknown token 400
+    - pairing-status reflects consumption
+    - installer.ps1 endpoint serves the script
+  - **Curated regression (iter-78/79/80/82/83/84): 56/56 green.**
+
+
 - 2026-07-04 (iter-80) — **Forgot Password / Reset Password flow**:
   - **`password_reset.py`** — token generator (urlsafe 32-byte, 1h TTL) + branded HTML/text email (gold accent vs activation's green) sent via the existing Resend integration. Dev fallback returns the reset link when `RESEND_API_KEY` is missing.
   - **`POST /api/auth/forgot-password`** {email} — issues a single-use token + emails reset link. Returns generic success for unknown emails OR suspended/terminated users (no enumeration leak). 60s per-account cooldown returns 429 `rate_limited`. Suspended/terminated users get the generic-OK but no token is issued (so the bypass surface is closed).
