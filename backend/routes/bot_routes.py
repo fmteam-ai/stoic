@@ -1070,7 +1070,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         score -= min(10, 2 * ghosts)
         issues.append({"severity": "info", "code": "ghost_trades",
                        "label": f"{ghosts} closed trade(s) missing exit price",
-                       "fix": "EA v1.36 history sweep will auto-fill these within ~60s of connecting."})
+                       "fix": f"EA v{LATEST_EA} history sweep will auto-fill these within ~60s of connecting."})
 
     # --- 6. Bot active flag (max -5, advisory) ----------------------------
     # When the user has *explicitly* paused the bot (any config with active=False)
