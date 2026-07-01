@@ -96,7 +96,7 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.36"
+#property version   "1.37"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
@@ -185,7 +185,7 @@ int OnInit() {
    _ea_boot_time = TimeCurrent();
    // EA v1.36: resolve token from inputs OR auto-installer drop file.
    EffectiveToken = ResolveBridgeToken();
-   Print("STOIC Bridge EA v1.36 started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v", EA_CLIENT_VERSION, " started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
