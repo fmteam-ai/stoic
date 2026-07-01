@@ -172,12 +172,57 @@ async def block_stats(
     # use $dateTrunc reliably without a conversion stage.
     rows = await db.safety_blocks.find({
         "user_id": user["id"], "blocked_at": {"$gte": cutoff},
-    }, projection={"blocked_at": 1}).to_list(length=10000)
+    }, projection={"blocked_at": 1, "account_id": 1, "blocked_by": 1,
+                   "symbol": 1}).to_list(length=10000)
     buckets: dict[str, int] = {}
+    # Per-account × per-reason counts so we can see WHICH account keeps
+    # tripping WHICH guard — critical for diagnosing "3 accounts silent"
+    # scenarios where blocks are unevenly distributed.
+    per_account: dict[str, dict] = {}
     for r in rows:
         ts = str(r.get("blocked_at") or "")[:10]  # YYYY-MM-DD
         if ts:
             buckets[ts] = buckets.get(ts, 0) + 1
+        acc_id = r.get("account_id") or "default"
+        reason = r.get("blocked_by") or "unknown"
+        slot = per_account.setdefault(acc_id, {"total": 0, "by_reason": {}})
+        slot["total"] += 1
+        slot["by_reason"][reason] = slot["by_reason"].get(reason, 0) + 1
+
+    # Enrich with account labels
+    acc_ids = [aid for aid in per_account.keys() if aid != "default"]
+    parsed_ids = []
+    for aid in acc_ids:
+        try:
+            parsed_ids.append(parse_object_id(aid))
+        except Exception:  # noqa: BLE001
+            pass
+    label_map: dict[str, str] = {}
+    if parsed_ids:
+        async for acc in db.accounts.find(
+            {"_id": {"$in": parsed_ids}},
+            projection={"broker": 1, "label": 1, "account_number": 1},
+        ):
+            label_map[str(acc["_id"])] = (
+                acc.get("label")
+                or f"{acc.get('broker', '?')} · {acc.get('account_number', '?')}"
+            )
+    by_account = [
+        {
+            "account_id": aid,
+            "label": label_map.get(aid, "default profile" if aid == "default" else aid),
+            "total": v["total"],
+            "top_reason": max(v["by_reason"].items(), key=lambda kv: kv[1])[0]
+                          if v["by_reason"] else None,
+            "by_reason": [
+                {"blocked_by": k, "count": c,
+                 "label": REASON_LABELS.get(k, k)}
+                for k, c in sorted(v["by_reason"].items(),
+                                   key=lambda kv: -kv[1])
+            ],
+        }
+        for aid, v in sorted(per_account.items(), key=lambda kv: -kv[1]["total"])
+    ]
     # Fill missing days with 0 so the sparkline is continuous
     by_day = []
     for i in range(days, -1, -1):
@@ -187,6 +232,7 @@ async def block_stats(
     return {
         "by_reason": by_reason,
         "by_day": by_day,
+        "by_account": by_account,
         "total": sum(r["count"] for r in by_reason),
         "thresholds": get_guardian_config(),
         "window_days": days,

@@ -296,6 +296,36 @@ export default function SafetyBlocks() {
                     </div>
                 </div>
 
+                {(stats?.by_account?.length || 0) > 0 && (
+                    <div className="border border-[#1F1F1F] p-4" data-testid="sb-per-account">
+                        <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-3">
+                            BLOCKS PER ACCOUNT ({days}D) · WHICH ACCOUNT IS SILENT?
+                        </div>
+                        <div className="space-y-2">
+                            {stats.by_account.map((row) => (
+                                <div key={row.account_id}
+                                     className="grid grid-cols-[1fr_auto_auto] gap-3 items-center py-1.5 border-b border-[#1F1F1F] last:border-0">
+                                    <div className="text-xs font-mono text-[#E4E4E7] truncate">
+                                        {row.label}
+                                    </div>
+                                    <div className="text-[10px] font-mono text-[#A1A1AA] tracking-widest whitespace-nowrap">
+                                        {row.top_reason
+                                            ? (row.by_reason[0]?.label || row.top_reason)
+                                            : "—"}
+                                    </div>
+                                    <div className="text-xs font-mono text-[#FF3B30] tabular-nums w-14 text-right">
+                                        {row.total}×
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="mt-3 text-[10px] text-[#52525B] font-mono leading-relaxed">
+                            An account with a large count here is likely the &quot;silent&quot; one — the guardian is refusing its trades.
+                            Open the reason list below and apply the suggested config to reduce future blocks.
+                        </div>
+                    </div>
+                )}
+
                 {stats?.thresholds && (
                     <details className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="sb-thresholds">
                         <summary className="cursor-pointer px-4 py-2.5 font-mono text-[10px] text-[#A1A1AA] tracking-widest hover:bg-[#0F0F0F] inline-flex items-center gap-2">
