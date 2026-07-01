@@ -193,19 +193,28 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
             summary = await reconcile_account(
                 str(acc["_id"]), authoritative_tickets, source="manual_force",
             )
-            # Also cancel never-executed pending OPEN trades (no ticket)
+            # Also cancel never-executed OPEN/pending trades that never got a
+            # broker ticket. Two states qualify:
+            #   • status="pending" + mt5_ticket=None  (never fired to broker)
+            #   • status="open"    + mt5_ticket=None  (bug state — bot recorded
+            #     the fill locally but broker never confirmed with a ticket.
+            #     The trade sits open forever, consuming risk-cap slots. Force
+            #     Sync deliberately reaps this class of orphan since there is
+            #     no broker-side position to reconcile against.)
             cancel_cursor = db.trades.find({
                 "account_id": str(acc["_id"]),
-                "status": "pending",
+                "status": {"$in": ["pending", "open"]},
                 "mt5_ticket": None,
             })
             cancelled = []
             now_iso = datetime.now(timezone.utc).isoformat()
             async for t in cancel_cursor:
+                is_open = t.get("status") == "open"
                 update = {
-                    "status": "cancelled",
+                    "status": "closed" if is_open else "cancelled",
                     "closed_at": now_iso,
-                    "close_reason": "force_cancelled_never_filled",
+                    "close_reason": ("force_reaped_ticketless_open"
+                                     if is_open else "force_cancelled_never_filled"),
                     "reconciled": True,
                     "reconciled_at": now_iso,
                 }

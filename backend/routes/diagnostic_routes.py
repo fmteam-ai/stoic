@@ -178,7 +178,12 @@ async def _check_trade_sync(db, user_id: str) -> dict:
         "user_id": user_id, "status": {"$in": ["pending", "open"]},
     })
     accs = await db.accounts.find({"user_id": user_id}).to_list(length=20)
-    broker_open = sum(int(a.get("positions_count") or 0) for a in accs)
+    # Broker vs DB drift (open trades in DB vs live heartbeat position count).
+    # The heartbeat writes `open_positions` on the account doc (bridge_routes.py
+    # line 63) — earlier versions of this diagnostic read `positions_count`,
+    # a field that was never written, so every account was reported as
+    # broker=0 and a phantom "DB drift" alert triggered on every run.
+    broker_open = sum(int(a.get("open_positions") or 0) for a in accs)
     if abs(db_open - broker_open) > 0:
         checks.append(_mk("Broker positions ↔ DB sync", "warn",
                           f"DB={db_open} · Broker reports {broker_open}",
