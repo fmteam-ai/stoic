@@ -275,10 +275,10 @@ async def heartbeat(payload: BridgeHeartbeat):
                     )
                     revived += 1
                 continue
-            opened_iso = (
-                datetime.fromtimestamp(p.time_open, tz=timezone.utc).isoformat()
-                if p.time_open else now_iso
-            )
+            # NOTE (iter-97): p.time_open comes from MT5 in broker-local
+            # epoch seconds — labelling it UTC causes timestamp drift.
+            # Use server-received UTC as the canonical opened_at instead.
+            opened_iso = now_iso
             await db.trades.insert_one({
                 "user_id": acc["user_id"],
                 "account_id": account_id,
@@ -702,11 +702,22 @@ async def external_deal(payload: BridgeExternalDeal):
                          payload.deal_id, account_id, e)
         raise HTTPException(status_code=500, detail="Failed to persist broker deal")
 
-    # Best-effort ISO timestamp from broker (unix seconds → UTC ISO).
-    if payload.deal_time:
-        deal_iso = datetime.fromtimestamp(payload.deal_time, tz=timezone.utc).isoformat()
-    else:
-        deal_iso = datetime.now(timezone.utc).isoformat()
+    # STOIC uses SERVER-RECEIVED UTC as the canonical timestamp on trade
+    # docs (opened_at / closed_at / partial_closed_at). MT5's DEAL_TIME is
+    # broker-server-LOCAL seconds since epoch — NOT true UTC. Different
+    # brokers sit in different timezones (OnEquity UTC+3, IC Markets UTC+2,
+    # etc.) and MT5 gives no timezone metadata alongside the raw epoch. If
+    # we treat that as UTC via `datetime.fromtimestamp(..., tz=utc)`, the
+    # resulting ISO string is off by the broker's timezone offset — which
+    # causes closed_at (real UTC now) to appear BEFORE opened_at (broker
+    # local labelled as UTC). Users see impossible timestamp inversions.
+    #
+    # Instead: use the receiving-server's real UTC time for the canonical
+    # field and keep the raw broker epoch in a sidecar field so we can
+    # still audit against broker records.
+    server_iso = datetime.now(timezone.utc).isoformat()
+    deal_iso = server_iso
+    broker_deal_epoch = payload.deal_time or None
 
     # 2. Look up matching STOIC trade by (account, mt5_ticket).
     existing = await db.trades.find_one({
@@ -793,6 +804,7 @@ async def external_deal(payload: BridgeExternalDeal):
             "broker": acc.get("broker", "MT5"),
             "mt5_ticket": payload.mt5_ticket,
             "opened_at": deal_iso,
+            "broker_deal_epoch": broker_deal_epoch,
             "closed_at": None,
             "origin": trade_origin,
             "magic_number": int(payload.magic or 0),
