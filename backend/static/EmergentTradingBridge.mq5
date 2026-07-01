@@ -103,7 +103,7 @@
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.36"
+#define EA_CLIENT_VERSION "1.37"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -496,12 +496,17 @@ datetime _ea_boot_time = 0;
 string CACHED_AVAILABLE_SYMBOLS = "";
 
 string BuildAvailableSymbolsJson() {
+   // iter-92 · Added broker-alias bases (GOLD, SILVER, US30, DAX40, NAS,
+   // DOW, DAX) so brokers like OnEquity/ICMR/PepperstoneRazor that publish
+   // gold as `GOLD#`/`SILVER#` instead of `XAUUSD#` are captured in the
+   // MarketWatch scan. Backend's broker_symbol_detector.BASE_ALIASES maps
+   // GOLD → XAUUSD, SILVER → XAGUSD, US30 → NAS100 (same alias family).
    string bases[] = {
-      "XAUUSD","XAGUSD","BTCUSD","ETHUSD",
+      "XAUUSD","XAGUSD","GOLD","SILVER","BTCUSD","ETHUSD",
       "EURUSD","GBPUSD","USDJPY","USDCHF","USDCAD","AUDUSD","NZDUSD",
       "EURGBP","EURJPY","GBPJPY",
       "USOIL","UKOIL","WTI","BRENT",
-      "NAS100","SPX500","GER40","UK100","JPN225"
+      "NAS100","SPX500","GER40","UK100","JPN225","US30","DAX","DAX40","NAS","DOW"
    };
    int total = SymbolsTotal(true);   // true = MarketWatch only
    string out = "[";

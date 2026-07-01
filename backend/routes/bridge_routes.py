@@ -109,7 +109,25 @@ async def heartbeat(payload: BridgeHeartbeat):
         # `XAUUSD.b`, `GOLDcfd`, `XAU/USD`). Without this, when detection
         # gives a wrong answer we have no way to recover short of asking
         # the user to dig into MetaTrader manually. Cap at 200 symbols.
-        set_doc["available_symbols"] = list(payload.available_symbols)[:200]
+        #
+        # iter-92: MERGE (union) with existing symbols instead of replacing.
+        # Legacy EAs (v1.36 and earlier) don't include broker-aliases like
+        # `GOLD#`/`SILVER#` in the MarketWatch scan (they filter against a
+        # hardcoded XAU/XAG-only bases array). Admins can now inject the
+        # missing tickers into the account doc and the next heartbeat will
+        # PRESERVE them instead of overwriting them. On EA v1.37+ the EA
+        # itself reports the aliases so no admin intervention is needed.
+        existing = list(acc.get("available_symbols") or [])
+        incoming = list(payload.available_symbols)[:200]
+        merged: list[str] = []
+        seen: set[str] = set()
+        for s in incoming + existing:
+            if isinstance(s, str) and s.strip() and s not in seen:
+                merged.append(s)
+                seen.add(s)
+                if len(merged) >= 200:
+                    break
+        set_doc["available_symbols"] = merged
         set_doc["available_symbols_at"] = now_iso
 
     # EA v1.22+: persist the ticket list so the user can later trigger

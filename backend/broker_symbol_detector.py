@@ -39,6 +39,22 @@ KNOWN_BASES = (
     "NAS100", "SPX500", "GER40", "UK100", "JPN225",
 )
 
+# iter-92 · Broker-specific aliases. Some brokers (OnEquity, IC Markets Raw,
+# Pepperstone Razor, etc.) publish gold as `GOLD#`/`GOLD.m` instead of the
+# CME-convention `XAUUSD`. STOIC internally always uses `XAUUSD` as the
+# canonical base for gold; this map lets `resolve_broker_symbol` accept the
+# broker's naming without the user having to configure aliases per-account.
+#   canonical_base → tuple of accepted alias prefixes (case-insensitive)
+BASE_ALIASES: dict[str, tuple[str, ...]] = {
+    "XAUUSD": ("XAUUSD", "GOLD"),
+    "XAGUSD": ("XAGUSD", "SILVER"),
+}
+
+
+def _aliases_for(base: str) -> tuple[str, ...]:
+    """Return every acceptable prefix for a canonical base (base itself + aliases)."""
+    return BASE_ALIASES.get(base.upper(), (base.upper(),))
+
 # Maximum total suffix length we'll trust. Anything longer is probably
 # a totally different instrument (e.g. "XAUUSDmicro_eur_cross_v2").
 MAX_SUFFIX_LEN = 6
@@ -144,11 +160,13 @@ def resolve_broker_symbol(
     if not base_symbol:
         return None
     base_upper = base_symbol.upper()
+    accepted_prefixes = _aliases_for(base_upper)
 
     # Path 1: per-base lookup using actual MarketWatch inventory (preferred)
     if available_symbols:
         # Prefer the BEST match: shortest tail (so plain `XAUUSD` beats
         # `XAUUSDmicro` if both exist); then alphabetical for determinism.
+        # iter-92: also accept broker-alias prefixes (GOLD# for XAUUSD, etc.)
         candidates: list[tuple[int, str]] = []
         for name in available_symbols:
             if not isinstance(name, str):
@@ -156,12 +174,23 @@ def resolve_broker_symbol(
             stripped = name.strip()
             if not stripped:
                 continue
-            split = _split_base_suffix(stripped)
-            if split and split[0] == base_upper:
-                candidates.append((len(split[1]), stripped))
+            upper = stripped.upper()
+            for prefix in accepted_prefixes:
+                if upper.startswith(prefix):
+                    suffix = stripped[len(prefix):]
+                    if len(suffix) <= MAX_SUFFIX_LEN and not any(
+                        c in suffix for c in (" ", "/", "\\")
+                    ):
+                        # canonical-prefix matches score better than alias
+                        # matches, so 'XAUUSD' beats 'GOLD' when both exist
+                        alias_penalty = 0 if prefix == base_upper else 1
+                        candidates.append(
+                            (alias_penalty, len(suffix), stripped)
+                        )
+                        break
         if candidates:
             candidates.sort()
-            return candidates[0][1]
+            return candidates[0][2]
         # MarketWatch is known AND base not in it → broker doesn't offer it.
         return None
 
