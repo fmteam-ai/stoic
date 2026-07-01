@@ -37,6 +37,10 @@ function priceDecimals(symbol) {
 
 function fmtPrice(symbol, p) {
     if (p == null || Number.isNaN(parseFloat(p))) return "—";
+    // Treat literal 0 as "no data" for SL/TP columns — some closed trades
+    // came in via the pre-iter93 external-deal race path and have SL=0/TP=0
+    // in the DB even though they had proper stops at the broker.
+    if (parseFloat(p) === 0) return "—";
     return parseFloat(p).toFixed(priceDecimals(symbol));
 }
 
