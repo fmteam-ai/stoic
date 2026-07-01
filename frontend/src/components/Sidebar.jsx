@@ -140,7 +140,10 @@ export function Sidebar({ onNavigate }) {
     });
     const [openMap, setOpenMap] = useState(() => {
         try {
-            const stored = JSON.parse(localStorage.getItem("stoic_sidebar_open") || "{}");
+            // iter-98: bumped storage key from `stoic_sidebar_open` → `_v2`
+            // so any user who had collapsed the INSIGHTS group (hiding Bot
+            // Health) gets a fresh default with all daily-use sections open.
+            const stored = JSON.parse(localStorage.getItem("stoic_sidebar_open_v2") || "{}");
             // Default the daily-use sections to open if no preference saved
             return { ...Object.fromEntries([...DEFAULT_OPEN].map(k => [k, true])), ...stored };
         } catch { return Object.fromEntries([...DEFAULT_OPEN].map(k => [k, true])); }
@@ -167,7 +170,7 @@ export function Sidebar({ onNavigate }) {
     const toggle = useCallback((key) => {
         setOpenMap(m => {
             const next = { ...m, [key]: !(m[key] !== false) };
-            try { localStorage.setItem("stoic_sidebar_open", JSON.stringify(next)); } catch { /* ignore */ }
+            try { localStorage.setItem("stoic_sidebar_open_v2", JSON.stringify(next)); } catch { /* ignore */ }
             return next;
         });
     }, []);
