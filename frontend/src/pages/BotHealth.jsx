@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
     RefreshCw, Activity, AlertTriangle, CheckCircle2, ShieldCheck, TrendingDown,
     Brain, Clock, FlaskConical, BarChart3, Stethoscope, Zap, Wand2, HeartPulse,
+    Wrench, Loader2,
 } from "lucide-react";
 
 const SEV_STYLE = {
@@ -67,17 +68,48 @@ function Kpi({ label, value, tone }) {
     );
 }
 
-function DiagnosticPanel({ diag }) {
+function DiagnosticPanel({ diag, onReload }) {
+    const [fixing, setFixing] = useState(false);
     if (!diag) return null;
     const total = diag.sections?.length || 0;
     const failingSections = (diag.sections || []).filter(s =>
         (s.checks || []).some(c => c.status !== "ok" && c.status !== "pass" && c.status !== null)
     );
+    const fixableCodes = diag.auto_fixable_codes || [];
+
+    const applyFixAll = async () => {
+        if (!fixableCodes.length || fixing) return;
+        setFixing(true);
+        try {
+            const r = await api.post("/diagnostic/auto-fix", { codes: fixableCodes });
+            const results = r.data?.results || {};
+            const summary = Object.entries(results).map(([k, v]) => {
+                if (v.error) return `${k}: ${v.error}`;
+                const n = v.closed ?? v.acknowledged ?? v.cleared ?? v.released ?? 0;
+                return `${k}: ${n}`;
+            }).join(" · ");
+            toast.success(`Auto-fix applied — ${summary}`);
+            if (onReload) await onReload();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally {
+            setFixing(false);
+        }
+    };
+
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="diagnostic-panel">
-            <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
+            <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2 flex-wrap">
                 <Stethoscope className="w-3.5 h-3.5 text-[#0099FF]" />
                 <span className="font-display font-bold text-sm">Live Diagnostic</span>
+                {fixableCodes.length > 0 && (
+                    <button onClick={applyFixAll} disabled={fixing}
+                        data-testid="diagnostic-panel-autofix"
+                        className="ml-2 px-2.5 py-1 border border-[#FFB000]/40 bg-[#FFB000]/10 text-[#FFB000] text-[10px] font-mono tracking-widest hover:bg-[#FFB000]/20 disabled:opacity-40 inline-flex items-center gap-1.5">
+                        {fixing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
+                        AUTO-FIX ({fixableCodes.length})
+                    </button>
+                )}
                 <span className={`ml-auto font-mono text-[10px] tracking-widest ${styleFor(diag.status === "pass" ? "healthy" : "warning").fg}`}>
                     {(diag.status || "—").toUpperCase()} · {total - failingSections.length}/{total} OK
                 </span>
@@ -505,7 +537,7 @@ export default function BotHealth() {
                 <AutoHealPanel data={data.autoHeal} onChange={load} />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <DiagnosticPanel diag={data.diagnostic} />
+                    <DiagnosticPanel diag={data.diagnostic} onReload={load} />
                     <PulsePanel pulse={data.pulse} />
                 </div>
 
