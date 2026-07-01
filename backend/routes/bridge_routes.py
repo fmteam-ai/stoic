@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import logging
 from fastapi import APIRouter, HTTPException
@@ -705,6 +705,50 @@ async def external_deal(payload: BridgeExternalDeal):
         # OPEN event — only insert if STOIC doesn't already track this ticket.
         if existing:
             return {"ok": True, "noop": "ticket_already_tracked"}
+
+        # iter-93: race-condition fix. When STOIC fires an order, execution.py
+        # inserts a trade doc with status="pending" and mt5_ticket=None. The EA
+        # then opens the position and issues TWO callbacks:
+        #   1) /bridge/report  → attaches mt5_ticket to the pending doc
+        #   2) /bridge/external-deal (this handler) → OnTradeTransaction "in"
+        # If (2) arrives before (1), the lookup above misses (no matching
+        # ticket yet) and we fall into the fresh-insert path below — which
+        # hardcodes stop_loss=0.0 and take_profit=0.0 because BridgeExternalDeal
+        # doesn't carry SL/TP fields. Result: a duplicate trade with NO stops,
+        # invisible to Safety Guardian's risk math and unclosable via the
+        # normal SL/TP mechanism. Adopt any STOIC-owned pending sibling
+        # instead of orphaning it, so the SL/TP set by the signal survive.
+        if payload.magic == STOIC_MAGIC:
+            twelve_min_ago = (datetime.now(timezone.utc) - timedelta(minutes=12)).isoformat()
+            adopt_q = {
+                "account_id": account_id,
+                "symbol": payload.symbol,
+                "action": payload.action,
+                "status": "pending",
+                "mt5_ticket": None,
+                "opened_at": {"$gte": twelve_min_ago},
+            }
+            sibling = await db.trades.find_one(adopt_q, sort=[("opened_at", -1)])
+            if sibling:
+                await db.trades.update_one(
+                    {"_id": sibling["_id"]},
+                    {"$set": {
+                        "mt5_ticket": payload.mt5_ticket,
+                        "status": "open",
+                        "entry_price": payload.price,
+                        "adopted_via_external_deal": True,
+                        "adopted_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                await ws_manager.broadcast(user_id, "trade_updated", {
+                    "trade_id": str(sibling["_id"]),
+                    "status": "open",
+                    "external_open": False,
+                    "symbol": payload.symbol,
+                    "action": payload.action,
+                })
+                return {"ok": True, "adopted": str(sibling["_id"])}
+
         trade_doc = {
             "user_id": user_id,
             "account_id": account_id,
