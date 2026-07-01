@@ -344,7 +344,10 @@ export default function Trades() {
             }
         };
         fetchQuotes();
-        const id = setInterval(fetchQuotes, 5000);
+        // iter-92 · Was 5000ms — dropped to 2000ms so live prices on open
+        // trades feel real-time. The endpoint is a cached microstructure read
+        // (no broker round-trip) so the extra requests are cheap.
+        const id = setInterval(fetchQuotes, 2000);
         return () => { cancelled = true; clearInterval(id); };
     }, [symbolsKey]);
 
