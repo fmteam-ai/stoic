@@ -507,6 +507,34 @@ export default function Accounts() {
                                     </div>
 
                                     <div className="mt-4 pt-4 border-t border-[#1F1F1F]">
+                                        {(() => {
+                                            const syms = a.available_symbols || [];
+                                            // Only warn once we've actually received a symbol list (v1.34+ EA).
+                                            // Empty list => legacy EA / never heartbeated with MarketWatch scan.
+                                            if (syms.length === 0) return null;
+                                            const hasGold = syms.some(s => /XAU|GOLD/i.test(s));
+                                            if (hasGold) return null;
+                                            return (
+                                                <div className="mb-4 p-3 border border-[#FF3B30]/40 bg-[#FF3B30]/5"
+                                                     data-testid={`missing-gold-warning-${a.account_number}`}>
+                                                    <div className="flex items-start gap-2">
+                                                        <AlertTriangle className="w-3.5 h-3.5 text-[#FF3B30] flex-shrink-0 mt-0.5" />
+                                                        <div className="text-[11px] leading-relaxed">
+                                                            <div className="font-mono text-[10px] tracking-widest text-[#FF3B30] mb-1">
+                                                                NO GOLD SYMBOL IN MT5 MARKET WATCH
+                                                            </div>
+                                                            <div className="text-[#E4E4E7]">
+                                                                This account&apos;s EA reports {syms.length} symbols, none of them XAUUSD/GOLD.
+                                                                The bot will keep skipping every gold trade with <code className="text-[#FFB000]">symbol_not_offered_by_broker</code>.
+                                                            </div>
+                                                            <div className="text-[#A1A1AA] mt-2">
+                                                                Fix: open this account&apos;s MT5 → right-click Market Watch → <strong className="text-[#E4E4E7]">Show All</strong>, or press <strong className="text-[#E4E4E7]">Ctrl+U</strong> and enable XAUUSD (or your broker&apos;s gold ticker). Wait ~15s for the next heartbeat.
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
                                         <SymbolSuffixRow account={a} onSet={async (suffix) => {
                                             try {
                                                 await api.put(`/accounts/${a.id}/symbol-suffix`, { symbol_suffix: suffix });
