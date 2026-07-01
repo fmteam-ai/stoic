@@ -354,10 +354,38 @@ async def poll_trades(payload: PollRequest):
     acc = await _account_by_token(payload.bridge_token)
 
     # 1. Pending NEW trades (status='pending')
-    new_cursor = db.trades.find({"account_id": str(acc["_id"]), "status": "pending"})
-    pending = await new_cursor.to_list(length=20)
+    # iter-96: atomic dispatch lock. Previously we returned EVERY pending
+    # trade on every poll — so if /bridge/report was slow (or the response
+    # was dropped), the EA would re-execute the same pending trade on its
+    # next poll, opening a DUPLICATE broker position with a new ticket. The
+    # original ticket eventually attached to the pending doc via a late
+    # /bridge/report, but the duplicate came in via /bridge/external-deal
+    # fresh-insert with SL=0/TP=0 (no signal_id, no adoption match).
+    #
+    # Fix: findAndModify each candidate — stamp `_dispatched_at` and only
+    # return trades whose `_dispatched_at` is NULL or older than the
+    # DISPATCH_LOCK window. If the EA never confirms the dispatch (report
+    # never lands), the lock auto-expires and the trade gets re-dispatched.
+    DISPATCH_LOCK_SEC = 30
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=DISPATCH_LOCK_SEC)).isoformat()
     out = []
-    for t in pending:
+    # Loop up to 20 times, each iteration atomically claims one pending doc.
+    for _ in range(20):
+        t = await db.trades.find_one_and_update(
+            {
+                "account_id": str(acc["_id"]),
+                "status": "pending",
+                "$or": [
+                    {"_dispatched_at": {"$exists": False}},
+                    {"_dispatched_at": None},
+                    {"_dispatched_at": {"$lt": cutoff}},
+                ],
+            },
+            {"$set": {"_dispatched_at": datetime.now(timezone.utc).isoformat()},
+             "$inc": {"_dispatch_count": 1}},
+        )
+        if not t:
+            break
         out.append({
             "trade_id": str(t["_id"]),
             "symbol": t["symbol"],
