@@ -164,19 +164,44 @@ async def _check_trade_sync_drift(db, user_id: str) -> list[dict]:
     """Run reconciler if the local DB shows open trades that the broker no
     longer reports. Cheap call — the reconciler short-circuits if nothing
     needs fixing.
+
+    iter-94: escalate to force-mode when any open trade is >10 min old.
+    A stuck-open trade whose last heartbeat_at snapshot said `open_positions=0`
+    (or whose EA fell silent >5 min ago) needs the aggressive reconcile that
+    also reaps ticketless orphans. Fresh trades (< 10 min old) still get the
+    gentle non-force path so we never race the EA's OnTradeTransaction "in"
+    event during the fill window.
     """
     open_count = await db.trades.count_documents({
         "user_id": user_id, "status": "open",
     })
     if open_count == 0:
         return []
+
+    # Detect stuck-open trades (>10 min old) — trigger for force reconcile
+    ten_min_ago = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    stale_open = await db.trades.count_documents({
+        "user_id": user_id, "status": "open",
+        "$or": [
+            {"opened_at": {"$lt": ten_min_ago}},
+            # Fallback: legacy trades without opened_at ISO string
+            {"opened_at": None},
+        ],
+    })
+    force = stale_open > 0
+
     try:
         from trade_reconciler import reconcile_user
-        result = await reconcile_user(user_id)
+        result = await reconcile_user(user_id, force=force)
         total_closed = (result or {}).get("total_closed", 0)
         if total_closed > 0:
-            await _log_action(db, user_id, "reconcile_drift", {"closed": total_closed})
-            return [{"kind": "reconcile_drift", "closed": total_closed}]
+            await _log_action(db, user_id, "reconcile_drift", {
+                "closed": total_closed,
+                "force": force,
+                "stale_open_at_trigger": stale_open,
+            })
+            return [{"kind": "reconcile_drift", "closed": total_closed,
+                     "force": force}]
     except Exception as e:  # noqa: BLE001
         logger.warning("auto-heal reconcile failed for user=%s: %s", user_id, e)
     return []

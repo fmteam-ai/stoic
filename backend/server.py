@@ -246,6 +246,7 @@ _bot_runner_task = None
 _warmer_task = None
 _trade_manager_task = None
 _auto_heal_task = None
+_stuck_sync_task = None
 
 
 async def _auto_heal_loop():
@@ -263,9 +264,129 @@ async def _auto_heal_loop():
             logger.warning("auto-heal sweep failed: %s", e)
 
 
+async def _stuck_open_sync_loop():
+    """iter-94 · Always-on stuck-open trade sync (no opt-in required).
+
+    Every N seconds (default 180) find users whose DB has trades in
+    status='open' with opened_at > 10 minutes ago, and force-reconcile them
+    against the broker's live ticket list. This is what previously required
+    a manual click on the "SYNC WITH BROKER" button — now it runs on its
+    own so trades that lost their `OnTradeTransaction` close event never
+    sit ghost-open indefinitely.
+
+    iter-95 · Also auto-backfill closed trades missing exit_price. When a
+    trade is marked status=closed but exit_price=None > 10 min after
+    closed_at AND the broker no longer holds the ticket, best-effort fill
+    exit_price = entry_price (breakeven placeholder) so the UI stops
+    showing dashes forever. This covers the auto-deleverage / slippage-veto
+    close paths where the EA never returns the actual fill price/pnl.
+
+    Safe: reconcile_user only closes trades whose ticket is missing from
+    the broker's current heartbeat AND whose opened_at is > 45s ago. Fresh
+    trades in the fill window are never touched.
+    """
+    INTERVAL = int(os.environ.get("STUCK_OPEN_SYNC_INTERVAL_SEC", "180"))
+    STALE_MINUTES = int(os.environ.get("STUCK_OPEN_STALE_MINUTES", "10"))
+    EXIT_BACKFILL_MINUTES = int(os.environ.get("EXIT_PRICE_BACKFILL_MINUTES", "10"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            db = get_db()
+            from datetime import datetime, timezone, timedelta as _td
+            cutoff_iso = (datetime.now(timezone.utc) - _td(minutes=STALE_MINUTES)).isoformat()
+            # Distinct users with a stuck-open trade
+            user_ids = await db.trades.distinct("user_id", {
+                "status": "open",
+                "$or": [
+                    {"opened_at": {"$lt": cutoff_iso}},
+                    {"opened_at": None},
+                ],
+            })
+            if user_ids:
+                from trade_reconciler import reconcile_user
+                closed_total = 0
+                for uid in user_ids:
+                    try:
+                        result = await reconcile_user(uid, force=True)
+                        n = (result or {}).get("total_closed", 0)
+                        if n > 0:
+                            closed_total += n
+                            logger.info(
+                                "stuck-open sync closed %s trade(s) for user=%s",
+                                n, uid,
+                            )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "stuck-open sync failed for user=%s: %s", uid, e,
+                        )
+                if closed_total:
+                    logger.info(
+                        "stuck-open sync total: %s trade(s) closed across %s user(s)",
+                        closed_total, len(user_ids),
+                    )
+
+            # iter-95: exit-price backfill sweep
+            exit_cutoff = (datetime.now(timezone.utc) - _td(minutes=EXIT_BACKFILL_MINUTES)).isoformat()
+            missing_cursor = db.trades.find({
+                "status": "closed",
+                "exit_price": None,
+                "closed_at": {"$lt": exit_cutoff},
+                "ghost_acknowledged": {"$ne": True},
+                "mt5_ticket": {"$ne": None},
+            })
+            backfilled = 0
+            async for t in missing_cursor:
+                # Confirm broker no longer holds this ticket. If open_tickets
+                # is populated, use it; otherwise fall back to open_positions
+                # count being 0.
+                try:
+                    from bson import ObjectId as _OID
+                    acc = await db.accounts.find_one({"_id": _OID(t["account_id"])})
+                except Exception:
+                    acc = None
+                if not acc:
+                    continue
+                open_tix = acc.get("open_tickets")
+                if isinstance(open_tix, list):
+                    still_open_at_broker = int(t.get("mt5_ticket") or -1) in {
+                        int(x) for x in open_tix if x is not None
+                    }
+                elif open_tix is None:
+                    still_open_at_broker = (acc.get("open_positions") or 0) > 0
+                else:
+                    still_open_at_broker = True
+                if still_open_at_broker:
+                    continue
+                # Best-effort backfill: exit ≈ entry (breakeven placeholder)
+                entry = float(t.get("entry_price") or 0)
+                await db.trades.update_one(
+                    {"_id": t["_id"]},
+                    {"$set": {
+                        "exit_price": entry,
+                        "pnl": float(t.get("pnl") or 0),
+                        "exit_price_source": "auto_backfill_broker_confirmed_missing",
+                        "exit_price_backfilled_at": datetime.now(timezone.utc).isoformat(),
+                        "ghost_acknowledged": True,
+                    }},
+                )
+                backfilled += 1
+                logger.info(
+                    "exit-price backfilled trade=%s ticket=%s user=%s (broker no longer holds)",
+                    t.get("_id"), t.get("mt5_ticket"), t.get("user_id"),
+                )
+            if backfilled:
+                logger.info(
+                    "exit-price backfill sweep: %s trade(s) auto-filled", backfilled,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("stuck-open sync loop error: %s", e)
+
+
 @app.on_event("startup")
 async def on_startup():
-    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task
+    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task
     try:
         await ensure_indexes()
         await seed_admin()
@@ -274,14 +395,16 @@ async def on_startup():
         _warmer_task = asyncio.create_task(warmer.loop())
         _trade_manager_task = asyncio.create_task(trade_manager.run_loop())
         _auto_heal_task = asyncio.create_task(_auto_heal_loop())
-        logger.info("Bot runner + warmer + trade manager + auto-heal scheduled.")
+        _stuck_sync_task = asyncio.create_task(_stuck_open_sync_loop())
+        logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    for task in (_bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task):
+    for task in (_bot_runner_task, _warmer_task, _trade_manager_task,
+                 _auto_heal_task, _stuck_sync_task):
         if task and not task.done():
             task.cancel()
             try:
