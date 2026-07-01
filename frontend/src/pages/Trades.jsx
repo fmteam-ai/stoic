@@ -999,16 +999,25 @@ function ClearTradesMenu({ trades, onCleared }) {
         const noun = scope === "closed" ? `${closedCount} closed trade(s)`
                    : scope === "cancelled" ? `${cancelledCount} cancelled trade(s)`
                    : scope === "failed" ? `${failedCount} failed trade(s)`
+                   : scope === "unfilled" ? `${cancelledCount + failedCount} unfilled (cancelled + failed) trade(s)`
                    : days ? `trades older than ${days} day(s)`
                    : `${deletableTotal} closed/cancelled/failed trade(s)`;
         if (!window.confirm(`Delete ${noun}? Open positions are protected.\n\nThis cannot be undone.`)) return;
         setBusy(true);
         try {
-            const params = new URLSearchParams();
-            if (scope) params.set("scope", scope);
-            if (days) params.set("older_than_days", String(days));
-            const { data } = await api.delete(`/trades?${params.toString()}`);
-            toast.success(`Cleared ${data.deleted} trade${data.deleted === 1 ? "" : "s"} (${label})`);
+            // Backend doesn't natively expose an "unfilled" combined scope.
+            // Fire two deletes back-to-back so a single menu click clears
+            // BOTH cancelled and failed rows.
+            const scopesToRun = scope === "unfilled" ? ["cancelled", "failed"] : [scope];
+            let totalDeleted = 0;
+            for (const s of scopesToRun) {
+                const params = new URLSearchParams();
+                if (s) params.set("scope", s);
+                if (days) params.set("older_than_days", String(days));
+                const { data } = await api.delete(`/trades?${params.toString()}`);
+                totalDeleted += data.deleted || 0;
+            }
+            toast.success(`Cleared ${totalDeleted} trade${totalDeleted === 1 ? "" : "s"} (${label})`);
             setOpen(false);
             await onCleared();
         } catch (e) {
@@ -1038,7 +1047,7 @@ function ClearTradesMenu({ trades, onCleared }) {
                     <ClearTradeOption icon={Trash} label="Clear closed trades only" sub={`${closedCount} settled position${closedCount === 1 ? "" : "s"}`}
                         onClick={() => clear("closed", "closed")} testid="clear-closed" disabled={closedCount === 0} />
                     <ClearTradeOption icon={Trash} label="Clear cancelled / failed only" sub={`${cancelledCount + failedCount} never-filled`}
-                        onClick={() => clear("cancelled", "cancelled")} testid="clear-cancelled" disabled={cancelledCount === 0} />
+                        onClick={() => clear("unfilled", "cancelled + failed")} testid="clear-cancelled" disabled={cancelledCount + failedCount === 0} />
                     <ClearTradeOption icon={Trash} label="Clear trades > 30 days old" sub="Keep last month only"
                         onClick={() => clear(null, "30d", 30)} testid="clear-30d" />
                     <ClearTradeOption icon={Trash} label="Clear trades > 7 days old" sub="Keep the recent week"
