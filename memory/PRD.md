@@ -8,6 +8,14 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-07-02 (iter-98) — **Trades page · date range + winning/lost status filters**:
+  - **`pages/Trades.jsx`**: added `WINNING` and `LOST` buttons to the status filter row alongside `ALL / PENDING / OPEN / CLOSED / FAILED`. Because the backend `/api/trades` route only knows pending/open/closed/failed, `winning`/`lost` are translated to `status=closed` and narrowed client-side by `parseFloat(pnl) > 0` / `< 0`. Constant `CLIENT_ONLY_FILTERS = ['winning', 'lost']` at module scope.
+  - **Date range picker row** (`data-testid=date-filter-row`): `FROM` (`date-from`) and `TO` (`date-to`) `<input type="date">` inputs clamp the visible table by `opened_at` in the user's local timezone — start-of-day for FROM, end-of-day for TO. `min`/`max` attributes cross-link the inputs so the user can't pick TO earlier than FROM. A `CLEAR` button (`date-clear`) appears when either date is set.
+  - **`visibleTrades` useMemo** applies both refinements over the loaded `trades` list. A `SHOWING X / Y` counter (`visible-count`) surfaces whenever any client-side filter is active. Empty state differentiates: "No trades yet" (nothing loaded) vs "No trades match your filters. Try clearing the date range or status filter." when filters exclude everything.
+  - **Testing agent iter-34**: 9/9 test cases passed at 100% against real historical data (100 loaded trades → 76 winning, 17 lost) — filter-winning, filter-lost, date-from far past, date-from today, date-to yesterday, date-clear, combined winning + date range, empty-state text differentiation, existing filters not broken.
+  - Known orthogonal limitation flagged by tester: the backend `/api/trades` returns a 100-row default cap, so client-side date filtering only refines the loaded window. Not blocking; deferred to a future "load more" / server-side date-range enhancement.
+
+
 - 2026-06-30 (iter-87) — **Migration Helper · Export/Import admin state across environments**:
   - **Backend `routes/migration_routes.py`** with 2 admin-only endpoints (admin-only via `_admin_only()` guard):
     - `GET /api/admin/export-state` → returns JSON with `schema_version=1`, exporter email, the admin's portable user fields (NO password_hash), and the full contents of `accounts` / `bot_configs` / `user_presets` filtered by `user_id`. ObjectIds are recursively serialised to hex strings; datetimes to ISO strings.
