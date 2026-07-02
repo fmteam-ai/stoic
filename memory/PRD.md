@@ -801,6 +801,13 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 - MANUAL TRADES EXCLUDED: optimizer reviews BOT-EXECUTED trades only
   (`origin ∈ {auto, null}` — null = legacy bot trades; manual/external/other_ea/test_trade
   excluded). Report carries `excluded_manual_trades` count, shown as an amber badge in the UI.
+- STRICTLY PER-ACCOUNT (iter38): /analyze requires account_id (400 otherwise); each account's
+  trades reviewed separately; Apply writes ONLY to that account's config — if the account
+  still inherits the default profile, the default is cloned into a per-account override
+  first (`_ensure_account_override`) so changes never leak to other accounts. Scheduled
+  sweep iterates db.accounts (effective config active). Summary excludes legacy null-scope
+  reports. Bot Config section shows a "select an account" hint on Default Profile scope.
+  Tests: 15/15 (incl. apply-isolation + manual-origin-exclusion + 400-without-account).
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.

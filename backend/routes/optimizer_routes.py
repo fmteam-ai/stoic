@@ -35,9 +35,14 @@ async def _assert_account_owned(db, user_id: str, account_id: Optional[str]):
 @router.post("/analyze")
 async def run_analysis(account_id: Optional[str] = None, window: int = 24,
                        force: bool = False, user=Depends(get_current_user)):
-    """On-demand analysis. Returns a cached report if one for the same scope
-    was generated < CACHE_MINUTES ago (unless force=true) — protects the LLM
-    key from double-click spam."""
+    """On-demand analysis. STRICTLY PER-ACCOUNT — account_id is required so
+    trades from different accounts are never mixed into one review.
+    Returns a cached report if one for the same account was generated
+    < CACHE_MINUTES ago (unless force=true)."""
+    if not account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="account_id is required — the optimizer reviews each account separately.")
     db = get_db()
     await _assert_account_owned(db, user["id"], account_id)
     if not force:
@@ -69,9 +74,10 @@ async def optimizer_summary(user=Depends(get_current_user)):
     labels = {str(a["_id"]): (a.get("label") or a.get("broker") or "Account")
               for a in accounts}
 
-    # Latest report per (account_id) scope via aggregation
+    # Latest report per account via aggregation. Legacy default-scope
+    # (account_id=null) reports are excluded — reviews are per-account only.
     pipeline = [
-        {"$match": {"user_id": user["id"]}},
+        {"$match": {"user_id": user["id"], "account_id": {"$ne": None}}},
         {"$sort": {"created_at": -1}},
         {"$group": {"_id": "$account_id", "doc": {"$first": "$$ROOT"}}},
     ]

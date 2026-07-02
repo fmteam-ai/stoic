@@ -275,6 +275,37 @@ def _config_filter(user_id: str, account_id):
             "$or": [{"account_id": None}, {"account_id": {"$exists": False}}]}
 
 
+async def _effective_config(db, user_id: str, account_id) -> dict:
+    """The config that actually governs this account: per-account override if
+    present, else the user's default profile. Ensures from-values and the
+    pause_bot/preset context reflect what the bot really runs with."""
+    if account_id:
+        cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": account_id})
+        if cfg:
+            return cfg
+    return await db.bot_configs.find_one(_config_filter(user_id, None)) or {}
+
+
+async def _ensure_account_override(db, user_id: str, account_id) -> None:
+    """Applying a recommendation must NEVER leak to other accounts. If the
+    account has no per-account bot_config yet (it inherits the default
+    profile), clone the effective config into a per-account override first
+    so the applied change is isolated to this account only."""
+    if not account_id:
+        return
+    existing = await db.bot_configs.find_one({"user_id": user_id, "account_id": account_id})
+    if existing:
+        return
+    base = await _effective_config(db, user_id, None)
+    clone = {k: v for k, v in base.items() if k != "_id"}
+    clone.update({
+        "user_id": user_id,
+        "account_id": account_id,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    await db.bot_configs.insert_one(clone)
+
+
 def serialize_report(doc: dict) -> dict:
     d = {k: v for k, v in doc.items() if k != "_id"}
     d["id"] = str(doc["_id"])
@@ -299,7 +330,7 @@ async def analyze_account(user_id: str, account_id, window_hours: int = 24,
     excluded_q = {**trade_q, "origin": {"$nin": ["auto", None]}}
     excluded_manual = await db.trades.count_documents(excluded_q)
 
-    cfg = await db.bot_configs.find_one(_config_filter(user_id, account_id)) or {}
+    cfg = await _effective_config(db, user_id, account_id)
     stats = compute_trade_stats(trades)
 
     doc = {
@@ -394,11 +425,17 @@ async def get_latest_report(user_id: str, account_id) -> dict | None:
 
 async def apply_recommendation(user_id: str, report: dict, rec: dict) -> dict:
     """Execute a single validated recommendation. Suggest-only flow — this
-    only ever runs from an explicit user click. Returns an audit dict."""
+    only ever runs from an explicit user click.
+
+    STRICTLY PER-ACCOUNT: when the report targets an account that still
+    inherits the default profile, the default config is first cloned into a
+    per-account override so the change affects THIS account only.
+    Returns an audit dict."""
     db = get_db()
     account_id = report.get("account_id")
     now = datetime.now(timezone.utc).isoformat()
     audit = {"applied_at": now}
+    await _ensure_account_override(db, user_id, account_id)
 
     if rec["type"] == "config_change":
         field = rec["field"]
@@ -427,15 +464,19 @@ async def apply_recommendation(user_id: str, report: dict, rec: dict) -> dict:
 # ---------------------------------------------------------------- scheduled sweep
 
 async def scheduled_sweep():
-    """Hourly tick from server.py. For every ACTIVE bot scope, re-analyze at
-    most once per 24h — and only when the window holds enough trades."""
+    """Hourly tick from server.py. Reviews EACH ACCOUNT SEPARATELY — at most
+    once per 24h per account, only for accounts whose effective bot config is
+    active and whose window holds enough bot-executed trades."""
     db = get_db()
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=SCHEDULED_EVERY_HOURS)).isoformat()
     ran = 0
-    async for cfg in db.bot_configs.find({"active": True}):
-        user_id = cfg.get("user_id")
-        account_id = cfg.get("account_id")
+    async for acc in db.accounts.find({}):
+        user_id = acc.get("user_id")
+        account_id = str(acc["_id"])
         if not user_id:
+            continue
+        cfg = await _effective_config(db, user_id, account_id)
+        if not cfg.get("active"):
             continue
         recent = await db.optimizer_reports.find_one({
             "user_id": user_id, "account_id": account_id,
@@ -444,10 +485,8 @@ async def scheduled_sweep():
         if recent:
             continue
         trade_cut = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        tq = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": trade_cut},
-              "origin": BOT_ORIGIN_FILTER}
-        if account_id:
-            tq["account_id"] = account_id
+        tq = {"user_id": user_id, "account_id": account_id, "status": "closed",
+              "closed_at": {"$gte": trade_cut}, "origin": BOT_ORIGIN_FILTER}
         n = await db.trades.count_documents(tq)
         if n < MIN_TRADES:
             continue

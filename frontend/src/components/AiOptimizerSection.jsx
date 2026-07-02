@@ -129,13 +129,14 @@ export default function AiOptimizerSection({ accountId, onConfigChanged, anchorR
     const scopeQ = accountId ? `?account_id=${accountId}` : "";
 
     const load = useCallback(async () => {
+        if (!accountId) { setReport(null); setLoading(false); return; }
         setLoading(true);
         try {
             const { data } = await api.get(`/optimizer/report${scopeQ}`);
             setReport(data?.exists === false ? null : data);
         } catch (_e) { setReport(null); }
         setLoading(false);
-    }, [scopeQ]);
+    }, [scopeQ, accountId]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -204,8 +205,9 @@ export default function AiOptimizerSection({ accountId, onConfigChanged, anchorR
                 </div>
                 <div className="flex items-center gap-2">
                     {[24, 48].map(w => (
-                        <button key={w} onClick={() => analyze(w)} disabled={analyzing !== null}
+                        <button key={w} onClick={() => analyze(w)} disabled={analyzing !== null || !accountId}
                             data-testid={`optimizer-analyze-${w}h`}
+                            title={!accountId ? "Select a specific account above — reviews are per-account" : undefined}
                             className="px-3 py-1.5 text-[10px] tracking-widest font-medium border border-[#10F2C5]/40 text-[#10F2C5] hover:bg-[#10F2C5]/10 disabled:opacity-50 flex items-center gap-1.5 transition-colors">
                             <RefreshCw className={`w-3 h-3 ${analyzing === w ? "animate-spin" : ""}`} />
                             {analyzing === w ? "ANALYZING…" : `ANALYZE ${w}H`}
@@ -215,7 +217,16 @@ export default function AiOptimizerSection({ accountId, onConfigChanged, anchorR
             </div>
 
             <div className="p-5 space-y-4">
-                {loading ? (
+                {!accountId ? (
+                    <div className="text-xs text-[#A1A1AA] leading-relaxed" data-testid="optimizer-select-account-hint">
+                        The optimizer reviews <span className="text-white">each account separately</span> —
+                        it analyzes only that account's bot-executed trades, and applying a suggestion
+                        changes <span className="text-white">only that account's</span> settings (an
+                        account still inheriting the default profile gets its own override first, so
+                        nothing leaks to other accounts). Select a specific account in the scope bar
+                        above to run or view its AI review.
+                    </div>
+                ) : loading ? (
                     <div className="font-mono text-xs text-[#52525B] tracking-widest">LOADING…</div>
                 ) : !report ? (
                     <div className="text-xs text-[#A1A1AA] leading-relaxed" data-testid="optimizer-empty-state">
