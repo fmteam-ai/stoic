@@ -435,10 +435,41 @@ async def scheduled_sweep():
         if n < MIN_TRADES:
             continue
         try:
-            await analyze_account(user_id, account_id, 24, source="scheduled")
+            report = await analyze_account(user_id, account_id, 24, source="scheduled")
             ran += 1
+            if report.get("verdict") == "critical":
+                await _alert_critical(db, user_id, account_id, report)
         except Exception as e:  # noqa: BLE001
             logger.warning("scheduled optimizer failed user=%s acct=%s: %s",
                            user_id, account_id, e)
     if ran:
         logger.info("optimizer scheduled sweep: %d report(s) generated", ran)
+
+
+async def _alert_critical(db, user_id: str, account_id, report: dict):
+    """Telegram alert when a scheduled review lands a CRITICAL verdict.
+    Fire-and-forget — never raises into the sweep."""
+    try:
+        label = "Default Profile"
+        if account_id:
+            from bson import ObjectId
+            acc = await db.accounts.find_one({"_id": ObjectId(account_id)})
+            if acc:
+                label = acc.get("label") or acc.get("broker") or "Account"
+        stats = report.get("stats") or {}
+        pending = [r for r in (report.get("recommendations") or [])
+                   if r.get("status") == "pending"]
+        lines = [
+            f"Account: {label}",
+            f"Verdict: CRITICAL ({report.get('window_hours')}h review)",
+            report.get("headline") or "",
+            f"Win rate {stats.get('win_rate')}% · Net P&L ${stats.get('total_pnl')} "
+            f"over {stats.get('total_trades')} trades",
+        ]
+        if pending:
+            lines.append(f"{len(pending)} suggestion(s) waiting — review at /bot-config")
+        from notifier import send_telegram
+        await send_telegram(user_id, "optimizer_critical",
+                            "AI Optimizer: CRITICAL verdict", [l for l in lines if l])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("optimizer critical alert failed user=%s: %s", user_id, e)

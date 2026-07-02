@@ -17,6 +17,7 @@ const EVENT_LABELS = {
     high_conf_signal: { label: "High-Confidence Signal", desc: "When AI generates a BUY/SELL with confidence ≥75%", color: "#FFD700" },
     external_trade_opened: { label: "Manual Trade Detected", desc: "When a position is opened on MT5 outside STOIC (manual click, another EA). Tagged 📌 — never confused with bot trades.", color: "#FFB000" },
     sl_imminent: { label: "SL Imminent (≤5min)", desc: "When an open trade's stop-loss ETA drops below 5 minutes at current market velocity", color: "#FF3B30" },
+    optimizer_critical: { label: "AI Optimizer: Critical Verdict", desc: "When the scheduled 24h trade review flags an account as CRITICAL (consistent losses / heavy drawdown)", color: "#10F2C5" },
 };
 
 export default function Notifications() {
