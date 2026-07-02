@@ -52,7 +52,7 @@ BOT_ORIGIN_FILTER = {"$in": ["auto", None]}
 # (kind, min, max) — bool kind ignores min/max. Values outside are clamped.
 ALLOWED_FIELDS = {
     "min_confidence_override":      ("int",   0,    95),
-    "trade_of_day_cap":             ("int",   1,    20),
+    "trade_of_day_cap":             ("int",   1,    100),
     "max_concurrent_trades":        ("int",   1,    10),
     "trailing_enabled":             ("bool",  None, None),
     "trailing_start_r":             ("float", 0.1,  5.0),

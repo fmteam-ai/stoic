@@ -812,6 +812,8 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   per-account isolation, schedule, Telegram critical alert, Fable 5); TOC renumbered to 23
   sections and drifted in-section H2 numbers fixed; Daily Routine gained Trades-filters +
   Optimizer checks; Multi-Bot section gained Step 4 "Bot Pulse strategy chips/dropdown".
+- trade_of_day_cap max raised 50 → 100 (BotConfig.jsx input max; ai_optimizer ALLOWED_FIELDS
+  clamp aligned to 100). Backend had no hard cap — verified PUT accepts 100.
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.

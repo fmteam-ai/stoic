@@ -682,7 +682,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                             Max new trades per symbol per UTC day. Forces selectivity — bot waits for the A-grade
                             setup instead of churning. Set to <span className="text-[#52525B]">0</span> for unlimited.
                         </p>
-                        <PPNumInput cfg={cfg} setCfg={setCfg} field="trade_of_day_cap" label="MAX TRADES PER SYMBOL / DAY" suffix="trades" step={1} min={0} max={50} />
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="trade_of_day_cap" label="MAX TRADES PER SYMBOL / DAY" suffix="trades" step={1} min={0} max={100} />
                     </div>
                 </div>
 
