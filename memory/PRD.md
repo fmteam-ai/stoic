@@ -780,6 +780,23 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Changelog — Feb 2026
 
+### AI Strategy Optimizer (iter37 — suggest-only trade review, THIS SESSION)
+- Bot reviews closed trades over last 24/48h per account scope and suggests
+  strategy adjustments to raise win rate. SUGGEST-ONLY: user clicks Apply/Dismiss.
+- LLM: **claude-fable-5 (confirmed working on Emergent Universal Key)**, fallback claude-opus-4-8.
+- Backend: `/app/backend/ai_optimizer.py` (stats digest, ALLOWED_FIELDS whitelist+clamps,
+  validate_recommendations, apply_recommendation, scheduled_sweep every 24h/scope via
+  hourly `_optimizer_loop` in server.py). Routes: `/app/backend/routes/optimizer_routes.py`:
+  POST /api/optimizer/analyze (5-min cache), GET /report, GET /summary,
+  POST /report/{rid}/rec/{recid}/apply|dismiss (409 on non-pending).
+- Rec types: config_change (field/from/to), preset_switch, pause_bot. All whitelisted server-side.
+- Collection: `optimizer_reports` (per-run doc, recs carry pending/applied/dismissed status).
+- Frontend: `AiOptimizerCard.jsx` on Dashboard (verdict rows + pending badge, deep-links
+  `/bot-config?account=<id>&optimizer=1`), `AiOptimizerSection.jsx` in BotConfig
+  (ANALYZE 24H/48H, verdict/headline/stats/patterns/rec cards with Apply/Dismiss).
+- Tests: /app/backend/tests/test_ai_optimizer.py (6 unit) +
+  test_iter_optimizer_http.py (7 http, self-provisioning). iteration_37.json: 100% pass.
+
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.
 
