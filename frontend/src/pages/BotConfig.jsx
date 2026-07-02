@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target } from "lucide-react";
@@ -46,6 +47,45 @@ export default function BotConfig() {
     const [newSym, setNewSym] = useState("");
 
     const accountQuery = selectedAccountId ? `?account_id=${selectedAccountId}` : "";
+
+    // Deep-link support (from Bot Pulse strategy chip → /bot-config?account=<id>&preset=<key>):
+    // • `?account=<id>` pre-selects that account's config on first mount.
+    //   Use "default" as a sentinel for the user's default-profile scope
+    //   (matches null selectedAccountId).
+    // • `?preset=<key>` scrolls the Strategy Presets section into view and
+    //   pulses the matching card so it's obvious which preset is currently
+    //   active on the account you came from.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const [highlightPreset, setHighlightPreset] = useState(null);
+    const deepLinkAppliedRef = useRef(false);
+    const presetsAnchorRef = useRef(null);
+
+    useEffect(() => {
+        if (deepLinkAppliedRef.current) return;
+        const acct = searchParams.get("account");
+        const preset = searchParams.get("preset");
+        if (acct || preset) {
+            deepLinkAppliedRef.current = true;
+            if (acct) setSelectedAccountId(acct === "default" ? null : acct);
+            if (preset) setHighlightPreset(preset);
+            // Consume the query string so a refresh doesn't re-trigger scroll+highlight.
+            const next = new URLSearchParams(searchParams);
+            next.delete("account");
+            next.delete("preset");
+            setSearchParams(next, { replace: true });
+        }
+    }, [searchParams, setSearchParams]);
+
+    // Once presets have loaded AND we're highlighting one, scroll the section
+    // into view and let the pulse animation run for ~2.5s.
+    useEffect(() => {
+        if (!highlightPreset || !presets.length) return;
+        if (presetsAnchorRef.current) {
+            presetsAnchorRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        const t = setTimeout(() => setHighlightPreset(null), 2500);
+        return () => clearTimeout(t);
+    }, [highlightPreset, presets.length]);
 
     const load = useCallback(async () => {
         try {
@@ -269,7 +309,8 @@ export default function BotConfig() {
                 />
 
                 {/* Strategy Presets */}
-                <div className="border border-[#FFD700]/30 bg-[#0A0A0A]" data-testid="strategy-presets-section">
+                <div ref={presetsAnchorRef}
+                     className="border border-[#FFD700]/30 bg-[#0A0A0A]" data-testid="strategy-presets-section">
                     <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-[#FFD700]" />
                         <div>
@@ -282,13 +323,14 @@ export default function BotConfig() {
                             const Icon = PRESET_ICONS[p.icon] || Sparkles;
                             const active = cfg.active_preset === p.key;
                             const isApplying = applyingPreset === p.key;
+                            const isHighlighted = highlightPreset === p.key;
                             return (
                                 <button key={p.key} onClick={() => applyPreset(p.key, p.label)}
                                     disabled={isApplying}
                                     data-testid={`preset-card-${p.key}`}
                                     className={`text-left p-4 border transition-colors duration-150 disabled:opacity-50 ${
                                         active ? "border-[#FFD700] bg-[#FFD700]/5" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
-                                    }`}>
+                                    } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
                                     <div className="flex items-center justify-between mb-2">
                                         <div className="flex items-center gap-2">
                                             <Icon className="w-4 h-4" style={{ color: p.color }} />
@@ -330,12 +372,13 @@ export default function BotConfig() {
                                     const customKey = `custom:${p.id}`;
                                     const active = cfg.active_preset === customKey;
                                     const isApplying = applyingPreset === customKey;
+                                    const isHighlighted = highlightPreset === customKey;
                                     return (
                                         <div key={p.id}
                                             data-testid={`custom-preset-${p.id}`}
                                             className={`text-left p-4 border transition-colors duration-150 group ${
                                                 active ? "border-[#9B59B6] bg-[#9B59B6]/5" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
-                                            }`}>
+                                            } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
                                             <div className="flex items-center justify-between mb-2">
                                                 <div className="flex items-center gap-2 min-w-0">
                                                     <Bookmark className="w-4 h-4 text-[#9B59B6] shrink-0" />

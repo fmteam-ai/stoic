@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { Link } from "react-router-dom";
 import api from "@/lib/api";
 import { Activity, Pause, AlertTriangle, Ban, CheckCircle2, Clock, ChevronDown, ChevronUp } from "lucide-react";
 
@@ -81,14 +82,24 @@ function PulseRow({ item }) {
                             {item.symbols.join(" · ")}
                         </span>
                     )}
-                    {item.strategy_label && (
-                        <span
-                            title={`Strategy preset: ${item.strategy_label}`}
-                            data-testid={`bot-pulse-strategy-${item.config_id}`}
-                            className="inline-flex items-center px-1.5 py-0.5 border border-[#0099FF]/40 text-[#0099FF] text-[10px] font-mono tracking-widest">
-                            {item.strategy_label.toUpperCase()}
-                        </span>
-                    )}
+                    {item.strategy_label && (() => {
+                        // Deep-link straight into the Strategy Presets section of
+                        // Bot Config, pre-scoped to this row's account (or the
+                        // "default" profile when no account is bound) and with
+                        // the currently-active preset card highlighted.
+                        const params = new URLSearchParams();
+                        params.set("account", item.account_id || "default");
+                        if (item.strategy_key) params.set("preset", item.strategy_key);
+                        return (
+                            <Link
+                                to={`/bot-config?${params.toString()}`}
+                                title={`Strategy preset: ${item.strategy_label} — click to edit in Bot Config`}
+                                data-testid={`bot-pulse-strategy-${item.config_id}`}
+                                className="inline-flex items-center px-1.5 py-0.5 border border-[#0099FF]/40 text-[#0099FF] hover:bg-[#0099FF]/10 hover:border-[#0099FF] text-[10px] font-mono tracking-widest transition-colors">
+                                {item.strategy_label.toUpperCase()}
+                            </Link>
+                        );
+                    })()}
                 </div>
             </div>
 

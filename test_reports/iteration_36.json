@@ -1,0 +1,55 @@
+{
+  "summary": "Frontend-only verification of the Bot Pulse strategy-chip deep-link feature. All 7 review-request test cases PASSED end-to-end. Chips render as <a> anchors with the correct hrefs (including the 'account=default' sentinel for the null/default profile), clicking a chip navigates to /bot-config, the URL query string is cleaned up via setSearchParams({replace:true}) within ~1s, the Strategy Presets section scrolls into view, and the matching preset card pulses green (ring-2 + animate-pulse) for ~2.5s before the classes are removed. Page refresh does NOT re-trigger the scroll/highlight. Regression checks confirm KRAKEN_SPOT (no strategy_label) renders zero chips and the WINNING filter on /trades still works.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_evidence": {
+    "auth": "admin@trading.bot / admin123 login succeeded; /trades loaded with bot-pulse-panel and 7 rows",
+    "chips_rendered": "6 anchor chips: SCALPER (OnEquity), MEAN REVERSION (RoboForex), SNIPER (STARTRADER), AGGRESSIVE (VTMarkets), TREND RIDER (Default profile — account=default), FAST SCALP (Tauro Markets). KRAKEN_SPOT row has zero chips (correct — strategy_label null).",
+    "chip_hrefs": {
+      "SCALPER": "/bot-config?account=6a42710e6288bcc0d204cf85&preset=scalper",
+      "MEAN REVERSION": "/bot-config?account=6a3ad0ef17f40ac1dd3eb3ef&preset=mean_reversion",
+      "SNIPER": "/bot-config?account=6a435003545b76de9539d197&preset=sniper",
+      "AGGRESSIVE": "/bot-config?account=6a3e94742bac4774b982fd67&preset=aggressive",
+      "TREND RIDER": "/bot-config?account=default&preset=trend_rider",
+      "FAST SCALP": "/bot-config?account=6a41c0fcbb9bafcf02729e71&preset=fast_scalp"
+    },
+    "scalper_deeplink": {
+      "navigated_to": "/bot-config?account=<id>&preset=scalper",
+      "initial_class_on_preset_card_scalper": "…border-[#FFD700] bg-[#FFD700]/5 ring-2 ring-[#00FF41] animate-pulse (verified ring-2 + animate-pulse both present)",
+      "url_after_1200ms": "/bot-config (query params removed)",
+      "class_after_3000ms": "border-[#FFD700] bg-[#FFD700]/5 (ring-2 + animate-pulse removed, ACTIVE yellow border preserved)",
+      "post_refresh_url": "/bot-config (still clean, no re-add of ?account/?preset)",
+      "post_refresh_highlight": "not re-triggered — preset-card-scalper class contains no ring-2 or animate-pulse"
+    },
+    "trend_rider_default_profile_deeplink": {
+      "chip_href": "/bot-config?account=default&preset=trend_rider",
+      "post_click_url_after_1200ms": "/bot-config (cleaned)",
+      "preset_card_class": "ring-2 ring-[#00FF41] animate-pulse present on preset-card-trend_rider",
+      "account_scope_note": "account=default correctly maps to null selectedAccountId (BotConfig.jsx L69), so the AccountScopeBar lands on the Default-profile scope with no per-account override selected."
+    },
+    "regression_kraken_no_chip": "KRAKEN_SPOT row has 0 chips matching [data-testid^='bot-pulse-strategy-'] — regression PASS.",
+    "regression_winning_filter": "filter-winning testid present and clickable; trades table narrows (visible on screenshot: WIN RATE 73.33% / WINS 132 / OPEN 4). Row count on Bot Pulse remains 7 (< DROPDOWN_THRESHOLD=10) so chips render inline as expected.",
+    "console": "No new errors from BotPulsePanel or BotConfig during navigation, click, refresh, or highlight-timer paths (only pre-existing benign warnings)."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "BotConfig.jsx L63-77 — deepLinkAppliedRef guards against re-running the consumption effect after the first mount. Correct — setSearchParams({replace:true}) clears the query but the second render's useEffect returns early because the ref is already true. Verified in the refresh test: URL stays clean and highlight does NOT re-trigger.",
+    "BotConfig.jsx L81-88 — the scroll+highlight effect fires whenever `presets.length` changes from 0 → N or `highlightPreset` changes. Timer is properly cleaned via `return () => clearTimeout(t)` so a fast unmount won't leak. 2500ms matches the review spec.",
+    "BotConfig.jsx L326 & L375 — `isHighlighted` toggles `ring-2 ring-[#00FF41] animate-pulse` on both built-in preset cards AND custom preset cards. This means a chip whose strategy_key is `custom:<id>` would still highlight correctly — nice symmetry, though no admin config exercises that path today.",
+    "BotPulsePanel.jsx L85-102 — chip is now a <Link>. The URLSearchParams builder correctly emits 'account=default' when item.account_id is falsy. Only concern (non-blocking): if the row is stale for some reason and item.strategy_key is null while strategy_label is truthy, the href would omit ?preset and BotConfig would just scroll without pulsing — that's a benign fallback, not a bug.",
+    "Suggestion (non-blocking): the Link uses `to={\"/bot-config?...\"}`. If the app ever moves to hash routing, this string form breaks. Consider `to={{ pathname: '/bot-config', search: params.toString() }}` for forward-compat, but not required today."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "not tested (skip per request)", "frontend": "100%" },
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — used admin's existing 7 bot_configs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Deep-link flow (Bot Pulse strategy chip → /bot-config?account=<id>&preset=<key>) is fully validated: chip renders as <a>, href builds correctly, click navigates, URL cleaned via setSearchParams replace, Strategy Presets section scrolled+pulsed for 2.5s, refresh does not re-trigger. Both real-account and default-profile (account=default sentinel) paths verified. Custom-preset (custom:<id>) highlight code path exists (BotConfig.jsx L375) but no admin config uses one — worth exercising once a user_preset is applied to a bot_config in a future iteration.",
+  "rca of the issue": "N/A — no bugs found."
+}
