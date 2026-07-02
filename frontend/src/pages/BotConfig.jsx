@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target } from "lucide-react";
 import { toast } from "sonner";
 
@@ -57,24 +58,39 @@ export default function BotConfig() {
     //   active on the account you came from.
     const [searchParams, setSearchParams] = useSearchParams();
     const [highlightPreset, setHighlightPreset] = useState(null);
+    const [scrollOptimizer, setScrollOptimizer] = useState(false);
     const deepLinkAppliedRef = useRef(false);
     const presetsAnchorRef = useRef(null);
+    const optimizerAnchorRef = useRef(null);
 
     useEffect(() => {
         if (deepLinkAppliedRef.current) return;
         const acct = searchParams.get("account");
         const preset = searchParams.get("preset");
-        if (acct || preset) {
+        const optimizer = searchParams.get("optimizer");
+        if (acct || preset || optimizer) {
             deepLinkAppliedRef.current = true;
             if (acct) setSelectedAccountId(acct === "default" ? null : acct);
             if (preset) setHighlightPreset(preset);
+            if (optimizer) setScrollOptimizer(true);
             // Consume the query string so a refresh doesn't re-trigger scroll+highlight.
             const next = new URLSearchParams(searchParams);
             next.delete("account");
             next.delete("preset");
+            next.delete("optimizer");
             setSearchParams(next, { replace: true });
         }
     }, [searchParams, setSearchParams]);
+
+    // Deep-link from the Dashboard optimizer card (?optimizer=1) — scroll the
+    // AI Optimizer section into view once the page has rendered its config.
+    useEffect(() => {
+        if (!scrollOptimizer || !cfg || !optimizerAnchorRef.current) return;
+        optimizerAnchorRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+        const t = setTimeout(() => setScrollOptimizer(false), 1500);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scrollOptimizer, cfg]);
 
     // Once presets have loaded AND we're highlighting one, scroll the section
     // into view and let the pulse animation run for ~2.5s.
@@ -306,6 +322,13 @@ export default function BotConfig() {
                     onSelect={setSelectedAccountId}
                     onReset={resetAccountConfig}
                     resetting={resetting}
+                />
+
+                {/* AI Strategy Optimizer — 24/48h trade review + suggest-only tuning */}
+                <AiOptimizerSection
+                    accountId={selectedAccountId}
+                    onConfigChanged={load}
+                    anchorRef={optimizerAnchorRef}
                 />
 
                 {/* Strategy Presets */}

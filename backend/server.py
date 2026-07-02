@@ -57,6 +57,7 @@ from routes.postmortem_routes import router as postmortem_router
 from routes.auto_heal_routes import router as auto_heal_router
 from routes.preferences_routes import router as preferences_router
 from routes.insights_routes import router as insights_router
+from routes.optimizer_routes import router as optimizer_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -158,6 +159,7 @@ api_router.include_router(postmortem_router)
 api_router.include_router(auto_heal_router)
 api_router.include_router(preferences_router)
 api_router.include_router(insights_router)
+api_router.include_router(optimizer_router)
 
 
 # ---------- WebSocket ----------
@@ -247,6 +249,22 @@ _warmer_task = None
 _trade_manager_task = None
 _auto_heal_task = None
 _stuck_sync_task = None
+_optimizer_task = None
+
+
+async def _optimizer_loop():
+    """Hourly sweep — AI Strategy Optimizer re-analyzes each ACTIVE bot scope
+    at most once per 24h (see ai_optimizer.scheduled_sweep guards)."""
+    import ai_optimizer
+    INTERVAL = int(os.environ.get("OPTIMIZER_SWEEP_INTERVAL_SEC", "3600"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            await ai_optimizer.scheduled_sweep()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("optimizer sweep failed: %s", e)
 
 
 async def _auto_heal_loop():
@@ -386,7 +404,7 @@ async def _stuck_open_sync_loop():
 
 @app.on_event("startup")
 async def on_startup():
-    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task
+    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task
     try:
         await ensure_indexes()
         await seed_admin()
@@ -396,7 +414,8 @@ async def on_startup():
         _trade_manager_task = asyncio.create_task(trade_manager.run_loop())
         _auto_heal_task = asyncio.create_task(_auto_heal_loop())
         _stuck_sync_task = asyncio.create_task(_stuck_open_sync_loop())
-        logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync scheduled.")
+        _optimizer_task = asyncio.create_task(_optimizer_loop())
+        logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
 
@@ -404,7 +423,7 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     for task in (_bot_runner_task, _warmer_task, _trade_manager_task,
-                 _auto_heal_task, _stuck_sync_task):
+                 _auto_heal_task, _stuck_sync_task, _optimizer_task):
         if task and not task.done():
             task.cancel()
             try:
