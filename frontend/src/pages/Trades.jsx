@@ -15,6 +15,11 @@ const STATUS_STYLE = {
     failed: "border-[#FF3B30]/40 text-[#FF3B30]",
 };
 
+// "winning" and "lost" are UI-only refinements over "closed" — the backend
+// route doesn't understand them, so we translate to status=closed and narrow
+// client-side by parseFloat(pnl) sign.
+const CLIENT_ONLY_FILTERS = ["winning", "lost"];
+
 // MT5 standard contract sizes — used to derive live $-P&L per open trade.
 // XAUUSD: 1 lot = 100 oz   → $1 move = $100 P&L per 1.00 lot
 // BTCUSD: 1 lot = 1 BTC    → $1 move = $1 P&L
@@ -205,6 +210,8 @@ export default function Trades() {
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [filter, setFilter] = useState("");
+    const [dateFrom, setDateFrom] = useState("");   // yyyy-mm-dd or ""
+    const [dateTo, setDateTo] = useState("");
     const [accountFilter, setAccountFilter] = useState("");   // "" = all accounts; otherwise account_id
     const [accounts, setAccounts] = useState([]);             // for filter pills + label lookup
     const [quotes, setQuotes] = useState({}); // {SYMBOL: price}  ← polled fallback
@@ -229,7 +236,10 @@ export default function Trades() {
         setRefreshing(true);
         try {
             const params = new URLSearchParams();
-            if (filter) params.set("status", filter);
+            // "winning"/"lost" are client-side subsets of "closed" — ask the
+            // backend for closed trades and refine after.
+            const backendStatus = CLIENT_ONLY_FILTERS.includes(filter) ? "closed" : filter;
+            if (backendStatus) params.set("status", backendStatus);
             if (accountFilter) params.set("account_id", accountFilter);
             const qs = params.toString();
             const statsParams = accountFilter ? `?account_id=${accountFilter}` : "";
@@ -276,6 +286,28 @@ export default function Trades() {
             });
         }
     }, [lastEvent, load]);
+
+    // Client-side refinement layer: winning/lost narrow closed trades by pnl,
+    // and the date range clamps by opened_at (inclusive). Date inputs are
+    // interpreted in the user's local timezone — start-of-day for `from`,
+    // end-of-day for `to`.
+    const visibleTrades = useMemo(() => {
+        const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
+        const toMs   = dateTo   ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
+        return trades.filter(t => {
+            if (filter === "winning" && !(t.status === "closed" && parseFloat(t.pnl) > 0)) return false;
+            if (filter === "lost"    && !(t.status === "closed" && parseFloat(t.pnl) < 0)) return false;
+            if (fromMs != null || toMs != null) {
+                const openedMs = t.opened_at ? Date.parse(t.opened_at) : NaN;
+                if (Number.isNaN(openedMs)) return false;
+                if (fromMs != null && openedMs < fromMs) return false;
+                if (toMs   != null && openedMs > toMs)   return false;
+            }
+            return true;
+        });
+    }, [trades, filter, dateFrom, dateTo]);
+
+    const clearDateRange = () => { setDateFrom(""); setDateTo(""); };
 
     // Poll quotes for any open-trade symbols every 5s — drives live price + P&L.
     const openSymbols = useMemo(() => {
@@ -527,8 +559,8 @@ export default function Trades() {
                     );
                 })()}
 
-                <div className="flex gap-2 flex-wrap">
-                    {["", "pending", "open", "closed", "failed"].map(f => (
+                <div className="flex gap-2 flex-wrap" data-testid="status-filter-row">
+                    {["", "pending", "open", "closed", "winning", "lost", "failed"].map(f => (
                         <button key={f || "all"} onClick={() => setFilter(f)}
                             data-testid={`filter-${f || "all"}`}
                             className={`px-3 py-1.5 text-xs font-mono tracking-widest border transition-colors ${
@@ -537,6 +569,40 @@ export default function Trades() {
                             {(f || "ALL").toUpperCase()}
                         </button>
                     ))}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap" data-testid="date-filter-row">
+                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-1">OPENED ·</span>
+                    <label className="flex items-center gap-1.5 font-mono text-[10px] text-[#52525B] tracking-widest">
+                        FROM
+                        <input type="date"
+                            value={dateFrom}
+                            onChange={(e) => setDateFrom(e.target.value)}
+                            max={dateTo || undefined}
+                            data-testid="date-from"
+                            className="bg-[#0A0A0A] border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00FF41] transition-colors" />
+                    </label>
+                    <label className="flex items-center gap-1.5 font-mono text-[10px] text-[#52525B] tracking-widest">
+                        TO
+                        <input type="date"
+                            value={dateTo}
+                            onChange={(e) => setDateTo(e.target.value)}
+                            min={dateFrom || undefined}
+                            data-testid="date-to"
+                            className="bg-[#0A0A0A] border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00FF41] transition-colors" />
+                    </label>
+                    {(dateFrom || dateTo) && (
+                        <button onClick={clearDateRange}
+                            data-testid="date-clear"
+                            className="px-2 py-1 text-[10px] font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#FF3B30]/40 hover:text-[#FF3B30] transition-colors flex items-center gap-1">
+                            <X className="w-3 h-3" /> CLEAR
+                        </button>
+                    )}
+                    {(dateFrom || dateTo || filter === "winning" || filter === "lost") && (
+                        <span className="ml-auto font-mono text-[10px] text-[#00FF41] tracking-widest" data-testid="visible-count">
+                            SHOWING {visibleTrades.length} / {trades.length}
+                        </span>
+                    )}
                 </div>
 
                 {accounts.length > 1 && (
@@ -564,10 +630,16 @@ export default function Trades() {
 
                 {loading ? (
                     <div className="font-mono text-xs text-[#52525B] tracking-widest">LOADING TRADES…</div>
-                ) : trades.length === 0 ? (
+                ) : visibleTrades.length === 0 ? (
                     <div className="border border-dashed border-[#1F1F1F] p-12 text-center" data-testid="trades-empty">
-                        <div className="font-display font-bold text-lg mb-1">No trades yet</div>
-                        <div className="text-sm text-[#A1A1AA]">Generate an AI signal and execute it from the Signals page.</div>
+                        <div className="font-display font-bold text-lg mb-1">
+                            {trades.length === 0 ? "No trades yet" : "No trades match your filters"}
+                        </div>
+                        <div className="text-sm text-[#A1A1AA]">
+                            {trades.length === 0
+                                ? "Generate an AI signal and execute it from the Signals page."
+                                : "Try clearing the date range or status filter."}
+                        </div>
                     </div>
                 ) : (
                     <div className="border border-[#1F1F1F] bg-[#0A0A0A] overflow-x-auto">
@@ -580,7 +652,7 @@ export default function Trades() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {trades.map(t => (
+                                {visibleTrades.map(t => (
                                     <tr key={t.id} className="border-b border-[#1F1F1F] hover:bg-[#121212] transition-colors" data-testid={`trade-row-${t.id}`}>
                                         <td className="px-3 py-2 font-mono">
                                             <div className="flex items-center gap-1.5">

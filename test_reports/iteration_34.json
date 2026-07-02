@@ -1,0 +1,38 @@
+{
+  "summary": "Frontend-only regression of the new Trades page search/filter feature (WINNING/LOST status buttons + FROM/TO date range + CLEAR + SHOWING X/Y counter + differentiated empty state). All 9 test-case items from the review request PASSED against real historical data on the admin account (100 loaded trades, 76 winning, 17 lost, 4 failed, 2 currently open). Existing filters and refresh/sync/clear controls remain functional.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_evidence": {
+    "login": "admin@trading.bot / admin123 login redirected to / then /trades loaded successfully",
+    "testids_present": ["filter-all","filter-pending","filter-open","filter-closed","filter-winning","filter-lost","filter-failed","date-from","date-to","date-clear","status-filter-row","date-filter-row","visible-count","trades-empty"],
+    "filter_winning": "76 rows returned; every sampled row has status CLOSED and pnl beginning with +$; visible-count = 'SHOWING 76 / 100'",
+    "filter_lost": "17 rows returned; every sampled row has status CLOSED and pnl beginning with -$; visible-count = 'SHOWING 17 / 100'",
+    "filter_all_reset": "100 rows; visible-count hidden (None) as expected",
+    "date_from_far_past": "date-from=2020-01-01 → 100 rows still shown (nothing filtered out); visible-count shown ('SHOWING 100 / 100') because a client-side filter is active — matches implementation",
+    "date_from_today": "date-from=2026-07-02 → 25 rows (only today's trades); visible-count 'SHOWING 25 / 100'",
+    "date_to_yesterday": "date-to=2026-07-01 (from empty) → 75 rows (<= yesterday); date-clear button appears",
+    "date_clear": "Both inputs cleared, 100 rows return, visible-count hidden",
+    "combined_winning_plus_date": "filter-winning + date-from=2020-01-01 → 76 rows, all still CLOSED with +$ pnl (intersection correct)",
+    "empty_state_with_filters": "date-from=2030-01-01 (no matches) shows 'No trades match your filters\\nTry clearing the date range or status filter.' (trades-empty testid)",
+    "existing_filters": "filter-open=2 rows, filter-closed=100 rows, filter-pending=0 rows, filter-failed=4 rows — all render correctly",
+    "toolbar_buttons": "REFRESH, SYNC WITH BROKER, CLEAR buttons all present and clickable (found by text; only CLEAR menu has a data-testid `clear-trades-menu`)"
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Minor: filter=closed returns 100 rows equal to ALL, suggesting the backend /api/trades endpoint uses a default 100-row cap. Client-side date filtering therefore only refines the already-loaded window (a user setting date-from=2020 doesn't retrieve older trades beyond the 100 returned). Not part of this feature but worth flagging for a future enhancement to add server-side date range params or a 'load more'.",
+    "Minor: visible-count is shown as 'SHOWING 100 / 100' whenever a client-side filter is active even if nothing is filtered out (e.g. date-from=2020-01-01). This matches the code (`(dateFrom || dateTo || filter === 'winning' || filter === 'lost')`) and is arguably useful UX ('filter is active'), so keeping as-is.",
+    "Suggestion: consider adding data-testid to the REFRESH and SYNC WITH BROKER buttons (currently only findable by text) — minor testability improvement, not blocking."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A (frontend-only pass)", "frontend": "100%" },
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — used existing production-like historical trades on admin account (165 total, 74.55% win rate).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Trades page filter feature is fully verified. Backend /api/trades appears to return only 100 trades (page cap) which is orthogonal to this feature. The `winning` and `lost` filters are client-side subsets of `closed` (backend receives status=closed), and the date range clamps opened_at in local timezone (start-of-day for FROM, end-of-day for TO). All new data-testids are wired correctly."
+}
