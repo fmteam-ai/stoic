@@ -8,6 +8,15 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-07-02 (iter-100) — **Bot Pulse strategy chip · clickable deep-link to Bot Config**:
+  - **`components/BotPulsePanel.jsx`**: the blue strategy chip on each account row is now a react-router `<Link>` (was a static `<span>`). Href pattern: `/bot-config?account=<account_id_or_"default">&preset=<strategy_key>`. The literal string `default` sentinel is used when `item.account_id` is falsy (Default profile scope), keeping URL param parsing on the other side dead-simple.
+  - **`pages/BotConfig.jsx`**: added `useSearchParams` deep-link consumer:
+    - Reads `?account` and `?preset` on first mount (guarded by `deepLinkAppliedRef` so it runs exactly once). `account=default` → `setSelectedAccountId(null)`; any other value → per-account scope.
+    - Immediately clears the query params with `setSearchParams(next, {replace: true})` so a page refresh doesn't re-scroll/re-pulse.
+    - Second `useEffect` waits for `presets.length > 0`, then `scrollIntoView({behavior:'smooth', block:'start'})` on the Strategy Presets section (`presetsAnchorRef`) and highlights the matching preset card (built-in AND custom) with `ring-2 ring-[#00FF41] animate-pulse` for 2.5s before clearing.
+  - **Testing agent iter-36**: 7/7 test cases passed at 100% frontend. All 6 chip hrefs verified (5 real account IDs + 1 `default` sentinel), click → navigate → URL cleanup within 1s, matching preset card gains ring+pulse animation for 2.5s then settles, page refresh does NOT re-trigger highlight. Regression on KRAKEN_SPOT (no chip) and Trades filters (winning/lost) still green.
+
+
 - 2026-07-02 (iter-99) — **Bot Pulse panel · strategy chip per account + dropdown mode for large fleets**:
   - **Backend `routes/bot_routes.py::get_bot_pulse`**: now emits `strategy_key` and `strategy_label` per item. Built-in presets resolve via `strategy_presets.PRESETS[key]["label"]`; `custom:<id>` keys are batch-resolved through a single `db.user_presets.find({_id: {$in: [...]}})` query (avoids N+1 when a user has many accounts). Unresolvable custom keys fall back to `"Custom preset"`; unknown built-in keys fall back to `key.title()`.
   - **Frontend `components/BotPulsePanel.jsx`**:
