@@ -219,10 +219,12 @@ export default function AiOptimizerSection({ accountId, onConfigChanged, anchorR
                     <div className="font-mono text-xs text-[#52525B] tracking-widest">LOADING…</div>
                 ) : !report ? (
                     <div className="text-xs text-[#A1A1AA] leading-relaxed" data-testid="optimizer-empty-state">
-                        No AI review yet for this scope. The optimizer reads the last 24–48h of closed
-                        trades, finds losing patterns (session, symbol, direction, exit reason) and
-                        proposes concrete config changes — nothing is applied without your click.
-                        A scheduled review also runs automatically every 24h while the bot is active.
+                        No AI review yet for this scope. The optimizer reads the last 24–48h of
+                        <span className="text-white"> bot-executed</span> closed trades (manual trades
+                        you open on the broker terminal are excluded), finds losing patterns
+                        (session, symbol, direction, exit reason) and proposes concrete config
+                        changes — nothing is applied without your click. A scheduled review also
+                        runs automatically every 24h while the bot is active.
                     </div>
                 ) : (
                     <>
@@ -236,6 +238,12 @@ export default function AiOptimizerSection({ accountId, onConfigChanged, anchorR
                                     {report.window_hours}H WINDOW · {report.source === "scheduled" ? "AUTO" : "MANUAL"} · {agoLabel(report.created_at)}
                                     {report.model_used ? ` · ${report.model_used.toUpperCase()}` : ""}
                                 </span>
+                                {report.excluded_manual_trades > 0 && (
+                                    <span className="font-mono text-[10px] text-[#FFB000] tracking-widest"
+                                        data-testid="optimizer-excluded-manual">
+                                        {report.excluded_manual_trades} MANUAL TRADE{report.excluded_manual_trades > 1 ? "S" : ""} EXCLUDED
+                                    </span>
+                                )}
                             </div>
                         </div>
 

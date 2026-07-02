@@ -41,6 +41,13 @@ SCHEDULED_EVERY_HOURS = 24
 # guaranteed-supported fallback on the Emergent Universal Key.
 MODEL_CANDIDATES = [("anthropic", "claude-fable-5"), ("anthropic", "claude-opus-4-8")]
 
+# Optimizer reviews BOT-EXECUTED trades only. `origin` values seen in the wild:
+# 'auto' (bot), 'manual' / 'external' / 'other_ea' (broker-terminal trades),
+# 'test_trade'. Legacy docs missing `origin` predate the field and came from
+# the bot's execution path — treated as bot trades ($in with None matches
+# both null and missing fields in Mongo).
+BOT_ORIGIN_FILTER = {"$in": ["auto", None]}
+
 # Whitelist of bot_config fields the optimizer may suggest changing.
 # (kind, min, max) — bool kind ignores min/max. Values outside are clamped.
 ALLOWED_FIELDS = {
@@ -281,10 +288,16 @@ async def analyze_account(user_id: str, account_id, window_hours: int = 24,
     window_hours = 48 if int(window_hours) >= 48 else 24
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
 
-    trade_q = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": cutoff}}
+    trade_q = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": cutoff},
+               "origin": BOT_ORIGIN_FILTER}
     if account_id:
         trade_q["account_id"] = account_id
     trades = await db.trades.find(trade_q).sort("closed_at", -1).to_list(300)
+
+    # Transparency: count manual/external trades in the same window that were
+    # deliberately left out of the review.
+    excluded_q = {**trade_q, "origin": {"$nin": ["auto", None]}}
+    excluded_manual = await db.trades.count_documents(excluded_q)
 
     cfg = await db.bot_configs.find_one(_config_filter(user_id, account_id)) or {}
     stats = compute_trade_stats(trades)
@@ -295,6 +308,7 @@ async def analyze_account(user_id: str, account_id, window_hours: int = 24,
         "window_hours": window_hours,
         "source": source,
         "stats": stats,
+        "excluded_manual_trades": excluded_manual,
         "active_preset": cfg.get("active_preset"),
         "bot_active": bool(cfg.get("active")),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -304,9 +318,11 @@ async def analyze_account(user_id: str, account_id, window_hours: int = 24,
         doc.update({
             "insufficient_data": True,
             "verdict": "insufficient_data",
-            "headline": f"Only {stats['total_trades']} closed trade(s) in the last "
-                        f"{window_hours}h — need at least {MIN_TRADES} for a meaningful review.",
-            "summary": "Let the bot trade a bit longer or widen the window to 48h.",
+            "headline": f"Only {stats['total_trades']} bot-executed closed trade(s) in the last "
+                        f"{window_hours}h — need at least {MIN_TRADES} for a meaningful review."
+                        + (f" ({excluded_manual} manual trade(s) excluded.)" if excluded_manual else ""),
+            "summary": "Manual trades opened via the broker terminal are never reviewed. "
+                       "Let the bot trade a bit longer or widen the window to 48h.",
             "patterns": [], "recommendations": [], "model_used": None,
         })
         res = await db.optimizer_reports.insert_one(doc)
@@ -428,7 +444,8 @@ async def scheduled_sweep():
         if recent:
             continue
         trade_cut = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        tq = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": trade_cut}}
+        tq = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": trade_cut},
+              "origin": BOT_ORIGIN_FILTER}
         if account_id:
             tq["account_id"] = account_id
         n = await db.trades.count_documents(tq)

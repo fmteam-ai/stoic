@@ -798,6 +798,9 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   test_iter_optimizer_http.py (7 http, self-provisioning). iteration_37.json: 100% pass.
 - Telegram alert: scheduled sweep sends `optimizer_critical` alert on CRITICAL verdict
   (via notifier.send_telegram; opt-out toggle added to Notifications page EVENT_LABELS).
+- MANUAL TRADES EXCLUDED: optimizer reviews BOT-EXECUTED trades only
+  (`origin ∈ {auto, null}` — null = legacy bot trades; manual/external/other_ea/test_trade
+  excluded). Report carries `excluded_manual_trades` count, shown as an amber badge in the UI.
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.
