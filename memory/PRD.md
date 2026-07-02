@@ -808,6 +808,10 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   sweep iterates db.accounts (effective config active). Summary excludes legacy null-scope
   reports. Bot Config section shows a "select an account" hint on Default Profile scope.
   Tests: 15/15 (incl. apply-isolation + manual-origin-exclusion + 400-without-account).
+- GUIDE UPDATED (iter39): new Guide section "13. AI Strategy Optimizer" (suggest-only,
+  per-account isolation, schedule, Telegram critical alert, Fable 5); TOC renumbered to 23
+  sections and drifted in-section H2 numbers fixed; Daily Routine gained Trades-filters +
+  Optimizer checks; Multi-Bot section gained Step 4 "Bot Pulse strategy chips/dropdown".
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.

@@ -5,7 +5,7 @@ import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
     Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign, Server, Bitcoin,
-    Stethoscope, Activity, Wand2,
+    Stethoscope, Activity, Wand2, BrainCircuit,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
@@ -22,16 +22,17 @@ const SECTIONS = [
     { id: "autopilot",    title: "10. Autopilot mode explained",       icon: Plane },
     { id: "shadow",       title: "11. Paper Shadow Mode + Report",     icon: Eye },
     { id: "adaptive",     title: "12. Adaptive Intelligence (NEW)",    icon: Sparkles },
-    { id: "doctor",       title: "13. Bot Doctor — self-diagnosis",    icon: Stethoscope },
-    { id: "auto-broker",  title: "14. Auto Broker Detection (NEW)",    icon: Wand2 },
-    { id: "daily",        title: "15. Daily 5-min routine",            icon: Clock },
-    { id: "advanced",     title: "16. Advanced — tuning & auditing",   icon: SettingsIcon },
-    { id: "presets",      title: "17. Strategy Presets",               icon: Bookmark },
-    { id: "crypto",       title: "18. Crypto · Binance Spot",          icon: Bitcoin },
-    { id: "vps",          title: "19. VPS — 24/7 uptime",              icon: Server },
-    { id: "going-live",   title: "20. Going live (paper → real)",      icon: TrendingUp },
-    { id: "affiliate",    title: "21. Earn 20% recurring (affiliate)", icon: DollarSign },
-    { id: "faq",          title: "22. Quick links",                    icon: Zap },
+    { id: "optimizer",    title: "13. AI Strategy Optimizer (NEW)",    icon: BrainCircuit },
+    { id: "doctor",       title: "14. Bot Doctor — self-diagnosis",    icon: Stethoscope },
+    { id: "auto-broker",  title: "15. Auto Broker Detection (NEW)",    icon: Wand2 },
+    { id: "daily",        title: "16. Daily 5-min routine",            icon: Clock },
+    { id: "advanced",     title: "17. Advanced — tuning & auditing",   icon: SettingsIcon },
+    { id: "presets",      title: "18. Strategy Presets",               icon: Bookmark },
+    { id: "crypto",       title: "19. Crypto · Binance Spot",          icon: Bitcoin },
+    { id: "vps",          title: "20. VPS — 24/7 uptime",              icon: Server },
+    { id: "going-live",   title: "21. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "22. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "23. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -100,6 +101,7 @@ export default function Guide() {
                     <Autopilot />
                     <ShadowSection />
                     <AdaptiveSection />
+                    <OptimizerSection />
                     <BotDoctorSection />
                     <AutoBrokerSection />
                     <DailyFlow />
@@ -459,7 +461,7 @@ function RiskSection() {
     ];
     return (
         <section>
-            <H2 id="risk" icon={ShieldCheck}>5. Risk & Capital Preservation</H2>
+            <H2 id="risk" icon={ShieldCheck}>8. Risk & Capital Preservation</H2>
             <P>Position size is calculated via <strong className="text-white">Kelly Criterion</strong> (capped at
                 0.25 of full Kelly) — scaled by your confidence + regime modifier ÷ stop-loss distance.</P>
             <P className="mt-3">Beyond sizing, these guards stop the bot when things go wrong:</P>
@@ -482,7 +484,7 @@ function RiskSection() {
 function SetupSteps() {
     return (
         <section>
-            <H2 id="setup" icon={Rocket}>7. Setup — sign-up to autopilot</H2>
+            <H2 id="setup" icon={Rocket}>9. Setup — sign-up to autopilot</H2>
             <P>Six steps. Roughly 10 minutes if you already have an MT5 broker account. After step 6, STOIC trades
                 without you needing to touch it again.</P>
             <div className="space-y-5 mt-4">
@@ -703,10 +705,69 @@ function AdaptiveSection() {
     );
 }
 
+function OptimizerSection() {
+    return (
+        <section id="optimizer">
+            <H2 id="optimizer" icon={BrainCircuit}>13. AI Strategy Optimizer — reviews its own trades</H2>
+            <P>
+                Every account gets its own <strong className="text-white">AI performance coach</strong>. The optimizer
+                reads the last <strong className="text-white">24 or 48 hours</strong> of that account&apos;s{" "}
+                <strong className="text-[#10F2C5]">bot-executed</strong> closed trades (trades you open manually on the
+                broker terminal are excluded — you&apos;ll see an amber <span className="font-mono text-[10px] text-[#FFB000]">N MANUAL TRADES EXCLUDED</span> badge),
+                digs through win rate, profit factor, and losing patterns by session / symbol / direction / exit reason,
+                and proposes concrete tuning changes to raise the win rate.
+            </P>
+            <div className="space-y-3 mt-4">
+                <div className="border border-[#10F2C5]/30 bg-[#10F2C5]/5 p-4 space-y-2">
+                    <div className="font-mono text-[10px] text-[#10F2C5] tracking-widest">SUGGEST-ONLY, ALWAYS</div>
+                    <P>
+                        The optimizer <strong className="text-white">never touches your config on its own</strong>. Each
+                        recommendation is a card with the AI&apos;s reasoning + expected impact, and you choose{" "}
+                        <strong className="text-[#10F2C5]">APPLY</strong> or <strong>DISMISS</strong> per card. Three
+                        recommendation types:
+                    </P>
+                    <ul className="text-sm text-[#A1A1AA] space-y-1.5">
+                        <li>• <strong className="text-[#10F2C5]">CONFIG CHANGE</strong> — a single setting, shown as <span className="font-mono text-xs">from → to</span> (e.g. SL COOLDOWN: OFF → ON). Values are whitelist-validated and clamped server-side.</li>
+                        <li>• <strong className="text-[#FFD700]">SWITCH PRESET</strong> — move the account to a different Strategy Preset when its style doesn&apos;t fit current conditions.</li>
+                        <li>• <strong className="text-[#FF3B30]">PAUSE BOT</strong> — only suggested when an account is consistently losing (heavy drawdown / sub-35% win rate on a real sample).</li>
+                    </ul>
+                </div>
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4 space-y-2">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">STRICTLY PER-ACCOUNT</div>
+                    <P>
+                        Each account is analyzed <strong className="text-white">separately</strong> and applying a suggestion
+                        changes <strong className="text-white">only that account</strong>. If the account still inherits the
+                        default profile, STOIC first clones the profile into a per-account override — so a tweak for your
+                        scalping account can never leak into your swing account.
+                    </P>
+                </div>
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4 space-y-2">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">WHEN IT RUNS</div>
+                    <ul className="text-sm text-[#A1A1AA] space-y-1.5">
+                        <li>• <strong className="text-white">On-demand</strong> — <span className="font-mono text-xs text-[#10F2C5]">ANALYZE 24H / 48H</span> buttons in Bot Config (select an account first).</li>
+                        <li>• <strong className="text-white">Scheduled</strong> — an automatic review every 24h per active account (needs ≥ 3 bot-executed closed trades in the window).</li>
+                        <li>• <strong className="text-white">Dashboard card</strong> — the AI STRATEGY OPTIMIZER card lists each account&apos;s latest verdict (HEALTHY / NEEDS TUNING / UNDERPERFORMING / CRITICAL) and pending suggestions; click a row to jump straight to that account&apos;s review.</li>
+                    </ul>
+                </div>
+            </div>
+            <Callout kind="warn">
+                <strong>CRITICAL verdict → Telegram alert.</strong> When a scheduled review flags an account as CRITICAL,
+                you get a Telegram message with the account, win rate, P&L and pending suggestion count. Toggle it under
+                Notifications → &quot;AI Optimizer: Critical Verdict&quot;.
+            </Callout>
+            <Callout kind="info">
+                Powered by <strong>Claude Fable 5</strong> (Anthropic&apos;s newest model) with automatic fallback. Reports
+                stay in history — an already-applied or dismissed card keeps its state so you always know what you acted on.
+            </Callout>
+            <CTAButton to="/bot-config?optimizer=1" testid="optimizer-guide-cta">Open the Optimizer in Bot Config</CTAButton>
+        </section>
+    );
+}
+
 function BotDoctorSection() {
     return (
         <section id="doctor">
-            <H2 id="doctor" icon={Stethoscope}>13. Bot Doctor — self-diagnosis</H2>
+            <H2 id="doctor" icon={Stethoscope}>14. Bot Doctor — self-diagnosis</H2>
             <P>
                 STOIC analyses its own last hour of telemetry every 5 minutes (failed trades, blocked
                 accounts, regime context, vetos, signal patterns, win rate) and produces a structured
@@ -740,7 +801,7 @@ function BotDoctorSection() {
 function AutoBrokerSection() {
     return (
         <section id="auto-broker">
-            <H2 id="auto-broker" icon={Wand2}>14. Auto Broker Detection</H2>
+            <H2 id="auto-broker" icon={Wand2}>15. Auto Broker Detection</H2>
             <P>
                 Every broker renames common symbols differently — <code className="font-mono text-[#10F2C5]">XAUUSD</code> becomes
                 <code className="font-mono text-[#10F2C5]"> XAUUSD.fx</code> on Tauro, <code className="font-mono text-[#10F2C5]">XAUUSD.e</code> on OnEquity,
@@ -783,12 +844,13 @@ function DailyFlow() {
         ["Check connection",   "Accounts page → all MT5 accounts should show ● CONNECTED. If any is stale, follow the FAQ disconnection fix."],
         ["Review HOLDs",       "AI Signals page → click ALL HOLDS to see what was skipped + why. Look for repeated BLOCKED vetoes — they tell you what's killing your edge."],
         ["Audit STRONG / MARGINAL", "If any actionable signal is MARGINAL, manually decide skip vs half-size. STRONG signals you can trust to autonomous execution."],
-        ["Skim Trades log",    "Trades page → confirm any opened/closed trades match your expectations. Telegram alerts mirror this."],
+        ["Skim Trades log",    "Trades page → confirm any opened/closed trades match your expectations. Use the new date-range picker and WINNING / LOST / OPEN filters to slice the log fast. Telegram alerts mirror this."],
+        ["Check AI Optimizer suggestions", "Dashboard → AI STRATEGY OPTIMIZER card. If an account shows pending suggestions or a NEEDS TUNING / CRITICAL verdict, click through and Apply what you trust (see section 13)."],
         ["Read Risk Commander","Optional: chat with the Commander for ad-hoc questions like \"why did the bot pass on gold today?\""],
     ];
     return (
         <section>
-            <H2 id="daily" icon={Clock}>12. Daily 5-min routine</H2>
+            <H2 id="daily" icon={Clock}>16. Daily 5-min routine</H2>
             <P>Autopilot doesn&apos;t mean &quot;set and forget forever&quot;. About <strong className="text-white">5 minutes a day</strong> keeps you in the loop:</P>
             <ol className="space-y-1.5 mt-3 list-decimal list-inside marker:text-[#52525B] marker:font-mono">
                 {checks.map(([t, sub]) => (
@@ -809,7 +871,7 @@ function DailyFlow() {
 function Advanced() {
     return (
         <section>
-            <H2 id="advanced" icon={SettingsIcon}>13. Advanced — tuning & auditing</H2>
+            <H2 id="advanced" icon={SettingsIcon}>17. Advanced — tuning & auditing</H2>
             <div className="space-y-4 mt-3">
                 <div>
                     <div className="font-display font-bold text-base mb-1.5">🔍 Auditing a specific signal</div>
@@ -841,7 +903,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>17. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>21. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -860,7 +922,7 @@ function GoingLive() {
 function VpsSection() {
     return (
         <section>
-            <H2 id="vps" icon={Server}>16. VPS — 24/7 uptime (eliminate disconnects)</H2>
+            <H2 id="vps" icon={Server}>20. VPS — 24/7 uptime (eliminate disconnects)</H2>
             <P>
                 Autopilot only works while your <strong className="text-white">MT5 terminal is running and online</strong>.
                 If your PC sleeps, closes its lid, reboots, or loses internet — the bot loses contact with your broker,
@@ -990,7 +1052,7 @@ function PresetsSection() {
     ];
     return (
         <section>
-            <H2 id="presets" icon={Bookmark}>14. Strategy Presets</H2>
+            <H2 id="presets" icon={Bookmark}>18. Strategy Presets</H2>
             <P>
                 Presets are <strong className="text-white">one-click personality profiles</strong> for the bot. They overlay
                 behaviour knobs (confidence floor, trade cap, trailing stop, cooldowns, news protector) onto your config — but
@@ -1033,7 +1095,7 @@ function PresetsSection() {
 function AffiliateSection() {
     return (
         <section>
-            <H2 id="affiliate" icon={DollarSign}>18. Earn 20% recurring (affiliate program)</H2>
+            <H2 id="affiliate" icon={DollarSign}>22. Earn 20% recurring (affiliate program)</H2>
             <P>
                 Refer one trader — get paid every month they stay subscribed. STOIC pays{" "}
                 <strong className="text-[#FFD700]">20% recurring commission</strong> on the base subscription fee for the
@@ -1123,7 +1185,7 @@ function QuickLinks() {
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>19. Quick links</H2>
+            <H2 id="faq" icon={Zap}>23. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (
@@ -1205,6 +1267,12 @@ function MultiBotSection() {
                 and <code className="text-[#FFD700]">last_change_applied_at</code>. You can
                 always answer &quot;why is this bot set up like this?&quot;.
             </Step>
+            <Step n="4" title="Fleet at a glance — Bot Pulse" testid="multi-bot-pulse">
+                The <strong>Bot Pulse</strong> panel on the Dashboard shows every account&apos;s live bot state
+                with a <strong className="text-white">strategy chip</strong> (which preset each account runs).
+                Click a chip to deep-link straight into that account&apos;s preset in Bot Config. Running more
+                than 10 accounts? The panel automatically collapses into a compact dropdown to save space.
+            </Step>
             <Callout kind="info">
                 <strong>Telegram quick controls</strong> (<code>/run</code>, <code>/stop</code>, <code>/panic</code>)
                 broadcast to ALL bots by default. Toast / Telegram reply tells you
@@ -1262,7 +1330,7 @@ function ShadowSection() {
 function CryptoSection() {
     return (
         <section>
-            <H2 id="crypto" icon={Bitcoin}>15. Crypto · Binance Spot</H2>
+            <H2 id="crypto" icon={Bitcoin}>19. Crypto · Binance Spot</H2>
             <P>
                 STOIC trades BTC/USDT on Binance Spot via the CCXT REST API — server-side,
                 no EA needed. Runs the same Safety Guardian veto cascade, the same Explainable AI
