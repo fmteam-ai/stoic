@@ -8,6 +8,15 @@ UI, dual-AI intelligence (Claude Sonnet 4.5), Kelly Criterion sizing,
 Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
 
 ## Sessions changelog
+- 2026-07-02 (iter-99) — **Bot Pulse panel · strategy chip per account + dropdown mode for large fleets**:
+  - **Backend `routes/bot_routes.py::get_bot_pulse`**: now emits `strategy_key` and `strategy_label` per item. Built-in presets resolve via `strategy_presets.PRESETS[key]["label"]`; `custom:<id>` keys are batch-resolved through a single `db.user_presets.find({_id: {$in: [...]}})` query (avoids N+1 when a user has many accounts). Unresolvable custom keys fall back to `"Custom preset"`; unknown built-in keys fall back to `key.title()`.
+  - **Frontend `components/BotPulsePanel.jsx`**:
+    - Added blue strategy chip (`data-testid=bot-pulse-strategy-<config_id>`) inside each row's left column alongside the LIVE/SHADOW/OFF state chip and the symbols chip. Displays the uppercased strategy label; hidden when no preset is set (e.g. KRAKEN_SPOT).
+    - Header summary now reads `N ACTIVE · M TOTAL · LOOP 60s` (previously only ACTIVE was shown).
+    - **New `DROPDOWN_THRESHOLD = 10` constant**. When `items.length > 10`, a `bot-pulse-selector-row` renders under the header with (a) a `<select>` (`bot-pulse-selector`) listing each account in the form `[STATE] Label · Strategy · LEVEL`, ranked by severity (block > warn > info) and freshness — auto-selecting the loudest on first load, and (b) a `SHOW ALL (N) / HIDE (N)` toggle button (`bot-pulse-show-all`) that flips between dropdown-preview mode and the full expanded list on demand. Below the 10-item threshold the panel is unchanged (all rows always visible).
+  - **Testing agent iter-35**: 6/6 test cases passed at 100% frontend + backend. `strategy_key/strategy_label` verified for all 7 admin bot_configs (Scalper / Mean Reversion / Sniper / Aggressive / Trend Rider / Fast Scalp / null-for-no-preset). Header shows `4 ACTIVE · 7 TOTAL · LOOP 60s`. Dropdown mode manually validated by main agent with a temporary threshold override (7 options rendered correctly; auto-select of top-ranked config; SHOW ALL / HIDE toggle expands/collapses the row list). No regression on the WINNING/LOST/date-range filters from iter-98.
+
+
 - 2026-07-02 (iter-98) — **Trades page · date range + winning/lost status filters**:
   - **`pages/Trades.jsx`**: added `WINNING` and `LOST` buttons to the status filter row alongside `ALL / PENDING / OPEN / CLOSED / FAILED`. Because the backend `/api/trades` route only knows pending/open/closed/failed, `winning`/`lost` are translated to `status=closed` and narrowed client-side by `parseFloat(pnl) > 0` / `< 0`. Constant `CLIENT_ONLY_FILTERS = ['winning', 'lost']` at module scope.
   - **Date range picker row** (`data-testid=date-filter-row`): `FROM` (`date-from`) and `TO` (`date-to`) `<input type="date">` inputs clamp the visible table by `opened_at` in the user's local timezone — start-of-day for FROM, end-of-day for TO. `min`/`max` attributes cross-link the inputs so the user can't pick TO earlier than FROM. A `CLEAR` button (`date-clear`) appears when either date is set.
