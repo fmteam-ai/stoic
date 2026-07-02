@@ -282,6 +282,31 @@ async def get_bot_pulse(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.bot_configs.find({"user_id": user["id"]})
     docs = await cursor.to_list(length=100)
+    # Batch-resolve custom preset labels so we don't fire one query per config
+    # when a user has 20+ accounts, each with a `custom:<id>` active preset.
+    custom_ids: set[str] = set()
+    for d in docs:
+        ap = d.get("active_preset") or ""
+        if isinstance(ap, str) and ap.startswith("custom:"):
+            try:
+                custom_ids.add(ap.split(":", 1)[1])
+            except Exception:
+                pass
+    custom_label_by_id: dict[str, str] = {}
+    if custom_ids:
+        oids = []
+        for pid in custom_ids:
+            try:
+                oids.append(ObjectId(pid))
+            except Exception:
+                pass
+        if oids:
+            cur = db.user_presets.find(
+                {"_id": {"$in": oids}, "user_id": user["id"]},
+                {"name": 1},
+            )
+            async for row in cur:
+                custom_label_by_id[str(row["_id"])] = row.get("name") or "Custom"
     out: list[dict] = []
     now = datetime.now(timezone.utc)
     for d in docs:
@@ -305,6 +330,17 @@ async def get_bot_pulse(user=Depends(get_current_user)):
                     label = acct.get("login") or acct.get("broker") or f"Account {acct_id[:6]}"
             except Exception:
                 pass
+        # Strategy preset label — resolved once, sent alongside the raw key so
+        # the UI doesn't need its own preset dictionary.
+        active_preset = d.get("active_preset") or ""
+        strategy_label = None
+        if active_preset:
+            if isinstance(active_preset, str) and active_preset.startswith("custom:"):
+                pid = active_preset.split(":", 1)[1]
+                strategy_label = custom_label_by_id.get(pid, "Custom preset")
+            else:
+                p = get_preset(active_preset)
+                strategy_label = (p or {}).get("label") or active_preset.title()
         out.append({
             "config_id": str(d["_id"]),
             "account_id": acct_id,
@@ -312,6 +348,8 @@ async def get_bot_pulse(user=Depends(get_current_user)):
             "active": bool(d.get("active")),
             "paper_shadow_mode": bool(d.get("paper_shadow_mode")),
             "symbols": d.get("symbols") or [],
+            "strategy_key": active_preset or None,
+            "strategy_label": strategy_label,
             "pulse": pulse,
             "stale_seconds": stale,
         })

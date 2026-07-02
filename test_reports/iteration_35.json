@@ -1,0 +1,35 @@
+{
+  "summary": "Full frontend + backend verification of the BotPulsePanel strategy-chip + ACTIVE/TOTAL header + dropdown-mode threshold feature. All 6 review-request test cases PASSED. Backend /api/bot/pulse now emits strategy_key + strategy_label per item; frontend renders a blue strategy chip inline for every config with an active_preset and shows both ACTIVE and TOTAL counters in the header. Dropdown mode correctly stays hidden below the 10-account threshold (admin has 7). Regression on Trades page filters (WINNING/LOST + date range) unaffected.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_evidence": {
+    "auth": "admin@trading.bot / admin123 login succeeded; /trades loaded",
+    "api_bot_pulse": "GET /api/bot/pulse returns 7 items, loop_interval_sec=60. strategy_key/strategy_label emitted per item. Verified mapping: OnEquity→scalper/Scalper, RoboForex→mean_reversion/Mean Reversion, STARTRADER→sniper/Sniper, VTMarkets→aggressive/Aggressive, Default profile→trend_rider/Trend Rider, Tauro Markets→fast_scalp/Fast Scalp, KRAKEN_SPOT→null/null. Order = active first, then by label — matches server-side sort.",
+    "row_count": "7 (matches admin's 7 bot_configs)",
+    "strategy_chips_rendered": "6 chips present: SCALPER (OnEquity), MEAN REVERSION (RoboForex), SNIPER (STARTRADER), AGGRESSIVE (VTMarkets), TREND RIDER (Default profile), FAST SCALP (Tauro Markets). No chip for KRAKEN_SPOT (correct — strategy_label null).",
+    "chip_testids": "bot-pulse-strategy-<config_id> present for all 6 rows with a preset",
+    "header_counts": "bot-pulse-toggle text contains '4 ACTIVE · 7 TOTAL · LOOP 60s' — regex-verified ACTIVE=4 TOTAL=7 LOOP=60s",
+    "dropdown_absent": "bot-pulse-selector and bot-pulse-selector-row both absent since 7 < DROPDOWN_THRESHOLD=10 (code in BotPulsePanel.jsx line 8 = 10, unchanged as required)",
+    "custom_preset_batching": "Backend code (bot_routes.py:287-309) batch-resolves custom:<id> presets via a single user_presets $in query; falls back to 'Custom preset' when unresolvable — logic verified via code review (no admin config uses custom preset today so runtime path not exercised, but structure is correct)",
+    "regression_filters": "filter-all, filter-winning, filter-lost, date-from, date-to testids all present. Clicking filter-winning still returns the expected subset (78 trade rows). No console errors from BotPulsePanel; only pre-existing recharts width/height warnings observed."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "bot_routes.py:342-343 — For non-custom, non-builtin keys (get_preset returns None), fallback is active_preset.title() which will print e.g. 'Foo_Bar' for legacy keys; acceptable safety net, but any garbage stored value will still leak to UI. Consider validating active_preset against known keys at write time (POST /api/bot/preset/{key} already does this — so risk is limited to legacy DB rows).",
+    "BotPulsePanel.jsx:84-91 — strategy chip only renders when item.strategy_label is truthy; that's correct. Good use of title attribute for the full label since strategy_label.toUpperCase() could get long. No a11y concern.",
+    "BotPulsePanel.jsx:172-181 — auto-select useEffect depends on rankedItems (memoized on data). Correct guard for `selectedId === '__all__'`; won't clobber user's explicit 'show all' state on refresh. Good.",
+    "Suggestion (non-blocking): the dropdown-mode <option> label concatenates strategy + level with '·' separators — that's fine for LTR but the option value shows in the collapsed <select>, which can get long on brokers with 20+ char labels + long custom preset names. Consider truncating with title attribute on the option, but currently the browser handles it acceptably."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100%", "frontend": "100%" },
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — used admin's 7 pre-existing bot_configs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "BotPulsePanel strategy chip + ACTIVE/TOTAL counter + dropdown-threshold feature fully verified. DROPDOWN_THRESHOLD = 10 (unchanged); dropdown mode was previously validated by main agent with a temporary threshold override, no need to re-verify. If a user with >10 accounts is ever seeded, re-verify the bot-pulse-selector rendering + auto-select + SHOW ALL toggle behaviour end-to-end. Custom preset (custom:<id>) name resolution code path exists but no admin config currently uses one — worth exercising once a user_preset is applied on any config."
+}
