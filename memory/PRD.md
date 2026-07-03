@@ -814,6 +814,15 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   Optimizer checks; Multi-Bot section gained Step 4 "Bot Pulse strategy chips/dropdown".
 - trade_of_day_cap max raised 50 → 100 (BotConfig.jsx input max; ai_optimizer ALLOWED_FIELDS
   clamp aligned to 100). Backend had no hard cap — verified PUT accepts 100.
+- EA v1.38 (iter40) — retcode 10016 INVALID_STOPS fix (Tauro Markets XAUUSD.fx rejection):
+  new ClampStops() clamps SL/TP to max(SYMBOL_TRADE_STOPS_LEVEL, freeze level, live spread)
+  +2pt buffer, sides per MT5 rules (BUY vs Bid, SELL vs Ask), normalises with the TRADED
+  symbol's digits (was chart _Digits bug), retries OrderSend once with doubled buffer on
+  10016 (never opens without SL). Trailing/breakeven SL moves clamped too. Version bumped
+  in mq5 (3 places) + LATEST_EA in bot_routes/diagnostic_routes + setup_routes
+  ea_latest_version + Accounts.jsx. Tests: test_iter40_ea_clamp_stops.py (5) + iter85
+  updated to 1.38 — 18/18 pass. NOTE: fix reaches live users only after prod redeploy
+  AND users updating their EA to v1.38.
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.

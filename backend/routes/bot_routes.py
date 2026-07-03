@@ -1012,7 +1012,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.37"
+    LATEST_EA = "1.38"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:
@@ -1473,7 +1473,8 @@ async def get_bot_status(account_id: Optional[str] = None,
         err = str(recent_failed["error"])
         retcode_hint = ""
         if "10016" in err:
-            retcode_hint = " (INVALID_STOPS — broker rejects: SL/TP too close to entry. Try a different broker or widen risk profile.)"
+            retcode_hint = (" (INVALID_STOPS — SL/TP violated the broker's minimum stop distance. "
+                            "EA v1.38 auto-clamps stops to broker rules and retries — update your EA from the Accounts page.)")
         elif "10013" in err:
             retcode_hint = " (INVALID_REQUEST — bad order params; check symbol name in EA)"
         elif "10014" in err:

@@ -20,7 +20,7 @@ import re
 import requests
 
 EA_PATH = "/app/backend/static/EmergentTradingBridge.mq5"
-EXPECTED_VERSION = "1.36"
+EXPECTED_VERSION = "1.38"
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
@@ -50,7 +50,8 @@ def test_client_version_define_matches():
 
 def test_oninit_print_includes_version():
     src = _ea_source()
-    assert f"STOIC Bridge EA v{EXPECTED_VERSION} started" in src
+    # The Print concatenates EA_CLIENT_VERSION at runtime — assert the pattern.
+    assert 'Print("STOIC Bridge EA v", EA_CLIENT_VERSION, " started' in src
 
 
 # ─────────────────── Token-from-file logic ───────────────────

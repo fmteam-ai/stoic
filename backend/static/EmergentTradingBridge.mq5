@@ -58,6 +58,17 @@
 //|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| v1.38 — Fix retcode 10016 (TRADE_RETCODE_INVALID_STOPS) on        |
+//|         brokers with a non-zero SYMBOL_TRADE_STOPS_LEVEL (e.g.    |
+//|         Tauro Markets XAUUSD.fx). The EA now clamps SL/TP to the  |
+//|         broker's minimum stop distance (stops level, freeze       |
+//|         level and live spread, whichever is larger) before every  |
+//|         OrderSend, normalises with the TRADED symbol's digits     |
+//|         (was chart-symbol _Digits), and on a 10016 rejection      |
+//|         retries once with a doubled safety buffer. SL moves       |
+//|         (trailing / breakeven) are clamped the same way.          |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| v1.34 — Auto broker-suffix detection. EA enumerates MarketWatch  |
 //|         symbols matching common bases (XAU/BTC/forex) and sends  |
 //|         the list in `available_symbols` on heartbeat. Backend    |
@@ -96,14 +107,14 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.37"
+#property version   "1.38"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.37"
+#define EA_CLIENT_VERSION "1.38"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -679,6 +690,40 @@ double ExtractDouble(string src, string key, int from_pos) {
    return StringToDouble(num);
 }
 
+//+------------------------------------------------------------------+
+//| v1.38 — Clamp SL/TP to the broker's minimum stop distance so      |
+//| OrderSend never fails with retcode 10016 (INVALID_STOPS).         |
+//| `side`: +1 for BUY, -1 for SELL. `extra_mult` widens the safety   |
+//| buffer (the 10016 retry pass uses 2).                             |
+//| MT5 rule: for a BUY position both SL and TP are compared against  |
+//| Bid; for a SELL position against Ask.                             |
+//+------------------------------------------------------------------+
+void ClampStops(string sym, int side, double &sl, double &tp, int extra_mult) {
+   int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
+   long   stops  = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+   long   freeze = SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL);
+   long   pts    = (stops > freeze ? stops : freeze) + 2;   // +2pt safety
+   double min_dist = pts * point * extra_mult;
+
+   double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+   // Some brokers report stops_level=0 but still enforce a spread-based
+   // distance internally — never go tighter than the live spread.
+   double spread = ask - bid;
+   if (min_dist < spread * extra_mult) min_dist = spread * extra_mult;
+
+   if (side > 0) {                       // BUY — measured against Bid
+      if (sl > 0 && sl > bid - min_dist) sl = bid - min_dist;
+      if (tp > 0 && tp < bid + min_dist) tp = bid + min_dist;
+   } else {                              // SELL — measured against Ask
+      if (sl > 0 && sl < ask + min_dist) sl = ask + min_dist;
+      if (tp > 0 && tp > ask - min_dist) tp = ask - min_dist;
+   }
+   sl = (sl > 0) ? NormalizeDouble(sl, digits) : 0;
+   tp = (tp > 0) ? NormalizeDouble(tp, digits) : 0;
+}
+
 void ExecuteTrade(string trade_id, string symbol, string action, double lot, double sl, double tp) {
    MqlTradeRequest req; MqlTradeResult res;
    ZeroMemory(req); ZeroMemory(res);
@@ -704,13 +749,35 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    double price = (action == "BUY") ? SymbolInfoDouble(broker_symbol, SYMBOL_ASK)
                                     : SymbolInfoDouble(broker_symbol, SYMBOL_BID);
    req.price = price;
-   req.sl    = NormalizeDouble(sl, _Digits);
-   req.tp    = NormalizeDouble(tp, _Digits);
+   int side = (action == "BUY") ? 1 : -1;
+   // v1.38 — clamp to broker stop rules + normalise with the TRADED
+   // symbol's digits (was chart _Digits, wrong when EA chart != symbol).
+   double adj_sl = sl, adj_tp = tp;
+   ClampStops(broker_symbol, side, adj_sl, adj_tp, 1);
+   req.sl    = adj_sl;
+   req.tp    = adj_tp;
    req.type  = (action == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
    bool ok = OrderSend(req, res);
+
+   // v1.38 — if the broker still says INVALID_STOPS (price moved between
+   // clamp and send, or stricter internal rules), refresh the price and
+   // retry ONCE with a doubled safety buffer. Never opens without SL.
+   if (!(ok && res.retcode == TRADE_RETCODE_DONE) && res.retcode == TRADE_RETCODE_INVALID_STOPS) {
+      Print("[v1.38] retcode 10016 INVALID_STOPS on ", broker_symbol,
+            " sl=", adj_sl, " tp=", adj_tp, " — retrying with widened stops");
+      adj_sl = sl; adj_tp = tp;
+      ClampStops(broker_symbol, side, adj_sl, adj_tp, 2);
+      req.price = (action == "BUY") ? SymbolInfoDouble(broker_symbol, SYMBOL_ASK)
+                                    : SymbolInfoDouble(broker_symbol, SYMBOL_BID);
+      req.sl = adj_sl;
+      req.tp = adj_tp;
+      ZeroMemory(res);
+      ok = OrderSend(req, res);
+   }
+
    string status = (ok && res.retcode == TRADE_RETCODE_DONE) ? "open" : "failed";
-   string err = (ok ? "" : "retcode=" + IntegerToString(res.retcode));
+   string err = (status == "open") ? "" : "retcode=" + IntegerToString(res.retcode);
 
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":%I64u,\"status\":\"%s\",\"entry_price\":%.5f,\"error\":\"%s\"}",
@@ -759,7 +826,14 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl) {
    req.action   = TRADE_ACTION_SLTP;
    req.position = ticket;
    req.symbol   = symbol;
-   req.sl       = NormalizeDouble(new_sl, _Digits);
+   // v1.38 — clamp the SL move to the broker's stop rules (trailing /
+   // breakeven moves near price also trigger retcode 10016 otherwise).
+   // TP is passed through untouched.
+   long ptype = PositionGetInteger(POSITION_TYPE);
+   int  side  = (ptype == POSITION_TYPE_BUY) ? 1 : -1;
+   double adj_sl = new_sl, tp_ignore = 0;
+   ClampStops(symbol, side, adj_sl, tp_ignore, 1);
+   req.sl       = adj_sl;
    req.tp       = current_tp;
 
    bool ok = OrderSend(req, res);
