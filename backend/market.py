@@ -19,6 +19,10 @@ log = logging.getLogger("market")
 SYMBOL_MAP = {
     # Commodities
     "XAUUSD": {"asset": "commodity"},
+    # Equity index CFDs (iter-43) — Yahoo Finance chart API for the
+    # underlying cash index; the broker CFD tracks it closely.
+    "US30":   {"asset": "index", "yh": "^DJI"},
+    "NAS100": {"asset": "index", "yh": "^NDX"},
     # Forex (base/quote)
     "EURUSD": {"asset": "forex", "base": "EUR", "quote": "USD"},
     "GBPUSD": {"asset": "forex", "base": "GBP", "quote": "USD"},
@@ -207,14 +211,22 @@ async def _yahoo_gold_history() -> list:
 
     Free, no key, OHLC, very reliable. This is the primary source for XAU history.
     """
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=1y&interval=1d"
+    return await _yahoo_chart_history("GC=F", "gold")
+
+
+async def _yahoo_chart_history(yh_symbol: str, label: str) -> list:
+    """Generic Yahoo Finance v8 chart fetch — 1y of daily OHLC candles.
+    Used for gold futures (GC=F) and equity indices (^DJI, ^NDX)."""
+    from urllib.parse import quote as _urlquote
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/"
+           f"{_urlquote(yh_symbol, safe='')}?range=1y&interval=1d")
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as c:
         r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
         data = r.json()
     result = (data.get("chart") or {}).get("result") or []
     if not result:
-        raise RuntimeError("Yahoo returned no gold candles")
+        raise RuntimeError(f"Yahoo returned no {label} candles")
     res = result[0]
     ts_list = res.get("timestamp") or []
     quotes = ((res.get("indicators") or {}).get("quote") or [{}])[0]
@@ -238,6 +250,34 @@ async def _yahoo_gold_history() -> list:
         })
     history.sort(key=lambda r: r["date"])
     return history
+
+
+async def _yahoo_index_quote(yh_symbol: str) -> dict:
+    """iter-43 — live index quote from the Yahoo v8 chart meta block."""
+    from urllib.parse import quote as _urlquote
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/"
+           f"{_urlquote(yh_symbol, safe='')}?range=1d&interval=5m")
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as c:
+        r = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        data = r.json()
+    result = (data.get("chart") or {}).get("result") or []
+    if not result:
+        raise RuntimeError(f"Yahoo returned no quote for {yh_symbol}")
+    meta = result[0].get("meta") or {}
+    price = float(meta.get("regularMarketPrice") or 0)
+    if price <= 0:
+        raise RuntimeError(f"Yahoo returned zero price for {yh_symbol}")
+    prev = float(meta.get("chartPreviousClose") or meta.get("previousClose") or 0)
+    change = round(price - prev, 2) if prev else 0.0
+    return {
+        "price": price, "bid": price, "ask": price,
+        "change": change,
+        "change_pct": round(change / prev * 100, 3) if prev else 0.0,
+        "high": meta.get("regularMarketDayHigh"),
+        "low": meta.get("regularMarketDayLow"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 async def _stooq_gold_history() -> list:
@@ -360,6 +400,8 @@ async def get_quote(symbol: str) -> dict:
                     q = await _cg_quote(meta["cg_id"])
             elif meta["asset"] == "commodity":
                 q = await _gold_quote()
+            elif meta["asset"] == "index":
+                q = await _yahoo_index_quote(meta["yh"])
             elif meta["asset"] == "forex":
                 q = await _fx_quote(meta["base"], meta["quote"])
             else:
@@ -397,6 +439,8 @@ def ttl_seconds_for_quote(asset: str) -> int:
         return 5
     if asset == "commodity":
         return 5
+    if asset == "index":
+        return 15
     return 60
 
 
@@ -465,6 +509,8 @@ async def get_history(symbol: str) -> list:
                     hist = await _cg_history(meta["cg_id"])
             elif meta["asset"] == "commodity":
                 hist = await _gold_history()
+            elif meta["asset"] == "index":
+                hist = await _yahoo_chart_history(meta["yh"], sym)
             elif meta["asset"] == "forex":
                 hist = await _fx_history(meta["base"], meta["quote"])
         except (httpx.HTTPError, RuntimeError) as e:

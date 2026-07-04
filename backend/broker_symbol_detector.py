@@ -36,7 +36,7 @@ KNOWN_BASES = (
     "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
     "EURGBP", "EURJPY", "GBPJPY",
     "USOIL", "UKOIL", "WTI", "BRENT",
-    "NAS100", "SPX500", "GER40", "UK100", "JPN225",
+    "US30", "NAS100", "SPX500", "GER40", "UK100", "JPN225",
 )
 
 # iter-92 · Broker-specific aliases. Some brokers (OnEquity, IC Markets Raw,
@@ -48,6 +48,9 @@ KNOWN_BASES = (
 BASE_ALIASES: dict[str, tuple[str, ...]] = {
     "XAUUSD": ("XAUUSD", "GOLD"),
     "XAGUSD": ("XAGUSD", "SILVER"),
+    # iter-43 · Equity index CFDs — broker naming varies wildly.
+    "US30":   ("US30", "DJ30", "WS30", "DOW30", "DJI30"),
+    "NAS100": ("NAS100", "USTEC", "US100", "NDX100", "USTECH"),
 }
 
 

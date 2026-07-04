@@ -853,6 +853,13 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   (5) ai_optimizer prompt PRIMARY OBJECTIVE statement (WR & profit must move together).
   Tests: test_iter42_profit_tied_objective.py (15) + iter69/iter52 regressions = 67 passed.
   Live verified: admin's 88.9% WR / 0.22 payoff window now gets 1.0× (was 1.3× boost).
+- US30 / NAS100 INDEX SUPPORT (iter43) — market.py SYMBOL_MAP asset "index" with Yahoo
+  v8 chart feed (^DJI / ^NDX): _yahoo_index_quote (meta.regularMarketPrice) +
+  _yahoo_chart_history (generic 1y daily; gold GC=F refactored onto it); quote TTL 15s.
+  broker_symbol_detector: US30 added to KNOWN_BASES; BASE_ALIASES US30→(DJ30,WS30,DOW30,
+  DJI30), NAS100→(USTEC,US100,NDX100,USTECH). pip_utils + portfolio sectors already had
+  index specs. Symbols appear in Bot Config selector via /api/market/symbols (17 total).
+  Tests: test_iter43_index_symbols.py (11, incl. live feed) — 54 passed w/ regressions.
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.
