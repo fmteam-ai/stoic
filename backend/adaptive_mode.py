@@ -229,6 +229,21 @@ def _multiplier_for(win_rate_pct: float) -> float:
     return 0.5
 
 
+def _profit_tied_multiplier(win_rate_pct: float, expectancy_r, avg_pnl) -> float:
+    """iter-42 — win rate and profit tied. A hot win-rate streak only earns
+    a risk BOOST when a MEANINGFUL expectancy backs it (≥ 0.15R); a
+    marginal edge stays neutral and a net-losing window always cuts risk
+    regardless of win rate."""
+    MIN_EXPECTANCY_FOR_BOOST = 0.15
+    mult = _multiplier_for(win_rate_pct)
+    if (expectancy_r is not None and mult > 1.0
+            and expectancy_r < MIN_EXPECTANCY_FOR_BOOST):
+        mult = 1.0            # wins often but profit doesn't back it → no boost
+    if avg_pnl is not None and avg_pnl < 0:
+        mult = min(mult, 0.7)  # net-negative window → force risk down
+    return round(mult, 2)
+
+
 async def compute_risk_multiplier(user_id: str, account_id: Optional[str] = None,
                                   window: int = 20) -> dict:
     """Return {'multiplier': float, 'win_rate_pct': float, 'samples': int,
@@ -258,7 +273,11 @@ async def compute_risk_multiplier(user_id: str, account_id: Optional[str] = None
                 "window": int(window),
                 "reason": "All recent trades closed flat — neutral risk."}
     win_rate = round(100.0 * wins / decided, 1)
-    mult = _multiplier_for(win_rate)
+    # iter-42 — profit-tied multiplier (see objective.py philosophy).
+    from objective import expectancy_stats
+    stats = expectancy_stats([float(r.get("pnl") or 0) for r in rows])
+    mult = _profit_tied_multiplier(win_rate, stats.get("expectancy_r"),
+                                   stats.get("avg_pnl"))
     return {
         "multiplier": mult,
         "win_rate_pct": win_rate,
@@ -266,8 +285,11 @@ async def compute_risk_multiplier(user_id: str, account_id: Optional[str] = None
         "window": int(window),
         "wins": wins,
         "losses": losses,
+        "payoff_ratio": stats.get("payoff_ratio"),
+        "expectancy_r": stats.get("expectancy_r"),
         "reason": (
-            f"Last {decided} decided trades · win rate {win_rate}% "
+            f"Last {decided} decided trades · win rate {win_rate}% · "
+            f"payoff {stats.get('payoff_ratio')} · expectancy {stats.get('expectancy_r')}R "
             f"→ risk multiplier {mult}×"
         ),
     }

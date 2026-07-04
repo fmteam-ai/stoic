@@ -9,13 +9,13 @@ engine can actually evaluate against closed-trade history:
   • symbol subset          ∈ powerset({XAUUSD, BTCUSD}) minus empty
   • lookback days          ∈ {14, 30, 60}
 
-For each combination it runs `strategy_backtest.run_backtest` and computes
-a composite score:
-    score = win_rate × log(1 + matched_trades) + 0.001 × total_pnl_usd
+For each combination it runs `strategy_backtest.run_backtest` and ranks by
+the shared profit-tied objective (objective.stoic_score, iter-42):
+    score = win_rate × avg_profit_per_trade × ln(1 + matched_trades)
 
-That favours strategies that win MORE OFTEN on a LARGER sample, with a
-small kicker for absolute P&L. The optimizer returns the top variant + the
-delta vs. the baseline so the UI can show "improvement found".
+Win rate and profit are TIED: a variant that wins often but loses money
+scores negative and can never be selected. The optimizer returns the top
+variant + the delta vs. the baseline so the UI can show "improvement found".
 
 Output:
   {
@@ -32,6 +32,7 @@ import logging
 from itertools import product
 
 from strategy_backtest import run_backtest
+from objective import stoic_score
 
 logger = logging.getLogger("strategy-optimizer")
 
@@ -41,10 +42,12 @@ LOOKBACK_VARIANTS = [14, 30, 60]
 
 
 def _score(result: dict) -> float:
-    wr = result.get("win_rate") or 0.0
-    n  = result.get("matched_trades") or 0
-    pnl = result.get("total_pnl_usd") or 0.0
-    return (wr * math.log1p(n)) + (0.001 * pnl)
+    # iter-42 — profit-tied objective: win rate and P&L must move together.
+    return stoic_score(
+        result.get("win_rate") or 0.0,
+        result.get("total_pnl_usd") or 0.0,
+        result.get("matched_trades") or 0,
+    )
 
 
 def _symbol_subsets(symbols: list[str]) -> list[list[str]]:

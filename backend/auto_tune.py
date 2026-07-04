@@ -1,10 +1,13 @@
 """Auto-tune confidence threshold from closed-trade analytics.
 
 Builds a per-user, per-symbol minimum-confidence threshold by analysing
-the empirical win-rate of historical closed trades grouped into 5-pt buckets.
-The "auto-tuned" threshold is the lowest bucket where:
+the empirical win-rate AND profitability of historical closed trades grouped
+into 5-pt buckets. The "auto-tuned" threshold is the lowest bucket where:
   - sample count >= MIN_SAMPLES, AND
-  - win_rate >= TARGET_WIN_RATE
+  - win_rate >= TARGET_WIN_RATE, AND
+  - the bucket is NET PROFITABLE with positive expectancy (iter-42: win rate
+    and profit are tied — a bucket that wins often but loses money never
+    qualifies).
 
 If no bucket qualifies, fall back to the user's risk-profile minimum.
 
@@ -22,6 +25,7 @@ from bson import ObjectId
 
 from database import get_db
 from risk import get_profile
+from objective import expectancy_stats
 
 MIN_SAMPLES = 5            # need at least this many trades in a bucket to trust it
 TARGET_WIN_RATE = 55.0     # we want >= 55% win rate
@@ -93,17 +97,25 @@ def _compute_threshold(rows: list, profile_min: float) -> dict:
         n = len(pnls)
         wins = sum(1 for p in pnls if p > 0)
         wr = round(100 * wins / n, 1) if n else 0.0
+        stats = expectancy_stats(pnls) if n else {}
         breakdown.append({
             "bucket": b,
             "count": n,
             "win_rate": wr,
             "total_pnl": round(sum(pnls), 2),
+            "expectancy_r": stats.get("expectancy_r"),
+            "payoff_ratio": stats.get("payoff_ratio"),
         })
 
-    # Lowest qualifying bucket
+    # Lowest qualifying bucket — iter-42: win rate AND profit tied. The
+    # bucket must win often enough AND be net profitable with positive
+    # expectancy; frequent-but-losing buckets can no longer raise the gate.
     suggested = None
     for entry in breakdown:
-        if entry["count"] >= MIN_SAMPLES and entry["win_rate"] >= TARGET_WIN_RATE:
+        if (entry["count"] >= MIN_SAMPLES
+                and entry["win_rate"] >= TARGET_WIN_RATE
+                and entry["total_pnl"] > 0
+                and (entry["expectancy_r"] or 0) > 0):
             suggested = entry["bucket"]
             break
 

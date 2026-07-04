@@ -79,7 +79,11 @@ ALLOWED_FIELDS = {
     "let_winners_run":              ("bool",  None, None),
 }
 
-_SYSTEM_PROMPT = """You are STOIC's strategy-tuning analyst. You receive a
+_SYSTEM_PROMPT = """You are STOIC's strategy-tuning analyst. PRIMARY
+OBJECTIVE: maximize win rate AND total profit TOGETHER — they must move as
+one (expectancy = win_rate × payoff − loss_rate). A recommendation that
+raises the win rate while shrinking payoff/total P&L (or vice versa) is
+unacceptable. You receive a
 trading account's closed-trade statistics for the last {window}h plus its
 current bot configuration. Return STRICT JSON ONLY (no markdown, no prose
 outside the JSON) with this exact shape:

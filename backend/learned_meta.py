@@ -154,7 +154,7 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
     async for s in db.signals.find({"_id": {"$in": sig_ids}}):
         sig_map[str(s["_id"])] = s
 
-    X, y, sessions = [], [], []
+    X, y, sessions, pnls = [], [], [], []
     for t in trades:
         sig = sig_map.get(str(t.get("signal_id") or ""))
         if not sig:
@@ -168,11 +168,26 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
         sessions.append(session_bucket(entered_at))
         X.append(feats)
         y.append(1 if float(t.get("pnl") or 0) > 0 else 0)
-    return np.array(X, dtype=float), np.array(y, dtype=float), sessions
+        pnls.append(abs(float(t.get("pnl") or 0)))
+
+    # iter-42 · Profit-weighted samples — win rate and profit tied. Each
+    # trade's training weight scales with |pnl| (normalised to the median),
+    # so a -$362 loss teaches the model ~4× more than a -$50 scratch and a
+    # big winner counts more than a tiny one. Clipped to [0.25, 4.0].
+    if pnls:
+        arr = np.array(pnls, dtype=float)
+        nonzero = arr[arr > 0]
+        med = float(np.median(nonzero)) if nonzero.size else 1.0
+        sample_w = np.clip(arr / max(med, 1e-9), 0.25, 4.0)
+    else:
+        sample_w = np.array([])
+    return np.array(X, dtype=float), np.array(y, dtype=float), sessions, sample_w
 
 
-def _train_logreg(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, float]:
-    """Plain L2-regularised logistic regression with GD. Returns (weights_with_bias, train_auc)."""
+def _train_logreg(X: np.ndarray, y: np.ndarray,
+                  sample_w: np.ndarray | None = None) -> tuple[np.ndarray, float]:
+    """Plain L2-regularised logistic regression with GD (optionally
+    profit-weighted). Returns (weights_with_bias, train_auc)."""
     n, d = X.shape
     # Standardise — mean/std per column, store for inference
     mu = X.mean(axis=0)
@@ -180,11 +195,16 @@ def _train_logreg(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, float]:
     Xn = (X - mu) / sd
     Xb = np.hstack([Xn, np.ones((n, 1))])   # add bias column
 
+    if sample_w is None or len(sample_w) != n:
+        sw = np.ones(n)
+    else:
+        sw = sample_w / max(float(sample_w.mean()), 1e-9)  # mean-normalise
+
     w = np.zeros(d + 1)
     for _ in range(EPOCHS):
         z = Xb @ w
         p = _sigmoid(z)
-        grad = (Xb.T @ (p - y)) / n + L2 * np.concatenate([w[:-1], [0]])
+        grad = (Xb.T @ ((p - y) * sw)) / n + L2 * np.concatenate([w[:-1], [0]])
         w -= LR * grad
 
     # Simple AUC: ranks of positive class vs negative class
@@ -204,8 +224,10 @@ def _auc(y: np.ndarray, p: np.ndarray) -> float:
     return float(score / (pos.size * neg.size))
 
 
-def _train_xgb(X: np.ndarray, y: np.ndarray) -> tuple[bytes, np.ndarray, float]:
-    """Train a small XGBoost classifier (iter-69). Returns (model_bytes, p_train, train_auc).
+def _train_xgb(X: np.ndarray, y: np.ndarray,
+               sample_w: np.ndarray | None = None) -> tuple[bytes, np.ndarray, float]:
+    """Train a small XGBoost classifier (iter-69, profit-weighted iter-42).
+    Returns (model_bytes, p_train, train_auc).
 
     Uses the low-level `xgb.train` API (no sklearn dependency). Capacity is
     deliberately small — the dataset is small (100-5000 rows) and we want to
@@ -216,7 +238,10 @@ def _train_xgb(X: np.ndarray, y: np.ndarray) -> tuple[bytes, np.ndarray, float]:
     neg = float((y == 0).sum())
     spw = (neg / pos) if pos > 0 else 1.0
 
-    dmat = xgb.DMatrix(X, label=y)
+    if sample_w is not None and len(sample_w) == n:
+        dmat = xgb.DMatrix(X, label=y, weight=sample_w)
+    else:
+        dmat = xgb.DMatrix(X, label=y)
     params = {
         "objective": "binary:logistic",
         "max_depth": 3,
@@ -248,18 +273,21 @@ def _xgb_predict_proba(model_bytes: bytes, X: np.ndarray) -> np.ndarray:
     return booster.predict(dmat)
 
 
-def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
+def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
+                  sample_w: np.ndarray | None = None) -> dict:
     """Train one classifier on (X, y) and return the persistable artifact dict.
 
     iter-69 · For samples ≥100 we use XGBoost; below that we fall back to
     L2-regularised logistic regression so the model still trains on small
     per-session slices. Both paths feed through identical Platt calibration.
+    iter-42 · `sample_w` profit-weights every example so P(win) is trained
+    to care about the SIZE of wins/losses, not just their count.
     """
     n = len(y)
     use_xgb = _XGB_AVAILABLE and n >= MIN_SAMPLES_XGB
 
     if use_xgb:
-        model_bytes, p_train, auc = _train_xgb(X, y)
+        model_bytes, p_train, auc = _train_xgb(X, y, sample_w)
         backend = "xgboost"
         # XGBoost takes raw features — no standardisation needed.
         model_payload = {
@@ -267,7 +295,7 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
         }
         p_final = p_train
     else:
-        w, mu, sd, auc = _train_logreg(X, y)
+        w, mu, sd, auc = _train_logreg(X, y, sample_w)
         backend = "logreg"
         p_final = _sigmoid(
             np.hstack([(X - mu) / sd, np.ones((n, 1))]) @ w
@@ -306,6 +334,7 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str) -> dict:
         "train_auc": round(auc, 4),
         "n_samples": int(n),
         "n_wins": int(y.sum()),
+        "profit_weighted": bool(sample_w is not None and len(sample_w) == n),
         "calibration": platt,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "feature_names": [
@@ -329,7 +358,7 @@ def _b64decode_bytes(s: str) -> bytes:
 async def retrain() -> dict:
     """Pull closed-trade dataset, train global + per-session models. Persist artifacts."""
     db = get_db()
-    X, y, sessions = await _build_dataset()
+    X, y, sessions, sample_w = await _build_dataset()
     n = len(y)
     if n < MIN_SAMPLES:
         return {
@@ -339,7 +368,7 @@ async def retrain() -> dict:
         }
 
     # 1. Global fallback artifact — always trained when there's enough data
-    global_doc = _fit_artifact(X, y, ARTIFACT_KEY, "GLOBAL")
+    global_doc = _fit_artifact(X, y, ARTIFACT_KEY, "GLOBAL", sample_w)
     await db.learned_meta_artifacts.update_one(
         {"key": ARTIFACT_KEY}, {"$set": global_doc}, upsert=True
     )
@@ -354,7 +383,7 @@ async def retrain() -> dict:
         # Need both classes (≥1 win and ≥1 loss) — pure 0/1 sets degenerate LR
         if n_s >= MIN_SAMPLES_PER_SESSION and 0 < wins_s < n_s:
             key = f"{SESSION_ARTIFACT_PREFIX}{label}"
-            doc = _fit_artifact(X[mask], y[mask], key, label)
+            doc = _fit_artifact(X[mask], y[mask], key, label, sample_w[mask])
             await db.learned_meta_artifacts.update_one(
                 {"key": key}, {"$set": doc}, upsert=True
             )

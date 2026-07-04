@@ -838,6 +838,21 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   fixed), BotConfig.jsx save whitelist + Section 04 toggles.
   Tests: tests/test_iter41_payoff_repair.py (14) + optimizer units = 20/20. Live forced
   analysis confirmed Fable 5 recommends soft_stop/let_winners_run on real data.
+- PROFIT-TIED LEARNING OBJECTIVE (iter42) — user directive: "all bot logic and training
+  must tie win rate and profit together". New shared module /app/backend/objective.py
+  (expectancy_stats, stoic_score = WR × avg_profit_per_trade × ln(1+n)). Rewired ALL
+  5 learners:
+  (1) strategy_optimizer._score → stoic_score (losing variants score negative);
+  (2) auto_tune bucket qualification now also requires total_pnl>0 AND expectancy_r>0
+      (breakdown rows carry expectancy_r/payoff_ratio);
+  (3) adaptive_mode._profit_tied_multiplier — WR boost only when expectancy_r ≥ 0.15;
+      net-losing window caps at 0.7×; reason string shows payoff+expectancy;
+  (4) learned_meta profit-WEIGHTED training — sample weight = clip(|pnl|/median,0.25,4)
+      for both logreg (weighted gradient) and XGBoost (DMatrix weight); artifact has
+      profit_weighted flag; backwards compatible (sample_w optional);
+  (5) ai_optimizer prompt PRIMARY OBJECTIVE statement (WR & profit must move together).
+  Tests: test_iter42_profit_tied_objective.py (15) + iter69/iter52 regressions = 67 passed.
+  Live verified: admin's 88.9% WR / 0.22 payoff window now gets 1.0× (was 1.3× boost).
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.
