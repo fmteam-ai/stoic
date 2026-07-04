@@ -96,6 +96,73 @@ async def trade_stats(account_id: Optional[str] = None,
     return {**_aggregate_stats(closed), "open_trades": len(open_trades)}
 
 
+@router.get("/history")
+async def trade_history(date_from: str, date_to: str,
+                        account_id: Optional[str] = None,
+                        user=Depends(get_current_user)):
+    """Full trade history for an explicit date range (iter-44).
+
+    Powers the period presets (today / yesterday / this week / last week /
+    this month / last month) and the custom date search on the Trades page.
+    Returns every matching trade (no 100-row cap) plus a summary computed
+    over the CLOSED trades in the range: wins, losses, win rate, total P&L.
+
+    Range matching: a trade belongs to the range if it CLOSED inside it;
+    still-open/pending trades match on their open/created timestamp.
+    Dates are yyyy-mm-dd, inclusive on both ends.
+    """
+    import re
+    for d in (date_from, date_to):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d or ""):
+            raise HTTPException(status_code=400, detail="Dates must be yyyy-mm-dd")
+    if date_from > date_to:
+        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+    fr = f"{date_from}T00:00:00"
+    to = f"{date_to}T23:59:59.999999"
+
+    db = get_db()
+    q: dict = {"user_id": user["id"], "$or": [
+        {"closed_at": {"$gte": fr, "$lte": to}},
+        {"$and": [
+            {"$or": [{"closed_at": None}, {"closed_at": {"$exists": False}}]},
+            {"$or": [
+                {"opened_at": {"$gte": fr, "$lte": to}},
+                {"$and": [
+                    {"$or": [{"opened_at": None}, {"opened_at": {"$exists": False}}]},
+                    {"created_at": {"$gte": fr, "$lte": to}},
+                ]},
+            ]},
+        ]},
+    ]}
+    if account_id:
+        q["account_id"] = account_id
+    docs = await db.trades.find(q).sort([("closed_at", -1), ("opened_at", -1)]).to_list(length=5000)
+    trades = [_serialize(d) for d in docs]
+
+    closed = [t for t in trades if t.get("status") == "closed"]
+    wins = [t for t in closed if float(t.get("pnl") or 0) > 0]
+    losses = [t for t in closed if float(t.get("pnl") or 0) < 0]
+    gross_profit = sum(float(t.get("pnl") or 0) for t in wins)
+    gross_loss = abs(sum(float(t.get("pnl") or 0) for t in losses))
+    summary = {
+        "date_from": date_from,
+        "date_to": date_to,
+        "total_trades": len(trades),
+        "closed_trades": len(closed),
+        "open_trades": sum(1 for t in trades if t.get("status") == "open"),
+        "wins": len(wins),
+        "losses": len(losses),
+        "breakeven": len(closed) - len(wins) - len(losses),
+        "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else 0.0,
+        "total_pnl": round(gross_profit - gross_loss, 2),
+        "gross_profit": round(gross_profit, 2),
+        "gross_loss": round(gross_loss, 2),
+        "avg_win": round(gross_profit / len(wins), 2) if wins else 0.0,
+        "avg_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
+    }
+    return {"summary": summary, "trades": trades}
+
+
 @router.get("/live")
 async def live_open_trades(account_id: Optional[str] = None,
                            user=Depends(get_current_user)):

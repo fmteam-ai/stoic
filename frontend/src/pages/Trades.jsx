@@ -212,6 +212,8 @@ export default function Trades() {
     const [filter, setFilter] = useState("");
     const [dateFrom, setDateFrom] = useState("");   // yyyy-mm-dd or ""
     const [dateTo, setDateTo] = useState("");
+    const [periodPreset, setPeriodPreset] = useState(null);   // today | yesterday | this_week | ...
+    const [historySummary, setHistorySummary] = useState(null); // stats for the selected range
     const [accountFilter, setAccountFilter] = useState("");   // "" = all accounts; otherwise account_id
     const [accounts, setAccounts] = useState([]);             // for filter pills + label lookup
     const [quotes, setQuotes] = useState({}); // {SYMBOL: price}  ← polled fallback
@@ -235,6 +237,19 @@ export default function Trades() {
     const load = useCallback(async () => {
         setRefreshing(true);
         try {
+            // Full-history mode (iter-44): with a complete date range the
+            // backend returns EVERY matching trade (no 100-row cap) plus the
+            // period summary (wins/losses/win-rate/total P&L).
+            if (dateFrom && dateTo) {
+                const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+                if (accountFilter) params.set("account_id", accountFilter);
+                const { data } = await api.get(`/trades/history?${params.toString()}`);
+                setTrades(data.trades || []);
+                setHistorySummary(data.summary || null);
+                setLoading(false); setRefreshing(false);
+                return;
+            }
+            setHistorySummary(null);
             const params = new URLSearchParams();
             // "winning"/"lost" are client-side subsets of "closed" — ask the
             // backend for closed trades and refine after.
@@ -250,7 +265,7 @@ export default function Trades() {
             setTrades(t.data); setStats(s.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); setRefreshing(false); }
-    }, [filter, accountFilter]);
+    }, [filter, accountFilter, dateFrom, dateTo]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -297,7 +312,10 @@ export default function Trades() {
         return trades.filter(t => {
             if (filter === "winning" && !(t.status === "closed" && parseFloat(t.pnl) > 0)) return false;
             if (filter === "lost"    && !(t.status === "closed" && parseFloat(t.pnl) < 0)) return false;
-            if (fromMs != null || toMs != null) {
+            // History mode: the backend already ranged the query (closed-at
+            // based) — re-clamping by opened_at would wrongly drop trades
+            // that closed inside the window but opened before it.
+            if (!historySummary && (fromMs != null || toMs != null)) {
                 const openedMs = t.opened_at ? Date.parse(t.opened_at) : NaN;
                 if (Number.isNaN(openedMs)) return false;
                 if (fromMs != null && openedMs < fromMs) return false;
@@ -305,9 +323,31 @@ export default function Trades() {
             }
             return true;
         });
-    }, [trades, filter, dateFrom, dateTo]);
+    }, [trades, filter, dateFrom, dateTo, historySummary]);
 
-    const clearDateRange = () => { setDateFrom(""); setDateTo(""); };
+    const clearDateRange = () => { setDateFrom(""); setDateTo(""); setPeriodPreset(null); };
+
+    // iter-44 · Period presets — local-timezone date math, Monday-start weeks.
+    const applyPeriod = (key) => {
+        const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const now = new Date();
+        const monday = (d) => { const x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+        let f = "", t = "";
+        if (key === "today") { f = t = ymd(now); }
+        else if (key === "yesterday") { const y = new Date(now); y.setDate(y.getDate() - 1); f = t = ymd(y); }
+        else if (key === "this_week") { f = ymd(monday(now)); t = ymd(now); }
+        else if (key === "last_week") {
+            const s = monday(now); s.setDate(s.getDate() - 7);
+            const e = new Date(s); e.setDate(e.getDate() + 6);
+            f = ymd(s); t = ymd(e);
+        }
+        else if (key === "this_month") { f = ymd(new Date(now.getFullYear(), now.getMonth(), 1)); t = ymd(now); }
+        else if (key === "last_month") {
+            f = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+            t = ymd(new Date(now.getFullYear(), now.getMonth(), 0));
+        }
+        setDateFrom(f); setDateTo(t); setPeriodPreset(key);
+    };
 
     // Poll quotes for any open-trade symbols every 5s — drives live price + P&L.
     const openSymbols = useMemo(() => {
@@ -571,13 +611,27 @@ export default function Trades() {
                     ))}
                 </div>
 
+                <div className="flex items-center gap-2 flex-wrap" data-testid="period-preset-row">
+                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-1">PERIOD ·</span>
+                    {[["today", "TODAY"], ["yesterday", "YESTERDAY"], ["this_week", "THIS WEEK"],
+                      ["last_week", "LAST WEEK"], ["this_month", "THIS MONTH"], ["last_month", "LAST MONTH"]].map(([key, label]) => (
+                        <button key={key} onClick={() => applyPeriod(key)}
+                            data-testid={`period-${key}`}
+                            className={`px-3 py-1.5 text-xs font-mono tracking-widest border transition-colors ${
+                                periodPreset === key ? "border-[#0099FF] text-[#0099FF]" : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]"
+                            }`}>
+                            {label}
+                        </button>
+                    ))}
+                </div>
+
                 <div className="flex items-center gap-2 flex-wrap" data-testid="date-filter-row">
-                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-1">OPENED ·</span>
+                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-1">CUSTOM ·</span>
                     <label className="flex items-center gap-1.5 font-mono text-[10px] text-[#52525B] tracking-widest">
                         FROM
                         <input type="date"
                             value={dateFrom}
-                            onChange={(e) => setDateFrom(e.target.value)}
+                            onChange={(e) => { setDateFrom(e.target.value); setPeriodPreset(null); }}
                             max={dateTo || undefined}
                             data-testid="date-from"
                             className="bg-[#0A0A0A] border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00FF41] transition-colors" />
@@ -586,7 +640,7 @@ export default function Trades() {
                         TO
                         <input type="date"
                             value={dateTo}
-                            onChange={(e) => setDateTo(e.target.value)}
+                            onChange={(e) => { setDateTo(e.target.value); setPeriodPreset(null); }}
                             min={dateFrom || undefined}
                             data-testid="date-to"
                             className="bg-[#0A0A0A] border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00FF41] transition-colors" />
@@ -604,6 +658,25 @@ export default function Trades() {
                         </span>
                     )}
                 </div>
+
+                {/* iter-44 · Period summary — wins / losses / win rate / total profit for the selected range */}
+                {historySummary && (
+                    <div className="border border-[#0099FF]/30 bg-[#0A0A0A] p-4" data-testid="history-summary">
+                        <div className="font-mono text-[10px] text-[#0099FF] tracking-widest mb-3">
+                            PERIOD RESULTS · {historySummary.date_from} → {historySummary.date_to}
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                            <Stat label="TRADES" value={`${historySummary.closed_trades} closed${historySummary.open_trades ? ` / ${historySummary.open_trades} open` : ""}`} />
+                            <Stat label="WINS" value={historySummary.wins} accent="text-[#00FF41]" />
+                            <Stat label="LOST" value={historySummary.losses} accent="text-[#FF3B30]" />
+                            <Stat label="WIN RATE" value={`${historySummary.win_rate}%`}
+                                accent={historySummary.win_rate >= 55 ? "text-[#00FF41]" : historySummary.win_rate >= 40 ? "text-[#FFD700]" : "text-[#FF3B30]"} />
+                            <Stat label="TOTAL PROFIT" value={`${historySummary.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(historySummary.total_pnl).toFixed(2)}`}
+                                accent={historySummary.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
+                            <Stat label="AVG WIN / LOSS" value={`$${historySummary.avg_win} / $${Math.abs(historySummary.avg_loss)}`} />
+                        </div>
+                    </div>
+                )}
 
                 {accounts.length > 1 && (
                     <div className="flex items-center gap-2 flex-wrap" data-testid="account-filter-row">

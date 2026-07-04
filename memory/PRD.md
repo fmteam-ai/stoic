@@ -860,6 +860,14 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   DJI30), NAS100→(USTEC,US100,NDX100,USTECH). pip_utils + portfolio sectors already had
   index specs. Symbols appear in Bot Config selector via /api/market/symbols (17 total).
   Tests: test_iter43_index_symbols.py (11, incl. live feed) — 54 passed w/ regressions.
+- FULL TRADE HISTORY (iter44) — GET /api/trades/history?date_from&date_to&account_id
+  (no 100-row cap, up to 5000; range matches closed_at, falls back to opened_at/created_at
+  for open trades; returns summary: wins/losses/breakeven/win_rate/total_pnl/gross/avg).
+  Trades.jsx: period preset chips (TODAY/YESTERDAY/THIS WEEK/LAST WEEK/THIS MONTH/
+  LAST MONTH, Monday-start weeks, local TZ) + "PERIOD RESULTS" summary panel; custom
+  date inputs kept (labeled CUSTOM, clears preset on manual edit); client-side date
+  re-clamp skipped in history mode. Tests: test_iter44_trade_history.py (3) pass;
+  UI verified via screenshot (THIS WEEK → 256 closed, 75.8% WR, +$5525).
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.
