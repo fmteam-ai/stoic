@@ -226,16 +226,25 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
                 reverse=True,
             )
             for r in contrib[:1]:
-                # Find the matching open_position to get the trade_id
-                for p in open_positions:
-                    if (p.get("symbol") or "").upper() == r["symbol"]:
-                        actions.append({
-                            "kind": "close_trade",
-                            "trade_id": str(p.get("_id") or p.get("id") or ""),
-                            "symbol": r["symbol"], "lot_size": p.get("lot_size"),
-                            "reason": "auto_deleverage_var_cap",
-                        })
-                        break
+                # iter-41 fix — among the top-risk symbol's positions prefer
+                # culling the WORST LOSER (mirrors the iter-48 sector-cap
+                # fix). The previous "first match" pick closed arbitrary
+                # positions and showed up as -$362 avg late-loser closes.
+                matches = [p for p in open_positions
+                           if (p.get("symbol") or "").upper() == r["symbol"]]
+                if not matches:
+                    continue
+                if any(p.get("live_pnl") for p in matches):
+                    pick = min(matches, key=lambda p: float(p.get("live_pnl") or 0))
+                else:
+                    pick = max(matches, key=lambda p: float(p.get("lot_size") or 0)
+                               * float(p.get("entry_price") or 0))
+                actions.append({
+                    "kind": "close_trade",
+                    "trade_id": str(pick.get("_id") or pick.get("id") or ""),
+                    "symbol": r["symbol"], "lot_size": pick.get("lot_size"),
+                    "reason": "auto_deleverage_var_cap",
+                })
 
     # Dedupe actions by trade_id (keep first occurrence so HIGHER-priority
     # triggers like hard_drawdown win)

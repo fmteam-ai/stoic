@@ -135,6 +135,11 @@ def _serialize(cfg: dict) -> dict:
         # per-account crypto risk cap override.
         "paper_shadow_mode": bool(cfg.get("paper_shadow_mode", False)),
         "crypto_risk_pct_per_trade": cfg.get("crypto_risk_pct_per_trade"),
+        # iter-41 — payoff-ratio repair (Soft-Stop + Let Winners Run)
+        "soft_stop_enabled": bool(cfg.get("soft_stop_enabled", False)),
+        "soft_stop_loss_fraction": float(cfg.get("soft_stop_loss_fraction") or 0.6),
+        "soft_stop_min_minutes": int(cfg.get("soft_stop_min_minutes") or 10),
+        "let_winners_run": bool(cfg.get("let_winners_run", False)),
         "updated_at": cfg.get("updated_at"),
     }
 

@@ -54,6 +54,27 @@ def _trade_targets(trade: dict) -> tuple:
     return float(sl_pips), float(tp1), float(tp2), float(tp3)
 
 
+def _soft_stop_should_fire(cfg: dict, pips_up: float, sl_pips: float, opened_at) -> bool:
+    """iter-41 · Soft-Stop — should this losing trade be cut early?
+
+    Fires when the adverse move reaches `soft_stop_loss_fraction` of the SL
+    distance AND the trade is older than `soft_stop_min_minutes` (so normal
+    entry noise doesn't insta-close fresh trades)."""
+    if not cfg.get("soft_stop_enabled") or pips_up >= 0 or sl_pips <= 0:
+        return False
+    frac = min(max(float(cfg.get("soft_stop_loss_fraction") or 0.6), 0.3), 0.9)
+    min_age_min = int(cfg.get("soft_stop_min_minutes") or 10)
+    try:
+        dt = datetime.fromisoformat(str(opened_at).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - dt).total_seconds() < min_age_min * 60:
+            return False
+    except Exception:
+        pass  # unknown age — don't block the loss guard
+    return (-pips_up) >= sl_pips * frac
+
+
 async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     """Decide if a single open trade needs a modification, write it to DB."""
     db = get_db()
@@ -113,11 +134,14 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
         # NOTE: no Telegram here — fires from modification_ack on EA confirm.
         return
 
-    # Tier 2 — close another 25% at +tp2 pips (remaining = 25% of original)
+    # Tier 2 — close another 25% at +tp2 pips (remaining = 25% of original).
+    # let_winners_run: full size is still on at TP2 (no TP1 banking), so
+    # close half here — remaining = 50% of original rides to TP3.
     if (not trade.get("tp2_closed")
             and trade.get("tp1_closed")
             and pips_up >= tp2_pips):
-        new_lot = round(original_lot * 0.25, 2)
+        tier2_frac = 0.5 if cfg.get("let_winners_run") else 0.25
+        new_lot = round(original_lot * tier2_frac, 2)
         if new_lot >= 0.01:
             await db.trades.update_one(
                 {"_id": trade_id},
@@ -140,8 +164,32 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             # NOTE: no Telegram here — fires from modification_ack on EA confirm.
             return
 
-    # Tier 1 — close 50% AND move SL to entry at +tp1 pips
+    # Tier 1 — close 50% AND move SL to entry at +tp1 pips.
+    # let_winners_run (iter-41): move SL to break-even ONLY — keep full size
+    # running toward TP2/TP3 to raise the average win.
     if not trade.get("tp1_closed") and pips_up >= tp1_pips:
+        if cfg.get("let_winners_run"):
+            await db.trades.update_one(
+                {"_id": trade_id},
+                {"$set": {
+                    "tp1_closed": True,
+                    "pending_modification": {
+                        "type": "MODIFY_SL",
+                        "new_sl": round(entry, 5),
+                        "requested_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    "be_target_sl": round(entry, 5),
+                }},
+            )
+            await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                "trade_id": str(trade_id),
+                "action": "BE_ONLY_TP1_WINNERS_RUN",
+                "from_lot": current_lot,
+                "to_lot": current_lot,
+                "new_sl": round(entry, 5),
+                "pips": round(pips_up, 1),
+            })
+            return
         new_lot = round(original_lot * 0.5, 2)
         if new_lot >= 0.01:
             await db.trades.update_one(

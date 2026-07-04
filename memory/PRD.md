@@ -823,6 +823,21 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   ea_latest_version + Accounts.jsx. Tests: test_iter40_ea_clamp_stops.py (5) + iter85
   updated to 1.38 — 18/18 pass. NOTE: fix reaches live users only after prod redeploy
   AND users updating their EA to v1.38.
+- PAYOFF-RATIO REPAIR (iter41) — user found high WR (70-83%) but flat profit; analysis
+  showed payoff 0.41-0.80 (losers 1.3-2.4x winners), worst = auto_deleverage_var_cap
+  closes (-$362 avg). Shipped 4 fixes:
+  (a) Soft-Stop: trade_manager cuts losers at `soft_stop_loss_fraction` (0.6 default) of SL
+      distance after `soft_stop_min_minutes` (10) age; close_reason=soft_stop_cut_loss.
+      Fields: soft_stop_enabled/loss_fraction/min_minutes — OFF by default.
+  (b) VaR-cap deleverage now prefers culling the WORST LOSER among the top-risk symbol's
+      positions (mirrors iter-48 sector fix).
+  (c) let_winners_run toggle: TP1 → BE-only (no 50% banking), TP2 closes half, TP3 rest.
+  (d) Optimizer stats now include payoff_ratio + avg_pnl_per_trade; prompt teaches the
+      payoff trap; 4 new ALLOWED_FIELDS; PAYOFF cell in UI stats grid.
+  Plumbing: models.py BotConfigUpdate, bot_routes _serialize (was missing new fields —
+  fixed), BotConfig.jsx save whitelist + Section 04 toggles.
+  Tests: tests/test_iter41_payoff_repair.py (14) + optimizer units = 20/20. Live forced
+  analysis confirmed Fable 5 recommends soft_stop/let_winners_run on real data.
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.

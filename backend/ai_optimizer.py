@@ -73,6 +73,10 @@ ALLOWED_FIELDS = {
     "pre_news_protect_minutes":     ("int",   1,    60),
     "profit_taking_mode":           ("enum",  None, ("expected_value", "win_rate", "trend_follow")),
     "daily_drawdown_pct":           ("float", 0.5,  20.0),
+    "soft_stop_enabled":            ("bool",  None, None),
+    "soft_stop_loss_fraction":      ("float", 0.3,  0.9),
+    "soft_stop_min_minutes":        ("int",   1,    120),
+    "let_winners_run":              ("bool",  None, None),
 }
 
 _SYSTEM_PROMPT = """You are STOIC's strategy-tuning analyst. You receive a
@@ -101,6 +105,12 @@ Rules:
 - config_change "field" MUST be one of: {allowed_fields}
 - preset_switch "preset_key" MUST be one of: {preset_keys}
 - Never recommend the value a field already has, or the preset already active.
+- PAYOFF-RATIO TRAP: if win_rate is high (>60%) but payoff_ratio < 1.0, the
+  account wins often but loses big — average loss exceeds average win, so
+  profit stays flat despite the win rate. In that case PRIORITIZE:
+  (a) enabling soft_stop_enabled / lowering soft_stop_loss_fraction to cut
+  losers before the full stop, and (b) let_winners_run=true or a higher
+  partial_close_trigger_r so winners reach their full targets.
 - Base every recommendation on the supplied stats. Be terse and specific."""
 
 
@@ -127,6 +137,8 @@ def compute_trade_stats(trades: list[dict]) -> dict:
     losses = [t for t in trades if float(t.get("pnl") or 0) <= 0]
     gross_profit = sum(float(t.get("pnl") or 0) for t in wins)
     gross_loss = abs(sum(float(t.get("pnl") or 0) for t in losses))
+    avg_win = gross_profit / len(wins) if wins else 0.0
+    avg_loss = -gross_loss / len(losses) if losses else 0.0
 
     def _bucket(key_fn):
         out: dict = {}
@@ -159,8 +171,12 @@ def compute_trade_stats(trades: list[dict]) -> dict:
         "gross_profit": round(gross_profit, 2),
         "gross_loss": round(gross_loss, 2),
         "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else None,
-        "avg_win": round(gross_profit / len(wins), 2) if wins else 0.0,
-        "avg_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        # iter-41 — payoff ratio (avg win / |avg loss|). < 1.0 means losers
+        # are bigger than winners: the classic high-WR / low-profit trap.
+        "payoff_ratio": round(avg_win / abs(avg_loss), 2) if avg_loss else None,
+        "avg_pnl_per_trade": round((gross_profit - gross_loss) / total, 2) if total else 0.0,
         "worst_losing_streak": worst_streak,
         "by_symbol": _bucket(lambda t: t.get("base_symbol") or t.get("symbol")),
         "by_direction": _bucket(lambda t: t.get("action")),

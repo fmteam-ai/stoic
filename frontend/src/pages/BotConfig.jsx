@@ -221,6 +221,10 @@ export default function BotConfig() {
                 min_confidence_override: cfg.min_confidence_override,
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
+                soft_stop_enabled: cfg.soft_stop_enabled ?? false,
+                soft_stop_loss_fraction: cfg.soft_stop_loss_fraction ?? 0.6,
+                soft_stop_min_minutes: cfg.soft_stop_min_minutes ?? 10,
+                let_winners_run: cfg.let_winners_run ?? false,
             });
             setCfg(data); setSaveMsg("Configuration saved.");
             // refresh allConfigs index so the selector reflects new state
@@ -827,6 +831,24 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="partial_close_fraction" label="CLOSE FRACTION" suffix="0-1" step={0.05} min={0.1} max={0.9} />
                         </div>
                     )}
+                </div>
+
+                {/* Soft-Stop — iter-41 payoff-ratio repair */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="soft_stop_enabled" label="Soft-Stop — Cut Losers Early" icon={Scissors} color="#FF3B30"
+                        desc="Close a losing trade once it reaches a fraction of the stop distance (e.g. 60%) instead of riding to the full SL. Shrinks average loss — the fix for high win rate but flat profit." />
+                    {cfg.soft_stop_enabled && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="soft_stop_loss_fraction" label="CUT AT FRACTION OF SL" suffix="0.3-0.9" step={0.05} min={0.3} max={0.9} />
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="soft_stop_min_minutes" label="MIN TRADE AGE" suffix="minutes" step={1} min={1} max={120} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Let Winners Run — iter-41 payoff-ratio repair */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="let_winners_run" label="Let Winners Run" icon={TrendingUp} color="#10F2C5"
+                        desc="At TP1, move SL to break-even WITHOUT banking 50% — the full position keeps running toward TP2/TP3 (half banked at TP2). Raises average win at zero added risk once break-even is set." />
                 </div>
 
                 {/* Trailing */}

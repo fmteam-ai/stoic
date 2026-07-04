@@ -266,13 +266,15 @@ export default function AiOptimizerSection({ accountId, onConfigChanged, anchorR
                         )}
 
                         {stats && stats.total_trades > 0 && (
-                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2" data-testid="optimizer-stats">
+                            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2" data-testid="optimizer-stats">
                                 <StatCell label="TRADES" value={stats.total_trades} />
                                 <StatCell label="WIN RATE" value={`${stats.win_rate}%`}
                                     accent={stats.win_rate >= 55 ? "text-[#00FF41]" : stats.win_rate >= 40 ? "text-[#FFD700]" : "text-[#FF3B30]"} />
                                 <StatCell label="NET P&L" value={`$${stats.total_pnl?.toLocaleString()}`}
                                     accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
                                 <StatCell label="PROFIT FACTOR" value={stats.profit_factor ?? "∞"} />
+                                <StatCell label="PAYOFF" value={stats.payoff_ratio ?? "—"}
+                                    accent={stats.payoff_ratio == null ? "text-white" : stats.payoff_ratio >= 1 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
                                 <StatCell label="WORST STREAK" value={`${stats.worst_losing_streak}L`}
                                     accent={stats.worst_losing_streak >= 5 ? "text-[#FF3B30]" : "text-white"} />
                             </div>

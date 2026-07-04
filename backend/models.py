@@ -217,6 +217,15 @@ class BotConfigUpdate(BaseModel):
     # fast_scalp, scalper, mean_reversion). User's explicit `active_preset`
     # is bypassed only while auto is enabled.
     auto_preset_enabled: bool = False
+    # ───── iter-41 · Payoff-ratio repair (high win rate / oversized losers) ─
+    # Soft-Stop: cut a losing trade early at a fraction of its SL distance
+    # instead of riding to the full stop. Directly shrinks the average loss.
+    soft_stop_enabled: bool = False
+    soft_stop_loss_fraction: float = 0.6   # close at 60% of the SL distance
+    soft_stop_min_minutes: int = 10        # min trade age before it may fire
+    # Let Winners Run: at TP1 move SL to break-even WITHOUT banking 50% —
+    # full size continues toward TP2/TP3. Raises the average win.
+    let_winners_run: bool = False
 
 
 class BotConfigOut(BotConfigUpdate):
