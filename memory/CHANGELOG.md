@@ -1,5 +1,12 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-48 / fork) — **Today's closed-trades cleanup + live deep-sync repair**:
+  - User: "closed trades today have wrong data / missing exit price — keep only bot-executed trades."
+  - Deleted 22 junk docs: 19 test remnants (fake tickets 999111/777111, incl. 5 on deleted accounts), 2 fabricated docs (no ticket/entry), 1 duplicate ghost doc (same broker ticket 45386781 as a fully-recorded trade).
+  - 4 genuine bot trades had placeholder panic-close data (exit==entry, pnl=0): marked `pnl_estimated=True` and queued deep broker sync on their 4 accounts. **Live EAs (v1.39) executed the sync within ~60s** — 108-134 deals re-scanned per account, all 4 trades repaired with exact broker figures (real SL exits, P&L -199 to -377).
+  - Result: today's closed list = 21 trades, 100% bot-executed (`origin=auto`) with exact broker data (no estimated/unknown/missing exits).
+  - First real-world validation of the iter-46 deep-sync pipeline end-to-end on live broker terminals.
+
 - 2026-07-06 (iter-47 / fork) — **Slippage-veto repair + FULL_CLOSE queue consumption (EA v1.40)**:
   - **User report**: "1 trade modification(s) waiting >5min for EA" despite all terminals on v1.39.
   - **Root cause 1 (EA)**: `ParseModificationsBlock` only handled MODIFY_SL/PARTIAL_CLOSE — FULL_CLOSE (slippage veto / auto-deleverage / reconciler force-closes) was NEVER consumed. ~90 closed trades carried stale FULL_CLOSE mods; 1 open trade was "stuck". The veto has effectively never executed at the broker.
