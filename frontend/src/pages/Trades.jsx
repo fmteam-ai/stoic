@@ -312,6 +312,9 @@ export default function Trades() {
         return trades.filter(t => {
             if (filter === "winning" && !(t.status === "closed" && parseFloat(t.pnl) > 0)) return false;
             if (filter === "lost"    && !(t.status === "closed" && parseFloat(t.pnl) < 0)) return false;
+            // History mode returns ALL statuses in range — the plain status
+            // filter (closed/open/pending/failed) must still apply client-side.
+            if (historySummary && filter && !CLIENT_ONLY_FILTERS.includes(filter) && t.status !== filter) return false;
             // History mode: the backend already ranged the query (closed-at
             // based) — re-clamping by opened_at would wrongly drop trades
             // that closed inside the window but opened before it.

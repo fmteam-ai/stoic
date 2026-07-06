@@ -343,7 +343,7 @@ void SweepDealHistory() {
          "\"deal_entry\":\"%s\",\"symbol\":\"%s\",\"action\":\"%s\","
          "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
          "\"commission\":%.2f,\"swap\":%.2f,"
-         "\"deal_time\":%I64d,\"magic\":%I64d}",
+         "\"deal_time\":%I64d,\"magic\":%I64d,\"backfill\":true}",
          EffectiveToken, position_id, deal_id,
          entry_str, symbol, action,
          volume, price, profit, commission, swap, deal_time, magic);
@@ -666,7 +666,7 @@ bool PushDealById(ulong deal_id) {
       "\"deal_entry\":\"%s\",\"symbol\":\"%s\",\"action\":\"%s\","
       "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
       "\"commission\":%.2f,\"swap\":%.2f,"
-      "\"deal_time\":%I64d,\"magic\":%I64d}",
+      "\"deal_time\":%I64d,\"magic\":%I64d,\"backfill\":true}",
       EffectiveToken, position_id, deal_id,
       entry_str, symbol, action,
       volume, price, profit, commission, swap, deal_time, magic);

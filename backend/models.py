@@ -363,6 +363,7 @@ class BridgeExternalDeal(BaseModel):
     commission: float = 0.0
     swap: float = 0.0
     deal_time: int = 0                    # unix seconds (broker time)
+    backfill: bool = False                # EA v1.40+: history-sweep / deep-sync push
     magic: int = 0                        # 0 = manual broker-side; else our MagicNumber
 
 

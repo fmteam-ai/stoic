@@ -880,6 +880,20 @@ async def external_deal(payload: BridgeExternalDeal):
     server_iso = datetime.now(timezone.utc).isoformat()
     deal_iso = server_iso
     broker_deal_epoch = payload.deal_time or None
+    # iter-48 · HISTORICAL deals (deep-sync / history-sweep backfills) must
+    # keep the broker's own event time — stamping them with "now" folds
+    # trades that closed days ago into TODAY's stats (wrong win-rate/P&L).
+    # Broker epochs are broker-LOCAL (±3h typical skew), which is far closer
+    # to the truth than repair-arrival time. Live events (received within
+    # 10 min of the deal, or untagged) keep the accurate server-UTC stamp.
+    if broker_deal_epoch:
+        try:
+            deal_dt = datetime.fromtimestamp(int(broker_deal_epoch), tz=timezone.utc)
+            age_sec = (datetime.now(timezone.utc) - deal_dt).total_seconds()
+            if payload.backfill or age_sec > 600:
+                deal_iso = deal_dt.isoformat()
+        except (ValueError, OSError, OverflowError):
+            pass
 
     # 2. Look up matching STOIC trade by (account, mt5_ticket).
     existing = await db.trades.find_one({

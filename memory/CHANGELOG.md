@@ -1,5 +1,12 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-49 / fork) — **Period stats counted past trades + status filter ignored in history mode**:
+  - User: TODAY period counted past trades → wrong win-rate/profit. Screenshot showed 27 closed incl. old trades, and 37 rows while CLOSED filter active.
+  - **Root cause 1**: external-deal stamps `closed_at = server-now`. Correct for LIVE events, but deep-sync/history-sweep backfills push deals that happened DAYS ago — repair time folded them into today. Fix: `BridgeExternalDeal.backfill` flag (EA v1.40 tags sweep + deep-sync pushes) + fallback heuristic (deal_time epoch >10min old) → use broker deal time (broker-local, ±3h skew) for opened_at/closed_at/partial_closed_at. Live deals keep server UTC.
+  - **Root cause 2 (frontend `Trades.jsx`)**: in history mode (period presets) the plain status filter (closed/open/...) was not applied client-side — table showed ALL statuses. Fixed in `visibleTrades`.
+  - **Data repair**: 4 mis-stamped trades restored to real broker close times from `broker_deals.deal_time` — 3 were genuine Monday-01:00 weekend-gap SL hits (correctly today), 1 moved to Jul 5.
+  - **Testing**: 4 new pytest asserts (23 total green), live-API E2E (backfilled 3-day-old deal keeps broker date; live deal keeps today; /trades/history excludes the old one), screenshot verified 26 closed / SHOWING 26 of 40.
+
 - 2026-07-06 (iter-48 / fork) — **Today's closed-trades cleanup + live deep-sync repair**:
   - User: "closed trades today have wrong data / missing exit price — keep only bot-executed trades."
   - Deleted 22 junk docs: 19 test remnants (fake tickets 999111/777111, incl. 5 on deleted accounts), 2 fabricated docs (no ticket/entry), 1 duplicate ghost doc (same broker ticket 45386781 as a fully-recorded trade).

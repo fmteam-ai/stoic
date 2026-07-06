@@ -91,3 +91,25 @@ class TestEaV140:
         src = _src("routes/bot_routes.py")
         assert "Recompile EA to v1.26" not in src
         assert "v1.40+" in src
+
+
+class TestBackfillTimestamps:
+    """iter-48 · historical deals keep broker time; live deals keep server UTC."""
+
+    def test_external_deal_uses_broker_time_for_backfills(self):
+        src = _src("routes/bridge_routes.py")
+        assert "payload.backfill or age_sec > 600" in src
+        assert "fromtimestamp(int(broker_deal_epoch)" in src
+
+    def test_model_has_backfill_flag(self):
+        assert "backfill: bool = False" in _src("models.py")
+
+    def test_ea_tags_sweep_and_deep_sync_as_backfill(self):
+        ea = _src("static/EmergentTradingBridge.mq5")
+        # both SweepDealHistory and PushDealById bodies carry the tag;
+        # the live OnTradeTransaction body must NOT.
+        assert ea.count('\\"backfill\\":true') == 2
+
+    def test_history_mode_applies_status_filter(self):
+        fe = open("/app/frontend/src/pages/Trades.jsx").read()
+        assert "historySummary && filter && !CLIENT_ONLY_FILTERS.includes(filter) && t.status !== filter" in fe
