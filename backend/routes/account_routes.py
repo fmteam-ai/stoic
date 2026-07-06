@@ -226,6 +226,32 @@ async def rotate_token(account_id: str, user=Depends(get_current_user)):
     return {"bridge_token": new_token}
 
 
+@router.post("/{account_id}/request-sync")
+async def request_broker_sync(account_id: str, user=Depends(get_current_user)):
+    """Queue a deep broker-history sync (7-day lookback) for the EA.
+
+    The EA (v1.39+) picks the request up on its next poll (~5s), re-scans the
+    full MT5 deal history for the window and re-pushes every deal. The server
+    is idempotent on deal_id but repairs any trade still carrying estimated
+    or missing P&L with the exact broker figures.
+    """
+    db = get_db()
+    oid = parse_object_id(account_id)
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    lookback = 7 * 86400
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.accounts.update_one({"_id": oid}, {"$set": {
+        "pending_history_sync": {
+            "lookback_seconds": lookback,
+            "requested_at": now_iso,
+            "requested_by": "user",
+        },
+    }})
+    return {"ok": True, "lookback_seconds": lookback, "requested_at": now_iso}
+
+
 @router.post("/{account_id}/import-positions")
 async def import_positions(account_id: str, payload: ImportPositionsRequest,
                             user=Depends(get_current_user)):

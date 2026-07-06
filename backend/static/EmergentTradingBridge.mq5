@@ -58,6 +58,16 @@
 //|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| v1.39 — On-demand Deep Broker Sync. The server can now request a  |
+//|         full re-scan of the MT5 deal history (default 7 days) via |
+//|         the poll-trades response ("sync_request"). The EA pushes  |
+//|         EVERY deal in the window to /api/bridge/external-deal     |
+//|         (server is idempotent + repairs trades with estimated or  |
+//|         missing P&L) and confirms via /api/bridge/sync-complete.  |
+//|         Triggered by the dashboard "SYNC" button or automatically |
+//|         by the server's auto-heal when it detects inexact records.|
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| v1.38 — Fix retcode 10016 (TRADE_RETCODE_INVALID_STOPS) on        |
 //|         brokers with a non-zero SYMBOL_TRADE_STOPS_LEVEL (e.g.    |
 //|         Tauro Markets XAUUSD.fx). The EA now clamps SL/TP to the  |
@@ -107,14 +117,14 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.38"
+#property version   "1.39"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.38"
+#define EA_CLIENT_VERSION "1.39"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -592,6 +602,89 @@ void PollPendingTrades() {
 
    // -------- 2. Process pending modifications from "modifications":[...] block --------
    ParseModificationsBlock(resp);
+
+   // -------- 3. v1.39: server-requested deep broker-history sync --------
+   ParseSyncRequest(resp);
+}
+
+// ----- v1.39: DEEP BROKER SYNC -----
+// The server sets "sync_request":{"lookback_seconds":N} on the poll-trades
+// response when the user clicks SYNC on the dashboard (or auto-heal detects
+// trades with estimated/missing P&L). We re-scan the FULL deal history for
+// the window — ignoring the incremental sweep watermark — and push every
+// deal. Server-side idempotency (unique deal_id index) makes duplicate
+// pushes harmless, while inexact trade records get repaired with the exact
+// broker figures. Completion is confirmed via /api/bridge/sync-complete.
+datetime _last_deep_sync = 0;
+
+void ParseSyncRequest(string resp) {
+   int s = StringFind(resp, "\"sync_request\":{");
+   if (s < 0) return;
+   // Local guard: never run two deep syncs within 60s even if the server
+   // re-dispatches (its own re-dispatch window is 180s).
+   if (_last_deep_sync > 0 && TimeCurrent() - _last_deep_sync < 60) return;
+   long lookback = (long)ExtractDouble(resp, "\"lookback_seconds\":", s);
+   if (lookback <= 0) lookback = 604800;   // default 7 days
+   _last_deep_sync = TimeCurrent();
+   DeepSyncHistory((int)lookback);
+}
+
+// Push a single (already history-selected) deal to /external-deal.
+// Returns true if the deal belonged to a position and got posted.
+bool PushDealById(ulong deal_id) {
+   long position_id = (long)HistoryDealGetInteger(deal_id, DEAL_POSITION_ID);
+   if (position_id == 0) return false;   // balance ops, deposits etc.
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_id, DEAL_ENTRY);
+   long   magic      = (long)HistoryDealGetInteger(deal_id, DEAL_MAGIC);
+   string symbol     = HistoryDealGetString(deal_id, DEAL_SYMBOL);
+   ENUM_DEAL_TYPE dt = (ENUM_DEAL_TYPE)HistoryDealGetInteger(deal_id, DEAL_TYPE);
+   double price      = HistoryDealGetDouble(deal_id, DEAL_PRICE);
+   double volume     = HistoryDealGetDouble(deal_id, DEAL_VOLUME);
+   double profit     = HistoryDealGetDouble(deal_id, DEAL_PROFIT);
+   double commission = HistoryDealGetDouble(deal_id, DEAL_COMMISSION);
+   double swap       = HistoryDealGetDouble(deal_id, DEAL_SWAP);
+   long   deal_time  = (long)HistoryDealGetInteger(deal_id, DEAL_TIME);
+
+   string entry_str = "inout";
+   if (entry == DEAL_ENTRY_IN)       entry_str = "in";
+   else if (entry == DEAL_ENTRY_OUT) entry_str = "out";
+   string action = (dt == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"mt5_ticket\":%I64d,\"deal_id\":%I64u,"
+      "\"deal_entry\":\"%s\",\"symbol\":\"%s\",\"action\":\"%s\","
+      "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
+      "\"commission\":%.2f,\"swap\":%.2f,"
+      "\"deal_time\":%I64d,\"magic\":%I64d}",
+      EffectiveToken, position_id, deal_id,
+      entry_str, symbol, action,
+      volume, price, profit, commission, swap, deal_time, magic);
+   HttpPost(ServerUrl + "/api/bridge/external-deal", body);
+   return true;
+}
+
+void DeepSyncHistory(int lookback_seconds) {
+   datetime from_ts = TimeCurrent() - lookback_seconds;
+   datetime to_ts   = TimeCurrent() + 60;
+   int pushed = 0;
+   if (HistorySelect(from_ts, to_ts)) {
+      int total = HistoryDealsTotal();
+      Print("STOIC deep-sync: re-scanning ", total, " deals over last ",
+            lookback_seconds / 86400, " day(s)");
+      for (int i = 0; i < total; i++) {
+         if (pushed >= 400) break;   // hard cap per sync pass
+         ulong deal_id = HistoryDealGetTicket(i);
+         if (deal_id == 0) continue;
+         if (PushDealById(deal_id)) pushed++;
+      }
+   } else {
+      Print("STOIC deep-sync: HistorySelect failed (", GetLastError(), ")");
+   }
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"deals_pushed\":%d,\"lookback_seconds\":%d}",
+      EffectiveToken, pushed, lookback_seconds);
+   HttpPost(ServerUrl + "/api/bridge/sync-complete", body);
+   Print("STOIC deep-sync complete: pushed ", pushed, " deals.");
 }
 
 // ----- TRADES BLOCK -----

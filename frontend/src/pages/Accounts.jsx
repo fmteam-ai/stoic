@@ -6,7 +6,7 @@ import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 // Used in the download URL so the filename changes per release (e.g.
 // `EmergentTradingBridge_v1.35.mq5`) — defeats aggressive browser caching
 // of the prior .mq5, which otherwise re-downloads stale source.
-const LATEST_EA_VERSION = "1.38";
+const LATEST_EA_VERSION = "1.39";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning } from "lucide-react";
 const Warning = AlertTriangle;
@@ -134,6 +134,15 @@ export default function Accounts() {
                 }
                 : a));
         }
+        if (lastEvent.type === "broker_sync_complete") {
+            const p = lastEvent.payload;
+            toast.success("Broker sync complete", {
+                description: `${p.deals_pushed} broker deal${p.deals_pushed === 1 ? "" : "s"} re-scanned · ${p.trades_repaired} trade record${p.trades_repaired === 1 ? "" : "s"} repaired with exact figures.`,
+            });
+            setAccounts(prev => prev.map(a => a.id === p.account_id
+                ? { ...a, last_full_sync_at: p.completed_at, pending_history_sync: null }
+                : a));
+        }
     }, [lastEvent]);
 
     const create = async (e) => {
@@ -259,6 +268,24 @@ export default function Accounts() {
             toast.error("Test trade refused", { description: formatApiError(e) });
         } finally {
             setForcingTest(prev => ({ ...prev, [id]: false }));
+        }
+    };
+
+    // iter-46 · Deep broker sync — EA re-scans 7 days of MT5 deal history and
+    // repairs any STOIC trade still carrying estimated/missing P&L.
+    const [syncing, setSyncing] = useState({});
+    const requestSync = async (id) => {
+        setSyncing(prev => ({ ...prev, [id]: true }));
+        try {
+            const { data } = await api.post(`/accounts/${id}/request-sync`);
+            const days = Math.round((data.lookback_seconds || 604800) / 86400);
+            toast.success("Broker sync queued", {
+                description: `Your EA will re-scan the last ${days} days of broker history within ~10s and repair any inexact trade records. You'll get a confirmation here when it finishes.`,
+            });
+        } catch (e) {
+            toast.error("Sync request failed", { description: formatApiError(e) });
+        } finally {
+            setTimeout(() => setSyncing(prev => ({ ...prev, [id]: false })), 2000);
         }
     };
 
@@ -566,6 +593,13 @@ export default function Accounts() {
                                                     <Lightning className="w-3.5 h-3.5" /> {forcingTest[a.id] ? "FIRING…" : "FORCE TRADE"}
                                                 </button>
                                             )}
+                                            <button onClick={() => requestSync(a.id)}
+                                                disabled={!!syncing[a.id]}
+                                                data-testid={`broker-sync-${a.account_number}`}
+                                                title="Deep-sync: your EA re-scans the last 7 days of broker deal history and repairs any estimated or missing trade data with exact figures"
+                                                className="px-3 py-2 border border-[#00BFFF]/40 text-[#00BFFF] hover:bg-[#00BFFF]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-50">
+                                                <ArrowsClockwise className={`w-3.5 h-3.5 ${syncing[a.id] ? "animate-spin" : ""}`} /> {syncing[a.id] ? "QUEUED…" : "SYNC"}
+                                            </button>
                                             <button onClick={() => rotate(a.id)} data-testid={`rotate-token-${a.account_number}`}
                                                 className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
                                                 <ArrowsClockwise className="w-3.5 h-3.5" /> ROTATE
@@ -575,6 +609,15 @@ export default function Accounts() {
                                                 <Trash className="w-3.5 h-3.5" /> DELETE
                                             </button>
                                         </div>
+                                        {(a.pending_history_sync || a.last_full_sync_at) && (
+                                            <div className="font-mono text-[10px] tracking-widest mt-2" data-testid={`sync-status-${a.account_number}`}>
+                                                {a.pending_history_sync ? (
+                                                    <span className="text-[#00BFFF]">BROKER SYNC PENDING · EA picks it up on next poll (requires EA v1.39+){a.pending_history_sync.requested_by === "auto_heal" ? " · auto-heal" : ""}</span>
+                                                ) : (
+                                                    <span className="text-[#52525B]">LAST BROKER SYNC · {new Date(a.last_full_sync_at).toLocaleString()}{a.last_full_sync ? ` · ${a.last_full_sync.deals_pushed} deals · ${a.last_full_sync.trades_repaired} repaired` : ""}</span>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
 
                                     {testResults[a.id] && (

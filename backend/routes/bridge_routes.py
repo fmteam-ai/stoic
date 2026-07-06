@@ -221,6 +221,39 @@ async def heartbeat(payload: BridgeHeartbeat):
             str(acc["_id"]), tickets, source="heartbeat",
         )
 
+    # iter-46 · Auto-heal: if closed trades carry estimated/unknown P&L, queue
+    # a deep history sync so the EA re-pushes exact broker figures. Throttled
+    # to one check per 5 min per account so heartbeats stay cheap.
+    if not mismatch and not acc.get("pending_history_sync"):
+        last_check = acc.get("ghost_check_at")
+        due = True
+        if last_check:
+            try:
+                due = (datetime.now(timezone.utc)
+                       - datetime.fromisoformat(last_check)).total_seconds() > 300
+            except ValueError:
+                due = True
+        if due:
+            set_doc["ghost_check_at"] = now_iso
+            seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            ghost_count = await db.trades.count_documents({
+                "account_id": str(acc["_id"]),
+                "status": "closed",
+                "closed_at": {"$gte": seven_days_ago},
+                "$or": [{"pnl_estimated": True}, {"pnl_unknown": True}],
+            })
+            if ghost_count > 0:
+                set_doc["pending_history_sync"] = {
+                    "lookback_seconds": 7 * 86400,
+                    "requested_at": now_iso,
+                    "requested_by": "auto_heal",
+                    "ghost_count": ghost_count,
+                }
+                logger.info(
+                    "Auto-heal queued deep broker sync for account=%s (%s ghost trades)",
+                    str(acc["_id"]), ghost_count,
+                )
+
     await db.accounts.update_one({"_id": acc["_id"]}, {"$set": set_doc})
 
     # EA v1.25+: ingest the live positions snapshot. Auto-creates trade
@@ -433,7 +466,82 @@ async def poll_trades(payload: PollRequest):
             "new_volume": m.get("new_volume"),
         })
 
-    return {"trades": out, "modifications": modifications}
+    resp = {"trades": out, "modifications": modifications}
+
+    # iter-46 · Deep broker-history sync dispatch. When a sync is pending
+    # (user-requested or auto-heal), tell the EA to re-scan its full deal
+    # history for the lookback window. Re-dispatched every 180s until the EA
+    # confirms via /bridge/sync-complete (covers dropped responses).
+    pending_sync = acc.get("pending_history_sync")
+    if pending_sync:
+        dispatched = pending_sync.get("dispatched_at")
+        redispatch = True
+        if dispatched:
+            try:
+                redispatch = (datetime.now(timezone.utc)
+                              - datetime.fromisoformat(dispatched)).total_seconds() > 180
+            except ValueError:
+                redispatch = True
+        if redispatch:
+            await db.accounts.update_one(
+                {"_id": acc["_id"]},
+                {"$set": {"pending_history_sync.dispatched_at":
+                          datetime.now(timezone.utc).isoformat()}},
+            )
+            resp["sync_request"] = {
+                "lookback_seconds": int(pending_sync.get("lookback_seconds") or 604800),
+            }
+
+    return resp
+
+
+class BridgeSyncComplete(BaseModel):
+    bridge_token: str
+    deals_pushed: int = 0
+    lookback_seconds: int | None = None
+
+
+@router.post("/sync-complete")
+async def sync_complete(payload: BridgeSyncComplete):
+    """EA v1.39 confirms a deep broker-history sync finished.
+
+    Clears the pending flag, records how many STOIC trade records were
+    repaired (backfilled with exact broker figures) since the sync was
+    requested, and pushes a live WS update to the user.
+    """
+    db = get_db()
+    acc = await _account_by_token(payload.bridge_token)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    pending = acc.get("pending_history_sync") or {}
+    requested_at = pending.get("requested_at")
+    repaired = 0
+    if requested_at:
+        repaired = await db.trades.count_documents({
+            "account_id": str(acc["_id"]),
+            "backfilled_at": {"$gte": requested_at},
+        })
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {
+        "pending_history_sync": None,
+        "last_full_sync_at": now_iso,
+        "last_full_sync": {
+            "completed_at": now_iso,
+            "deals_pushed": payload.deals_pushed,
+            "trades_repaired": repaired,
+            "requested_by": pending.get("requested_by"),
+            "lookback_seconds": payload.lookback_seconds or pending.get("lookback_seconds"),
+        },
+    }})
+    await ws_manager.broadcast(acc["user_id"], "broker_sync_complete", {
+        "account_id": str(acc["_id"]),
+        "deals_pushed": payload.deals_pushed,
+        "trades_repaired": repaired,
+        "completed_at": now_iso,
+    })
+    logger.info(
+        "Deep sync complete account=%s deals_pushed=%s repaired=%s",
+        str(acc["_id"]), payload.deals_pushed, repaired,
+    )
+    return {"ok": True, "trades_repaired": repaired}
 
 
 class BridgeModificationAck(BaseModel):
@@ -707,8 +815,28 @@ async def external_deal(payload: BridgeExternalDeal):
     try:
         await db.broker_deals.insert_one(deal_doc)
     except DuplicateKeyError:
-        # We already processed this (deal_id, account_id). Safe no-op.
-        return {"ok": True, "duplicate": True, "deal_id": payload.deal_id}
+        # Already processed this (deal_id, account_id). Normally a no-op —
+        # BUT (iter-46) a deep-sync re-push must still be able to REPAIR a
+        # trade record that carries estimated/missing exit data. Only fall
+        # through for "out" deals whose matched trade is CLOSED and still
+        # inexact; everything else stays a safe no-op (an open trade must
+        # never be re-processed — the partial-close math would double-fire).
+        if payload.deal_entry == "in":
+            return {"ok": True, "duplicate": True, "deal_id": payload.deal_id}
+        t = await db.trades.find_one({
+            "account_id": account_id, "mt5_ticket": payload.mt5_ticket,
+        })
+        needs_repair = (
+            t is not None and t.get("status") == "closed"
+            and (t.get("pnl_estimated") or t.get("pnl_unknown")
+                 or t.get("exit_price") is None)
+        )
+        if not needs_repair:
+            return {"ok": True, "duplicate": True, "deal_id": payload.deal_id}
+        logger.info(
+            "Duplicate deal %s re-processed to repair inexact trade %s (ticket %s)",
+            payload.deal_id, t["_id"], payload.mt5_ticket,
+        )
     except Exception as e:
         # Real failure — surface so the EA can retry. Silently swallowing here
         # would lose broker fills.
