@@ -1,5 +1,13 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-53 / fork) — **Velocity veto (Loss-Lab guardrail) — built but DISARMED**:
+  - Loss Lab suggested: LOW_VOL_TREND GOLD SELL → require Kalman velocity < +3.0, block when |velocity| > 5 contradicts MTF bias.
+  - Implemented `regime_adapter.velocity_veto(signal, cfg)` (two rules: counter-momentum + momentum/structure conflict) + bot_runner SKIP wiring + `velocity_veto` intel counter. Thresholds read from REGIME_MODIFIERS with per-user `cfg["regime_overrides"][regime]` override.
+  - **CRITICAL replay finding**: with the suggested thresholds, 30/30 recent live signals would have been vetoed — including the 60/60 winning SELL scalps (+$1,799 day). Gold's daily Kalman velocity ≈ +8 (multi-day bounce) while the bot profitably scalps SELLs. The Jul-3 losing cluster actually died from the weekend gap (now covered by Friday Flat).
+  - User chose (d): keep code, DISARM defaults. No regime ships thresholds; arm per-user via `bot_configs.regime_overrides = {"LOW_VOL_TREND": {"velocity_counter_max": 3.0, "velocity_veto_threshold": 5.0}}`.
+  - Tests: 13 green (disarmed default, armed behavior via override, MTF conflict, scope). Replay verified 0/30 vetoed with defaults.
+  - User asked whether the bot auto-adjusts strategies from losses — answered in finish (Auto-Tune, Learned Meta profit-tied, anti-tilt/VaR deleveraging auto; AI Optimizer + Loss Lab advisory). Proposed future: auto-shadow-test Loss Lab guardrails against recent signals before arming.
+
 - 2026-07-06 (iter-52 / fork) — **Friday Flat guard (weekend gap protection)**:
   - New `backend/friday_flat.py` (mirrors position_protector pattern): in the window before the Friday 21:00 UTC weekly close (default 60 min, config `friday_flat_minutes_before`), for every open non-crypto trade → mode "close": queue FULL_CLOSE pending_modification (needs EA v1.40+; auto-degrades to tighten on older EAs); mode "tighten": SL → breakeven when in profit, else halve remaining risk (never loosens). Idempotent via `friday_flat_at` flag; crypto (BTC/ETH) exempt; default-cfg respects per-account cfg ownership; window extends 3h past close.
   - `bot_runner.py`: entry gate blocks NEW entries during the window (pulse BLOCKED) + `sweep_friday_flat` in main loop after pre-news sweep.

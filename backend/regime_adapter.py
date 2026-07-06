@@ -30,11 +30,14 @@ REGIME_MODIFIERS = {
         "tp_atr_mult": 0.75,   # 25% tighter targets (scalp)
         "kelly_cap": 0.90,     # 10% trim
         "min_confidence_delta": 0,
-        # iter-53 · Loss-Lab guardrail: counter-momentum entries in this
-        # regime clustered in the losing set (e.g. GOLD SELL while Kalman
-        # velocity was > +3). Overridable per-user via cfg.regime_overrides.
-        "velocity_counter_max": 3.0,     # veto SELL when kv > +3 / BUY when kv < -3
-        "velocity_veto_threshold": 5.0,  # veto when |kv| > 5 AND contradicts MTF bias
+        # iter-53 · Loss-Lab velocity-veto knobs — INTENTIONALLY NOT ARMED.
+        # Replay against the last 30 live signals showed the suggested
+        # thresholds (counter_max=3.0, veto_threshold=5.0) would have blocked
+        # 30/30 entries, including the 60/60 winning SELL scalps of Jul 6.
+        # The veto logic (regime_adapter.velocity_veto + bot_runner wiring)
+        # stays in place; arm per-user via bot config, e.g.:
+        #   cfg["regime_overrides"] = {"LOW_VOL_TREND":
+        #       {"velocity_counter_max": 3.0, "velocity_veto_threshold": 5.0}}
     },
     "RANGE": {
         "mode": "DEFENSIVE_SCALP",
