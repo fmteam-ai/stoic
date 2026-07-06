@@ -357,6 +357,23 @@ async def notify_pre_news_close(user_id: str, trade_id: str, symbol: str, event_
         ])
 
 
+async def notify_auto_guard(user_id: str, action: str, items: list) -> None:
+    """iter-55 · Daily Auto-Learning — guard applied / auto-reverted."""
+    applied = action == "applied"
+    title = ("🤖 Auto-Learning · measure applied" if applied
+             else "↩️ Auto-Learning · guard reverted")
+    lines = []
+    for it in items[:5]:
+        m = it.get("measure") or {}
+        ev = (it.get("evidence") or m.get("evidence")) or {}
+        lines.append(f"• {m.get('title') or m.get('type')} "
+                     f"(net ${float(ev.get('net_effect') or 0):+.2f}/14d)")
+    lines.append("")
+    lines.append("Manage in Loss Lab → Active Auto-Guards." if applied
+                 else "Evidence turned negative on fresh data — reverted automatically.")
+    await send_telegram(user_id, "auto_guard", title, lines)
+
+
 async def notify_loss_review(user_id: str, review: dict) -> None:
     """iter-54 · Auto Loss Review — aggregate loss analysis with
     shadow-tested counter-measures."""
@@ -378,7 +395,11 @@ async def notify_loss_review(user_id: str, review: dict) -> None:
                    f"(saves ${ev['losses_avoided']:.0f} / misses ${ev['wins_missed']:.0f})")
         lines.append(f"• [{(m.get('priority') or 'med').upper()}] {m.get('title')}{tag}")
     lines.append("")
-    lines.append("Review & apply in Loss Lab — measures are never auto-applied.")
+    applied = review.get("auto_applied") or []
+    if applied:
+        lines.append(f"🤖 {len(applied)} measure(s) passed the evidence bar and were AUTO-APPLIED.")
+    else:
+        lines.append("Review in Loss Lab — qualifying measures auto-apply when Auto-Learning is ON.")
     await send_telegram(user_id, "loss_review",
         "🔬 Auto Loss Review — suggested measures", lines)
 

@@ -105,8 +105,10 @@ class TestWiring:
         fe = open("/app/frontend/src/pages/LossLab.jsx").read()
         assert "run-loss-review" in fe and "loss-review-card" in fe
 
-    def test_never_auto_applied(self):
+    def test_auto_learning_wired(self):
+        # iter-55: auto-apply/auto-revert superseded the "never auto-applied" rule
         src = open(os.path.join(BACKEND, "loss_advisor.py")).read()
-        assert "NEVER" in src
-        # module must not write to bot_configs
-        assert "bot_configs.update" not in src
+        assert "_auto_apply" in src and "_revalidate_guards" in src
+        assert "live_guard_block" in src
+        runner = open(os.path.join(BACKEND, "bot_runner.py")).read()
+        assert "live_guard_block" in runner and "auto_guard_block" in runner

@@ -9,11 +9,13 @@ against the user's actual recent trades:
     "would have avoided $X of losses / missed $Y of wins → net $Z"
 
 so every suggestion ships with hard evidence (today's lesson: a plausible
-guardrail can silently kill a winning strategy). Measures are NEVER
-auto-applied — they are advisory, ranked, and delivered via Loss Lab + Telegram.
+guardrail can silently kill a winning strategy). With Daily Auto-Learning ON
+(default), measures that pass the strict evidence bar are auto-applied as live
+guards and auto-reverted when fresh evidence turns negative.
 
 Collections:
   • `loss_reviews` — one doc per review run (auto or manual)
+  • `auto_guards`  — evidence-gated live guards (apply / revert audit trail)
 """
 import os
 import json
@@ -33,8 +35,14 @@ logger = logging.getLogger("loss-advisor")
 
 WINDOW_DAYS = 7          # losses analysed
 SHADOW_DAYS = 14         # trades replayed for evidence
-MIN_NEW_LOSSES = 3       # auto-run gate
+MIN_NEW_LOSSES = 1       # iter-55 · daily learning: any new loss triggers a review after cooldown
 COOLDOWN_HOURS = 24      # min gap between auto reviews per user
+
+# iter-55 · Daily Auto-Learning — evidence-gated auto-apply (user-consented).
+AUTO_APPLY_MIN_NET = 100.0   # $ net effect over the shadow window
+AUTO_APPLY_RATIO = 2.0       # losses_avoided must be ≥ 2× wins_missed
+GATE_TYPES = {"min_confidence", "velocity_veto", "session_block", "symbol_pause"}
+MAX_ACTIVE_GUARDS = 5
 
 _ADVISOR_SYSTEM = """You are the head of risk for an algorithmic gold/index/crypto
 trading desk. You receive aggregate statistics of the bot's recent LOSING trades
@@ -266,6 +274,130 @@ async def _claude_measures(payload: dict) -> dict:
                 "market_context": "", "measures": [], "_llm_failed": True}
 
 
+# ---------------------------------------------------------- auto-learning
+def _qualifies(m: dict) -> bool:
+    """Strict evidence bar for auto-apply."""
+    ev = m.get("evidence") or {}
+    if not ev.get("testable"):
+        return False
+    net = float(ev.get("net_effect") or 0)
+    saved = float(ev.get("losses_avoided") or 0)
+    missed = float(ev.get("wins_missed") or 0)
+    return net >= AUTO_APPLY_MIN_NET and saved >= AUTO_APPLY_RATIO * missed
+
+
+def live_guard_block(signal: dict, guards: list) -> str | None:
+    """Evaluate active auto-guards against a LIVE signal using the exact
+    predicates that were shadow-tested. Returns a block reason or None."""
+    pseudo_trade = {"symbol": signal.get("symbol"), "action": signal.get("action")}
+    for g in guards:
+        m = g.get("measure") or {}
+        pred = _predicate(m)
+        if pred is None:
+            continue
+        try:
+            if pred(pseudo_trade, signal):
+                net = ((g.get("latest_evidence") or g.get("evidence")) or {}).get("net_effect", 0)
+                return (f"Auto-guard: {m.get('title') or m.get('type')} "
+                        f"(shadow-tested net ${net:+.0f}/{SHADOW_DAYS}d)")
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+async def _auto_apply_enabled(db, user_id: str) -> bool:
+    try:
+        u = await db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        u = None
+    s = (u or {}).get("postmortem_settings") or {}
+    return bool(s.get("auto_apply_guards", True))
+
+
+async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
+    """Apply qualifying measures: config knobs directly, gate types as
+    live auto-guards. Everything logged, notified and reversible."""
+    if not await _auto_apply_enabled(db, user_id):
+        return []
+    applied = []
+    active_n = await db.auto_guards.count_documents({"user_id": user_id, "active": True})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for m in review_doc.get("measures") or []:
+        if not _qualifies(m):
+            continue
+        mtype = m.get("type")
+        if mtype == "friday_flat":
+            p = m.get("params") or {}
+            upd = {"friday_flat_enabled": True}
+            if p.get("mode") in ("close", "tighten"):
+                upd["friday_flat_mode"] = p["mode"]
+            try:
+                mins = int(p.get("minutes_before") or 0)
+                if 5 <= mins <= 480:
+                    upd["friday_flat_minutes_before"] = mins
+            except (TypeError, ValueError):
+                pass
+            r = await db.bot_configs.update_many({"user_id": user_id}, {"$set": upd})
+            applied.append({"kind": "config", "measure": m,
+                            "updated_configs": r.modified_count, "applied_at": now_iso})
+        elif mtype in GATE_TYPES:
+            if active_n >= MAX_ACTIVE_GUARDS:
+                continue
+            dup = await db.auto_guards.find_one({
+                "user_id": user_id, "active": True,
+                "measure.type": mtype, "measure.params": m.get("params") or {},
+            })
+            if dup:
+                continue
+            await db.auto_guards.insert_one({
+                "user_id": user_id,
+                "measure": {k: m[k] for k in
+                            ("title", "type", "params", "rationale", "priority") if k in m},
+                "evidence": m.get("evidence"),
+                "review_id": str(review_doc.get("_id") or ""),
+                "created_at": now_iso,
+                "active": True,
+                "source": "auto_learn",
+            })
+            active_n += 1
+            applied.append({"kind": "guard", "measure": m, "applied_at": now_iso})
+    if applied:
+        logger.warning("Auto-learning applied %d measure(s) user=%s", len(applied), user_id)
+        try:
+            from notifier import notify_auto_guard
+            await notify_auto_guard(user_id, "applied", applied)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("notify_auto_guard failed: %s", e)
+    return applied
+
+
+async def _revalidate_guards(db, user_id: str, ds: dict) -> list:
+    """Re-shadow-test active guards on fresh data; auto-revert when the
+    net effect turns negative."""
+    reverted = []
+    async for g in db.auto_guards.find({"user_id": user_id, "active": True}):
+        ev = _shadow_test(g.get("measure") or {}, ds)
+        if ev is None:
+            continue
+        await db.auto_guards.update_one({"_id": g["_id"]}, {"$set": {"latest_evidence": ev}})
+        if ev["net_effect"] < 0:
+            await db.auto_guards.update_one({"_id": g["_id"]}, {"$set": {
+                "active": False,
+                "reverted_at": datetime.now(timezone.utc).isoformat(),
+                "revert_reason": "evidence_turned_negative",
+            }})
+            reverted.append({"measure": g.get("measure"), "evidence": ev})
+            logger.warning("Auto-guard reverted (evidence negative) user=%s: %s",
+                           user_id, (g.get("measure") or {}).get("title"))
+    if reverted:
+        try:
+            from notifier import notify_auto_guard
+            await notify_auto_guard(user_id, "auto_reverted", reverted)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("notify_auto_guard failed: %s", e)
+    return reverted
+
+
 # --------------------------------------------------------------- main runs
 async def run_loss_review(db, user_id: str, trigger: str = "auto") -> dict | None:
     ds = await _gather(db, user_id)
@@ -329,6 +461,17 @@ async def run_loss_review(db, user_id: str, trigger: str = "auto") -> dict | Non
     logger.info("Loss review stored user=%s losses=%d measures=%d",
                 user_id, agg["losses"], len(measures))
 
+    # iter-55 · Daily Auto-Learning: re-validate existing guards on fresh
+    # data (auto-revert net-negative ones), then auto-apply new qualifying
+    # measures. Both logged on the review + Telegram.
+    doc["auto_reverted"] = await _revalidate_guards(db, user_id, ds)
+    doc["auto_applied"] = await _auto_apply(db, user_id, doc)
+    if doc["auto_applied"] or doc["auto_reverted"]:
+        await db.loss_reviews.update_one({"_id": res.inserted_id}, {"$set": {
+            "auto_applied": doc["auto_applied"],
+            "auto_reverted": doc["auto_reverted"],
+        }})
+
     await ws_manager.broadcast(user_id, "loss_review", {
         "review_id": str(res.inserted_id),
         "losses": agg["losses"],
@@ -386,4 +529,4 @@ async def sweep_loss_reviews(db) -> int:
     return produced
 
 
-__all__ = ["run_loss_review", "sweep_loss_reviews"]
+__all__ = ["run_loss_review", "sweep_loss_reviews", "live_guard_block"]

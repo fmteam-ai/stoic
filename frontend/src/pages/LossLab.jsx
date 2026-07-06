@@ -7,7 +7,7 @@ import {
     Activity, ChevronRight, Calendar,
 } from "lucide-react";
 
-function MeasureRow({ m, i }) {
+function MeasureRow({ m, i, autoApplied }) {
     const ev = m.evidence;
     const prio = (m.priority || "medium").toUpperCase();
     const prioColor = prio === "HIGH" ? "#FF3B30" : prio === "LOW" ? "#52525B" : "#FFB000";
@@ -17,6 +17,10 @@ function MeasureRow({ m, i }) {
                 <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border"
                       style={{ borderColor: `${prioColor}66`, color: prioColor }}>{prio}</span>
                 <span className="font-display font-bold text-sm">{m.title}</span>
+                {autoApplied && (
+                    <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#00FF41]/40 text-[#00FF41]"
+                          data-testid={`measure-auto-applied-${i}`}>AUTO-APPLIED</span>
+                )}
                 {ev?.testable && (
                     <span className={`font-mono text-xs ml-auto ${ev.net_effect >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}
                           title={`Shadow-tested over your last ${ev.shadow_days} days of real trades`}>
@@ -38,6 +42,8 @@ function MeasureRow({ m, i }) {
 
 function ReviewCard({ r }) {
     const agg = r.aggregates || {};
+    const appliedTitles = new Set((r.auto_applied || []).map(a => (a.measure || {}).title));
+    const reverted = r.auto_reverted || [];
     return (
         <div className="border border-[#0099FF]/30 bg-[#0A0A0A]" data-testid="loss-review-card">
             <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2 flex-wrap">
@@ -67,12 +73,25 @@ function ReviewCard({ r }) {
                     <div>
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">SUGGESTED MEASURES · RANKED BY SHADOW-TESTED NET EFFECT</div>
                         <div className="space-y-2">
-                            {r.measures.map((m, i) => <MeasureRow key={i} m={m} i={i} />)}
+                            {r.measures.map((m, i) => <MeasureRow key={i} m={m} i={i} autoApplied={appliedTitles.has(m.title)} />)}
                         </div>
                     </div>
                 )}
+                {reverted.length > 0 && (
+                    <div className="border border-[#FFB000]/30 bg-[#FFB000]/5 p-3" data-testid="review-auto-reverted">
+                        <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-1">AUTO-REVERTED THIS RUN</div>
+                        {reverted.map((it, i) => (
+                            <div key={i} className="text-xs text-[#A1A1AA]">
+                                • {(it.measure || {}).title || (it.measure || {}).type} — evidence turned negative
+                                (net ${((it.evidence || {}).net_effect ?? 0).toFixed(2)}/14d)
+                            </div>
+                        ))}
+                    </div>
+                )}
                 <div className="font-mono text-[10px] text-[#52525B] tracking-wider">
-                    MEASURES ARE NEVER AUTO-APPLIED — apply the ones you trust via Bot Config.
+                    {appliedTitles.size > 0
+                        ? `${appliedTitles.size} MEASURE${appliedTitles.size > 1 ? "S" : ""} AUTO-APPLIED (passed the evidence bar) — manage under Daily Auto-Learning below.`
+                        : "NO MEASURE PASSED THE AUTO-APPLY EVIDENCE BAR — apply the ones you trust via Bot Config."}
                 </div>
             </div>
         </div>
@@ -230,7 +249,30 @@ export default function LossLab() {
     const [err, setErr] = useState("");
     const [regenerating, setRegenerating] = useState(false);
     const [reviews, setReviews] = useState([]);
+    const [guards, setGuards] = useState([]);
     const [runningReview, setRunningReview] = useState(false);
+
+    const revertGuard = async (id) => {
+        try {
+            await api.post(`/postmortem/guards/${id}/revert`);
+            setGuards(prev => prev.map(g => g.id === id ? { ...g, active: false, revert_reason: "manual" } : g));
+        } catch (e) {
+            setErr(formatApiError(e));
+        }
+    };
+
+    const toggleAutoApply = async () => {
+        try {
+            const next = !settings?.auto_apply_guards;
+            await api.post("/postmortem/settings", {
+                auto_tighten_enabled: !!settings?.auto_tighten_enabled,
+                auto_apply_guards: next,
+            });
+            setSettings(s => ({ ...s, auto_apply_guards: next }));
+        } catch (e) {
+            setErr(formatApiError(e));
+        }
+    };
 
     const runReview = async () => {
         setRunningReview(true);
@@ -251,18 +293,20 @@ export default function LossLab() {
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
-            const [pats, pms, st, adj, rev] = await Promise.all([
+            const [pats, pms, st, adj, rev, grd] = await Promise.all([
                 api.get("/postmortem/patterns"),
                 api.get("/postmortem"),
                 api.get("/postmortem/settings"),
                 api.get("/postmortem/adjustments"),
                 api.get("/postmortem/reviews"),
+                api.get("/postmortem/guards"),
             ]);
             setPatterns(pats.data.items || []);
             setPostmortems(pms.data.items || []);
             setSettings(st.data);
             setAdjustments(adj.data.items || []);
             setReviews(rev.data.reviews || []);
+            setGuards(grd.data.guards || []);
         } catch (e) {
             setErr(formatApiError(e));
         } finally {
@@ -338,10 +382,11 @@ export default function LossLab() {
                         <div className="font-display font-bold text-sm">Auto Loss Review</div>
                         <div className="text-xs text-[#A1A1AA] leading-relaxed mt-1">
                             The bot automatically re-analyses <strong>all losses of the last 7 days</strong> whenever
-                            3+ new losses accumulate (max once/24h): Claude diagnoses the root cause against current
+                            a new loss lands (max once/24h): Claude diagnoses the root cause against current
                             market data, proposes counter-measures, and each measure is <strong>shadow-tested against
                             your last 14 days of real trades</strong> — showing exactly how much it would have saved
-                            vs. how many wins it would have cost. Delivered here + Telegram. Never auto-applied.
+                            vs. how many wins it would have cost. Delivered here + Telegram. Measures that pass the
+                            evidence bar are auto-applied when Daily Auto-Learning is ON (below).
                         </div>
                     </div>
                     <button onClick={runReview} disabled={runningReview}
@@ -352,6 +397,57 @@ export default function LossLab() {
                     </button>
                 </div>
                 {reviews.length > 0 && <ReviewCard r={reviews[0]} />}
+
+                {/* iter-55 — Daily Auto-Learning: master toggle + active guards */}
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="auto-learning-card">
+                    <div className="flex items-start gap-3">
+                        <ShieldCheck className={`w-5 h-5 shrink-0 mt-0.5 ${settings?.auto_apply_guards ? "text-[#00FF41]" : "text-[#52525B]"}`} />
+                        <div className="flex-1">
+                            <div className="font-display font-bold text-sm">Daily Auto-Learning — Evidence-Gated Auto-Apply</div>
+                            <div className="text-xs text-[#A1A1AA] leading-relaxed mt-1">
+                                Measures that pass the strict evidence bar (<strong>net ≥ +$100</strong> over 14 days of your real trades
+                                AND losses avoided ≥ 2× wins missed) are applied automatically and enforced on every new signal.
+                                Each daily review re-tests active guards on fresh data — a guard whose net effect turns negative is
+                                <strong> auto-reverted</strong>. You get a Telegram alert on every apply/revert.
+                            </div>
+                        </div>
+                        <button onClick={toggleAutoApply} data-testid="auto-apply-toggle"
+                            className={`px-3 py-1.5 border text-[10px] font-mono tracking-widest transition-colors ${
+                                settings?.auto_apply_guards
+                                    ? "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]"
+                                    : "border-[#52525B] text-[#A1A1AA] hover:border-white hover:text-white"
+                            }`}>
+                            {settings?.auto_apply_guards ? "● AUTO-APPLY ON" : "○ ADVISORY ONLY"}
+                        </button>
+                    </div>
+                    {guards.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">AUTO-GUARDS</div>
+                            {guards.map((g) => {
+                                const m = g.measure || {};
+                                const ev = g.latest_evidence || g.evidence || {};
+                                return (
+                                    <div key={g.id} className={`border p-3 flex items-center gap-3 flex-wrap ${g.active ? "border-[#00FF41]/25" : "border-[#1F1F1F] opacity-60"}`}
+                                         data-testid={`auto-guard-${g.id}`}>
+                                        <span className={`font-mono text-[10px] tracking-widest px-1.5 py-0.5 border ${g.active ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#52525B] text-[#52525B]"}`}>
+                                            {g.active ? "ACTIVE" : (g.revert_reason === "evidence_turned_negative" ? "AUTO-REVERTED" : "REVERTED")}
+                                        </span>
+                                        <span className="text-sm font-display font-bold">{m.title || m.type}</span>
+                                        <span className="font-mono text-xs text-[#A1A1AA]">
+                                            net {(ev.net_effect ?? 0) >= 0 ? "+" : "-"}${Math.abs(ev.net_effect ?? 0).toFixed(2)}/14d
+                                        </span>
+                                        {g.active && (
+                                            <button onClick={() => revertGuard(g.id)} data-testid={`revert-guard-${g.id}`}
+                                                className="ml-auto px-2.5 py-1 border border-[#FF3B30]/30 text-[#FF3B30] hover:bg-[#FF3B30]/10 text-[10px] font-mono tracking-widest transition-colors">
+                                                REVERT
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
 
                 {/* Auto-tighten toggle */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4 flex items-start gap-3"

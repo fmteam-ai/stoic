@@ -52,6 +52,7 @@ async def get_settings(user=Depends(get_current_user)):
     s = u.get("postmortem_settings") or {}
     return {
         "auto_tighten_enabled": bool(s.get("auto_tighten_enabled", False)),
+        "auto_apply_guards": bool(s.get("auto_apply_guards", True)),
         "updated_at": s.get("updated_at"),
     }
 
@@ -62,15 +63,20 @@ async def set_settings(payload: dict, user=Depends(get_current_user)):
     u = await _user_doc(db, user["id"])
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    enabled = bool(payload.get("auto_tighten_enabled"))
+    prev = (u.get("postmortem_settings") or {})
+    enabled = bool(payload.get("auto_tighten_enabled",
+                               prev.get("auto_tighten_enabled", False)))
+    auto_apply = bool(payload.get("auto_apply_guards",
+                                  prev.get("auto_apply_guards", True)))
     await db.users.update_one(
         {"_id": u["_id"]},
         {"$set": {"postmortem_settings": {
             "auto_tighten_enabled": enabled,
+            "auto_apply_guards": auto_apply,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }}},
     )
-    return {"auto_tighten_enabled": enabled}
+    return {"auto_tighten_enabled": enabled, "auto_apply_guards": auto_apply}
 
 
 # ---- adjustments audit trail ----
@@ -147,6 +153,32 @@ async def run_review_now(user=Depends(get_current_user)):
         return {"ok": True, "review": None,
                 "message": "No exact-data losses in the last 7 days — nothing to analyse."}
     return {"ok": True, "review": _serialize_review(doc)}
+
+
+@router.get("/guards")
+async def list_guards(user=Depends(get_current_user)):
+    """iter-55 · Active + recently reverted auto-guards."""
+    db = get_db()
+    docs = await db.auto_guards.find({"user_id": user["id"]}) \
+        .sort("created_at", -1).limit(20).to_list(length=20)
+    return {"guards": [_serialize_review(d) for d in docs]}
+
+
+@router.post("/guards/{guard_id}/revert")
+async def revert_guard(guard_id: str, user=Depends(get_current_user)):
+    db = get_db()
+    try:
+        oid = ObjectId(guard_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid guard id")
+    r = await db.auto_guards.update_one(
+        {"_id": oid, "user_id": user["id"], "active": True},
+        {"$set": {"active": False,
+                  "reverted_at": datetime.now(timezone.utc).isoformat(),
+                  "revert_reason": "manual"}})
+    if not r.modified_count:
+        raise HTTPException(status_code=404, detail="Guard not found or already reverted")
+    return {"ok": True}
 
 
 @router.get("")

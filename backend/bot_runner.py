@@ -668,6 +668,22 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "velocity_veto")
                 continue
 
+        # iter-55 · Active auto-guards (Daily Auto-Learning) — evidence-gated
+        # measures applied by the loss advisor, enforced with the exact
+        # predicates that were shadow-tested. Auto-reverted when evidence
+        # turns negative on fresh data.
+        if signal.get("action") in ("BUY", "SELL"):
+            guards = await db.auto_guards.find(
+                {"user_id": user_id, "active": True}).to_list(length=10)
+            if guards:
+                from loss_advisor import live_guard_block
+                gb = live_guard_block(signal, guards)
+                if gb:
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn", reason=gb)
+                    await inc_intel_counter(user_id, "auto_guard_block")
+                    continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
