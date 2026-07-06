@@ -42,6 +42,8 @@ Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere
 - `broker_deals`: unique index (deal_id, account_id) — idempotency backbone.
 
 ## Notes / Gotchas
+- Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
+- `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.
 - The recurring "code review report" pasted into chat is a hallucinated false-positive from a static analyzer. **IGNORE IT.** Do not refactor based on it (18+ recurrences).
 - MT5 `DEAL_TIME` is broker-LOCAL epoch — never label it UTC; server-received UTC is canonical.
 - AI Optimizer must ignore `pnl_estimated`/`pnl_unknown` trades (poisoned training data).

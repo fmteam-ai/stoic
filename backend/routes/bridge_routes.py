@@ -883,15 +883,30 @@ async def external_deal(payload: BridgeExternalDeal):
     # iter-48 · HISTORICAL deals (deep-sync / history-sweep backfills) must
     # keep the broker's own event time — stamping them with "now" folds
     # trades that closed days ago into TODAY's stats (wrong win-rate/P&L).
-    # Broker epochs are broker-LOCAL (±3h typical skew), which is far closer
-    # to the truth than repair-arrival time. Live events (received within
-    # 10 min of the deal, or untagged) keep the accurate server-UTC stamp.
+    # iter-51 · Broker epochs are broker-LOCAL (typically UTC+2/+3 EET). We
+    # LEARN each account's UTC offset from live deals (broker epoch vs server
+    # receive time, snapped to 15 min) and subtract it from historical epochs
+    # so backfilled closes land on the correct UTC calendar day. Live events
+    # keep the accurate server-UTC stamp.
     if broker_deal_epoch:
         try:
+            now_dt = datetime.now(timezone.utc)
             deal_dt = datetime.fromtimestamp(int(broker_deal_epoch), tz=timezone.utc)
-            age_sec = (datetime.now(timezone.utc) - deal_dt).total_seconds()
+            age_sec = (now_dt - deal_dt).total_seconds()
             if payload.backfill or age_sec > 600:
-                deal_iso = deal_dt.isoformat()
+                offset = int(acc.get("broker_utc_offset_sec") or 0)
+                deal_iso = datetime.fromtimestamp(
+                    int(broker_deal_epoch) - offset, tz=timezone.utc
+                ).isoformat()
+            else:
+                # Live deal → learn/refresh the broker's UTC offset.
+                raw_off = int(broker_deal_epoch) - int(now_dt.timestamp())
+                snapped = int(round(raw_off / 900.0) * 900)
+                if abs(snapped) <= 50400 and snapped != int(acc.get("broker_utc_offset_sec") or 0):
+                    await db.accounts.update_one(
+                        {"_id": acc["_id"]},
+                        {"$set": {"broker_utc_offset_sec": snapped}},
+                    )
         except (ValueError, OSError, OverflowError):
             pass
 

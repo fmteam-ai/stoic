@@ -1,5 +1,11 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-51 / fork) — **July 3 trades still in TODAY view — broker-local epoch skew**:
+  - Root cause: MT5 deal epochs are broker-LOCAL. The weekend-gap SL closes happened Sunday 22:01-22:06 UTC (market re-open) but UTC+3 brokers stamped them 01:01-01:06 Monday → stored as "today" UTC.
+  - **Fix (`bridge_routes.py` external-deal)**: STOIC now LEARNS each account's broker UTC offset from live deals (`broker_utc_offset_sec` = deal epoch minus server receive time, snapped to 15 min, ±14h clamp) and subtracts it from HISTORICAL/backfill epochs so closes land on the correct UTC day. Live deals keep server UTC.
+  - **Data**: learned offsets (micro/OnEquity/vtmarkets/StartTrader = +3h, MT5 Demo = 0h); repaired all 4 weekend-gap trades → closed_at 2026-07-05T22:0x UTC.
+  - Verified via authed API (cookie auth — login sets httpOnly cookie, NO bearer token): today = 60 closed / 60 wins / 100% / +$1,799.72 / zero rows opened before Jul 6. pytest 16 green.
+
 - 2026-07-06 (iter-50b / fork) — **LIVE P&L recurrence — lost edits**:
   - Two search_replace edits from iter-50 (LIVE P&L cell doc-snapshot fallback + header openLive fallback in `Trades.jsx`) reported success but NEVER landed on disk (verified via `git show`). Prior screenshot verification passed only because the playwright session had live WS ticks masking the missing fallback.
   - Re-applied both edits, verified via grep on disk, and re-tested with `/api/ws` BLOCKED in playwright (simulating the user's no-tick session): all 12 LIVE P&L cells render from `t.live_pnl` heartbeat snapshots; OPEN LIVE P&L card totals correctly.

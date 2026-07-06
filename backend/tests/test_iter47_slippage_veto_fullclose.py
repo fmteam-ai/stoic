@@ -94,12 +94,19 @@ class TestEaV140:
 
 
 class TestBackfillTimestamps:
-    """iter-48 · historical deals keep broker time; live deals keep server UTC."""
+    """iter-48 · historical deals keep broker time; live deals keep server UTC.
+    iter-51 · broker-LOCAL epochs corrected to true UTC via learned offset."""
 
     def test_external_deal_uses_broker_time_for_backfills(self):
         src = _src("routes/bridge_routes.py")
         assert "payload.backfill or age_sec > 600" in src
-        assert "fromtimestamp(int(broker_deal_epoch)" in src
+        assert "int(broker_deal_epoch) - offset" in src
+
+    def test_offset_learned_from_live_deals(self):
+        src = _src("routes/bridge_routes.py")
+        assert "broker_utc_offset_sec" in src
+        assert "round(raw_off / 900.0) * 900" in src   # snap to 15-min tz offsets
+        assert "abs(snapped) <= 50400" in src           # ±14h sanity clamp
 
     def test_model_has_backfill_flag(self):
         assert "backfill: bool = False" in _src("models.py")
