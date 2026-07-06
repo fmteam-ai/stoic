@@ -1,5 +1,13 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-52 / fork) — **Friday Flat guard (weekend gap protection)**:
+  - New `backend/friday_flat.py` (mirrors position_protector pattern): in the window before the Friday 21:00 UTC weekly close (default 60 min, config `friday_flat_minutes_before`), for every open non-crypto trade → mode "close": queue FULL_CLOSE pending_modification (needs EA v1.40+; auto-degrades to tighten on older EAs); mode "tighten": SL → breakeven when in profit, else halve remaining risk (never loosens). Idempotent via `friday_flat_at` flag; crypto (BTC/ETH) exempt; default-cfg respects per-account cfg ownership; window extends 3h past close.
+  - `bot_runner.py`: entry gate blocks NEW entries during the window (pulse BLOCKED) + `sweep_friday_flat` in main loop after pre-news sweep.
+  - `models.py` BotConfigUpdate: `friday_flat_enabled=True`, `friday_flat_mode="close"`, `friday_flat_minutes_before=60`. Telegram `notify_friday_flat` summary + WS `friday_flat` event.
+  - `BotConfig.jsx`: toggle + ACTION select + minutes input in Protection section; `withFlatDefaults()` normalizes older saved configs (UI showed OFF/0 while backend defaulted ON — fixed).
+  - **Tested**: 16 pytest green (window math incl. Friday boundary/after-close/custom minutes, tighten math, EA gate, wiring) + live-DB simulation with patched clock: CLOSE queues FULL_CLOSE, TIGHTEN queues MODIFY_SL to BE, EA 1.39 degrade works, crypto skipped, idempotent. UI screenshot: ON / CLOSE ALL / 60 min.
+  - NOTE: user terminals now report **EA v1.40** (Start Trader confirmed) — FULL_CLOSE actually executes.
+
 - 2026-07-06 (iter-51 / fork) — **July 3 trades still in TODAY view — broker-local epoch skew**:
   - Root cause: MT5 deal epochs are broker-LOCAL. The weekend-gap SL closes happened Sunday 22:01-22:06 UTC (market re-open) but UTC+3 brokers stamped them 01:01-01:06 Monday → stored as "today" UTC.
   - **Fix (`bridge_routes.py` external-deal)**: STOIC now LEARNS each account's broker UTC offset from live deals (`broker_utc_offset_sec` = deal epoch minus server receive time, snapped to 15 min, ±14h clamp) and subtracts it from HISTORICAL/backfill epochs so closes land on the correct UTC day. Live deals keep server UTC.

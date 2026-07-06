@@ -153,6 +153,13 @@ class BotConfigUpdate(BaseModel):
     max_spread_pips: Dict[str, float] = Field(
         default_factory=lambda: {"XAUUSD": 50.0, "BTCUSD": 100.0}
     )
+    # Friday Flat guard (iter-52) — weekend gap protection. Before the
+    # Friday 21:00 UTC weekly close: close all open non-crypto positions
+    # ("close", EA v1.40+) or tighten their SL ("tighten"), and block new
+    # entries for the window.
+    friday_flat_enabled: bool = True
+    friday_flat_mode: str = "close"          # "close" | "tighten"
+    friday_flat_minutes_before: int = 60
     # Auto-Tune — let the bot raise the min-confidence threshold based on
     # historical win-rates per (symbol, confidence-bucket).
     auto_tune_enabled: bool = True

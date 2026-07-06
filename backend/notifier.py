@@ -357,6 +357,25 @@ async def notify_pre_news_close(user_id: str, trade_id: str, symbol: str, event_
         ])
 
 
+async def notify_friday_flat(user_id: str, closed: int, tightened: int, actions: list) -> None:
+    """iter-52 · Friday Flat guard summary — positions closed/tightened ahead
+    of the Friday 21:00 UTC weekly close (weekend gap protection)."""
+    lines = []
+    for tr, act, new_sl in actions[:8]:
+        sym = tr.get("symbol")
+        side = tr.get("action")
+        if act == "close":
+            lines.append(f"• {sym} {side} — closing (weekend flat)")
+        else:
+            lines.append(f"• {sym} {side} — SL tightened to {new_sl}")
+    if len(actions) > 8:
+        lines.append(f"…and {len(actions) - 8} more")
+    lines.append("")
+    lines.append("Weekend gap protection ahead of the Friday 21:00 UTC close.")
+    await send_telegram(user_id, "friday_flat",
+        f"🛡 Friday Flat · {closed} closed · {tightened} tightened", lines)
+
+
 async def notify_account_blocked(user_id: str, account_id: str, retcode: str,
                                  retcode_label: str, hint: str) -> None:
     """iter-72 · Push alert when the broker-rejection breaker auto-halts an

@@ -103,6 +103,15 @@ export default function BotConfig() {
         return () => clearTimeout(t);
     }, [highlightPreset, presets.length]);
 
+    // Older saved configs predate the Friday Flat fields — the backend
+    // defaults the guard ON, so the UI must reflect the same defaults.
+    const withFlatDefaults = (d) => ({
+        ...d,
+        friday_flat_enabled: d?.friday_flat_enabled ?? true,
+        friday_flat_mode: d?.friday_flat_mode || "close",
+        friday_flat_minutes_before: d?.friday_flat_minutes_before ?? 60,
+    });
+
     const load = useCallback(async () => {
         try {
             const [c, p, s, pr, ac, cfgs] = await Promise.all([
@@ -113,7 +122,7 @@ export default function BotConfig() {
                 api.get("/accounts"),
                 api.get("/bot/configs"),
             ]);
-            setCfg(c.data); setProfiles(p.data.profiles); setSupported(s.data.symbols);
+            setCfg(withFlatDefaults(c.data)); setProfiles(p.data.profiles); setSupported(s.data.symbols);
             setPresets(pr.data.presets || []);
             setCustomPresets(pr.data.custom || []);
             setAccounts(ac.data || []);
@@ -134,7 +143,7 @@ export default function BotConfig() {
         setApplyingPreset(key); setErr("");
         try {
             const { data } = await api.post(`/bot/preset/${key}${accountQuery}`);
-            setCfg(data.config);
+            setCfg(withFlatDefaults(data.config));
             toast.success(`Preset applied · ${label}`, {
                 description: "Behaviour knobs updated. Click SAVE CONFIGURATION to persist.",
             });
@@ -217,6 +226,9 @@ export default function BotConfig() {
                 sl_cooldown_minutes: cfg.sl_cooldown_minutes,
                 pre_news_protect_enabled: cfg.pre_news_protect_enabled,
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
+                friday_flat_enabled: cfg.friday_flat_enabled ?? true,
+                friday_flat_mode: cfg.friday_flat_mode || "close",
+                friday_flat_minutes_before: cfg.friday_flat_minutes_before ?? 60,
                 aggressive_mode: cfg.aggressive_mode,
                 min_confidence_override: cfg.min_confidence_override,
                 paper_shadow_mode: cfg.paper_shadow_mode,
@@ -226,7 +238,7 @@ export default function BotConfig() {
                 soft_stop_min_minutes: cfg.soft_stop_min_minutes ?? 10,
                 let_winners_run: cfg.let_winners_run ?? false,
             });
-            setCfg(data); setSaveMsg("Configuration saved.");
+            setCfg(withFlatDefaults(data)); setSaveMsg("Configuration saved.");
             // refresh allConfigs index so the selector reflects new state
             try { const c = await api.get("/bot/configs"); setAllConfigs(c.data || []); } catch (_e) { /* non-fatal */ }
         } catch (e) { setErr(formatApiError(e)); }
@@ -714,6 +726,27 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     {cfg.pre_news_protect_enabled && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="pre_news_protect_minutes" label="FLATTEN WINDOW BEFORE EVENT" suffix="minutes" step={1} min={1} max={30} />
+                        </div>
+                    )}
+                </div>
+
+                {/* iter-52 — Friday Flat weekend gap guard */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="friday_flat_enabled" label="Friday Flat — Weekend Gap Guard" icon={CalendarClock} color="#FFB000"
+                        desc="Before the Friday 21:00 UTC weekly close: close all open positions (or tighten their SL to break-even / half-risk) and block new entries, so a weekend gap can't blow through your stops at the Sunday re-open. Crypto is exempt (trades 24/7). CLOSE mode requires EA v1.40+ — older EAs automatically degrade to TIGHTEN." />
+                    {(cfg.friday_flat_enabled ?? true) && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ACTION</label>
+                                <select value={cfg.friday_flat_mode || "close"}
+                                    onChange={(e) => setCfg({ ...cfg, friday_flat_mode: e.target.value })}
+                                    data-testid="friday-flat-mode"
+                                    className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none">
+                                    <option value="close">CLOSE ALL POSITIONS</option>
+                                    <option value="tighten">TIGHTEN SL (BE / HALF-RISK)</option>
+                                </select>
+                            </div>
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="friday_flat_minutes_before" label="WINDOW BEFORE CLOSE" suffix="minutes" step={5} min={5} max={480} />
                         </div>
                     )}
                 </div>

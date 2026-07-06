@@ -25,6 +25,7 @@ from execution import settle_paper_trades_against_price
 from trigger_sweeper import sweep_once as sweep_triggers
 from sl_watcher import sweep_once as sweep_sl_imminent
 from position_protector import sweep_all as sweep_pre_news
+from friday_flat import sweep_all as sweep_friday_flat, in_friday_flat_window
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
@@ -308,6 +309,19 @@ async def _process_user_account_locked(db, cfg: dict):
         cfg_fresh = await db.bot_configs.find_one({"_id": cfg["_id"]})
         if cfg_fresh:
             cfg["_profit_lock"] = cfg_fresh.get("_profit_lock")
+
+    # 1c. Friday Flat window (iter-52) — no NEW entries in the final stretch
+    # before the Friday 21:00 UTC weekly close. Open positions are handled by
+    # sweep_friday_flat in the main loop.
+    ff = in_friday_flat_window(cfg)
+    if ff["in_window"]:
+        await _record_pulse(db, cfg,
+            action="BLOCKED", level="block",
+            reason=(f"Friday Flat window — no new entries within "
+                    f"{ff['minutes_before']}min of the weekly close (Fri 21:00 UTC). "
+                    "Weekend gap protection."),
+        )
+        return
 
     # Paper-mode-only fallback when subscription is inactive
     if not entitlement["active"]:
@@ -1053,6 +1067,15 @@ async def loop():
                     logger.warning("Pre-news protect flattened %d trade(s)", protected)
             except Exception as e:
                 logger.exception("Pre-news protect sweep failed: %s", e)
+            # Friday Flat guard (iter-52) — close/tighten open positions ahead
+            # of the Friday 21:00 UTC weekly close (weekend gap protection).
+            try:
+                ffs = await sweep_friday_flat(db)
+                if ffs.get("closed") or ffs.get("tightened"):
+                    logger.warning("Friday Flat sweep · closed=%d tightened=%d",
+                                   ffs["closed"], ffs["tightened"])
+            except Exception as e:
+                logger.exception("Friday Flat sweep failed: %s", e)
             # Autonomous portfolio deleveraging — fires on hard DD, sector cap,
             # combined-corr bucket, or VaR breach. Per-account cooldown built-in.
             try:
