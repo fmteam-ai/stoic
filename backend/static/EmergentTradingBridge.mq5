@@ -127,15 +127,26 @@
 //|         #property version said "1.29". Now driven by a single    |
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v1.41 — End-of-Day quiet window. Spreads widen drastically across |
+//|         all liquidity providers in the final minutes before the   |
+//|         daily close. From EodQuietStart (23:40) to EodQuietEnd    |
+//|         (00:05) BROKER server time the EA skips poll-trades       |
+//|         entirely and every order function (open/modify/close)     |
+//|         refuses to fire — preventing severe slippage on automated |
+//|         orders. The server re-dispatches queued work after the    |
+//|         window (dispatch locks auto-expire). Heartbeats and       |
+//|         history sync continue (data-only, no orders).             |
+//+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.40"
+#property version   "1.41"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.40"
+#define EA_CLIENT_VERSION "1.41"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -146,6 +157,13 @@ input int    MagicNumber            = 901234;
 input int    HistorySweepSeconds    = 60;     // how often to scan MT5 deal history
 input int    HistoryLookbackSeconds = 86400;  // initial backfill window (24h)
 input int    HistorySweepMaxDeals   = 50;     // hard cap per sweep so a fresh chart doesn't flood STOIC
+
+// EA v1.41 · End-of-Day quiet window (broker server time, HH:MM).
+// Spreads widen drastically at the daily close — no order operations
+// (open / modify / close) are attempted inside the window.
+input bool   EodQuietEnabled        = true;
+input string EodQuietStart          = "23:40";  // broker server time
+input string EodQuietEnd            = "00:05";  // broker server time
 
 datetime lastPoll              = 0;
 datetime lastHistorySweep      = 0;
@@ -223,6 +241,41 @@ int OnInit() {
 }
 
 void OnDeinit(const int reason) { EventKillTimer(); }
+
+//+------------------------------------------------------------------+
+//| EA v1.41 — End-of-Day quiet window helpers.                       |
+//+------------------------------------------------------------------+
+// Parse "HH:MM" → minutes since midnight. Falls back on invalid input.
+int ParseHHMM(string s, int fallback_min) {
+   int c = StringFind(s, ":");
+   if (c <= 0) return fallback_min;
+   int h = (int)StringToInteger(StringSubstr(s, 0, c));
+   int m = (int)StringToInteger(StringSubstr(s, c + 1));
+   if (h < 0 || h > 23 || m < 0 || m > 59) return fallback_min;
+   return h * 60 + m;
+}
+
+datetime _last_quiet_log = 0;
+
+// True while inside [EodQuietStart, EodQuietEnd) in BROKER server time.
+// Handles windows that wrap midnight (23:40 → 00:05).
+bool IsEodQuietWindow() {
+   if (!EodQuietEnabled) return false;
+   MqlDateTime bt;
+   TimeToStruct(TimeCurrent(), bt);   // TimeCurrent() is broker server time
+   int now_min   = bt.hour * 60 + bt.min;
+   int start_min = ParseHHMM(EodQuietStart, 23 * 60 + 40);
+   int end_min   = ParseHHMM(EodQuietEnd, 5);
+   bool quiet;
+   if (start_min <= end_min) quiet = (now_min >= start_min && now_min < end_min);
+   else                      quiet = (now_min >= start_min || now_min < end_min);
+   if (quiet && TimeCurrent() - _last_quiet_log >= 60) {
+      Print("STOIC: EOD quiet window (", EodQuietStart, "-", EodQuietEnd,
+            " broker time) — order operations paused, spreads widen at the daily close.");
+      _last_quiet_log = TimeCurrent();
+   }
+   return quiet;
+}
 
 void OnTimer() {
    SendHeartbeat();
@@ -604,6 +657,9 @@ void SendHeartbeat() {
 }
 
 void PollPendingTrades() {
+   // v1.41 — skip the poll entirely during the EOD quiet window so no
+   // open/modify/close is even fetched; the server re-dispatches after.
+   if (IsEodQuietWindow()) return;
    string body = StringFormat("{\"bridge_token\":\"%s\"}", EffectiveToken);
    string resp = HttpPost(ServerUrl + "/api/bridge/poll-trades", body);
    if (StringLen(resp) == 0) return;
@@ -833,6 +889,7 @@ void ClampStops(string sym, int side, double &sl, double &tp, int extra_mult) {
 }
 
 void ExecuteTrade(string trade_id, string symbol, string action, double lot, double sl, double tp) {
+   if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    MqlTradeRequest req; MqlTradeResult res;
    ZeroMemory(req); ZeroMemory(res);
 
@@ -901,6 +958,7 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
 // the resulting broker "out" deal lands through OnTradeTransaction /
 // external-deal with the exact realized P&L.
 void ApplyFullClose(string trade_id, long ticket) {
+   if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) {
       // Position already gone on the broker — ack success so the queue clears.
       string gone = StringFormat(
@@ -940,6 +998,7 @@ void ApplyFullClose(string trade_id, long ticket) {
 }
 
 void ClosePosition(string trade_id, long ticket) {
+   if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) return;
    string symbol = PositionGetString(POSITION_SYMBOL);
    double vol    = PositionGetDouble(POSITION_VOLUME);
@@ -971,6 +1030,7 @@ void ClosePosition(string trade_id, long ticket) {
 
 // ----- v1.10: SL/TP modify -----
 void ApplyModifySL(string trade_id, long ticket, double new_sl) {
+   if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) return;
    string symbol = PositionGetString(POSITION_SYMBOL);
    double current_tp = PositionGetDouble(POSITION_TP);
@@ -1003,6 +1063,7 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl) {
 
 // ----- v1.10: Partial close — close (current_vol - new_vol) lots -----
 void ApplyPartialClose(string trade_id, long ticket, double new_vol) {
+   if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) return;
    string symbol = PositionGetString(POSITION_SYMBOL);
    double current_vol = PositionGetDouble(POSITION_VOLUME);

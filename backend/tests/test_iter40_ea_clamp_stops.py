@@ -46,13 +46,13 @@ def test_modify_sl_clamps():
 
 def test_version_138_everywhere():
     src = _src(EA_PATH)
-    assert '#property version   "1.40"' in src
-    assert '#define EA_CLIENT_VERSION "1.40"' in src
-    assert 'LATEST_EA = "1.40"' in _src(os.path.join(BACKEND, "routes", "bot_routes.py"))
-    assert 'LATEST_EA = "1.40"' in _src(os.path.join(BACKEND, "routes", "diagnostic_routes.py"))
-    assert '"ea_latest_version": "1.40"' in _src(os.path.join(BACKEND, "routes", "setup_routes.py"))
+    assert '#property version   "1.41"' in src
+    assert '#define EA_CLIENT_VERSION "1.41"' in src
+    assert 'LATEST_EA = "1.41"' in _src(os.path.join(BACKEND, "routes", "bot_routes.py"))
+    assert 'LATEST_EA = "1.41"' in _src(os.path.join(BACKEND, "routes", "diagnostic_routes.py"))
+    assert '"ea_latest_version": "1.41"' in _src(os.path.join(BACKEND, "routes", "setup_routes.py"))
     frontend = os.path.join(os.path.dirname(BACKEND), "frontend", "src", "pages", "Accounts.jsx")
-    assert 'LATEST_EA_VERSION = "1.40"' in _src(frontend)
+    assert 'LATEST_EA_VERSION = "1.41"' in _src(frontend)
 
 
 def test_10016_hint_mentions_ea_update():

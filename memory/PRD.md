@@ -20,7 +20,7 @@ via PowerShell auto-installer, and full broker-terminal data integrity
 - Production domain: stoicaibot.com.
 
 ## Current EA version
-**v1.40** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
+**v1.41** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
 `routes/setup_routes.py` (`ea_latest_version`), `frontend/src/pages/Accounts.jsx`,
 `frontend/src/components/EaVersionStrip.jsx`, EA `#property version` + `EA_CLIENT_VERSION`.
 Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere`,
@@ -48,6 +48,12 @@ Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere
 - API: GET/POST `/api/postmortem/settings`, GET `/api/postmortem/guards`, POST `/api/postmortem/guards/{id}/revert`, GET `/api/postmortem/reviews`, POST `/api/postmortem/reviews/run`.
 - UI: Loss Lab — Auto-Learning card (`auto-apply-toggle`), guards list with manual REVERT, ReviewCard shows AUTO-APPLIED badges + auto-reverted section.
 - Tests: `tests/test_iter55_auto_learning.py` (35 tests incl. HTTP), `tests/test_iter54_loss_advisor.py`.
+
+## EOD Quiet Window (iter-56, June 2026 — DONE)
+- Spreads widen drastically before the daily close → no order operations 23:40–00:05 BROKER server time.
+- EA v1.41: inputs `EodQuietEnabled/EodQuietStart/EodQuietEnd`, `IsEodQuietWindow()` (TimeCurrent = broker time, wraps midnight); PollPendingTrades skipped entirely + guards in ExecuteTrade/ClosePosition/ApplyModifySL/ApplyPartialClose/ApplyFullClose. Server re-dispatches after (dispatch locks expire). Heartbeats/history sync continue.
+- Backend mirror: `eod_quiet.py` + gate in `bot_runner.py` veto chain (uses learned `broker_utc_offset_sec`, intel counter `eod_quiet_block`) so signals aren't queued at stale prices.
+- Tests: `tests/test_iter56_eod_quiet.py`.
 
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.

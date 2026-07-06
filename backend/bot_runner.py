@@ -684,6 +684,18 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "auto_guard_block")
                     continue
 
+        # iter-56 · EOD quiet window — spreads widen drastically in the final
+        # minutes before the broker's daily close. Mirrors the EA v1.41
+        # client-side guard: no new signal execution 23:40-00:05 broker time.
+        if signal.get("action") in ("BUY", "SELL"):
+            from eod_quiet import eod_quiet_block
+            qb = eod_quiet_block(connected[0] if connected else None)
+            if qb:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn", reason=qb)
+                await inc_intel_counter(user_id, "eod_quiet_block")
+                continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
