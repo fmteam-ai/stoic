@@ -191,6 +191,23 @@ def compute_trade_stats(trades: list[dict]) -> dict:
 
 # ---------------------------------------------------------------- LLM
 
+def assess_data_quality(analyzed: int, estimated: int, unknown: int) -> dict:
+    """iter-46 — grade the trustworthiness of the trade data BEFORE advising.
+    unknown = closed trades with NO P&L data (excluded from analysis);
+    estimated = analyzed trades whose P&L is a snapshot estimate."""
+    total_closed = analyzed + unknown
+    est_frac = (estimated / analyzed) if analyzed else 0.0
+    unk_frac = (unknown / total_closed) if total_closed else 0.0
+    if total_closed and unknown >= analyzed:
+        quality = "poor"          # more missing than known — advice unsafe
+    elif unk_frac > 0.2 or est_frac > 0.3:
+        quality = "degraded"
+    else:
+        quality = "good"
+    return {"analyzed": analyzed, "estimated_pnl": estimated,
+            "unknown_excluded": unknown, "quality": quality}
+
+
 def _parse_llm_json(raw: str) -> dict:
     raw = str(raw).strip()
     if raw.startswith("```"):
@@ -340,10 +357,18 @@ async def analyze_account(user_id: str, account_id, window_hours: int = 24,
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
 
     trade_q = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": cutoff},
-               "origin": BOT_ORIGIN_FILTER}
+               "origin": BOT_ORIGIN_FILTER,
+               # iter-46: trades with NO P&L data would poison every stat —
+               # exclude them and surface the count as a data-quality signal.
+               "pnl_unknown": {"$ne": True}}
     if account_id:
         trade_q["account_id"] = account_id
     trades = await db.trades.find(trade_q).sort("closed_at", -1).to_list(300)
+
+    unknown_q = {**trade_q, "pnl_unknown": True}
+    unknown_count = await db.trades.count_documents(unknown_q)
+    estimated_count = sum(1 for t in trades if t.get("pnl_estimated"))
+    data_quality = assess_data_quality(len(trades), estimated_count, unknown_count)
 
     # Transparency: count manual/external trades in the same window that were
     # deliberately left out of the review.

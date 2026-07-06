@@ -21,6 +21,25 @@ from database import get_db
 from ws_manager import manager as ws_manager
 
 
+def _infer_close_reason(t: dict, exit_price) -> str:
+    """iter-45 — when ghost-closing with an estimated exit, infer TP/SL hit
+    from proximity to the trade's targets (~0.04% tolerance)."""
+    try:
+        exit_p = float(exit_price or 0)
+        entry = float(t.get("entry_price") or 0)
+        if exit_p > 0 and entry > 0:
+            tol = max(entry * 0.0004, 0.3)
+            sl = float(t.get("stop_loss") or 0)
+            tp = float(t.get("tp3") or t.get("take_profit") or 0)
+            if tp > 0 and abs(exit_p - tp) <= tol:
+                return "take_profit_reconciled"
+            if sl > 0 and abs(exit_p - sl) <= tol:
+                return "stop_loss_reconciled"
+    except Exception:
+        pass
+    return "broker_reconciled_estimated"
+
+
 async def reconcile_account(account_id: str, open_tickets: list[int],
                              *, source: str = "heartbeat") -> dict:
     """Close any DB-open trade for `account_id` whose mt5_ticket is not in
@@ -64,6 +83,8 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
         # ORPHAN — broker says it's no longer open. Mark it closed.
         # We can't infer exit_price reliably here (no quote in heartbeat), so
         # leave exit_price/pnl untouched if the EA never reported them.
+        # pnl_unknown flags the row so loss-counting logic (anti-tilt,
+        # optimizer) can tell "no data" apart from a real $0 breakeven.
         update = {
             "status": "closed",
             "closed_at": now_iso,
@@ -71,6 +92,20 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
             "reconciled": True,
             "reconciled_at": now_iso,
         }
+        if t.get("exit_price") is None:
+            # iter-45 · Use the last heartbeat-snapshot P&L/price as the
+            # ESTIMATED exit (better a close-to-real number than a dash).
+            # The EA's deal-history sweep overwrites with exact broker
+            # figures when/if the "out" deal arrives (pnl_estimated flag).
+            live_pnl = t.get("live_pnl")
+            live_price = t.get("live_price")
+            if live_pnl is not None or live_price is not None:
+                update["pnl"] = float(live_pnl or 0.0)
+                update["exit_price"] = live_price
+                update["pnl_estimated"] = True
+                update["close_reason"] = t.get("close_reason") or _infer_close_reason(t, live_price)
+            else:
+                update["pnl_unknown"] = True
         await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
         closed.append(str(t["_id"]))
 

@@ -1198,7 +1198,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         if tc.get("account_id"):
             at_q["account_id"] = tc["account_id"]
         at_recent = await db.trades.find(at_q).sort("closed_at", -1).limit(atn).to_list(length=atn)
-        if len(at_recent) == atn and all(float(r.get("pnl") or 0) <= 0 for r in at_recent):
+        if len(at_recent) == atn and all(float(r.get("pnl") or 0) < 0 for r in at_recent):  # iter-45: strict losses only
             last_close = at_recent[0].get("closed_at")
             try:
                 lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
@@ -1416,7 +1416,7 @@ async def get_bot_status(account_id: Optional[str] = None,
             if cfg.get("account_id"):
                 at_q["account_id"] = cfg["account_id"]
             at_recent = await db.trades.find(at_q).sort("closed_at", -1).limit(atn).to_list(length=atn)
-            if len(at_recent) == atn and all(float(r.get("pnl") or 0) <= 0 for r in at_recent):
+            if len(at_recent) == atn and all(float(r.get("pnl") or 0) < 0 for r in at_recent):  # iter-45: strict losses only
                 last_close = at_recent[0].get("closed_at")
                 try:
                     lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))

@@ -868,6 +868,21 @@ Regime-Adaptive Risk Modifier, Macro-freeze, and a Meta-Labeler classifier.
   date inputs kept (labeled CUSTOM, clears preset on manual edit); client-side date
   re-clamp skipped in history mode. Tests: test_iter44_trade_history.py (3) pass;
   UI verified via screenshot (THIS WEEK → 256 closed, 75.8% WR, +$5525).
+- GHOST-CLOSE RECOVERY + ANTI-TILT FALSE FREEZE (iter45) — user hit: 4 TP-winning trades
+  recorded closed with exit=None/pnl=0 (EA out-deals stopped arriving Mon Jul 6; in-deals
+  still flow; last out-deal Fri Jul 3 15:52 — EA-side, unresolved, mitigated server-side),
+  and those zero-P&L closes wrongly tripped anti-tilt freeze on 4 accounts.
+  Fixes: (1) anti-tilt loss = pnl STRICTLY < 0 in all 4 sites (bot_runner gating,
+  bot_routes ×2, diagnostic_routes) — all 4 accounts unfrozen, verified;
+  (2) heartbeat now stamps live_pnl/live_price/live_at on open trades (bridge_routes);
+  (3) reconciler ghost-close uses last snapshot as ESTIMATED exit (pnl_estimated=True,
+  close_reason take_profit_reconciled/stop_loss_reconciled/broker_reconciled_estimated
+  via _infer_close_reason, tol 0.04%); no snapshot → pnl_unknown=True;
+  (4) external-deal repair now overwrites estimates (real_exit_known guard);
+  (5) one-time repair: 4 ghost trades restored from TP targets (+$64.74/+$23.04/
+  +$39.05/+$74.86, pnl_estimated). Tests: test_iter45_ghost_close_recovery.py (7) pass.
+  OPEN QUESTION: why EA v1.38 out-deals/close-reports stopped — monitor next closes;
+  live_pnl estimate now covers the gap regardless.
 
 ### FRED macro feeds + Dashboard "Macro Climate" widget (iter26)
 **Why:** The bot's signal logic references DXY, real yields, and Fed posture but those values were proxied/assumed, not pulled from a real source. FRED gives us authoritative daily values for free with a registered API key.

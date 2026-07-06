@@ -249,6 +249,20 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "account_id": account_id, "mt5_ticket": int(p.ticket),
             })
             if existing:
+                # iter-45 · Persist the broker-live P&L/price on the open
+                # trade doc every heartbeat. If the close report is ever
+                # missed (EA offline at TP/SL hit), the reconciler uses this
+                # last-known snapshot as the ESTIMATED exit instead of
+                # leaving the trade with no exit price and no P&L.
+                if existing.get("status") == "open" and p.current_price is not None:
+                    await db.trades.update_one(
+                        {"_id": existing["_id"]},
+                        {"$set": {
+                            "live_pnl": float(p.profit or 0.0),
+                            "live_price": float(p.current_price),
+                            "live_at": now_iso,
+                        }},
+                    )
                 # AUTO-REVIVE: STOIC has the ticket but marked it closed
                 # without an exit price — yet the broker still has the
                 # position open. Premature close (panic + reconcile race).
@@ -886,7 +900,9 @@ async def external_deal(payload: BridgeExternalDeal):
         "broker_deal_id": payload.deal_id,
     }
     if existing:
-        if existing.get("exit_price") is not None:
+        real_exit_known = (existing.get("exit_price") is not None
+                           and not existing.get("pnl_estimated"))
+        if real_exit_known:
             # /bridge/report already filled this; just confirm.
             update = {
                 "broker_deal_id": payload.deal_id,
@@ -900,6 +916,8 @@ async def external_deal(payload: BridgeExternalDeal):
             )
             update["backfilled"] = True
             update["backfilled_at"] = datetime.now(timezone.utc).isoformat()
+            update["pnl_unknown"] = False   # real P&L recovered
+            update["pnl_estimated"] = False  # exact broker figures now
             # Distinguish "auto-repaired from reconciler ghost" vs "first-time
             # close report" — useful in the Audit Trail when STOIC initially
             # had no exit_price and the EA later caught up.

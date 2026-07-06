@@ -453,7 +453,11 @@ async def _process_user_account_locked(db, cfg: dict):
         recent = await db.trades.find(recent_q).sort(
             "closed_at", -1
         ).limit(anti_tilt_n).to_list(length=anti_tilt_n)
-        if len(recent) == anti_tilt_n and all(float(r.get("pnl") or 0) <= 0 for r in recent):
+        # A trade counts as a LOSS only when pnl is strictly negative.
+        # Reconciler ghost-closes (exit never reported → pnl 0.0 / None) and
+        # true breakevens must NOT trip the freeze — users were frozen on
+        # days with zero actual losing trades (iter-45 bug).
+        if len(recent) == anti_tilt_n and all(float(r.get("pnl") or 0) < 0 for r in recent):
             last_close = recent[0].get("closed_at")
             try:
                 lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))

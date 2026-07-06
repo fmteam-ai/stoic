@@ -214,7 +214,7 @@ async def _check_risk_state(db, user_id: str) -> dict:
         if tc.get("account_id"):
             q["account_id"] = tc["account_id"]
         recent = await db.trades.find(q).sort("closed_at", -1).limit(atn).to_list(length=atn)
-        if len(recent) == atn and all(float(r.get("pnl") or 0) <= 0 for r in recent):
+        if len(recent) == atn and all(float(r.get("pnl") or 0) < 0 for r in recent):  # iter-45: strict losses only
             last_close = recent[0].get("closed_at")
             try:
                 lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
