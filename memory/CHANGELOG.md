@@ -1,5 +1,10 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-50b / fork) — **LIVE P&L recurrence — lost edits**:
+  - Two search_replace edits from iter-50 (LIVE P&L cell doc-snapshot fallback + header openLive fallback in `Trades.jsx`) reported success but NEVER landed on disk (verified via `git show`). Prior screenshot verification passed only because the playwright session had live WS ticks masking the missing fallback.
+  - Re-applied both edits, verified via grep on disk, and re-tested with `/api/ws` BLOCKED in playwright (simulating the user's no-tick session): all 12 LIVE P&L cells render from `t.live_pnl` heartbeat snapshots; OPEN LIVE P&L card totals correctly.
+  - LESSON: after batched search_replace edits, verify presence on disk (grep) before claiming success; when a fix targets a fallback path, test with the primary path disabled.
+
 - 2026-07-06 (iter-50 / fork) — **Open trades showed no CURRENT price / LIVE P&L**:
   - Backend was fine (heartbeat writes `live_price`/`live_pnl` to every open trade doc, ≤5s fresh) but the UI ONLY rendered from WS `position_ticks` (not flowing in user's session) + a quote cache keyed by BASE symbols that missed suffixed tickers (GOLD#, XAUUSD.fx, XAUUSD-ECN).
   - **`Trades.jsx` fixes**: new `baseSymbol()` helper (mirrors backend pip_utils); render chain now tick → `t.live_price`/`t.live_pnl` doc snapshot → `quotes[baseSymbol]`; `priceDecimals` + `CONTRACT_SIZE` + `velocities` + `/market/quotes` symbol list all base-normalised (gold showed 5 decimals + wrong PnL math on suffixed symbols before); green "broker-live" dot now covers doc snapshots too.

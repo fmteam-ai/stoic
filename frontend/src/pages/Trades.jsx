@@ -572,13 +572,15 @@ export default function Trades() {
                     const priceFor = (t) => {
                         const tick = t.mt5_ticket != null ? liveTicks[String(t.mt5_ticket)] : null;
                         if (tick && tick.current_price != null) return tick.current_price;
-                        return quotes[t.symbol];
+                        if (t.live_price != null) return t.live_price; // heartbeat snapshot on the doc
+                        return quotes[baseSymbol(t.symbol)];
                     };
                     const openLive = trades.reduce((acc, t) => {
                         if (t.status !== "open") return acc;
                         // Broker-reported profit is broker-exact — prefer it when available.
                         const tick = t.mt5_ticket != null ? liveTicks[String(t.mt5_ticket)] : null;
                         if (tick && Number.isFinite(tick.profit)) return acc + tick.profit;
+                        if (Number.isFinite(t.live_pnl)) return acc + t.live_pnl;
                         const p = computeLivePnl(t, priceFor(t));
                         return p == null ? acc : acc + p;
                     }, 0);
@@ -805,8 +807,10 @@ export default function Trades() {
                                                 let live;
                                                 if (tick && Number.isFinite(tick.profit)) {
                                                     live = tick.profit;
+                                                } else if (t.live_pnl != null && Number.isFinite(Number(t.live_pnl))) {
+                                                    live = Number(t.live_pnl); // heartbeat snapshot on the doc
                                                 } else {
-                                                    live = computeLivePnl(t, quotes[t.symbol]);
+                                                    live = computeLivePnl(t, quotes[baseSymbol(t.symbol)]);
                                                 }
                                                 if (live == null) return <span className="text-[#52525B]">…</span>;
                                                 const cls = live >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]";
