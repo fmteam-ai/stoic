@@ -1,5 +1,17 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-47 / fork) — **Slippage-veto repair + FULL_CLOSE queue consumption (EA v1.40)**:
+  - **User report**: "1 trade modification(s) waiting >5min for EA" despite all terminals on v1.39.
+  - **Root cause 1 (EA)**: `ParseModificationsBlock` only handled MODIFY_SL/PARTIAL_CLOSE — FULL_CLOSE (slippage veto / auto-deleverage / reconciler force-closes) was NEVER consumed. ~90 closed trades carried stale FULL_CLOSE mods; 1 open trade was "stuck". The veto has effectively never executed at the broker.
+  - **Root cause 2 (pip math)**: `price_to_pips("GOLD#"/"XAUUSD.fx"/"XAUUSD-ECN", …)` fell back to 0.0001 FX pip → $1 move = "10000 pips" → tripped even the 9999 default cap. Added `pip_utils.base_symbol()` (suffix strip + GOLD→XAUUSD aliases) used by `pip_size`/`pip_value_usd_per_lot` and veto cap lookup.
+  - **Root cause 3 (baseline)**: veto compared fill vs SIGNAL price (5-15s dispatch latency drift, not slippage) and counted favorable fills. Audit: 20/20 recent "vetoes" were latency drift on PROFITABLE trades.
+  - **Fix (backend `bridge_routes.py::report_trade`)**: EA v1.40 reports `requested_price` (price at OrderSend); slippage = ADVERSE-only (direction-aware) fill-vs-requested. Veto fires ONLY when `requested_price` present (true measurement) — legacy reports record drift but never veto (they were no-op vetoes anyway).
+  - **Fix (EA v1.40)**: new `ApplyFullClose()` consumes FULL_CLOSE mods (closes by ticket, acks via modification-ack, acks `already_closed` if position gone so queue always clears); `/bridge/report` carries `requested_price`.
+  - **Hygiene**: `/bridge/report` closed path + external-deal full close now clear `pending_modification`. One-off DB cleanup: 90 stale mods on closed trades + 1 open false-veto FULL_CLOSE cleared (queue now empty). Stale diagnostic hint "Recompile EA to v1.26" → "Update EA to v1.40+".
+  - **Versions 1.39→1.40**: EA property/define, bot_routes/diagnostic_routes LATEST_EA, setup_routes ea_latest_version, Accounts.jsx, EaVersionStrip.jsx; tests iter40/iter85/iter46 updated.
+  - **Testing**: new `tests/test_iter47_slippage_veto_fullclose.py` (12 tests) + 37 combined pytest green + live-API E2E: suffixed GOLD# 0.5-pip true slip no-veto, favorable fill no-veto, 30-pip true adverse → FULL_CLOSE queued → surfaced in poll → ack clears, legacy report no-veto, close clears mod. iter25h failure verified PRE-EXISTING via git stash.
+  - **USER ACTION**: update EA to v1.40 on all terminals (Accounts page → DOWNLOAD EA).
+
 - 2026-07-06 (iter-46 / fork) — **On-demand Deep Broker Sync + Auto-Heal (EA v1.39)**:
   - **Goal**: "The bot must be able to restore at any time the correct data and synchronize with the brokers' terminals."
   - **Backend `routes/account_routes.py`**: `POST /api/accounts/{id}/request-sync` (auth) — queues `pending_history_sync` (7-day lookback, `requested_by=user`).

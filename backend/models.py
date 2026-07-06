@@ -338,6 +338,7 @@ class BridgeTradeReport(BaseModel):
     mt5_ticket: Optional[int] = None
     status: TradeStatus
     entry_price: Optional[float] = None
+    requested_price: Optional[float] = None  # EA v1.40+ — price at OrderSend
     exit_price: Optional[float] = None
     pnl: Optional[float] = None
     error: Optional[str] = None

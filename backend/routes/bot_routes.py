@@ -1017,7 +1017,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.39"
+    LATEST_EA = "1.40"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:
@@ -1053,7 +1053,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         score -= min(15, 5 * stuck)
         issues.append({"severity": "warning", "code": "stuck_modifications",
                        "label": f"{stuck} trade modification(s) waiting >5min for EA",
-                       "fix": "Recompile EA to v1.26 (F7 in MetaEditor) — the modification queue isn't being consumed."})
+                       "fix": "Update the EA to v1.40+ (Accounts page → DOWNLOAD EA, recompile with F7) — older builds ignore FULL_CLOSE queue entries."})
 
     # --- 5. Ghost trades — closed with no exit_price (max -10) ----------
     # Acknowledged ghosts (panic / account_deleted / reconciler-only closes

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 from database import get_db
 from models import BridgeHeartbeat, BridgeTradeReport, BridgeExternalDeal
 from ws_manager import manager as ws_manager
-from pip_utils import price_to_pips
+from pip_utils import price_to_pips, base_symbol
 from intelligence_counters import increment as inc_intel_counter
 from trade_reconciler import reconcile_account, reconcile_user
 
@@ -671,8 +671,23 @@ async def report_trade(payload: BridgeTradeReport):
         intended = float(trade.get("entry_price") or 0)
         actual = float(payload.entry_price)
         symbol = trade.get("symbol") or ""
-        slip_pips = price_to_pips(symbol, abs(actual - intended)) if intended > 0 else 0.0
+        action = trade.get("action")
+        # iter-47 · TRUE slippage baseline. EA v1.40+ reports the price it
+        # requested at OrderSend. The legacy baseline (signal price) conflated
+        # 5-15s dispatch latency with broker slippage — 100% of historical
+        # "vetoes" were false positives on trades that went on to profit.
+        requested = float(payload.requested_price or 0)
+        baseline = requested if requested > 0 else intended
+        # Direction-aware: only an ADVERSE fill (worse entry) counts.
+        # A favorable fill must never trigger the veto.
+        if action == "SELL":
+            adverse = baseline - actual
+        else:
+            adverse = actual - baseline
+        slip_pips = price_to_pips(symbol, max(0.0, adverse)) if baseline > 0 else 0.0
         update["intended_entry_price"] = intended
+        if requested > 0:
+            update["requested_price"] = requested
         update["slippage_pips"] = round(slip_pips, 2)
         update["slippage_checked"] = True
         # Pull bot config for the threshold — prefer the per-account override
@@ -688,9 +703,13 @@ async def report_trade(payload: BridgeTradeReport):
             })
             or {}
         )
-        if cfg.get("slippage_veto_enabled", True):
+        # Veto ONLY on a true-slippage measurement (requested_price present,
+        # EA v1.40+). Legacy reports lack it and the signal-vs-fill delta is
+        # dominated by latency drift, not execution quality.
+        if cfg.get("slippage_veto_enabled", True) and requested > 0:
             caps = cfg.get("max_slippage_pips") or {"XAUUSD": 20.0, "BTCUSD": 80.0}
-            cap = float(caps.get(symbol, caps.get(symbol.upper(), 9999)))
+            base = base_symbol(symbol)
+            cap = float(caps.get(base, caps.get(symbol, caps.get(symbol.upper(), 9999))))
             if slip_pips > cap:
                 slippage_force_close = True
                 # Stamp requested_at so the stuck-modification health check
@@ -713,6 +732,7 @@ async def report_trade(payload: BridgeTradeReport):
         update["error"] = payload.error
     if payload.status == "closed":
         update["closed_at"] = datetime.now(timezone.utc).isoformat()
+        update["pending_modification"] = None  # closed — queue entry is moot
         # Infer close_reason if not already set (manual/panic/telegram set it pre-emptively).
         if not trade.get("close_reason"):
             entry = float(trade.get("entry_price") or 0)
@@ -1026,6 +1046,7 @@ async def external_deal(payload: BridgeExternalDeal):
         "status": "closed",
         "closed_at": deal_iso,
         "broker_deal_id": payload.deal_id,
+        "pending_modification": None,  # closed — any queued mod is moot
     }
     if existing:
         real_exit_known = (existing.get("exit_price") is not None

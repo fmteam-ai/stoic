@@ -58,6 +58,17 @@
 //|         the user instead of looping retcode 10013 forever.         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| v1.40 — FULL_CLOSE modification support + true-slippage report.   |
+//|         (1) The EA now consumes FULL_CLOSE entries from the       |
+//|         modification queue (slippage veto / auto-deleverage /     |
+//|         reconciler force-closes) — previous builds silently       |
+//|         ignored them, leaving "stuck modification" warnings and   |
+//|         positions the server believed were being closed.          |
+//|         (2) /bridge/report now carries requested_price (the price |
+//|         at OrderSend) so STOIC measures TRUE broker slippage      |
+//|         instead of signal-to-fill latency drift.                  |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| v1.39 — On-demand Deep Broker Sync. The server can now request a  |
 //|         full re-scan of the MT5 deal history (default 7 days) via |
 //|         the poll-trades response ("sync_request"). The EA pushes  |
@@ -117,14 +128,14 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.39"
+#property version   "1.40"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.39"
+#define EA_CLIENT_VERSION "1.40"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -753,6 +764,10 @@ void ParseModificationsBlock(string resp) {
          ApplyPartialClose(trade_id, ticket, new_vol);
          // Combo: Tier-1 move also carries new_sl
          if (new_sl > 0) ApplyModifySL(trade_id, ticket, new_sl);
+      } else if (mod_type == "FULL_CLOSE" && ticket > 0) {
+         // v1.40 — slippage veto / auto-deleverage / reconciler force-close.
+         // Previous builds ignored this type entirely (stuck-queue bug).
+         ApplyFullClose(trade_id, ticket);
       }
 
       idx = brace_pos + 1;
@@ -872,10 +887,56 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    string status = (ok && res.retcode == TRADE_RETCODE_DONE) ? "open" : "failed";
    string err = (status == "open") ? "" : "retcode=" + IntegerToString(res.retcode);
 
+   // v1.40 — include the price we ASKED for so the server can measure true
+   // broker slippage (fill vs request) instead of signal-to-fill drift.
    string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":%I64u,\"status\":\"%s\",\"entry_price\":%.5f,\"error\":\"%s\"}",
-      EffectiveToken, trade_id, res.order, status, res.price, err);
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":%I64u,\"status\":\"%s\",\"entry_price\":%.5f,\"requested_price\":%.5f,\"error\":\"%s\"}",
+      EffectiveToken, trade_id, res.order, status, res.price, req.price, err);
    HttpPost(ServerUrl + "/api/bridge/report", body);
+}
+
+// ----- v1.40: FULL_CLOSE — close the entire position by ticket -----
+// Fired by the server's modification queue for slippage veto,
+// auto-deleverage and reconciler force-closes. Acks via modification-ack;
+// the resulting broker "out" deal lands through OnTradeTransaction /
+// external-deal with the exact realized P&L.
+void ApplyFullClose(string trade_id, long ticket) {
+   if (!PositionSelectByTicket(ticket)) {
+      // Position already gone on the broker — ack success so the queue clears.
+      string gone = StringFormat(
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":true,\"error\":\"already_closed\"}",
+         EffectiveToken, trade_id);
+      HttpPost(ServerUrl + "/api/bridge/modification-ack", gone);
+      return;
+   }
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   double vol    = PositionGetDouble(POSITION_VOLUME);
+   ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+   MqlTradeRequest req; MqlTradeResult res;
+   ZeroMemory(req); ZeroMemory(res);
+   req.action    = TRADE_ACTION_DEAL;
+   req.symbol    = symbol;
+   req.volume    = vol;
+   req.deviation = Slippage;
+   req.magic     = MagicNumber;
+   req.position  = ticket;
+   req.type_filling = PickFillingMode(symbol);
+   if (type == POSITION_TYPE_BUY) {
+      req.type  = ORDER_TYPE_SELL;
+      req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+   } else {
+      req.type  = ORDER_TYPE_BUY;
+      req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   }
+   bool ok = OrderSend(req, res);
+   bool success = (ok && res.retcode == TRADE_RETCODE_DONE);
+   string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":%s,\"error\":\"%s\"}",
+      EffectiveToken, trade_id, (success ? "true" : "false"), err);
+   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   if (success) Print("STOIC: FULL_CLOSE executed ticket=", ticket, " (", vol, " lots)");
 }
 
 void ClosePosition(string trade_id, long ticket) {

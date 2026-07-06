@@ -20,7 +20,7 @@ import re
 import requests
 
 EA_PATH = "/app/backend/static/EmergentTradingBridge.mq5"
-EXPECTED_VERSION = "1.39"
+EXPECTED_VERSION = "1.40"
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:

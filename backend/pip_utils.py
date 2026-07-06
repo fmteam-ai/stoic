@@ -64,12 +64,37 @@ ACCOUNT_TYPE_LOT_MULTIPLIER = {
     "microcent": 0.001,  # 1 microcent lot = 0.001 standard
 }
 
+# Broker-alias bases (GOLD# → XAUUSD etc.) — mirrors broker_symbol_detector.
+SYMBOL_ALIASES = {
+    "GOLD": "XAUUSD",
+    "SILVER": "XAGUSD",
+    "DOW": "US30",
+    "NAS": "NAS100",
+    "DAX": "GER40",
+}
+
+
+def base_symbol(symbol: Optional[str]) -> str:
+    """Resolve broker-suffixed/aliased tickers (XAUUSD.fx, GOLD#, XAUUSD-ECN)
+    to the STOIC base symbol. Without this, pip math on a suffixed gold
+    symbol fell back to the 0.0001 FX pip — a $1 move became "10000 pips"."""
+    if not symbol:
+        return ""
+    s = symbol.upper()
+    for known in PIP_SIZE:
+        if s.startswith(known):
+            return known
+    for alias, base in SYMBOL_ALIASES.items():
+        if s.startswith(alias):
+            return base
+    return s
+
 
 def pip_size(symbol: Optional[str]) -> float:
-    """Return the pip size for a symbol."""
+    """Return the pip size for a symbol (broker-suffix aware)."""
     if not symbol:
         return DEFAULT_PIP
-    return PIP_SIZE.get(symbol.upper(), DEFAULT_PIP)
+    return PIP_SIZE.get(base_symbol(symbol), DEFAULT_PIP)
 
 
 def pips_to_price(symbol: Optional[str], pips: float) -> float:
@@ -94,7 +119,7 @@ def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = N
     a USD risk budget into an MT5 lot quantity.
     """
     sym = (symbol or "").upper()
-    base = PIP_VALUE_USD_PER_STANDARD_LOT.get(sym, DEFAULT_PIP_VALUE_USD)
+    base = PIP_VALUE_USD_PER_STANDARD_LOT.get(base_symbol(sym), DEFAULT_PIP_VALUE_USD)
     atype = (account_type or "standard").lower()
     mult = ACCOUNT_TYPE_LOT_MULTIPLIER.get(atype, 1.0)
     return base * mult

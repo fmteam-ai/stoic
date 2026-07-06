@@ -20,7 +20,7 @@ via PowerShell auto-installer, and full broker-terminal data integrity
 - Production domain: stoicaibot.com.
 
 ## Current EA version
-**v1.39** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
+**v1.40** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
 `routes/setup_routes.py` (`ea_latest_version`), `frontend/src/pages/Accounts.jsx`,
 `frontend/src/components/EaVersionStrip.jsx`, EA `#property version` + `EA_CLIENT_VERSION`.
 Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere`,
@@ -47,10 +47,12 @@ Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere
 - AI Optimizer must ignore `pnl_estimated`/`pnl_unknown` trades (poisoned training data).
 - Production is far behind preview — deployment retry is P0 (see ROADMAP.md).
 - EAs ≤v1.38 silently ignore `sync_request`; pending badge on Accounts page tells user to update.
+- Slippage veto fires ONLY on true slippage (EA v1.40+ `requested_price`); legacy signal-vs-fill deltas are latency drift and must never veto.
+- Always use `pip_utils.base_symbol()` for pip math / cap lookups on broker-suffixed symbols (GOLD#, XAUUSD.fx, XAUUSD-ECN).
 
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 
 ## Related memory docs
-- `CHANGELOG.md` — full per-session implementation log (iter-46 latest: deep broker sync + EA v1.39).
+- `CHANGELOG.md` — full per-session implementation log (iter-47 latest: slippage-veto repair + FULL_CLOSE consumption, EA v1.40).
 - `ROADMAP.md` — prioritized backlog (P0: production deployment).
