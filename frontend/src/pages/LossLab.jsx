@@ -7,6 +7,78 @@ import {
     Activity, ChevronRight, Calendar,
 } from "lucide-react";
 
+function MeasureRow({ m, i }) {
+    const ev = m.evidence;
+    const prio = (m.priority || "medium").toUpperCase();
+    const prioColor = prio === "HIGH" ? "#FF3B30" : prio === "LOW" ? "#52525B" : "#FFB000";
+    return (
+        <div className="border border-[#1F1F1F] bg-black/40 p-3" data-testid={`review-measure-${i}`}>
+            <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border"
+                      style={{ borderColor: `${prioColor}66`, color: prioColor }}>{prio}</span>
+                <span className="font-display font-bold text-sm">{m.title}</span>
+                {ev?.testable && (
+                    <span className={`font-mono text-xs ml-auto ${ev.net_effect >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}
+                          title={`Shadow-tested over your last ${ev.shadow_days} days of real trades`}>
+                        net {ev.net_effect >= 0 ? "+" : "-"}${Math.abs(ev.net_effect).toFixed(2)}
+                    </span>
+                )}
+            </div>
+            <div className="text-xs text-[#A1A1AA] leading-relaxed mt-1">{m.rationale}</div>
+            {ev?.testable ? (
+                <div className="font-mono text-[10px] text-[#52525B] tracking-wider mt-2">
+                    SHADOW TEST · {ev.trades_blocked} trades blocked · saves ${ev.losses_avoided.toFixed(0)} in losses · misses ${ev.wins_missed.toFixed(0)} in wins ({ev.shadow_days}d replay)
+                </div>
+            ) : (
+                <div className="font-mono text-[10px] text-[#52525B] tracking-wider mt-2">NOT MECHANICALLY SHADOW-TESTABLE — judgement call</div>
+            )}
+        </div>
+    );
+}
+
+function ReviewCard({ r }) {
+    const agg = r.aggregates || {};
+    return (
+        <div className="border border-[#0099FF]/30 bg-[#0A0A0A]" data-testid="loss-review-card">
+            <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center gap-2 flex-wrap">
+                <Brain className="w-4 h-4 text-[#0099FF]" />
+                <span className="font-display font-bold text-sm">Auto Loss Review</span>
+                <span className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                    {new Date(r.created_at).toLocaleString()} · {r.trigger === "auto" ? "AUTOMATIC" : "MANUAL"}
+                </span>
+                <span className="font-mono text-xs text-[#FF3B30] ml-auto">
+                    {agg.losses} losses · -${Math.abs(agg.loss_pnl || 0).toFixed(2)} ({agg.window_days}d)
+                </span>
+            </div>
+            <div className="p-4 space-y-3">
+                {r.diagnosis && (
+                    <div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">DIAGNOSIS</div>
+                        <div className="text-sm text-white leading-relaxed">{r.diagnosis}</div>
+                    </div>
+                )}
+                {r.market_context && (
+                    <div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">CURRENT MARKET CONTEXT</div>
+                        <div className="text-xs text-[#A1A1AA] leading-relaxed">{r.market_context}</div>
+                    </div>
+                )}
+                {(r.measures || []).length > 0 && (
+                    <div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">SUGGESTED MEASURES · RANKED BY SHADOW-TESTED NET EFFECT</div>
+                        <div className="space-y-2">
+                            {r.measures.map((m, i) => <MeasureRow key={i} m={m} i={i} />)}
+                        </div>
+                    </div>
+                )}
+                <div className="font-mono text-[10px] text-[#52525B] tracking-wider">
+                    MEASURES ARE NEVER AUTO-APPLIED — apply the ones you trust via Bot Config.
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function pnlColor(v) {
     if (v == null || v === 0) return "text-[#A1A1AA]";
     return v < 0 ? "text-[#FF3B30]" : "text-[#00FF41]";
@@ -157,20 +229,40 @@ export default function LossLab() {
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [regenerating, setRegenerating] = useState(false);
+    const [reviews, setReviews] = useState([]);
+    const [runningReview, setRunningReview] = useState(false);
+
+    const runReview = async () => {
+        setRunningReview(true);
+        try {
+            const { data } = await api.post("/postmortem/reviews/run");
+            if (data.review) {
+                setReviews(prev => [data.review, ...prev]);
+            } else {
+                setErr(data.message || "No losses to analyse.");
+            }
+        } catch (e) {
+            setErr(formatApiError(e));
+        } finally {
+            setRunningReview(false);
+        }
+    };
 
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
-            const [pats, pms, st, adj] = await Promise.all([
+            const [pats, pms, st, adj, rev] = await Promise.all([
                 api.get("/postmortem/patterns"),
                 api.get("/postmortem"),
                 api.get("/postmortem/settings"),
                 api.get("/postmortem/adjustments"),
+                api.get("/postmortem/reviews"),
             ]);
             setPatterns(pats.data.items || []);
             setPostmortems(pms.data.items || []);
             setSettings(st.data);
             setAdjustments(adj.data.items || []);
+            setReviews(rev.data.reviews || []);
         } catch (e) {
             setErr(formatApiError(e));
         } finally {
@@ -238,6 +330,28 @@ export default function LossLab() {
                         INVESTIGATING TRADE {focusTradeId?.slice(-6)} — Claude is analysing market conditions (typically 10-15s)…
                     </div>
                 )}
+
+                {/* iter-54 — Auto Loss Review */}
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4 flex items-start gap-3" data-testid="auto-review-card">
+                    <Brain className="w-5 h-5 shrink-0 mt-0.5 text-[#0099FF]" />
+                    <div className="flex-1">
+                        <div className="font-display font-bold text-sm">Auto Loss Review</div>
+                        <div className="text-xs text-[#A1A1AA] leading-relaxed mt-1">
+                            The bot automatically re-analyses <strong>all losses of the last 7 days</strong> whenever
+                            3+ new losses accumulate (max once/24h): Claude diagnoses the root cause against current
+                            market data, proposes counter-measures, and each measure is <strong>shadow-tested against
+                            your last 14 days of real trades</strong> — showing exactly how much it would have saved
+                            vs. how many wins it would have cost. Delivered here + Telegram. Never auto-applied.
+                        </div>
+                    </div>
+                    <button onClick={runReview} disabled={runningReview}
+                        data-testid="run-loss-review"
+                        className="px-3 py-1.5 border border-[#0099FF]/40 text-[#0099FF] hover:bg-[#0099FF]/10 text-[10px] font-mono tracking-widest transition-colors disabled:opacity-50 flex items-center gap-1.5">
+                        <RefreshCw className={`w-3 h-3 ${runningReview ? "animate-spin" : ""}`} />
+                        {runningReview ? "ANALYSING…" : "RUN NOW"}
+                    </button>
+                </div>
+                {reviews.length > 0 && <ReviewCard r={reviews[0]} />}
 
                 {/* Auto-tighten toggle */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4 flex items-start gap-3"

@@ -357,6 +357,32 @@ async def notify_pre_news_close(user_id: str, trade_id: str, symbol: str, event_
         ])
 
 
+async def notify_loss_review(user_id: str, review: dict) -> None:
+    """iter-54 · Auto Loss Review — aggregate loss analysis with
+    shadow-tested counter-measures."""
+    agg = review.get("aggregates") or {}
+    lines = [
+        f"Analysed {agg.get('losses')} losses (${abs(agg.get('loss_pnl') or 0):.2f}) "
+        f"over {agg.get('window_days')}d.",
+        "",
+    ]
+    diag = (review.get("diagnosis") or "").strip()
+    if diag:
+        lines.append(diag)
+        lines.append("")
+    for m in (review.get("measures") or [])[:3]:
+        ev = m.get("evidence")
+        tag = ""
+        if ev and ev.get("testable"):
+            tag = (f" → net ${ev['net_effect']:+.2f} over {ev['shadow_days']}d "
+                   f"(saves ${ev['losses_avoided']:.0f} / misses ${ev['wins_missed']:.0f})")
+        lines.append(f"• [{(m.get('priority') or 'med').upper()}] {m.get('title')}{tag}")
+    lines.append("")
+    lines.append("Review & apply in Loss Lab — measures are never auto-applied.")
+    await send_telegram(user_id, "loss_review",
+        "🔬 Auto Loss Review — suggested measures", lines)
+
+
 async def notify_friday_flat(user_id: str, closed: int, tightened: int, actions: list) -> None:
     """iter-52 · Friday Flat guard summary — positions closed/tightened ahead
     of the Friday 21:00 UTC weekly close (weekend gap protection)."""

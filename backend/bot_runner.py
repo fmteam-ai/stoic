@@ -1089,6 +1089,15 @@ async def loop():
                                    ffs["closed"], ffs["tightened"])
             except Exception as e:
                 logger.exception("Friday Flat sweep failed: %s", e)
+            # Auto Loss Review (iter-54) — aggregate loss analysis with
+            # shadow-tested counter-measures (self-throttled to 1 check/10min).
+            try:
+                from loss_advisor import sweep_loss_reviews
+                produced = await sweep_loss_reviews(db)
+                if produced:
+                    logger.warning("Loss advisor produced %d review(s)", produced)
+            except Exception as e:
+                logger.exception("Loss advisor sweep failed: %s", e)
             # Autonomous portfolio deleveraging — fires on hard DD, sector cap,
             # combined-corr bucket, or VaR breach. Per-account cooldown built-in.
             try:

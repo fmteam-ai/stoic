@@ -1,5 +1,13 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-54 / fork) — **Auto Loss Review — automatic aggregate loss analysis with shadow-tested measures**:
+  - New `backend/loss_advisor.py`: auto-triggered when 3+ new exact losses accumulate (24h cooldown/user, sweep throttled to 1 check/10min in bot_runner loop). Pipeline: gather 14d exact-data auto trades joined to signals → aggregates (worst segments, loss reasons, weekend-gap PnL) + per-loss postmortem pattern counts + current market snapshot (macro/regime/kalman/MTF) → Claude Sonnet 4.5 (STRICT JSON, fixed measure menu: min_confidence | velocity_veto | session_block | symbol_pause | friday_flat | other) → each measure SHADOW-TESTED against real trades ("blocked N, saves $X, misses $Y, NET $Z") → ranked by net effect → stored in `loss_reviews` + WS `loss_review` + Telegram `notify_loss_review`. NEVER auto-applied.
+  - Routes (`postmortem_routes.py`, registered BEFORE `/{trade_id}`): `GET /api/postmortem/reviews`, `POST /api/postmortem/reviews/run` (manual). NOTE: postmortem `_serialize` is a whitelist — reviews use `_serialize_review`.
+  - `LossLab.jsx`: Auto Loss Review explainer card + RUN NOW + latest ReviewCard (diagnosis, market context, ranked MeasureRows with evidence chips).
+  - **Live E2E on real data (57 losses, -$10,108)**: Claude proposed 5 measures; shadow-testing showed only friday_flat is net-positive (+$1,005.85, $0 missed — already built in iter-52); session_block/velocity/min_confidence all net-NEGATIVE (-$123 to -$2,409) — validating evidence-gated advisory design.
+  - **FILE CORRUPTION incident**: LossLab.jsx got ~1.7KB of invalid-UTF8 trailing garbage after an edit (2nd occurrence of lost/corrupted search_replace writes today). Truncated at component end + re-verified each edit via grep. ALWAYS grep-verify LossLab.jsx/Trades.jsx edits.
+  - Tests: `tests/test_iter54_loss_advisor.py` 16 green (predicates incl. suffix-aware symbols, shadow math, weekend cross, aggregates, route order, never-auto-apply).
+
 - 2026-07-06 (iter-53 / fork) — **Velocity veto (Loss-Lab guardrail) — built but DISARMED**:
   - Loss Lab suggested: LOW_VOL_TREND GOLD SELL → require Kalman velocity < +3.0, block when |velocity| > 5 contradicts MTF bias.
   - Implemented `regime_adapter.velocity_veto(signal, cfg)` (two rules: counter-momentum + momentum/structure conflict) + bot_runner SKIP wiring + `velocity_veto` intel counter. Thresholds read from REGIME_MODIFIERS with per-user `cfg["regime_overrides"][regime]` override.

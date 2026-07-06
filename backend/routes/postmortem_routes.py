@@ -121,6 +121,34 @@ async def list_patterns(days: int = 30, user=Depends(get_current_user)):
     return {"items": out, "window_days": days}
 
 
+def _serialize_review(d: dict) -> dict:
+    out = {k: v for k, v in d.items() if k != "_id"}
+    out["id"] = str(d.get("_id"))
+    return out
+
+
+@router.get("/reviews")
+async def list_reviews(limit: int = 10, user=Depends(get_current_user)):
+    """iter-54 · Auto Loss Review history (aggregate analyses with
+    shadow-tested measures)."""
+    db = get_db()
+    docs = await db.loss_reviews.find({"user_id": user["id"]}) \
+        .sort("created_at", -1).limit(min(limit, 50)).to_list(length=50)
+    return {"reviews": [_serialize_review(d) for d in docs]}
+
+
+@router.post("/reviews/run")
+async def run_review_now(user=Depends(get_current_user)):
+    """Manual trigger for the aggregate loss review."""
+    from loss_advisor import run_loss_review
+    db = get_db()
+    doc = await run_loss_review(db, user["id"], trigger="manual")
+    if not doc:
+        return {"ok": True, "review": None,
+                "message": "No exact-data losses in the last 7 days — nothing to analyse."}
+    return {"ok": True, "review": _serialize_review(doc)}
+
+
 @router.get("")
 async def list_postmortems(limit: int = 50, pattern_key: Optional[str] = None,
                             user=Depends(get_current_user)):
