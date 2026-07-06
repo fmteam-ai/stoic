@@ -249,7 +249,7 @@ async def notify_trade_opened(user_id: str, trade: dict) -> bool:
         return await send_telegram(user_id, "external_trade_opened", title, body_lines)
 
     # Bot-initiated trade — the normal STOIC alert.
-    arrow = "🟢" if trade.get("action") == "BUY" else "🔴"
+    arrow = "🟢" if trade.get("action") == "BUY" else "🔵"
     return await send_telegram(user_id, "trade_opened",
         _title_with_account(account_label,
             f"{arrow} Trade Opened · {trade.get('symbol')} {trade.get('action')}"),

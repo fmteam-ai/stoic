@@ -147,7 +147,7 @@ async def _cmd_trades(token, chat_id, user_id) -> None:
         return
     lines = ["*📂 Open Trades*", ""]
     for t in trades:
-        emoji = "🟢" if t.get("action") == "BUY" else "🔴"
+        emoji = "🟢" if t.get("action") == "BUY" else "🔵"
         flags = []
         if t.get("partial_closed"):
             flags.append("PC")
