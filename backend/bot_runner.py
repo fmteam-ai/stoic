@@ -696,6 +696,18 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "eod_quiet_block")
                 continue
 
+        # iter-57 · Payoff guard — profit-taking overlays (win_rate Smart Cap)
+        # can clip TP1 while the SL stays wide, inverting the realized R:R
+        # (2026-07-06: risking 17 pts to make 4). Skip inverted setups.
+        if signal.get("action") in ("BUY", "SELL"):
+            from payoff_guard import payoff_guard_block
+            pb = payoff_guard_block(signal, cfg)
+            if pb:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn", reason=pb)
+                await inc_intel_counter(user_id, "payoff_guard_veto")
+                continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
