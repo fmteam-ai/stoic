@@ -655,6 +655,19 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "mtf_strict_veto")
                 continue
 
+        # iter-53 · Velocity veto (Loss-Lab guardrail) — counter-momentum
+        # entries in LOW_VOL_TREND (e.g. SELL while Kalman velocity > +3, or
+        # |velocity| > 5 fighting the MTF bias). Thresholds on the regime
+        # profile, overridable via cfg.regime_overrides.
+        if signal.get("action") in ("BUY", "SELL"):
+            from regime_adapter import velocity_veto
+            vv = velocity_veto(signal, cfg)
+            if vv:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn", reason=vv)
+                await inc_intel_counter(user_id, "velocity_veto")
+                continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter

@@ -30,6 +30,11 @@ REGIME_MODIFIERS = {
         "tp_atr_mult": 0.75,   # 25% tighter targets (scalp)
         "kelly_cap": 0.90,     # 10% trim
         "min_confidence_delta": 0,
+        # iter-53 · Loss-Lab guardrail: counter-momentum entries in this
+        # regime clustered in the losing set (e.g. GOLD SELL while Kalman
+        # velocity was > +3). Overridable per-user via cfg.regime_overrides.
+        "velocity_counter_max": 3.0,     # veto SELL when kv > +3 / BUY when kv < -3
+        "velocity_veto_threshold": 5.0,  # veto when |kv| > 5 AND contradicts MTF bias
     },
     "RANGE": {
         "mode": "DEFENSIVE_SCALP",
@@ -63,6 +68,51 @@ REGIME_MODIFIERS = {
         "min_confidence_delta": +99,  # never trade
     },
 }
+
+
+def velocity_veto(signal: dict, cfg: dict | None = None) -> str | None:
+    """iter-53 · Loss-Lab guardrail — velocity veto.
+
+    Blocks entries whose Kalman price velocity fights the trade:
+      1. Counter-momentum: SELL while kv > +`velocity_counter_max`
+         (or BUY while kv < -max) in regimes that define the knob.
+      2. Momentum/structure conflict: |kv| > `velocity_veto_threshold`
+         while the velocity direction contradicts the MTF HTF bias.
+    Thresholds live on REGIME_MODIFIERS and can be overridden per-user via
+    cfg["regime_overrides"][regime]. Returns a human-readable veto reason
+    or None to allow the trade.
+    """
+    action = signal.get("action")
+    if action not in ("BUY", "SELL"):
+        return None
+    regime_name = ((signal.get("regime") or {}).get("regime") or "").upper()
+    mods = REGIME_MODIFIERS.get(regime_name) or {}
+    ov = ((cfg or {}).get("regime_overrides") or {}).get(regime_name) or {}
+    counter_max = ov.get("velocity_counter_max", mods.get("velocity_counter_max"))
+    veto_thresh = ov.get("velocity_veto_threshold", mods.get("velocity_veto_threshold"))
+    if counter_max is None and veto_thresh is None:
+        return None  # regime defines no velocity rules
+    kf = ((signal.get("indicators") or {}).get("kalman_filter")
+          or signal.get("kalman_filter") or {})
+    kv = kf.get("k_velocity")
+    if kv is None:
+        return None
+    kv = float(kv)
+    if counter_max is not None:
+        if action == "SELL" and kv > float(counter_max):
+            return (f"Velocity veto ({regime_name}): SELL blocked — Kalman velocity "
+                    f"+{kv:.1f} > +{float(counter_max):.1f}, price momentum is against the short.")
+        if action == "BUY" and kv < -float(counter_max):
+            return (f"Velocity veto ({regime_name}): BUY blocked — Kalman velocity "
+                    f"{kv:.1f} < -{float(counter_max):.1f}, price momentum is against the long.")
+    if veto_thresh is not None and abs(kv) > float(veto_thresh):
+        htf = ((signal.get("mtf_gate") or {}).get("htf_trend") or "").upper()
+        vel_dir = "UP" if kv > 0 else "DOWN"
+        if htf in ("UP", "DOWN") and htf != vel_dir:
+            return (f"Velocity veto ({regime_name}): |velocity| {abs(kv):.1f} > "
+                    f"{float(veto_thresh):.1f} and contradicts the MTF bias "
+                    f"(velocity {vel_dir} vs HTF {htf}) — momentum/structure conflict.")
+    return None
 
 
 def adapt_profile_for_regime(profile: dict, regime: dict) -> Tuple[dict, dict]:
