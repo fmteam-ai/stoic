@@ -20,6 +20,19 @@ const STATUS_STYLE = {
 // client-side by parseFloat(pnl) sign.
 const CLIENT_ONLY_FILTERS = ["winning", "lost"];
 
+// Resolve broker-suffixed/aliased tickers (XAUUSD.fx, GOLD#, XAUUSD-ECN) to
+// the STOIC base symbol — quote lookups, decimals and contract-size math are
+// all keyed by base. Mirrors backend pip_utils.base_symbol.
+const BASE_SYMBOL_KEYS = ["XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD", "US30", "NAS100", "SPX500", "GER40", "UK100", "EURUSD", "GBPUSD", "USDJPY"];
+function baseSymbol(sym) {
+    if (!sym) return sym;
+    const u = String(sym).toUpperCase();
+    for (const b of BASE_SYMBOL_KEYS) if (u.startsWith(b)) return b;
+    if (u.startsWith("GOLD")) return "XAUUSD";
+    if (u.startsWith("SILVER")) return "XAGUSD";
+    return u;
+}
+
 // MT5 standard contract sizes — used to derive live $-P&L per open trade.
 // XAUUSD: 1 lot = 100 oz   → $1 move = $100 P&L per 1.00 lot
 // BTCUSD: 1 lot = 1 BTC    → $1 move = $1 P&L
@@ -34,9 +47,10 @@ const CONTRACT_SIZE = {
 
 function priceDecimals(symbol) {
     if (!symbol) return 2;
-    if (symbol === "BTCUSD" || symbol === "ETHUSD") return 2;
-    if (symbol === "XAUUSD" || symbol === "XAGUSD") return 2;
-    if (symbol.includes("JPY")) return 3;
+    const s = baseSymbol(symbol);
+    if (s === "BTCUSD" || s === "ETHUSD") return 2;
+    if (s === "XAUUSD" || s === "XAGUSD") return 2;
+    if (s.includes("JPY")) return 3;
     return 5;
 }
 
@@ -59,7 +73,7 @@ function computeLivePnl(trade, currentPrice) {
     if (!currentPrice || trade.status !== "open") return null;
     const entry = parseFloat(trade.entry_price);
     const lot = parseFloat(trade.lot_size);
-    const cs = CONTRACT_SIZE[trade.symbol] ?? 1;
+    const cs = CONTRACT_SIZE[baseSymbol(trade.symbol)] ?? 1;
     if (!entry || !lot || Number.isNaN(entry) || Number.isNaN(lot)) return null;
     const diff = trade.action === "BUY"
         ? (currentPrice - entry)
@@ -73,7 +87,7 @@ function dollarDistance(trade, currentPrice, levelPrice) {
     if (!currentPrice || !levelPrice) return null;
     const lvl = parseFloat(levelPrice);
     const lot = parseFloat(trade.lot_size);
-    const cs = CONTRACT_SIZE[trade.symbol] ?? 1;
+    const cs = CONTRACT_SIZE[baseSymbol(trade.symbol)] ?? 1;
     if (!lvl || !lot || Number.isNaN(lvl) || Number.isNaN(lot)) return null;
     return Math.abs(currentPrice - lvl) * lot * cs;
 }
@@ -274,6 +288,18 @@ export default function Trades() {
         api.get("/accounts").then(r => setAccounts(r.data || [])).catch(() => {});
     }, []);
 
+    // Fallback refresher: when the WS tick stream isn't flowing (proxy blocks
+    // websockets, backgrounded tab, etc.), re-pull the trade list every 15s so
+    // the heartbeat-persisted live_price/live_pnl snapshots stay fresh.
+    const lastTickAtRef = useRef(0);
+    useEffect(() => {
+        const id = setInterval(() => {
+            if (document.visibilityState !== "visible") return;
+            if (Date.now() - lastTickAtRef.current > 15000) load();
+        }, 15000);
+        return () => clearInterval(id);
+    }, [load]);
+
     // Live: refresh on any trade event + ingest broker-real-time ticks.
     const { lastEvent } = useLiveStream();
     useEffect(() => {
@@ -284,6 +310,7 @@ export default function Trades() {
         if (lastEvent.type === "position_ticks") {
             const ticks = lastEvent.payload?.ticks || [];
             if (!ticks.length) return;
+            lastTickAtRef.current = Date.now();
             const ts = lastEvent.payload?.ts || new Date().toISOString();
             setLiveTicks(prev => {
                 const next = { ...prev };
@@ -356,7 +383,7 @@ export default function Trades() {
     const openSymbols = useMemo(() => {
         const set = new Set();
         for (const t of trades) {
-            if (t.status === "open" && t.symbol) set.add(t.symbol);
+            if (t.status === "open" && t.symbol) set.add(baseSymbol(t.symbol));
         }
         // Sort for a deterministic key — avoids redundant re-fetches when the
         // first-encountered symbol order flips on WS updates.
@@ -567,7 +594,7 @@ export default function Trades() {
                         if (t.status !== "open") continue;
                         const px = priceFor(t);
                         if (!px) continue;
-                        const vel = velocities[t.symbol]; // price units / second
+                        const vel = velocities[baseSymbol(t.symbol)]; // price units / second
                         const slLevel = parseFloat(t.stop_loss);
                         const tpLevel = parseFloat(t.tp1 || t.take_profit);
                         const dSL = dollarDistance(t, px, slLevel);
@@ -749,12 +776,13 @@ export default function Trades() {
                                             {(() => {
                                                 if (t.status !== "open") return <span className="text-[#52525B]">—</span>;
                                                 const tick = t.mt5_ticket != null ? liveTicks[String(t.mt5_ticket)] : null;
-                                                const px = tick?.current_price ?? quotes[t.symbol];
+                                                const brokerLive = tick?.current_price ?? t.live_price;
+                                                const px = brokerLive ?? quotes[baseSymbol(t.symbol)];
                                                 if (px == null) return <span className="text-[#52525B]">—</span>;
-                                                // Green dot when sourced from broker-live EA tick; faint white when fallback feed.
+                                                // Green dot when sourced from broker-live EA data; faint white when fallback feed.
                                                 return (
                                                     <span className="inline-flex items-center gap-1.5">
-                                                        {tick && (
+                                                        {brokerLive != null && (
                                                             <span
                                                                 title="Broker-live (EA tick)"
                                                                 data-testid={`tick-live-${t.id}`}

@@ -1,5 +1,12 @@
 # STOIC — Sessions Changelog
 
+- 2026-07-06 (iter-50 / fork) — **Open trades showed no CURRENT price / LIVE P&L**:
+  - Backend was fine (heartbeat writes `live_price`/`live_pnl` to every open trade doc, ≤5s fresh) but the UI ONLY rendered from WS `position_ticks` (not flowing in user's session) + a quote cache keyed by BASE symbols that missed suffixed tickers (GOLD#, XAUUSD.fx, XAUUSD-ECN).
+  - **`Trades.jsx` fixes**: new `baseSymbol()` helper (mirrors backend pip_utils); render chain now tick → `t.live_price`/`t.live_pnl` doc snapshot → `quotes[baseSymbol]`; `priceDecimals` + `CONTRACT_SIZE` + `velocities` + `/market/quotes` symbol list all base-normalised (gold showed 5 decimals + wrong PnL math on suffixed symbols before); green "broker-live" dot now covers doc snapshots too.
+  - **Fallback refresher**: if no WS tick in >15s, re-pull the trade list every 15s (visible tab only) so snapshots stay fresh without websockets.
+  - Verified via screenshot: CURRENT 4150.98/4150.86… with green dots, LIVE P&L +$11.58/+$15.44…, 2-decimal gold prices.
+  - Note: "SYNC" button is for closed-history reconciliation — it was never going to fix live prices; the actual bug was the render chain above.
+
 - 2026-07-06 (iter-49 / fork) — **Period stats counted past trades + status filter ignored in history mode**:
   - User: TODAY period counted past trades → wrong win-rate/profit. Screenshot showed 27 closed incl. old trades, and 37 rows while CLOSED filter active.
   - **Root cause 1**: external-deal stamps `closed_at = server-now`. Correct for LIVE events, but deep-sync/history-sweep backfills push deals that happened DAYS ago — repair time folded them into today. Fix: `BridgeExternalDeal.backfill` flag (EA v1.40 tags sweep + deep-sync pushes) + fallback heuristic (deal_time epoch >10min old) → use broker deal time (broker-local, ±3h skew) for opened_at/closed_at/partial_closed_at. Live deals keep server UTC.
