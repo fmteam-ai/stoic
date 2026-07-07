@@ -12,6 +12,7 @@ import DataFreshnessStrip from "@/components/DataFreshnessStrip";
 import { MacroClimate } from "@/components/MacroClimate";
 import { DiagnosticModal } from "@/components/DiagnosticModal";
 import BotPulsePanel from "@/components/BotPulsePanel";
+import MarketPosture from "@/components/MarketPosture";
 import BotWatching from "@/components/BotWatching";
 import CooldownPanel from "@/components/CooldownPanel";
 import RiskGaugePanel from "@/components/RiskGaugePanel";
@@ -501,6 +502,8 @@ export default function Dashboard() {
             <div className="p-4 md:p-8 space-y-6">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="dashboard-error">{err}</div>}
 
+                <MarketPosture />
+
                 <BotPulsePanel />
 
                 <BotWatching />
@@ -783,3 +786,4 @@ function DiagButton({ summary, onClick }) {
         </button>
     );
 }
+

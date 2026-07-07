@@ -395,6 +395,39 @@ class PollRequest(BaseModel):
     bridge_token: str
 
 
+class BridgeCandles(BaseModel):
+    bridge_token: str
+    symbol: str
+    timeframe: str = "M15"
+    bars: list
+
+
+@router.post("/candles")
+async def receive_candles(payload: BridgeCandles):
+    """EA v1.42 — M15 candle feed for the Market Structure agent."""
+    db = get_db()
+    account = await _account_by_token(payload.bridge_token)
+    base = base_symbol(payload.symbol)
+    bars = []
+    for b in (payload.bars or [])[-200:]:
+        try:
+            bars.append({"t": int(b["t"]), "o": float(b["o"]), "h": float(b["h"]),
+                         "l": float(b["l"]), "c": float(b["c"]),
+                         "v": float(b.get("v") or 0)})
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not bars:
+        raise HTTPException(status_code=422, detail="No valid bars")
+    await db.intraday_candles.update_one(
+        {"user_id": account["user_id"], "symbol": base,
+         "timeframe": payload.timeframe},
+        {"$set": {"bars": bars, "source_symbol": payload.symbol,
+                  "account_id": str(account["_id"]),
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    return {"status": "ok", "stored": len(bars)}
+
+
 @router.post("/poll-trades")
 async def poll_trades(payload: PollRequest):
     db = get_db()

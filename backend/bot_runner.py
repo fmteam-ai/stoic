@@ -730,6 +730,51 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "loss_cooldown_block")
                 continue
 
+        # iter-60 · Structure / Range / Fed-tone gates (Market Structure,
+        # Quant and Macro agents). All fail-open: missing data → no veto.
+        if signal.get("action") in ("BUY", "SELL"):
+            from market_structure import structure_snapshot, structure_gate
+            from range_forecast import build_range_forecast, range_gate
+            from fed_tone import get_fed_tone, fed_tone_gate
+            from pip_utils import base_symbol as _bs
+            _base = _bs(sym)
+            cdoc = await db.intraday_candles.find_one(
+                {"user_id": user_id, "symbol": _base})
+            snap = structure_snapshot((cdoc or {}).get("bars") or [])
+            signal["market_structure"] = snap
+            sg = structure_gate(signal["action"], snap)
+            if sg:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn", reason=sg)
+                await inc_intel_counter(user_id, "structure_gate_veto")
+                continue
+            try:
+                from market import get_history
+                rf = build_range_forecast(await get_history(sym),
+                                          (cdoc or {}).get("bars") or [])
+            except Exception:
+                rf = None
+            signal["range_forecast"] = rf
+            rg = range_gate(signal["action"], signal.get("entry_price"),
+                            signal.get("tp1") or signal.get("take_profit"), rf)
+            if rg:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn", reason=rg)
+                await inc_intel_counter(user_id, "range_gate_veto")
+                continue
+            if _base == "XAUUSD":
+                try:
+                    tone = await get_fed_tone()
+                except Exception:
+                    tone = None
+                signal["fed_tone"] = tone
+                fg = fed_tone_gate(signal["action"], _base, tone)
+                if fg:
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn", reason=fg)
+                    await inc_intel_counter(user_id, "fed_tone_veto")
+                    continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter

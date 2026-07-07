@@ -39,6 +39,7 @@ from routes.subscription_routes import router as subscription_router
 from routes.affiliate_routes import router as affiliate_router
 from routes.notification_routes import router as notification_router
 from routes.telegram_routes import router as telegram_router
+from routes.posture_routes import router as posture_router
 from routes.analytics_routes import router as analytics_router
 from routes.entitlement_routes import router as entitlement_router
 from routes.agent_routes import router as agent_router
@@ -141,6 +142,7 @@ api_router.include_router(subscription_router)
 api_router.include_router(affiliate_router)
 api_router.include_router(notification_router)
 api_router.include_router(telegram_router)
+api_router.include_router(posture_router)
 api_router.include_router(analytics_router)
 api_router.include_router(entitlement_router)
 api_router.include_router(agent_router)

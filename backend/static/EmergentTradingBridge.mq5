@@ -128,6 +128,11 @@
 //|         EA_CLIENT_VERSION macro so the two can never drift.       |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//| v1.42 — M15 candle feed. Streams the chart symbol's last 96 M15   |
+//|         bars to STOIC every CandlesSeconds (300s) so the Market   |
+//|         Structure agent can detect break-of-structure, liquidity  |
+//|         sweeps, fair value gaps and accumulation/distribution.    |
+//+------------------------------------------------------------------+
 //| v1.41 — End-of-Day quiet window. Spreads widen drastically across |
 //|         all liquidity providers in the final minutes before the   |
 //|         daily close. From EodQuietStart (23:40) to EodQuietEnd    |
@@ -139,14 +144,14 @@
 //|         history sync continue (data-only, no orders).             |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.41"
+#property version   "1.42"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.41"
+#define EA_CLIENT_VERSION "1.42"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -165,6 +170,10 @@ input bool   EodQuietEnabled        = true;
 input string EodQuietStart          = "23:40";  // broker server time
 input string EodQuietEnd            = "00:05";  // broker server time
 
+// EA v1.42 · M15 candle feed interval for the Market Structure agent.
+input int    CandlesSeconds         = 300;
+
+datetime _last_candles_sent    = 0;
 datetime lastPoll              = 0;
 datetime lastHistorySweep      = 0;
 datetime lastReportedDealTime  = 0;   // high-watermark — never re-push deals older than this
@@ -280,12 +289,40 @@ bool IsEodQuietWindow() {
 void OnTimer() {
    SendHeartbeat();
    PollPendingTrades();
+   // EA v1.42 — M15 candle feed for the Market Structure agent.
+   if (TimeCurrent() - _last_candles_sent >= CandlesSeconds) {
+      SendCandles();
+      _last_candles_sent = TimeCurrent();
+   }
    // Autonomous history sweep — at most once every HistorySweepSeconds so
    // we don't bombard the server with redundant /external-deal calls.
    if (TimeCurrent() - lastHistorySweep >= HistorySweepSeconds) {
       SweepDealHistory();
       lastHistorySweep = TimeCurrent();
    }
+}
+
+//+------------------------------------------------------------------+
+//| EA v1.42 — stream the chart symbol's M15 candles to STOIC so the  |
+//| Market Structure agent can detect BOS / liquidity sweeps / FVGs.  |
+//+------------------------------------------------------------------+
+void SendCandles() {
+   MqlRates rates[];
+   int n = CopyRates(_Symbol, PERIOD_M15, 0, 96, rates);
+   if (n < 10) return;
+   string bars = "[";
+   for (int i = 0; i < n; i++) {
+      if (i > 0) bars += ",";
+      bars += StringFormat(
+         "{\"t\":%I64d,\"o\":%.5f,\"h\":%.5f,\"l\":%.5f,\"c\":%.5f,\"v\":%I64d}",
+         (long)rates[i].time, rates[i].open, rates[i].high, rates[i].low,
+         rates[i].close, rates[i].tick_volume);
+   }
+   bars += "]";
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M15\",\"bars\":%s}",
+      EffectiveToken, _Symbol, bars);
+   HttpPost(ServerUrl + "/api/bridge/candles", body);
 }
 
 //+------------------------------------------------------------------+

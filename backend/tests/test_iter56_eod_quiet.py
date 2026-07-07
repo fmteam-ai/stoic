@@ -75,8 +75,8 @@ class TestEaWiring:
         self.src = open(EA_PATH).read()
 
     def test_version_141(self):
-        assert '#property version   "1.41"' in self.src
-        assert '#define EA_CLIENT_VERSION "1.41"' in self.src
+        assert '#property version   "1.42"' in self.src
+        assert '#define EA_CLIENT_VERSION "1.42"' in self.src
 
     def test_inputs_present(self):
         assert "input bool   EodQuietEnabled" in self.src
@@ -111,8 +111,8 @@ class TestBackendWiring:
         assert '"eod_quiet_block"' in src  # intel counter
 
     def test_versions_bumped_everywhere(self):
-        assert 'LATEST_EA = "1.41"' in open(os.path.join(BACKEND, "routes", "bot_routes.py")).read()
-        assert 'LATEST_EA = "1.41"' in open(os.path.join(BACKEND, "routes", "diagnostic_routes.py")).read()
-        assert '"ea_latest_version": "1.41"' in open(os.path.join(BACKEND, "routes", "setup_routes.py")).read()
-        assert 'LATEST_EA_VERSION = "1.41"' in open("/app/frontend/src/pages/Accounts.jsx").read()
-        assert 'LATEST_EA_VERSION = "1.41"' in open("/app/frontend/src/components/EaVersionStrip.jsx").read()
+        assert 'LATEST_EA = "1.42"' in open(os.path.join(BACKEND, "routes", "bot_routes.py")).read()
+        assert 'LATEST_EA = "1.42"' in open(os.path.join(BACKEND, "routes", "diagnostic_routes.py")).read()
+        assert '"ea_latest_version": "1.42"' in open(os.path.join(BACKEND, "routes", "setup_routes.py")).read()
+        assert 'LATEST_EA_VERSION = "1.42"' in open("/app/frontend/src/pages/Accounts.jsx").read()
+        assert 'LATEST_EA_VERSION = "1.42"' in open("/app/frontend/src/components/EaVersionStrip.jsx").read()
