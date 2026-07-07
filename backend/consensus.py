@@ -110,6 +110,10 @@ def compute_consensus(signal: dict) -> dict:
     ch = (signal.get("intraday_momentum") or {}).get("change_pct")
     if ch is not None and abs(ch) >= 0.2:
         mv += 0.5 if (ch > 0) == (action == "BUY") else -0.5
+    news = signal.get("news_ai") or {}
+    net = news.get("net")
+    if net is not None and abs(float(net)) >= 0.75:   # AI news read (-3..+3)
+        mv += 0.5 if (float(net) > 0) == (action == "BUY") else -0.5
     votes["macro"] = round(_clip(mv), 2)
 
     total = sum(WEIGHTS[k] * votes[k] for k in WEIGHTS)

@@ -121,6 +121,14 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Posture returns per-symbol `liquidity`; LIQUIDITY AgentRow in MarketPosture.jsx (draw, stops, active zone, OBs, POC, delta, DOM live/offline strip).
 - Tests: `tests/test_iter105_liquidity_map.py` (13 passed). Live: XAUUSD draw DOWN, 2 OBs, 3 clusters, liquidity vote in both consensus scores.
 
+## AI News Understanding Agent (iter-106, June 2026 — DONE)
+- `news_understanding.py`: replaces keyword sentiment — Claude (bullion-desk macro-strategist persona) scores EACH headline -3..+3 answering "how bullish is this specifically for <asset>?". Feed: NewsAPI macro wire (FOMC/CPI/NFP/central banks, tier-1 domains reuters/bloomberg/cnbc/ft/wsj) + asset query, deduped, 12 max.
+- Recency-weighted aggregation (12h half-life) → net -3..+3 + label (strongly_bearish..strongly_bullish) + top-3 drivers with per-headline score & why. Cached 45min/asset, fail-open.
+- `news_gate`: veto BUY when net ≤ -2 / SELL when net ≥ +2. `news_gate_mode` default **enforce**. Counter: news_gate_veto. Signal field `news_ai`.
+- Consensus: news folds into MACRO vote (±0.5 when |net| ≥ 0.75). Posture returns per-symbol `news_ai`; AI NEWS AgentRow in MarketPosture.jsx (net badge + scored drivers).
+- Old `news.py` score_sentiment (coarse -1..1) left untouched (still used by ai_signals confidence).
+- Tests: `tests/test_iter106_news_understanding.py` (12 passed). Live: 12 headlines scored, weak NFP +2.5 gold-bullish, net +0.37 neutral.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

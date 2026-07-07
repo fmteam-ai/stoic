@@ -133,6 +133,24 @@ export default function MarketPosture() {
                             : <span className="text-[#52525B]">{s.liquidity?.reason || "waiting for M15 candles (EA v1.43)"}</span>}
                     </AgentRow>
 
+                    <AgentRow icon={Newspaper} color="#A855F7" label="AI NEWS" testid={`posture-news-${sym}`}>
+                        {s.news_ai
+                            ? <>Reads the tape as <strong style={{ color: s.news_ai.net >= 0.75 ? "#00FF41" : s.news_ai.net <= -0.75 ? "#FF3B30" : "#A1A1AA" }}>
+                                    {s.news_ai.label.replace(/_/g, " ")} ({s.news_ai.net > 0 ? "+" : ""}{s.news_ai.net}/3)
+                                </strong> for {sym} across {s.news_ai.headlines} headlines
+                                {(s.news_ai.drivers || []).length > 0 && (
+                                    <span className="block font-mono text-[10px] text-[#A855F7] mt-0.5 space-y-0.5" data-testid={`posture-news-drivers-${sym}`}>
+                                        {s.news_ai.drivers.map((d, i) => (
+                                            <span key={i} className="block">
+                                                <span style={{ color: d.score >= 1 ? "#00FF41" : d.score <= -1 ? "#FF3B30" : "#A1A1AA" }}>{d.score > 0 ? "+" : ""}{d.score}</span>
+                                                {" "}{d.title.length > 90 ? d.title.slice(0, 90) + "…" : d.title}{d.why ? ` — ${d.why}` : ""}
+                                            </span>
+                                        ))}
+                                    </span>
+                                )}</>
+                            : <span className="text-[#52525B]">AI headline scoring warming up (Reuters / Bloomberg / FOMC / CPI / NFP)</span>}
+                    </AgentRow>
+
                     <AgentRow icon={Cpu} color="#06B6D4" label="QUANT" testid={`posture-quant-${sym}`}>
                         Last read: <strong>{s.action || "—"}</strong>{s.confidence ? ` @ ${s.confidence}%` : ""}
                         {s.range_forecast?.remaining_range != null

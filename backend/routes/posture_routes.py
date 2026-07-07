@@ -98,6 +98,12 @@ async def market_posture(user=Depends(get_current_user)):
                                        dom_doc=dom_doc)
         except Exception as e:
             logger.debug("posture liquidity failed: %s", e)
+        news_ai = None
+        try:
+            from news_understanding import get_news_understanding
+            news_ai = await get_news_understanding(base)
+        except Exception as e:
+            logger.debug("posture news understanding failed: %s", e)
         cons = None
         bayes_out = None
         try:
@@ -107,7 +113,7 @@ async def market_posture(user=Depends(get_current_user)):
             pol = await get_policy(db, uid)
             bmodel = await _get_bayes(db, uid)
             ctx = {"mtf_tiers": sig.get("mtf_tiers"), "market_structure": struct,
-                   "liquidity": lmap,
+                   "liquidity": lmap, "news_ai": news_ai,
                    "forecast": fc, "fed_tone": fed if base == "XAUUSD" else None,
                    "confidence": sig.get("confidence"),
                    "intraday_momentum": sig.get("intraday_momentum"),
@@ -133,6 +139,7 @@ async def market_posture(user=Depends(get_current_user)):
                          or {"ready": False, "reason": "no data", "bars_n": 0},
             "range_forecast": sig.get("range_forecast"),
             "liquidity": lmap,
+            "news_ai": news_ai,
             "forecast": fc,
             "consensus": cons,
             "bayes": bayes_out,

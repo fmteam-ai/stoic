@@ -801,6 +801,27 @@ async def _process_user_account_locked(db, cfg: dict):
                         continue
                     signal["liquidity_advisory"] = lg
 
+            # iter-106 · AI News Understanding — Claude scores each headline
+            # (Reuters/Bloomberg/FOMC/CPI/NFP) -3..+3 for THIS asset. Fail-open.
+            news_ai = None
+            try:
+                from news_understanding import get_news_understanding, news_gate
+                news_ai = await get_news_understanding(_base)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("news understanding skipped: %s", e)
+            if news_ai:
+                signal["news_ai"] = news_ai
+                ng = news_gate(signal["action"], _base, news_ai)
+                if ng:
+                    news_mode = str(cfg.get("news_gate_mode")
+                                    or "enforce").lower()
+                    if news_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=ng)
+                        await inc_intel_counter(user_id, "news_gate_veto")
+                        continue
+                    signal["news_ai_advisory"] = ng
+
         # iter-61 · Offline RL policy gate — distributional Q-values learned
         # from the user's real trades (reward = PnL − λ·loss − μ·drawdown).
         # advisory (default): annotate only · enforce: BLOCK skips, SCALE halves lot.
