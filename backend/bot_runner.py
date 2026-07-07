@@ -1218,7 +1218,24 @@ async def _process_user_account_locked(db, cfg: dict):
         # closed trades' win rate. Multiplier ∈ [0.5, 1.3]. Neutral when
         # fewer than 5 closed samples exist on the account.
         adaptive_risk_info: dict | None = None
-        if cfg.get("adaptive_risk_enabled"):
+        # iter-111 · Adaptive Position Sizing — risk% scales with confidence,
+        # volatility, recent accuracy, liquidity and drawdown. Supersedes the
+        # older win-rate-only adaptive_risk when enabled (default ON).
+        if cfg.get("adaptive_sizing_enabled", True):
+            try:
+                from adaptive_sizing import compute_adaptive_risk
+                asz = await compute_adaptive_risk(
+                    db, user_id, cfg, signal, target_account,
+                    float(profile.get("risk_pct") or 1.0), cfg_account_id)
+                profile = {**profile, "risk_pct": asz["risk_pct"]}
+                signal["adaptive_sizing"] = asz
+                logger.info(
+                    "Adaptive sizing user=%s sym=%s base=%.2f%% × %.2f → "
+                    "%.2f%% · %s", user_id, sym, asz["base_risk_pct"],
+                    asz["multiplier"], asz["risk_pct"], asz["components"])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("adaptive sizing failed: %s — using base risk", e)
+        elif cfg.get("adaptive_risk_enabled"):
             try:
                 from adaptive_mode import compute_risk_multiplier
                 adaptive_risk_info = await compute_risk_multiplier(

@@ -159,6 +159,11 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Posture per-direction `uncertainty`; consensus pills now show "BUY 56 · 51% HIGH" (score · calibrated conf · risk) with driver tooltip.
 - Tests: `tests/test_iter110_uncertainty.py` (9 passed); 79 green across iter102-110. Live: BUY 51%/HIGH (models ±19pp apart, 4 agents against) vs SELL 65%/MEDIUM.
 
+## Adaptive Position Sizing (iter-111, June 2026 — DONE)
+- `adaptive_sizing.py`: risk% per trade = base × Π(bounded multipliers): confidence (calibrated iter-110 conf: 60%→~0.3×, 98%→~1.8×; HIGH tier ×0.7, LOW ×1.1), volatility (inverse ATR targeting recent-8 vs full-96 bars, 0.6-1.25×), accuracy (20-trade WR tiers 0.5-1.3×), liquidity (DOM/draw alignment 0.7-1.15×), drawdown (30d realized peak-to-now vs equity: ≥10%→0.4×, ≥5%→0.6×, ≥2%→0.8×). Total clamp [0.1×, 2×]; final risk clamp [floor 0.1%, cap 2.0%].
+- bot_runner: applied to `profile.risk_pct` BEFORE Kelly sizing (supersedes old win-rate-only `adaptive_risk_enabled` when on). Config: `adaptive_sizing_enabled` default **True**, `adaptive_risk_floor_pct`/`adaptive_risk_cap_pct` (models.py). Signal field `adaptive_sizing` {multiplier, risk_pct, components, drawdown_frac, recent_win_rate}.
+- Tests: `tests/test_iter111_adaptive_sizing.py` (7 passed); 136 green across iter10x suites. Live: admin account (20% WR, 20% DD) throttled high-conf trade to 0.2% — capital preservation dominating, as designed.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

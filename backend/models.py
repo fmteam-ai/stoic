@@ -188,6 +188,11 @@ class BotConfigUpdate(BaseModel):
     # Uncertainty estimation (iter-110): skip low-confidence trades.
     uncertainty_gate_mode: str = "enforce"   # off | advisory | enforce
     min_calibrated_confidence: int = 60
+    # Adaptive Position Sizing (iter-111) — risk% per trade scales with
+    # confidence, volatility, recent accuracy, liquidity and drawdown.
+    adaptive_sizing_enabled: bool = True
+    adaptive_risk_floor_pct: float = 0.1
+    adaptive_risk_cap_pct: float = 2.0
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.
