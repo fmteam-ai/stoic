@@ -697,16 +697,26 @@ async def _process_user_account_locked(db, cfg: dict):
                 continue
 
         # iter-57 · Payoff guard — profit-taking overlays (win_rate Smart Cap)
-        # can clip TP1 while the SL stays wide, inverting the realized R:R
-        # (2026-07-06: risking 17 pts to make 4). Skip inverted setups.
+        # can clip TP1 while the SL stays wide, inverting the realized R:R.
+        # Default mode "tighten": clamp the SL to 2× the TP1 distance so the
+        # trade executes with corrected geometry (mode "skip" vetoes instead).
         if signal.get("action") in ("BUY", "SELL"):
-            from payoff_guard import payoff_guard_block
-            pb = payoff_guard_block(signal, cfg)
-            if pb:
+            from payoff_guard import payoff_guard_apply
+            pg = payoff_guard_apply(signal, cfg)
+            if pg and pg.get("skip"):
                 await _record_pulse(db, cfg, symbol=sym,
-                    action="SKIP", level="warn", reason=pb)
+                    action="SKIP", level="warn", reason=pg["skip"])
                 await inc_intel_counter(user_id, "payoff_guard_veto")
                 continue
+            if pg and pg.get("tighten"):
+                signal["stop_loss"] = pg["tighten"]
+                try:
+                    signal["sl_pips"] = round(float(signal.get("sl_pips") or 0)
+                                              * pg["sl_pips_scale"], 1)
+                except (TypeError, ValueError):
+                    pass
+                signal["payoff_guard"] = {"tightened": True, "reason": pg["reason"]}
+                await inc_intel_counter(user_id, "payoff_guard_tighten")
 
         signal["user_id"] = user_id
         if cfg_account_id:

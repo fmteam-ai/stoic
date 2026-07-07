@@ -19,7 +19,14 @@ INTRADAY_COUNTER_MOMENTUM_PCT = 0.4          # gold / indices
 INTRADAY_COUNTER_MOMENTUM_PCT_CRYPTO = 1.0   # BTC is noisier
 
 
-def payoff_guard_block(signal: dict, cfg: dict) -> str | None:
+def payoff_guard_apply(signal: dict, cfg: dict) -> dict | None:
+    """Evaluate the SL/TP1 payoff ratio of a signal.
+
+    Returns None when the geometry is fine, otherwise:
+      {"skip": reason}                      — cfg payoff_guard_mode == "skip"
+      {"tighten": new_sl, "sl_pips_scale": f, "reason": ...}
+                                            — default: clamp SL to max_ratio × TP1 dist
+    """
     if not cfg.get("payoff_guard_enabled", True):
         return None
     try:
@@ -35,9 +42,19 @@ def payoff_guard_block(signal: dict, cfg: dict) -> str | None:
     tp1_d = abs(tp1 - entry)
     if tp1_d <= 0 or sl_d <= max_ratio * tp1_d:
         return None
-    return (f"Payoff guard: SL distance {sl_d:.1f} is {sl_d / tp1_d:.1f}x the TP1 "
+    if str(cfg.get("payoff_guard_mode") or "tighten").lower() == "skip":
+        return {"skip": (
+            f"Payoff guard: SL distance {sl_d:.1f} is {sl_d / tp1_d:.1f}x the TP1 "
             f"distance {tp1_d:.1f} (max {max_ratio:.1f}x) — realized R:R would be "
-            f"inverted (risking {sl_d:.1f} to make {tp1_d:.1f}). Trade skipped.")
+            f"inverted (risking {sl_d:.1f} to make {tp1_d:.1f}). Trade skipped.")}
+    new_dist = max_ratio * tp1_d
+    direction = 1 if sl > entry else -1
+    new_sl = round(entry + direction * new_dist, 5)
+    return {"tighten": new_sl,
+            "sl_pips_scale": new_dist / sl_d,
+            "reason": (f"Payoff guard: SL tightened {sl_d:.1f} → {new_dist:.1f} "
+                       f"({max_ratio:.1f}x TP1 distance {tp1_d:.1f}) — was risking "
+                       f"{sl_d:.1f} to make {tp1_d:.1f}.")}
 
 
 def intraday_counter_momentum(action: str, symbol: str, current_price: float,

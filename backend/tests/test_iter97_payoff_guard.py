@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from payoff_guard import payoff_guard_block, intraday_counter_momentum  # noqa: E402
+from payoff_guard import payoff_guard_apply, intraday_counter_momentum  # noqa: E402
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -17,33 +17,43 @@ def sig(entry, sl, tp1, action="SELL"):
 
 
 class TestPayoffGuard:
-    def test_blocks_inverted_rr(self):
-        # The real 2026-07-06 trade: entry 4137.89, SL 4155 (17.1), TP1 4134 (3.9)
-        r = payoff_guard_block(sig(4137.89, 4155.0, 4134.0), {})
-        assert r is not None and "Payoff guard" in r
+    def test_tightens_inverted_rr_sell(self):
+        # The real 2026-07-06 setup: entry 4138, SL 15 above, TP1 6 below (2.5x)
+        r = payoff_guard_apply(sig(4138.0, 4153.0, 4132.0), {})
+        assert r and r.get("tighten") == 4150.0  # entry + 2x6
+        assert "tightened" in r["reason"]
+        assert abs(r["sl_pips_scale"] - 12.0 / 15.0) < 1e-9
+
+    def test_tightens_inverted_rr_buy(self):
+        r = payoff_guard_apply(sig(4138.0, 4123.0, 4144.0, action="BUY"), {})
+        assert r and r.get("tighten") == 4126.0  # entry - 2x6
+
+    def test_skip_mode(self):
+        r = payoff_guard_apply(sig(4138.0, 4153.0, 4132.0), {"payoff_guard_mode": "skip"})
+        assert r and "Trade skipped" in r.get("skip", "")
 
     def test_allows_healthy_rr(self):
-        # SL 10 away, TP1 6 away → ratio 1.67 ≤ 2 → allowed
-        assert payoff_guard_block(sig(4100.0, 4110.0, 4094.0), {}) is None
+        # SL 10 away, TP1 6 away → ratio 1.67 ≤ 2 → no action
+        assert payoff_guard_apply(sig(4100.0, 4110.0, 4094.0), {}) is None
 
     def test_boundary_exactly_2x_allowed(self):
-        assert payoff_guard_block(sig(4100.0, 4110.0, 4095.0), {}) is None
+        assert payoff_guard_apply(sig(4100.0, 4110.0, 4095.0), {}) is None
 
     def test_custom_ratio(self):
         s = sig(4100.0, 4110.0, 4096.0)  # SL 10, TP1 4 → 2.5x
-        assert payoff_guard_block(s, {}) is not None
-        assert payoff_guard_block(s, {"payoff_guard_max_sl_tp1": 3.0}) is None
+        assert payoff_guard_apply(s, {}) is not None
+        assert payoff_guard_apply(s, {"payoff_guard_max_sl_tp1": 3.0}) is None
 
     def test_disabled_via_cfg(self):
-        s = sig(4137.89, 4155.0, 4134.0)
-        assert payoff_guard_block(s, {"payoff_guard_enabled": False}) is None
+        s = sig(4138.0, 4153.0, 4132.0)
+        assert payoff_guard_apply(s, {"payoff_guard_enabled": False}) is None
 
     def test_falls_back_to_take_profit(self):
-        s = {"entry_price": 4137.89, "stop_loss": 4155.0, "take_profit": 4134.0, "action": "SELL"}
-        assert payoff_guard_block(s, {}) is not None
+        s = {"entry_price": 4138.0, "stop_loss": 4153.0, "take_profit": 4132.0, "action": "SELL"}
+        assert payoff_guard_apply(s, {}) is not None
 
-    def test_missing_levels_no_block(self):
-        assert payoff_guard_block({"entry_price": 4100.0, "action": "SELL"}, {}) is None
+    def test_missing_levels_no_action(self):
+        assert payoff_guard_apply({"entry_price": 4100.0, "action": "SELL"}, {}) is None
 
 
 H = [
@@ -88,7 +98,8 @@ class TestIntradayCounterMomentum:
 class TestWiring:
     def test_bot_runner_payoff_guard(self):
         src = open(os.path.join(BACKEND, "bot_runner.py")).read()
-        assert "payoff_guard_block" in src and '"payoff_guard_veto"' in src
+        assert "payoff_guard_apply" in src
+        assert '"payoff_guard_tighten"' in src and '"payoff_guard_veto"' in src
 
     def test_ai_signals_intraday_gate(self):
         src = open(os.path.join(BACKEND, "ai_signals.py")).read()

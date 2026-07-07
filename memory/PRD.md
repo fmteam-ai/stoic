@@ -57,7 +57,7 @@ Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere
 
 ## Payoff Repair (iter-57, June 2026 — DONE)
 Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` Smart Cap clips TP (leaves SL untouched) AFTER the R:R≥2.0 entry gate → realized R:R 0.2-0.5; plus 147/147 SELLs while gold rallied (MTF tiers are DAILY-bar only, blind to intraday).
-- `payoff_guard.py`: `payoff_guard_block` (skip if SL dist > 2× TP1 dist, cfg `payoff_guard_enabled`/`payoff_guard_max_sl_tp1`, wired in bot_runner veto chain, counter `payoff_guard_veto`) + `intraday_counter_momentum` (veto trades fighting >±0.4% intraday move vs yesterday's close, ±1.0% crypto; wired in ai_signals as "VETO (intraday-momentum)", signal field `intraday_momentum`).
+- `payoff_guard.py`: `payoff_guard_apply` — default mode "tighten" clamps SL to 2× TP1 distance (signal executes with corrected geometry, counter `payoff_guard_tighten`, signal field `payoff_guard.tightened`); mode "skip" vetoes (cfg `payoff_guard_mode`/`payoff_guard_enabled`/`payoff_guard_max_sl_tp1`). Plus `intraday_counter_momentum` (veto trades fighting >±0.4% intraday move vs yesterday's close, ±1.0% crypto; wired in ai_signals as "VETO (intraday-momentum)", signal field `intraday_momentum`).
 - `let_winners_run=True` set on ALL active bot_configs (BE-only at TP1, no banking).
 - Auto-Learning toggled back ON; Loss Advisor auto-applied "Tighten Friday Close Window to 90min" (net +$1,006 shadow-tested).
 - NOTE: DB has 500+ stale INACTIVE bot_configs (test artifacts) — always filter `active: True`.
