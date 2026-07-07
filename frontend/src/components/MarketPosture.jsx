@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -101,6 +101,15 @@ export default function MarketPosture() {
                             ? ` · day range ${s.range_forecast.used_pct}% used, ~${s.range_forecast.remaining_range} left`
                             : s.range_forecast?.atr14 ? ` · ATR14 ${s.range_forecast.atr14}` : ""}
                         {s.intraday_momentum?.change_pct != null ? ` · intraday ${s.intraday_momentum.change_pct > 0 ? "+" : ""}${s.intraday_momentum.change_pct}%` : ""}
+                    </AgentRow>
+
+                    <AgentRow icon={TrendingUp} color="#38BDF8" label="FORECAST" testid={`posture-forecast-${sym}`}>
+                        {s.forecast
+                            ? <>Next {s.forecast.horizon} {s.forecast.source === "M15" ? "×15min" : "days"} (Chronos):
+                                {" "}median <strong style={{ color: s.forecast.median_change_pct >= 0 ? "#00FF41" : "#FF3B30" }}>
+                                    {s.forecast.median_change_pct > 0 ? "+" : ""}{s.forecast.median_change_pct}%</strong>,
+                                {" "}80% band [{s.forecast.band_low_pct > 0 ? "+" : ""}{s.forecast.band_low_pct}% … {s.forecast.band_high_pct > 0 ? "+" : ""}{s.forecast.band_high_pct}%]</>
+                            : <span className="text-[#52525B]">forecast model warming up</span>}
                     </AgentRow>
 
                     {(s.active_vetoes || []).length > 0 && (

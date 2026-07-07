@@ -799,6 +799,29 @@ async def _process_user_account_locked(db, cfg: dict):
                 elif rl_dec["decision"] == "SCALE" and rl_mode == "enforce":
                     signal["rl_scale"] = rl_dec.get("scale", 0.5)
 
+        # iter-62 · Forecast gate — Chronos-Bolt zero-shot quantile forecast.
+        # Blocks only when the ENTIRE 80% band moves against the trade.
+        # advisory (default): annotate + counter · enforce: skip. Fail-open.
+        if signal.get("action") in ("BUY", "SELL"):
+            fc = None
+            try:
+                from forecast_agent import get_forecast, forecast_gate
+                fc = await get_forecast(db, user_id, sym)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("forecast agent skipped: %s", e)
+            if fc:
+                signal["forecast"] = fc
+                fgate = forecast_gate(signal["action"], fc)
+                if fgate:
+                    fc_mode = str(cfg.get("forecast_gate_mode") or "advisory").lower()
+                    signal["forecast_gate_advice"] = fgate
+                    await inc_intel_counter(user_id, "forecast_gate_advice")
+                    if fc_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=fgate)
+                        await inc_intel_counter(user_id, "forecast_gate_block")
+                        continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter

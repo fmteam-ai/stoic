@@ -165,6 +165,8 @@ class BotConfigUpdate(BaseModel):
     auto_tune_enabled: bool = True
     # Offline RL policy (iter-61): off | advisory | enforce
     rl_policy_mode: str = "advisory"
+    # Chronos forecast gate (iter-62): off | advisory | enforce
+    forecast_gate_mode: str = "advisory"
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.

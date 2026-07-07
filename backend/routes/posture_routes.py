@@ -67,6 +67,22 @@ async def market_posture(user=Depends(get_current_user)):
         vetoes = [ln.strip() for ln in (sig.get("reasoning") or "").split("\n")
                   if ln.strip().startswith("VETO")]
         cdoc = await db.intraday_candles.find_one({"user_id": uid, "symbol": base})
+        fc = None
+        try:
+            from forecast_agent import get_forecast
+            fc = await get_forecast(db, uid, base)
+        except Exception as e:
+            logger.debug("posture forecast failed: %s", e)
+        struct = None
+        try:
+            from market_structure import structure_snapshot
+            struct = structure_snapshot((cdoc or {}).get("bars") or [])
+            if not struct.get("ready") and not (cdoc or {}).get("bars"):
+                struct = {"ready": False,
+                          "reason": "no M15 candles yet — EA v1.42 required",
+                          "bars_n": 0}
+        except Exception as e:
+            logger.debug("posture structure failed: %s", e)
         symbols[base] = {
             "action": sig.get("action"),
             "confidence": sig.get("confidence"),
@@ -74,11 +90,10 @@ async def market_posture(user=Depends(get_current_user)):
                       if isinstance(sig.get("regime"), dict) else sig.get("regime"),
             "tiers": _tier_line(sig.get("mtf_tiers")),
             "intraday_momentum": sig.get("intraday_momentum"),
-            "structure": sig.get("market_structure")
-                         or {"ready": False,
-                             "reason": "no M15 candles yet — EA v1.42 required",
-                             "bars_n": len((cdoc or {}).get("bars") or [])},
+            "structure": struct or sig.get("market_structure")
+                         or {"ready": False, "reason": "no data", "bars_n": 0},
             "range_forecast": sig.get("range_forecast"),
+            "forecast": fc,
             "active_vetoes": vetoes[-4:],
             "unlock_hints": _unlock_hints(sig),
             "signal_at": str(sig.get("created_at") or ""),
