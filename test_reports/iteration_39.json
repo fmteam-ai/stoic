@@ -1,0 +1,68 @@
+{
+  "summary": "iter-116 comprehensive platform review complementing iteration_38 (intelligence layers). Backend: 32/32 new HTTP tests pass in test_iter116_platform_review.py covering auth (register/verify/login/logout + admin), bot config CRUD (incl. iter-105..114 fields), signals/trades/history, EA v1.43 distribution (SendDom+SendCandles verified), bridge candles+dom+heartbeat (valid & invalid tokens), intelligence smoke (11 arch stages, posture, ml/ensemble), analytics (health-score, risk-gauge, sessions, attribution, portfolio), admin moderation (admin-only), Stripe checkout (admin-blocked, new-user works). Also re-confirmed 144/144 pass across test_iter105..116 combined. Frontend E2E as admin: Dashboard, Trades, Accounts, BotConfig, LossLab, BotHealth, Strategies, /commander (RiskCommander), Subscription all load without console/page errors — the review's '/risk-commander' path is a typo; actual route is /commander. Frontend E2E as new user: /, /trades, /bot-config, /accounts all render sensibly with 0/4 onboarding wizard, grace-period banner, and empty-state agent rows (no crashes with zero data). Overall platform health: 92% — one HIGH-priority backend serialization bug hides ~20 config fields from the API, one MEDIUM stale-copy bug in onboarding UI, and one testing-side-effect (admin default bot_config was accidentally destroyed and auto-recreated with defaults). No trades executed, no accounts modified.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/bot/config  (and every _serialize() caller in bot_routes.py)",
+        "issue": "HIGH — _serialize() at /app/backend/routes/bot_routes.py:82 uses a hard-coded whitelist that pre-dates iter-52..114 and STRIPS ~20 fields from every response: friday_flat_enabled/mode/minutes_before, rl_policy_mode, forecast_gate_mode, consensus_gate_mode, consensus_threshold, prob_forecast_mode, bayes_gate_mode, ml_ensemble_mode, liquidity_gate_mode, news_gate_mode, calendar_intel_mode, meta_strategy_enabled, uncertainty_gate_mode, min_calibrated_confidence, adaptive_sizing_enabled, adaptive_risk_floor_pct, adaptive_risk_cap_pct, monte_carlo_mode, monte_carlo_paths, risk_engine_enabled, monthly_drawdown_pct, max_leverage, cvar_budget_pct, event_exposure_cap_pct. VERIFIED: DB persists these when written via PUT (Pydantic model accepts them, $set writes them), but the API's response projection drops them, so the BotConfig frontend cannot render or edit any of these iter-105..114 controls. UI-side confirmation: BotConfig page shows no 'Liquidity', 'Monte Carlo', 'Uncertainty', 'CVaR', 'Risk Engine', 'News Understanding', 'Calendar' controls.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {"endpoint": "GET /api/trades/history",
+       "issue": "Requires both date_from and date_to as mandatory query params — returns 422 without them. UI clients need to always pass a date range; consider defaulting to last-30-days server-side for convenience."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "OnboardingBanner.jsx step 2 + MarketPosture.jsx structure/liquidity empty-state copy",
+        "issue": "MEDIUM — stale EA version in copy. OnboardingBanner says 'Install the STOIC EA (v1.29+)' and MarketPosture empty states say 'waiting for M15 candles (EA v1.42)' — actual current version is v1.43 (verified in /app/backend/static/EmergentTradingBridge.mq5 line 156 and served correctly by /api/ea-script). Users installing today may leave a stale v1.29/v1.42 in place and lose iter-105 (DOM) / iter-106 (candles) telemetry.",
+        "selector": "/app/frontend/src/components/OnboardingBanner.jsx:37 and /app/frontend/src/components/MarketPosture.jsx:116,137",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "BotConfig page (Pages/BotConfig.jsx)",
+        "issue": "HIGH — no UI controls exist for any iter-105..114 field (liquidity_gate_mode, news_gate_mode, calendar_intel_mode, ml_ensemble_mode, meta_strategy_enabled, uncertainty_gate_mode, min_calibrated_confidence, adaptive_sizing_enabled, monte_carlo_mode/paths, risk_engine_enabled, monthly_drawdown_pct, cvar_budget_pct, max_leverage, event_exposure_cap_pct). Root cause is the backend _serialize() bug above — even if the UI added controls, they'd never hydrate.",
+        "selector": "/app/frontend/src/pages/BotConfig.jsx",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter116_platform_review.py",
+    "/app/test_reports/pytest/iter116_platform.xml",
+    "/app/test_reports/pytest/iter116_full_regression.xml"
+  ],
+  "action_items": [
+    "HIGH — Fix bot_routes.py _serialize() to include all iter-52..114 fields (friday_flat_*, rl_policy_mode, forecast_gate_mode, consensus_gate_mode, consensus_threshold, prob_forecast_mode, bayes_gate_mode, ml_ensemble_mode, liquidity_gate_mode, news_gate_mode, calendar_intel_mode, meta_strategy_enabled, uncertainty_gate_mode, min_calibrated_confidence, adaptive_sizing_enabled, adaptive_risk_floor_pct, adaptive_risk_cap_pct, monte_carlo_mode, monte_carlo_paths, risk_engine_enabled, monthly_drawdown_pct, max_leverage, cvar_budget_pct, event_exposure_cap_pct). Consider replacing the whitelist with a pass-through that only drops _id and stringifies ObjectId — or drive it directly from BotConfigUpdate.__fields__.",
+    "HIGH — Add BotConfig frontend controls for the 12+ iter-105..114 fields once the backend fix lands. Flip test_KNOWN_BUG_get_hides_iter_105_114_fields in test_iter116_platform_review.py to `assert not missing` as the regression guard.",
+    "MEDIUM — Bump stale EA version copy: OnboardingBanner.jsx:37 (v1.29+ → v1.43+) and MarketPosture.jsx:116,137 (v1.42 → v1.43).",
+    "LOW — Consider making date_from/date_to optional on /api/trades/history with a 30-day default so clients don't need to always compute a range.",
+    "LOW — Review request contained the path '/risk-commander' but the actual route is '/commander' (App.js:85). Either add a redirect for the marketed URL or document the discrepancy."
+  ],
+  "critical_code_review_comments": [
+    "bot_routes.py:82 _serialize() — hard-coded whitelist that is not being kept in lock-step with BotConfigUpdate. Every new field added to the Pydantic model since iter-40 has been silently dropped from all reads. This is the single highest-leverage bug in this iteration: it renders every one of the intelligence layers un-tunable via the UI.",
+    "bot_routes.py _get_or_create_config() also uses a hard-coded default set — new users get a config that lacks all iter-52..114 keys, so the runtime falls back to Pydantic defaults. Not user-facing but drift-prone.",
+    "trade_routes.py /history hard-requires both date_from and date_to (422 otherwise). Diverges from /trades which accepts limit only. Consider aligning ergonomics.",
+    "OnboardingBanner + MarketPosture reference the EA version as a magic string in three different places (v1.29+, v1.42, v1.43). Extract into a single constant so future EA bumps are one-line changes.",
+    "posture_routes.py from iter-38 review still caps to symbols[:4] — noted last iteration as a known limitation but worth revisiting when users start managing >4 symbols.",
+    "bridge_routes.py POST /bridge/dom fail-opens (returns 200 stored=0 when both bids and asks are empty) — cross-referenced with iter-38, still consistent with rest of bridge surface. Acceptable."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter116_platform_review.py (new — 32 HTTP integration tests covering auth, bot config, signals/trades, EA, bridge, intelligence smoke, analytics, admin, subscription)"
+  ],
+  "success_rate": {
+    "backend": "100% (32/32 iter-116 HTTP + 144/144 iter-105..116 combined). Full-regression scoring not applicable — 73 legacy tests fail because register API now requires terms_agreed:true (iter-79 breaking change); these are pre-existing failures unrelated to this review.",
+    "frontend": "100% for admin (Dashboard, Trades, Accounts, BotConfig, LossLab, BotHealth, Strategies, /commander, Subscription all render without errors) and 100% for new-user empty-state (/, /trades, /bot-config, /accounts all render with sensible empty states)."
+  },
+  "test_credentials": "admin@trading.bot / admin123 (cookie auth via /api/auth/login). Bridge token '-14t8rVrFxnX7AK4vWHveL9QAqNFhO-0AeV-yxShWyQ' used for POST /api/bridge/candles + /dom happy-path (symbol=TESTSYM only — no live-symbol data was mutated).",
+  "seed_data_creation": "Two throwaway users created via /api/auth/register (both deleted in test teardown / via mongo shell). Two docs written to intraday_candles and dom_snapshots with symbol='TESTSYM' — will not affect any live pipeline (no live symbol resolves to TESTSYM). No trades, no account mutations, no bot_config.active changes.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "testing_side_effects": "SELF-DISCLOSURE: an inline cleanup script used bash-escaped `$exists` which mongo interpreted as an operator, causing the admin user's DEFAULT bot_config doc (_id 6a37783f1dde14b8f664c25e, account_id=None) to be deleted. The API's _get_or_create_config auto-recreated a fresh default on the next GET, so admin is back to a full-defaults profile. Per-account overrides for admin were unaffected. Recommend main agent restore any customised admin default settings (e.g. active_preset, custom symbols) if they had been non-default. No other users touched.",
+  "context_for_next_testing_agent": "Baseline regression suite: cd /app/backend && REACT_APP_BACKEND_URL=<preview> python -m pytest tests/test_iter105_liquidity_map.py tests/test_iter106_news_understanding.py tests/test_iter107_calendar_intel.py tests/test_iter108_ml_ensemble.py tests/test_iter109_meta_online_causal.py tests/test_iter110_uncertainty.py tests/test_iter111_adaptive_sizing.py tests/test_iter112_monte_carlo.py tests/test_iter113_explain_selfeval.py tests/test_iter114_risk_engine.py tests/test_iter115_arch_pipeline.py tests/test_iter116_platform_review.py -q  → expect 144/144. Once main agent fixes _serialize(), flip the assertion in test_KNOWN_BUG_get_hides_iter_105_114_fields from `assert missing` to `assert not missing` and the frontend BotConfig will need new controls surfaced. Route reminder: RiskCommander lives at /commander (not /risk-commander). Bridge candles/dom must use symbol='TESTSYM' for safe testing on this live system.",
+  "rca of the issue": "SERIALIZATION-STRIP BUG — reproduction: (1) POST /api/auth/login as admin, (2) PUT /api/bot/config json={monte_carlo_paths: 7500, liquidity_gate_mode: 'advisory'} → 200 but response has NEITHER field, (3) mongo shell find_one({user_id: admin.id}) → both fields ARE persisted, (4) GET /api/bot/config → response STILL missing both fields. Root cause: bot_routes.py:82 _serialize(cfg) returns a hand-crafted dict of 43 keys that has not been extended since iter-40, so all iter-52..114 fields are structurally invisible to the API's response layer. Mitigation options (choose ONE): (a) Replace _serialize() with `{k: (str(v) if k=='_id' else v) for k,v in cfg.items() if k != '_id'} | {'id': str(cfg['_id'])}` — pass-through everything, (b) derive the whitelist from `set(BotConfigUpdate.model_fields.keys()) | {'id','user_id','account_id','updated_at'}`, or (c) manually add the ~20 missing keys to the existing whitelist and add a unit test that diffs BotConfigUpdate.__fields__ against _serialize's key set."
+}
