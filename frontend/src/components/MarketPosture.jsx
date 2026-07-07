@@ -118,6 +118,15 @@ export default function MarketPosture() {
                             ? ` · day range ${s.range_forecast.used_pct}% used, ~${s.range_forecast.remaining_range} left`
                             : s.range_forecast?.atr14 ? ` · ATR14 ${s.range_forecast.atr14}` : ""}
                         {s.intraday_momentum?.change_pct != null ? ` · intraday ${s.intraday_momentum.change_pct > 0 ? "+" : ""}${s.intraday_momentum.change_pct}%` : ""}
+                        {s.bayes && (
+                            <span className="block font-mono text-[10px] text-[#06B6D4] mt-0.5" data-testid={`posture-bayes-${sym}`}>
+                                {["BUY", "SELL"].map(a => {
+                                    const b = s.bayes[a];
+                                    if (!b) return null;
+                                    return `${a}: P ${Math.round(b.p_success * 100)}% · +${b.expected_reward_r}R / -${b.expected_loss_r}R · EV ${b.ev_r > 0 ? "+" : ""}${b.ev_r}R (${b.quality})`;
+                                }).filter(Boolean).join("   |   ")}
+                            </span>
+                        )}
                     </AgentRow>
 
                     <AgentRow icon={TrendingUp} color="#38BDF8" label="FORECAST" testid={`posture-forecast-${sym}`}>

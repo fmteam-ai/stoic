@@ -799,6 +799,33 @@ async def _process_user_account_locked(db, cfg: dict):
                 elif rl_dec["decision"] == "SCALE" and rl_mode == "enforce":
                     signal["rl_scale"] = rl_dec.get("scale", 0.5)
 
+        # iter-65 · Bayesian decision model — P(trade succeeds) + E[R] from
+        # real outcomes (Beta-Binomial posterior per state). advisory default;
+        # enforce vetoes quality-D setups with sufficient evidence.
+        if signal.get("action") in ("BUY", "SELL"):
+            bd = None
+            try:
+                from bayes_decision import get_model, bayes_decision, MIN_EVIDENCE
+                bd = bayes_decision(await get_model(db, user_id), signal, sym)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("bayes decision skipped: %s", e)
+            if bd:
+                signal["bayes"] = bd
+                b_mode = str(cfg.get("bayes_gate_mode") or "advisory").lower()
+                if bd["quality"] == "D" and bd["n"] >= MIN_EVIDENCE and b_mode != "off":
+                    await inc_intel_counter(user_id, "bayes_d_quality")
+                    if b_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn",
+                            reason=(f"Bayesian decision gate: P(success) "
+                                    f"{bd['p_success']:.0%} (CI {bd['ci90'][0]:.0%}-"
+                                    f"{bd['ci90'][1]:.0%}, n={bd['n']}), E[reward] "
+                                    f"{bd['expected_reward_r']}R vs E[loss] "
+                                    f"{bd['expected_loss_r']}R → EV {bd['ev_r']}R "
+                                    f"(quality D). Vetoed."))
+                        await inc_intel_counter(user_id, "bayes_block")
+                        continue
+
         # iter-62 · Forecast gate — Chronos-Bolt zero-shot quantile forecast.
         # Blocks only when the ENTIRE 80% band moves against the trade.
         # advisory (default): annotate + counter · enforce: skip. Fail-open.

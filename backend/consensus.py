@@ -73,6 +73,9 @@ def compute_consensus(signal: dict) -> dict:
         qv -= 0.4
     elif (rl.get("mean") or 0) > 0 and rl.get("n", 0) >= 8:
         qv += 0.4
+    bayes = signal.get("bayes") or {}
+    if bayes.get("n", 0) >= 8 and bayes.get("ev_r") is not None:
+        qv += _clip(bayes["ev_r"]) * 0.4
     votes["quant"] = round(_clip(qv), 2)
 
     mv = 0.0

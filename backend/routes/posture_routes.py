@@ -90,19 +90,25 @@ async def market_posture(user=Depends(get_current_user)):
         except Exception as e:
             logger.debug("posture structure failed: %s", e)
         cons = None
+        bayes_out = None
         try:
             from consensus import compute_consensus
             from rl_policy import get_policy, rl_decision
+            from bayes_decision import get_model as _get_bayes, bayes_decision
             pol = await get_policy(db, uid)
+            bmodel = await _get_bayes(db, uid)
             ctx = {"mtf_tiers": sig.get("mtf_tiers"), "market_structure": struct,
                    "forecast": fc, "fed_tone": fed if base == "XAUUSD" else None,
                    "confidence": sig.get("confidence"),
                    "intraday_momentum": sig.get("intraday_momentum"),
                    "session": sig.get("session"), "regime": sig.get("regime")}
             cons = {}
+            bayes_out = {}
             for a in ("BUY", "SELL"):
                 s2 = {**ctx, "action": a}
                 s2["rl_policy"] = rl_decision(pol, s2, base)
+                s2["bayes"] = bayes_decision(bmodel, s2, base)
+                bayes_out[a] = s2["bayes"]
                 cons[a] = compute_consensus(s2)
         except Exception as e:
             logger.debug("posture consensus failed: %s", e)
@@ -118,6 +124,7 @@ async def market_posture(user=Depends(get_current_user)):
             "range_forecast": sig.get("range_forecast"),
             "forecast": fc,
             "consensus": cons,
+            "bayes": bayes_out,
             "active_vetoes": vetoes[-4:],
             "unlock_hints": _unlock_hints(sig),
             "signal_at": str(sig.get("created_at") or ""),
