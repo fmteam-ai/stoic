@@ -1401,6 +1401,39 @@ async def _process_user_account_locked(db, cfg: dict):
             effective_lot = max(round(effective_lot * _rl_scale, 2), 0.01)
             sizing_method = sizing_method + "+rl_scale"
 
+        # iter-114 · Advanced Risk Engine — final pre-trade authority:
+        # drawdown ladder (D/W/M), abnormal-market halt, dynamic leverage,
+        # event-window exposure cap, CVaR budget. Block or trim.
+        if cfg.get("risk_engine_enabled", True):
+            try:
+                from risk_engine import risk_engine_evaluate
+                rev = await risk_engine_evaluate(
+                    db, user_id, cfg, target_account, signal,
+                    effective_lot, cfg_account_id)
+                await db.signals.update_one(
+                    {"_id": result.inserted_id},
+                    {"$set": {"risk_engine": {
+                        "allow": rev["allow"], "scale": rev["scale"],
+                        "checks": rev["checks"],
+                        "pnl_windows": rev["pnl_windows"]}}})
+                if not rev["allow"]:
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn",
+                        reason=f"Risk engine: {rev['blocked_by']['detail']}")
+                    await inc_intel_counter(user_id, "risk_engine_block")
+                    continue
+                if rev["scale"] < 1.0:
+                    effective_lot = max(
+                        round(effective_lot * rev["scale"], 2), 0.01)
+                    sizing_method = sizing_method + "+risk_engine"
+                    logger.info(
+                        "Risk engine trim ×%.3f user=%s sym=%s: %s",
+                        rev["scale"], user_id, sym,
+                        "; ".join(c["detail"] for c in rev["checks"]
+                                  if c["status"] == "trim"))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("risk engine failed (fail-open): %s", e)
+
         # iter-58 · Pre-trade sector-cap fit. Prevents the bot from opening
         # trades that would immediately breach the per-account sector cap
         # (e.g., XAU notional > 500% of equity) and get auto-deleveraged

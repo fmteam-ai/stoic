@@ -178,6 +178,16 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Posture top-level `self_evaluation` {graded, avg qualities, top_mistakes, last_lesson, adjustments}; SELF-EVAL AgentRow.
 - Tests: `tests/test_iter113_explain_selfeval.py` (9 passed); 153 green. Live: 50 real trades graded, Claude lessons generating ("sold into LOW_VOL_TREND primed for expansion").
 
+## Advanced Risk Engine (iter-114, June 2026 — DONE)
+- `risk_engine.py`: unified pre-trade authority run AFTER all lot sizing (post rl_scale), fail-open. Five checks → {allow, scale, checks}:
+  1. **Dynamic leverage**: max notional = equity × max_leverage(20×) × vol_adj(0.4-1.0, from ATR expansion) × conf_adj(0.6/<65%, 1.2/>85%); oversize trimmed to fit.
+  2. **Event exposure**: high-impact print ≤60min → correlated USD notional (open+new) capped at event_exposure_cap_pct (100%): block above cap, halve above 50%.
+  3. **Drawdown ladder**: daily(3%)/weekly(7%)/**monthly(12%, new)** realized-PnL windows vs equity → block for the window.
+  4. **Abnormal market**: last bar ≥4× median range → suspend cycle; ≥2.5× → halve; candle feed stale >45min on weekdays → suspend (data outage).
+  5. **CVaR budget**: projected portfolio CVaR₉₅ (portfolio/var.py) incl. hypothetical position vs cvar_budget_pct (8%): trim to fit, hard block >1.5×.
+- Config (models.py): risk_engine_enabled=True, monthly_drawdown_pct, max_leverage, cvar_budget_pct, event_exposure_cap_pct. Verdict stored on signal doc (`risk_engine`). Counter: risk_engine_block. `risk_engine_status` → posture top-level; RISK ENGINE AgentRow (equity, D/W/M PnL, CVaR, DD status).
+- Tests: `tests/test_iter114_risk_engine.py` (7 passed; 40 green iter11x). Live: real -4.6% daily DD correctly blocking; oversized gold trade caught by event cap (1161% exposure) AND CVaR ceiling (23.9% > 12%).
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

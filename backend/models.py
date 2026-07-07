@@ -196,6 +196,13 @@ class BotConfigUpdate(BaseModel):
     # Monte Carlo trade simulation (iter-112): enter only on positive EV.
     monte_carlo_mode: str = "enforce"        # off | advisory | enforce
     monte_carlo_paths: int = 10000
+    # Advanced Risk Engine (iter-114): dynamic leverage, event-exposure caps,
+    # daily/weekly/monthly drawdown ladder, abnormal-market halt, CVaR budget.
+    risk_engine_enabled: bool = True
+    monthly_drawdown_pct: float = 12.0
+    max_leverage: float = 20.0
+    cvar_budget_pct: float = 8.0
+    event_exposure_cap_pct: float = 100.0
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.

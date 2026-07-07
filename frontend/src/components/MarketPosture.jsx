@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle, Dices, MessageSquareText, ClipboardCheck } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle, Dices, MessageSquareText, ClipboardCheck, ShieldAlert } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -315,6 +315,20 @@ export default function MarketPosture() {
                             </span>
                         )}</>
                     : <span className="text-[#52525B]">off — enable Meta-Learning to let the bandit pick the winning strategy automatically</span>}
+            </AgentRow>
+
+            <AgentRow icon={ShieldAlert} color="#F87171" label="RISK ENGINE" testid="posture-risk-engine">
+                {data.risk_engine
+                    ? <>Equity <strong>${data.risk_engine.equity?.toLocaleString()}</strong>
+                        {" "}· P&L D <span style={{ color: data.risk_engine.pnl_windows?.day >= 0 ? "#00FF41" : "#FF3B30" }}>${data.risk_engine.pnl_windows?.day}</span>
+                        {" "}/ W <span style={{ color: data.risk_engine.pnl_windows?.week >= 0 ? "#00FF41" : "#FF3B30" }}>${data.risk_engine.pnl_windows?.week}</span>
+                        {" "}/ M <span style={{ color: data.risk_engine.pnl_windows?.month >= 0 ? "#00FF41" : "#FF3B30" }}>${data.risk_engine.pnl_windows?.month}</span>
+                        {" "}· {data.risk_engine.open_positions} open
+                        {data.risk_engine.cvar?.cvar_95_pct != null && ` · CVaR₉₅ ${data.risk_engine.cvar.cvar_95_pct}% ($${Math.round(data.risk_engine.cvar.cvar_95_usd || 0)})`}
+                        <span className="block font-mono text-[10px] mt-0.5" style={{ color: data.risk_engine.drawdown?.status === "ok" ? "#F87171" : "#FF3B30" }}>
+                            {data.risk_engine.drawdown?.detail} · dynamic leverage + event-exposure caps + abnormal-market halt active
+                        </span></>
+                    : <span className="text-[#52525B]">connect an account to arm the risk engine</span>}
             </AgentRow>
 
             <AgentRow icon={ClipboardCheck} color="#FDA4AF" label="SELF-EVAL" testid="posture-self-eval">

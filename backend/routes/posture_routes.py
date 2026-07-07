@@ -214,6 +214,12 @@ async def market_posture(user=Depends(get_current_user)):
     except Exception as e:
         logger.debug("posture meta strategy failed: %s", e)
     online = await db.online_learning.find_one({"user_id": uid}, {"_id": 0})
+    risk_eng = None
+    try:
+        from risk_engine import risk_engine_status
+        risk_eng = await risk_engine_status(db, uid)
+    except Exception as e:
+        logger.debug("posture risk engine failed: %s", e)
     self_eval = None
     try:
         evals = await db.trade_evaluations.find({"user_id": uid}).sort(
@@ -278,4 +284,5 @@ async def market_posture(user=Depends(get_current_user)):
         "meta_strategy": meta_strat,
         "online_learning": online,
         "self_evaluation": self_eval,
+        "risk_engine": risk_eng,
     }
