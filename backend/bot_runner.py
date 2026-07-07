@@ -811,6 +811,39 @@ async def _process_user_account_locked(db, cfg: dict):
                 logger.debug("forecast agent skipped: %s", e)
             if fc:
                 signal["forecast"] = fc
+                # iter-64 · Probabilistic trade evaluation — outcome
+                # distribution → EV filter, quantile stop, dynamic sizing.
+                # advisory (default): annotate · enforce: veto negative-EV,
+                # apply tighter quantile SL, scale lot down.
+                try:
+                    from prob_forecast import trade_eval
+                    pe = trade_eval(sym, signal["action"], signal.get("entry_price"),
+                                    signal.get("stop_loss"),
+                                    signal.get("tp1") or signal.get("take_profit"), fc)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("prob eval skipped: %s", e)
+                    pe = None
+                if pe:
+                    signal["prob_eval"] = pe
+                    pf_mode = str(cfg.get("prob_forecast_mode") or "advisory").lower()
+                    if pe["negative_ev"]:
+                        await inc_intel_counter(user_id, "prob_ev_negative")
+                        if pf_mode == "enforce":
+                            await _record_pulse(db, cfg, symbol=sym,
+                                action="SKIP", level="warn",
+                                reason=(f"Probabilistic EV gate: expected value "
+                                        f"{pe['ev_pips']} pips, prob-weighted expectancy "
+                                        f"{pe['prob_expectancy_pips']} pips (P(TP) "
+                                        f"{pe['p_tp']:.0%} vs P(SL) {pe['p_sl']:.0%}) — "
+                                        f"distribution says this trade loses. Vetoed."))
+                            await inc_intel_counter(user_id, "prob_ev_block")
+                            continue
+                    if pf_mode == "enforce":
+                        if pe.get("suggested_sl"):
+                            signal["stop_loss"] = pe["suggested_sl"]
+                            signal["prob_sl_applied"] = True
+                        if pe["lot_multiplier"] < 1.0:
+                            signal["prob_lot_scale"] = pe["lot_multiplier"]
                 fgate = forecast_gate(signal["action"], fc)
                 if fgate:
                     fc_mode = str(cfg.get("forecast_gate_mode") or "advisory").lower()
@@ -1122,7 +1155,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 logger.debug("Correlation-Kelly skipped (%s) — proceeding without trim", e)
 
         # iter-61 · RL policy half-size (enforce mode SCALE decision)
-        _rl_scale = float(signal.get("rl_scale") or 1.0)
+        # iter-64 · combined with probabilistic-forecast lot multiplier
+        _rl_scale = float(signal.get("rl_scale") or 1.0) \
+            * float(signal.get("prob_lot_scale") or 1.0)
         if _rl_scale < 1.0:
             effective_lot = max(round(effective_lot * _rl_scale, 2), 0.01)
             sizing_method = sizing_method + "+rl_scale"

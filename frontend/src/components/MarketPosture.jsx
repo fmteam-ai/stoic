@@ -125,7 +125,14 @@ export default function MarketPosture() {
                             ? <>Next {s.forecast.horizon} {s.forecast.source === "M15" ? "×15min" : "days"} (Chronos):
                                 {" "}median <strong style={{ color: s.forecast.median_change_pct >= 0 ? "#00FF41" : "#FF3B30" }}>
                                     {s.forecast.median_change_pct > 0 ? "+" : ""}{s.forecast.median_change_pct}%</strong>,
-                                {" "}80% band [{s.forecast.band_low_pct > 0 ? "+" : ""}{s.forecast.band_low_pct}% … {s.forecast.band_high_pct > 0 ? "+" : ""}{s.forecast.band_high_pct}%]</>
+                                {" "}80% band [{s.forecast.band_low_pct > 0 ? "+" : ""}{s.forecast.band_low_pct}% … {s.forecast.band_high_pct > 0 ? "+" : ""}{s.forecast.band_high_pct}%]
+                                {s.forecast.distribution?.scenarios && (
+                                    <span className="block font-mono text-[10px] text-[#38BDF8] mt-0.5" data-testid={`posture-scenarios-${sym}`}>
+                                        {s.forecast.distribution.scenarios.map(sc =>
+                                            `${Math.round(sc.prob * 100)}%: ${sc.pips > 0 ? "+" : ""}${sc.pips} pips`).join("  ·  ")}
+                                        {"  →  EV "}{s.forecast.distribution.ev_pips_long > 0 ? "+" : ""}{s.forecast.distribution.ev_pips_long} pips (long)
+                                    </span>
+                                )}</>
                             : <span className="text-[#52525B]">forecast model warming up</span>}
                     </AgentRow>
 

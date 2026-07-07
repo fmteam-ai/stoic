@@ -107,6 +107,12 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Live at build time: BUY 61 (OK) vs SELL 37 (CONFLICTED) on XAUUSD.
 - Tests: `tests/test_iter102_consensus.py`.
 
+## Probabilistic Forecasting (iter-64, June 2026 — DONE)
+- Chronos now returns 9 deciles (`QUANTILE_LEVELS`); `prob_forecast.py`: CDF interpolation, 3-bucket scenario table ("30%: +84 pips · 60%: -113 · 10%: -277 → EV -71 long"), `trade_eval` (P(TP)/P(SL), prob-weighted expectancy, quantile-based suggested_sl [q10/q90, only if tighter], lot_multiplier 1.0/0.75/0.5 — never scales up).
+- Wired in bot_runner inside the forecast block: `prob_forecast_mode` off|**advisory (default)**|enforce (enforce = veto negative-EV, apply tighter SL, prob_lot_scale merged with rl_scale in sizing). Counters: prob_ev_negative/prob_ev_block. Signal fields: prob_eval, prob_sl_applied, prob_lot_scale.
+- Forecast payload has `distribution` + `quantile_levels/values`; scenarios shown in MarketPosture FORECAST row.
+- Tests: `tests/test_iter103_prob_forecast.py`.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

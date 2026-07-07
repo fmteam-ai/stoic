@@ -14,6 +14,7 @@ from pip_utils import base_symbol
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "amazon/chronos-bolt-tiny"
+QUANTILE_LEVELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 CACHE_TTL = 300
 HORIZON_M15 = 8      # 2 hours ahead
 HORIZON_DAILY = 3    # 3 days ahead
@@ -48,21 +49,32 @@ def _forecast_sync(closes: list, horizon: int):
         return None
     ctx = torch.tensor(closes[-512:], dtype=torch.float32)
     quantiles, _ = pipe.predict_quantiles(
-        inputs=ctx, prediction_length=horizon, quantile_levels=[0.1, 0.5, 0.9])
-    return quantiles[0].tolist()   # [horizon][3]
+        inputs=ctx, prediction_length=horizon, quantile_levels=QUANTILE_LEVELS)
+    return quantiles[0].tolist()   # [horizon][len(QUANTILE_LEVELS)]
 
 
-def summarize(closes: list, q: list, source: str, horizon: int) -> dict:
+def summarize(closes: list, q: list, source: str, horizon: int,
+              symbol: str = "XAUUSD") -> dict:
     last = float(closes[-1])
-    q10, q50, q90 = (float(q[-1][0]), float(q[-1][1]), float(q[-1][2]))
-    return {
+    vals = [float(v) for v in q[-1]]
+    q10, q50, q90 = vals[0], vals[len(vals) // 2], vals[-1]
+    out = {
         "model": MODEL_NAME, "source": source, "horizon": horizon,
         "last": round(last, 5),
         "q10": round(q10, 5), "q50": round(q50, 5), "q90": round(q90, 5),
         "median_change_pct": round((q50 - last) / last * 100, 3),
         "band_low_pct": round((q10 - last) / last * 100, 3),
         "band_high_pct": round((q90 - last) / last * 100, 3),
+        "quantile_levels": QUANTILE_LEVELS[:len(vals)],
+        "quantile_values": [round(v, 5) for v in vals],
     }
+    try:
+        from prob_forecast import scenario_table
+        out["distribution"] = scenario_table(
+            symbol, last, out["quantile_levels"], vals)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("scenario table failed: %s", e)
+    return out
 
 
 async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
@@ -96,7 +108,7 @@ async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
                 loop = asyncio.get_running_loop()
                 q = await loop.run_in_executor(None, _forecast_sync, closes, horizon)
                 if q:
-                    payload = summarize(closes, q, source, horizon)
+                    payload = summarize(closes, q, source, horizon, base)
             except Exception as e:  # noqa: BLE001
                 logger.warning("forecast inference failed: %s", e)
         _cache[base] = (now + CACHE_TTL, payload)

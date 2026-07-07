@@ -170,6 +170,8 @@ class BotConfigUpdate(BaseModel):
     # Master Agent consensus (iter-63): off | advisory | enforce
     consensus_gate_mode: str = "enforce"
     consensus_threshold: int = 55
+    # Probabilistic forecast layer (iter-64): off | advisory | enforce
+    prob_forecast_mode: str = "advisory"
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.
