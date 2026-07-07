@@ -175,6 +175,7 @@ async def market_posture(user=Depends(get_current_user)):
             "bayes": bayes_out,
             "ml_ensemble": ml_out,
             "uncertainty": unc_out,
+            "monte_carlo": sig.get("monte_carlo"),
             "active_vetoes": vetoes[-4:],
             "unlock_hints": _unlock_hints(sig),
             "signal_at": str(sig.get("created_at") or ""),

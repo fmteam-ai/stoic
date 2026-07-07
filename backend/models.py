@@ -193,6 +193,9 @@ class BotConfigUpdate(BaseModel):
     adaptive_sizing_enabled: bool = True
     adaptive_risk_floor_pct: float = 0.1
     adaptive_risk_cap_pct: float = 2.0
+    # Monte Carlo trade simulation (iter-112): enter only on positive EV.
+    monte_carlo_mode: str = "enforce"        # off | advisory | enforce
+    monte_carlo_paths: int = 10000
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.

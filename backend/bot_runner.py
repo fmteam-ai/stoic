@@ -1040,6 +1040,38 @@ async def _process_user_account_locked(db, cfg: dict):
                     continue
                 signal["uncertainty_advisory"] = ug
 
+        # iter-112 · Monte Carlo trade simulation — 10k bootstrap paths from
+        # real M15 dynamics: P(TP first) vs P(SL first), max-DD distribution.
+        # Enter only if expected value is positive (default enforce).
+        if signal.get("action") in ("BUY", "SELL"):
+            mc = None
+            try:
+                from monte_carlo import simulate_trade, mc_gate
+                from pip_utils import base_symbol as _bs_mc
+                _cdoc_mc = await db.intraday_candles.find_one(
+                    {"user_id": user_id, "symbol": _bs_mc(sym)}, {"bars": 1})
+                mc = simulate_trade(
+                    signal["action"], signal.get("entry_price"),
+                    signal.get("stop_loss"),
+                    signal.get("tp1") or signal.get("take_profit"),
+                    (_cdoc_mc or {}).get("bars") or [],
+                    n_paths=int(cfg.get("monte_carlo_paths") or 10000))
+            except Exception as e:  # noqa: BLE001
+                logger.debug("monte carlo skipped: %s", e)
+            if mc:
+                signal["monte_carlo"] = mc
+                mg = mc_gate(mc)
+                if mg:
+                    mc_mode = str(cfg.get("monte_carlo_mode")
+                                  or "enforce").lower()
+                    await inc_intel_counter(user_id, "mc_negative_ev")
+                    if mc_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=mg)
+                        await inc_intel_counter(user_id, "mc_block")
+                        continue
+                    signal["monte_carlo_advisory"] = mg
+
         signal["user_id"] = user_id
         if cfg.get("meta_strategy_active"):
             signal["meta_strategy"] = cfg["meta_strategy_active"]

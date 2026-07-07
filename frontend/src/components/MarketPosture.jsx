@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle, Dices } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -222,6 +222,18 @@ export default function MarketPosture() {
                                 </span></>
                             : <span className="text-[#52525B]">ensemble warming up</span>}
                     </AgentRow>
+
+                    {s.monte_carlo && (
+                        <AgentRow icon={Dices} color="#C084FC" label="MONTE CARLO" testid={`posture-montecarlo-${sym}`}>
+                            Last candidate simulated across <strong>{s.monte_carlo.paths.toLocaleString()}</strong> paths:
+                            {" "}TP first <strong style={{ color: "#00FF41" }}>{Math.round(s.monte_carlo.p_tp_first * 100)}%</strong>
+                            {" "}vs SL first <strong style={{ color: "#FF3B30" }}>{Math.round(s.monte_carlo.p_sl_first * 100)}%</strong>
+                            {" "}· EV <strong style={{ color: s.monte_carlo.ev_r > 0 ? "#00FF41" : "#FF3B30" }}>{s.monte_carlo.ev_r > 0 ? "+" : ""}{s.monte_carlo.ev_r}R</strong>
+                            <span className="block font-mono text-[10px] text-[#C084FC] mt-0.5">
+                                R:R {s.monte_carlo.rr} · max DD median {s.monte_carlo.max_dd_r_median}R / p95 {s.monte_carlo.max_dd_r_p95}R · resolves in ~{s.monte_carlo.median_bars_to_exit} bars · negative-EV entries auto-vetoed
+                            </span>
+                        </AgentRow>
+                    )}
 
                     <AgentRow icon={TrendingUp} color="#38BDF8" label="FORECAST" testid={`posture-forecast-${sym}`}>
                         {s.forecast

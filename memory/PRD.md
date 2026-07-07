@@ -164,6 +164,13 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - bot_runner: applied to `profile.risk_pct` BEFORE Kelly sizing (supersedes old win-rate-only `adaptive_risk_enabled` when on). Config: `adaptive_sizing_enabled` default **True**, `adaptive_risk_floor_pct`/`adaptive_risk_cap_pct` (models.py). Signal field `adaptive_sizing` {multiplier, risk_pct, components, drawdown_frac, recent_win_rate}.
 - Tests: `tests/test_iter111_adaptive_sizing.py` (7 passed); 136 green across iter10x suites. Live: admin account (20% WR, 20% DD) throttled high-conf trade to 0.2% — capital preservation dominating, as designed.
 
+## Monte Carlo Trade Simulation (iter-112, June 2026 — DONE)
+- `monte_carlo.py`: pre-entry simulation of N=10,000 paths (numpy vectorized, ~14ms) by bootstrap-resampling real M15 bar dynamics (close-change + up/down wick triples — preserves fat tails & drift, no Gaussian). Each path → SL hit / TP hit / timeout over 96-bar horizon; same-bar collision counts as SL (conservative).
+- Outputs: p_tp_first/p_sl_first/p_timeout, ev_r (= p_tp·R − p_sl + timeout mean R), max-DD distribution in R (median/p95, wick-inclusive so can exceed 1R), median_bars_to_exit. Deterministic with seed.
+- `mc_gate`: veto when ev_r ≤ 0 ("enter only if EV positive"). Config `monte_carlo_mode` default **enforce**, `monte_carlo_paths` 10000 (models.py). bot_runner block after uncertainty gate. Counters: mc_negative_ev/mc_block. Signal field `monte_carlo`.
+- Posture surfaces last signal's `monte_carlo`; MONTE CARLO AgentRow (paths, TP/SL odds, EV, DD stats).
+- Tests: `tests/test_iter112_monte_carlo.py` (8 passed — note: test bars must be drift-free by construction since bootstrap preserves drift); 144 green across iter10x-11x. Live gold: 10k paths 14ms, EV +0.05R.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.
