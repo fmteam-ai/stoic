@@ -25,6 +25,10 @@ def bullish_ctx(action="BUY"):
         "rl_policy": {"decision": "ALLOW", "mean": 30.0, "n": 12},
         "fed_tone": {"score": -0.5},           # dovish = gold-bullish
         "intraday_momentum": {"change_pct": 0.6},
+        "liquidity": {"ready": True, "draw": "UP", "active_zone": "DEMAND",
+                      "cum_delta": {"bias": "BULLISH"},
+                      "dom": {"live": True, "imbalance": 0.4}},
+        "news_ai": {"net": 1.5},
     }
 
 

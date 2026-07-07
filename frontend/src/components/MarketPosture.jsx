@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -149,6 +149,27 @@ export default function MarketPosture() {
                                     </span>
                                 )}</>
                             : <span className="text-[#52525B]">AI headline scoring warming up (Reuters / Bloomberg / FOMC / CPI / NFP)</span>}
+                    </AgentRow>
+
+                    <AgentRow icon={CalendarClock} color="#FB923C" label="CALENDAR INTEL" testid={`posture-calendar-${sym}`}>
+                        {s.calendar_intel
+                            ? <><strong>{s.calendar_intel.title}</strong>
+                                {" "}{s.calendar_intel.minutes_to >= 0
+                                    ? `in ${s.calendar_intel.minutes_to >= 60 ? `${Math.floor(s.calendar_intel.minutes_to / 60)}h ${s.calendar_intel.minutes_to % 60}m` : `${s.calendar_intel.minutes_to}m`}`
+                                    : `${Math.abs(s.calendar_intel.minutes_to)}m ago`}
+                                {" "}— most likely <strong style={{ color: s.calendar_intel.top === "fakeout" ? "#FF3B30" : s.calendar_intel.top === "breakout" ? "#00FF41" : "#FFB000" }}>
+                                    {s.calendar_intel.top} ({Math.round(s.calendar_intel.top_p * 100)}%)</strong>
+                                <span className="block font-mono text-[10px] text-[#FB923C] mt-0.5" data-testid={`posture-calendar-probs-${sym}`}>
+                                    {["breakout", "fakeout", "reversal", "continuation"].map(k =>
+                                        `${k} ${Math.round((s.calendar_intel.probs?.[k] || 0) * 100)}%`).join(" · ")}
+                                    {s.calendar_intel.learned_outcomes > 0 ? ` · learned from ${s.calendar_intel.learned_outcomes} real outcomes` : " · priors only (learning)"}
+                                </span>
+                                {(s.calendar_intel.context_drivers || []).length > 0 && (
+                                    <span className="block text-[10px] text-[#A1A1AA]">
+                                        {s.calendar_intel.context_drivers.map((d, i) => <span key={i} className="block">→ {d}</span>)}
+                                    </span>
+                                )}</>
+                            : <span className="text-[#52525B]">no high-impact event in the next 24h</span>}
                     </AgentRow>
 
                     <AgentRow icon={Cpu} color="#06B6D4" label="QUANT" testid={`posture-quant-${sym}`}>

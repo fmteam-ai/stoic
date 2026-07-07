@@ -104,6 +104,13 @@ async def market_posture(user=Depends(get_current_user)):
             news_ai = await get_news_understanding(base)
         except Exception as e:
             logger.debug("posture news understanding failed: %s", e)
+        cal_pred = None
+        try:
+            from calendar_intel import next_event_prediction
+            cal_pred = await next_event_prediction(
+                db, base, (cdoc or {}).get("bars") or [], lmap)
+        except Exception as e:
+            logger.debug("posture calendar intel failed: %s", e)
         cons = None
         bayes_out = None
         try:
@@ -140,6 +147,7 @@ async def market_posture(user=Depends(get_current_user)):
             "range_forecast": sig.get("range_forecast"),
             "liquidity": lmap,
             "news_ai": news_ai,
+            "calendar_intel": cal_pred,
             "forecast": fc,
             "consensus": cons,
             "bayes": bayes_out,

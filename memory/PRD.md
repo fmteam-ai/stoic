@@ -129,6 +129,14 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Old `news.py` score_sentiment (coarse -1..1) left untouched (still used by ai_signals confidence).
 - Tests: `tests/test_iter106_news_understanding.py` (12 passed). Live: 12 headlines scored, weak NFP +2.5 gold-bullish, net +0.37 neutral.
 
+## Economic Calendar Intelligence (iter-107, June 2026 — DONE)
+- `calendar_intel.py`: instead of only avoiding news, predicts P(breakout/fakeout/reversal/continuation) per scheduled event. Dirichlet priors per event class (FOMC/CPI/NFP/GDP/PMI/SPEECH/OTHER) + learned posterior from REAL outcomes (`event_outcomes` collection, each real outcome ≈ 8 prior units) + context multipliers (vol compression → breakout ×1.3; stop clusters within 1.5×ATR → fakeout ×1.25; price stretched >2×ATR → reversal ×1.3).
+- `classify_outcome`: post-hoc labels each passed high-impact event from M15 candles (pre-range 8 bars vs post 4 bars: closed-beyond=breakout, wick-beyond+close-inside=fakeout, direction-flip=reversal, else continuation). `sweep_event_outcomes` in bot_runner main loop (throttled 1/30min, dedupe by title|ts|symbol).
+- `calendar_entry_policy`: VETO new entries when fakeout dominant (p≥0.35) within 45min pre-event or 15min post-event ("first spike is a trap"); CAUTION otherwise. `calendar_intel_mode` default **enforce**. Counter: calendar_intel_veto. Signal fields: calendar_intel, calendar_policy. Coexists with existing macro_freeze hard gate.
+- Posture per-symbol `calendar_intel`; CALENDAR INTEL AgentRow (event countdown, 4-way prob bar, learned-outcomes count, context drivers).
+- **Fix**: `economic_calendar.get_events` now backs off 10min on fetch failure (FF feed was stuck in HTTP 429 because every caller retried instantly).
+- Tests: `tests/test_iter107_calendar_intel.py` (13 passed); consensus test updated for liquidity/news votes. 62 tests green across iter102-107 suites.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

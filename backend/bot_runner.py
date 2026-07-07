@@ -822,6 +822,30 @@ async def _process_user_account_locked(db, cfg: dict):
                         continue
                     signal["news_ai_advisory"] = ng
 
+            # iter-107 · Calendar Intelligence — predicts breakout/fakeout/
+            # reversal/continuation for the next high-impact print. Vetoes
+            # entries only when a fakeout (stop-hunt) is the dominant scenario.
+            cal_pred = None
+            try:
+                from calendar_intel import (next_event_prediction,
+                                            calendar_entry_policy)
+                cal_pred = await next_event_prediction(
+                    db, _base, (cdoc or {}).get("bars") or [], lmap)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("calendar intel skipped: %s", e)
+            if cal_pred:
+                signal["calendar_intel"] = cal_pred
+                pol = calendar_entry_policy(signal["action"], cal_pred)
+                if pol:
+                    signal["calendar_policy"] = pol
+                    cal_mode = str(cfg.get("calendar_intel_mode")
+                                   or "enforce").lower()
+                    if pol["mode"] == "VETO" and cal_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=pol["reason"])
+                        await inc_intel_counter(user_id, "calendar_intel_veto")
+                        continue
+
         # iter-61 · Offline RL policy gate — distributional Q-values learned
         # from the user's real trades (reward = PnL − λ·loss − μ·drawdown).
         # advisory (default): annotate only · enforce: BLOCK skips, SCALE halves lot.
@@ -1370,6 +1394,14 @@ async def loop():
                     logger.warning("Pre-news protect flattened %d trade(s)", protected)
             except Exception as e:
                 logger.exception("Pre-news protect sweep failed: %s", e)
+            # Calendar Intelligence outcome learning (iter-107) — classify how
+            # the market ACTUALLY reacted to passed high-impact events
+            # (breakout/fakeout/reversal/continuation). Self-throttled 1/30min.
+            try:
+                from calendar_intel import sweep_event_outcomes
+                await sweep_event_outcomes(db)
+            except Exception as e:
+                logger.exception("Calendar intel outcome sweep failed: %s", e)
             # Friday Flat guard (iter-52) — close/tighten open positions ahead
             # of the Friday 21:00 UTC weekly close (weekend gap protection).
             try:

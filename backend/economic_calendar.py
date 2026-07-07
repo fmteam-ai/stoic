@@ -134,6 +134,9 @@ async def get_events() -> list:
             _cache["expires_at"] = time.time() + 3600  # 1h
             return evts
         except Exception:
+            # Failure backoff (e.g. HTTP 429 rate limit): keep stale events and
+            # stop hammering the feed for 10 min so the limit can reset.
+            _cache["expires_at"] = time.time() + 600
             return _cache["events"] or []
 
 
