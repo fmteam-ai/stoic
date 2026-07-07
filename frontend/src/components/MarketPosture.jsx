@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle, Dices } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle, Dices, MessageSquareText, ClipboardCheck } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -223,6 +223,16 @@ export default function MarketPosture() {
                             : <span className="text-[#52525B]">ensemble warming up</span>}
                     </AgentRow>
 
+                    {s.explanation && (
+                        <AgentRow icon={MessageSquareText} color="#93C5FD" label="EXPLAIN" testid={`posture-explain-${sym}`}>
+                            <strong>{s.explanation.headline}</strong>
+                            <span className="block font-mono text-[10px] text-[#93C5FD] mt-0.5">
+                                {(s.explanation.because || []).map((b, i) => <span key={i} className="block">✓ {b}</span>)}
+                                {(s.explanation.despite || []).map((b, i) => <span key={i} className="block" style={{ color: "#FFB000" }}>✗ despite: {b}</span>)}
+                            </span>
+                        </AgentRow>
+                    )}
+
                     {s.monte_carlo && (
                         <AgentRow icon={Dices} color="#C084FC" label="MONTE CARLO" testid={`posture-montecarlo-${sym}`}>
                             Last candidate simulated across <strong>{s.monte_carlo.paths.toLocaleString()}</strong> paths:
@@ -305,6 +315,24 @@ export default function MarketPosture() {
                             </span>
                         )}</>
                     : <span className="text-[#52525B]">off — enable Meta-Learning to let the bandit pick the winning strategy automatically</span>}
+            </AgentRow>
+
+            <AgentRow icon={ClipboardCheck} color="#FDA4AF" label="SELF-EVAL" testid="posture-self-eval">
+                {data.self_evaluation
+                    ? <>Graded <strong>{data.self_evaluation.graded}</strong> recent trades ·
+                        {" "}entry quality <strong>{data.self_evaluation.avg_entry_quality}/100</strong> ·
+                        {" "}exit <strong>{data.self_evaluation.avg_exit_quality}/100</strong>
+                        {(data.self_evaluation.top_mistakes || []).length > 0 &&
+                            ` · recurring: ${data.self_evaluation.top_mistakes.map(([m, n]) => `${m.replace(/_/g, " ")} ×${n}`).join(", ")}`}
+                        {Object.keys(data.self_evaluation.adjustments || {}).filter(k => k !== "based_on").length > 0 && (
+                            <span className="block font-mono text-[10px] text-[#FDA4AF] mt-0.5">
+                                behavior adjusted: {Object.entries(data.self_evaluation.adjustments).filter(([k]) => k !== "based_on").map(([k, v]) => `${k.replace(/_/g, " ")} → ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ")}
+                            </span>
+                        )}
+                        {data.self_evaluation.last_lesson && (
+                            <span className="block text-[10px] text-[#A1A1AA] italic">"{data.self_evaluation.last_lesson}"</span>
+                        )}</>
+                    : <span className="text-[#52525B]">grades every closed trade — "why was I wrong?" — and adjusts behavior</span>}
             </AgentRow>
 
             <AgentRow icon={RefreshCw} color="#FCD34D" label="ONLINE LEARNING" testid="posture-online-learning">

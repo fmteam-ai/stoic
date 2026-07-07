@@ -176,6 +176,7 @@ async def market_posture(user=Depends(get_current_user)):
             "ml_ensemble": ml_out,
             "uncertainty": unc_out,
             "monte_carlo": sig.get("monte_carlo"),
+            "explanation": sig.get("explanation"),
             "active_vetoes": vetoes[-4:],
             "unlock_hints": _unlock_hints(sig),
             "signal_at": str(sig.get("created_at") or ""),
@@ -213,6 +214,30 @@ async def market_posture(user=Depends(get_current_user)):
     except Exception as e:
         logger.debug("posture meta strategy failed: %s", e)
     online = await db.online_learning.find_one({"user_id": uid}, {"_id": 0})
+    self_eval = None
+    try:
+        evals = await db.trade_evaluations.find({"user_id": uid}).sort(
+            "evaluated_at", -1).limit(20).to_list(20)
+        if evals:
+            mc_counts: dict = {}
+            for e in evals:
+                for m in e.get("mistakes") or []:
+                    mc_counts[m] = mc_counts.get(m, 0) + 1
+            adj_doc = await db.behavior_adjustments.find_one({"user_id": uid})
+            last_lesson = next((e.get("lesson") for e in evals
+                                if e.get("lesson")), None)
+            self_eval = {
+                "graded": len(evals),
+                "avg_entry_quality": round(sum(
+                    e.get("entry_quality") or 0 for e in evals) / len(evals)),
+                "avg_exit_quality": round(sum(
+                    e.get("exit_quality") or 0 for e in evals) / len(evals)),
+                "top_mistakes": sorted(mc_counts.items(),
+                                       key=lambda kv: -kv[1])[:3],
+                "last_lesson": last_lesson,
+                "adjustments": (adj_doc or {}).get("adjustments") or {}}
+    except Exception as e:
+        logger.debug("posture self-eval failed: %s", e)
     cutoff = (now - timedelta(minutes=30)).isoformat()
     recent_losses = await db.trades.count_documents(
         {"user_id": uid, "status": "closed", "pnl": {"$lt": 0},
@@ -252,4 +277,5 @@ async def market_posture(user=Depends(get_current_user)):
         "rl_policy": rl,
         "meta_strategy": meta_strat,
         "online_learning": online,
+        "self_evaluation": self_eval,
     }

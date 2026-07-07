@@ -1021,6 +1021,22 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "consensus_block")
                     continue
 
+        # iter-113 · Self-evaluation behavior adjustments — recurring
+        # mistakes learned from graded trades reshape new candidates
+        # (widen SL, extend TP, raise confidence floor).
+        if signal.get("action") in ("BUY", "SELL"):
+            try:
+                from self_evaluation import get_adjustments, apply_adjustments
+                _adj = await get_adjustments(db, user_id)
+                if _adj:
+                    _applied = apply_adjustments(signal, _adj)
+                    if _applied:
+                        signal["behavior_adjustments"] = _applied
+                        logger.info("Behavior adjustments applied user=%s: %s",
+                                    user_id, _applied)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("behavior adjustments skipped: %s", e)
+
         # iter-110 · Uncertainty estimation — calibrated confidence + risk
         # tier from model disagreement, CI width, band dispersion and agent
         # conflict. Skips low-confidence trades (default enforce).
@@ -1030,7 +1046,8 @@ async def _process_user_account_locked(db, cfg: dict):
             signal["uncertainty"] = est
             u_mode = str(cfg.get("uncertainty_gate_mode") or "enforce").lower()
             ug = uncertainty_gate(
-                est, int(cfg.get("min_calibrated_confidence") or 60))
+                est, int(cfg.get("min_calibrated_confidence") or 60)
+                + int(signal.get("_conf_floor_bump") or 0))
             if ug and u_mode != "off":
                 await inc_intel_counter(user_id, "uncertainty_low_conf")
                 if u_mode == "enforce":
@@ -1073,6 +1090,13 @@ async def _process_user_account_locked(db, cfg: dict):
                     signal["monte_carlo_advisory"] = mg
 
         signal["user_id"] = user_id
+        # iter-113 · Explainable AI — human-readable decision rationale.
+        if signal.get("action") in ("BUY", "SELL"):
+            try:
+                from explainer import explain_decision
+                signal["explanation"] = explain_decision(signal)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("explainer skipped: %s", e)
         if cfg.get("meta_strategy_active"):
             signal["meta_strategy"] = cfg["meta_strategy_active"]
         if cfg_account_id:
@@ -1529,6 +1553,13 @@ async def loop():
                     logger.info("Online learning retrained %d user(s)", n_retrained)
             except Exception as e:
                 logger.exception("Online learning sweep failed: %s", e)
+            # Self-Evaluation Agent (iter-113) — grade closed trades ("why
+            # was I wrong?"), store lessons, learn behavior adjustments.
+            try:
+                from self_evaluation import sweep_self_evaluation
+                await sweep_self_evaluation(db)
+            except Exception as e:
+                logger.exception("Self-evaluation sweep failed: %s", e)
             # Friday Flat guard (iter-52) — close/tighten open positions ahead
             # of the Friday 21:00 UTC weekly close (weekend gap protection).
             try:

@@ -171,6 +171,13 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Posture surfaces last signal's `monte_carlo`; MONTE CARLO AgentRow (paths, TP/SL odds, EV, DD stats).
 - Tests: `tests/test_iter112_monte_carlo.py` (8 passed — note: test bars must be drift-free by construction since bootstrap preserves drift); 144 green across iter10x-11x. Live gold: 10k paths 14ms, EV +0.05R.
 
+## Explainable AI + Self-Evaluation Agent (iter-113, June 2026 — DONE)
+- **Explainable AI** (`explainer.py`): `explain_decision(signal)` builds {headline, because[], despite[]} from consensus votes + all agent fields (trend tiers, structure bias/phase, liquidity draw/zone/delta/DOM, forecast, quant p_win/Bayes, macro fed/news/causal, Monte Carlo odds, calendar caution). Attached as `signal.explanation` in bot_runner before insert; posture surfaces last signal's explanation; EXPLAIN AgentRow (✓ because / ✗ despite).
+- **Self-Evaluation** (`self_evaluation.py`): grades every closed trade — entry_quality/exit_quality 0-100 (MFE/MAE recomputed from M15 candles, stopped-then-reversed detection), regime/volatility/news context, mistake taxonomy (counter_trend_entry, entered_into_opposing_liquidity, traded_into_news_event, stop_too_tight, left_money_on_table, low_confidence_entry, oversized_in_drawdown). Losses get a Claude "why was I wrong?" one-liner. Stored in `trade_evaluations`; trades flagged `self_evaluated`. Sweep in bot loop (5min throttle, 10/sweep, 48h lookback).
+- **Adjusts future behavior**: `compute_adjustments` over last 20 evals (≥30% recurrence) → sl_widen_factor 1.2 / tp_extend_factor 1.15 / min_conf_bump +5, stored in `behavior_adjustments`, applied to every new candidate in bot_runner (`apply_adjustments` mutates SL/TP pre-MonteCarlo; conf bump raises uncertainty floor). Signal field `behavior_adjustments`.
+- Posture top-level `self_evaluation` {graded, avg qualities, top_mistakes, last_lesson, adjustments}; SELF-EVAL AgentRow.
+- Tests: `tests/test_iter113_explain_selfeval.py` (9 passed); 153 green. Live: 50 real trades graded, Claude lessons generating ("sold into LOW_VOL_TREND primed for expansion").
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.
