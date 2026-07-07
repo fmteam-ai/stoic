@@ -188,6 +188,13 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Config (models.py): risk_engine_enabled=True, monthly_drawdown_pct, max_leverage, cvar_budget_pct, event_exposure_cap_pct. Verdict stored on signal doc (`risk_engine`). Counter: risk_engine_block. `risk_engine_status` → posture top-level; RISK ENGINE AgentRow (equity, D/W/M PnL, CVaR, DD status).
 - Tests: `tests/test_iter114_risk_engine.py` (7 passed; 40 green iter11x). Live: real -4.6% daily DD correctly blocking; oversized gold trade caught by event cap (1161% exposure) AND CVaR ceiling (23.9% > 12%).
 
+## Live Architecture Pipeline + Conflict Audit (iter-115, June 2026 — DONE)
+- `routes/architecture_routes.py`: GET `/api/architecture` — 11 stages matching the user's diagram exactly (Market Data[price/news/macro] → Feature Engineering → Models[Transformer/RL/Bayes] → Ensemble → Regime → Decision Confidence → Monte Carlo → Sizing → Risk → Execution → Broker) with live per-stage health (candle age clamped ≥0 for broker time offset, model states, EA versions, heartbeats).
+- `ArchitecturePipeline.jsx`: collapsible SYSTEM ARCHITECTURE card on Dashboard rendering the live pipeline with status dots (testids arch-stage-*).
+- Pipeline order audit confirmed bot_runner matches the diagram: gates → RL → Bayes → forecast → ml_ensemble → consensus → behavior_adjustments → uncertainty → monte_carlo → insert → adaptive_sizing → Kelly → corr → rl_scale → risk_engine → execution.
+- **Testing agent full audit (iteration_38.json): 100% — 99/99 unit + 13/13 HTTP integration + all frontend testids; zero backend/frontend issues, zero conflicts.**
+- Advisory notes from review (non-bugs): posture caps symbols[:4]; MarketPosture.jsx >360 lines (future split candidate).
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.
