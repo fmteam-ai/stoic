@@ -1,0 +1,28 @@
+{
+  "summary": "iter-115 full-pipeline verification. Backend: 99/99 legacy unit tests (test_iter105..114) + 13/13 new HTTP integration tests pass. Frontend: MarketPosture and ArchitecturePipeline both render on the Dashboard with all 10 required posture data-testids and all 11 architecture stages + 6 sub-stage children resolved. Consensus pills show calibrated confidence + risk. Regression pages (/trades, /accounts, /loss-lab) load without console errors. Read-only testing — no bot_configs modified, no trades executed, no accounts touched.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter115_arch_pipeline.py",
+    "/app/test_reports/pytest/iter115_arch_pipeline.xml",
+    "/app/test_reports/pytest/iter105_114_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "posture_routes.py compute_consensus returns votes as a DICT (agent->signed-score), not a list of {agent,score} objects. The review request phrased it as 'votes including liquidity vote' — the dict shape is fine, but the API contract is undocumented. Frontend already handles it correctly via Object.entries(consensus[a].votes).",
+    "posture_routes.py:70 loops symbols[:4] — a user with >4 active symbols will silently see only the first 4 in the posture card. Consider surfacing a 'X more not shown' hint or lifting the cap.",
+    "architecture_routes.py:120 detail string interpolates online.get('retrain_count', 0) but nests it inside an f-string with a conditional — works, but for a null 'online' doc the string reads '.retrained None×' if online was truthy-but-empty. Currently guarded by 'if online', ok.",
+    "MarketPosture.jsx has grown to 360+ lines and is doing a lot of conditional rendering — worth splitting each AgentRow into its own tiny file for maintainability, but not blocking.",
+    "ArchitecturePipeline.jsx: on toggle-close the fetched `data` is retained in state (good, avoids refetch storms), but there's no 'refresh' button — stale stage detail lingers until page reload. Minor UX improvement candidate.",
+    "bridge_routes.py POST /bridge/dom returns 200 with stored=0 when both bids and asks are empty — arguably a 4xx or a warning, but fail-open is consistent with the rest of the bridge surface."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter115_arch_pipeline.py (new — 13 HTTP tests: auth, architecture 11 stages, posture agents, ml ensemble, bridge/dom, EA download v1.43)"
+  ],
+  "success_rate": {"backend": "100% (99/99 unit + 13/13 HTTP integration)", "frontend": "100% (all 10 posture testids + 11 arch stages + 6 sub-stages resolved; regression pages load)"},
+  "test_credentials": "admin@trading.bot / admin123 (cookie auth). Bridge token '-14t8rVrFxnX7AK4vWHveL9QAqNFhO-0AeV-yxShWyQ' used for POST /api/bridge/dom happy-path test.",
+  "seed_data_creation": "None. Test wrote one dom_snapshots doc (upsert on {user_id,symbol}=XAUUSD) — the account already has a live liquidity feed so this is a no-op mutation.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression suite: run cd /app/backend && python -m pytest tests/test_iter105..114 tests/test_iter115_arch_pipeline.py -q. Architecture endpoint returns exactly 11 stages in fixed diagram order — do NOT reorder. Posture consensus.votes is a DICT keyed by agent name (trend/structure/forecast/quant/liquidity/macro) not a list. news_ai / calendar_intel / monte_carlo / explanation may legitimately be null on any given cycle (documented in review). EA file served from both /api/ea-script and /api/bridge/download-ea (same handler)."
+}

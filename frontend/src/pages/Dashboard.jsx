@@ -13,6 +13,7 @@ import { MacroClimate } from "@/components/MacroClimate";
 import { DiagnosticModal } from "@/components/DiagnosticModal";
 import BotPulsePanel from "@/components/BotPulsePanel";
 import MarketPosture from "@/components/MarketPosture";
+import ArchitecturePipeline from "@/components/ArchitecturePipeline";
 import BotWatching from "@/components/BotWatching";
 import CooldownPanel from "@/components/CooldownPanel";
 import RiskGaugePanel from "@/components/RiskGaugePanel";
@@ -503,6 +504,7 @@ export default function Dashboard() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="dashboard-error">{err}</div>}
 
                 <MarketPosture />
+                <ArchitecturePipeline />
 
                 <BotPulsePanel />
 
