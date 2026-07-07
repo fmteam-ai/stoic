@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -110,6 +110,27 @@ export default function MarketPosture() {
                                 {s.structure.acc_dist ? ` · ${s.structure.acc_dist.phase.toLowerCase()}` : ""}
                                 {(s.structure.unfilled_fvg || []).length > 0 ? ` · ${s.structure.unfilled_fvg.length} open FVG` : ""}</>
                             : <span className="text-[#52525B]">{s.structure?.reason || "waiting for M15 candles (EA v1.42)"}</span>}
+                    </AgentRow>
+
+                    <AgentRow icon={Layers} color="#E879F9" label="LIQUIDITY" testid={`posture-liquidity-${sym}`}>
+                        {s.liquidity?.ready
+                            ? <>{s.liquidity.draw
+                                    ? <>Draw on liquidity: <strong style={{ color: s.liquidity.draw === "UP" ? "#00FF41" : "#FF3B30" }}>{s.liquidity.draw}</strong></>
+                                    : "No dominant liquidity pull"}
+                                {s.liquidity.nearest_above ? ` · buy-stops @ ${s.liquidity.nearest_above.level} (×${s.liquidity.nearest_above.strength})` : ""}
+                                {s.liquidity.nearest_below ? ` · sell-stops @ ${s.liquidity.nearest_below.level} (×${s.liquidity.nearest_below.strength})` : ""}
+                                {s.liquidity.active_zone
+                                    ? <> · in <strong style={{ color: s.liquidity.active_zone === "DEMAND" ? "#00FF41" : "#FF3B30" }}>{s.liquidity.active_zone} block</strong></>
+                                    : ""}
+                                {(s.liquidity.order_blocks || []).length > 0 ? ` · ${s.liquidity.order_blocks.length} unmitigated OB` : ""}
+                                {s.liquidity.profile ? ` · POC ${s.liquidity.profile.poc}` : ""}
+                                {s.liquidity.cum_delta ? ` · delta ${s.liquidity.cum_delta.bias.toLowerCase()}${s.liquidity.cum_delta.divergence ? ` (${s.liquidity.cum_delta.divergence.replace(/_/g, " ").toLowerCase()})` : ""}` : ""}
+                                <span className="block font-mono text-[10px] mt-0.5" style={{ color: s.liquidity.dom?.live ? "#E879F9" : "#52525B" }} data-testid={`posture-dom-${sym}`}>
+                                    {s.liquidity.dom?.live
+                                        ? `DOM LIVE: book ${s.liquidity.dom.imbalance > 0 ? "+" : ""}${Math.round(s.liquidity.dom.imbalance * 100)}% ${s.liquidity.dom.imbalance >= 0 ? "bid" : "ask"}-heavy · walls ${s.liquidity.dom.wall_bid ? `bid ${s.liquidity.dom.wall_bid.p}` : ""}${s.liquidity.dom.wall_ask ? ` / ask ${s.liquidity.dom.wall_ask.p}` : ""}`
+                                        : "DOM offline — EA v1.43 streams the order book where the broker provides one"}
+                                </span></>
+                            : <span className="text-[#52525B]">{s.liquidity?.reason || "waiting for M15 candles (EA v1.43)"}</span>}
                     </AgentRow>
 
                     <AgentRow icon={Cpu} color="#06B6D4" label="QUANT" testid={`posture-quant-${sym}`}>

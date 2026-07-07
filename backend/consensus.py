@@ -1,18 +1,19 @@
 """iter-63 · Master Agent — weighted consensus across all agents.
 
 Combines every agent's view of a candidate trade into one 0-100 score:
-  trend (MTF tiers)    25%
-  quant (conf + RL)    25%
-  structure (SMC)      20%
-  forecast (Chronos)   20%
-  macro (Fed + tape)   10%
+  trend (MTF tiers)      20%
+  quant (conf + RL)      20%
+  structure (SMC)        15%
+  forecast (Chronos)     20%
+  liquidity (order flow) 15%
+  macro (Fed + tape)     10%
 50 = neutral. The Risk agent is intentionally NOT in the score — its rules
 (loss cooldown, payoff guard, EOD quiet, …) stay hard gates.
 A trade only fires when score ≥ `consensus_threshold` (default 55) unless
 `consensus_gate_mode` is advisory/off."""
 
-WEIGHTS = {"trend": 0.25, "quant": 0.25, "structure": 0.20,
-           "forecast": 0.20, "macro": 0.10}
+WEIGHTS = {"trend": 0.20, "quant": 0.20, "structure": 0.15,
+           "forecast": 0.20, "liquidity": 0.15, "macro": 0.10}
 DEFAULT_THRESHOLD = 55
 
 
@@ -77,6 +78,30 @@ def compute_consensus(signal: dict) -> dict:
     if bayes.get("n", 0) >= 8 and bayes.get("ev_r") is not None:
         qv += _clip(bayes["ev_r"]) * 0.4
     votes["quant"] = round(_clip(qv), 2)
+
+    lm = signal.get("liquidity") or {}
+    lv = 0.0
+    if lm.get("ready"):
+        draw = lm.get("draw")
+        if draw == "UP":
+            lv += 0.6 if action == "BUY" else -0.6
+        elif draw == "DOWN":
+            lv += 0.6 if action == "SELL" else -0.6
+        zone = lm.get("active_zone")
+        if zone == "DEMAND":
+            lv += 0.4 if action == "BUY" else -0.4
+        elif zone == "SUPPLY":
+            lv += 0.4 if action == "SELL" else -0.4
+        delta = (lm.get("cum_delta") or {}).get("bias")
+        if delta == "BULLISH":
+            lv += 0.3 if action == "BUY" else -0.3
+        elif delta == "BEARISH":
+            lv += 0.3 if action == "SELL" else -0.3
+        dom = lm.get("dom") or {}
+        imb = dom.get("imbalance")
+        if dom.get("live") and imb is not None and abs(imb) >= 0.25:
+            lv += 0.3 if (imb > 0) == (action == "BUY") else -0.3
+    votes["liquidity"] = round(_clip(lv), 2)
 
     mv = 0.0
     tone_score = float((signal.get("fed_tone") or {}).get("score") or 0)

@@ -89,6 +89,15 @@ async def market_posture(user=Depends(get_current_user)):
                           "bars_n": 0}
         except Exception as e:
             logger.debug("posture structure failed: %s", e)
+        lmap = None
+        try:
+            from liquidity_map import build_liquidity_map
+            dom_doc = await db.dom_snapshots.find_one(
+                {"user_id": uid, "symbol": base})
+            lmap = build_liquidity_map((cdoc or {}).get("bars") or [],
+                                       dom_doc=dom_doc)
+        except Exception as e:
+            logger.debug("posture liquidity failed: %s", e)
         cons = None
         bayes_out = None
         try:
@@ -98,6 +107,7 @@ async def market_posture(user=Depends(get_current_user)):
             pol = await get_policy(db, uid)
             bmodel = await _get_bayes(db, uid)
             ctx = {"mtf_tiers": sig.get("mtf_tiers"), "market_structure": struct,
+                   "liquidity": lmap,
                    "forecast": fc, "fed_tone": fed if base == "XAUUSD" else None,
                    "confidence": sig.get("confidence"),
                    "intraday_momentum": sig.get("intraday_momentum"),
@@ -122,6 +132,7 @@ async def market_posture(user=Depends(get_current_user)):
             "structure": struct or sig.get("market_structure")
                          or {"ready": False, "reason": "no data", "bars_n": 0},
             "range_forecast": sig.get("range_forecast"),
+            "liquidity": lmap,
             "forecast": fc,
             "consensus": cons,
             "bayes": bayes_out,

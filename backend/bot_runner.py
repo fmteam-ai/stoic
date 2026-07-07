@@ -775,6 +775,32 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "fed_tone_veto")
                     continue
 
+            # iter-105 · Liquidity Mapping agent — order blocks, stop clusters,
+            # volume profile, cumulative delta, DOM (EA v1.43). Fail-open.
+            lmap = None
+            try:
+                from liquidity_map import build_liquidity_map, liquidity_gate
+                dom_doc = await db.dom_snapshots.find_one(
+                    {"user_id": user_id, "symbol": _base})
+                lmap = build_liquidity_map(
+                    (cdoc or {}).get("bars") or [],
+                    price=signal.get("entry_price"), dom_doc=dom_doc)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("liquidity map skipped: %s", e)
+            if lmap:
+                signal["liquidity"] = lmap
+                lg = liquidity_gate(signal["action"], lmap,
+                                    signal.get("entry_price"))
+                if lg:
+                    lq_mode = str(cfg.get("liquidity_gate_mode")
+                                  or "enforce").lower()
+                    if lq_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=lg)
+                        await inc_intel_counter(user_id, "liquidity_gate_veto")
+                        continue
+                    signal["liquidity_advisory"] = lg
+
         # iter-61 · Offline RL policy gate — distributional Q-values learned
         # from the user's real trades (reward = PnL − λ·loss − μ·drawdown).
         # advisory (default): annotate only · enforce: BLOCK skips, SCALE halves lot.

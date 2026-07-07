@@ -428,6 +428,42 @@ async def receive_candles(payload: BridgeCandles):
     return {"status": "ok", "stored": len(bars)}
 
 
+class BridgeDom(BaseModel):
+    bridge_token: str
+    symbol: str
+    bids: list = []
+    asks: list = []
+
+
+@router.post("/dom")
+async def receive_dom(payload: BridgeDom):
+    """EA v1.43 — Depth of Market snapshot for the Liquidity Mapping agent."""
+    db = get_db()
+    account = await _account_by_token(payload.bridge_token)
+    base = base_symbol(payload.symbol)
+
+    def _rows(rows):
+        out = []
+        for r in (rows or [])[:25]:
+            try:
+                out.append({"p": float(r["p"]), "v": float(r["v"])})
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
+
+    bids, asks = _rows(payload.bids), _rows(payload.asks)
+    if not bids and not asks:
+        return {"status": "ok", "stored": 0}
+    await db.dom_snapshots.update_one(
+        {"user_id": account["user_id"], "symbol": base},
+        {"$set": {"bids": bids, "asks": asks,
+                  "source_symbol": payload.symbol,
+                  "account_id": str(account["_id"]),
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    return {"status": "ok", "stored": len(bids) + len(asks)}
+
+
 @router.post("/poll-trades")
 async def poll_trades(payload: PollRequest):
     db = get_db()

@@ -113,6 +113,14 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Forecast payload has `distribution` + `quantile_levels/values`; scenarios shown in MarketPosture FORECAST row.
 - Tests: `tests/test_iter103_prob_forecast.py`.
 
+## Liquidity Mapping Agent (iter-105, June 2026 — DONE)
+- `liquidity_map.py`: institutional order-flow view from M15 candles + DOM — unmitigated order blocks (last opposing candle before displacement), stop clusters (equal highs/lows = pooled stops, swept-pool removal), FVGs (reused), volume profile (POC/VAH/VAL, 70% VA), cumulative delta proxy (CLV×vol, divergence flags), draw-on-liquidity magnet (strength/distance-weighted pull).
+- **EA v1.43**: `MarketBookAdd(_Symbol)` at init, `SendDom()` every DomSeconds (30s) → `POST /api/bridge/dom` → `dom_snapshots` collection (per user/symbol, 16 levels/side). Degrades gracefully when broker gives no DOM. RoboForex + OnEquity both provide DOM for XAUUSD.
+- `liquidity_gate`: vetoes BUY inside unmitigated SUPPLY OB / SELL inside DEMAND OB / trades into ≥60% opposing book imbalance. `liquidity_gate_mode` default **enforce** (advisory = annotate only). Counter: liquidity_gate_veto. Signal field `liquidity`.
+- Consensus reweighted: trend 20 / quant 20 / structure 15 / forecast 20 / **liquidity 15** / macro 10.
+- Posture returns per-symbol `liquidity`; LIQUIDITY AgentRow in MarketPosture.jsx (draw, stops, active zone, OBs, POC, delta, DOM live/offline strip).
+- Tests: `tests/test_iter105_liquidity_map.py` (13 passed). Live: XAUUSD draw DOWN, 2 OBs, 3 clusters, liquidity vote in both consensus scores.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

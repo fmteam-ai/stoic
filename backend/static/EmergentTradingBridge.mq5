@@ -143,15 +143,24 @@
 //|         window (dispatch locks auto-expire). Heartbeats and       |
 //|         history sync continue (data-only, no orders).             |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v1.43 — Depth of Market feed. Subscribes to the broker's order    |
+//|         book (MarketBookAdd) and streams bid/ask depth to STOIC   |
+//|         every DomSeconds (30s) for the Liquidity Mapping agent    |
+//|         (resting liquidity, walls, book imbalance). Degrades      |
+//|         gracefully: if the broker provides no DOM for the symbol  |
+//|         (common on CFD feeds) nothing is sent and the agent maps  |
+//|         liquidity from candles alone.                             |
+//+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.42"
+#property version   "1.43"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.42"
+#define EA_CLIENT_VERSION "1.43"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -173,7 +182,13 @@ input string EodQuietEnd            = "00:05";  // broker server time
 // EA v1.42 · M15 candle feed interval for the Market Structure agent.
 input int    CandlesSeconds         = 300;
 
+// EA v1.43 · Depth of Market feed for the Liquidity Mapping agent.
+input bool   DomEnabled             = true;
+input int    DomSeconds             = 30;
+
 datetime _last_candles_sent    = 0;
+datetime _last_dom_sent        = 0;
+bool     _dom_subscribed       = false;
 datetime lastPoll              = 0;
 datetime lastHistorySweep      = 0;
 datetime lastReportedDealTime  = 0;   // high-watermark — never re-push deals older than this
@@ -244,12 +259,17 @@ int OnInit() {
    _ea_boot_time = TimeCurrent();
    // EA v1.36: resolve token from inputs OR auto-installer drop file.
    EffectiveToken = ResolveBridgeToken();
+   // EA v1.43: subscribe to the broker's order book (no-op if unsupported).
+   if (DomEnabled) _dom_subscribed = MarketBookAdd(_Symbol);
    Print("STOIC Bridge EA v", EA_CLIENT_VERSION, " started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
 
-void OnDeinit(const int reason) { EventKillTimer(); }
+void OnDeinit(const int reason) {
+   EventKillTimer();
+   if (_dom_subscribed) MarketBookRelease(_Symbol);
+}
 
 //+------------------------------------------------------------------+
 //| EA v1.41 — End-of-Day quiet window helpers.                       |
@@ -294,6 +314,11 @@ void OnTimer() {
       SendCandles();
       _last_candles_sent = TimeCurrent();
    }
+   // EA v1.43 — Depth of Market feed for the Liquidity Mapping agent.
+   if (_dom_subscribed && TimeCurrent() - _last_dom_sent >= DomSeconds) {
+      SendDom();
+      _last_dom_sent = TimeCurrent();
+   }
    // Autonomous history sweep — at most once every HistorySweepSeconds so
    // we don't bombard the server with redundant /external-deal calls.
    if (TimeCurrent() - lastHistorySweep >= HistorySweepSeconds) {
@@ -323,6 +348,38 @@ void SendCandles() {
       "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M15\",\"bars\":%s}",
       EffectiveToken, _Symbol, bars);
    HttpPost(ServerUrl + "/api/bridge/candles", body);
+}
+
+//+------------------------------------------------------------------+
+//| EA v1.43 — stream the broker's live order book (Depth of Market)  |
+//| to STOIC. The Liquidity Mapping agent uses it to detect bid/ask   |
+//| walls and book imbalance. Silently no-ops when the broker gives   |
+//| no DOM for the symbol.                                            |
+//+------------------------------------------------------------------+
+void SendDom() {
+   MqlBookInfo book[];
+   if (!MarketBookGet(_Symbol, book)) return;
+   int n = ArraySize(book);
+   if (n < 2) return;
+   string bids = "", asks = "";
+   int nb = 0, na = 0;
+   for (int i = 0; i < n; i++) {
+      double vol = (book[i].volume_real > 0) ? book[i].volume_real
+                                             : (double)book[i].volume;
+      string row = StringFormat("{\"p\":%.5f,\"v\":%.2f}", book[i].price, vol);
+      if ((book[i].type == BOOK_TYPE_BUY || book[i].type == BOOK_TYPE_BUY_MARKET) && nb < 16) {
+         if (nb > 0) bids += ",";
+         bids += row; nb++;
+      } else if ((book[i].type == BOOK_TYPE_SELL || book[i].type == BOOK_TYPE_SELL_MARKET) && na < 16) {
+         if (na > 0) asks += ",";
+         asks += row; na++;
+      }
+   }
+   if (nb == 0 && na == 0) return;
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"bids\":[%s],\"asks\":[%s]}",
+      EffectiveToken, _Symbol, bids, asks);
+   HttpPost(ServerUrl + "/api/bridge/dom", body);
 }
 
 //+------------------------------------------------------------------+
