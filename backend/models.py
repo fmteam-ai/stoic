@@ -167,6 +167,9 @@ class BotConfigUpdate(BaseModel):
     rl_policy_mode: str = "advisory"
     # Chronos forecast gate (iter-62): off | advisory | enforce
     forecast_gate_mode: str = "advisory"
+    # Master Agent consensus (iter-63): off | advisory | enforce
+    consensus_gate_mode: str = "enforce"
+    consensus_threshold: int = 55
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.

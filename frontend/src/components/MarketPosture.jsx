@@ -83,6 +83,23 @@ export default function MarketPosture() {
                         <span className="font-display font-bold text-sm">{sym}</span>
                         <span className="font-mono text-[10px] text-[#A1A1AA]">{s.regime || ""}</span>
                         {["SHORT", "MEDIUM", "LONG"].map(n => <TierPill key={n} name={n === "SHORT" ? "WEEK" : n === "MEDIUM" ? "MONTH" : "QTR"} tier={s.tiers?.[n]} />)}
+                        {s.consensus && (
+                            <span className="ml-auto flex items-center gap-2 font-mono text-[11px]" data-testid={`posture-consensus-${sym}`}>
+                                <span className="text-[#52525B] text-[9px] tracking-widest">MASTER CONSENSUS</span>
+                                {["BUY", "SELL"].map(a => {
+                                    const sc = s.consensus[a]?.score;
+                                    const col = sc >= 70 ? "#00FF41" : sc >= 55 ? "#FFB000" : "#52525B";
+                                    return (
+                                        <span key={a} className="px-1.5 py-0.5 border"
+                                              style={{ borderColor: `${col}55`, color: col }}
+                                              title={s.consensus[a] ? Object.entries(s.consensus[a].votes).map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`).join(" · ") : ""}>
+                                            {a} {sc}
+                                        </span>
+                                    );
+                                })}
+                                <span className="text-[#52525B] text-[9px]">≥55 to trade</span>
+                            </span>
+                        )}
                     </div>
 
                     <AgentRow icon={LineChart} color="#00FF41" label="STRUCTURE" testid={`posture-structure-${sym}`}>

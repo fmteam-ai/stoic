@@ -58,6 +58,12 @@ async def market_posture(user=Depends(get_current_user)):
     now = datetime.now(timezone.utc)
 
     symbols = {}
+    fed = None
+    try:
+        from fed_tone import get_fed_tone
+        fed = await get_fed_tone()
+    except Exception as e:
+        logger.warning("posture fed tone failed: %s", e)
     cfgs = await db.bot_configs.find({"user_id": uid, "active": True}).to_list(20)
     traded = sorted({base_symbol(s) for c in cfgs for s in (c.get("symbols") or ["XAUUSD"])}) or ["XAUUSD"]
 
@@ -83,6 +89,23 @@ async def market_posture(user=Depends(get_current_user)):
                           "bars_n": 0}
         except Exception as e:
             logger.debug("posture structure failed: %s", e)
+        cons = None
+        try:
+            from consensus import compute_consensus
+            from rl_policy import get_policy, rl_decision
+            pol = await get_policy(db, uid)
+            ctx = {"mtf_tiers": sig.get("mtf_tiers"), "market_structure": struct,
+                   "forecast": fc, "fed_tone": fed if base == "XAUUSD" else None,
+                   "confidence": sig.get("confidence"),
+                   "intraday_momentum": sig.get("intraday_momentum"),
+                   "session": sig.get("session"), "regime": sig.get("regime")}
+            cons = {}
+            for a in ("BUY", "SELL"):
+                s2 = {**ctx, "action": a}
+                s2["rl_policy"] = rl_decision(pol, s2, base)
+                cons[a] = compute_consensus(s2)
+        except Exception as e:
+            logger.debug("posture consensus failed: %s", e)
         symbols[base] = {
             "action": sig.get("action"),
             "confidence": sig.get("confidence"),
@@ -94,6 +117,7 @@ async def market_posture(user=Depends(get_current_user)):
                          or {"ready": False, "reason": "no data", "bars_n": 0},
             "range_forecast": sig.get("range_forecast"),
             "forecast": fc,
+            "consensus": cons,
             "active_vetoes": vetoes[-4:],
             "unlock_hints": _unlock_hints(sig),
             "signal_at": str(sig.get("created_at") or ""),
@@ -106,12 +130,6 @@ async def market_posture(user=Depends(get_current_user)):
         macro = await get_macro_snapshot()
     except Exception as e:
         logger.warning("posture macro failed: %s", e)
-    fed = None
-    try:
-        from fed_tone import get_fed_tone
-        fed = await get_fed_tone()
-    except Exception as e:
-        logger.warning("posture fed tone failed: %s", e)
 
     # Risk agent state
     rl = None

@@ -822,6 +822,27 @@ async def _process_user_account_locked(db, cfg: dict):
                         await inc_intel_counter(user_id, "forecast_gate_block")
                         continue
 
+        # iter-63 · Master Agent consensus — weighted vote across all agents
+        # (trend/quant/structure/forecast/macro). Trade fires only when the
+        # score clears `consensus_threshold` (default 55; mode default enforce).
+        if signal.get("action") in ("BUY", "SELL"):
+            from consensus import compute_consensus, DEFAULT_THRESHOLD
+            cons = compute_consensus(signal)
+            signal["consensus"] = cons
+            c_mode = str(cfg.get("consensus_gate_mode") or "enforce").lower()
+            c_thr = int(cfg.get("consensus_threshold") or DEFAULT_THRESHOLD)
+            if cons["score"] < c_thr and c_mode != "off":
+                await inc_intel_counter(user_id, "consensus_low")
+                if c_mode == "enforce":
+                    detail = ", ".join(f"{k} {v:+.1f}" for k, v in cons["votes"].items())
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn",
+                        reason=(f"Master Agent consensus {cons['score']}/100 "
+                                f"({cons['verdict']}) below threshold {c_thr} — "
+                                f"votes: {detail}."))
+                    await inc_intel_counter(user_id, "consensus_block")
+                    continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
