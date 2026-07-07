@@ -18,6 +18,35 @@ from datetime import datetime, timezone
 INTRADAY_COUNTER_MOMENTUM_PCT = 0.4          # gold / indices
 INTRADAY_COUNTER_MOMENTUM_PCT_CRYPTO = 1.0   # BTC is noisier
 
+# iter-59 · SHORT-tier (last ~week) momentum strength above which fading it
+# is forbidden. Shadow-tested 14d: blocks 226 fades netting -$1,044
+# (14d total -$439 → +$604; 2026-07-07 session -$815 → +$35). Weaker
+# counter-SHORT fades stay allowed — they were net profitable.
+SHORT_TIER_FADE_MAX_SLOPE_PCT = 1.0
+
+
+def short_tier_momentum_veto(action: str, mtf_tiers: dict,
+                             threshold: float = SHORT_TIER_FADE_MAX_SLOPE_PCT) -> str | None:
+    """Veto trades fading a STRONGLY directional SHORT tier (V-recovery
+    failure mode: MEDIUM/LONG SMAs stay bearish for weeks after a reversal,
+    so the 2-of-3 MTF vote keeps approving SELLs into a fresh rally)."""
+    if action not in ("BUY", "SELL"):
+        return None
+    sh = (mtf_tiers or {}).get("SHORT") or {}
+    slope = sh.get("sma_fast_slope_pct")
+    if slope is None:
+        return None
+    slope = float(slope)
+    if action == "SELL" and slope >= threshold:
+        return (f"SHORT-tier momentum veto: last-week trend is strongly UP "
+                f"(fast-SMA slope {slope:+.2f}% ≥ {threshold}%) — SELL would fade "
+                f"a fresh rally the slower tiers haven't caught up to. Vetoed.")
+    if action == "BUY" and slope <= -threshold:
+        return (f"SHORT-tier momentum veto: last-week trend is strongly DOWN "
+                f"(fast-SMA slope {slope:+.2f}% ≤ -{threshold}%) — BUY would fade "
+                f"a fresh selloff the slower tiers haven't caught up to. Vetoed.")
+    return None
+
 
 def payoff_guard_apply(signal: dict, cfg: dict) -> dict | None:
     """Evaluate the SL/TP1 payoff ratio of a signal.

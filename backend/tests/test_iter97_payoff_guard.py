@@ -95,6 +95,38 @@ class TestIntradayCounterMomentum:
         assert intraday_counter_momentum("SELL", "XAUUSD", 4143.0, [], today="2026-07-06") == (None, None)
 
 
+class TestShortTierMomentumVeto:
+    def _tiers(self, slope, rsi=70):
+        return {"SHORT": {"direction": "UP" if slope > 0 else "DOWN",
+                          "sma_fast_slope_pct": slope, "rsi": rsi}}
+
+    def test_sell_vetoed_on_strong_weekly_rally(self):
+        from payoff_guard import short_tier_momentum_veto
+        r = short_tier_momentum_veto("SELL", self._tiers(1.42))
+        assert r is not None and "fresh rally" in r
+
+    def test_sell_allowed_on_weak_up_slope(self):
+        from payoff_guard import short_tier_momentum_veto
+        assert short_tier_momentum_veto("SELL", self._tiers(0.6)) is None
+
+    def test_buy_vetoed_on_strong_weekly_selloff(self):
+        from payoff_guard import short_tier_momentum_veto
+        assert short_tier_momentum_veto("BUY", self._tiers(-1.3)) is not None
+
+    def test_buy_allowed_with_rally(self):
+        from payoff_guard import short_tier_momentum_veto
+        assert short_tier_momentum_veto("BUY", self._tiers(1.42)) is None
+
+    def test_missing_tiers_no_veto(self):
+        from payoff_guard import short_tier_momentum_veto
+        assert short_tier_momentum_veto("SELL", {}) is None
+        assert short_tier_momentum_veto("SELL", {"SHORT": {}}) is None
+
+    def test_hold_no_veto(self):
+        from payoff_guard import short_tier_momentum_veto
+        assert short_tier_momentum_veto("HOLD", self._tiers(2.0)) is None
+
+
 class TestWiring:
     def test_bot_runner_payoff_guard(self):
         src = open(os.path.join(BACKEND, "bot_runner.py")).read()
@@ -106,3 +138,5 @@ class TestWiring:
         assert "intraday_counter_momentum" in src
         assert "VETO (intraday-momentum)" in src
         assert '"intraday_momentum"' in src
+        assert "short_tier_momentum_veto" in src
+        assert "VETO (short-tier-momentum)" in src

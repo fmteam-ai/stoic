@@ -629,10 +629,19 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # from DAILY bars and can't see today's session. Blocks trades fighting a
     # strong intraday move vs yesterday's close (2026-07-06: 147/147 SELLs
     # while gold rallied +0.8% intraday).
-    from payoff_guard import intraday_counter_momentum
+    from payoff_guard import intraday_counter_momentum, short_tier_momentum_veto
     intraday_veto, intraday_change_pct = intraday_counter_momentum(
         final_action, symbol, current_price, history)
     if intraday_veto:
+        final_action = "HOLD"
+
+    # 12. SHORT-tier momentum veto (iter-59) — V-recovery failure mode: the
+    # MEDIUM/LONG tiers stay bearish for weeks after a sharp reversal, so the
+    # 2-of-3 vote keeps approving fades of a fresh strong rally. When the
+    # last-week trend is strongly directional (|slope| ≥ 1%), fading it is
+    # forbidden regardless of the slower tiers.
+    short_tier_veto = short_tier_momentum_veto(final_action, mtf_tiers)
+    if short_tier_veto:
         final_action = "HOLD"
 
     # Kelly-modified position sizing — use regime-adapted profile
@@ -668,6 +677,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         reasoning = f"{reasoning}\n\nVETO (DXY gate): {dxy_veto}"
     if intraday_veto:
         reasoning = f"{reasoning}\n\nVETO (intraday-momentum): {intraday_veto}"
+    if short_tier_veto:
+        reasoning = f"{reasoning}\n\nVETO (short-tier-momentum): {short_tier_veto}"
     if self_contra_veto:
         reasoning = f"{reasoning}\n\nVETO (self-contradiction): {self_contra_veto}"
 
@@ -721,10 +732,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "dxy_gate": dxy_gate,
         "intraday_momentum": {"change_pct": intraday_change_pct,
                               "veto": bool(intraday_veto)},
+        "short_tier_momentum_veto": bool(short_tier_veto),
         "liquidity_window": liquidity_window,
         "key_factors": parsed.get("key_factors", []),
         "min_confidence_required": adapted_profile["min_confidence"],
-        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(self_contra_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto) or bool(dxy_veto) or bool(intraday_veto),
+        "veto_applied": bool(veto_reason) or bool(regime_veto) or bool(self_contra_veto) or bool(macro_veto) or bool(entropy_veto) or bool(meta_veto) or bool(mtf_veto) or bool(learned_veto) or bool(aplus_veto) or bool(rr_veto) or bool(dxy_veto) or bool(intraday_veto) or bool(short_tier_veto),
         "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }
