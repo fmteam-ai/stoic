@@ -439,6 +439,20 @@ async def _process_user_account_locked(db, cfg: dict):
                         user_id, cfg_account_id or "default",
                         pick["preset_key"], pick["reason"])
 
+    # iter-109 · Meta-Learning strategy switcher — bandit over presets scored
+    # on the user's own recent trades. Overrides auto_preset when enabled.
+    if cfg.get("meta_strategy_enabled"):
+        try:
+            from meta_strategy import apply_meta_strategy
+            cfg, _meta_info = await apply_meta_strategy(db, user_id, cfg)
+            if _meta_info and _meta_info["switched"]:
+                await _record_pulse(db, cfg, symbol="*", action="ADAPT",
+                    level="info",
+                    reason=f"Meta-strategy: {_meta_info['reason']}")
+                await inc_intel_counter(user_id, "meta_strategy_switch")
+        except Exception as e:  # noqa: BLE001
+            logger.exception("meta strategy failed user=%s: %s", user_id, e)
+
     max_concurrent = int(cfg.get("max_concurrent_trades", 3))
     max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
@@ -774,6 +788,15 @@ async def _process_user_account_locked(db, cfg: dict):
                         action="SKIP", level="warn", reason=fg)
                     await inc_intel_counter(user_id, "fed_tone_veto")
                     continue
+                # iter-109 · Causal AI — structural transmission chain
+                # (inflation → yields → real yields → USD → gold).
+                try:
+                    from causal_model import build_causal_view
+                    from macro_feeds import get_macro_snapshot
+                    signal["causal"] = build_causal_view(
+                        await get_macro_snapshot(), tone)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("causal model skipped: %s", e)
 
             # iter-105 · Liquidity Mapping agent — order blocks, stop clusters,
             # volume profile, cumulative delta, DOM (EA v1.43). Fail-open.
@@ -999,6 +1022,8 @@ async def _process_user_account_locked(db, cfg: dict):
                     continue
 
         signal["user_id"] = user_id
+        if cfg.get("meta_strategy_active"):
+            signal["meta_strategy"] = cfg["meta_strategy_active"]
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
         signal["consumed"] = False
@@ -1426,6 +1451,16 @@ async def loop():
                 await sweep_event_outcomes(db)
             except Exception as e:
                 logger.exception("Calendar intel outcome sweep failed: %s", e)
+            # Online Learning (iter-109) — continuous retraining: ML ensemble,
+            # RL policy and Bayes retrain after every few closed trades or
+            # hourly with fresh data. Self-throttled to 1 sweep/10min.
+            try:
+                from online_learning import sweep_online_learning
+                n_retrained = await sweep_online_learning(db)
+                if n_retrained:
+                    logger.info("Online learning retrained %d user(s)", n_retrained)
+            except Exception as e:
+                logger.exception("Online learning sweep failed: %s", e)
             # Friday Flat guard (iter-52) — close/tighten open positions ahead
             # of the Friday 21:00 UTC weekly close (weekend gap protection).
             try:

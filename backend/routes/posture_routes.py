@@ -111,6 +111,14 @@ async def market_posture(user=Depends(get_current_user)):
                 db, base, (cdoc or {}).get("bars") or [], lmap)
         except Exception as e:
             logger.debug("posture calendar intel failed: %s", e)
+        causal = None
+        if base == "XAUUSD":
+            try:
+                from causal_model import build_causal_view
+                from macro_feeds import get_macro_snapshot
+                causal = build_causal_view(await get_macro_snapshot(), fed)
+            except Exception as e:
+                logger.debug("posture causal failed: %s", e)
         cons = None
         bayes_out = None
         ml_out = None
@@ -122,7 +130,7 @@ async def market_posture(user=Depends(get_current_user)):
             pol = await get_policy(db, uid)
             bmodel = await _get_bayes(db, uid)
             ctx = {"mtf_tiers": sig.get("mtf_tiers"), "market_structure": struct,
-                   "liquidity": lmap, "news_ai": news_ai,
+                   "liquidity": lmap, "news_ai": news_ai, "causal": causal,
                    "forecast": fc, "fed_tone": fed if base == "XAUUSD" else None,
                    "confidence": sig.get("confidence"),
                    "intraday_momentum": sig.get("intraday_momentum"),
@@ -156,6 +164,7 @@ async def market_posture(user=Depends(get_current_user)):
             "liquidity": lmap,
             "news_ai": news_ai,
             "calendar_intel": cal_pred,
+            "causal": causal,
             "forecast": fc,
             "consensus": cons,
             "bayes": bayes_out,
@@ -190,6 +199,13 @@ async def market_posture(user=Depends(get_current_user)):
 
     guards = await db.auto_guards.find(
         {"user_id": uid, "active": True}).to_list(10)
+    meta_strat = None
+    try:
+        from meta_strategy import posture_summary
+        meta_strat = await posture_summary(db, uid)
+    except Exception as e:
+        logger.debug("posture meta strategy failed: %s", e)
+    online = await db.online_learning.find_one({"user_id": uid}, {"_id": 0})
     cutoff = (now - timedelta(minutes=30)).isoformat()
     recent_losses = await db.trades.count_documents(
         {"user_id": uid, "status": "closed", "pnl": {"$lt": 0},
@@ -227,4 +243,6 @@ async def market_posture(user=Depends(get_current_user)):
         },
         "today_expectancy": expectancy,
         "rl_policy": rl,
+        "meta_strategy": meta_strat,
+        "online_learning": online,
     }

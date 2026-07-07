@@ -117,6 +117,10 @@ def compute_consensus(signal: dict) -> dict:
     net = news.get("net")
     if net is not None and abs(float(net)) >= 0.75:   # AI news read (-3..+3)
         mv += 0.5 if (float(net) > 0) == (action == "BUY") else -0.5
+    cz = signal.get("causal") or {}
+    pz = cz.get("pressure")
+    if pz is not None and abs(float(pz)) >= 0.35:     # causal chain pressure
+        mv += 0.4 if (float(pz) > 0) == (action == "BUY") else -0.4
     votes["macro"] = round(_clip(mv), 2)
 
     total = sum(WEIGHTS[k] * votes[k] for k in WEIGHTS)

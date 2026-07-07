@@ -174,6 +174,17 @@ class BotConfigUpdate(BaseModel):
     prob_forecast_mode: str = "advisory"
     # Bayesian decision gate (iter-65): off | advisory | enforce
     bayes_gate_mode: str = "advisory"
+    # Stacked ML ensemble (iter-108): off | advisory | enforce
+    ml_ensemble_mode: str = "advisory"
+    # Liquidity Mapping gate (iter-105): advisory | enforce
+    liquidity_gate_mode: str = "enforce"
+    # AI News Understanding gate (iter-106): advisory | enforce
+    news_gate_mode: str = "enforce"
+    # Calendar Intelligence gate (iter-107): advisory | enforce
+    calendar_intel_mode: str = "enforce"
+    # Meta-Learning strategy switcher (iter-109) — bandit picks the preset
+    # that is actually winning right now; auto-switches when it stops.
+    meta_strategy_enabled: bool = False
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.

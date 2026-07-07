@@ -146,6 +146,13 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - Deps added: scikit-learn, lightgbm, catboost (xgboost was present). requirements.txt frozen.
 - Tests: `tests/test_iter108_ml_ensemble.py` (7 passed). Live on 405 real trades: XGBoost AUC .596→w .386, CatBoost .516→w .064; BUY p_win .711 (5 members), SELL .664 (7 members).
 
+## Meta-Learning + Online Learning + Causal AI (iter-109, June 2026 — DONE)
+- **Meta-Learning** (`meta_strategy.py`): multi-armed bandit over strategy presets (trend_rider/scalper/mean_reversion/breakout/sniper/balanced). Score = recency-weighted mean R (half-life 10 trades) + UCB exploration bonus. Switches when active strategy loses ≥3 of last 5 AND better arm exists, or an alt beats it by 0.10 margin. Opt-in `meta_strategy_enabled` (models.py); overlays preset config in bot_runner (after auto_preset, overrides it); stamps `signal.meta_strategy` for attribution (trades→signals join). State in `bot_configs.meta_strategy_state`; switches logged to `meta_strategy_events` + pulse + counter meta_strategy_switch. Posture top-level `meta_strategy`.
+- **Online Learning** (`online_learning.py`): continuous retraining — ML ensemble + RL + Bayes retrain when ≥5 new closed trades OR ≥1 new trade + models >1h old (no new trades = no retrain). Sweep in bot_runner main loop, throttled 10min, state in `online_learning` collection. Posture top-level `online_learning`.
+- **Causal AI** (`causal_model.py`): structural causal graph for gold — inflation(T10YIE) → Fed tone → yields(DGS10) → REAL yields(DGS10−T10YIE) → USD(DTWEXBGS) → gold. Weekly deltas normalised by tanh/sigma; pressure = −0.5·real −0.35·usd −0.15·fed (−1..+1 bullish gold). Chain trace with active/confirms flags + narrative. Attached to XAUUSD signals in bot_runner fed-tone block; consensus macro vote ±0.4 when |pressure|≥0.35. CAUSAL AI AgentRow (XAUUSD only).
+- New config fields in models.py: ml_ensemble_mode, liquidity_gate_mode, news_gate_mode, calendar_intel_mode, meta_strategy_enabled.
+- Tests: `tests/test_iter109_meta_online_causal.py` (14 passed); 70 green across iter102-109. Live: causal chain traced from real FRED (pressure −0.09 NEUTRAL), meta bandit initialised.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

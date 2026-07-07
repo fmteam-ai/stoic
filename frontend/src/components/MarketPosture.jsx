@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -151,6 +151,17 @@ export default function MarketPosture() {
                             : <span className="text-[#52525B]">AI headline scoring warming up (Reuters / Bloomberg / FOMC / CPI / NFP)</span>}
                     </AgentRow>
 
+                    {s.causal && (
+                        <AgentRow icon={GitBranch} color="#F472B6" label="CAUSAL AI" testid={`posture-causal-${sym}`}>
+                            <strong style={{ color: s.causal.label === "BULLISH_GOLD" ? "#00FF41" : s.causal.label === "BEARISH_GOLD" ? "#FF3B30" : "#A1A1AA" }}>
+                                {s.causal.narrative}
+                            </strong>
+                            <span className="block font-mono text-[10px] text-[#F472B6] mt-0.5" data-testid={`posture-causal-chain-${sym}`}>
+                                {(s.causal.chain || []).filter(c => c.active).map(c => `${c.link} (${c.value})`).join("  →  ") || "all links quiet"}
+                            </span>
+                        </AgentRow>
+                    )}
+
                     <AgentRow icon={CalendarClock} color="#FB923C" label="CALENDAR INTEL" testid={`posture-calendar-${sym}`}>
                         {s.calendar_intel
                             ? <><strong>{s.calendar_intel.title}</strong>
@@ -265,6 +276,28 @@ export default function MarketPosture() {
                         {" "}<span className={data.rl_policy.negative_states > 0 ? "text-[#FFB000]" : ""}>{data.rl_policy.negative_states} reliably-losing setup{data.rl_policy.negative_states === 1 ? "" : "s"} identified</span>
                         {" "}(reward = return − risk − drawdown)</>
                     : <span className="text-[#52525B]">policy trains on the next bot cycle</span>}
+            </AgentRow>
+
+            <AgentRow icon={Shuffle} color="#34D399" label="META STRATEGY" testid="posture-meta-strategy">
+                {data.meta_strategy
+                    ? <>Bandit active: <strong className="uppercase">{data.meta_strategy.active?.replace(/_/g, " ")}</strong>
+                        {Object.entries(data.meta_strategy.scores || {}).slice(0, 3).map(([k, v]) =>
+                            ` · ${k.replace(/_/g, " ")} ${v.ucb} (${v.n})`).join("")}
+                        {(data.meta_strategy.recent_switches || []).length > 0 && (
+                            <span className="block font-mono text-[10px] text-[#34D399] mt-0.5">
+                                last switch: {data.meta_strategy.recent_switches[0].from || "—"} → {data.meta_strategy.recent_switches[0].to}
+                            </span>
+                        )}</>
+                    : <span className="text-[#52525B]">off — enable Meta-Learning to let the bandit pick the winning strategy automatically</span>}
+            </AgentRow>
+
+            <AgentRow icon={RefreshCw} color="#FCD34D" label="ONLINE LEARNING" testid="posture-online-learning">
+                {data.online_learning
+                    ? <>Models retrained <strong>{data.online_learning.retrain_count || 0}×</strong> continuously ·
+                        {" "}trigger: {data.online_learning.last_trigger || "—"} ·
+                        {" "}tracking {data.online_learning.n_trades || 0} closed trades
+                        {data.online_learning.last_trained ? ` · last run ${new Date(data.online_learning.last_trained).toLocaleTimeString()}` : ""}</>
+                    : <span className="text-[#52525B]">continuous retraining arms after the first closed trades</span>}
             </AgentRow>
         </div>
     );
