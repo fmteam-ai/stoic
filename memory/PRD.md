@@ -63,6 +63,11 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - NOTE: DB has 500+ stale INACTIVE bot_configs (test artifacts) — always filter `active: True`.
 - Tests: `tests/test_iter97_payoff_guard.py`.
 
+## Loss Cooldown (iter-58, June 2026 — DONE)
+- After ANY loss: block same base-symbol+direction re-entries for 30min across ALL accounts (`loss_cooldown.py`, cfg `loss_cooldown_enabled`/`loss_cooldown_minutes`, 0=off, counter `loss_cooldown_block`). Shadow-tested 14d: -$174 → +$7,429 (blocked 159 clustered re-entries, net -$7,603). Verified live via Bot Pulse.
+- Context: 5 correlated accounts fire the same signal every ~3min; anti-tilt is per-account (2 losses each) so one wrong read = 13 clustered losses before it bites.
+- Tests: `tests/test_iter98_loss_cooldown.py`.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

@@ -718,6 +718,18 @@ async def _process_user_account_locked(db, cfg: dict):
                 signal["payoff_guard"] = {"tightened": True, "reason": pg["reason"]}
                 await inc_intel_counter(user_id, "payoff_guard_tighten")
 
+        # iter-58 · Loss cooldown — after ANY loss, same symbol+direction
+        # re-entries are paused for 30min across ALL accounts (shadow-tested
+        # 14d on real trades: -$174 → +$7,429; blocks clustered re-entries).
+        if signal.get("action") in ("BUY", "SELL"):
+            from loss_cooldown import loss_cooldown_block
+            lc = await loss_cooldown_block(db, user_id, sym, signal["action"], cfg)
+            if lc:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn", reason=lc)
+                await inc_intel_counter(user_id, "loss_cooldown_block")
+                continue
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
