@@ -89,15 +89,19 @@ export default function MarketPosture() {
                                 {["BUY", "SELL"].map(a => {
                                     const sc = s.consensus[a]?.score;
                                     const col = sc >= 70 ? "#00FF41" : sc >= 55 ? "#FFB000" : "#52525B";
+                                    const u = s.uncertainty?.[a];
+                                    const riskCol = u?.risk === "LOW" ? "#00FF41" : u?.risk === "HIGH" ? "#FF3B30" : "#FFB000";
                                     return (
                                         <span key={a} className="px-1.5 py-0.5 border"
                                               style={{ borderColor: `${col}55`, color: col }}
-                                              title={s.consensus[a] ? Object.entries(s.consensus[a].votes).map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`).join(" · ") : ""}>
+                                              data-testid={`posture-uncertainty-${a.toLowerCase()}-${sym}`}
+                                              title={u ? `calibrated confidence ${u.confidence_pct}% · uncertainty ${u.uncertainty}${(u.drivers || []).length ? " · " + u.drivers.join("; ") : ""}` : (s.consensus[a] ? Object.entries(s.consensus[a].votes).map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`).join(" · ") : "")}>
                                             {a} {sc}
+                                            {u && <> · <span style={{ color: riskCol }}>{u.confidence_pct}% {u.risk}</span></>}
                                         </span>
                                     );
                                 })}
-                                <span className="text-[#52525B] text-[9px]">≥55 to trade</span>
+                                <span className="text-[#52525B] text-[9px]">score · calibrated conf · risk</span>
                             </span>
                         )}
                     </div>

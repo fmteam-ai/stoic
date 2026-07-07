@@ -153,6 +153,12 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - New config fields in models.py: ml_ensemble_mode, liquidity_gate_mode, news_gate_mode, calendar_intel_mode, meta_strategy_enabled.
 - Tests: `tests/test_iter109_meta_online_causal.py` (14 passed); 70 green across iter102-109. Live: causal chain traced from real FRED (pressure −0.09 NEUTRAL), meta bandit initialised.
 
+## Uncertainty Estimation (iter-110, June 2026 — DONE)
+- `uncertainty.py`: calibrated confidence + risk tier per prediction. U = weighted mix of model disagreement (ensemble member spread /0.25, w.30), Bayes CI90 width (w.20), Chronos band/median ratio (w.15), consensus vote conflict (w.25), data sufficiency n/20 (w.10). p_cal = 0.5 + (p_dir−0.5)(1−U) where p_dir = mean(consensus/100, ml p_win, raw confidence/100). Risk: LOW (≥75% & U≤.35) / HIGH (<60% or U≥.6) / MEDIUM.
+- `uncertainty_gate` skips HIGH-risk or below-floor trades. Config: `uncertainty_gate_mode` default **enforce**, `min_calibrated_confidence` default 60 (models.py). bot_runner block AFTER consensus gate. Counters: uncertainty_low_conf/uncertainty_skip. Signal field `uncertainty`.
+- Posture per-direction `uncertainty`; consensus pills now show "BUY 56 · 51% HIGH" (score · calibrated conf · risk) with driver tooltip.
+- Tests: `tests/test_iter110_uncertainty.py` (9 passed); 79 green across iter102-110. Live: BUY 51%/HIGH (models ±19pp apart, 4 agents against) vs SELL 65%/MEDIUM.
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

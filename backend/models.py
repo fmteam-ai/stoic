@@ -185,6 +185,9 @@ class BotConfigUpdate(BaseModel):
     # Meta-Learning strategy switcher (iter-109) — bandit picks the preset
     # that is actually winning right now; auto-switches when it stops.
     meta_strategy_enabled: bool = False
+    # Uncertainty estimation (iter-110): skip low-confidence trades.
+    uncertainty_gate_mode: str = "enforce"   # off | advisory | enforce
+    min_calibrated_confidence: int = 60
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.

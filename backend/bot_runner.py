@@ -1021,6 +1021,25 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "consensus_block")
                     continue
 
+        # iter-110 · Uncertainty estimation — calibrated confidence + risk
+        # tier from model disagreement, CI width, band dispersion and agent
+        # conflict. Skips low-confidence trades (default enforce).
+        if signal.get("action") in ("BUY", "SELL"):
+            from uncertainty import estimate_uncertainty, uncertainty_gate
+            est = estimate_uncertainty(signal)
+            signal["uncertainty"] = est
+            u_mode = str(cfg.get("uncertainty_gate_mode") or "enforce").lower()
+            ug = uncertainty_gate(
+                est, int(cfg.get("min_calibrated_confidence") or 60))
+            if ug and u_mode != "off":
+                await inc_intel_counter(user_id, "uncertainty_low_conf")
+                if u_mode == "enforce":
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn", reason=ug)
+                    await inc_intel_counter(user_id, "uncertainty_skip")
+                    continue
+                signal["uncertainty_advisory"] = ug
+
         signal["user_id"] = user_id
         if cfg.get("meta_strategy_active"):
             signal["meta_strategy"] = cfg["meta_strategy_active"]

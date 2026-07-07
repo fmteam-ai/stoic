@@ -122,6 +122,7 @@ async def market_posture(user=Depends(get_current_user)):
         cons = None
         bayes_out = None
         ml_out = None
+        unc_out = None
         try:
             from consensus import compute_consensus
             from rl_policy import get_policy, rl_decision
@@ -138,6 +139,8 @@ async def market_posture(user=Depends(get_current_user)):
             cons = {}
             bayes_out = {}
             ml_out = {}
+            unc_out = {}
+            from uncertainty import estimate_uncertainty
             for a in ("BUY", "SELL"):
                 s2 = {**ctx, "action": a}
                 s2["rl_policy"] = rl_decision(pol, s2, base)
@@ -149,6 +152,8 @@ async def market_posture(user=Depends(get_current_user)):
                     logger.debug("posture ml ensemble failed: %s", e)
                 ml_out[a] = s2.get("ml_ensemble")
                 cons[a] = compute_consensus(s2)
+                s2["consensus"] = cons[a]
+                unc_out[a] = estimate_uncertainty(s2)
         except Exception as e:
             logger.debug("posture consensus failed: %s", e)
         symbols[base] = {
@@ -169,6 +174,7 @@ async def market_posture(user=Depends(get_current_user)):
             "consensus": cons,
             "bayes": bayes_out,
             "ml_ensemble": ml_out,
+            "uncertainty": unc_out,
             "active_vetoes": vetoes[-4:],
             "unlock_hints": _unlock_hints(sig),
             "signal_at": str(sig.get("created_at") or ""),
