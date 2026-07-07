@@ -99,6 +99,20 @@ async def market_posture(user=Depends(get_current_user)):
         logger.warning("posture fed tone failed: %s", e)
 
     # Risk agent state
+    rl = None
+    try:
+        rl_doc = await db.rl_policies.find_one({"user_id": uid})
+        if rl_doc:
+            min_v = (rl_doc.get("params") or {}).get("min_visits", 8)
+            neg = [k for k, v in (rl_doc.get("states") or {}).items()
+                   if v["n"] >= min_v and v["mean"] < 0]
+            rl = {"trained_at": rl_doc.get("trained_at"),
+                  "trades_used": rl_doc.get("trades_used"),
+                  "states_learned": len(rl_doc.get("states") or {}),
+                  "negative_states": len(neg)}
+    except Exception as e:
+        logger.warning("posture rl failed: %s", e)
+
     guards = await db.auto_guards.find(
         {"user_id": uid, "active": True}).to_list(10)
     cutoff = (now - timedelta(minutes=30)).isoformat()
@@ -137,4 +151,5 @@ async def market_posture(user=Depends(get_current_user)):
             "loss_cooldown_armed": recent_losses > 0,
         },
         "today_expectancy": expectancy,
+        "rl_policy": rl,
     }

@@ -775,6 +775,30 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "fed_tone_veto")
                     continue
 
+        # iter-61 · Offline RL policy gate — distributional Q-values learned
+        # from the user's real trades (reward = PnL − λ·loss − μ·drawdown).
+        # advisory (default): annotate only · enforce: BLOCK skips, SCALE halves lot.
+        if signal.get("action") in ("BUY", "SELL"):
+            from rl_policy import get_policy, rl_decision
+            rl_dec = None
+            try:
+                rl_dec = rl_decision(await get_policy(db, user_id), signal, sym)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("RL policy skipped: %s", e)
+            if rl_dec:
+                signal["rl_policy"] = rl_dec
+                rl_mode = str(cfg.get("rl_policy_mode") or "advisory").lower()
+                if rl_dec["decision"] == "BLOCK" and rl_mode != "off":
+                    await inc_intel_counter(user_id, "rl_policy_block_advice")
+                    if rl_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn",
+                            reason=f"RL policy: {rl_dec['reason']}")
+                        await inc_intel_counter(user_id, "rl_policy_block")
+                        continue
+                elif rl_dec["decision"] == "SCALE" and rl_mode == "enforce":
+                    signal["rl_scale"] = rl_dec.get("scale", 0.5)
+
         signal["user_id"] = user_id
         if cfg_account_id:
             signal["account_id"] = cfg_account_id  # signal tagged so UI can filter
@@ -1052,6 +1076,12 @@ async def _process_user_account_locked(db, cfg: dict):
                     sizing_method = sizing_method + "+corr_kelly"
             except Exception as e:  # noqa: BLE001
                 logger.debug("Correlation-Kelly skipped (%s) — proceeding without trim", e)
+
+        # iter-61 · RL policy half-size (enforce mode SCALE decision)
+        _rl_scale = float(signal.get("rl_scale") or 1.0)
+        if _rl_scale < 1.0:
+            effective_lot = max(round(effective_lot * _rl_scale, 2), 0.01)
+            sizing_method = sizing_method + "+rl_scale"
 
         # iter-58 · Pre-trade sector-cap fit. Prevents the bot from opening
         # trades that would immediately breach the per-account sector cap

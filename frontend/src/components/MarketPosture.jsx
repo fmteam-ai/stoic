@@ -136,6 +136,15 @@ export default function MarketPosture() {
                 {(data.risk?.active_auto_guards || []).length > 0 &&
                     <> · {data.risk.active_auto_guards.length} auto-guard{data.risk.active_auto_guards.length > 1 ? "s" : ""} active: {data.risk.active_auto_guards.map(g => g.title).join("; ")}</>}
             </AgentRow>
+
+            <AgentRow icon={Cpu} color="#F97316" label="RL POLICY" testid="posture-rl">
+                {data.rl_policy
+                    ? <>Learned from <strong>{data.rl_policy.trades_used}</strong> real trades ·
+                        {" "}{data.rl_policy.states_learned} market states ·
+                        {" "}<span className={data.rl_policy.negative_states > 0 ? "text-[#FFB000]" : ""}>{data.rl_policy.negative_states} reliably-losing setup{data.rl_policy.negative_states === 1 ? "" : "s"} identified</span>
+                        {" "}(reward = return − risk − drawdown)</>
+                    : <span className="text-[#52525B]">policy trains on the next bot cycle</span>}
+            </AgentRow>
         </div>
     );
 }

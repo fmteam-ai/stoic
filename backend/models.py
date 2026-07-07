@@ -163,6 +163,8 @@ class BotConfigUpdate(BaseModel):
     # Auto-Tune — let the bot raise the min-confidence threshold based on
     # historical win-rates per (symbol, confidence-bucket).
     auto_tune_enabled: bool = True
+    # Offline RL policy (iter-61): off | advisory | enforce
+    rl_policy_mode: str = "advisory"
     # Slippage veto — force-close fills whose actual entry deviated more than
     # this many pips from the signal's intended entry. Hard guard against
     # ECN bad-fills during news.
