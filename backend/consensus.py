@@ -77,6 +77,9 @@ def compute_consensus(signal: dict) -> dict:
     bayes = signal.get("bayes") or {}
     if bayes.get("n", 0) >= 8 and bayes.get("ev_r") is not None:
         qv += _clip(bayes["ev_r"]) * 0.4
+    ml = signal.get("ml_ensemble") or {}
+    if ml.get("p_win") is not None and (ml.get("models_used") or 0) >= 3:
+        qv += _clip((float(ml["p_win"]) - 0.5) * 2) * 0.5
     votes["quant"] = round(_clip(qv), 2)
 
     lm = signal.get("liquidity") or {}

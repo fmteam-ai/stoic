@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -187,6 +187,25 @@ export default function MarketPosture() {
                                 }).filter(Boolean).join("   |   ")}
                             </span>
                         )}
+                    </AgentRow>
+
+                    <AgentRow icon={Network} color="#4ADE80" label="ML ENSEMBLE" testid={`posture-ml-${sym}`}>
+                        {s.ml_ensemble && (s.ml_ensemble.BUY || s.ml_ensemble.SELL)
+                            ? <>{["BUY", "SELL"].map(a => {
+                                    const m = s.ml_ensemble[a];
+                                    if (!m || m.p_win == null) return null;
+                                    return `${a}: P(win) ${Math.round(m.p_win * 100)}% (${m.models_used} models)`;
+                                }).filter(Boolean).join("   |   ")}
+                                <span className="block font-mono text-[10px] text-[#4ADE80] mt-0.5" data-testid={`posture-ml-members-${sym}`}>
+                                    {(s.ml_ensemble.BUY?.members || s.ml_ensemble.SELL?.members || []).map(m =>
+                                        `${m.name.replace(/_/g, " ")} ${Math.round(m.p * 100)}% (w${m.w})`).join(" · ")}
+                                </span>
+                                <span className="block text-[10px] text-[#A1A1AA]">
+                                    {s.ml_ensemble.BUY?.gbm_status === "trained"
+                                        ? `GBMs trained on ${s.ml_ensemble.BUY.trained_n} real trades · walk-forward AUC: ${Object.entries(s.ml_ensemble.BUY.gbm_auc || {}).map(([k, v]) => `${k.split("_")[0]} ${v}`).join(" / ")}`
+                                        : `GBMs waiting for data (${s.ml_ensemble.BUY?.trained_n ?? 0}/40 trades) — averaging live agents meanwhile`}
+                                </span></>
+                            : <span className="text-[#52525B]">ensemble warming up</span>}
                     </AgentRow>
 
                     <AgentRow icon={TrendingUp} color="#38BDF8" label="FORECAST" testid={`posture-forecast-${sym}`}>

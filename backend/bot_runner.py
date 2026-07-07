@@ -953,6 +953,30 @@ async def _process_user_account_locked(db, cfg: dict):
                         await inc_intel_counter(user_id, "forecast_gate_block")
                         continue
 
+        # iter-108 · Stacked ML Ensemble — GBM/XGBoost/CatBoost/LightGBM
+        # (skill-weighted by walk-forward AUC) + Transformer + RL + Bayes,
+        # intelligently averaged into one P(win). Fail-open.
+        if signal.get("action") in ("BUY", "SELL"):
+            ml_pred = None
+            try:
+                from ml_ensemble import ml_predict, ml_gate
+                ml_pred = await ml_predict(db, user_id, signal, sym)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("ml ensemble skipped: %s", e)
+            if ml_pred:
+                signal["ml_ensemble"] = ml_pred
+                mg = ml_gate(ml_pred)
+                if mg:
+                    ml_mode = str(cfg.get("ml_ensemble_mode")
+                                  or "advisory").lower()
+                    await inc_intel_counter(user_id, "ml_ensemble_low_p")
+                    if ml_mode == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=mg)
+                        await inc_intel_counter(user_id, "ml_ensemble_block")
+                        continue
+                    signal["ml_ensemble_advisory"] = mg
+
         # iter-63 · Master Agent consensus — weighted vote across all agents
         # (trend/quant/structure/forecast/macro). Trade fires only when the
         # score clears `consensus_threshold` (default 55; mode default enforce).

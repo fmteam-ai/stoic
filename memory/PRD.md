@@ -137,6 +137,15 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - **Fix**: `economic_calendar.get_events` now backs off 10min on fetch failure (FF feed was stuck in HTTP 429 because every caller retried instantly).
 - Tests: `tests/test_iter107_calendar_intel.py` (13 passed); consensus test updated for liquidity/news votes. 62 tests green across iter102-107 suites.
 
+## Stacked ML Ensemble (iter-108, June 2026 — DONE)
+- `ml_ensemble.py`: 7-model ensemble — 4 GBMs trained on user's real trades (sklearn GradientBoosting, XGBoost, LightGBM, CatBoost; 19 features via `featurize()`: action/confidence/tiers/session/regime/cyclical hour/sl_pips/rr) + 3 live agents (Transformer=Chronos band, RL agent sigmoid(mean/40), Bayes p_success).
+- **Intelligent averaging**: GBM weights = walk-forward TimeSeriesSplit(3) OOS AUC − 0.5 (zero skill = zero vote), scaled by min(n/150,1)×0.7; RL/Bayes weights scale with evidence min(n/20,1)×0.35; Transformer fixed 0.25. p_win = Σwp/Σw.
+- Models persisted `/app/backend/models_store/{uid}/gbm_ensemble.joblib` (joblib, mtime-cached); metadata in `ml_ensembles` (TTL 12h auto-retrain, min 40 trades). Routes: GET `/api/ml/ensemble`, POST `/api/ml/train`.
+- bot_runner gate after forecast block: `ml_ensemble_mode` default **advisory** (enforce = veto p_win<0.40 with ≥3 models). Counters: ml_ensemble_low_p/ml_ensemble_block. Signal field `ml_ensemble`. Consensus quant vote += clip((p_win−0.5)×2)×0.5 when ≥3 models.
+- Posture per-direction `ml_ensemble`; ML ENSEMBLE AgentRow (p_win per side, member breakdown w/ weights, AUC line).
+- Deps added: scikit-learn, lightgbm, catboost (xgboost was present). requirements.txt frozen.
+- Tests: `tests/test_iter108_ml_ensemble.py` (7 passed). Live on 405 real trades: XGBoost AUC .596→w .386, CatBoost .516→w .064; BUY p_win .711 (5 members), SELL .664 (7 members).
+
 ## Notes / Gotchas
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.

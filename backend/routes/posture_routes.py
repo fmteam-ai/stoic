@@ -113,10 +113,12 @@ async def market_posture(user=Depends(get_current_user)):
             logger.debug("posture calendar intel failed: %s", e)
         cons = None
         bayes_out = None
+        ml_out = None
         try:
             from consensus import compute_consensus
             from rl_policy import get_policy, rl_decision
             from bayes_decision import get_model as _get_bayes, bayes_decision
+            from ml_ensemble import ml_predict
             pol = await get_policy(db, uid)
             bmodel = await _get_bayes(db, uid)
             ctx = {"mtf_tiers": sig.get("mtf_tiers"), "market_structure": struct,
@@ -127,11 +129,17 @@ async def market_posture(user=Depends(get_current_user)):
                    "session": sig.get("session"), "regime": sig.get("regime")}
             cons = {}
             bayes_out = {}
+            ml_out = {}
             for a in ("BUY", "SELL"):
                 s2 = {**ctx, "action": a}
                 s2["rl_policy"] = rl_decision(pol, s2, base)
                 s2["bayes"] = bayes_decision(bmodel, s2, base)
                 bayes_out[a] = s2["bayes"]
+                try:
+                    s2["ml_ensemble"] = await ml_predict(db, uid, s2, base)
+                except Exception as e:
+                    logger.debug("posture ml ensemble failed: %s", e)
+                ml_out[a] = s2.get("ml_ensemble")
                 cons[a] = compute_consensus(s2)
         except Exception as e:
             logger.debug("posture consensus failed: %s", e)
@@ -151,6 +159,7 @@ async def market_posture(user=Depends(get_current_user)):
             "forecast": fc,
             "consensus": cons,
             "bayes": bayes_out,
+            "ml_ensemble": ml_out,
             "active_vetoes": vetoes[-4:],
             "unlock_hints": _unlock_hints(sig),
             "signal_at": str(sig.get("created_at") or ""),
