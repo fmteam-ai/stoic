@@ -202,6 +202,11 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Backlog Trio (iter-118, July 8 2026 — DONE, tested iteration_40.json 100% pass)
+- **"Why is my bot silent?" banner** — `SilentBotBanner.jsx` top of Dashboard. Backend: `_record_pulse` now also persists `_last_notable_pulse` (routine "cooldown active" SKIPs excluded so the real blocker survives); `/api/bot/pulse` returns `notable` + `notable_stale_seconds`. Banner hides if any bot executed <30min ago; expander shows per-bot reasons.
+- **Partner Broker Card** — `routes/partner_routes.py` (GET lazy-seeds Exness/IC Markets/Vantage with PLACEHOLDER IB links; admin POST/DELETE; click tracking POST /brokers/{id}/click → affiliate_clicks). `PartnerBrokerCard.jsx` on Accounts page. Admin must replace placeholder links via POST /api/partners/brokers.
+- **Weekly Agent Report Card** — `agent_report_card.py` (7d intelligence_counters × realized EV/trade → per-agent est. P&L impact, verdicts QUIET/KEEP ENFORCE/CONSIDER ADVISE/MONITORING, 1h cache in `agent_report_cards`). Route GET /api/agents/report-card. `AgentReportCard.jsx` on Agents page. First real insight: Execution Guards 105 blocks ≈ −$430 est. missed EV → CONSIDER ADVISE.
+
 ## Notes / Gotchas
 - Minor observed: trade-manager logs "price fetch failed for GOLD: Symbol GOLD not supported" — FIXED July 8: `market._key()` now routes through `pip_utils.base_symbol()`, so all quote/history callers resolve broker symbols (GOLD, GOLD#, XAUUSD-ECN → XAUUSD).
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
