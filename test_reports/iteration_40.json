@@ -1,0 +1,40 @@
+{
+  "summary": "iter-117 backlog: SilentBotBanner, PartnerBrokerCard, AgentReportCard — end-to-end verified. 15/15 new backend HTTP tests pass in test_iter117_backlog_features.py covering (a) GET /api/bot/pulse now returning `notable`+`notable_stale_seconds` per config with routine 'cooldown active' SKIPs excluded from notable, (b) GET /api/agents/report-card shape (baseline+agents+totals+method), verdict enum validation, 1h cache honored on 2nd call without force, force=true rebuilds with new built_at, (c) GET /api/partners/brokers lazy-seeds 3 defaults (Exness/IC Markets/Vantage) with is_placeholder=true + is_admin flag + sort ordering, (d) admin POST upsert flips is_placeholder→false when link no longer contains 'PLACEHOLDER', persists via GET, (e) admin DELETE + 404 on re-delete, (f) non-admin gets 403 on POST and DELETE (fresh registered+verified user), (g) POST /brokers/{id}/click increments clicks by 1 and returns {url}=broker.ib_link. Frontend E2E as admin: Dashboard renders `silent-bot-banner` with 'AI HOLD 35.0% — MEDIUM and LONG tiers both DOWN...' from VTMarkets 16s ago; expander reveals 5 bot rows each with own notable reason (data-testid='silent-bot-row-{cfg_id}'). Agents page shows agent-report-card with baseline strip (Win rate 76.6% of 406, Avg $51.54/$-151.2, EV +$4.10, Total impact -$430.50), 1 active row (Execution Guards 105 hard blocks, -$430.50, CONSIDER ADVISE), 16 quiet hidden, method line present; REBUILD button works with no errors. Accounts page shows partner-broker-card at bottom with 3 tiles (Exness starred+highlight, IC Markets, Vantage) each with regulation, MIN DEPOSIT, and OPEN ACCOUNT button (data-testid='partner-broker-open-{id}'). No console pageerrors on /, /agents, /accounts, /bot-config, /trades. Regression: MarketPosture, BotPulsePanel, ArchitecturePipeline, and account list all still render normally.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter117_backlog_features.py",
+    "/app/test_reports/pytest/iter117.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "partner_routes.py:65 _ser() correctly excludes _id and stringifies via 'id' — good MongoDB pattern.",
+    "partner_routes.py:101 is_placeholder derived from string search 'PLACEHOLDER' in ib_link — brittle if admin picks a link that legitimately contains that substring; consider explicit is_placeholder field or regex on '{PLACEHOLDER}' pattern.",
+    "partner_routes.py DELETE endpoint does not soft-delete (irreversible) and there is no restore path for defaults. Test seed only fires when count_documents({})==0, so an accidental delete-all leaves the collection empty until manual re-seed. Consider a per-name upsert seed or /partners/brokers/reset endpoint.",
+    "agent_report_card.py caches under {user_id: ...} without account/version key — if AGENTS list is extended, the cache stays stale for up to 1h until force=true is called. Not user-facing but worth a cache-key bump on schema change.",
+    "bot_runner.py _record_pulse:152 'is_routine' uses substring match 'cooldown active' on reason — will also skip other cooldown-active variants like 'Loss cooldown active' which arguably ARE notable blockers. Consider matching only the specific SKIP-with-signal-cooldown case (e.g. reason == 'Signal cooldown active').",
+    "SilentBotBanner.jsx 30s poll interval is fine, but component silently swallows API errors ({/* silent */}) — a broken /bot/pulse would just make the banner disappear with no user signal. Non-critical.",
+    "PartnerBrokerCard.jsx open() catches errors but only shows a toast — if the click POST fails, the OPEN ACCOUNT button falls through and does nothing (no window.open). Could fall back to b.ib_link unconditionally to still open the link.",
+    "AgentReportCard.jsx shows raw slug in data-testid but the request spec listed 'report-row-risk-managed-trading-4' — the actual slugs are 'mtf', 'consensus', 'execution', etc. so that specific test-id would only exist if an agent slug happened to be 'risk-managed-trading-4'. Assumed request was giving a slug example based on preview hostname; verified 16 real rows render with the actual slugs (test-id 'report-row-execution' visible for Execution Guards row)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter117_backlog_features.py (new — 15 HTTP integration tests: pulse notable, report-card shape+cache+force, partners CRUD + click tracking + admin/non-admin, regression sanity)"
+  ],
+  "success_rate": {
+    "backend": "100% (15/15 iter-117 tests pass)",
+    "frontend": "100% (silent-bot-banner + expander, agent-report-card + baseline + total-impact + rebuild, partner-broker-card + 3 tiles + OPEN buttons all render as specified; no console pageerrors on Dashboard, Agents, Accounts, BotConfig, Trades)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (cookie auth). Throwaway verified user auto-created per test run and cleaned up in fixture teardown.",
+  "seed_data_creation": "Test-created throwaway user iter117user_*@test.com (deleted in fixture teardown). One TEST_DELETE_ME broker created + deleted in test_admin_delete_and_readd. Exness broker's ib_link was briefly flipped to a REAL test URL to verify is_placeholder→false then reverted to original PLACEHOLDER link. Click counter on first broker (Exness) incremented by 1 from click-test. No production trades/accounts touched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Baseline: cd /app/backend && REACT_APP_BACKEND_URL=<preview> python -m pytest tests/test_iter117_backlog_features.py -v — expect 15/15. Actual agent slugs used in data-testid are the AGENTS[] tuple slugs from agent_report_card.py (mtf, consensus, ml_ensemble, uncertainty, monte_carlo, risk_engine, rl_policy, bayes, forecast, news, calendar, liquidity, learned_meta, structure, payoff, execution, cooldowns) — NOT the review-request example 'risk-managed-trading-4'. Silent-bot banner only renders when >=1 config.active=true AND no BUY/SELL/EXEC notable in last 30 min — current DB state satisfies this; do not toggle bot_configs.active. Partner brokers use lazy-seed (count_documents==0 trigger) — if admin deletes all 3, re-hit GET /api/partners/brokers to reseed automatically.",
+  "rca of the issue": "N/A — no bugs found in this review scope."
+}

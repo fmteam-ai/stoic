@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import AgentReportCard from "@/components/AgentReportCard";
 import {
     Brain, Search, ShieldCheck, Send, Activity, RefreshCw,
     CheckCircle2, XCircle, AlertTriangle, Clock, Cpu,
@@ -105,6 +106,7 @@ export default function Agents() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="agents-error">{err}</div>}
 
                 <StrategyGeneratorCta />
+                <AgentReportCard />
                 <AgentRoster />
                 <MacroSnapshot macro={macro} />
                 <ActivityFeed loading={loading} activity={activity} />

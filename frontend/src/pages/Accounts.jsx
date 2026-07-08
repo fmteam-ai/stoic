@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
+import PartnerBrokerCard from "@/components/PartnerBrokerCard";
 
 // Bump together with backend `LATEST_EA` in bot_routes.py / diagnostic_routes.py.
 // Used in the download URL so the filename changes per release (e.g.
@@ -639,6 +640,8 @@ export default function Accounts() {
                         })}
                     </div>
                 )}
+
+                <PartnerBrokerCard />
             </div>
 
             {importAccount && (

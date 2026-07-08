@@ -323,6 +323,14 @@ async def get_bot_pulse(user=Depends(get_current_user)):
                 stale = int((now - ts).total_seconds())
             except Exception:
                 stale = None
+        notable = d.get("_last_notable_pulse") or None
+        notable_stale = None
+        if notable and notable.get("ts"):
+            try:
+                nts = datetime.fromisoformat(str(notable["ts"]).replace("Z", "+00:00"))
+                notable_stale = int((now - nts).total_seconds())
+            except Exception:
+                notable_stale = None
         # Friendly label for the UI — account-scoped or "Default"
         acct_id = d.get("account_id")
         label = "Default profile"
@@ -357,6 +365,8 @@ async def get_bot_pulse(user=Depends(get_current_user)):
             "strategy_label": strategy_label,
             "pulse": pulse,
             "stale_seconds": stale,
+            "notable": notable,
+            "notable_stale_seconds": notable_stale,
         })
     # Sort: active first, then shadow, then inactive
     out.sort(key=lambda x: (not x["active"], not x["paper_shadow_mode"], x["label"]))

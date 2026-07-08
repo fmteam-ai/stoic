@@ -46,6 +46,7 @@ from routes.architecture_routes import router as architecture_router
 from routes.analytics_routes import router as analytics_router
 from routes.entitlement_routes import router as entitlement_router
 from routes.agent_routes import router as agent_router
+from routes.partner_routes import router as partner_router
 from routes.integrity_routes import router as integrity_router
 from routes.diagnostic_routes import router as diagnostic_router
 from routes.safety_blocks_routes import router as safety_blocks_router
@@ -152,6 +153,7 @@ api_router.include_router(architecture_router)
 api_router.include_router(analytics_router)
 api_router.include_router(entitlement_router)
 api_router.include_router(agent_router)
+api_router.include_router(partner_router)
 api_router.include_router(integrity_router)
 api_router.include_router(diagnostic_router)
 api_router.include_router(safety_blocks_router)

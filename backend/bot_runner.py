@@ -145,9 +145,16 @@ async def _record_pulse(
             "level": level,
             "next_eligible_at": nxt_iso,
         }
+        # Routine 5-min cooldown SKIPs overwrite the pulse every cycle and
+        # bury the real blocker (anti-tilt, noise, risk cap). Keep the last
+        # NOTABLE verdict separately so the UI can always show the true "why".
+        update = {"_last_pulse": pulse}
+        is_routine = action == "SKIP" and "cooldown active" in (reason or "").lower()
+        if not is_routine:
+            update["_last_notable_pulse"] = pulse
         await db.bot_configs.update_one(
             {"_id": cfg["_id"]},
-            {"$set": {"_last_pulse": pulse}},
+            {"$set": update},
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist pulse cfg=%s: %s", cfg.get("_id"), e)

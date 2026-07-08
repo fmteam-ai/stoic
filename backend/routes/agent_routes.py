@@ -58,6 +58,13 @@ async def latest_per_symbol(user=Depends(get_current_user)):
     return {"items": out}
 
 
+@router.get("/report-card")
+async def report_card(force: bool = False, user=Depends(get_current_user)):
+    """Weekly per-agent report card — gate activity + estimated P&L impact."""
+    from agent_report_card import get_report_card
+    return await get_report_card(get_db(), user["id"], force=force)
+
+
 @router.get("/macro")
 async def macro_snapshot(user=Depends(get_current_user)):  # noqa: ARG001 (auth gate only)
     snap = await get_macro_snapshot()
