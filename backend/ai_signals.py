@@ -85,6 +85,17 @@ Rules:
     Rolling 20-bar VWAP proxy. `regime=near` + trend-aligned `pullback_signal`
     = high-quality re-entry. `above_extended` / `below_extended` regimes
     (>1.5% from VWAP) are mean-reversion-risk — prefer HOLD or fade.
+- Intraday M15 (`intraday_m15`, null when EA stream is stale):
+    LIVE intraday structure from the broker's M15 feed — this is TODAY's
+    price action which the daily tiers cannot see. Fields: trend (EMA20/50
+    stack), momentum_3h_pct, donchian20 breakout, session_vwap distance,
+    swing_structure (HH_HL bullish / LH_LL bearish), atr15, day_range_pct.
+    When day_range_pct > 1.5% AND trend/donchian/structure agree on a
+    direction, this is a TRADEABLE INTRADAY TREND DAY: you may issue
+    BUY/SELL at 60-75 confidence in that direction even when daily MEDIUM/
+    LONG tiers conflict — the system will tag it as an intraday scalp with
+    tight M15-ATR stops. Never fight strong intraday momentum with a
+    counter-trend entry.
 - Note: a Meta-Labeler will re-verify your output; conservative is safer.
 - Gold-specific (XAUUSD only): when `kalman_filter`, `cot_positioning`, and
   `real_yield_10y` are present in the payload, use them as macro context:
@@ -203,6 +214,10 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # M15 stream shows an ORGANIZED market, it outranks the daily verdict.
     if not entropy.get("tradeable", True):
         entropy = await _intraday_entropy_override(symbol, entropy)
+    # iter-120 · Intraday M15 feature pack — live EA-stream vision so the
+    # strategy engine can trade clean intraday days the daily tiers can't see.
+    from intraday_features import fetch_intraday_pack, intraday_alignment
+    intraday_pack = await fetch_intraday_pack(symbol)
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
@@ -292,6 +307,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
             for e in upcoming_macro[:5]
         ],
         "noise_filter": entropy,
+        "intraday_m15": intraday_pack,
         "compressed_history_features": compressed_features,
         "mtf_tiers": mtf_tiers,
         "breakout_scalper": breakout,
@@ -548,9 +564,20 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # 6. Multi-Timeframe trend confluence gate
     mtf = multi_timeframe_gate(action, history, indicators, mtf_tiers=mtf_tiers)
     mtf_veto = ""
+    trade_scope = "swing"
     if action != "HOLD" and not mtf["aligned"] and not aggressive_mode:
-        mtf_veto = mtf["reason"]
-        final_action = "HOLD"
+        # iter-120 · Intraday scalp override — daily tiers conflict, but if
+        # the live M15 structure STRONGLY supports the action this becomes a
+        # tagged intraday scalp (tight M15-ATR geometry) instead of a veto.
+        ia_score, ia_note = intraday_alignment(action, intraday_pack)
+        if ia_score >= 60:
+            trade_scope = "intraday_scalp"
+            mtf = {**mtf, "scalp_override": (
+                f"MTF unaligned but M15 strongly supports {action} "
+                f"(score {ia_score}/100: {ia_note}) — intraday scalp scope.")}
+        else:
+            mtf_veto = mtf["reason"]
+            final_action = "HOLD"
 
     # 7. Learned Meta-Classifier — local logistic regression P(win | features).
     #    Only fires once we have a trained artifact (≥30 closed trades).
@@ -600,7 +627,33 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # ---- SL/TP — adaptive ATR-based, with hardcoded pip-system fallback ----
     sl, tp1, tp2, tp3 = current_price, current_price, current_price, current_price
     atr = indicators.get("atr_14") or 0.0
-    if ADAPTIVE_SL_TP_ENABLED and atr > 0 and final_action in ("BUY", "SELL"):
+    # iter-120 · Intraday scalps size stops off M15 ATR (much tighter than
+    # daily ATR) — same 1.5/5.0 multipliers preserve the weighted R:R ≈ 2.08.
+    atr15 = float((intraday_pack or {}).get("atr15") or 0)
+    if trade_scope == "intraday_scalp" and atr15 > 0 and final_action in ("BUY", "SELL"):
+        sl_dist_price = ATR_SL_MULTIPLIER * atr15
+        sl_min_price = pips_to_price(symbol, 30)   # scalp floor: 30 pips
+        sl_max_price = pips_to_price(symbol, SL_MAX_PIPS)
+        sl_dist_price = max(sl_min_price, min(sl_max_price, sl_dist_price))
+        tp_dist_price = ATR_TP_MULTIPLIER * atr15
+        tp1_dist = tp_dist_price * 0.4
+        tp2_dist = tp_dist_price * 0.7
+        tp3_dist = tp_dist_price * 1.0
+        if final_action == "BUY":
+            sl = round(current_price - sl_dist_price, 5)
+            tp1 = round(current_price + tp1_dist, 5)
+            tp2 = round(current_price + tp2_dist, 5)
+            tp3 = round(current_price + tp3_dist, 5)
+        else:
+            sl = round(current_price + sl_dist_price, 5)
+            tp1 = round(current_price - tp1_dist, 5)
+            tp2 = round(current_price - tp2_dist, 5)
+            tp3 = round(current_price - tp3_dist, 5)
+        sl_pips_target = round(price_to_pips(symbol, sl_dist_price), 1)
+        tp1_pips_target = round(price_to_pips(symbol, tp1_dist), 1)
+        tp2_pips_target = round(price_to_pips(symbol, tp2_dist), 1)
+        tp3_pips_target = round(price_to_pips(symbol, tp3_dist), 1)
+    elif ADAPTIVE_SL_TP_ENABLED and atr > 0 and final_action in ("BUY", "SELL"):
         # SL = clamp(ATR_SL_MULTIPLIER × ATR, SL_MIN_PIPS, SL_MAX_PIPS)
         sl_dist_price = ATR_SL_MULTIPLIER * atr
         # Convert clamp bounds from pips → price
@@ -769,6 +822,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "compressed_features": compressed_features,
         "regime_execution_mode": regime_meta,
         "meta_label": meta_label,
+        "scope": trade_scope,
+        "intraday_m15": intraday_pack,
         "mtf_gate": mtf,
         "mtf_tiers": mtf_tiers,
         "breakout_scalper": breakout,

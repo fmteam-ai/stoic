@@ -202,6 +202,13 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Intraday Scalp Engine (iter-120, July 8 2026 — DONE, unit tests test_iter120 5/5 pass)
+User complaint: gold ranged 2.31% (93.5pts, −75pt waterfall 11:00-13:00 UTC) and bot took nothing — pipeline was 100% daily-anchored (MTF tiers/breakout/vwap all from daily bars; LLM never saw intraday action; MTF veto killed everything on conflicted days unless aggressive_mode, which Auto-Heal turned OFF 07-07 19:05 after −$814/−4.55% day). Built:
+- `intraday_features.py` — M15 pack from EA stream (trend EMA20/50, momentum_3h, donchian20, session VWAP dist, swing structure HH_HL/LH_LL, atr15, day_range_pct) + `intraday_alignment()` score 0-100 (≥60 = strong).
+- `ai_signals.py`: pack fed to LLM as `intraday_m15` (+ SYSTEM_PROMPT guidance: tradeable intraday trend day = may fire 60-75 conf against daily conflict); MTF veto override → `scope: intraday_scalp` when alignment ≥60; scalp SL/TP from M15 ATR (SL 1.5×atr15 clamp [30p, SL_MAX], TP 5×atr15 ladder 0.4/0.7/1.0, weighted R:R 2.08 preserved). Signal now carries `scope` + `intraday_m15`.
+- All other guardrails (final R:R guard, risk caps, anti-tilt, news freeze, confluence) remain fully active for scalps.
+- Verified live: LLM reasoning now cites M15 structure explicitly; correctly HOLDs mid-bounce. Aggressive_mode remains OFF on all accounts (user hasn't chosen to re-enable).
+
 ## R:R Watch Panel (iter-119b, July 8 2026 — DONE)
 - `GET /api/analytics/rr-watch` — before/after the 2026-07-08T09:45Z geometry fix: trades, median R:R (tp1 vs SL), win rate, net P&L per bucket. `RrWatchPanel.jsx` at top of Analytics page (red 0.31 before vs after-fix bucket, turns green at ≥0.75). No post-fix trades yet at build time (bot legitimately HOLDing at 35% conf). **Next session: re-audit once after-bucket has ~20 trades.**
 

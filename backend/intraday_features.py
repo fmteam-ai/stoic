@@ -1,0 +1,164 @@
+"""Intraday M15 feature pack — gives the strategy engine real intraday vision.
+
+The daily-anchored pipeline (MTF tiers, breakout scalper, VWAP pullback are
+all computed from DAILY bars) is blind to intraday structure: on 2026-07-08
+gold ranged 2.31% with a clean -75pt waterfall and the bot never saw it.
+This module computes live features from the EA's M15 stream so (a) the LLM
+sees today's price action and (b) the MTF veto can be overridden for
+strongly-aligned intraday scalps.
+"""
+import logging
+from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger("intraday-features")
+
+MIN_BARS = 40
+FRESHNESS_MIN = 30
+
+
+def _ema(values: list, period: int) -> float:
+    k = 2 / (period + 1)
+    e = values[0]
+    for v in values[1:]:
+        e = v * k + e * (1 - k)
+    return e
+
+
+def _atr(bars: list, period: int = 14) -> float:
+    trs = []
+    for i in range(1, len(bars)):
+        h, l, pc = bars[i]["h"], bars[i]["l"], bars[i - 1]["c"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < period:
+        return 0.0
+    return sum(trs[-period:]) / period
+
+
+def compute_intraday_features(bars: list) -> dict | None:
+    """Pure computation on M15 bars (dicts with t/o/h/l/c/v)."""
+    if not bars or len(bars) < MIN_BARS:
+        return None
+    closes = [float(b["c"]) for b in bars]
+    last = closes[-1]
+
+    ema20 = _ema(closes[-40:], 20)
+    ema50 = _ema(closes, 50) if len(closes) >= 50 else _ema(closes, 20)
+    atr15 = _atr(bars[-30:], 14)
+
+    # Trend state from EMA stack + slope of EMA20 over last 8 bars (2h)
+    ema20_prev = _ema(closes[-48:-8], 20) if len(closes) >= 48 else ema20
+    slope_pct = (ema20 - ema20_prev) / ema20_prev * 100 if ema20_prev else 0.0
+    if last > ema20 > ema50 and slope_pct > 0.05:
+        trend = "UP"
+    elif last < ema20 < ema50 and slope_pct < -0.05:
+        trend = "DOWN"
+    else:
+        trend = "FLAT"
+
+    # 3-hour momentum (12 bars)
+    mom_3h_pct = (last - closes[-13]) / closes[-13] * 100 if len(closes) >= 13 else 0.0
+
+    # Donchian-20 breakout state
+    hi20 = max(float(b["h"]) for b in bars[-21:-1])
+    lo20 = min(float(b["l"]) for b in bars[-21:-1])
+    if last > hi20:
+        donchian = "BREAK_UP"
+    elif last < lo20:
+        donchian = "BREAK_DOWN"
+    else:
+        donchian = "INSIDE"
+
+    # Session VWAP — today's UTC bars, volume-weighted typical price
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pv = vol = 0.0
+    for b in bars:
+        if datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d") != today:
+            continue
+        tp = (float(b["h"]) + float(b["l"]) + float(b["c"])) / 3
+        v = float(b.get("v") or 1)
+        pv += tp * v
+        vol += v
+    vwap = pv / vol if vol else None
+    vwap_dist_pct = (last - vwap) / vwap * 100 if vwap else None
+
+    # Swing structure — compare last two 10-bar segment extremes
+    seg = bars[-30:]
+    h1 = max(float(b["h"]) for b in seg[:10]); l1 = min(float(b["l"]) for b in seg[:10])
+    h2 = max(float(b["h"]) for b in seg[10:20]); l2 = min(float(b["l"]) for b in seg[10:20])
+    h3 = max(float(b["h"]) for b in seg[20:]); l3 = min(float(b["l"]) for b in seg[20:])
+    if h3 > h2 > h1 and l3 > l2 > l1:
+        structure = "HH_HL"       # bullish
+    elif h3 < h2 < h1 and l3 < l2 < l1:
+        structure = "LH_LL"       # bearish
+    else:
+        structure = "MIXED"
+
+    day_bars = [b for b in bars
+                if datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d") == today]
+    day_range_pct = None
+    if day_bars:
+        dh = max(float(b["h"]) for b in day_bars)
+        dl = min(float(b["l"]) for b in day_bars)
+        day_range_pct = round((dh - dl) / dl * 100, 2) if dl else None
+
+    return {
+        "timeframe": "M15",
+        "last_price": round(last, 2),
+        "trend": trend,
+        "ema20": round(ema20, 2),
+        "ema50": round(ema50, 2),
+        "ema20_slope_pct_2h": round(slope_pct, 3),
+        "momentum_3h_pct": round(mom_3h_pct, 3),
+        "donchian20": donchian,
+        "session_vwap": round(vwap, 2) if vwap else None,
+        "vwap_dist_pct": round(vwap_dist_pct, 3) if vwap_dist_pct is not None else None,
+        "swing_structure": structure,
+        "atr15": round(atr15, 3),
+        "day_range_pct": day_range_pct,
+        "bars_analyzed": len(bars),
+    }
+
+
+def intraday_alignment(action: str, feats: dict | None) -> tuple[int, str]:
+    """Score 0-100 for how strongly M15 structure supports `action`."""
+    if not feats or action not in ("BUY", "SELL"):
+        return 0, ""
+    up = action == "BUY"
+    score = 0
+    notes = []
+    if feats["trend"] == ("UP" if up else "DOWN"):
+        score += 35; notes.append(f"M15 trend {feats['trend']}")
+    if feats["donchian20"] == ("BREAK_UP" if up else "BREAK_DOWN"):
+        score += 20; notes.append(f"Donchian {feats['donchian20']}")
+    mom = feats["momentum_3h_pct"]
+    if (mom > 0.25 if up else mom < -0.25):
+        score += 20; notes.append(f"3h momentum {mom:+.2f}%")
+    if feats["swing_structure"] == ("HH_HL" if up else "LH_LL"):
+        score += 15; notes.append(f"structure {feats['swing_structure']}")
+    vd = feats.get("vwap_dist_pct")
+    if vd is not None and (vd > 0 if up else vd < 0):
+        score += 10; notes.append(f"price {'above' if up else 'below'} VWAP")
+    return score, ", ".join(notes)
+
+
+async def fetch_intraday_pack(symbol: str) -> dict | None:
+    """Latest fresh M15 features for the symbol from the EA candle stream."""
+    try:
+        from database import get_db
+        from pip_utils import base_symbol
+        doc = await get_db().intraday_candles.find_one(
+            {"symbol": base_symbol(symbol)},
+            {"bars": {"$slice": -120}, "updated_at": 1},
+            sort=[("updated_at", -1)],
+        )
+        if not doc:
+            return None
+        upd = doc.get("updated_at")
+        if upd:
+            u = datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) - u > timedelta(minutes=FRESHNESS_MIN):
+                return None
+        return compute_intraday_features(doc.get("bars") or [])
+    except Exception as e:  # noqa: BLE001
+        logger.debug("intraday pack failed for %s: %s", symbol, e)
+        return None
