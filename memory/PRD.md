@@ -202,6 +202,9 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Per-Account Guard Scoping (iter-122b, July 8 2026 — DONE)
+Guards now act individually per account (each has own equity/settings): `loss_cooldown.py` (was deliberately cross-account since iter-58 — user overrode; message now "on this account"), `_on_sl_cooldown(account_id=)`, loss-streak circuit-breaker query. Anti-tilt + trade_of_day_cap were already account-scoped. Verified with synthetic trades: loss on acctA blocks only acctA; manual losses block nothing; SL cooldown isolated per account.
+
 ## Manual-Trade Isolation for Behavioral Guards (iter-122, July 8 2026 — DONE)
 User's manual GOLD SELL (−$0.16) froze all 5 bots 30min via loss cooldown. Behavioral guards must judge the bot by its OWN trades: added `origin: "auto"` filter to (1) `loss_cooldown.py` query, (2) anti-tilt (bot_runner ~485), (3) `_on_sl_cooldown`, (4) loss-streak circuit-breaker (~1217), (5) trade_of_day_cap query, (6) report-card `_baseline_stats` EV. Equity-level guards (daily drawdown, safety_guardian aggregate risk incl. open manual positions, auto-heal) DELIBERATELY still count everything — they protect the account, not the bot's behavior. Verified live: cooldown cleared, all 5 bots resumed scanning.
 

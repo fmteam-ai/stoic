@@ -71,20 +71,24 @@ def _sl_cooldown_minutes_default() -> int:
     return int(os.environ.get("SL_COOLDOWN_MIN", "45"))
 
 
-async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int) -> dict | None:
+async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int,
+                          account_id: str | None = None) -> dict | None:
     """If the most recent trade for (user, symbol) was a stop-out within
     `lookback_min` minutes, return that trade's metadata. Used to suppress
     revenge re-entries into the same losing regime.
     """
     if lookback_min <= 0:
         return None
-    cursor = db.trades.find({
+    q = {
         "user_id": user_id,
         "symbol": symbol,
         "status": "closed",
         "origin": "auto",
         "close_reason": "stop_loss",
-    }).sort("closed_at", -1).limit(1)
+    }
+    if account_id:
+        q["account_id"] = account_id
+    cursor = db.trades.find(q).sort("closed_at", -1).limit(1)
     docs = await cursor.to_list(length=1)
     if not docs:
         return None
@@ -560,7 +564,8 @@ async def _process_user_account_locked(db, cfg: dict):
                 continue
 
         if sl_cooldown_enabled and sl_cooldown_min > 0:
-            sl_cd = await _on_sl_cooldown(db, user_id, sym, sl_cooldown_min)
+            sl_cd = await _on_sl_cooldown(db, user_id, sym, sl_cooldown_min,
+                                          account_id=cfg_account_id)
             if sl_cd:
                 logger.info("SL cooldown user=%s sym=%s resumes in %smin",
                             user_id, sym, sl_cd["resumes_in_min"])
@@ -750,9 +755,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 signal["payoff_guard"] = {"tightened": True, "reason": pg["reason"]}
                 await inc_intel_counter(user_id, "payoff_guard_tighten")
 
-        # iter-58 · Loss cooldown — after ANY loss, same symbol+direction
-        # re-entries are paused for 30min across ALL accounts (shadow-tested
-        # 14d on real trades: -$174 → +$7,429; blocks clustered re-entries).
+        # iter-58 · Loss cooldown — after a BOT loss, same symbol+direction
+        # re-entries are paused for 30min on THAT account (iter-122b:
+        # per-account — each account has its own equity and settings).
         if signal.get("action") in ("BUY", "SELL"):
             from loss_cooldown import loss_cooldown_block
             lc = await loss_cooldown_block(db, user_id, sym, signal["action"], cfg)
@@ -1218,12 +1223,14 @@ async def _process_user_account_locked(db, cfg: dict):
         LOSS_STREAK_THRESHOLD = 2
         LOSS_STREAK_COOLDOWN_HRS = 4
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=LOSS_STREAK_COOLDOWN_HRS)).isoformat()
-        recent_closed = await db.trades.find(
-            {
-                "user_id": user_id, "symbol": sym, "action": signal["action"],
-                "status": "closed", "origin": "auto", "closed_at": {"$gte": cutoff},
-            },
-        ).sort("closed_at", -1).limit(LOSS_STREAK_THRESHOLD).to_list(LOSS_STREAK_THRESHOLD)
+        ls_q = {
+            "user_id": user_id, "symbol": sym, "action": signal["action"],
+            "status": "closed", "origin": "auto", "closed_at": {"$gte": cutoff},
+        }
+        if cfg.get("account_id"):
+            ls_q["account_id"] = cfg["account_id"]
+        recent_closed = await db.trades.find(ls_q).sort(
+            "closed_at", -1).limit(LOSS_STREAK_THRESHOLD).to_list(LOSS_STREAK_THRESHOLD)
         if (len(recent_closed) >= LOSS_STREAK_THRESHOLD
                 and all(float(t.get("pnl") or 0) < 0 for t in recent_closed)):
             await _record_pulse(db, cfg, symbol=sym,

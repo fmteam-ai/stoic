@@ -1,13 +1,9 @@
-"""iter-58 · Loss Cooldown guardrail.
+"""iter-58 · Loss Cooldown guardrail (iter-122b: per-account).
 
-After ANY trade closes at a loss, block NEW trades in the same
-symbol+direction for `loss_cooldown_minutes` (default 30) across ALL of the
-user's accounts. The existing anti-tilt freeze is per-account and needs 2
-losses per account before it bites — with 5 correlated accounts one wrong
-directional read became 13 clustered losses in under an hour (2026-07-07).
-
-Shadow-tested on the user's real trades: last 14 days -$174 → +$7,429
-(blocks 159 clustered re-entries carrying net -$7,603)."""
+After a BOT trade closes at a loss, block NEW trades in the same
+symbol+direction for `loss_cooldown_minutes` (default 30) on THAT account.
+Each account has its own equity and settings, so a loss on one broker must
+not pause the others."""
 from datetime import datetime, timedelta, timezone
 
 from pip_utils import base_symbol
@@ -28,11 +24,15 @@ async def loss_cooldown_block(db, user_id: str, symbol: str, action: str,
         return None
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(minutes=minutes)).isoformat()
-    rows = await db.trades.find({
+    q = {
         "user_id": user_id, "status": "closed", "action": action,
         "origin": "auto",  # bot losses only — manual trades must not freeze the bot
         "pnl": {"$lt": 0}, "closed_at": {"$gte": cutoff},
-    }).sort("closed_at", -1).limit(25).to_list(length=25)
+    }
+    account_id = cfg.get("account_id")
+    if account_id:
+        q["account_id"] = account_id
+    rows = await db.trades.find(q).sort("closed_at", -1).limit(25).to_list(length=25)
     base = base_symbol(symbol)
     for r in rows:
         if base_symbol(r.get("symbol")) != base:
@@ -42,8 +42,8 @@ async def loss_cooldown_block(db, user_id: str, symbol: str, action: str,
             left = minutes - (now - closed).total_seconds() / 60.0
         except (ValueError, TypeError):
             left = minutes
-        return (f"Loss cooldown: a {action} on {base} closed at a loss "
+        return (f"Loss cooldown: a bot {action} on {base} closed at a loss "
                 f"(${float(r.get('pnl') or 0):.2f}) {minutes - left:.0f}min ago — "
-                f"same-direction re-entries paused across all accounts for "
+                f"same-direction re-entries paused on this account for "
                 f"{max(left, 0):.0f} more min.")
     return None
