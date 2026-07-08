@@ -202,6 +202,13 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Range Scalp Engine (iter-123, July 8 2026 — DONE, tests 11/11 pass incl. iter-120 regression)
+User: "market moves up and down, bot sleeping; strategies are fast scalp". Root cause: ALL strategies were trend-hunters — in an M15 RANGE nothing can ever fire (user was profitably scalping the range manually). Built:
+- `intraday_features.py`: pack now has session_high/low + range_pos_pct; `range_scalp_signal()` — BUY ≤18% / SELL ≥82% of session range when trend FLAT + Donchian INSIDE + day_range ≥0.6% + range ≥4×atr15.
+- `ai_signals.py`: `range_scalp_mode` param (from cfg `range_scalp_enabled` via strategy_agent). Fires only when LLM says HOLD + macro not frozen; `scope: range_scalp`. EXEMPT from trend vetoes: MTF, CHOP, entropy, short-tier, A+ confluence, self-contradiction, intraday counter-momentum. Geometry: SL 1.2×atr15 (30p floor), TP toward VWAP clamp [2.4, 4.8]×atr15, rr floor 1.05 (weighted lands ~1.25). ALL capital protections + bot_runner gates still apply.
+- cfg toggle in models/_serialize/BotConfig.jsx ("Range Scalp Mode"); enabled on 5 scalper/fast_scalp configs (aggressive acct left off).
+- E2E simulation: range-low pack → BUY 73, scope range_scalp, rr 1.25, no vetoes, tradeable.
+
 ## Per-Account Guard Settings UI (iter-122c, July 8 2026 — DONE)
 Bot Config (already per-account via selector) now exposes: Loss Cooldown (enabled/minutes), Trade Geometry Guards (payoff_guard_enabled, payoff_guard_max_sl_tp1, min_final_rr). Added fields to `models.BotConfigUpdate`, `bot_routes._serialize` whitelist + new-config defaults, BotConfig.jsx save payload + CapitalGuardsSection controls. GOTCHA: `_serialize()` in bot_routes is an explicit whitelist — new cfg fields MUST be added there or GET returns None. E2E verified: per-account save/read isolated (acct A 15min/0.8 didn't touch acct B 30min/0.75).
 

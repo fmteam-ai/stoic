@@ -229,6 +229,7 @@ export default function BotConfig() {
                 min_final_rr: cfg.min_final_rr ?? 0.75,
                 payoff_guard_enabled: cfg.payoff_guard_enabled ?? true,
                 payoff_guard_max_sl_tp1: cfg.payoff_guard_max_sl_tp1 ?? 1.2,
+                range_scalp_enabled: cfg.range_scalp_enabled ?? false,
                 pre_news_protect_enabled: cfg.pre_news_protect_enabled,
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
                 friday_flat_enabled: cfg.friday_flat_enabled ?? true,
@@ -745,6 +746,12 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="min_final_rr" label="FINAL R:R FLOOR" suffix="R" step={0.05} min={0} max={3} />
                         </div>
                     )}
+                </div>
+
+                {/* Range Scalp engine */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="range_scalp_enabled" label="Range Scalp Mode" icon={Crosshair} color="#10F2C5"
+                        desc="When M15 shows a confirmed RANGE (flat trend, no breakout), fade the extremes: BUY near the session low, SELL near the session high, targeting VWAP. Tight M15-ATR stops. Trend vetoes don't apply; all capital protections (risk caps, cooldowns, news freeze) stay active. Stands down the moment a breakout is detected." />
                 </div>
 
                 {/* Pre-news Position Protector */}

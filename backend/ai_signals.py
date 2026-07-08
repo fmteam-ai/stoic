@@ -184,7 +184,8 @@ async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
 
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
-                         aggressive_mode: bool = False) -> dict:
+                         aggressive_mode: bool = False,
+                         range_scalp_mode: bool = False) -> dict:
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
@@ -481,6 +482,21 @@ async def analyze_symbol(symbol: str, risk_level: str,
         logger.info("Aggressive Mode skipped sym=%s action=%s conf=%s frozen=%s",
                     symbol, action, confidence, macro.get("frozen"))
 
+    # iter-123 · Range Scalp — deterministic range-fade when the AI holds and
+    # the M15 stream shows a confirmed RANGE with price at an extreme.
+    # Trend vetoes (MTF/CHOP/entropy/short-tier/A+) don't apply to this scope;
+    # every capital protection (risk caps, cooldowns, news freeze) still does.
+    trade_scope = "swing"
+    range_scalp_applied = ""
+    if range_scalp_mode and action == "HOLD" and not macro.get("frozen"):
+        from intraday_features import range_scalp_signal
+        rs_action, rs_note = range_scalp_signal(intraday_pack)
+        if rs_action:
+            action = rs_action
+            trade_scope = "range_scalp"
+            confidence = max(confidence, adapted_profile["min_confidence"] + 3)
+            range_scalp_applied = rs_note
+
     # Veto cascade — each veto checks its own condition independently,
     # so reasoning carries all reasons we held off. Final action is HOLD if any fires.
     final_action = action
@@ -493,7 +509,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # 2. Regime CHOP safety veto
     regime_label = regime.get("regime")
     regime_veto = ""
-    if regime_label == "CHOP" and action != "HOLD":
+    if regime_label == "CHOP" and action != "HOLD" and trade_scope != "range_scalp":
         regime_veto = "Regime CHOP detected — high vol without direction. Trade vetoed."
         final_action = "HOLD"
 
@@ -508,7 +524,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # A model contradicting itself is a sanity bug, not a probability — no
     # amount of "aggressive" setting should let the bot trade on it.
     self_contra_veto = ""
-    if action != "HOLD":
+    if action != "HOLD" and trade_scope != "range_scalp":
         rtxt = (parsed.get("reasoning") or "").lower()
         block_phrases = [
             "cautious_wait", "cautious wait",
@@ -534,7 +550,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
 
     # 4. Shannon entropy noise veto — block trades in chaotic/random markets
     entropy_veto = ""
-    if not entropy.get("tradeable", True) and action != "HOLD" and not aggressive_mode:
+    if (not entropy.get("tradeable", True) and action != "HOLD"
+            and not aggressive_mode and trade_scope != "range_scalp"):
         entropy_veto = (
             f"Noise filter: market entropy={entropy.get('entropy')} "
             f"({entropy.get('label')}). Random walk regime — trade vetoed."
@@ -564,8 +581,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # 6. Multi-Timeframe trend confluence gate
     mtf = multi_timeframe_gate(action, history, indicators, mtf_tiers=mtf_tiers)
     mtf_veto = ""
-    trade_scope = "swing"
-    if action != "HOLD" and not mtf["aligned"] and not aggressive_mode:
+    if (action != "HOLD" and not mtf["aligned"] and not aggressive_mode
+            and trade_scope != "range_scalp"):
         # iter-120 · Intraday scalp override — daily tiers conflict, but if
         # the live M15 structure STRONGLY supports the action this becomes a
         # tagged intraday scalp (tight M15-ATR geometry) instead of a veto.
@@ -620,7 +637,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         min_confluences=APLUS_MIN_CONFLUENCES,
     )
     aplus_veto = ""
-    if final_action != "HOLD" and not confluence["passed"] and not aggressive_mode:
+    if (final_action != "HOLD" and not confluence["passed"] and not aggressive_mode
+            and trade_scope != "range_scalp"):
         aplus_veto = confluence["reason"]
         final_action = "HOLD"
 
@@ -630,12 +648,20 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # iter-120 · Intraday scalps size stops off M15 ATR (much tighter than
     # daily ATR) — same 1.5/5.0 multipliers preserve the weighted R:R ≈ 2.08.
     atr15 = float((intraday_pack or {}).get("atr15") or 0)
-    if trade_scope == "intraday_scalp" and atr15 > 0 and final_action in ("BUY", "SELL"):
-        sl_dist_price = ATR_SL_MULTIPLIER * atr15
+    if trade_scope in ("intraday_scalp", "range_scalp") and atr15 > 0 and final_action in ("BUY", "SELL"):
+        if trade_scope == "range_scalp":
+            # Fade toward VWAP: tight stop beyond the extreme, target clamped
+            # so the weighted R:R stays ≥ ~1.25 (high-win-rate style).
+            sl_dist_price = 1.2 * atr15
+            vwap = (intraday_pack or {}).get("session_vwap")
+            vwap_dist = abs(current_price - float(vwap)) if vwap else 0.0
+            tp_dist_price = max(2.4 * atr15, min(4.8 * atr15, vwap_dist or 3.0 * atr15))
+        else:
+            sl_dist_price = ATR_SL_MULTIPLIER * atr15
+            tp_dist_price = ATR_TP_MULTIPLIER * atr15
         sl_min_price = pips_to_price(symbol, 30)   # scalp floor: 30 pips
         sl_max_price = pips_to_price(symbol, SL_MAX_PIPS)
         sl_dist_price = max(sl_min_price, min(sl_max_price, sl_dist_price))
-        tp_dist_price = ATR_TP_MULTIPLIER * atr15
         tp1_dist = tp_dist_price * 0.4
         tp2_dist = tp_dist_price * 0.7
         tp3_dist = tp_dist_price * 1.0
@@ -712,8 +738,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
             + 0.25 * abs(tp3 - current_price)
         )
         rr_ratio = round(weighted_tp_dist / sl_dist, 2)
-        # In Aggressive Mode, drop the R:R floor to 1.1 (still positive expectancy).
-        rr_floor = 1.1 if aggressive_mode else MIN_RR_RATIO
+        # Aggressive Mode: floor 1.1; range scalps: 1.05 (high-win-rate style).
+        if trade_scope == "range_scalp":
+            rr_floor = 1.05
+        else:
+            rr_floor = 1.1 if aggressive_mode else MIN_RR_RATIO
         if rr_ratio < rr_floor:
             rr_veto = (
                 f"Weighted R:R {rr_ratio} < min {rr_floor}. "
@@ -736,6 +765,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
     from payoff_guard import intraday_counter_momentum, short_tier_momentum_veto
     intraday_veto, intraday_change_pct = intraday_counter_momentum(
         final_action, symbol, current_price, history)
+    if intraday_veto and trade_scope == "range_scalp":
+        # Fading a range extreme always opposes the day's tape — that's the
+        # whole setup. Breakout protection lives in range_scalp_signal itself
+        # (requires FLAT trend + Donchian INSIDE).
+        intraday_veto = ""
     if intraday_veto:
         final_action = "HOLD"
 
@@ -744,7 +778,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # 2-of-3 vote keeps approving fades of a fresh strong rally. When the
     # last-week trend is strongly directional (|slope| ≥ 1%), fading it is
     # forbidden regardless of the slower tiers.
-    short_tier_veto = short_tier_momentum_veto(final_action, mtf_tiers)
+    short_tier_veto = (short_tier_momentum_veto(final_action, mtf_tiers)
+                       if trade_scope != "range_scalp" else None)
     short_tier_defer = ""
     if short_tier_veto:
         # iter-120b · The SHORT tier is a WEEKLY daily-bar slope — when live
@@ -796,6 +831,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         reasoning = f"{reasoning}\n\nVETO (short-tier-momentum): {short_tier_veto}"
     if short_tier_defer:
         reasoning = f"{reasoning}\n\nNOTE: {short_tier_defer}"
+    if range_scalp_applied:
+        reasoning = f"{reasoning}\n\nRANGE SCALP: {range_scalp_applied}"
     if self_contra_veto:
         reasoning = f"{reasoning}\n\nVETO (self-contradiction): {self_contra_veto}"
 
@@ -836,6 +873,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "regime_execution_mode": regime_meta,
         "meta_label": meta_label,
         "scope": trade_scope,
+        "range_scalp_applied": range_scalp_applied or None,
         "intraday_m15": intraday_pack,
         "mtf_gate": mtf,
         "mtf_tiers": mtf_tiers,

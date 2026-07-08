@@ -96,10 +96,14 @@ def compute_intraday_features(bars: list) -> dict | None:
     day_bars = [b for b in bars
                 if datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d") == today]
     day_range_pct = None
+    session_high = session_low = range_pos_pct = None
     if day_bars:
         dh = max(float(b["h"]) for b in day_bars)
         dl = min(float(b["l"]) for b in day_bars)
         day_range_pct = round((dh - dl) / dl * 100, 2) if dl else None
+        session_high, session_low = round(dh, 2), round(dl, 2)
+        if dh > dl:
+            range_pos_pct = round((last - dl) / (dh - dl) * 100, 1)
 
     return {
         "timeframe": "M15",
@@ -115,6 +119,9 @@ def compute_intraday_features(bars: list) -> dict | None:
         "swing_structure": structure,
         "atr15": round(atr15, 3),
         "day_range_pct": day_range_pct,
+        "session_high": session_high,
+        "session_low": session_low,
+        "range_pos_pct": range_pos_pct,
         "bars_analyzed": len(bars),
     }
 
@@ -139,6 +146,38 @@ def intraday_alignment(action: str, feats: dict | None) -> tuple[int, str]:
     if vd is not None and (vd > 0 if up else vd < 0):
         score += 10; notes.append(f"price {'above' if up else 'below'} VWAP")
     return score, ", ".join(notes)
+
+
+RANGE_EDGE_PCT = 18          # extreme = within this % of the session range edge
+RANGE_MIN_DAY_PCT = 0.6      # session must have moved at least this much
+RANGE_MIN_ATR_MULT = 4.0     # range width must be ≥ this × ATR15 (target reachable)
+
+
+def range_scalp_signal(feats: dict | None) -> tuple[str | None, str]:
+    """Deterministic range-fade setup: in a confirmed M15 RANGE, BUY near the
+    session low / SELL near the session high, targeting VWAP / range middle.
+    Returns (action|None, note)."""
+    if not feats:
+        return None, ""
+    if feats.get("trend") != "FLAT" or feats.get("donchian20") != "INSIDE":
+        return None, "not rangebound"
+    atr15 = float(feats.get("atr15") or 0)
+    hi, lo = feats.get("session_high"), feats.get("session_low")
+    pos = feats.get("range_pos_pct")
+    day_rng = float(feats.get("day_range_pct") or 0)
+    if not atr15 or hi is None or lo is None or pos is None:
+        return None, "missing range data"
+    if day_rng < RANGE_MIN_DAY_PCT:
+        return None, f"day range {day_rng}% too small"
+    if (hi - lo) < RANGE_MIN_ATR_MULT * atr15:
+        return None, "range too narrow vs ATR — target not reachable"
+    if pos <= RANGE_EDGE_PCT:
+        return "BUY", (f"Range scalp: price at {pos}% of session range "
+                       f"({lo}–{hi}), fading the low toward VWAP {feats.get('session_vwap')}.")
+    if pos >= 100 - RANGE_EDGE_PCT:
+        return "SELL", (f"Range scalp: price at {pos}% of session range "
+                        f"({lo}–{hi}), fading the high toward VWAP {feats.get('session_vwap')}.")
+    return None, f"mid-range ({pos}%)"
 
 
 async def fetch_intraday_pack(symbol: str) -> dict | None:

@@ -229,6 +229,9 @@ class BotConfigUpdate(BaseModel):
     # Payoff guard — clamp SL to at most this multiple of the TP1 distance.
     payoff_guard_enabled: bool = True
     payoff_guard_max_sl_tp1: float = 1.2
+    # Range Scalp engine (iter-123) — fade session-range extremes toward VWAP
+    # when M15 shows a confirmed RANGE. Trend vetoes don't apply to this scope.
+    range_scalp_enabled: bool = False
     # Pre-news existing-position protector — flatten OPEN trades into imminent HIGH-impact events
     pre_news_protect_enabled: bool = True
     pre_news_protect_minutes: int = 5

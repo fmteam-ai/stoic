@@ -32,5 +32,6 @@ class StrategyAgent:
             symbol, risk_level,
             min_conf_override=int(cfg.get("min_confidence_override") or 0),
             aggressive_mode=bool(cfg.get("aggressive_mode") or False),
+            range_scalp_mode=bool(cfg.get("range_scalp_enabled") or False),
         )
         return signal
