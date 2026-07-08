@@ -5,7 +5,6 @@ The scheduler in `server.py` calls `sweep_user(user_id)` on a 5-minute cadence
 Every action is idempotent + reversible + logged to `auto_heal_actions`.
 
 Safe set (never touches money flow):
-  • Disable `aggressive_mode` after a loss spike (daily PnL ≤ -2% of equity)
   • Raise `min_confidence_override` +5 (clamp 95) when a loss pattern recurs ≥3×
   • Trade reconcile when DB ↔ broker drift detected
   • Clear stale Bot Pulse (>1 h)
@@ -44,55 +43,6 @@ async def _log_action(db, user_id: str, kind: str, detail: dict):
         "detail": detail,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
-
-
-async def _check_aggressive_mode(db, user_id: str) -> list[dict]:
-    """If any cfg has aggressive_mode=true AND today's PnL is deeply red,
-    flip it off as a protective measure.
-
-    The threshold is conservative — daily PnL ≤ -2% of equity. This catches
-    the iter-48 bias-trap pattern without flapping on day-to-day noise.
-    """
-    actions = []
-    cfgs = await db.bot_configs.find({"user_id": user_id, "aggressive_mode": True}).to_list(length=20)
-    if not cfgs:
-        return actions
-
-    # Daily PnL — sum today's closed trades
-    today_iso = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    daily_pnl = 0.0
-    async for t in db.trades.find({
-        "user_id": user_id, "status": "closed",
-        "closed_at": {"$gte": today_iso},
-    }):
-        daily_pnl += float(t.get("pnl") or 0)
-
-    # Reference equity — use first account's equity (best-effort)
-    acct = await db.accounts.find_one({"user_id": user_id})
-    equity = float((acct or {}).get("equity") or 0)
-    pnl_pct = (daily_pnl / equity * 100) if equity > 0 else 0.0
-
-    if pnl_pct > -2.0:
-        return actions  # not severe enough — leave aggressive_mode alone
-
-    for cfg in cfgs:
-        await db.bot_configs.update_one(
-            {"_id": cfg["_id"]},
-            {"$set": {"aggressive_mode": False,
-                      "updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
-        actions.append({
-            "kind": "disable_aggressive_mode",
-            "config_id": str(cfg["_id"]),
-            "trigger": f"daily PnL {pnl_pct:.2f}% ≤ -2.0%",
-        })
-    if actions:
-        await _log_action(db, user_id, "disable_aggressive_mode", {
-            "configs": [a["config_id"] for a in actions],
-            "daily_pnl": round(daily_pnl, 2),
-            "daily_pnl_pct": round(pnl_pct, 2),
-        })
-    return actions
 
 
 async def _check_recurring_loss_pattern(db, user_id: str) -> list[dict]:
@@ -235,7 +185,6 @@ async def sweep_user(user_id: str) -> dict:
 
     all_actions = []
     for fn in (
-        _check_aggressive_mode,
         _check_recurring_loss_pattern,
         _check_trade_sync_drift,
         _clear_stale_pulses,

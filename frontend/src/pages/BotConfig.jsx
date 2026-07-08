@@ -229,14 +229,11 @@ export default function BotConfig() {
                 min_final_rr: cfg.min_final_rr ?? 0.75,
                 payoff_guard_enabled: cfg.payoff_guard_enabled ?? true,
                 payoff_guard_max_sl_tp1: cfg.payoff_guard_max_sl_tp1 ?? 1.2,
-                range_scalp_enabled: cfg.range_scalp_enabled ?? false,
-                mtf_confluence_enabled: cfg.mtf_confluence_enabled ?? false,
                 pre_news_protect_enabled: cfg.pre_news_protect_enabled,
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
                 friday_flat_enabled: cfg.friday_flat_enabled ?? true,
                 friday_flat_mode: cfg.friday_flat_mode || "close",
                 friday_flat_minutes_before: cfg.friday_flat_minutes_before ?? 60,
-                aggressive_mode: cfg.aggressive_mode,
                 min_confidence_override: cfg.min_confidence_override,
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
@@ -749,16 +746,18 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     )}
                 </div>
 
-                {/* MTF Confluence engine */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="mtf_confluence_enabled" label="MTF Confluence Mode" icon={Crosshair} color="#FFD700"
-                        desc="Top-down multi-timeframe strategy: 4H trend → 1H structure → 15M pullback → live-price breakout entry. Only trades when all timeframes align (e.g. 4H bullish + 1H bullish + 15M pullback + breakout = long). Tight M15-ATR stops; all capital protections stay active." />
-                </div>
-
-                {/* Range Scalp engine */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="range_scalp_enabled" label="Range Scalp Mode" icon={Crosshair} color="#10F2C5"
-                        desc="When M15 shows a confirmed RANGE (flat trend, no breakout), fade the extremes: BUY near the session low, SELL near the session high, targeting VWAP. Tight M15-ATR stops. Trend vetoes don't apply; all capital protections (risk caps, cooldowns, news freeze) stay active. Stands down the moment a breakout is detected." />
+                {/* Core Strategy — strict MTF cascade (always on) */}
+                <div className="border border-[#FFD700]/30 p-4 bg-[#0A0A08]" data-testid="core-strategy-card">
+                    <div className="flex items-center gap-2 mb-2">
+                        <Crosshair className="w-4 h-4 text-[#FFD700]" />
+                        <span className="font-display font-bold text-sm">Core Strategy — MTF Top-Down Cascade</span>
+                        <span className="ml-auto font-mono text-[9px] tracking-widest px-2 py-0.5 border border-[#FFD700]/40 text-[#FFD700]">ALWAYS ON</span>
+                    </div>
+                    <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                        The bot trades ONE strategy: 4H trend → 1H structure → 15M pullback → live-price breakout entry.
+                        It only fires when every timeframe agrees; otherwise it stands by and reports why on the MTF Cascade panel.
+                        Tight M15-ATR stops. All capital protections (news veto, macro freeze, R:R floor, drawdown guards, cooldowns) stay active.
+                    </p>
                 </div>
 
                 {/* Pre-news Position Protector */}
@@ -789,17 +788,6 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                                 </select>
                             </div>
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="friday_flat_minutes_before" label="WINDOW BEFORE CLOSE" suffix="minutes" step={5} min={5} max={480} />
-                        </div>
-                    )}
-                </div>
-
-                {/* Aggressive Mode */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="aggressive_mode" label="Aggressive Mode" icon={Flame} color="#FF6B00"
-                        desc="When Claude returns HOLD with any non-zero conviction AND the macro window is open, infer a direction from indicators (Kalman velocity + price-vs-MA200 + DXY bias) and convert HOLD → BUY/SELL. Increases trade frequency at the cost of per-trade edge. The full 10-layer veto cascade still runs." />
-                    {cfg.aggressive_mode && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="min_confidence_override" label="MIN-CONF OVERRIDE (0 = use profile)" suffix="%" step={1} min={0} max={95} />
                         </div>
                     )}
                 </div>
@@ -1101,20 +1089,6 @@ function TradingIntelligenceSection({ cfg, setCfg }) {
                             ))}
                         </div>
                     )}
-                </div>
-
-                {/* MTF Gate — informational (always-on) */}
-                <div className="border border-[#1F1F1F] p-4 bg-[#050505]">
-                    <div className="flex items-center gap-2 mb-2">
-                        <TrendingUp className="w-4 h-4 text-[#0099FF]" />
-                        <span className="font-display font-bold text-sm">Multi-Timeframe Trend Gate</span>
-                        <div className="font-mono text-[10px] px-2 py-0.5 border border-[#0099FF]/40 text-[#0099FF] bg-[#0099FF]/10">● ALWAYS ON</div>
-                    </div>
-                    <p className="text-xs text-[#A1A1AA] leading-relaxed">
-                        Every BUY/SELL signal is veto-checked against three trend confluence rules
-                        (SMA20 slope, SMA50 vs SMA200, price vs SMA50). Counter-trend setups are
-                        silently held. Look for <span className="text-[#0099FF]">mtf_gate</span> on the Signals page.
-                    </p>
                 </div>
 
                 {/* Slippage Veto */}

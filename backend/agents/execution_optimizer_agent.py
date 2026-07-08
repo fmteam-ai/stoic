@@ -10,7 +10,7 @@ broker engine fires. Three deterministic guards:
                          news; firing there costs you the edge.)
   2. SESSION GUARD    — for XAUUSD, defer trades fired in pure
                          off-hours (e.g., 22:00-06:00 UTC, weekends)
-                         unless aggressive_mode is set. Off-hours
+                         Off-hours
                          spreads are typically 2-3× tighter sessions.
   3. SLICE PLANNER    — if the lot would represent > SLICE_MAX_PCT of
                          the symbol's average daily volume budget (a
@@ -117,7 +117,6 @@ class ExecutionOptimizerAgent:
         *,
         signal: dict,
         account: dict | None = None,
-        aggressive_mode: bool = False,
     ) -> dict:
         action = (signal or {}).get("action") or "HOLD"
         symbol = (signal or {}).get("symbol") or ""
@@ -142,7 +141,7 @@ class ExecutionOptimizerAgent:
         session = "active"
         if sym == "XAUUSD" and DEFER_OFF_HOURS_GOLD and _is_xau_off_hours():
             session = "off_hours"
-            if not aggressive_mode and deferred_reason is None:
+            if deferred_reason is None:
                 deferred_reason = ("XAUUSD off-hours window (22-06 UTC / weekend) "
                                    "— defer to next session for tighter spreads")
 

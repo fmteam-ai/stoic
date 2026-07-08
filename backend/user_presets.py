@@ -21,7 +21,7 @@ from database import get_db
 # Mirrors strategy_presets.py — same behaviour knobs only. Never lets users
 # accidentally serialise risk_level, symbols, drawdown limits, or per-symbol caps.
 PRESET_FIELD_WHITELIST = {
-    "aggressive_mode", "min_confidence_override",
+    "min_confidence_override",
     "trade_of_day_cap", "max_concurrent_trades",
     "trailing_enabled", "trailing_start_r", "trailing_distance_r",
     "partial_close_enabled", "partial_close_trigger_r", "partial_close_fraction",

@@ -72,11 +72,8 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
         "min_final_rr": 0.75,
         "payoff_guard_enabled": True,
         "payoff_guard_max_sl_tp1": 1.2,
-        "range_scalp_enabled": False,
-        "mtf_confluence_enabled": False,
         "pre_news_protect_enabled": True,
         "pre_news_protect_minutes": 5,
-        "aggressive_mode": False,
         "min_confidence_override": 0,
         "max_lot_size": 0.0,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -130,13 +127,9 @@ def _serialize(cfg: dict) -> dict:
         "min_final_rr": cfg.get("min_final_rr", 0.75),
         "payoff_guard_enabled": cfg.get("payoff_guard_enabled", True),
         "payoff_guard_max_sl_tp1": cfg.get("payoff_guard_max_sl_tp1", 1.2),
-        "range_scalp_enabled": cfg.get("range_scalp_enabled", False),
-        "mtf_confluence_enabled": cfg.get("mtf_confluence_enabled", False),
         "pre_news_protect_enabled": cfg.get("pre_news_protect_enabled", True),
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
-        "aggressive_mode": cfg.get("aggressive_mode", False),
         "min_confidence_override": cfg.get("min_confidence_override", 0),
-        "mtf_strict": cfg.get("mtf_strict", False),
         "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
         # iter-74 · Adaptive Mode visibility
@@ -686,8 +679,6 @@ async def update_config(payload: BotConfigUpdate,
     if "daily_profit_target_action" in update:
         v = (update["daily_profit_target_action"] or "").lower()
         update["daily_profit_target_action"] = v if v in ("lock", "stop") else "lock"
-    if "mtf_strict" in update:
-        update["mtf_strict"] = bool(update["mtf_strict"])
     if "daily_profit_target_r" in update:
         try:
             update["daily_profit_target_r"] = max(0.0, min(20.0, float(update["daily_profit_target_r"])))
@@ -1173,30 +1164,6 @@ async def bot_health_score(user=Depends(get_current_user)):
         issues.append({"severity": "info", "code": "bot_inactive",
                        "label": "Bot is paused (not generating signals)",
                        "fix": "Go to BotConfig and toggle the bot ON to start trading."})
-
-    # --- 6b. Aggressive mode bypasses safety filters (max -15, P1 warning) --
-    # On 2026-06-26 a customer lost $1121 in 22 minutes because aggressive_mode
-    # silently disabled entropy + learned classifier vetoes, letting the bot
-    # fire 5 same-direction signals into a 0.94-entropy noisy market. The
-    # flag is a power-user knob — surface it LOUDLY so it isn't left on by
-    # accident.
-    tilt_cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=20)
-    aggressive_cfgs = [c for c in tilt_cfgs if c.get("aggressive_mode")]
-    if aggressive_cfgs:
-        score -= 15
-        labels = [
-            (str(c.get("account_id"))[-6:] if c.get("account_id") else "Default")
-            for c in aggressive_cfgs
-        ]
-        issues.append({
-            "severity": "warning",
-            "code": "aggressive_mode_on",
-            "label": (f"Aggressive mode enabled on {len(aggressive_cfgs)} config(s): "
-                      f"{', '.join(labels)} — entropy + learned-classifier vetoes "
-                      f"are BYPASSED."),
-            "fix": ("Turn off aggressive_mode in Bot Config unless you understand "
-                    "you are trading without noise/learned-model protection."),
-        })
 
     # --- 6c. Broker-rejecting accounts (iter-71, max -25 critical) ----------
     # Any account auto-halted by the broker-reject circuit breaker — the

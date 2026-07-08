@@ -125,10 +125,10 @@ def compute_consensus(signal: dict) -> dict:
 
     total = sum(WEIGHTS[k] * votes[k] for k in WEIGHTS)
     scope_adjusted = None
-    if signal.get("scope") in ("range_scalp", "mtf_confluence"):
-        # iter-124b/125 · Trend & forecast agents are DAILY-based — they can't
-        # judge an intraday fade or an intraday 4H/1H confluence trade. Score
-        # these scopes on the agents that can, re-normalized.
+    if signal.get("scope") == "mtf_confluence":
+        # iter-125 · Trend & forecast agents are DAILY-based — they can't
+        # judge an intraday 4H/1H confluence trade. Score
+        # this scope on the agents that can, re-normalized.
         scope_adjusted = ["trend", "forecast"]
         keep = {k: w for k, w in WEIGHTS.items() if k not in scope_adjusted}
         norm = sum(keep.values())

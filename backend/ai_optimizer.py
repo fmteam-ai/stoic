@@ -68,7 +68,6 @@ ALLOWED_FIELDS = {
     "anti_tilt_consecutive_losses": ("int",   1,    10),
     "anti_tilt_freeze_hours":       ("int",   1,    48),
     "asia_session_skip_xau":        ("bool",  None, None),
-    "aggressive_mode":              ("bool",  None, None),
     "pre_news_protect_enabled":     ("bool",  None, None),
     "pre_news_protect_minutes":     ("int",   1,    60),
     "profit_taking_mode":           ("enum",  None, ("expected_value", "win_rate", "trend_follow")),

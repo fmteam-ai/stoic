@@ -469,7 +469,6 @@ async def _process_user_account_locked(db, cfg: dict):
     max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
     min_conf_override = int(cfg.get("min_confidence_override") or 0)
-    aggressive_mode_cfg = bool(cfg.get("aggressive_mode") or False)
     spread_filter_enabled = bool(cfg.get("spread_filter_enabled", False))
     max_spread_pips = cfg.get("max_spread_pips") or {}
     anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
@@ -642,9 +641,8 @@ async def _process_user_account_locked(db, cfg: dict):
                 tune = await get_auto_threshold(user_id, sym, risk_level)
                 signal["auto_tune"] = tune
                 eff = float(tune.get("effective_threshold") or 0)
-                if aggressive_mode_cfg or (0 < min_conf_override < 100):
-                    cap = min_conf_override if (0 < min_conf_override < 100) else 100
-                    eff = min(eff, float(cap))
+                if 0 < min_conf_override < 100:
+                    eff = min(eff, float(min_conf_override))
                 if (signal.get("confidence") or 0) < eff:
                     auto_tune_block_reason = (
                         f"Auto-tune raised threshold to {eff:.0f}% "
@@ -669,41 +667,6 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "rr_veto")
         except Exception:
             pass
-
-        # iter-73 · STRICT MTF mode (cfg.mtf_strict=True). On top of the
-        # existing veto (which fires when ≥2/3 tiers disagree), this requires
-        # ≥2/3 tiers to ACTIVELY AGREE with the trade direction. Counter-trend
-        # AND drift-into-chop trades are both blocked.
-        if signal.get("action") in ("BUY", "SELL") and bool(cfg.get("mtf_strict")):
-            tiers = signal.get("mtf_tiers") or {}
-            alignment = (tiers.get("alignment") or {})
-            buy_sup = int(alignment.get("buy_support") or 0)
-            sell_sup = int(alignment.get("sell_support") or 0)
-            need = 2  # minimum tiers that must back the direction
-            ok = (signal["action"] == "BUY" and buy_sup >= need) or \
-                 (signal["action"] == "SELL" and sell_sup >= need)
-            if not ok:
-                await _record_pulse(db, cfg, symbol=sym,
-                    action="SKIP", level="warn",
-                    reason=(f"MTF strict mode: {signal['action']} needs ≥{need}/3 "
-                            f"tiers agreeing — got buy={buy_sup} sell={sell_sup}. "
-                            f"Trade skipped."),
-                )
-                await inc_intel_counter(user_id, "mtf_strict_veto")
-                continue
-
-        # iter-53 · Velocity veto (Loss-Lab guardrail) — counter-momentum
-        # entries in LOW_VOL_TREND (e.g. SELL while Kalman velocity > +3, or
-        # |velocity| > 5 fighting the MTF bias). Thresholds on the regime
-        # profile, overridable via cfg.regime_overrides.
-        if signal.get("action") in ("BUY", "SELL"):
-            from regime_adapter import velocity_veto
-            vv = velocity_veto(signal, cfg)
-            if vv:
-                await _record_pulse(db, cfg, symbol=sym,
-                    action="SKIP", level="warn", reason=vv)
-                await inc_intel_counter(user_id, "velocity_veto")
-                continue
 
         # iter-55 · Active auto-guards (Daily Auto-Learning) — evidence-gated
         # measures applied by the loss advisor, enforced with the exact

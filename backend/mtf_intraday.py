@@ -15,7 +15,6 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger("mtf-confluence")
 
-DETERMINISTIC_SCOPES = ("range_scalp", "mtf_confluence")
 PULLBACK_MIN_RETRACE = 0.25
 PULLBACK_MAX_RETRACE = 0.70
 IMPULSE_MIN_ATR = 2.0        # trend leg must be ≥ this × ATR15 to matter

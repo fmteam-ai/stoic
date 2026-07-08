@@ -1,0 +1,61 @@
+{
+  "summary": "iter-41 verification of OPTION A single-engine MTF cascade simplification. 44/45 backend tests pass (test_iter126_mtf_only_engine 9/10 + test_iter125_mtf_confluence 7/7 + test_iter63_market_hours_veto 28/28). Frontend renders correctly: mtf-cascade-panel shows live cascade ('4H FLAT / 1H DOWN — WAITING'), core-strategy-card has ALWAYS ON badge with 'Core Strategy — MTF Top-Down Cascade' copy, silent-bot banner + 6 bot-pulse rows all show 'MTF cascade: 4H FLAT / 1H DOWN — no higher-TF agreement — standing by.' proving the new single-engine loop is live. NO 'Aggressive Mode' / 'Range Scalp Mode' / 'MTF Confluence Mode' toggles anywhere. GET /api/bot/config no longer exposes any of the 4 removed legacy fields; PUT with those legacy fields is silently accepted (200) and NOT persisted. GET /api/bot/mtf-confluence?symbol=XAUUSD returns full cascade shape (h4_trend/h1_structure/m15_setup/aligned/note). ai_signals.analyze_symbol('XAUUSD','medium') returns dict with scope='mtf_confluence' and reasoning referencing MTF cascade. GET /api/bot/presets contains no 'aggressive' key and no preset config has aggressive_mode. However, there is ONE CRITICAL BUG: GET /api/bot/health-score returns 500 because `tilt_cfgs` is used at bot_routes.py:1198 but was never defined — the load statement lived in the deleted section 6b (aggressive_mode). This 500 is user-facing: the /bot-health page shows a red 'Request failed with status code 500' banner (see screenshot). Fix is a 1-line: add `tilt_cfgs = await db.bot_configs.find({\"user_id\": user[\"id\"]}).to_list(length=200)` before the `for tc in tilt_cfgs` loop, or fold section 7 into an existing bot_configs fetch. NOT fixed by testing agent per scope rules — flagged for main agent.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/bot/health-score",
+        "issue": "500 Internal Server Error — NameError: name 'tilt_cfgs' is not defined at bot_routes.py:1198. When aggressive_mode section 6b was removed, it took the `tilt_cfgs = await db.bot_configs.find(...)` fetch with it, but section 7 (anti-tilt freeze) still iterates `for tc in tilt_cfgs`. Reproduces on every call; also floods backend.err.log with tracebacks (240+ so far). USER-FACING: /bot-health page shows red 'Request failed with status code 500' banner. Fix: re-add tilt_cfgs = await db.bot_configs.find({'user_id': user['id']}).to_list(length=200) before the loop at ~line 1197.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "internal — orchestrator (historical)",
+        "issue": "backend.err.log shows earlier tracebacks 'NameError: fetch_mtf_confluence is not defined' from ~17:57 in agents/orchestrator.py path. Current calls no longer produce this trace (latest 300s+ of log are clean apart from tilt_cfgs), so likely fixed post-deploy — worth grep-verifying strategy_agent.py still imports fetch_mtf_confluence."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "BotHealthPage",
+        "issue": "Renders red error box 'Request failed with status code 500' at top of page because /api/bot/health-score is 500ing (same root cause as backend critical bug). Auto-Heal card + Self-Improvements card still render below, but the score widget is entirely unusable.",
+        "selector": "text=Request failed with status code 500",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter126_mtf_only_engine.py",
+    "/app/test_reports/pytest/iter126.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Fix `tilt_cfgs` NameError in /app/backend/routes/bot_routes.py line ~1197. Add `tilt_cfgs = await db.bot_configs.find({'user_id': user['id']}).to_list(length=200)` (or reuse the cfg fetch from section 6) BEFORE the `for tc in tilt_cfgs` loop. This blocks the Bot Health page in the UI and floods the backend error log.",
+    "Optional cleanup: `microstructure.py:51` still contains a docstring reference to 'aggressive_mode' — dead reference, safe to drop for consistency with the OPTION-A simplification.",
+    "Optional: `agent_report_card.py:16` names an agent 'mtf_strict_veto' code path — with mtf_strict deleted, this row will always be zero-impact. Consider dropping it from AGENTS[] or renaming.",
+    "Stale tests referencing removed features (range_scalp_signal, DETERMINISTIC_SCOPES, aggressive_mode kwargs) exist in tests/ per review request — did NOT run them; main agent should decide whether to delete or convert."
+  ],
+  "critical_code_review_comments": [
+    "bot_routes.py:1198 — `for tc in tilt_cfgs:` references an undefined name; classic dead-variable-after-refactor bug. The removed section 6b was the fetch site. Root cause of both the 500 and the user-facing red banner on /bot-health.",
+    "bot_routes.py `bot_health_score` is now 630+ lines in a single function — extremely hard to maintain (each removed section leaves this kind of dangling ref). Recommend splitting into per-section helpers (`_score_connectivity`, `_score_anti_tilt`, etc.) so future toggles can't leave orphan variables.",
+    "ai_signals.py:130 `analyze_symbol(symbol, risk_level, min_conf_override=0)` requires risk_level positional — good, but the review request's suggestion 'call asyncio.run for a symbol' implies a 1-arg call. Consider adding a default `risk_level='medium'` for interactive/REPL usage.",
+    "microstructure.py:51 — orphan docstring still mentions 'aggressive_mode' behaviour that no longer exists (dead reference).",
+    "agent_report_card.py:16 — 'mtf_strict_veto' vetokey no longer emitted (mtf_strict removed) — this agent row will always be 0/0/CONSIDER; either remove or fold into the 'mtf_veto' bucket.",
+    "backend.err.log accumulated 240+ tracebacks in a short window because every call to /api/bot/health-score fails. Suggest adding a top-level `try/except` in the health-score handler that returns a degraded {score: null, error: str(e)} 200 payload instead of 500 — protects the UI from full-page failure while the underlying bug is being fixed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter126_mtf_only_engine.py (new — 10 integration tests: /api/bot/config no-legacy shape, legacy PUT-ignored, mtf-confluence cascade shape, /bot/pulse MTF-cascade reason presence, /bot/presets no-aggressive, /bot/health-score green path (currently failing), analyze_symbol unit-level shape+scope+reasoning)"
+  ],
+  "success_rate": {
+    "backend": "97.8% (44/45 — 9/10 in iter126, 7/7 in iter125_mtf_confluence, 28/28 in iter63_market_hours_veto). The only failure is the documented tilt_cfgs NameError on /api/bot/health-score.",
+    "frontend": "90% — mtf-cascade-panel + core-strategy-card + ALWAYS-ON badge + 6-row silent-bot banner all render correctly with MTF cascade reasons; NO legacy toggles remain; /bot-health page renders but shows a red 500 error banner (same root-cause backend bug)."
+  },
+  "test_credentials": "admin@trading.bot / admin123 (cookie auth). No throwaway users created this run.",
+  "seed_data_creation": "None. trade_of_day_cap on admin default config was briefly bumped to a test value and restored (idempotent). No trades executed, no bot toggled, no PANIC triggered, no live MT5 accounts touched.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Baseline: cd /app/backend && REACT_APP_BACKEND_URL=<preview> python -m pytest tests/test_iter126_mtf_only_engine.py tests/test_iter125_mtf_confluence.py tests/test_iter63_market_hours_veto.py -v — expect 45/45 AFTER main agent fixes tilt_cfgs NameError at bot_routes.py:1198. Currently 44/45 with the single documented failure on test_bot_health_endpoint. After fix, re-run and additionally verify /bot-health page in UI no longer shows the red 'Request failed with status code 500' banner. Do NOT toggle any bot_configs.active or trigger PANIC — LIVE MT5 accounts (vtmarkets, Start Trader, MT5 Demo, micro, OnEquity, OnEquity Live, Tauro/VTMarkets) are heart-beating into this preview. Pulse response shape is {items: [{pulse: {reason}, notable: {reason}, ...}]} not a flat list.",
+  "rca of the issue": "ROOT CAUSE: When the OPTION-A simplification removed the aggressive-mode block (section 6b) from bot_health_score() in /app/backend/routes/bot_routes.py, the `tilt_cfgs = await db.bot_configs.find(...).to_list(...)` line that was inside section 6b was removed with it — but section 7 (anti-tilt freeze, lines 1192-1240) still calls `for tc in tilt_cfgs`. Python evaluates that loop line as soon as the request runs, raising NameError. Every /api/bot/health-score call now returns 500, and the Bot Health page shows a red error banner. REPRODUCTION: `curl -c c.txt -X POST $URL/api/auth/login -H 'content-type: application/json' -d '{\"email\":\"admin@trading.bot\",\"password\":\"admin123\"}'` then `curl -b c.txt $URL/api/bot/health-score` → 500 + 'Internal Server Error'. Backend log shows `File \"/app/backend/routes/bot_routes.py\", line 1198, in bot_health_score / for tc in tilt_cfgs: / NameError: name 'tilt_cfgs' is not defined`. MITIGATION (1-line): Just before line ~1197 add `tilt_cfgs = await db.bot_configs.find({'user_id': user['id']}).to_list(length=200)` OR fold section 7 into an existing bot_configs cursor. Optionally also wrap the whole handler in a try/except that returns a graceful degraded payload so the UI never shows a raw 500."
+}

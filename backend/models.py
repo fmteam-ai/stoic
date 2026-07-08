@@ -229,22 +229,10 @@ class BotConfigUpdate(BaseModel):
     # Payoff guard — clamp SL to at most this multiple of the TP1 distance.
     payoff_guard_enabled: bool = True
     payoff_guard_max_sl_tp1: float = 1.2
-    # Range Scalp engine (iter-123) — fade session-range extremes toward VWAP
-    # when M15 shows a confirmed RANGE. Trend vetoes don't apply to this scope.
-    range_scalp_enabled: bool = False
-    # MTF Confluence engine (iter-125, user-specified): 4H trend + 1H
-    # structure + M15 pullback + live-price breakout entry.
-    mtf_confluence_enabled: bool = False
     # Pre-news existing-position protector — flatten OPEN trades into imminent HIGH-impact events
     pre_news_protect_enabled: bool = True
     pre_news_protect_minutes: int = 5
-    # Aggressive Mode — when the Strategy Agent returns HOLD but underlying indicators have
-    # a clear directional bias, override to BUY/SELL. Increases trade frequency at the cost
-    # of per-trade edge. Use carefully.
-    aggressive_mode: bool = False
-    # iter-67: stricter MTF gate — when True, signals require alignment on
-    # H1 + H4 in addition to the base timeframe. Reduces false breakouts.
-    mtf_strict: bool = False
+    # iter-67: stricter MTF gate
     # Custom minimum-confidence override (1-95). 0 = use the risk_level default.
     min_confidence_override: int = 0
     # Per-account lot-size cap. 0 = uncapped (use signal's computed lot size).

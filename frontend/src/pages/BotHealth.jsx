@@ -430,7 +430,6 @@ function AutoHealPanel({ data, onChange }) {
 
             <div className="px-4 py-3 text-xs text-[#A1A1AA] leading-relaxed border-b border-[#1F1F1F]">
                 When enabled, every 5 minutes the bot scans for fixable issues and applies <em>safe, reversible</em> patches —
-                disables <code className="px-1 bg-[#1F1F1F]">aggressive_mode</code> after a loss spike,
                 raises <code className="px-1 bg-[#1F1F1F]">min_confidence</code> on recurring loss patterns,
                 runs <code className="px-1 bg-[#1F1F1F]">reconcile</code> on DB/broker drift,
                 clears stale pulses. <strong>Never touches</strong> open trades or the bot ON/OFF state.

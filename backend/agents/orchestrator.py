@@ -169,7 +169,6 @@ class Orchestrator:
             try:
                 eo = await self.exec_optimizer.optimize(
                     signal=signal, account=account,
-                    aggressive_mode=bool((user_cfg or {}).get("aggressive_mode")),
                 )
                 if not eo.get("approved"):
                     signal["execution_deferred"] = True
