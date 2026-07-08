@@ -62,7 +62,7 @@ def payoff_guard_apply(signal: dict, cfg: dict) -> dict | None:
         entry = float(signal.get("entry_price") or 0)
         sl = float(signal.get("stop_loss") or 0)
         tp1 = float(signal.get("tp1") or signal.get("take_profit") or 0)
-        max_ratio = float(cfg.get("payoff_guard_max_sl_tp1") or 2.0)
+        max_ratio = float(cfg.get("payoff_guard_max_sl_tp1") or 1.2)
     except (TypeError, ValueError):
         return None
     if not (entry and sl and tp1):
@@ -84,6 +84,41 @@ def payoff_guard_apply(signal: dict, cfg: dict) -> dict | None:
             "reason": (f"Payoff guard: SL tightened {sl_d:.1f} → {new_dist:.1f} "
                        f"({max_ratio:.1f}x TP1 distance {tp1_d:.1f}) — was risking "
                        f"{sl_d:.1f} to make {tp1_d:.1f}.")}
+
+
+def final_rr_guard(signal: dict, cfg: dict) -> str | None:
+    """LAST-line R:R check on the FINAL geometry, run AFTER every overlay
+    (Smart Cap TP clipping, payoff-guard SL tighten, behavior adjustments).
+
+    The signal-time R:R veto (min 2.0) runs on the ORIGINAL geometry, so a
+    later TP clip could ship trades risking 3x their target (iter-118 audit:
+    median executed R:R 0.31 → 73% win rate but net-negative P&L). Weighted
+    R:R = (0.5·TP1 + 0.25·TP2 + 0.25·TP3) / SL must clear `min_final_rr`
+    (default 0.75 → breakeven win rate 57%).
+    """
+    if signal.get("action") not in ("BUY", "SELL"):
+        return None
+    try:
+        floor = float(cfg.get("min_final_rr") or 0.75)
+        entry = float(signal.get("entry_price") or 0)
+        sl = float(signal.get("stop_loss") or 0)
+        tp1 = float(signal.get("tp1") or signal.get("take_profit") or 0)
+        tp2 = float(signal.get("tp2") or tp1)
+        tp3 = float(signal.get("tp3") or tp2)
+    except (TypeError, ValueError):
+        return None
+    if not (entry and sl and tp1) or floor <= 0:
+        return None
+    sl_d = abs(entry - sl)
+    if sl_d <= 0:
+        return None
+    weighted_tp = 0.5 * abs(tp1 - entry) + 0.25 * abs(tp2 - entry) + 0.25 * abs(tp3 - entry)
+    rr = weighted_tp / sl_d
+    if rr >= floor:
+        return None
+    return (f"Final R:R guard: geometry after profit-taking overlays is "
+            f"{rr:.2f} (risking {sl_d:.1f} to make {weighted_tp:.1f}, "
+            f"min {floor:.2f}) — negative expected value, trade skipped.")
 
 
 def intraday_counter_momentum(action: str, symbol: str, current_price: float,

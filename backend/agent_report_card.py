@@ -27,7 +27,7 @@ AGENTS = [
     ("Liquidity Map", "liquidity", ["liquidity_gate_veto"], []),
     ("Learned Meta-Labeler", "learned_meta", ["learned_meta_veto"], []),
     ("Structure & Range Gates", "structure", ["structure_gate_veto", "range_gate_veto"], []),
-    ("Payoff Guard", "payoff", ["payoff_guard_veto"], ["payoff_guard_tighten"]),
+    ("Payoff Guard", "payoff", ["payoff_guard_veto", "final_rr_veto"], ["payoff_guard_tighten"]),
     ("Execution Guards", "execution", ["velocity_veto", "slippage_veto", "spread_block", "rr_veto", "aplus_veto"], []),
     ("Cooldowns & Breakers", "cooldowns",
      ["loss_cooldown_block", "sl_cooldown_block", "eod_quiet_block",

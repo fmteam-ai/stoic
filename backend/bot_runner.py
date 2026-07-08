@@ -1044,6 +1044,18 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception as e:  # noqa: BLE001
                 logger.debug("behavior adjustments skipped: %s", e)
 
+        # iter-118 · Final R:R guard — re-check geometry AFTER every overlay
+        # (Smart Cap TP clip, payoff-guard tighten, behavior adjustments).
+        # The signal-time R:R veto only sees the ORIGINAL geometry.
+        if signal.get("action") in ("BUY", "SELL"):
+            from payoff_guard import final_rr_guard
+            frr = final_rr_guard(signal, cfg)
+            if frr:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn", reason=frr)
+                await inc_intel_counter(user_id, "final_rr_veto")
+                continue
+
         # iter-110 · Uncertainty estimation — calibrated confidence + risk
         # tier from model disagreement, CI width, band dispersion and agent
         # conflict. Skips low-confidence trades (default enforce).

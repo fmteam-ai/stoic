@@ -202,6 +202,12 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Trade Behavior Audit + R:R Expectancy Fix (iter-119, July 8 2026 — DONE)
+Audit of 409 closed auto trades (14d): mechanics correct (geometry valid, slippage ≤2pts, Kelly trimming OK, guards firing) BUT median executed R:R was 0.31 vs designed 2.08 → 73.3% win rate with profit factor 0.97 (net −$439). Root cause: R:R veto (min 2.0) runs on ORIGINAL geometry; later Smart Cap/regime overlay clips TP to 60p (collapsing tp1=tp2=tp3) while SL stays 120p; payoff guard only clamped SL to 2× TP1 (R:R 0.5). Side effect: breakeven/trailing/partials never fired (0 breakevens/14d). Fixes:
+- `payoff_guard.final_rr_guard()` — LAST-line weighted R:R check on FINAL geometry after all overlays; skips below `min_final_rr` (default 0.75, cfg-overridable). Wired in bot_runner after behavior adjustments; counter `final_rr_veto` (mapped into Payoff Guard row of report card).
+- Payoff guard default `payoff_guard_max_sl_tp1` 2.0 → 1.2 (clamped scalps land at R:R ≈0.83; breakeven WR 55% vs realized 73%).
+NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit lost) — apply same-file edits sequentially.
+
 ## Backlog Trio (iter-118, July 8 2026 — DONE, tested iteration_40.json 100% pass)
 - **"Why is my bot silent?" banner** — `SilentBotBanner.jsx` top of Dashboard. Backend: `_record_pulse` now also persists `_last_notable_pulse` (routine "cooldown active" SKIPs excluded so the real blocker survives); `/api/bot/pulse` returns `notable` + `notable_stale_seconds`. Banner hides if any bot executed <30min ago; expander shows per-bot reasons.
 - **Partner Broker Card** — `routes/partner_routes.py` (GET lazy-seeds Exness/IC Markets/Vantage with PLACEHOLDER IB links; admin POST/DELETE; click tracking POST /brokers/{id}/click → affiliate_clicks). `PartnerBrokerCard.jsx` on Accounts page. Admin must replace placeholder links via POST /api/partners/brokers.
