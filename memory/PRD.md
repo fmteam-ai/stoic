@@ -202,6 +202,13 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## MTF Confluence Engine (iter-125, July 8 2026 — DONE, 18/18 tests, user-specified strategy)
+User rejected "express lane"; specified top-down MTF: 4H trend → 1H structure → 15M pullback setup → 5M/1M entry; only trade on alignment. Built `mtf_intraday.py`: resample M15→1H/4H; `tf_trend` = EMA8 vs EMA20 gap ≥0.2% (price-vs-EMA deliberately ignored — pullbacks dip below fast EMA); `detect_pullback` = impulse ≥2×ATR15 + 25-70% retrace → minor swing level; entry = LIVE-PRICE break of swing level (EA has no M5 stream; live quote = tick precision). `fetch_mtf_confluence(symbol, live_price)`.
+- ai_signals: `mtf_confluence_mode` (cfg `mtf_confluence_enabled`, enabled on all 6 active configs). Scope `mtf_confluence` gets FIRST claim (before range scalp/aggressive). `DETERMINISTIC_SCOPES=("range_scalp","mtf_confluence")` now drives all trend-veto exemptions (CHOP/entropy/daily-MTF/short-tier/A+/self-contra/counter-momentum). learned_meta = advisory for mtf_confluence (was 152 vetoes/day, daily-swing-trained). Geometry = intraday_scalp branch (SL 1.5×atr15, TP 5×, weighted R:R 2.08); rr floor 1.1. Consensus scope-adjust extended to this scope.
+- `bridge_routes` candle store now MERGES bars by timestamp, cap 800 (EA sends ~96; 4H analysis enriches over days).
+- `GET /api/bot/mtf-confluence?symbol=` + `MtfCascadePanel.jsx` on Dashboard (live 4-row cascade w/ statuses). BotConfig toggle "MTF Confluence Mode".
+- Verified: live endpoint (real data: 4H+1H DOWN aligned, correctly waiting on 76% retrace), full pipeline sim (SELL, rr 2.08, no vetoes), Dashboard panel screenshot.
+
 ## Consensus Fairness + Precedence Fix (iter-124b, July 8 2026 — DONE)
 User screenshot showed all scalp bots SKIP at "consensus 50-53 < 55". Two root causes: (1) consensus weights trend 20% + forecast 20% — both definitionally trend-following, handicapping range fades 40%; fixed in `consensus.py`: scope=="range_scalp" → drop trend+forecast, re-normalize remaining weights (quant/structure/liquidity/macro); `scope_adjusted` field in output. Verified: good fade 86, garbage fade 21 (gate stays meaningful). (2) PRECEDENCE BUG: aggressive override ran BEFORE range-scalp check, flipping HOLD→SELL so the range engine never engaged (needs action==HOLD); fixed: range scalp block moved above aggressive override in ai_signals — confirmed via simulation (both modes on → scope range_scalp, aggr None, consensus 57 passes).
 

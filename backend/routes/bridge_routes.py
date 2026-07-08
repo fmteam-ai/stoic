@@ -418,6 +418,15 @@ async def receive_candles(payload: BridgeCandles):
             continue
     if not bars:
         raise HTTPException(status_code=422, detail="No valid bars")
+    # iter-125 · Accumulate history server-side (EA only sends ~96 bars):
+    # merge by timestamp, keep the newest 800 (8+ days of M15 → real 4H data).
+    existing = await db.intraday_candles.find_one(
+        {"user_id": account["user_id"], "symbol": base,
+         "timeframe": payload.timeframe}, {"bars": 1})
+    if existing and existing.get("bars"):
+        merged = {int(b["t"]): b for b in existing["bars"]}
+        merged.update({int(b["t"]): b for b in bars})
+        bars = [merged[t] for t in sorted(merged)][-800:]
     await db.intraday_candles.update_one(
         {"user_id": account["user_id"], "symbol": base,
          "timeframe": payload.timeframe},

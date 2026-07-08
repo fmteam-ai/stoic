@@ -232,6 +232,9 @@ class BotConfigUpdate(BaseModel):
     # Range Scalp engine (iter-123) — fade session-range extremes toward VWAP
     # when M15 shows a confirmed RANGE. Trend vetoes don't apply to this scope.
     range_scalp_enabled: bool = False
+    # MTF Confluence engine (iter-125, user-specified): 4H trend + 1H
+    # structure + M15 pullback + live-price breakout entry.
+    mtf_confluence_enabled: bool = False
     # Pre-news existing-position protector — flatten OPEN trades into imminent HIGH-impact events
     pre_news_protect_enabled: bool = True
     pre_news_protect_minutes: int = 5

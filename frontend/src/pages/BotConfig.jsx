@@ -230,6 +230,7 @@ export default function BotConfig() {
                 payoff_guard_enabled: cfg.payoff_guard_enabled ?? true,
                 payoff_guard_max_sl_tp1: cfg.payoff_guard_max_sl_tp1 ?? 1.2,
                 range_scalp_enabled: cfg.range_scalp_enabled ?? false,
+                mtf_confluence_enabled: cfg.mtf_confluence_enabled ?? false,
                 pre_news_protect_enabled: cfg.pre_news_protect_enabled,
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
                 friday_flat_enabled: cfg.friday_flat_enabled ?? true,
@@ -746,6 +747,12 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="min_final_rr" label="FINAL R:R FLOOR" suffix="R" step={0.05} min={0} max={3} />
                         </div>
                     )}
+                </div>
+
+                {/* MTF Confluence engine */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="mtf_confluence_enabled" label="MTF Confluence Mode" icon={Crosshair} color="#FFD700"
+                        desc="Top-down multi-timeframe strategy: 4H trend → 1H structure → 15M pullback → live-price breakout entry. Only trades when all timeframes align (e.g. 4H bullish + 1H bullish + 15M pullback + breakout = long). Tight M15-ATR stops; all capital protections stay active." />
                 </div>
 
                 {/* Range Scalp engine */}

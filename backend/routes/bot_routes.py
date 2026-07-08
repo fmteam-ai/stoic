@@ -73,6 +73,7 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
         "payoff_guard_enabled": True,
         "payoff_guard_max_sl_tp1": 1.2,
         "range_scalp_enabled": False,
+        "mtf_confluence_enabled": False,
         "pre_news_protect_enabled": True,
         "pre_news_protect_minutes": 5,
         "aggressive_mode": False,
@@ -130,6 +131,7 @@ def _serialize(cfg: dict) -> dict:
         "payoff_guard_enabled": cfg.get("payoff_guard_enabled", True),
         "payoff_guard_max_sl_tp1": cfg.get("payoff_guard_max_sl_tp1", 1.2),
         "range_scalp_enabled": cfg.get("range_scalp_enabled", False),
+        "mtf_confluence_enabled": cfg.get("mtf_confluence_enabled", False),
         "pre_news_protect_enabled": cfg.get("pre_news_protect_enabled", True),
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
         "aggressive_mode": cfg.get("aggressive_mode", False),
@@ -277,6 +279,23 @@ async def list_configs(user=Depends(get_current_user)):
     cursor = db.bot_configs.find({"user_id": user["id"]})
     docs = await cursor.to_list(length=100)
     return [_serialize(d) for d in docs]
+
+
+@router.get("/mtf-confluence")
+async def mtf_confluence_report(symbol: str = "XAUUSD", user=Depends(get_current_user)):
+    """Live MTF cascade report: 4H trend / 1H structure / M15 setup / entry."""
+    from market import get_quote
+    from mtf_intraday import fetch_mtf_confluence
+    try:
+        quote = await get_quote(symbol)
+        live = float(quote.get("price") or 0)
+    except Exception:
+        live = 0.0
+    report = await fetch_mtf_confluence(symbol, live)
+    if not report:
+        return {"available": False, "symbol": symbol,
+                "note": "M15 stream missing or stale (EA offline?)"}
+    return {"available": True, "symbol": symbol, "live_price": live, **report}
 
 
 @router.get("/pulse")
