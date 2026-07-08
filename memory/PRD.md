@@ -195,7 +195,15 @@ Root cause of "78.9% win rate, negative profit": `profit_taking_mode=win_rate` S
 - **Testing agent full audit (iteration_38.json): 100% — 99/99 unit + 13/13 HTTP integration + all frontend testids; zero backend/frontend issues, zero conflicts.**
 - Advisory notes from review (non-bugs): posture caps symbols[:4]; MarketPosture.jsx >360 lines (future split candidate).
 
+## Stale-Data Blindness Fix (iter-117, July 8 2026 — DONE)
+User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) noise filter ran on DAILY returns only — frozen at entropy 0.9335 "NOISY" → cheap-HOLD short-circuit for 24h+ regardless of intraday structure; (b) daily history memory-cached 6h → pipeline analyzed px 4130 while live was 4064. Fixes in `ai_signals.py` + `market.py`:
+- `_intraday_entropy_override()` — when daily entropy is NOISY, fresh EA M15 stream (<30min, ≥31 bars) is classified; ORGANIZED intraday verdict outranks daily (`source: intraday_m15_override`).
+- Live-price patch: last daily bar's close/high/low refreshed with live quote before computing indicators/MTF/kalman/vwap.
+- Daily history cache TTL 21600s → 900s.
+Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
+
 ## Notes / Gotchas
+- Minor observed: trade-manager logs "price fetch failed for GOLD: Symbol GOLD not supported" for user's manual OnEquity GOLD trades — base_symbol mapping gap in trade-manager price fetch (backlog).
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.
 - The recurring "code review report" pasted into chat is a hallucinated false-positive from a static analyzer. **IGNORE IT.** Do not refactor based on it (18+ recurrences).

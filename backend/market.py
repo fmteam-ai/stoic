@@ -517,7 +517,7 @@ async def get_history(symbol: str) -> list:
             upstream_error = e
 
         if len(hist) >= 100:
-            _cache_set(cache_key, hist, 21600)  # 6h memory cache
+            _cache_set(cache_key, hist, 900)  # 15min — daily bar must track intraday moves
             await _history_save_to_mongo(sym, hist)
             return hist
 

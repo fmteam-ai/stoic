@@ -12,7 +12,7 @@ import json
 import uuid
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger("ai_signals")
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -135,12 +135,58 @@ def _apply_dual_veto(action: str, confidence: float, sentiment: dict) -> tuple:
     return action, ""
 
 
+async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
+    """When daily entropy says NOISY, check the EA's fresh M15 stream.
+    An organized intraday market (clean trend) outranks stale daily noise."""
+    try:
+        from database import get_db
+        from pip_utils import base_symbol
+        doc = await get_db().intraday_candles.find_one(
+            {"symbol": base_symbol(symbol)},
+            {"bars": {"$slice": -80}, "updated_at": 1},
+            sort=[("updated_at", -1)],
+        )
+        if not doc:
+            return daily
+        upd = doc.get("updated_at")
+        if upd:
+            u = datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) - u > timedelta(minutes=30):
+                return daily  # stale stream — keep the daily verdict
+        closes = [float(b.get("c") or 0) for b in (doc.get("bars") or []) if b.get("c")]
+        if len(closes) < 31:
+            return daily
+        intraday = classify_noise(closes)
+        if intraday.get("tradeable"):
+            return {
+                **intraday,
+                "source": "intraday_m15_override",
+                "daily_entropy": daily.get("entropy"),
+                "note": (f"Daily entropy {daily.get('entropy')} NOISY, but live M15 "
+                         f"structure is {intraday.get('label')} "
+                         f"(entropy {intraday.get('entropy')}) — intraday verdict wins."),
+            }
+        return {**daily, "intraday_entropy": intraday.get("entropy")}
+    except Exception:
+        return daily
+
+
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
                          aggressive_mode: bool = False) -> dict:
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
+    # iter-117 · Live-price patch — refresh the in-flight daily bar with the
+    # live quote so intraday indicators track the real market instead of the
+    # history cache (bot missed a 60-pt gold drop analyzing a stale close).
+    live_px = float(quote.get("price") or 0)
+    if history and live_px > 0:
+        lb = dict(history[-1])
+        lb["close"] = live_px
+        lb["high"] = max(float(lb.get("high") or live_px), live_px)
+        lb["low"] = min(float(lb.get("low") or live_px), live_px)
+        history = history[:-1] + [lb]
     indicators = compute_indicators(history) or {}
     sentiment = await score_sentiment(symbol)
     session = current_session()
@@ -152,6 +198,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
     entropy = classify_noise([c["close"] for c in history]) if history else {
         "entropy": 0, "label": "ORGANIZED", "traffic_light": "green", "tradeable": True, "threshold": 0.9
     }
+    # iter-117 · Intraday entropy override — daily-return entropy cannot see
+    # a fresh intraday trend forming inside a single day. When the EA's live
+    # M15 stream shows an ORGANIZED market, it outranks the daily verdict.
+    if not entropy.get("tradeable", True):
+        entropy = await _intraday_entropy_override(symbol, entropy)
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
