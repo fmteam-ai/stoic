@@ -219,6 +219,16 @@ class BotConfigUpdate(BaseModel):
     # Per-symbol cooldown after a stop-loss hit — prevents revenge-regime re-entry
     sl_cooldown_enabled: bool = True
     sl_cooldown_minutes: int = 45
+    # Loss cooldown (iter-58/122b) — after a BOT loss, pause same
+    # symbol+direction re-entries on THIS account for N minutes.
+    loss_cooldown_enabled: bool = True
+    loss_cooldown_minutes: int = 30
+    # Final R:R guard (iter-119) — skip trades whose post-overlay weighted
+    # geometry falls below this floor. 0 = disabled.
+    min_final_rr: float = 0.75
+    # Payoff guard — clamp SL to at most this multiple of the TP1 distance.
+    payoff_guard_enabled: bool = True
+    payoff_guard_max_sl_tp1: float = 1.2
     # Pre-news existing-position protector — flatten OPEN trades into imminent HIGH-impact events
     pre_news_protect_enabled: bool = True
     pre_news_protect_minutes: int = 5

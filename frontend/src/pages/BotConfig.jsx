@@ -224,6 +224,11 @@ export default function BotConfig() {
                 asia_session_skip_xau: cfg.asia_session_skip_xau,
                 sl_cooldown_enabled: cfg.sl_cooldown_enabled,
                 sl_cooldown_minutes: cfg.sl_cooldown_minutes,
+                loss_cooldown_enabled: cfg.loss_cooldown_enabled ?? true,
+                loss_cooldown_minutes: cfg.loss_cooldown_minutes ?? 30,
+                min_final_rr: cfg.min_final_rr ?? 0.75,
+                payoff_guard_enabled: cfg.payoff_guard_enabled ?? true,
+                payoff_guard_max_sl_tp1: cfg.payoff_guard_max_sl_tp1 ?? 1.2,
                 pre_news_protect_enabled: cfg.pre_news_protect_enabled,
                 pre_news_protect_minutes: cfg.pre_news_protect_minutes,
                 friday_flat_enabled: cfg.friday_flat_enabled ?? true,
@@ -715,6 +720,29 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     {cfg.sl_cooldown_enabled && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="sl_cooldown_minutes" label="COOLDOWN WINDOW" suffix="minutes" step={5} min={5} max={240} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Loss Cooldown (per-account, bot trades only) */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="loss_cooldown_enabled" label="Loss Cooldown" icon={Timer} color="#FFB000"
+                        desc="After a BOT trade closes at a loss on THIS account, pause same symbol+direction re-entries for N minutes. Manual trades and other accounts are ignored." />
+                    {(cfg.loss_cooldown_enabled ?? true) && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="loss_cooldown_minutes" label="COOLDOWN WINDOW" suffix="minutes" step={5} min={0} max={240} />
+                        </div>
+                    )}
+                </div>
+
+                {/* Payoff Guard + Final R:R Guard */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="payoff_guard_enabled" label="Trade Geometry Guards" icon={Scale} color="#10F2C5"
+                        desc="Payoff guard clamps the stop-loss to at most N× the TP1 distance. The Final R:R guard skips any trade whose post-overlay weighted risk:reward falls below the floor (0 = off). Both run AFTER all profit-taking overlays." />
+                    {(cfg.payoff_guard_enabled ?? true) && (
+                        <div className="grid grid-cols-2 gap-3 mt-3">
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="payoff_guard_max_sl_tp1" label="MAX SL / TP1 RATIO" suffix="×" step={0.1} min={0.5} max={3} />
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="min_final_rr" label="FINAL R:R FLOOR" suffix="R" step={0.05} min={0} max={3} />
                         </div>
                     )}
                 </div>

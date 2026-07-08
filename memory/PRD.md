@@ -202,6 +202,9 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Per-Account Guard Settings UI (iter-122c, July 8 2026 — DONE)
+Bot Config (already per-account via selector) now exposes: Loss Cooldown (enabled/minutes), Trade Geometry Guards (payoff_guard_enabled, payoff_guard_max_sl_tp1, min_final_rr). Added fields to `models.BotConfigUpdate`, `bot_routes._serialize` whitelist + new-config defaults, BotConfig.jsx save payload + CapitalGuardsSection controls. GOTCHA: `_serialize()` in bot_routes is an explicit whitelist — new cfg fields MUST be added there or GET returns None. E2E verified: per-account save/read isolated (acct A 15min/0.8 didn't touch acct B 30min/0.75).
+
 ## Per-Account Guard Scoping (iter-122b, July 8 2026 — DONE)
 Guards now act individually per account (each has own equity/settings): `loss_cooldown.py` (was deliberately cross-account since iter-58 — user overrode; message now "on this account"), `_on_sl_cooldown(account_id=)`, loss-streak circuit-breaker query. Anti-tilt + trade_of_day_cap were already account-scoped. Verified with synthetic trades: loss on acctA blocks only acctA; manual losses block nothing; SL cooldown isolated per account.
 
