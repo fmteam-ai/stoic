@@ -63,24 +63,35 @@ export function QuickActionsBar() {
     };
 
     if (!data) return null;
-    const pnl = data.todays_pnl_usd ?? 0;
-    const pnlPositive = pnl >= 0;
+    const botPnl = data.todays_bot_pnl_usd ?? 0;
+    const manPnl = data.todays_manual_pnl_usd ?? 0;
+    const fmt = (v) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
     return (
         <>
             <div className="fixed top-8 right-3 z-40 flex items-center gap-1.5 sm:gap-2 bg-[#0A0A0A]/95 backdrop-blur-md border border-[#1F1F1F] shadow-xl px-2 py-1.5"
                  data-testid="quick-actions-bar">
 
-                {/* Today's P&L */}
+                {/* Today's P&L — bot vs manual */}
                 <div className="hidden md:flex flex-col items-end px-2"
                      data-testid="quick-todays-pnl"
-                     title={`${data.todays_closed_count} trades closed today`}>
+                     title={`${data.todays_bot_closed_count ?? 0} bot + ${(data.todays_closed_count ?? 0) - (data.todays_bot_closed_count ?? 0)} manual trades closed today`}>
                     <div className="font-mono text-[9px] text-[#52525B] tracking-widest leading-none">
-                        TODAY
+                        BOT TODAY
                     </div>
                     <div className="font-display text-sm leading-tight mt-0.5"
-                         style={{ color: pnlPositive ? "#00FF41" : "#FF3B30" }}>
-                        {pnlPositive ? "+" : ""}${pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                         style={{ color: botPnl >= 0 ? "#00FF41" : "#FF3B30" }}>
+                        {fmt(botPnl)}
+                    </div>
+                </div>
+                <div className="hidden lg:flex flex-col items-end px-2 border-l border-[#1F1F1F]"
+                     data-testid="quick-manual-pnl">
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest leading-none">
+                        MANUAL
+                    </div>
+                    <div className="font-display text-sm leading-tight mt-0.5"
+                         style={{ color: manPnl >= 0 ? "#A1A1AA" : "#FF3B30" }}>
+                        {fmt(manPnl)}
                     </div>
                 </div>
 

@@ -202,6 +202,9 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Bot vs Manual P&L Split (iter-124, July 8 2026 — DONE)
+`/api/bot/quick-actions` now returns `todays_bot_pnl_usd`, `todays_bot_closed_count`, `todays_manual_pnl_usd` (split on `origin == "auto"`). QuickActionsBar header shows "BOT TODAY" (green/red) + "MANUAL" (gray/red, lg screens) instead of a single mixed TODAY stat. Verified: header renders BOT +$0 / MANUAL +$349 (user's manual scalps). User does NOT need to disconnect accounts to separate stats.
+
 ## Range Scalp Engine (iter-123, July 8 2026 — DONE, tests 11/11 pass incl. iter-120 regression)
 User: "market moves up and down, bot sleeping; strategies are fast scalp". Root cause: ALL strategies were trend-hunters — in an M15 RANGE nothing can ever fire (user was profitably scalping the range manually). Built:
 - `intraday_features.py`: pack now has session_high/low + range_pos_pct; `range_scalp_signal()` — BUY ≤18% / SELL ≥82% of session range when trend FLAT + Donchian INSIDE + day_range ≥0.6% + range ≥4×atr15.

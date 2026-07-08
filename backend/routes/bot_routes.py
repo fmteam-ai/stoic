@@ -1300,17 +1300,28 @@ async def quick_actions(user=Depends(get_current_user)):
     })
     todays_pnl = 0.0
     todays_count = 0
+    bot_pnl = 0.0
+    bot_count = 0
+    manual_pnl = 0.0
     async for t in cursor:
         pnl = t.get("pnl")
         if pnl is not None:
             todays_pnl += float(pnl)
             todays_count += 1
+            if t.get("origin") == "auto":
+                bot_pnl += float(pnl)
+                bot_count += 1
+            else:
+                manual_pnl += float(pnl)
 
     return {
         "bot_active": bot_active,
         "open_trades": open_count,
         "todays_pnl_usd": round(todays_pnl, 2),
         "todays_closed_count": todays_count,
+        "todays_bot_pnl_usd": round(bot_pnl, 2),
+        "todays_bot_closed_count": bot_count,
+        "todays_manual_pnl_usd": round(manual_pnl, 2),
     }
 
 
