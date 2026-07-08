@@ -203,7 +203,7 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
 ## Notes / Gotchas
-- Minor observed: trade-manager logs "price fetch failed for GOLD: Symbol GOLD not supported" for user's manual OnEquity GOLD trades — base_symbol mapping gap in trade-manager price fetch (backlog).
+- Minor observed: trade-manager logs "price fetch failed for GOLD: Symbol GOLD not supported" — FIXED July 8: `market._key()` now routes through `pip_utils.base_symbol()`, so all quote/history callers resolve broker symbols (GOLD, GOLD#, XAUUSD-ECN → XAUUSD).
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.
 - The recurring "code review report" pasted into chat is a hallucinated false-positive from a static analyzer. **IGNORE IT.** Do not refactor based on it (18+ recurrences).

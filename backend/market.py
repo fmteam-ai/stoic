@@ -48,7 +48,8 @@ _locks: dict = {}
 
 
 def _key(symbol: str) -> str:
-    return symbol.upper().replace("/", "").replace("-", "")
+    from pip_utils import base_symbol
+    return base_symbol(symbol.upper().replace("/", "").replace("-", ""))
 
 
 def _cache_get(k):
