@@ -745,8 +745,19 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # last-week trend is strongly directional (|slope| ≥ 1%), fading it is
     # forbidden regardless of the slower tiers.
     short_tier_veto = short_tier_momentum_veto(final_action, mtf_tiers)
+    short_tier_defer = ""
     if short_tier_veto:
-        final_action = "HOLD"
+        # iter-120b · The SHORT tier is a WEEKLY daily-bar slope — when live
+        # M15 structure strongly confirms the trade (score ≥60), the "fresh
+        # rally" it protects against is already over on the intraday chart.
+        ia_score, ia_note = intraday_alignment(final_action, intraday_pack)
+        if ia_score >= 60:
+            short_tier_defer = (
+                f"Short-tier veto deferred: weekly slope opposes {final_action}, "
+                f"but live M15 strongly confirms it ({ia_score}/100: {ia_note}).")
+            short_tier_veto = ""
+        else:
+            final_action = "HOLD"
 
     # Kelly-modified position sizing — use regime-adapted profile
     sl_distance = abs(current_price - sl) or 0.0001
@@ -783,6 +794,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         reasoning = f"{reasoning}\n\nVETO (intraday-momentum): {intraday_veto}"
     if short_tier_veto:
         reasoning = f"{reasoning}\n\nVETO (short-tier-momentum): {short_tier_veto}"
+    if short_tier_defer:
+        reasoning = f"{reasoning}\n\nNOTE: {short_tier_defer}"
     if self_contra_veto:
         reasoning = f"{reasoning}\n\nVETO (self-contradiction): {self_contra_veto}"
 

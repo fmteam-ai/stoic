@@ -202,6 +202,9 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Short-Tier Veto Intraday Deferral (iter-120b, July 8 2026 — DONE)
+User re-enabled aggressive_mode on all 5 bots but signals stayed HOLD: aggressive override fired (SELL 58-68 conf) yet `short_tier_momentum_veto` (weekly daily-bar fast-SMA slope ±1%) reverted everything — it ignored aggressive_mode AND the new scalp scope, and had also blocked yesterday's 11:43 SELL before the −75pt drop. Fix in `ai_signals.py`: when `intraday_alignment(action) ≥ 60`, the short-tier veto DEFERS (reasoning gets "NOTE: Short-tier veto deferred..."); below 60 it still vetoes (correct — don't fade an active M15 bounce). Verified by simulation: strong-down M15 pack + aggressive → SELL 68, SL 150p / TP 100/200/300 (rr 1.17 ≥ 1.1 floor). Live conditions (M15 FLAT bounce, score 25) correctly still HOLD.
+
 ## Intraday Scalp Engine (iter-120, July 8 2026 — DONE, unit tests test_iter120 5/5 pass)
 User complaint: gold ranged 2.31% (93.5pts, −75pt waterfall 11:00-13:00 UTC) and bot took nothing — pipeline was 100% daily-anchored (MTF tiers/breakout/vwap all from daily bars; LLM never saw intraday action; MTF veto killed everything on conflicted days unless aggressive_mode, which Auto-Heal turned OFF 07-07 19:05 after −$814/−4.55% day). Built:
 - `intraday_features.py` — M15 pack from EA stream (trend EMA20/50, momentum_3h, donchian20, session VWAP dist, swing structure HH_HL/LH_LL, atr15, day_range_pct) + `intraday_alignment()` score 0-100 (≥60 = strong).
