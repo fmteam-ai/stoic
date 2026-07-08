@@ -124,7 +124,17 @@ def compute_consensus(signal: dict) -> dict:
     votes["macro"] = round(_clip(mv), 2)
 
     total = sum(WEIGHTS[k] * votes[k] for k in WEIGHTS)
+    scope_adjusted = None
+    if signal.get("scope") == "range_scalp":
+        # iter-124b · Trend & forecast agents are definitionally trend-following
+        # — they can never endorse a range fade, handicapping it 40% of the
+        # score. Judge fades on the agents that CAN assess them, re-normalized.
+        scope_adjusted = ["trend", "forecast"]
+        keep = {k: w for k, w in WEIGHTS.items() if k not in scope_adjusted}
+        norm = sum(keep.values())
+        total = sum(w * votes[k] for k, w in keep.items()) / norm
     score = max(0, min(100, round(50 + 50 * total)))
     verdict = ("STRONG" if score >= 70 else "OK" if score >= DEFAULT_THRESHOLD
                else "WEAK" if score >= 40 else "CONFLICTED")
-    return {"score": score, "votes": votes, "verdict": verdict}
+    return {"score": score, "votes": votes, "verdict": verdict,
+            "scope_adjusted": scope_adjusted}

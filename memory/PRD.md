@@ -202,6 +202,9 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Consensus Fairness + Precedence Fix (iter-124b, July 8 2026 — DONE)
+User screenshot showed all scalp bots SKIP at "consensus 50-53 < 55". Two root causes: (1) consensus weights trend 20% + forecast 20% — both definitionally trend-following, handicapping range fades 40%; fixed in `consensus.py`: scope=="range_scalp" → drop trend+forecast, re-normalize remaining weights (quant/structure/liquidity/macro); `scope_adjusted` field in output. Verified: good fade 86, garbage fade 21 (gate stays meaningful). (2) PRECEDENCE BUG: aggressive override ran BEFORE range-scalp check, flipping HOLD→SELL so the range engine never engaged (needs action==HOLD); fixed: range scalp block moved above aggressive override in ai_signals — confirmed via simulation (both modes on → scope range_scalp, aggr None, consensus 57 passes).
+
 ## Bot vs Manual P&L Split (iter-124, July 8 2026 — DONE)
 `/api/bot/quick-actions` now returns `todays_bot_pnl_usd`, `todays_bot_closed_count`, `todays_manual_pnl_usd` (split on `origin == "auto"`). QuickActionsBar header shows "BOT TODAY" (green/red) + "MANUAL" (gray/red, lg screens) instead of a single mixed TODAY stat. Verified: header renders BOT +$0 / MANUAL +$349 (user's manual scalps). User does NOT need to disconnect accounts to separate stats.
 

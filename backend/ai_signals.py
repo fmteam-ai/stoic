@@ -452,6 +452,19 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # vetoes can still block the trade.
     # ------------------------------------------------------------------------
     aggressive_applied = None
+    # iter-123/124b · Range Scalp gets FIRST claim: in a confirmed M15 RANGE
+    # a deterministic edge-fade beats an indicator-bias trend override (which
+    # would fire into the range and rightly die at the consensus gate).
+    trade_scope = "swing"
+    range_scalp_applied = ""
+    if range_scalp_mode and action == "HOLD" and not macro.get("frozen"):
+        from intraday_features import range_scalp_signal
+        rs_action, rs_note = range_scalp_signal(intraday_pack)
+        if rs_action:
+            action = rs_action
+            trade_scope = "range_scalp"
+            confidence = max(confidence, adapted_profile["min_confidence"] + 3)
+            range_scalp_applied = rs_note
     if aggressive_mode and action == "HOLD" and confidence >= 15 and not macro.get("frozen"):
         bias_votes = 0
         kv = indicators.get("kalman_velocity")
@@ -482,20 +495,10 @@ async def analyze_symbol(symbol: str, risk_level: str,
         logger.info("Aggressive Mode skipped sym=%s action=%s conf=%s frozen=%s",
                     symbol, action, confidence, macro.get("frozen"))
 
-    # iter-123 · Range Scalp — deterministic range-fade when the AI holds and
-    # the M15 stream shows a confirmed RANGE with price at an extreme.
-    # Trend vetoes (MTF/CHOP/entropy/short-tier/A+) don't apply to this scope;
+    # iter-123 · Range Scalp scope (moved above the aggressive override —
+    # runs first so a confirmed range fade outranks the trend override).
+    # Trend vetoes (MTF/CHOP/entropy/short-tier/A+) don't apply to that scope;
     # every capital protection (risk caps, cooldowns, news freeze) still does.
-    trade_scope = "swing"
-    range_scalp_applied = ""
-    if range_scalp_mode and action == "HOLD" and not macro.get("frozen"):
-        from intraday_features import range_scalp_signal
-        rs_action, rs_note = range_scalp_signal(intraday_pack)
-        if rs_action:
-            action = rs_action
-            trade_scope = "range_scalp"
-            confidence = max(confidence, adapted_profile["min_confidence"] + 3)
-            range_scalp_applied = rs_note
 
     # Veto cascade — each veto checks its own condition independently,
     # so reasoning carries all reasons we held off. Final action is HOLD if any fires.
