@@ -82,6 +82,7 @@ async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int) -> d
         "user_id": user_id,
         "symbol": symbol,
         "status": "closed",
+        "origin": "auto",
         "close_reason": "stop_loss",
     }).sort("closed_at", -1).limit(1)
     docs = await cursor.to_list(length=1)
@@ -482,7 +483,9 @@ async def _process_user_account_locked(db, cfg: dict):
     # === Anti-tilt: freeze auto-execute if last N closed trades all lost ===
     anti_tilt_active = False
     if anti_tilt_enabled and anti_tilt_n > 0:
-        recent_q = {"user_id": user_id, "status": "closed"}
+        # iter-122 · origin=auto: judge the bot by its OWN trades — a $-0.16
+        # manual close must not freeze auto-execution.
+        recent_q = {"user_id": user_id, "status": "closed", "origin": "auto"}
         if cfg_account_id:
             recent_q["account_id"] = cfg_account_id
         recent = await db.trades.find(recent_q).sort(
@@ -541,6 +544,7 @@ async def _process_user_account_locked(db, cfg: dict):
             tod_q = {
                 "user_id": user_id,
                 "symbol": sym,
+                "origin": "auto",
                 "created_at": {"$gte": day_start.isoformat()},
             }
             if cfg_account_id:
@@ -1217,7 +1221,7 @@ async def _process_user_account_locked(db, cfg: dict):
         recent_closed = await db.trades.find(
             {
                 "user_id": user_id, "symbol": sym, "action": signal["action"],
-                "status": "closed", "closed_at": {"$gte": cutoff},
+                "status": "closed", "origin": "auto", "closed_at": {"$gte": cutoff},
             },
         ).sort("closed_at", -1).limit(LOSS_STREAK_THRESHOLD).to_list(LOSS_STREAK_THRESHOLD)
         if (len(recent_closed) >= LOSS_STREAK_THRESHOLD

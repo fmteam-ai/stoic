@@ -30,6 +30,7 @@ async def loss_cooldown_block(db, user_id: str, symbol: str, action: str,
     cutoff = (now - timedelta(minutes=minutes)).isoformat()
     rows = await db.trades.find({
         "user_id": user_id, "status": "closed", "action": action,
+        "origin": "auto",  # bot losses only — manual trades must not freeze the bot
         "pnl": {"$lt": 0}, "closed_at": {"$gte": cutoff},
     }).sort("closed_at", -1).limit(25).to_list(length=25)
     base = base_symbol(symbol)

@@ -43,7 +43,7 @@ async def _baseline_stats(db, user_id: str) -> dict:
     for days in (7, 30):
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         cur = db.trades.find({
-            "user_id": user_id, "status": "closed",
+            "user_id": user_id, "status": "closed", "origin": "auto",
             "closed_at": {"$gte": cutoff},
             "pnl_estimated": {"$ne": True},
         }, {"pnl": 1})
