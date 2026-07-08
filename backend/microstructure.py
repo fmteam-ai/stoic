@@ -47,8 +47,7 @@ def is_market_closed(symbol: str, now: Optional[datetime] = None) -> Optional[di
     Crypto symbols (BTC/ETH/SOL/etc.) are never closed.
 
     Sending an order during a closed session = guaranteed broker rejection
-    (MT5 error 10018 MARKET_CLOSED), so this is a HARD veto applied even
-    under aggressive_mode.
+    (MT5 error 10018 MARKET_CLOSED), so this is an unconditional HARD veto.
     """
     if is_crypto_symbol(symbol):
         return None

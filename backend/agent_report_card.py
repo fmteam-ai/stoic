@@ -13,7 +13,7 @@ logger = logging.getLogger("agent-report-card")
 
 # (display name, slug, hard-block counters, soft/advisory counters)
 AGENTS = [
-    ("Multi-Timeframe Gate", "mtf", ["mtf_veto", "mtf_strict_veto"], []),
+    ("Multi-Timeframe Gate", "mtf", ["mtf_veto"], []),
     ("Master Consensus", "consensus", ["consensus_block"], ["consensus_low"]),
     ("ML Ensemble", "ml_ensemble", ["ml_ensemble_block"], ["ml_ensemble_low_p"]),
     ("Uncertainty Estimator", "uncertainty", ["uncertainty_skip"], ["uncertainty_low_conf"]),

@@ -1195,6 +1195,7 @@ async def bot_health_score(user=Depends(get_current_user)):
     # *why* no trades are firing, with a small deduction to make sure the
     # widget catches their eye instead of showing a misleading "100/100".
     tilt_frozen_accounts = []
+    tilt_cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=20)
     for tc in tilt_cfgs:
         if not tc.get("anti_tilt_enabled", True):
             continue

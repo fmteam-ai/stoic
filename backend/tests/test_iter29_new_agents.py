@@ -231,18 +231,6 @@ async def test_optimizer_xau_off_hours_defers(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_optimizer_aggressive_mode_overrides_off_hours(monkeypatch):
-    from agents.execution_optimizer_agent import ExecutionOptimizerAgent
-    monkeypatch.setattr("agents.execution_optimizer_agent._is_xau_off_hours",
-                        lambda *a, **kw: True)
-    out = await ExecutionOptimizerAgent().optimize(
-        signal={"action": "BUY", "lot_size": 0.05, "symbol": "XAUUSD"},
-        account=None, aggressive_mode=True,
-    )
-    assert out["approved"] is True
-
-
-@pytest.mark.asyncio
 async def test_optimizer_slice_plan_for_large_lot(monkeypatch):
     from agents.execution_optimizer_agent import ExecutionOptimizerAgent
     monkeypatch.setattr("agents.execution_optimizer_agent._is_xau_off_hours",

@@ -135,16 +135,14 @@ def test_bot_config_put_partial(session):
     r = session.get(f"{BASE_URL}/api/bot/configs", timeout=10)
     items = r.json().get("items") if isinstance(r.json(), dict) else r.json()
     items = items or []
-    orig_aggr = bool(items[0].get("aggressive_mode", False)) if items else False
     orig_min = items[0].get("min_confidence_override") if items else None
     # Partial PATCH via PUT
-    p = session.put(f"{BASE_URL}/api/bot/config", json={"aggressive_mode": False, "min_confidence_override": 70}, timeout=10)
+    p = session.put(f"{BASE_URL}/api/bot/config", json={"min_confidence_override": 70}, timeout=10)
     assert p.status_code in (200, 204), p.text
     body = p.json() if p.status_code == 200 else {}
-    assert body.get("aggressive_mode") is False
     assert int(body.get("min_confidence_override", 0)) == 70
     # Restore
-    payload = {"aggressive_mode": orig_aggr}
+    payload = {"min_confidence_override": 0}
     if orig_min is not None:
         payload["min_confidence_override"] = orig_min
     session.put(f"{BASE_URL}/api/bot/config", json=payload, timeout=10)

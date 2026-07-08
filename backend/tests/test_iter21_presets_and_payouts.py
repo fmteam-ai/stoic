@@ -82,7 +82,7 @@ def mongo_db():
 # ---------- BUILT-IN PRESETS ------------------------------------------------
 
 EXPECTED_ORDER = ["sniper", "scalper", "trend_rider", "breakout",
-                  "mean_reversion", "aggressive", "balanced"]
+                  "mean_reversion", "balanced"]
 
 
 class TestBuiltinPresets:
@@ -118,7 +118,6 @@ class TestBuiltinPresets:
         cfg = body["config"]
         assert cfg["min_confidence_override"] == 75
         assert cfg["trade_of_day_cap"] == 1
-        assert cfg["aggressive_mode"] is False
         assert cfg["active_preset"] == "sniper"
 
         # Untouched fields verified via /bot/config
