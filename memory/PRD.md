@@ -202,6 +202,9 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## R:R Watch Panel (iter-119b, July 8 2026 — DONE)
+- `GET /api/analytics/rr-watch` — before/after the 2026-07-08T09:45Z geometry fix: trades, median R:R (tp1 vs SL), win rate, net P&L per bucket. `RrWatchPanel.jsx` at top of Analytics page (red 0.31 before vs after-fix bucket, turns green at ≥0.75). No post-fix trades yet at build time (bot legitimately HOLDing at 35% conf). **Next session: re-audit once after-bucket has ~20 trades.**
+
 ## Trade Behavior Audit + R:R Expectancy Fix (iter-119, July 8 2026 — DONE)
 Audit of 409 closed auto trades (14d): mechanics correct (geometry valid, slippage ≤2pts, Kelly trimming OK, guards firing) BUT median executed R:R was 0.31 vs designed 2.08 → 73.3% win rate with profit factor 0.97 (net −$439). Root cause: R:R veto (min 2.0) runs on ORIGINAL geometry; later Smart Cap/regime overlay clips TP to 60p (collapsing tp1=tp2=tp3) while SL stays 120p; payoff guard only clamped SL to 2× TP1 (R:R 0.5). Side effect: breakeven/trailing/partials never fired (0 breakevens/14d). Fixes:
 - `payoff_guard.final_rr_guard()` — LAST-line weighted R:R check on FINAL geometry after all overlays; skips below `min_final_rr` (default 0.75, cfg-overridable). Wired in bot_runner after behavior adjustments; counter `final_rr_veto` (mapped into Payoff Guard row of report card).

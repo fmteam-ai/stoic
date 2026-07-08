@@ -12,6 +12,55 @@ from database import get_db
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
+@router.get("/rr-watch")
+async def rr_watch(user=Depends(get_current_user)):
+    """Realized R:R watch — compares trade geometry before vs after the
+    iter-119 expectancy fix (2026-07-08T09:45Z) so the improvement is
+    verifiable at a glance. R:R per trade = |TP1 − entry| / |entry − SL|.
+    """
+    FIX_TS = "2026-07-08T09:45:00+00:00"
+    db = get_db()
+
+    async def _bucket(q: dict) -> dict:
+        rrs, pnl, wins, n_closed = [], 0.0, 0, 0
+        async for t in db.trades.find(
+                {"user_id": user["id"], "origin": "auto", **q},
+                {"entry_price": 1, "stop_loss": 1, "tp1": 1, "take_profit": 1,
+                 "pnl": 1, "status": 1}).limit(1000):
+            e = float(t.get("entry_price") or 0)
+            sl = float(t.get("stop_loss") or 0)
+            tp1 = float(t.get("tp1") or t.get("take_profit") or 0)
+            if e and sl and tp1 and abs(e - sl) > 0:
+                rrs.append(abs(tp1 - e) / abs(e - sl))
+            if t.get("status") == "closed":
+                n_closed += 1
+                p = float(t.get("pnl") or 0)
+                pnl += p
+                if p > 0:
+                    wins += 1
+        rrs.sort()
+        med = rrs[len(rrs) // 2] if rrs else None
+        return {
+            "trades": len(rrs),
+            "median_rr": round(med, 2) if med is not None else None,
+            "closed": n_closed,
+            "win_rate": round(wins / n_closed * 100, 1) if n_closed else None,
+            "net_pnl": round(pnl, 2),
+        }
+
+    before = await _bucket({"opened_at": {"$lt": FIX_TS}})
+    after = await _bucket({"opened_at": {"$gte": FIX_TS}})
+    return {
+        "fix_deployed_at": FIX_TS,
+        "before": before,
+        "after": after,
+        "target_median_rr": 0.83,
+        "note": ("Post-fix trades should show median R:R ≥ 0.75 "
+                 "(payoff guard clamps SL to 1.2× TP1; final R:R guard skips below 0.75). "
+                 "Pre-fix median was 0.31."),
+    }
+
+
 @router.get("/attribution")
 async def get_attribution(user=Depends(get_current_user)):
     """Full performance attribution across every dimension."""
