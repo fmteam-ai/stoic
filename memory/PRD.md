@@ -202,6 +202,10 @@ User report: gold dropped 4120→4060 with zero bot action. Root cause: (a) nois
 - Daily history cache TTL 21600s → 900s.
 Verified live: signals now show real px + ORGANIZED override; LLM runs full analysis instead of cheap-hold.
 
+## Scalp Radar Telegram Ping (iter-121, July 8 2026 — DONE)
+- `scalp_radar.py` — per user+symbol state in `scalp_radar_state`, 60/50 hysteresis: pings Telegram (`event_type: scalp_radar`, opt-out toggle on Notifications page) the moment M15 alignment ≥60 arms the intraday engine; direction flip re-pings; disarm below 50. Hooked in bot_runner right after signal fetch (uses signal's `intraday_m15`, no extra fetch; 5 configs on same symbol ping once).
+- Tested: arm/dedupe/disarm/no-pack cycles verified against live DB with synthetic user; toggle visible on /notifications.
+
 ## Short-Tier Veto Intraday Deferral (iter-120b, July 8 2026 — DONE)
 User re-enabled aggressive_mode on all 5 bots but signals stayed HOLD: aggressive override fired (SELL 58-68 conf) yet `short_tier_momentum_veto` (weekly daily-bar fast-SMA slope ±1%) reverted everything — it ignored aggressive_mode AND the new scalp scope, and had also blocked yesterday's 11:43 SELL before the −75pt drop. Fix in `ai_signals.py`: when `intraday_alignment(action) ≥ 60`, the short-tier veto DEFERS (reasoning gets "NOTE: Short-tier veto deferred..."); below 60 it still vetoes (correct — don't fade an active M15 bounce). Verified by simulation: strong-down M15 pack + aggressive → SELL 68, SL 150p / TP 100/200/300 (rr 1.17 ≥ 1.1 floor). Live conditions (M15 FLAT bounce, score 25) correctly still HOLD.
 

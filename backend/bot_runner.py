@@ -588,6 +588,13 @@ async def _process_user_account_locked(db, cfg: dict):
                     reason="Analyser pipeline returned no signal (Strategy or Risk agent failed). Check logs.",
                 )
                 continue
+            # iter-121 · Scalp Radar — Telegram ping when M15 alignment arms.
+            # State keyed per user+symbol, so 5 configs on XAUUSD ping once.
+            try:
+                from scalp_radar import scalp_radar_ping
+                await scalp_radar_ping(db, user_id, sym, signal.get("intraday_m15"))
+            except Exception as e:  # noqa: BLE001
+                logger.debug("scalp radar failed: %s", e)
             # iter-74 · Cache the regime so the NEXT tick can pick a preset
             # for auto_preset_enabled without re-querying the orchestrator.
             try:
