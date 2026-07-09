@@ -42,8 +42,10 @@ async def test_eligibility_single_loss_not_consecutive():
     db.trades.find_one = AsyncMock(return_value={"pnl": +30.0})  # prior was a winner
     trade = {"pnl": -5.0, "close_reason": "manual", "_id": ObjectId(),
              "user_id": "u1", "symbol": "XAUUSD"}
-    eligible, _ = await lp._is_postmortem_eligible(db, trade)
-    assert eligible is False
+    eligible, trigger = await lp._is_postmortem_eligible(db, trade)
+    # iter-127c: EVERY losing trade is eligible; single loss → 'loss' trigger
+    assert eligible is True
+    assert trigger == "loss"
 
 
 def test_pattern_key_stable():

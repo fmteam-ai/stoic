@@ -262,6 +262,12 @@ NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit 
 ## POST-MORTEM "NOT ELIGIBLE" BUG FIXED (iter-127c, July 9 2026)
 Clicking POST-MORTEM on a losing closed trade errored "Trade is not eligible for post-mortem". Cause: manual regenerate reused the AUTO-trigger heuristic (only sl_hit or consecutive-loss qualify) — and ALL recent losses close via external_close/broker_confirmed, never 'stop_loss', so nothing ever qualified. Fix: `maybe_record_postmortem(db, id, force=True)` — manual click generates for ANY closed losing trade (trigger='manual'); route `/postmortem/{id}/regenerate` passes force=True. Verified: full LLM narrative generated for trade 6a4fcf…3ea2.
 
+## AUTO POST-MORTEM ON EVERY LOSING TRADE (iter-127d, July 9 2026 — user request, DONE)
+- `_is_postmortem_eligible`: any pnl<0 is now eligible; trigger labels: 'sl_hit' (close_reason contains stop_loss) / 'consecutive_loss' / 'loss'.
+- Added missing hook in bridge_routes deal-close backfill path (~line 1225) — broker-reported/external closes bypassed execution.py's hook entirely (root cause of empty Loss Lab).
+- Backfilled 12 recent losing trades (23 PMs total); pattern learner auto-tightened GOLD|UNKNOWN|OFF|SELL min_confidence 55→60 from the new data.
+- Test updated: test_iter45_postmortem single-loss case now expects eligible/'loss' (19/19 pass).
+
 ## BOT SILENCE ROOT-CAUSE CHAIN FIXED (iter-127b, July 9 2026 — FIRST AUTO TRADE EXECUTED)
 User: "bot still silent 30+ hours". Traced and fixed the FULL veto chain, one real blocker at a time (each verified live):
 1. hf_scalp had no FLAT-market play → added VWAP fade (±0.20/0.25% from VWAP) + exhaustion fade (±0.30/0.35% extension w/ stalled momentum) to `strategy_engines.py`.

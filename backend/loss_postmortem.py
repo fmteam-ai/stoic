@@ -68,17 +68,17 @@ def _pattern_key(trade: dict, signal: dict) -> str:
 async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:
     """Return (eligible, trigger_reason).
 
-    Eligible when:
-      • close_reason == 'stop_loss' AND pnl < 0  → 'sl_hit'
-      • pnl < 0 AND the previous closed trade for (user, symbol) also lost
-                → 'consecutive_loss'
+    iter-127c (user request): EVERY closed losing trade gets a post-mortem.
+    The trigger label still distinguishes how it lost:
+      • close_reason contains 'stop_loss'      → 'sl_hit'
+      • previous closed trade on symbol lost   → 'consecutive_loss'
+      • any other loss                         → 'loss'
     """
     pnl = float(trade.get("pnl") or 0)
     if pnl >= 0:
         return False, ""
-    if (trade.get("close_reason") or "").lower() == "stop_loss":
+    if "stop_loss" in (trade.get("close_reason") or "").lower():
         return True, "sl_hit"
-    # Look back at the prior closed trade on same symbol
     prior = await db.trades.find_one(
         {
             "user_id": trade["user_id"],
@@ -90,7 +90,7 @@ async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:
     )
     if prior and float(prior.get("pnl") or 0) < 0:
         return True, "consecutive_loss"
-    return False, ""
+    return True, "loss"
 
 
 def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict) -> dict:

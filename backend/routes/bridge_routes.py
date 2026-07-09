@@ -1212,6 +1212,16 @@ async def external_deal(payload: BridgeExternalDeal):
         "trade_id": tid, **update,
     })
 
+    # iter-127c · auto post-mortem on EVERY losing close, including
+    # broker-reported / external closes that bypass execution.py
+    if realized is not None and float(realized) < 0 and update.get("status", "closed") == "closed":
+        try:
+            import asyncio as _aio
+            from loss_postmortem import maybe_record_postmortem
+            _aio.create_task(maybe_record_postmortem(db, tid))
+        except Exception:
+            pass
+
     if existing and existing.get("exit_price") is None:
         try:
             from notifier import notify_trade_closed
