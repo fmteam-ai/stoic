@@ -742,9 +742,12 @@ async def _process_user_account_locked(db, cfg: dict):
                 {"user_id": user_id, "symbol": _base})
             snap = structure_snapshot((cdoc or {}).get("bars") or [])
             signal["market_structure"] = snap
-            # range_fade opposes fresh structure BY DESIGN (fades extremes)
+            # fade-style scalps oppose fresh structure BY DESIGN; their
+            # protection is the tight M15-ATR stop + 0.25% risk cap
+            from strategy_engines import SCALP_ENGINES as _fade_exempt
             sg = (structure_gate(signal["action"], snap)
-                  if signal.get("scope") != "range_fade" else None)
+                  if signal.get("scope") not in (_fade_exempt | {"range_fade"})
+                  else None)
             if sg:
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn", reason=sg)
@@ -757,13 +760,19 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception:
                 rf = None
             signal["range_forecast"] = rf
+            from strategy_engines import DETERMINISTIC_INTRADAY_SCOPES as _DET
+            _det_scope = signal.get("scope") in _DET
             rg = range_gate(signal["action"], signal.get("entry_price"),
                             signal.get("tp1") or signal.get("take_profit"), rf)
             if rg:
-                await _record_pulse(db, cfg, symbol=sym,
-                    action="SKIP", level="warn", reason=rg)
-                await inc_intel_counter(user_id, "range_gate_veto")
-                continue
+                # daily range forecast can't judge tiny deterministic
+                # intraday targets — advisory for those scopes
+                if not _det_scope:
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn", reason=rg)
+                    await inc_intel_counter(user_id, "range_gate_veto")
+                    continue
+                signal["range_gate_advisory"] = rg
             if _base == "XAUUSD":
                 try:
                     tone = await get_fed_tone()
@@ -772,10 +781,13 @@ async def _process_user_account_locked(db, cfg: dict):
                 signal["fed_tone"] = tone
                 fg = fed_tone_gate(signal["action"], _base, tone)
                 if fg:
-                    await _record_pulse(db, cfg, symbol=sym,
-                        action="SKIP", level="warn", reason=fg)
-                    await inc_intel_counter(user_id, "fed_tone_veto")
-                    continue
+                    # daily macro tone — advisory for deterministic scalps
+                    if not _det_scope:
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=fg)
+                        await inc_intel_counter(user_id, "fed_tone_veto")
+                        continue
+                    signal["fed_tone_advisory"] = fg
                 # iter-109 · Causal AI — structural transmission chain
                 # (inflation → yields → real yields → USD → gold).
                 try:
@@ -826,7 +838,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 if ng:
                     news_mode = str(cfg.get("news_gate_mode")
                                     or "enforce").lower()
-                    if news_mode == "enforce":
+                    if news_mode == "enforce" and not _det_scope:
                         await _record_pulse(db, cfg, symbol=sym,
                             action="SKIP", level="warn", reason=ng)
                         await inc_intel_counter(user_id, "news_gate_veto")
@@ -999,7 +1011,8 @@ async def _process_user_account_locked(db, cfg: dict):
             c_thr = int(cfg.get("consensus_threshold") or DEFAULT_THRESHOLD)
             if cons["score"] < c_thr and c_mode != "off":
                 await inc_intel_counter(user_id, "consensus_low")
-                if c_mode == "enforce":
+                from strategy_engines import DETERMINISTIC_INTRADAY_SCOPES as _DET_C
+                if c_mode == "enforce" and signal.get("scope") not in _DET_C:
                     detail = ", ".join(f"{k} {v:+.1f}" for k, v in cons["votes"].items())
                     await _record_pulse(db, cfg, symbol=sym,
                         action="SKIP", level="warn",
@@ -1008,6 +1021,10 @@ async def _process_user_account_locked(db, cfg: dict):
                                 f"votes: {detail}."))
                     await inc_intel_counter(user_id, "consensus_block")
                     continue
+                # deterministic intraday engines: daily-agent votes are
+                # advisory — the persona's own rules + tight stop govern
+                signal["consensus_advisory"] = (
+                    f"consensus {cons['score']}/100 below {c_thr} (advisory)")
 
         # iter-113 · Self-evaluation behavior adjustments — recurring
         # mistakes learned from graded trades reshape new candidates
@@ -1069,10 +1086,21 @@ async def _process_user_account_locked(db, cfg: dict):
                 from pip_utils import base_symbol as _bs_mc
                 _cdoc_mc = await db.intraday_candles.find_one(
                     {"user_id": user_id, "symbol": _bs_mc(sym)}, {"bars": 1})
+                # simulate the BLENDED target (50%@TP1+25%@TP2+25%@TP3 =
+                # rr_ratio × SL) — simulating TP1 alone (0.8×SL) wrongly
+                # tags every 3-TP trade as negative EV
+                _entry_mc = signal.get("entry_price")
+                _sl_mc = signal.get("stop_loss")
+                _tp_mc = signal.get("tp1") or signal.get("take_profit")
+                _rr_mc = float(signal.get("rr_ratio") or 0)
+                if _entry_mc and _sl_mc and _rr_mc > 0:
+                    _d = abs(_entry_mc - _sl_mc) * _rr_mc
+                    _tp_mc = (_entry_mc + _d if signal["action"] == "BUY"
+                              else _entry_mc - _d)
                 mc = simulate_trade(
-                    signal["action"], signal.get("entry_price"),
-                    signal.get("stop_loss"),
-                    signal.get("tp1") or signal.get("take_profit"),
+                    signal["action"], _entry_mc,
+                    _sl_mc,
+                    _tp_mc,
                     (_cdoc_mc or {}).get("bars") or [],
                     n_paths=int(cfg.get("monte_carlo_paths") or 10000))
             except Exception as e:  # noqa: BLE001
@@ -1084,7 +1112,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     mc_mode = str(cfg.get("monte_carlo_mode")
                                   or "enforce").lower()
                     await inc_intel_counter(user_id, "mc_negative_ev")
-                    if mc_mode == "enforce":
+                    # IID bootstrap inherits recent drift → it can't price
+                    # mean-reversion; fade entries get advisory treatment
+                    if mc_mode == "enforce" and signal.get("entry_style") != "fade":
                         await _record_pulse(db, cfg, symbol=sym,
                             action="SKIP", level="warn", reason=mg)
                         await inc_intel_counter(user_id, "mc_block")
@@ -1482,6 +1512,36 @@ async def _process_user_account_locked(db, cfg: dict):
                 sizing_method = sizing_method + "+sector_cap_fit"
         except Exception as e:  # noqa: BLE001
             logger.debug("Sector-cap fit skipped (%s) — proceeding without trim", e)
+
+        # iter-127b · FINAL hard risk clamp — assume STANDARD contract size
+        # (most conservative). Protects against mislabeled account_type
+        # metadata (e.g. a standard account stored as 'microcent' made pip
+        # value 1000× too small and inflated lots). Worst-case USD at the
+        # stop must stay within the trade's risk budget.
+        try:
+            _slp = signal.get("stop_loss")
+            _ep = signal.get("entry_price")
+            if _slp and _ep:
+                from pip_utils import price_to_pips as _p2p, \
+                    pip_value_usd_per_lot as _pvpl
+                _pips = _p2p(sym, abs(float(_ep) - float(_slp)))
+                _pip_std = _pvpl(sym, "standard")
+                _eq = float(target_account.get("equity")
+                            or target_account.get("balance") or 0)
+                _cap_pct = float(signal.get("risk_pct_cap")
+                                 or profile.get("risk_pct") or 1.0)
+                if _eq > 0 and _pips > 0 and _pip_std > 0:
+                    _max_risk_lot = (_eq * _cap_pct / 100.0) / (_pips * _pip_std)
+                    if effective_lot > _max_risk_lot:
+                        logger.info(
+                            "Std-contract risk clamp acct=%s sym=%s: %.2f → %.2f "
+                            "lots (budget %.2f%% of $%.0f, SL %.1f pips)",
+                            cfg_account_id or "default", sym, effective_lot,
+                            _max_risk_lot, _cap_pct, _eq, _pips)
+                        effective_lot = max(round(_max_risk_lot, 2), 0.01)
+                        sizing_method = sizing_method + "+std_risk_clamp"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("std risk clamp skipped: %s", e)
 
         engine = engine_for_account(target_account)
         trade_doc = await engine.execute(

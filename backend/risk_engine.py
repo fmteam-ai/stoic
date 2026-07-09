@@ -149,6 +149,33 @@ async def cvar_budget_check(open_trades, new_position, equity,
                 "detail": f"projected CVaR₉₅ {cvar_pct:.1f}% of equity "
                           f"(${snap.get('cvar_95_usd', 0):,.0f}) within the "
                           f"{budget_pct:.0f}% budget", "cvar_pct": cvar_pct}
+    # Stop-aware override (iter-127): parametric 1-day CVaR ignores hard
+    # stops entirely — on micro accounts even the broker-minimum 0.01 lot
+    # "projects" a huge tail and permanently blocks stop-bounded intraday
+    # trades. When EVERY position carries a stop, the true tail is the
+    # Σ stop-distance loss ×1.5 (gap buffer); use it when tighter.
+    bounded = 0.0
+    all_stopped = True
+    for p in list(open_trades) + [new_position]:
+        if (p.get("status") or "open") not in ("open", "pending"):
+            continue
+        entry = float(p.get("entry_price") or 0)
+        lot = float(p.get("lot_size") or 0)
+        slp = p.get("stop_loss")
+        if not slp or entry <= 0 or lot <= 0:
+            all_stopped = False
+            break
+        contract = 100 if (p.get("symbol") or "").upper() in ("XAUUSD", "GOLD") else 1
+        bounded += abs(entry - float(slp)) * lot * contract * 1.5
+    if all_stopped and equity > 0:
+        bounded_pct = 100.0 * bounded / equity
+        if bounded_pct <= budget_pct:
+            return {"name": "cvar_budget", "status": "ok", "scale": 1.0,
+                    "detail": f"stop-bounded tail {bounded_pct:.1f}% of equity "
+                              f"(${bounded:,.0f} incl. 1.5× gap buffer) within "
+                              f"the {budget_pct:.0f}% budget — parametric "
+                              f"CVaR₉₅ {cvar_pct:.1f}% overridden by hard stops",
+                    "cvar_pct": round(bounded_pct, 2)}
     if cvar_pct > budget_pct * 1.5:
         return {"name": "cvar_budget", "status": "block", "scale": 0.0,
                 "detail": f"projected CVaR₉₅ {cvar_pct:.1f}% > "
@@ -255,7 +282,7 @@ async def risk_engine_evaluate(db, user_id, cfg, account, signal,
         checks.append(await cvar_budget_check(
             open_trades,
             {"symbol": sym, "lot_size": lot, "entry_price": price,
-             "status": "open"},
+             "stop_loss": signal.get("stop_loss"), "status": "open"},
             equity,
             budget_pct=float(cfg.get("cvar_budget_pct")
                              or DEF_CVAR_BUDGET_PCT)))

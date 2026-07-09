@@ -69,6 +69,9 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
                            f"3h momentum +{mom}%, price above EMA20")
         if -0.20 <= vdist <= 0.05:
             return "BUY", f"VWAP bounce: uptrend pullback to session VWAP (dist {vdist}%)"
+        if vdist >= (0.30 if fast else 0.35) and mom <= 0 and dch != "BREAK_UP":
+            return "SELL", (f"exhaustion fade: price {vdist}% above VWAP with 3h "
+                            f"momentum stalled ({mom}%) — fading back toward VWAP")
         return None, (f"uptrend, no burst yet (slope {slope}%/2h, 3h mom {mom}%; "
                       f"need ≥{slope_min}%/{mom_min}%, price≥EMA20) and no VWAP touch (dist {vdist}%)")
     if trend == "DOWN":
@@ -79,9 +82,22 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
                             f"3h momentum {mom}%, price below EMA20")
         if -0.05 <= vdist <= 0.20:
             return "SELL", f"VWAP bounce: downtrend rally to session VWAP (dist {vdist}%)"
+        if vdist <= -(0.30 if fast else 0.35) and mom >= 0 and dch != "BREAK_DOWN":
+            return "BUY", (f"exhaustion fade: price {abs(vdist)}% below VWAP with 3h "
+                           f"momentum stalled (+{mom}%) — fading back toward VWAP")
         return None, (f"downtrend, no burst yet (slope {slope}%/2h, 3h mom {mom}%; "
                       f"need ≤-{slope_min}%/-{mom_min}%, price≤EMA20) and no VWAP touch (dist {vdist}%)")
-    return None, "M15 trend FLAT — momentum engine needs a directional EMA stack"
+    # FLAT market — micro mean-reversion around session VWAP (the classic
+    # high-frequency "small doses" behavior; tight stop is the protection)
+    fade_min = 0.20 if fast else 0.25   # % distance from VWAP required to fade
+    if vdist >= fade_min and dch != "BREAK_UP":
+        return "SELL", (f"VWAP fade: FLAT trend, price {vdist}% above session "
+                        f"VWAP — fading back toward {feats.get('session_vwap')}")
+    if vdist <= -fade_min and dch != "BREAK_DOWN":
+        return "BUY", (f"VWAP fade: FLAT trend, price {abs(vdist)}% below session "
+                       f"VWAP — fading back toward {feats.get('session_vwap')}")
+    return None, (f"FLAT trend, price within ±{fade_min}% of VWAP "
+                  f"(dist {vdist}%) — no scalp edge")
 
 
 def range_fade_signal(feats: dict) -> tuple:

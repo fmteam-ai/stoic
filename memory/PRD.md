@@ -259,6 +259,16 @@ NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit 
 - **Partner Broker Card** — `routes/partner_routes.py` (GET lazy-seeds Exness/IC Markets/Vantage with PLACEHOLDER IB links; admin POST/DELETE; click tracking POST /brokers/{id}/click → affiliate_clicks). `PartnerBrokerCard.jsx` on Accounts page. Admin must replace placeholder links via POST /api/partners/brokers.
 - **Weekly Agent Report Card** — `agent_report_card.py` (7d intelligence_counters × realized EV/trade → per-agent est. P&L impact, verdicts QUIET/KEEP ENFORCE/CONSIDER ADVISE/MONITORING, 1h cache in `agent_report_cards`). Route GET /api/agents/report-card. `AgentReportCard.jsx` on Agents page. First real insight: Execution Guards 105 blocks ≈ −$430 est. missed EV → CONSIDER ADVISE.
 
+## BOT SILENCE ROOT-CAUSE CHAIN FIXED (iter-127b, July 9 2026 — FIRST AUTO TRADE EXECUTED)
+User: "bot still silent 30+ hours". Traced and fixed the FULL veto chain, one real blocker at a time (each verified live):
+1. hf_scalp had no FLAT-market play → added VWAP fade (±0.20/0.25% from VWAP) + exhaustion fade (±0.30/0.35% extension w/ stalled momentum) to `strategy_engines.py`.
+2. Master Agent consensus gate (daily agents voting) blocked scalps → advisory for DETERMINISTIC_INTRADAY_SCOPES (enforced for MTF engines).
+3. Range/fed-tone/news-AI gates (daily models) → advisory for deterministic scopes (`_det_scope` in bot_runner).
+4. Monte Carlo gate simulated TP1 ONLY (0.8×SL) → now simulates blended target (rr_ratio×SL); IID bootstrap can't price mean reversion → MC advisory for `entry_style=="fade"` (tagged in ai_signals).
+5. CVaR₉₅ budget used 1-day notional VaR ignoring stops → stop-aware override in `risk_engine.cvar_budget_check` (Σ stop-distance ×1.5 gap buffer within budget → allow).
+6. SIZING BUG: STARTRADER stored account_type='microcent' but live equity deltas proved STANDARD contract → pip value $0.01 vs $10 → lots inflated (0.29 instead of ~0.10). Fixed: account_type corrected in DB + FINAL std-contract risk clamp in bot_runner (assumes standard contract, clamps lot so stop-loss worst case ≤ risk budget; `+std_risk_clamp` sizing method).
+RESULT: 11:25 UTC first auto trade EXECUTED (fast_scalp exhaustion-fade SELL XAUUSD 0.29 @4100.54, SL 4106.62, TP 4096.10, STARTRADER $25.7k). Anti-pyramid correctly refuses stacking while open. NOTE: that first trade risks 0.686% (sized pre-clamp); subsequent trades clamp to 0.25%.
+
 ## PER-ACCOUNT STRATEGY ENGINES (iter-127, July 9 2026 — DONE, tested iteration_42.json: 85/85 pass, 0 issues)
 User: "each account has different strategy, but the bot acts like one strategy for all". Now the account's `active_preset` selects EXACTLY ONE execution engine (`strategy_engines.py`):
 - sniper→mtf_strict · balanced/None/custom→mtf_moderate (1H boss, 4H non-opposing, retrace 20-75%) · trend_rider→mtf_relaxed (retrace 15-80%, impulse 1.5×ATR) · scalper→hf_scalp (M15 EMA bursts + VWAP bounces, 5-min re-entry) · fast_scalp→hf_scalp_fast (softer thresholds, 3-min re-entry) · breakout→breakout_m15 (Donchian-20 + momentum confirm) · mean_reversion→range_fade (fade session extremes toward VWAP).

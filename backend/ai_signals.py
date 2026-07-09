@@ -384,6 +384,9 @@ async def analyze_symbol(symbol: str, risk_level: str,
             return _hold(f"{engine_label}: {note} — standing by.")
         action = sig
         engine_note = note
+    # fade-style entries bet against recent drift — tagged so drift-based
+    # gates (Monte Carlo bootstrap) go advisory for them
+    entry_style = "fade" if "fade" in engine_note.lower() else "trend"
 
     # ---- ENGINE CONFIRMED — build the trade ---------------------------------
     trade_scope = engine
@@ -540,6 +543,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "scope": trade_scope,
         "strategy_engine": engine,
         "engine_label": engine_label,
+        "entry_style": entry_style,
         "mtf_confluence": mtf_conf,
         "mtf_confluence_applied": engine_note if mtf_mode else None,
         "indicators": indicators,
