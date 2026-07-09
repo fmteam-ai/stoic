@@ -767,7 +767,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                                 <span className="ml-auto font-mono text-[9px] tracking-widest px-2 py-0.5 border" style={{ borderColor: `${color}66`, color }}>PER-ACCOUNT</span>
                             </div>
                             <p className="text-xs text-[#A1A1AA] leading-relaxed">
-                                {desc} This account trades ONLY this engine — change it by applying a different preset on the <span style={{ color }}>Strategies</span> page.
+                                {desc} This account trades ONLY this engine — change it by applying a different preset in the <span style={{ color }}>Strategy Presets</span> section below.
                                 All capital protections (news veto, macro freeze, R:R floor, drawdown guards, cooldowns) stay active.
                             </p>
                         </div>

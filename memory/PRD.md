@@ -259,6 +259,16 @@ NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit 
 - **Partner Broker Card** — `routes/partner_routes.py` (GET lazy-seeds Exness/IC Markets/Vantage with PLACEHOLDER IB links; admin POST/DELETE; click tracking POST /brokers/{id}/click → affiliate_clicks). `PartnerBrokerCard.jsx` on Accounts page. Admin must replace placeholder links via POST /api/partners/brokers.
 - **Weekly Agent Report Card** — `agent_report_card.py` (7d intelligence_counters × realized EV/trade → per-agent est. P&L impact, verdicts QUIET/KEEP ENFORCE/CONSIDER ADVISE/MONITORING, 1h cache in `agent_report_cards`). Route GET /api/agents/report-card. `AgentReportCard.jsx` on Agents page. First real insight: Execution Guards 105 blocks ≈ −$430 est. missed EV → CONSIDER ADVISE.
 
+## PER-ACCOUNT STRATEGY ENGINES (iter-127, July 9 2026 — DONE, tested iteration_42.json: 85/85 pass, 0 issues)
+User: "each account has different strategy, but the bot acts like one strategy for all". Now the account's `active_preset` selects EXACTLY ONE execution engine (`strategy_engines.py`):
+- sniper→mtf_strict · balanced/None/custom→mtf_moderate (1H boss, 4H non-opposing, retrace 20-75%) · trend_rider→mtf_relaxed (retrace 15-80%, impulse 1.5×ATR) · scalper→hf_scalp (M15 EMA bursts + VWAP bounces, 5-min re-entry) · fast_scalp→hf_scalp_fast (softer thresholds, 3-min re-entry) · breakout→breakout_m15 (Donchian-20 + momentum confirm) · mean_reversion→range_fade (fade session extremes toward VWAP).
+- `mtf_intraday.MTF_MODES` parametrizes the cascade (strict/moderate/relaxed). `analyze_symbol(..., strategy=)` dispatches; scope/strategy_engine/engine_label in every response; reasoning starts with engine label.
+- HF scalps: SL 0.8×ATR15, TP=2×SL (weighted R:R 1.25), risk 0.25%/trade (`risk_pct_cap` enforced in bot_runner sizing). range_fade/breakout: SL 1×ATR15, TP 2×SL.
+- Gate scoping: news veto HARD for MTF engines, ADVISORY for deterministic intraday scopes; uncertainty gate advisory for DETERMINISTIC_INTRADAY_SCOPES; structure gate exempts range_fade. Claude narration only for MTF setups (deterministic engines = no LLM cost).
+- Presets: scalper/fast_scalp set signal_cooldown_minutes 5/3 (existing configs migrated); descriptions start with "ENGINE: ...".
+- Frontend: BotConfig "Active Engine" card is dynamic per account (data-testid core-strategy-card, PER-ACCOUNT badge). NOTE: /strategies route = AI Strategy Generator; preset picker lives on /bot-config.
+- Live verification: each active account's pulse shows its own engine label (STARTRADER→FAST SCALP, Tauro→BREAKOUT, VTMarkets/RoboForex→MEAN REVERSION, OnEquity→TREND RIDER).
+
 ## SINGLE-ENGINE SIMPLIFICATION — Option A (iter-126, July 8 2026 — DONE, tested iteration_41.json)
 User rejected the confusing overlap of 5 execution modes and chose **Option A: MTF Confluence is the ONLY engine**.
 - `ai_signals.analyze_symbol()` fully rewritten: strict cascade (4H trend → 1H structure → M15 pullback 25-70% retrace → live breakout via `mtf_intraday.fetch_mtf_confluence`) is the sole signal generator. Claude is now a NARRATION-ONLY layer (`NARRATOR_PROMPT`) that explains confirmed setups — it never picks direction, and is SKIPPED on every HOLD (big LLM cost saving). Not-aligned → cheap HOLD with exact cascade note ("waiting on M15 setup: retrace 74% outside 25%-70%").
