@@ -229,7 +229,9 @@ async def regenerate(trade_id: str, user=Depends(get_current_user)):
     if float(trade.get("pnl") or 0) >= 0:
         raise HTTPException(status_code=400, detail="Trade was not a loss")
     await db.loss_postmortems.delete_many({"trade_id": trade_id})
-    doc = await maybe_record_postmortem(db, trade["_id"])
+    doc = await maybe_record_postmortem(db, trade["_id"], force=True)
     if not doc:
-        raise HTTPException(status_code=400, detail="Trade is not eligible for post-mortem")
+        raise HTTPException(
+            status_code=400,
+            detail="Post-mortem could not be generated for this trade")
     return _serialize(doc)

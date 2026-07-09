@@ -259,6 +259,9 @@ NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit 
 - **Partner Broker Card** — `routes/partner_routes.py` (GET lazy-seeds Exness/IC Markets/Vantage with PLACEHOLDER IB links; admin POST/DELETE; click tracking POST /brokers/{id}/click → affiliate_clicks). `PartnerBrokerCard.jsx` on Accounts page. Admin must replace placeholder links via POST /api/partners/brokers.
 - **Weekly Agent Report Card** — `agent_report_card.py` (7d intelligence_counters × realized EV/trade → per-agent est. P&L impact, verdicts QUIET/KEEP ENFORCE/CONSIDER ADVISE/MONITORING, 1h cache in `agent_report_cards`). Route GET /api/agents/report-card. `AgentReportCard.jsx` on Agents page. First real insight: Execution Guards 105 blocks ≈ −$430 est. missed EV → CONSIDER ADVISE.
 
+## POST-MORTEM "NOT ELIGIBLE" BUG FIXED (iter-127c, July 9 2026)
+Clicking POST-MORTEM on a losing closed trade errored "Trade is not eligible for post-mortem". Cause: manual regenerate reused the AUTO-trigger heuristic (only sl_hit or consecutive-loss qualify) — and ALL recent losses close via external_close/broker_confirmed, never 'stop_loss', so nothing ever qualified. Fix: `maybe_record_postmortem(db, id, force=True)` — manual click generates for ANY closed losing trade (trigger='manual'); route `/postmortem/{id}/regenerate` passes force=True. Verified: full LLM narrative generated for trade 6a4fcf…3ea2.
+
 ## BOT SILENCE ROOT-CAUSE CHAIN FIXED (iter-127b, July 9 2026 — FIRST AUTO TRADE EXECUTED)
 User: "bot still silent 30+ hours". Traced and fixed the FULL veto chain, one real blocker at a time (each verified live):
 1. hf_scalp had no FLAT-market play → added VWAP fade (±0.20/0.25% from VWAP) + exhaustion fade (±0.30/0.35% extension w/ stalled momentum) to `strategy_engines.py`.

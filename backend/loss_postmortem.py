@@ -182,9 +182,12 @@ async def _user_doc(db, user_id: str) -> dict | None:
             or await db.users.find_one({"id": user_id}))
 
 
-async def maybe_record_postmortem(db, trade_id) -> dict | None:
+async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | None:
     """Run a post-mortem if the trade is eligible. Idempotent — skips if a
     postmortem for this trade already exists.
+
+    `force=True` (manual user request): any closed losing trade qualifies —
+    the sl_hit/consecutive-loss heuristic only gates AUTO post-mortems.
 
     Returns the inserted postmortem doc (or existing one) on success, None on
     skip.
@@ -205,7 +208,9 @@ async def maybe_record_postmortem(db, trade_id) -> dict | None:
 
     eligible, trigger = await _is_postmortem_eligible(db, trade)
     if not eligible:
-        return None
+        if not (force and float(trade.get("pnl") or 0) < 0):
+            return None
+        trigger = "manual"
 
     # Look up the original signal (best-effort)
     signal = {}
