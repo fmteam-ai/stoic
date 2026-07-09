@@ -742,7 +742,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 {"user_id": user_id, "symbol": _base})
             snap = structure_snapshot((cdoc or {}).get("bars") or [])
             signal["market_structure"] = snap
-            sg = structure_gate(signal["action"], snap)
+            # range_fade opposes fresh structure BY DESIGN (fades extremes)
+            sg = (structure_gate(signal["action"], snap)
+                  if signal.get("scope") != "range_fade" else None)
             if sg:
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn", reason=sg)
@@ -1048,7 +1050,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 + int(signal.get("_conf_floor_bump") or 0))
             if ug and u_mode != "off":
                 await inc_intel_counter(user_id, "uncertainty_low_conf")
-                if u_mode == "enforce":
+                from strategy_engines import DETERMINISTIC_INTRADAY_SCOPES
+                if (u_mode == "enforce"
+                        and signal.get("scope") not in DETERMINISTIC_INTRADAY_SCOPES):
                     await _record_pulse(db, cfg, symbol=sym,
                         action="SKIP", level="warn", reason=ug)
                     await inc_intel_counter(user_id, "uncertainty_skip")
@@ -1314,6 +1318,11 @@ async def _process_user_account_locked(db, cfg: dict):
         # equity pool used for Kelly sizing. The locked $ becomes untouchable.
         from profit_target import locked_profit_amount
         locked = locked_profit_amount(cfg)
+        # iter-127 · HF scalp engines carry a per-trade risk cap (0.25%)
+        rcap = signal.get("risk_pct_cap")
+        if rcap:
+            profile = {**profile,
+                       "risk_pct": min(float(profile.get("risk_pct") or 0), float(rcap))}
         sized = compute_lot_for_account(
             account=target_account,
             symbol=signal["symbol"],

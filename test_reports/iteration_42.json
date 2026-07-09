@@ -1,0 +1,48 @@
+{
+  "summary": "iter-42 verification of per-account strategy engine dispatch (iter-127). ALL 85/85 backend tests pass across iter127+iter126+iter125+iter63+iter29 suites. New test file /app/backend/tests/test_iter127_engine_dispatch.py (27 tests) covers: (a) strategy_engines.ENGINE_BY_PRESET mapping, resolve_engine defaults + custom:xyz fallback, SCALP_RISK_PCT_CAP=0.25, DETERMINISTIC_INTRADAY_SCOPES set, ENGINE_LABELS present. (b) Pure functions hf_scalp_signal (BUY on uptrend burst + softer thresholds when fast=True), range_fade_signal (BUY at range low, None when trending), breakout_signal (BUY on BREAK_UP with positive momentum, None when INSIDE). (c) mtf_intraday MTF_MODES dict has strict/moderate/relaxed configs, moderate allows 4H FLAT when 1H trends (strict rejects with 'no higher-TF agreement'). (d) analyze_symbol dispatches correctly for all 9 preset values (None, sniper, balanced, trend_rider, scalper, fast_scalp, breakout, mean_reversion, custom:xyz) — scope, strategy_engine, engine_label all populated and reasoning starts with engine_label. (e) HTTP: /api/bot/presets descriptions all start with 'ENGINE:', scalper.signal_cooldown_minutes==5, fast_scalp==3, no 'aggressive' key. /api/bot/mtf-confluence returns full cascade shape. /api/bot/health-score returns 200 (iter-41 tilt_cfgs fix confirmed). /api/bot/pulse shows per-engine labels on active accounts. Backend logs clean of orchestrator errors after 2026-07-09 09:28 (pre-fix errors ignored per review). FRONTEND fully verified: /bot-config core-strategy-card renders 'Active Engine — SCALPER — HF Momentum Engine' + PER-ACCOUNT badge, switches label correctly when clicking OnEquity Live account tile. All 7 preset cards on /bot-config show 'ENGINE: ...' descriptions (Sniper, Scalper=ACTIVE, Fast Scalp, Trend Rider, Breakout Hunter, Mean Reversion, Balanced). Dashboard silent-bot banner shows 'AI HOLD 0% — TREND RIDER · Relaxed MTF Cascade: 4H+1H UP + M15 setup ready — waiting for live break of 4112.09' proving OnEquity (trend_rider preset) is running its own engine live. /bot-health page renders clean 100/100 score (no red 500 banner). Iter-126 legacy tests updated: scope assertion 'mtf_confluence' → 'mtf_moderate', pulse-reason token check now scans for any of the 7 engine labels. Total execution: 85 passed in 5.61s. No trades were toggled, no presets applied to per-account configs, no PANIC triggered.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/strategies route", "issues": ["This route is the AI Strategy Generator (plain-English → compiled strategy), NOT the preset picker. Review-request bullet 'FRONTEND: /strategies page renders presets with ENGINE: descriptions' is a route mismatch — the preset cards with ENGINE: descriptions actually live on /bot-config → STRATEGY PRESETS section. Both features work; this is just a docs/routing nit. Consider adding a link from /strategies to /bot-config presets, or reword the request expectation."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter127_engine_dispatch.py",
+    "/app/backend/tests/test_iter126_mtf_only_engine.py",
+    "/app/test_reports/pytest/iter127.xml",
+    "/app/test_reports/pytest/iter127_regression.xml"
+  ],
+  "action_items": [
+    "No functional fixes required. Optional: /strategies route currently hosts the AI Strategy Generator; the preset picker is on /bot-config. If you want /strategies to also list presets with ENGINE: descriptions (matching the review-request wording), either add a preset section there or update product copy.",
+    "Optional cleanup: /app/backend/routes/bot_routes.py `bot_health_score` is still 630+ lines — a good candidate for splitting into per-section helpers so future refactors can't strand undefined variables (same class of bug as iter-41 tilt_cfgs).",
+    "Optional: agent_report_card.py:16 still lists 'mtf_strict_veto' as an agent row — still fires when sniper preset is active (mtf_strict engine), so it is NOT dead any more under iter-127. No action needed but re-verify iter-127 emits this vetokey when a sniper account rejects on strict mode."
+  ],
+  "critical_code_review_comments": [
+    "strategy_engines.py — clean, well-scoped module (144 lines). ENGINE_BY_PRESET, resolve_engine, and the three pure engine functions are testable and pass all synthetic-feature tests. Good separation.",
+    "ai_signals.py analyze_symbol is now ~570 lines and doing a lot (features, MTF, LLM narration, SL/TP geometry, veto stack, sizing, response assembly). Consider splitting the geometry+veto+response-assembly tail into a helper so each engine dispatch path is easier to reason about.",
+    "News sentiment veto behaviour is correctly HARD for mtf_mode and ADVISORY for deterministic scopes (line 427: `if veto_reason and not mtf_mode: sentiment_note = veto_reason; veto_reason = ''`) — matches the spec. Good.",
+    "SCALP_RISK_PCT_CAP is applied at ai_signals.py:499-503 by shadowing profile['risk_pct'] with min(profile.risk_pct, 0.25) AND emitted as `risk_pct_cap: 0.25` on the response payload — main agent must ensure bot_runner reads `signal.risk_pct_cap` (not just profile) before compute_lot_for_account.",
+    "mtf_intraday.MTF_MODES relaxed uses retrace_hi=0.80 (matches review spec 'wider pullback 15-80%'), strict uses 0.25-0.70, moderate uses 0.20-0.75. impulse_atr scales down 2.0 → 1.75 → 1.5. Sensible ladder.",
+    "The 'ENGINE:' prefix in preset descriptions is a good UX cue but hard-coded into each description string. If a future preset omits it, tests will fail silently. Consider adding a `engine_key` field to each preset dict and letting the frontend render the ENGINE prefix, keeping description free-text."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter127_engine_dispatch.py (NEW — 27 tests: engine mapping + 3 pure engines + MTF_MODES + 9 parametrized analyze_symbol dispatch + 4 HTTP endpoint checks)",
+    "/app/backend/tests/test_iter126_mtf_only_engine.py (UPDATED — 2 assertion changes: scope 'mtf_confluence' → 'mtf_moderate' for default calls, pulse-reason check widened from 'MTF cascade' to any engine token)"
+  ],
+  "success_rate": {
+    "backend": "100% (85/85: iter127=27, iter126=10, iter125=7, iter63=28, iter29=13)",
+    "frontend": "100% — core-strategy-card renders per-account 'Active Engine — <label>' + PER-ACCOUNT badge, account-switch updates the label, all 7 presets display 'ENGINE:' descriptions on /bot-config, dashboard silent-bot banner shows per-engine reasons (TREND RIDER for OnEquity confirmed live), /bot-health returns 100/100 with no 500 banner (iter-41 regression clean)."
+  },
+  "test_credentials": "admin@trading.bot / admin123 (cookie auth). No throwaway users created.",
+  "seed_data_creation": "None. bot_config trade_of_day_cap on admin default was briefly bumped for a test and restored (idempotent). No trades executed, no bot toggled, no PANIC triggered, no per-account presets changed. LIVE MT5 accounts (OnEquity, OnEquity Live, Start Trader, MT5 Demo, vtmarkets, micro, stoic) untouched — heart-beats logging normally in backend log.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Baseline command: cd /app/backend && REACT_APP_BACKEND_URL=<preview> python -m pytest tests/test_iter127_engine_dispatch.py tests/test_iter126_mtf_only_engine.py tests/test_iter125_mtf_confluence.py tests/test_iter63_market_hours_veto.py tests/test_iter29_new_agents.py -q → 85/85. Do NOT toggle bot_configs.active, do NOT apply presets to per-account configs (account_id set), do NOT trigger PANIC — LIVE MT5 accounts are heart-beating into this preview (OnEquity=trend_rider, OnEquity Live=scalper, Start Trader=fast_scalp per the review request; verify these in bot_configs collection before further changes). Default-profile changes are safe (bot inactive there). The /strategies route hosts the AI Strategy Generator, NOT the preset picker; presets are on /bot-config → STRATEGY PRESETS section.",
+  "rca of the issue": "No bug this iteration. The iter-127 per-account engine dispatch works end-to-end: strategy_engines.resolve_engine reads the account's active_preset (agents/strategy_agent.py:34 passes cfg.get('active_preset') into analyze_symbol(strategy=...)); ai_signals.analyze_symbol dispatches to run_engine for deterministic scopes or fetch_mtf_confluence(mode=...) for MTF scopes; each account sees only its own engine's reasoning surfaced on the pulse feed. Iter-41 tilt_cfgs NameError is confirmed fixed (bot_routes.py:1198 now defines `tilt_cfgs = await db.bot_configs.find({'user_id': user['id']}).to_list(length=20)` before the loop) — /api/bot/health-score returns 200 with score 100/100."
+}

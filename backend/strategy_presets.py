@@ -19,7 +19,7 @@ PRESETS = {
         "label": "Sniper",
         "tagline": "Patient. Precise. A-grade only.",
         "description": (
-            "Low frequency, high conviction. Waits for confluence + macro alignment "
+            "ENGINE: Strict MTF Cascade (4H→1H→15M pullback→breakout). Low frequency, high conviction. Waits for confluence + macro alignment "
             "and only fires when confidence is well above the profile floor. Trail "
             "is loose so winners run."
         ),
@@ -43,12 +43,13 @@ PRESETS = {
         "label": "Scalper",
         "tagline": "Fast in, fast out, many small wins.",
         "description": (
-            "High-tempo execution. Lower confidence floor, more concurrent positions, "
+            "ENGINE: HF Momentum Scalper (M15 bursts + VWAP bounces, 0.25% risk/trade, 5-min re-entry). High-tempo execution. Lower confidence floor, more concurrent positions, "
             "tight trailing for quick lock-ins. Best for active sessions on tight spreads."
         ),
         "icon": "Zap",
         "color": "#00FF41",
         "config": {
+            "signal_cooldown_minutes": 5,
             "min_confidence_override": 55,
             "trade_of_day_cap": 6,
             "max_concurrent_trades": 4,
@@ -66,13 +67,14 @@ PRESETS = {
         "label": "Fast Scalp",
         "tagline": "Quick in, ≤100-pip out — pure win-rate hunter.",
         "description": (
-            "Maximises the number of green trades. Locks 70% off at 0.5R, "
+            "ENGINE: HF Momentum Scalper turbo (softer thresholds, 3-min re-entry, 0.25% risk/trade). Maximises the number of green trades. Locks 70% off at 0.5R, "
             "trails the runner tight, and hard-caps profit at 100 pips per "
             "trade. Pair with profit_taking_mode='win_rate' for the full effect."
         ),
         "icon": "Zap",
         "color": "#10F2C5",
         "config": {
+            "signal_cooldown_minutes": 3,
             "min_confidence_override": 60,
             "trade_of_day_cap": 8,
             "max_concurrent_trades": 4,
@@ -93,7 +95,7 @@ PRESETS = {
         "label": "Trend Rider",
         "tagline": "Catch the wave, hold the line.",
         "description": (
-            "Built for sustained directional moves. Wide trailing windows to let "
+            "ENGINE: Relaxed MTF Cascade (1H boss, 4H non-opposing, wide pullback window). Built for sustained directional moves. Wide trailing windows to let "
             "winners stretch, large partial-close R-multiples, news-protector ON."
         ),
         "icon": "TrendingUp",
@@ -116,7 +118,7 @@ PRESETS = {
         "label": "Breakout Hunter",
         "tagline": "Wait for volatility expansion.",
         "description": (
-            "Only fires when volatility breaks out of its recent range. Strong anti-tilt "
+            "ENGINE: Donchian-20 M15 breakout with momentum confirmation. Only fires when volatility breaks out of its recent range. Strong anti-tilt "
             "settings prevent churn during chop. Skips Asia-session XAU by default."
         ),
         "icon": "Rocket",
@@ -139,7 +141,7 @@ PRESETS = {
         "label": "Mean Reversion",
         "tagline": "Buy weakness, sell strength.",
         "description": (
-            "Targets calm, range-bound markets. Tighter take-profits, faster partial closes. "
+            "ENGINE: Range Fade (fade session extremes toward VWAP in confirmed ranges). Targets calm, range-bound markets. Tighter take-profits, faster partial closes. "
             "Skips trending sessions automatically via the MTF gate."
         ),
         "icon": "Activity",
@@ -160,7 +162,7 @@ PRESETS = {
         "label": "Balanced (Default)",
         "tagline": "STOIC's house defaults.",
         "description": (
-            "The standard STOIC configuration. Sensible trade caps, balanced trailing, "
+            "ENGINE: Moderate MTF Cascade (1H-led, 4H non-opposing). The standard STOIC configuration. Sensible trade caps, balanced trailing, "
             "all guards on. A solid baseline before you customise."
         ),
         "icon": "Scale",

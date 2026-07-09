@@ -746,19 +746,33 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     )}
                 </div>
 
-                {/* Core Strategy — strict MTF cascade (always on) */}
-                <div className="border border-[#FFD700]/30 p-4 bg-[#0A0A08]" data-testid="core-strategy-card">
-                    <div className="flex items-center gap-2 mb-2">
-                        <Crosshair className="w-4 h-4 text-[#FFD700]" />
-                        <span className="font-display font-bold text-sm">Core Strategy — MTF Top-Down Cascade</span>
-                        <span className="ml-auto font-mono text-[9px] tracking-widest px-2 py-0.5 border border-[#FFD700]/40 text-[#FFD700]">ALWAYS ON</span>
-                    </div>
-                    <p className="text-xs text-[#A1A1AA] leading-relaxed">
-                        The bot trades ONE strategy: 4H trend → 1H structure → 15M pullback → live-price breakout entry.
-                        It only fires when every timeframe agrees; otherwise it stands by and reports why on the MTF Cascade panel.
-                        Tight M15-ATR stops. All capital protections (news veto, macro freeze, R:R floor, drawdown guards, cooldowns) stay active.
-                    </p>
-                </div>
+                {/* Core Strategy — engine selected by this account's preset (iter-127) */}
+                {(() => {
+                    const ENGINE_INFO = {
+                        sniper: ["SNIPER — Strict MTF Cascade", "4H trend → 1H structure → 15M pullback (25-70%) → live breakout. A+ setups only — lowest frequency, highest selectivity.", "#FFD700"],
+                        trend_rider: ["TREND RIDER — Relaxed MTF Cascade", "1H trend is the boss; 4H just must not oppose. Wider pullback window (15-80%), softer impulse filter — several trades per day in trending sessions.", "#00FF41"],
+                        scalper: ["SCALPER — HF Momentum Engine", "M15 momentum bursts + VWAP bounces. Tight 0.8×ATR15 stops, 2:1 targets, 0.25% risk per trade, re-entry every 5 min. Built for many small doses.", "#00FF41"],
+                        fast_scalp: ["FAST SCALP — HF Momentum (turbo)", "Same engine as Scalper with softer momentum thresholds and 3-min re-entry. Highest trade frequency — bounded by your daily cap.", "#10F2C5"],
+                        breakout: ["BREAKOUT HUNTER — Donchian-20 M15", "Trades escapes from the 20-bar M15 channel, confirmed by 3h momentum. Stands aside inside the channel.", "#FF6B00"],
+                        mean_reversion: ["MEAN REVERSION — Range Fade", "In a confirmed M15 range: BUY near the session low, SELL near the session high, targeting VWAP. Stands down when a breakout appears.", "#0099FF"],
+                        balanced: ["BALANCED — Moderate MTF Cascade", "1H-led cascade with 4H non-opposition, 20-75% pullback window. The house default.", "#A1A1AA"],
+                    };
+                    const key = (cfg.active_preset && !String(cfg.active_preset).startsWith("custom:")) ? cfg.active_preset : "balanced";
+                    const [title, desc, color] = ENGINE_INFO[key] || ENGINE_INFO.balanced;
+                    return (
+                        <div className="border p-4 bg-[#0A0A08]" style={{ borderColor: `${color}55` }} data-testid="core-strategy-card">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Crosshair className="w-4 h-4" style={{ color }} />
+                                <span className="font-display font-bold text-sm">Active Engine — {title}</span>
+                                <span className="ml-auto font-mono text-[9px] tracking-widest px-2 py-0.5 border" style={{ borderColor: `${color}66`, color }}>PER-ACCOUNT</span>
+                            </div>
+                            <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                                {desc} This account trades ONLY this engine — change it by applying a different preset on the <span style={{ color }}>Strategies</span> page.
+                                All capital protections (news veto, macro freeze, R:R floor, drawdown guards, cooldowns) stay active.
+                            </p>
+                        </div>
+                    );
+                })()}
 
                 {/* Pre-news Position Protector */}
                 <div>

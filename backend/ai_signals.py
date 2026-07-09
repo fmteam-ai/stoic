@@ -33,6 +33,8 @@ from macro.cot import get_gold_positioning
 from macro.tips import get_real_yield
 from macro.dxy import get_dxy_snapshot
 from mtf_intraday import fetch_mtf_confluence
+from strategy_engines import (resolve_engine, run_engine, ENGINE_LABELS,
+                              MTF_MODE_BY_ENGINE, SCALP_ENGINES, SCALP_RISK_PCT_CAP)
 from pip_utils import pips_to_price, price_to_pips
 
 # --- Execution geometry tunables ---
@@ -128,7 +130,8 @@ async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
 
 
 async def analyze_symbol(symbol: str, risk_level: str,
-                         min_conf_override: int = 0) -> dict:
+                         min_conf_override: int = 0,
+                         strategy: str | None = None) -> dict:
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
@@ -287,16 +290,22 @@ async def analyze_symbol(symbol: str, risk_level: str,
     }, separators=(",", ":"))
 
     # ------------------------------------------------------------------------
-    # EXECUTION ENGINE — single strategy (iter-126 simplification).
-    # The strict Multi-Timeframe cascade (4H trend → 1H structure → M15
-    # pullback → live-price breakout) is the ONLY signal generator. Claude is
-    # the explanation layer for confirmed setups — it never picks direction.
+    # EXECUTION ENGINE — per-account strategy dispatch (iter-127).
+    # The account's active preset selects EXACTLY ONE engine (strategy_engines
+    # .py): MTF cascades at 3 strictness levels, HF momentum scalps, range
+    # fades, or Donchian breakouts. Claude only narrates confirmed MTF setups.
     # Hard capital protections kept here: market closed, macro freeze,
     # dual-AI news veto, minimum R:R. Account-level guards (drawdown,
     # cooldowns, anti-tilt, spread, payoff guard) run in the bot runner.
     # ------------------------------------------------------------------------
+    engine = resolve_engine(strategy)
+    engine_label = ENGINE_LABELS.get(engine, engine)
+    mtf_mode = MTF_MODE_BY_ENGINE.get(engine)
+
     market_closure = is_market_closed(symbol)
-    mtf_conf = None if market_closure else await fetch_mtf_confluence(symbol, current_price)
+    mtf_conf = None
+    if mtf_mode and not market_closure:
+        mtf_conf = await fetch_mtf_confluence(symbol, current_price, mode=mtf_mode)
 
     def _hold(reason: str, closure: dict | None = None) -> dict:
         return {
@@ -310,7 +319,9 @@ async def analyze_symbol(symbol: str, risk_level: str,
             "lot_size": 0, "kelly_f": 0, "effective_risk_pct": 0, "risk_amount": 0,
             "risk_level": risk_level,
             "reasoning": reason,
-            "scope": "mtf_confluence",
+            "scope": engine,
+            "strategy_engine": engine,
+            "engine_label": engine_label,
             "mtf_confluence": mtf_conf,
             "indicators": indicators,
             "sentiment": sentiment,
@@ -353,64 +364,99 @@ async def analyze_symbol(symbol: str, risk_level: str,
         )
     if macro.get("frozen"):
         return _hold(f"Macro freeze in effect: {macro.get('reason') or 'high-impact event window'}")
-    if not mtf_conf:
-        return _hold(
-            "MTF cascade: no fresh M15 stream from the EA (bridge must be online "
-            "and streaming candles) — standing by."
-        )
-    if not mtf_conf.get("aligned"):
-        return _hold(f"MTF cascade: {mtf_conf.get('note') or 'timeframes not aligned'} — standing by.")
 
-    # ---- CONFLUENCE CONFIRMED — build the trade ----------------------------
-    action = mtf_conf["direction"]
-    trade_scope = "mtf_confluence"
+    action = None
+    engine_note = ""
+    if mtf_mode:
+        if not mtf_conf:
+            return _hold(f"{engine_label}: no fresh M15 stream from the EA (bridge "
+                         f"must be online and streaming candles) — standing by.")
+        if not mtf_conf.get("aligned"):
+            return _hold(f"{engine_label}: {mtf_conf.get('note') or 'timeframes not aligned'} — standing by.")
+        action = mtf_conf["direction"]
+        engine_note = mtf_conf["note"]
+    else:
+        if not intraday_pack:
+            return _hold(f"{engine_label}: no fresh M15 stream from the EA (bridge "
+                         f"must be online and streaming candles) — standing by.")
+        sig, note = run_engine(engine, intraday_pack)
+        if not sig:
+            return _hold(f"{engine_label}: {note} — standing by.")
+        action = sig
+        engine_note = note
+
+    # ---- ENGINE CONFIRMED — build the trade ---------------------------------
+    trade_scope = engine
     confidence = float(adapted_profile["min_confidence"] + 5)
+    reasoning = f"{engine_label}: {engine_note}"
+    key_factors = [engine_label, engine_note[:80]]
 
-    reasoning = f"MTF CONFLUENCE: {mtf_conf['note']}"
-    key_factors = [
-        f"4H trend {mtf_conf.get('h4_trend')}",
-        f"1H structure {mtf_conf.get('h1_structure')}",
-        f"Live break of {mtf_conf.get('swing_level')}",
-    ]
-    try:
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
-            system_message=NARRATOR_PROMPT,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        narration = await chat.send_message(UserMessage(text=json.dumps({
-            "confirmed_setup": {"direction": action, "cascade": mtf_conf},
-            "market_context": json.loads(user_text),
-        }, separators=(",", ":"))))
-        parsed = _parse_ai_json(str(narration))
-        if parsed.get("reasoning"):
-            reasoning = f"{reasoning}\n\n{parsed['reasoning']}"
-        if parsed.get("key_factors"):
-            key_factors = parsed["key_factors"]
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Narration pass failed for %s: %s", symbol, e)
+    if mtf_mode:
+        # Explanation layer — Claude narrates the confirmed MTF setup only
+        # (deterministic engines keep their own note; no LLM cost per scalp).
+        key_factors = [
+            f"4H trend {mtf_conf.get('h4_trend')}",
+            f"1H structure {mtf_conf.get('h1_structure')}",
+            f"Live break of {mtf_conf.get('swing_level')}",
+        ]
+        try:
+            chat = LlmChat(
+                api_key=os.environ["EMERGENT_LLM_KEY"],
+                session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
+                system_message=NARRATOR_PROMPT,
+            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            narration = await chat.send_message(UserMessage(text=json.dumps({
+                "confirmed_setup": {"direction": action, "cascade": mtf_conf},
+                "market_context": json.loads(user_text),
+            }, separators=(",", ":"))))
+            parsed = _parse_ai_json(str(narration))
+            if parsed.get("reasoning"):
+                reasoning = f"{reasoning}\n\n{parsed['reasoning']}"
+            if parsed.get("key_factors"):
+                key_factors = parsed["key_factors"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Narration pass failed for %s: %s", symbol, e)
 
     final_action = action
 
-    # Guard A — dual-AI news veto: strongly opposed news blocks the entry.
+    # Guard A — dual-AI news veto. HARD for MTF engines (multi-hour holds);
+    # ADVISORY for minutes-scale intraday engines (scalp/fade/breakout) where
+    # a daily news bias shouldn't silence the whole persona.
+    sentiment_note = ""
     _, veto_reason = _apply_dual_veto(action, confidence, sentiment)
+    if veto_reason and not mtf_mode:
+        sentiment_note = veto_reason
+        veto_reason = ""
     if veto_reason:
         final_action = "HOLD"
 
-    # ---- SL/TP geometry — M15 ATR preferred, daily ATR fallback ------------
+    # ---- SL/TP geometry — per-engine, M15 ATR based -------------------------
     atr15 = float((intraday_pack or {}).get("atr15") or 0)
     atr_daily = float(indicators.get("atr_14") or 0)
-    if atr15 > 0:
+    tp_mult_of_sl = None
+    if engine in SCALP_ENGINES and atr15 > 0:
+        # tight scalp geometry: quick in, quick out
+        sl_dist_price = 0.8 * atr15
+        sl_min_price = pips_to_price(symbol, 20)
+        tp_mult_of_sl = 2.0
+    elif engine in ("range_fade", "breakout_m15") and atr15 > 0:
+        sl_dist_price = 1.0 * atr15
+        sl_min_price = pips_to_price(symbol, 25)
+        tp_mult_of_sl = 2.0
+    elif atr15 > 0:
         sl_dist_price = ATR_SL_MULTIPLIER * atr15
         tp_dist_price = ATR_TP_MULTIPLIER * atr15
-        sl_min_price = pips_to_price(symbol, 30)   # intraday floor: 30 pips
+        sl_min_price = pips_to_price(symbol, 30)
     else:
         sl_dist_price = ATR_SL_MULTIPLIER * atr_daily
         tp_dist_price = ATR_TP_MULTIPLIER * atr_daily
         sl_min_price = pips_to_price(symbol, SL_MIN_PIPS)
     sl_max_price = pips_to_price(symbol, SL_MAX_PIPS)
     sl_dist_price = max(sl_min_price, min(sl_max_price, sl_dist_price))
-    if tp_dist_price <= 0:
+    if tp_mult_of_sl:
+        # anchored to the FINAL clamped SL → weighted R:R is always 1.25
+        tp_dist_price = tp_mult_of_sl * sl_dist_price
+    elif tp_dist_price <= 0:
         tp_dist_price = sl_dist_price * 2.5
     tp1_dist = tp_dist_price * 0.4
     tp2_dist = tp_dist_price * 0.7
@@ -445,17 +491,28 @@ async def analyze_symbol(symbol: str, risk_level: str,
                    f"Expected value too low — trade vetoed.")
         final_action = "HOLD"
 
-    # Kelly-modified position sizing — regime-adapted profile
+    # Kelly-modified position sizing — regime-adapted profile.
+    # HF scalps are capped at SCALP_RISK_PCT_CAP per trade (enforced again
+    # at execution time in bot_runner via `risk_pct_cap`).
+    sizing_profile = adapted_profile
+    risk_pct_cap = None
+    if engine in SCALP_ENGINES:
+        risk_pct_cap = SCALP_RISK_PCT_CAP
+        sizing_profile = {**adapted_profile,
+                          "risk_pct": min(float(adapted_profile.get("risk_pct") or 0),
+                                          SCALP_RISK_PCT_CAP)}
     sizing = compute_kelly_position_size(
         equity=1000.0,
         confidence_pct=confidence,
         sl_pips=sl_dist,
-        profile=adapted_profile,
+        profile=sizing_profile,
         pip_value=1.0,
     )
 
     if veto_reason:
         reasoning = f"{reasoning}\n\nVETO (news): {veto_reason}"
+    if sentiment_note:
+        reasoning = f"{reasoning}\n\nNOTE (news, advisory): {sentiment_note}"
     if rr_veto:
         reasoning = f"{reasoning}\n\nVETO (R:R): {rr_veto}"
 
@@ -477,11 +534,14 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "kelly_f": sizing["kelly_f"],
         "effective_risk_pct": sizing["effective_risk_pct"],
         "risk_amount": sizing["risk_amount"],
+        "risk_pct_cap": risk_pct_cap,
         "risk_level": risk_level,
         "reasoning": reasoning,
         "scope": trade_scope,
+        "strategy_engine": engine,
+        "engine_label": engine_label,
         "mtf_confluence": mtf_conf,
-        "mtf_confluence_applied": mtf_conf.get("note"),
+        "mtf_confluence_applied": engine_note if mtf_mode else None,
         "indicators": indicators,
         "sentiment": sentiment,
         "session": session,

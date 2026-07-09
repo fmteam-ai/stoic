@@ -121,12 +121,11 @@ def test_mtf_confluence_cascade_shape(admin_session):
     assert isinstance(data["aligned"], bool)
 
 
-# --- 6. bot/pulse should reflect MTF cascade HOLD reasons -------------
-def test_bot_pulse_contains_mtf_cascade_reasons(admin_session):
+# --- 6. bot/pulse should reflect per-engine reasons (iter-127) --------
+def test_bot_pulse_contains_per_engine_reasons(admin_session):
     r = admin_session.get(f"{BASE_URL}/api/bot/pulse", timeout=15)
     assert r.status_code == 200
     payload = r.json()
-    # Response is {"items": [{..., "pulse": {reason: ...}, "notable": {...}}]}
     items = payload.get("items", []) if isinstance(payload, dict) else payload
     assert isinstance(items, list), f"pulse payload not iterable: {type(payload)}"
     assert len(items) > 0, "no bot_configs returned in pulse response"
@@ -139,9 +138,14 @@ def test_bot_pulse_contains_mtf_cascade_reasons(admin_session):
             if r_str:
                 reasons.append(r_str)
 
-    joined = " ".join(reasons)
-    assert ("MTF cascade" in joined) or ("MTF CONFLUENCE" in joined.upper()), (
-        f"no MTF cascade reason found in {len(reasons)} pulse reasons. "
+    joined = " ".join(reasons).upper()
+    # Any of the new engine labels should be present in some active account's reason
+    engine_tokens = [
+        "SNIPER", "BALANCED", "TREND RIDER", "SCALPER", "FAST SCALP",
+        "BREAKOUT", "MEAN REVERSION", "MTF CASCADE",
+    ]
+    assert any(t in joined for t in engine_tokens), (
+        f"no per-engine label found in {len(reasons)} pulse reasons. "
         f"Sample: {reasons[:3]}"
     )
 
@@ -181,9 +185,9 @@ def test_bot_health_endpoint(admin_session):
     assert "score" in data or "health_score" in data
 
 
-# --- 9. ai_signals.analyze_symbol unit-level --------------------------
-def test_ai_signals_analyze_symbol_returns_mtf_shape():
-    """Directly import backend module and call analyze_symbol."""
+# --- 9. ai_signals.analyze_symbol unit-level (iter-127) ---------------
+def test_ai_signals_analyze_symbol_default_maps_to_moderate():
+    """Default strategy=None → engine='mtf_moderate' scope."""
     sys.path.insert(0, "/app/backend")
     try:
         import ai_signals  # noqa
@@ -194,11 +198,15 @@ def test_ai_signals_analyze_symbol_returns_mtf_shape():
     assert isinstance(result, dict), f"expected dict, got {type(result)}"
     assert result.get("action") in ("BUY", "SELL", "HOLD"), \
         f"unexpected action: {result.get('action')}"
-    assert result.get("scope") == "mtf_confluence", \
-        f"scope must be 'mtf_confluence', got {result.get('scope')}"
-    reasoning = str(result.get("reasoning", "")).upper()
-    assert ("MTF CASCADE" in reasoning) or ("MTF CONFLUENCE" in reasoning), \
-        f"reasoning must reference MTF cascade/confluence, got: {reasoning[:200]}"
+    # iter-127: default no-strategy → mtf_moderate engine
+    assert result.get("scope") == "mtf_moderate", \
+        f"scope must be 'mtf_moderate' (default), got {result.get('scope')}"
+    assert result.get("strategy_engine") == "mtf_moderate"
+    assert "engine_label" in result and result["engine_label"]
+    reasoning = str(result.get("reasoning", ""))
+    # reasoning must begin with the engine label
+    assert reasoning.startswith(result["engine_label"]), \
+        f"reasoning must start with engine label. reasoning={reasoning[:200]}"
 
 
 if __name__ == "__main__":
