@@ -262,6 +262,11 @@ NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit 
 ## POST-MORTEM "NOT ELIGIBLE" BUG FIXED (iter-127c, July 9 2026)
 Clicking POST-MORTEM on a losing closed trade errored "Trade is not eligible for post-mortem". Cause: manual regenerate reused the AUTO-trigger heuristic (only sl_hit or consecutive-loss qualify) — and ALL recent losses close via external_close/broker_confirmed, never 'stop_loss', so nothing ever qualified. Fix: `maybe_record_postmortem(db, id, force=True)` — manual click generates for ANY closed losing trade (trigger='manual'); route `/postmortem/{id}/regenerate` passes force=True. Verified: full LLM narrative generated for trade 6a4fcf…3ea2.
 
+## PRODUCTION DEPLOYMENT READINESS — PASS (iter-127e, July 9 2026)
+- deployment_agent scan #1: PASS w/ warnings — torch(624MB)+transformers+chronos stack flagged as build-timeout/OOM risk (likely cause of the previous K8s deploy timeout).
+- Removed from requirements.txt: torch, transformers, accelerate, chronos-forecasting, nvidia-nccl-cu12. Only consumer is forecast_agent.py (Chronos daily forecaster) which lazy-imports and degrades gracefully ("forecast agent disabled") — verified by import-block simulation. Forecast gate is advisory/fail-open, so production simply runs without Chronos forecasts. Preview still has torch installed locally → preview forecasts unaffected.
+- deployment_agent scan #2: PASS, zero findings. App is deployment-ready; user just needs to click Deploy in the Emergent UI.
+
 ## AUTO POST-MORTEM ON EVERY LOSING TRADE (iter-127d, July 9 2026 — user request, DONE)
 - `_is_postmortem_eligible`: any pnl<0 is now eligible; trigger labels: 'sl_hit' (close_reason contains stop_loss) / 'consecutive_loss' / 'loss'.
 - Added missing hook in bridge_routes deal-close backfill path (~line 1225) — broker-reported/external closes bypassed execution.py's hook entirely (root cause of empty Loss Lab).
