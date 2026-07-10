@@ -262,6 +262,13 @@ NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit 
 ## POST-MORTEM "NOT ELIGIBLE" BUG FIXED (iter-127c, July 9 2026)
 Clicking POST-MORTEM on a losing closed trade errored "Trade is not eligible for post-mortem". Cause: manual regenerate reused the AUTO-trigger heuristic (only sl_hit or consecutive-loss qualify) — and ALL recent losses close via external_close/broker_confirmed, never 'stop_loss', so nothing ever qualified. Fix: `maybe_record_postmortem(db, id, force=True)` — manual click generates for ANY closed losing trade (trigger='manual'); route `/postmortem/{id}/regenerate` passes force=True. Verified: full LLM narrative generated for trade 6a4fcf…3ea2.
 
+## "NO ACTION FOR 2 HOURS" — MANUAL-TRADE SLOT LEAK FIXED (iter-127f, July 10 2026)
+Timeline reconstructed for 12:58–15:30 UTC silence:
+1. 12:56-12:58 — 3 auto VWAP-fade BUYs lost → anti-tilt froze the account 1h (by design, expired correctly 14:26) + same-direction loss-streak breaker paused auto BUYs 4h (by design).
+2. 13:30-15:30 — user manually scalped GOLD nonstop on the same account; TWO guards counted MANUAL trades against the bot: `inflight_q` (max_concurrent slots) and `pyramid_q` (anti-pyramid) had NO origin filter → bot locked out whenever manual positions were open. FIXED: both queries now `origin: "auto"` (re-applying the iter-122 rule "manual trades never count against the bot").
+3. Verified after fix: engines analyze every loop; current holds are honest (price hugging VWAP mid-range = genuinely edgeless).
+GOTCHA CONFIRMED 3rd TIME: parallel search_replace on the SAME file loses edits silently — same-file edits MUST be sequential.
+
 ## PRODUCTION DEPLOYMENT READINESS — PASS (iter-127e, July 9 2026)
 - deployment_agent scan #1: PASS w/ warnings — torch(624MB)+transformers+chronos stack flagged as build-timeout/OOM risk (likely cause of the previous K8s deploy timeout).
 - Removed from requirements.txt: torch, transformers, accelerate, chronos-forecasting, nvidia-nccl-cu12. Only consumer is forecast_agent.py (Chronos daily forecaster) which lazy-imports and degrades gracefully ("forecast agent disabled") — verified by import-block simulation. Forecast gate is advisory/fail-open, so production simply runs without Chronos forecasts. Preview still has torch installed locally → preview forecasts unaffected.

@@ -509,8 +509,11 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception:
                 pass
 
-    # Count current open + pending trades to respect max_concurrent (per-account when scoped)
-    inflight_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
+    # Count current open + pending BOT trades to respect max_concurrent
+    # (per-account when scoped). origin=auto only — manual trades must NEVER
+    # consume the bot's slots.
+    inflight_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]},
+                  "origin": "auto"}
     if cfg_account_id:
         inflight_q["account_id"] = cfg_account_id
     inflight = await db.trades.count_documents(inflight_q)
@@ -1201,6 +1204,7 @@ async def _process_user_account_locked(db, cfg: dict):
             "symbol": sym,
             "action": signal["action"],
             "status": {"$in": ["pending", "open"]},
+            "origin": "auto",
         }
         if cfg_account_id:
             pyramid_q["account_id"] = cfg_account_id
