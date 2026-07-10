@@ -338,3 +338,10 @@ See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 ## Related memory docs
 - `CHANGELOG.md` — full per-session implementation log (iter-47 latest: slippage-veto repair + FULL_CLOSE consumption, EA v1.40).
 - `ROADMAP.md` — prioritized backlog (P0: production deployment).
+
+## Iter-128 (2026-06) — Bot vs Manual separation (P0 complete)
+- Trades page: BOT and MANUAL split stat cards (W/L, P&L, win-rate) replace combined WIN RATE / WINS-LOSSES cards; SOURCE filter pills (ALL/BOT/MANUAL) filter the table; period/history summary also shows the split.
+- Backend: `/api/trades/stats` + `/api/trades/history` summary now return `bot` and `manual` buckets (`_is_bot_trade` mirrors frontend SOURCE_BADGE_FOR).
+- Origin audit: added `origin:"auto"` filter to adaptive_mode (was including manual!), auto_tune, circuit_breakers, risk_engine._period_pnls, safety_guardian daily-loss cap, bot_doctor win-rate — ALL bot self-adjustments now based solely on bot trades. Learning modules (Kelly/RL/ML/Bayes/meta/loss advisor/cooldown/anti-tilt/revenge-block) already filtered correctly.
+- Tested: curl on both endpoints, UI screenshots, 65 backend regression tests pass.
+- Next: production deployment (user approval pending), Strategy Scoreboard UI (P2).

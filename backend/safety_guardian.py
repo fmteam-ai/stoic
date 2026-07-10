@@ -165,7 +165,7 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     # 6. Daily loss cap (realized today)
     day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     today_closed = await db.trades.find({
-        "user_id": user_id, "status": "closed",
+        "user_id": user_id, "status": "closed", "origin": "auto",
         "account_id": cfg_account_id, "closed_at": {"$gte": day_start},
     }).to_list(length=200) if cfg_account_id else []
     realized_today = sum(float(t.get("pnl") or 0) for t in today_closed)

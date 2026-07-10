@@ -195,6 +195,7 @@ async def _period_pnls(db, user_id, account_id=None):
     week0 = day0 - timedelta(days=now.weekday())
     month0 = day0.replace(day=1)
     q = {"user_id": user_id, "status": "closed", "pnl": {"$ne": None},
+         "origin": "auto",  # bot drawdown windows track bot performance only
          "closed_at": {"$gte": month0.isoformat()}}
     if account_id:
         q["account_id"] = account_id

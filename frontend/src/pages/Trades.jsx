@@ -158,6 +158,16 @@ const SOURCE_BADGE_FOR = (t) => {
     return { label: "MANUAL", cls: "border-[#FFD700]/40 bg-[#FFD700]/10 text-[#FFD700]", title: "Opened manually in the MT5 terminal (no magic, no origin)" };
 };
 
+// Bot vs Manual classification for stats/filters — mirrors SOURCE_BADGE_FOR
+// (and the backend _is_bot_trade): STOIC-origin/signal/magic ⇒ bot.
+function isBotTrade(t) {
+    const origin = t.origin || "";
+    if (origin.startsWith("auto")) return true;
+    if (origin.startsWith("manual")) return false;
+    if (t.signal_id) return true;
+    return (Number(t.magic_number) || 0) === STOIC_MAGIC;
+}
+
 function fmtDateTime(iso) {
     if (!iso) return "—";
     try {
@@ -179,6 +189,25 @@ function Stat({ label, value, accent, testid }) {
         <div className="p-4 border border-[#1F1F1F] bg-[#0A0A0A]" data-testid={testid}>
             <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">{label}</div>
             <div className={`font-mono font-medium text-base ${accent || "text-white"}`}>{value}</div>
+        </div>
+    );
+}
+
+function SplitStat({ label, data, accentBorder, testid }) {
+    if (!data) return null;
+    const pnl = data.total_pnl ?? 0;
+    return (
+        <div className={`p-4 border bg-[#0A0A0A] ${accentBorder}`} data-testid={testid}>
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">{label}</div>
+            <div className="font-mono font-medium text-base text-white">
+                <span className="text-[#00FF41]">{data.wins}W</span>
+                <span className="text-[#52525B]"> / </span>
+                <span className="text-[#FF3B30]">{data.losses}L</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[11px]">
+                <span className={pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}>{fmtPnl(pnl)}</span>
+                <span className="text-[#52525B]">{data.win_rate}% WR</span>
+            </div>
         </div>
     );
 }
@@ -224,6 +253,7 @@ export default function Trades() {
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [filter, setFilter] = useState("");
+    const [originFilter, setOriginFilter] = useState("");   // "" | "bot" | "manual"
     const [dateFrom, setDateFrom] = useState("");   // yyyy-mm-dd or ""
     const [dateTo, setDateTo] = useState("");
     const [periodPreset, setPeriodPreset] = useState(null);   // today | yesterday | this_week | ...
@@ -337,6 +367,8 @@ export default function Trades() {
         const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
         const toMs   = dateTo   ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
         return trades.filter(t => {
+            if (originFilter === "bot" && !isBotTrade(t)) return false;
+            if (originFilter === "manual" && isBotTrade(t)) return false;
             if (filter === "winning" && !(t.status === "closed" && parseFloat(t.pnl) > 0)) return false;
             if (filter === "lost"    && !(t.status === "closed" && parseFloat(t.pnl) < 0)) return false;
             // History mode returns ALL statuses in range — the plain status
@@ -353,7 +385,7 @@ export default function Trades() {
             }
             return true;
         });
-    }, [trades, filter, dateFrom, dateTo, historySummary]);
+    }, [trades, filter, originFilter, dateFrom, dateTo, historySummary]);
 
     const clearDateRange = () => { setDateFrom(""); setDateTo(""); setPeriodPreset(null); };
 
@@ -624,8 +656,8 @@ export default function Trades() {
                             closestTP={closestTP}
                         />
                         <Stat label="TOTAL" value={stats.total_trades} />
-                        <Stat label="WIN RATE" value={`${stats.win_rate}%`} accent="text-[#00FF41]" />
-                        <Stat label="WINS / LOSSES" value={`${stats.wins} / ${stats.losses}`} />
+                        <SplitStat label="BOT · W/L · P&L" data={stats.bot} accentBorder="border-[#00FF41]/30" testid="stat-bot-split" />
+                        <SplitStat label="MANUAL · W/L · P&L" data={stats.manual} accentBorder="border-[#FFD700]/30" testid="stat-manual-split" />
                         <Stat label="TOTAL P&L" value={`${stats.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(stats.total_pnl).toFixed(2)}`} accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
                     </div>
                     );
@@ -639,6 +671,21 @@ export default function Trades() {
                                 filter === f ? "border-[#00FF41] text-[#00FF41]" : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]"
                             }`}>
                             {(f || "ALL").toUpperCase()}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="flex gap-2 flex-wrap items-center" data-testid="origin-filter-row">
+                    <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-1">SOURCE ·</span>
+                    {[["", "ALL"], ["bot", "BOT"], ["manual", "MANUAL"]].map(([key, label]) => (
+                        <button key={key || "all"} onClick={() => setOriginFilter(key)}
+                            data-testid={`origin-filter-${key || "all"}`}
+                            className={`px-3 py-1.5 text-xs font-mono tracking-widest border transition-colors ${
+                                originFilter === key
+                                    ? (key === "manual" ? "border-[#FFD700] text-[#FFD700]" : "border-[#00FF41] text-[#00FF41]")
+                                    : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]"
+                            }`}>
+                            {label}
                         </button>
                     ))}
                 </div>
@@ -684,7 +731,7 @@ export default function Trades() {
                             <X className="w-3 h-3" /> CLEAR
                         </button>
                     )}
-                    {(dateFrom || dateTo || filter === "winning" || filter === "lost") && (
+                    {(dateFrom || dateTo || originFilter || filter === "winning" || filter === "lost") && (
                         <span className="ml-auto font-mono text-[10px] text-[#00FF41] tracking-widest" data-testid="visible-count">
                             SHOWING {visibleTrades.length} / {trades.length}
                         </span>
@@ -707,6 +754,12 @@ export default function Trades() {
                                 accent={historySummary.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"} />
                             <Stat label="AVG WIN / LOSS" value={`$${historySummary.avg_win} / $${Math.abs(historySummary.avg_loss)}`} />
                         </div>
+                        {(historySummary.bot || historySummary.manual) && (
+                            <div className="grid grid-cols-2 gap-3 mt-3" data-testid="history-split-row">
+                                <SplitStat label="BOT · W/L · P&L" data={historySummary.bot} accentBorder="border-[#00FF41]/30" testid="history-bot-split" />
+                                <SplitStat label="MANUAL · W/L · P&L" data={historySummary.manual} accentBorder="border-[#FFD700]/30" testid="history-manual-split" />
+                            </div>
+                        )}
                     </div>
                 )}
 

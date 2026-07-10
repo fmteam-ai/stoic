@@ -62,6 +62,39 @@ async def list_trades(limit: int = 100, status: str = None,
     return [_serialize(d) for d in docs]
 
 
+STOIC_MAGIC = 901234
+
+
+def _is_bot_trade(t: dict) -> bool:
+    """Mirror of the frontend SOURCE_BADGE_FOR classification."""
+    o = t.get("origin") or ""
+    if o.startswith("auto"):
+        return True
+    if o.startswith("manual"):
+        return False
+    if t.get("signal_id"):
+        return True
+    return (t.get("magic_number") or 0) == STOIC_MAGIC
+
+
+def _split_stats(closed: list) -> dict:
+    """W/L + P&L aggregates split into bot vs manual buckets."""
+    out = {}
+    for key, rows in (("bot", [t for t in closed if _is_bot_trade(t)]),
+                      ("manual", [t for t in closed if not _is_bot_trade(t)])):
+        wins = [t for t in rows if (t.get("pnl") or 0) > 0]
+        losses = [t for t in rows if (t.get("pnl") or 0) < 0]
+        decided = len(wins) + len(losses)
+        out[key] = {
+            "total_trades": len(rows),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(len(wins) / decided * 100, 1) if decided else 0.0,
+            "total_pnl": round(sum(float(t.get("pnl") or 0) for t in rows), 2),
+        }
+    return out
+
+
 def _aggregate_stats(closed: list) -> dict:
     """Compute aggregate P&L stats from a list of closed trade docs."""
     total = len(closed)
@@ -93,7 +126,8 @@ async def trade_stats(account_id: Optional[str] = None,
         open_q["account_id"] = account_id
     closed = await db.trades.find(closed_q).to_list(length=1000)
     open_trades = await db.trades.find(open_q).to_list(length=100)
-    return {**_aggregate_stats(closed), "open_trades": len(open_trades)}
+    return {**_aggregate_stats(closed), **_split_stats(closed),
+            "open_trades": len(open_trades)}
 
 
 @router.get("/history")
@@ -159,6 +193,7 @@ async def trade_history(date_from: str, date_to: str,
         "gross_loss": round(gross_loss, 2),
         "avg_win": round(gross_profit / len(wins), 2) if wins else 0.0,
         "avg_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
+        **_split_stats(closed),
     }
     return {"summary": summary, "trades": trades}
 

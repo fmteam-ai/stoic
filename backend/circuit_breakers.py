@@ -43,6 +43,7 @@ async def realised_pnl_since(db, user_id: str, since_iso: str,
     q: dict = {
         "user_id": user_id,
         "status": "closed",
+        "origin": "auto",  # bot losses only — manual trades must not trip the breaker
         "closed_at": {"$gte": since_iso},
     }
     if account_id:

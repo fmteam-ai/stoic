@@ -52,7 +52,7 @@ def _bucket_for(conf) -> Optional[int]:
 
 async def _load_rows(user_id: str, symbol: Optional[str]) -> list:
     db = get_db()
-    q = {"user_id": user_id, "status": "closed"}
+    q = {"user_id": user_id, "status": "closed", "origin": "auto"}
     if symbol:
         q["symbol"] = symbol.upper()
     cursor = db.trades.find(q).sort("closed_at", -1).limit(200)

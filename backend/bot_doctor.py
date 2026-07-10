@@ -99,7 +99,7 @@ async def _collect_telemetry(db, user_id: str,
     failed = [t async for t in failed_cursor]
 
     # 2. Closed trades (for win-rate context)
-    closed_q = {"user_id": user_id, "status": "closed",
+    closed_q = {"user_id": user_id, "status": "closed", "origin": "auto",
                 "closed_at": {"$gte": since}}
     if account_id:
         closed_q["account_id"] = account_id

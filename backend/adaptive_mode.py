@@ -250,8 +250,8 @@ async def compute_risk_multiplier(user_id: str, account_id: Optional[str] = None
     'reason': str}. Multiplier ∈ [0.5, 1.3]. Defaults to 1.0 when there
     aren't enough closed trades in the window to be statistically useful."""
     db = get_db()
-    q = {"user_id": user_id, "status": "closed",
-         "origin": {"$in": ["auto", "manual"]}}
+    # Bot self-adjustment: BOT trades only — manual trades must never move the multiplier.
+    q = {"user_id": user_id, "status": "closed", "origin": "auto"}
     if account_id:
         q["account_id"] = account_id
     cursor = db.trades.find(q).sort("closed_at", -1).limit(int(window))
