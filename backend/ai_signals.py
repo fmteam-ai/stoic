@@ -574,6 +574,10 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "key_factors": key_factors,
         "min_confidence_required": adapted_profile["min_confidence"],
         "veto_applied": bool(veto_reason) or bool(rr_veto),
+        "engine_geometry": None if is_hold else {
+            "stop_loss": sl, "take_profit": tp,
+            "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        },
         "tradeable": final_action != "HOLD" and confidence >= adapted_profile["min_confidence"],
         "created_at": datetime.now(timezone.utc),
     }

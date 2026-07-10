@@ -262,6 +262,15 @@ NOTE: parallel search_replace on the same file raced once (payoff_guard.py edit 
 ## POST-MORTEM "NOT ELIGIBLE" BUG FIXED (iter-127c, July 9 2026)
 Clicking POST-MORTEM on a losing closed trade errored "Trade is not eligible for post-mortem". Cause: manual regenerate reused the AUTO-trigger heuristic (only sl_hit or consecutive-loss qualify) — and ALL recent losses close via external_close/broker_confirmed, never 'stop_loss', so nothing ever qualified. Fix: `maybe_record_postmortem(db, id, force=True)` — manual click generates for ANY closed losing trade (trigger='manual'); route `/postmortem/{id}/regenerate` passes force=True. Verified: full LLM narrative generated for trade 6a4fcf…3ea2.
 
+## PERFORMANCE REVIEW + 4 WIN-RATE/PROFIT IMPROVEMENTS (iter-128, July 10 2026 — DONE, unit-tested 6/6)
+Review of 26 closed auto trades (Jul 9-10): 12W/12L, +$631/-$671 ≈ -$40 net. Killers: (a) one pre-clamp oversized -$176 trade (already fixed); (b) GEOMETRY SABOTAGE — Smart-Cap TP clip + behavior SL-widen + payoff reshape left orders at R:R 0.34 (win $53 avg < loss $56 avg), also nullified 0.4R breakeven; (c) knife-catch fades at day-lows fired on 3 accounts simultaneously (-$128/min).
+Fixes (user approved "all 4, no conflicts"):
+1. GEOMETRY INTEGRITY — profit-taking TP clip, behavior adjustments, payoff guard now SKIP DETERMINISTIC_INTRADAY_SCOPES (swing/MTF only). ai_signals stashes `engine_geometry`; pre-send net in bot_runner restores it if placed R:R < 1.5 (`geometry_restored` flag).
+2. FALLING-KNIFE FILTER — `recent_break` field in intraday_features (close outside prior 20-bar channel within last 8 bars); `_knife()` in strategy_engines blocks BUY-fades after fresh breakdowns / at ≤20% of a ≥1.0% down-day (mirrored for SELLs); also guards range_fade.
+3. BREAKEVEN — mean_reversion cfgs+preset → 0.5R, breakout → 0.6R (scalper/fast_scalp already 0.4R); works again now that TPs are 2R.
+4. CORRELATED-FADE STAGGER — same symbol+direction fade on another account within 30 min must be ≥ +0.3R before mirroring (`correlation_stagger` counter, pulse reason).
+Loop verified clean; currently in Friday-flat window (by design). Ordering in bot_runner: stagger → geometry restore → std risk clamp (restore BEFORE clamp so sizing uses correct SL). `_DET_PG` import defined at payoff-guard block, reused by behavior-adjust + geometry net.
+
 ## "NO ACTION FOR 2 HOURS" — MANUAL-TRADE SLOT LEAK FIXED (iter-127f, July 10 2026)
 Timeline reconstructed for 12:58–15:30 UTC silence:
 1. 12:56-12:58 — 3 auto VWAP-fade BUYs lost → anti-tilt froze the account 1h (by design, expired correctly 14:26) + same-direction loss-streak breaker paused auto BUYs 4h (by design).

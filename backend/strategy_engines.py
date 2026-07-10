@@ -61,6 +61,24 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
     vdist = float(feats.get("vwap_dist_pct") or 0)
     pos = feats.get("range_pos_pct")
     dch = feats.get("donchian20")
+    rbreak = feats.get("recent_break")
+    day_rng = float(feats.get("day_range_pct") or 0)
+
+    def _knife(direction: str) -> str | None:
+        """Falling-knife filter for fade entries (iter-128): never fade INTO
+        a fresh breakout or at the extreme of a big directional day."""
+        if direction == "BUY":
+            if rbreak == "DOWN" or dch == "BREAK_DOWN":
+                return "fresh breakdown in last 2h — no knife catching"
+            if day_rng >= 1.0 and pos is not None and float(pos) <= 20:
+                return f"price at {pos}% of a {day_rng}% down-day — no knife catching"
+        else:
+            if rbreak == "UP" or dch == "BREAK_UP":
+                return "fresh breakout up in last 2h — no fading strength"
+            if day_rng >= 1.0 and pos is not None and float(pos) >= 80:
+                return f"price at {pos}% of a {day_rng}% up-day — no fading strength"
+        return None
+
     if trend == "UP":
         if pos is not None and float(pos) > 95 and dch == "INSIDE":
             return None, f"uptrend but price at {pos}% of session range without a breakout — no chase"
@@ -70,6 +88,9 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
         if -0.20 <= vdist <= 0.05:
             return "BUY", f"VWAP bounce: uptrend pullback to session VWAP (dist {vdist}%)"
         if vdist >= (0.30 if fast else 0.35) and mom <= 0 and dch != "BREAK_UP":
+            k = _knife("SELL")
+            if k:
+                return None, f"exhaustion fade blocked: {k}"
             return "SELL", (f"exhaustion fade: price {vdist}% above VWAP with 3h "
                             f"momentum stalled ({mom}%) — fading back toward VWAP")
         return None, (f"uptrend, no burst yet (slope {slope}%/2h, 3h mom {mom}%; "
@@ -83,6 +104,9 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
         if -0.05 <= vdist <= 0.20:
             return "SELL", f"VWAP bounce: downtrend rally to session VWAP (dist {vdist}%)"
         if vdist <= -(0.30 if fast else 0.35) and mom >= 0 and dch != "BREAK_DOWN":
+            k = _knife("BUY")
+            if k:
+                return None, f"exhaustion fade blocked: {k}"
             return "BUY", (f"exhaustion fade: price {abs(vdist)}% below VWAP with 3h "
                            f"momentum stalled (+{mom}%) — fading back toward VWAP")
         return None, (f"downtrend, no burst yet (slope {slope}%/2h, 3h mom {mom}%; "
@@ -91,9 +115,15 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
     # high-frequency "small doses" behavior; tight stop is the protection)
     fade_min = 0.20 if fast else 0.25   # % distance from VWAP required to fade
     if vdist >= fade_min and dch != "BREAK_UP":
+        k = _knife("SELL")
+        if k:
+            return None, f"VWAP fade blocked: {k}"
         return "SELL", (f"VWAP fade: FLAT trend, price {vdist}% above session "
                         f"VWAP — fading back toward {feats.get('session_vwap')}")
     if vdist <= -fade_min and dch != "BREAK_DOWN":
+        k = _knife("BUY")
+        if k:
+            return None, f"VWAP fade blocked: {k}"
         return "BUY", (f"VWAP fade: FLAT trend, price {abs(vdist)}% below session "
                        f"VWAP — fading back toward {feats.get('session_vwap')}")
     return None, (f"FLAT trend, price within ±{fade_min}% of VWAP "
@@ -113,6 +143,11 @@ def range_fade_signal(feats: dict) -> tuple:
     day_rng = float(feats.get("day_range_pct") or 0)
     if not atr15 or hi is None or lo is None or pos is None:
         return None, "missing range data"
+    rbreak = feats.get("recent_break")
+    if rbreak == "DOWN" and float(pos) <= edge_pct:
+        return None, "fresh breakdown in last 2h — not fading the low"
+    if rbreak == "UP" and float(pos) >= 100 - edge_pct:
+        return None, "fresh breakout up in last 2h — not fading the high"
     if day_rng < min_day_pct:
         return None, f"day range {day_rng}% too small to fade"
     if (float(hi) - float(lo)) < min_atr_mult * atr15:

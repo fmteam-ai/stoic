@@ -124,6 +124,7 @@ PRESETS = {
         "icon": "Rocket",
         "color": "#FF6B00",
         "config": {
+            "breakeven_trigger_r": 0.6,
             "min_confidence_override": 70,
             "trade_of_day_cap": 2,
             "max_concurrent_trades": 3,
@@ -147,6 +148,7 @@ PRESETS = {
         "icon": "Activity",
         "color": "#9B59B6",
         "config": {
+            "breakeven_trigger_r": 0.5,
             "min_confidence_override": 65,
             "trade_of_day_cap": 3,
             "max_concurrent_trades": 3,

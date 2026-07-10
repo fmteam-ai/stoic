@@ -619,14 +619,15 @@ async def _process_user_account_locked(db, cfg: dict):
                     )
             except Exception:  # noqa: BLE001
                 pass
-            # iter-74 · Phase 1 — Profit-Taking Mode + TP cap.
-            # Clips TP per max_tp_pips_per_symbol (and 100-pip default in
-            # win_rate mode), and tightens TP in choppy regimes. Persists
-            # the adaptive_profit_taking telemetry onto the signal so the
-            # UI can show "TP clipped to 100p (regime DEFENSIVE_SCALP)".
+            # iter-74 · Phase 1 — Profit-Taking Mode + TP cap (swing-era).
+            # iter-128: NEVER reshape deterministic intraday engines — their
+            # TP=2×SL geometry IS the strategy; clipping the TP inverted the
+            # realized R:R (avg win < avg loss) and nullified breakeven.
             try:
-                from adaptive_mode import apply_profit_taking_mode
-                signal, _eff_cfg_pt = apply_profit_taking_mode(signal, cfg)
+                from strategy_engines import DETERMINISTIC_INTRADAY_SCOPES as _DET_PT
+                if signal.get("scope") not in _DET_PT:
+                    from adaptive_mode import apply_profit_taking_mode
+                    signal, _eff_cfg_pt = apply_profit_taking_mode(signal, cfg)
             except Exception as e:  # noqa: BLE001
                 logger.warning("apply_profit_taking_mode failed sym=%s: %s — using raw signal", sym, e)
         except Exception as e:
@@ -699,11 +700,11 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "eod_quiet_block")
                 continue
 
-        # iter-57 · Payoff guard — profit-taking overlays (win_rate Smart Cap)
-        # can clip TP1 while the SL stays wide, inverting the realized R:R.
-        # Default mode "tighten": clamp the SL to 2× the TP1 distance so the
-        # trade executes with corrected geometry (mode "skip" vetoes instead).
-        if signal.get("action") in ("BUY", "SELL"):
+        # iter-57 · Payoff guard — fixes swing-signal TP/SL inversions.
+        # iter-128: deterministic intraday engines keep their own geometry.
+        from strategy_engines import DETERMINISTIC_INTRADAY_SCOPES as _DET_PG
+        if (signal.get("action") in ("BUY", "SELL")
+                and signal.get("scope") not in _DET_PG):
             from payoff_guard import payoff_guard_apply
             pg = payoff_guard_apply(signal, cfg)
             if pg and pg.get("skip"):
@@ -1030,9 +1031,12 @@ async def _process_user_account_locked(db, cfg: dict):
                     f"consensus {cons['score']}/100 below {c_thr} (advisory)")
 
         # iter-113 · Self-evaluation behavior adjustments — recurring
-        # mistakes learned from graded trades reshape new candidates
-        # (widen SL, extend TP, raise confidence floor).
-        if signal.get("action") in ("BUY", "SELL"):
+        # mistakes learned from graded trades reshape new candidates.
+        # iter-128: swing/MTF only — widening a scalp's SL without moving its
+        # TP broke the 2:1 math, and min_conf bumps would blanket-block
+        # deterministic engines (their confidence is synthetic min+5).
+        if (signal.get("action") in ("BUY", "SELL")
+                and signal.get("scope") not in _DET_PG):
             try:
                 from self_evaluation import get_adjustments, apply_adjustments
                 _adj = await get_adjustments(db, user_id)
@@ -1516,6 +1520,64 @@ async def _process_user_account_locked(db, cfg: dict):
                 sizing_method = sizing_method + "+sector_cap_fit"
         except Exception as e:  # noqa: BLE001
             logger.debug("Sector-cap fit skipped (%s) — proceeding without trim", e)
+
+        # iter-128 · Correlated-fade stagger — when the same symbol+direction
+        # fade fired on another account in the last 30 min, mirror it only
+        # once that trade is ≥ +0.3R in profit. Kills simultaneous
+        # multi-account losses on one bad fade.
+        if signal.get("entry_style") == "fade":
+            try:
+                from pip_utils import base_symbol as _bs_st
+                from datetime import timedelta as _td_st
+                _cut = (datetime.now(timezone.utc) - _td_st(minutes=30)).isoformat()
+                _peers = await db.trades.find({
+                    "user_id": user_id, "origin": "auto",
+                    "status": {"$in": ["open", "pending"]},
+                    "action": signal["action"],
+                    "opened_at": {"$gte": _cut},
+                }).to_list(length=10)
+                _blocked = None
+                for _pt in _peers:
+                    if str(_pt.get("account_id")) == str(cfg_account_id):
+                        continue
+                    if _bs_st(_pt.get("symbol") or "") != _bs_st(sym):
+                        continue
+                    _pe, _ps = float(_pt.get("entry_price") or 0), float(_pt.get("stop_loss") or 0)
+                    _mkt = float(signal.get("entry_price") or 0)
+                    if not (_pe and _ps and _mkt):
+                        _blocked = "peer fade open, progress unknown"
+                        break
+                    _r = (_mkt - _pe) if signal["action"] == "BUY" else (_pe - _mkt)
+                    _r = _r / (abs(_pe - _ps) or 1e-9)
+                    if _r < 0.3:
+                        _blocked = f"peer fade on ..{str(_pt.get('account_id'))[-4:]} at {_r:+.2f}R (need ≥ +0.3R)"
+                        break
+                if _blocked:
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn",
+                        reason=f"Correlation stagger: {_blocked} — not mirroring the same fade yet.")
+                    await inc_intel_counter(user_id, "correlation_stagger")
+                    continue
+            except Exception as e:  # noqa: BLE001
+                logger.debug("correlation stagger skipped: %s", e)
+
+        # iter-128 · Geometry integrity net — if ANY overlay left a
+        # deterministic-engine order with R:R < 1.5, restore the engine's
+        # own geometry before sending.
+        try:
+            _geo = signal.get("engine_geometry")
+            if _geo and signal.get("scope") in _DET_PG:
+                _e = float(signal.get("entry_price") or 0)
+                _s = float(signal.get("stop_loss") or 0)
+                _t = float(signal.get("take_profit") or 0)
+                if _e and _s and _t and abs(_t - _e) / (abs(_e - _s) or 1e-9) < 1.5:
+                    signal["stop_loss"] = _geo["stop_loss"]
+                    signal["take_profit"] = _geo["take_profit"]
+                    signal["tp1"], signal["tp2"], signal["tp3"] = _geo["tp1"], _geo["tp2"], _geo["tp3"]
+                    signal["geometry_restored"] = True
+                    logger.info("Geometry restored sym=%s: overlays degraded R:R below 1.5", sym)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("geometry restore skipped: %s", e)
 
         # iter-127b · FINAL hard risk clamp — assume STANDARD contract size
         # (most conservative). Protects against mislabeled account_type

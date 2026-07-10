@@ -68,6 +68,20 @@ def compute_intraday_features(bars: list) -> dict | None:
     else:
         donchian = "INSIDE"
 
+    # iter-128 · Breakout memory — any close outside its prior 20-bar
+    # channel within the last 8 completed bars (~2h). Fade engines use it
+    # to avoid catching falling knives right after a breakdown.
+    recent_break = None
+    if len(bars) >= 30:
+        for k in range(max(21, len(bars) - 8), len(bars)):
+            h = max(float(b["h"]) for b in bars[k - 20:k])
+            lo = min(float(b["l"]) for b in bars[k - 20:k])
+            c = float(bars[k]["c"])
+            if c > h:
+                recent_break = "UP"
+            elif c < lo:
+                recent_break = "DOWN"
+
     # Session VWAP — today's UTC bars, volume-weighted typical price
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pv = vol = 0.0
@@ -114,6 +128,7 @@ def compute_intraday_features(bars: list) -> dict | None:
         "ema20_slope_pct_2h": round(slope_pct, 3),
         "momentum_3h_pct": round(mom_3h_pct, 3),
         "donchian20": donchian,
+        "recent_break": recent_break,
         "session_vwap": round(vwap, 2) if vwap else None,
         "vwap_dist_pct": round(vwap_dist_pct, 3) if vwap_dist_pct is not None else None,
         "swing_structure": structure,
