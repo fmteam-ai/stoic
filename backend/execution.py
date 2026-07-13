@@ -168,6 +168,8 @@ class MT5BridgeEngine(ExecutionEngine):
             "closed_at": None,
             "error": None,
             "origin": signal.get("origin", "manual"),
+            "scope": signal.get("scope"),
+            "trend_ride": signal.get("trend_ride"),
             "partial_closed": False,
             "breakeven_set": False,
             "trail_active": False,

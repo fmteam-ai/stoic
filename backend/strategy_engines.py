@@ -65,17 +65,19 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
     day_rng = float(feats.get("day_range_pct") or 0)
 
     def _knife(direction: str) -> str | None:
-        """Falling-knife filter for fade entries (iter-128): never fade INTO
-        a fresh breakout or at the extreme of a big directional day."""
+        """Falling-knife filter for fade entries (iter-128, tightened iter-129:
+        was day_rng≥1.0 / 20-80 bands — too loose to catch the 2026-07-13
+        0.57% grind): never fade INTO a fresh breakout or the working third
+        of a directional day."""
         if direction == "BUY":
             if rbreak == "DOWN" or dch == "BREAK_DOWN":
                 return "fresh breakdown in last 2h — no knife catching"
-            if day_rng >= 1.0 and pos is not None and float(pos) <= 20:
+            if day_rng >= 0.6 and pos is not None and float(pos) <= 30:
                 return f"price at {pos}% of a {day_rng}% down-day — no knife catching"
         else:
             if rbreak == "UP" or dch == "BREAK_UP":
                 return "fresh breakout up in last 2h — no fading strength"
-            if day_rng >= 1.0 and pos is not None and float(pos) >= 80:
+            if day_rng >= 0.6 and pos is not None and float(pos) >= 70:
                 return f"price at {pos}% of a {day_rng}% up-day — no fading strength"
         return None
 
@@ -115,12 +117,21 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
     # high-frequency "small doses" behavior; tight stop is the protection)
     fade_min = 0.20 if fast else 0.25   # % distance from VWAP required to fade
     if vdist >= fade_min and dch != "BREAK_UP":
+        # iter-129: a persistent grind keeps price on one side of VWAP for
+        # hours (2026-07-13: 109 BTC "fade back to VWAP" BUYs in a down
+        # grind). Never fade against a sloping session.
+        if slope >= 0.04:
+            return None, (f"VWAP fade blocked: session grinding UP (EMA20 slope "
+                          f"+{slope}%/2h) — price above VWAP is trend, not stretch")
         k = _knife("SELL")
         if k:
             return None, f"VWAP fade blocked: {k}"
         return "SELL", (f"VWAP fade: FLAT trend, price {vdist}% above session "
                         f"VWAP — fading back toward {feats.get('session_vwap')}")
     if vdist <= -fade_min and dch != "BREAK_DOWN":
+        if slope <= -0.04:
+            return None, (f"VWAP fade blocked: session grinding DOWN (EMA20 slope "
+                          f"{slope}%/2h) — price below VWAP is trend, not stretch")
         k = _knife("BUY")
         if k:
             return None, f"VWAP fade blocked: {k}"

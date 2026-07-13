@@ -757,6 +757,54 @@ async def _process_user_account_locked(db, cfg: dict):
                     action="SKIP", level="warn", reason=sg)
                 await inc_intel_counter(user_id, "structure_gate_veto")
                 continue
+
+            # iter-129 · Session-trend / exhaustion gates + trend-ride mode
+            # (2026-07-13 review: counter-trend buys into an 85pt gold slide,
+            # selling the day low after -2%, and 12pt TPs in an 80pt trend).
+            from payoff_guard import (session_trend_gate, exhaustion_chase_gate,
+                                      trend_ride_check)
+            from intraday_features import compute_intraday_features
+            _feats = compute_intraday_features((cdoc or {}).get("bars") or [])
+            if _feats:
+                signal["session_feats"] = {k: _feats.get(k) for k in (
+                    "day_range_pct", "range_pos_pct", "ema20_slope_pct_2h",
+                    "swing_structure")}
+                if cfg.get("session_trend_gate_enabled", True):
+                    stg = session_trend_gate(signal["action"], _feats, _base)
+                    if stg:
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=stg)
+                        await inc_intel_counter(user_id, "session_trend_veto")
+                        continue
+                if cfg.get("exhaustion_gate_enabled", True):
+                    exg = exhaustion_chase_gate(signal["action"], _feats, _base)
+                    if exg:
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="SKIP", level="warn", reason=exg)
+                        await inc_intel_counter(user_id, "exhaustion_chase_veto")
+                        continue
+                if cfg.get("trend_ride_enabled", True):
+                    ride = trend_ride_check(signal["action"], _feats, _base)
+                    if ride:
+                        try:
+                            _entry = float(signal.get("entry_price") or 0)
+                            _tp = float(signal.get("take_profit") or 0)
+                            _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
+                            if _entry and _tp and _mult > 1.0:
+                                signal["take_profit"] = round(
+                                    _entry + (_tp - _entry) * _mult, 5)
+                                if signal.get("tp_pips"):
+                                    signal["tp_pips"] = round(
+                                        float(signal["tp_pips"]) * _mult, 1)
+                                signal["trend_ride"] = ride
+                                await inc_intel_counter(user_id, "trend_ride_applied")
+                                await _record_pulse(db, cfg, symbol=sym,
+                                    action="INFO", level="info",
+                                    reason=(f"Trend-ride: {ride['day_range_pct']:.2f}% "
+                                            f"{ride['direction']} day — TP widened ×{_mult} "
+                                            f"so the trailing stop can ride the move."))
+                        except (TypeError, ValueError):
+                            pass
             try:
                 from market import get_history
                 rf = build_range_forecast(await get_history(sym),

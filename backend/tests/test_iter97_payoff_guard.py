@@ -19,25 +19,27 @@ def sig(entry, sl, tp1, action="SELL"):
 class TestPayoffGuard:
     def test_tightens_inverted_rr_sell(self):
         # The real 2026-07-06 setup: entry 4138, SL 15 above, TP1 6 below (2.5x)
+        # Default clamp ratio is 1.2x (tightened from 2.0x in geometry-integrity work).
         r = payoff_guard_apply(sig(4138.0, 4153.0, 4132.0), {})
-        assert r and r.get("tighten") == 4150.0  # entry + 2x6
+        assert r and abs(r.get("tighten") - 4145.2) < 1e-9  # entry + 1.2x6
         assert "tightened" in r["reason"]
-        assert abs(r["sl_pips_scale"] - 12.0 / 15.0) < 1e-9
+        assert abs(r["sl_pips_scale"] - 7.2 / 15.0) < 1e-9
 
     def test_tightens_inverted_rr_buy(self):
         r = payoff_guard_apply(sig(4138.0, 4123.0, 4144.0, action="BUY"), {})
-        assert r and r.get("tighten") == 4126.0  # entry - 2x6
+        assert r and abs(r.get("tighten") - 4130.8) < 1e-9  # entry - 1.2x6
 
     def test_skip_mode(self):
         r = payoff_guard_apply(sig(4138.0, 4153.0, 4132.0), {"payoff_guard_mode": "skip"})
         assert r and "Trade skipped" in r.get("skip", "")
 
     def test_allows_healthy_rr(self):
-        # SL 10 away, TP1 6 away → ratio 1.67 ≤ 2 → no action
-        assert payoff_guard_apply(sig(4100.0, 4110.0, 4094.0), {}) is None
+        # SL 6 away, TP1 6 away → ratio 1.0 ≤ 1.2 → no action
+        assert payoff_guard_apply(sig(4100.0, 4106.0, 4094.0), {}) is None
 
-    def test_boundary_exactly_2x_allowed(self):
-        assert payoff_guard_apply(sig(4100.0, 4110.0, 4095.0), {}) is None
+    def test_boundary_exactly_max_ratio_allowed(self):
+        # SL 6 away, TP1 5 away → ratio 1.2 exactly → allowed
+        assert payoff_guard_apply(sig(4100.0, 4106.0, 4095.0), {}) is None
 
     def test_custom_ratio(self):
         s = sig(4100.0, 4110.0, 4096.0)  # SL 10, TP1 4 → 2.5x
@@ -133,10 +135,13 @@ class TestWiring:
         assert "payoff_guard_apply" in src
         assert '"payoff_guard_tighten"' in src and '"payoff_guard_veto"' in src
 
-    def test_ai_signals_intraday_gate(self):
-        src = open(os.path.join(BACKEND, "ai_signals.py")).read()
-        assert "intraday_counter_momentum" in src
-        assert "VETO (intraday-momentum)" in src
-        assert '"intraday_momentum"' in src
-        assert "short_tier_momentum_veto" in src
-        assert "VETO (short-tier-momentum)" in src
+    def test_session_gates_wired_in_bot_runner(self):
+        # iter-129: session-aware gates replaced the old ai_signals
+        # intraday_counter_momentum wiring — all vetoes live in bot_runner now.
+        src = open(os.path.join(BACKEND, "bot_runner.py")).read()
+        assert "session_trend_gate" in src
+        assert "exhaustion_chase_gate" in src
+        assert "trend_ride_check" in src
+        assert '"session_trend_veto"' in src
+        assert '"exhaustion_chase_veto"' in src
+        assert '"trend_ride_applied"' in src

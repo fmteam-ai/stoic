@@ -345,3 +345,13 @@ See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 - Origin audit: added `origin:"auto"` filter to adaptive_mode (was including manual!), auto_tune, circuit_breakers, risk_engine._period_pnls, safety_guardian daily-loss cap, bot_doctor win-rate — ALL bot self-adjustments now based solely on bot trades. Learning modules (Kelly/RL/ML/Bayes/meta/loss advisor/cooldown/anti-tilt/revenge-block) already filtered correctly.
 - Tested: curl on both endpoints, UI screenshots, 65 backend regression tests pass.
 - Next: production deployment (user approval pending), Strategy Scoreboard UI (P2).
+
+## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
+Session review: gold -2.1% trend day, bot went 14W/18L (+$67). 4 failure patterns found & fixed:
+1. session_trend_gate (payoff_guard.py): vetoes counter-trend entries vs intraday session structure (range≥0.45% gold / 0.9% crypto, pos band + EMA20 slope + swing structure). Would have blocked both counter-trend BUY clusters (-$110).
+2. exhaustion_chase_gate: vetoes WITH-trend entries near day extreme after range ≥1.5% gold / 3.0% crypto elapsed (blocks selling the day low → -$244 avoided).
+3. trend_ride_check + TP widening ×1.8 (cfg trend_ride_tp_mult) on big directional days so trailing rides the move instead of 12pt clips.
+4. VWAP-fade grind fix (strategy_engines.py): FLAT-trend fades blocked when EMA20 slope ≥|0.04|%/2h (109 BTC BUY-fade signals in a down grind root cause); knife filter tightened (day_rng 1.0→0.6, bands 20/80→30/70).
+- All 3 gates wired in bot_runner iter-60 block; cfg toggles session_trend_gate_enabled / exhaustion_gate_enabled / trend_ride_enabled (default ON). Trades now stamp `scope` + `trend_ride`.
+- Fixed 5 stale pre-existing tests (test_iter97 expected old 2.0x ratio / old ai_signals wiring). New replay test file test_iter129_session_gates.py. 98 tests pass; backend clean after restart.
+- Replay estimate: same day with gates ≈ 14W/6L, ~+$350 instead of +$67.
