@@ -355,3 +355,11 @@ Session review: gold -2.1% trend day, bot went 14W/18L (+$67). 4 failure pattern
 - All 3 gates wired in bot_runner iter-60 block; cfg toggles session_trend_gate_enabled / exhaustion_gate_enabled / trend_ride_enabled (default ON). Trades now stamp `scope` + `trend_ride`.
 - Fixed 5 stale pre-existing tests (test_iter97 expected old 2.0x ratio / old ai_signals wiring). New replay test file test_iter129_session_gates.py. 98 tests pass; backend clean after restart.
 - Replay estimate: same day with gates ≈ 14W/6L, ~+$350 instead of +$67.
+
+## Iter-130 (2026-07-13) — Real-time narrative fusion (Decision + Risk agents)
+Context: gold's 2% slide was US-Iran driven; news layer's freshest headline was 3 days old (Fed-only queries), news was veto-only, sizing narrative-blind.
+1. news_understanding.py: added GEO_QUERY wire (Iran/Middle East/war/sanctions/OPEC/tariffs, tier-1 domains) + RSS backup wire (BBC World, Al Jazeera, CNBC World; stdlib XML parse, keyword relevance filter) merged & deduped, MAX_HEADLINES 12→18, CACHE_TTL 45m→15m. Verified live: "U.S. launches airstrikes against Iran…" now surfaces, Claude scored +2.5 (shock).
+2. Decision fusion: news_confidence_bias() — with-narrative +5 conf, against -10 (|net|≥1.2); stamped as signal.news_bias. Extreme veto (|net|≥2) unchanged.
+3. Risk fusion: narrative_risk_scale() — against moderate narrative ×0.5; live shock headline (|score|≥2.5) ×0.7 all trades; floor 0.35. Wired into bot_runner lot sizing (sizing_method "+narrative"), pulse-logged, counters news_bias_applied / news_size_trim.
+- Tests: test_iter130_narrative_fusion.py (17 tests); 61 pass incl. iter-129/97 regression. Backend clean after restart.
+- NOTE: NewsAPI free tier delays articles up to ~24h — RSS wire compensates in real time.

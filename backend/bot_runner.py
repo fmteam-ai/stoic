@@ -897,6 +897,28 @@ async def _process_user_account_locked(db, cfg: dict):
                         continue
                     signal["news_ai_advisory"] = ng
 
+                # iter-130 · Narrative fusion — the news net score now feeds
+                # the DECISION (confidence bias) and the RISK agent (sizing),
+                # not just the extreme-veto (2026-07-13: US-Iran drove a 2%
+                # gold slide the bot traded blind to).
+                from news_understanding import (news_confidence_bias,
+                                                narrative_risk_scale)
+                _delta, _bias_note = news_confidence_bias(
+                    signal["action"], news_ai)
+                if _delta:
+                    signal["confidence"] = max(5.0, min(95.0, round(
+                        float(signal.get("confidence") or 0) + _delta, 1)))
+                    signal["news_bias"] = {"delta": _delta, "note": _bias_note}
+                    await inc_intel_counter(user_id, "news_bias_applied")
+                _nscale, _nreason = narrative_risk_scale(
+                    signal["action"], news_ai)
+                if _nscale < 1.0:
+                    signal["news_size_scale"] = _nscale
+                    signal["news_size_reason"] = _nreason
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="INFO", level="info", reason=_nreason)
+                    await inc_intel_counter(user_id, "news_size_trim")
+
             # iter-107 · Calendar Intelligence — predicts breakout/fakeout/
             # reversal/continuation for the next high-impact print. Vetoes
             # entries only when a fakeout (stop-hunt) is the dominant scenario.
@@ -1490,11 +1512,15 @@ async def _process_user_account_locked(db, cfg: dict):
 
         # iter-61 · RL policy half-size (enforce mode SCALE decision)
         # iter-64 · combined with probabilistic-forecast lot multiplier
+        # iter-130 · combined with narrative risk scale (news fusion)
         _rl_scale = float(signal.get("rl_scale") or 1.0) \
-            * float(signal.get("prob_lot_scale") or 1.0)
+            * float(signal.get("prob_lot_scale") or 1.0) \
+            * float(signal.get("news_size_scale") or 1.0)
         if _rl_scale < 1.0:
             effective_lot = max(round(effective_lot * _rl_scale, 2), 0.01)
             sizing_method = sizing_method + "+rl_scale"
+            if signal.get("news_size_scale"):
+                sizing_method = sizing_method + "+narrative"
 
         # iter-114 · Advanced Risk Engine — final pre-trade authority:
         # drawdown ladder (D/W/M), abnormal-market halt, dynamic leverage,

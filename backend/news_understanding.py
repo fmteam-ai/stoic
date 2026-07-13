@@ -24,11 +24,33 @@ TIER1_DOMAINS = ("reuters.com,bloomberg.com,cnbc.com,ft.com,wsj.com,"
 MACRO_QUERY = ('FOMC OR "Federal Reserve" OR CPI OR "nonfarm payrolls" OR '
                '"central bank" OR "rate cut" OR "rate hike" OR '
                '"interest rate decision" OR "jobs report"')
-CACHE_TTL = 45 * 60
+# iter-130 · Geopolitics wire — 2026-07-13 gold slid 2% on US-Iran headlines
+# the Fed/asset queries never matched.
+GEO_QUERY = ('Iran OR "Middle East" OR ceasefire OR sanctions OR OPEC OR '
+             'tariff OR "trade deal" OR war OR missile OR "military strike" OR '
+             'escalation OR nuclear OR geopolitical')
+CACHE_TTL = 15 * 60          # iter-130: was 45 min — too slow for live shocks
 FAIL_TTL = 10 * 60
 RECENCY_HALF_LIFE_H = 12.0
 NEWS_EXTREME = 2.0
-MAX_HEADLINES = 12
+NEWS_ALIGN_MIN = 1.2         # |net| above which the narrative biases decisions
+NEWS_SHOCK_SCORE = 2.5       # any driver at/above this = live event risk
+MAX_HEADLINES = 18
+
+# RSS backup wire (iter-130) — NewsAPI free tier delays articles up to 24h;
+# these feeds are real-time and free. Titles are keyword-filtered for market
+# relevance before the Claude scoring pass.
+RSS_FEEDS = (
+    "https://feeds.bbci.co.uk/news/world/rss.xml",
+    "https://www.aljazeera.com/xml/rss/all.xml",
+    "https://www.cnbc.com/id/100727362/device/rss/rss.html",
+)
+RSS_RELEVANCE = ("iran", "israel", "middle east", "war", "strike", "missile",
+                 "ceasefire", "sanction", "opec", "oil", "tariff", "trade",
+                 "fed", "inflation", "election", "nuclear", "conflict",
+                 "gold", "dollar", "china", "russia", "ukraine", "attack",
+                 "military", "escalat", "peace", "treasury", "econom",
+                 "central bank", "rate")
 
 _cache: dict = {}   # {base: (expires_ts, payload|None)}
 
@@ -57,24 +79,69 @@ async def _fetch(client, params):
     return (r.json() or {}).get("articles") or []
 
 
+def _parse_rss(xml_text: str, source: str) -> list:
+    """Minimal RSS <item> parser — title + pubDate, no extra dependency."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    out = []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return out
+    for item in root.iter("item"):
+        title = (item.findtext("title") or "").strip()
+        if not title:
+            continue
+        pub = (item.findtext("pubDate") or "").strip()
+        iso = ""
+        try:
+            iso = parsedate_to_datetime(pub).astimezone(timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            pass
+        out.append({"title": title, "source": source, "publishedAt": iso})
+    return out
+
+
+async def _fetch_rss(client) -> list:
+    """Real-time backup wire: BBC / Al Jazeera / CNBC world RSS, filtered to
+    market-relevant titles, freshest first."""
+    items = []
+    for url in RSS_FEEDS:
+        try:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"},
+                                 follow_redirects=True)
+            if r.status_code == 200:
+                src = url.split("/")[2].replace("www.", "").split(".")[0].upper()
+                items.extend(_parse_rss(r.text, src))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("rss fetch failed %s: %s", url, e)
+    relevant = [it for it in items
+                if any(k in it["title"].lower() for k in RSS_RELEVANCE)]
+    relevant.sort(key=lambda x: x.get("publishedAt") or "", reverse=True)
+    return relevant[:8]
+
+
 async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
-    """Macro wire (FOMC/CPI/NFP/central banks, tier-1 domains) + asset query."""
+    """Macro wire (FOMC/CPI/NFP) + geopolitics wire + asset query + RSS backup."""
     key = os.environ.get("NEWSAPI_KEY", "")
-    if not key:
-        return []
     common = {"language": "en", "sortBy": "publishedAt", "apiKey": key,
               "searchIn": "title,description"}
+    macro, geo, asset, rss = [], [], [], []
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            macro = await _fetch(client, {**common, "q": MACRO_QUERY,
-                                          "domains": TIER1_DOMAINS, "pageSize": 8})
-            asset = await _fetch(client, {**common, "pageSize": 8,
-                                          "q": ASSET_QUERY.get(base, base)})
+            if key:
+                macro = await _fetch(client, {**common, "q": MACRO_QUERY,
+                                              "domains": TIER1_DOMAINS, "pageSize": 6})
+                geo = await _fetch(client, {**common, "q": GEO_QUERY,
+                                            "domains": TIER1_DOMAINS, "pageSize": 6})
+                asset = await _fetch(client, {**common, "pageSize": 6,
+                                              "q": ASSET_QUERY.get(base, base)})
+            rss = await _fetch_rss(client)
     except Exception as e:
         logger.warning("news_understanding fetch failed: %s", e)
         return []
     seen, out = set(), []
-    for a in macro + asset:
+    for a in macro + geo + asset:
         title = (a.get("title") or "").strip()
         if not title or title.lower() in seen:
             continue
@@ -82,6 +149,10 @@ async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
         out.append({"title": title,
                     "source": (a.get("source") or {}).get("name") or "",
                     "publishedAt": a.get("publishedAt") or ""})
+    for a in rss:
+        if a["title"].lower() not in seen:
+            seen.add(a["title"].lower())
+            out.append(a)
     return out[:limit]
 
 
@@ -208,3 +279,54 @@ def news_gate(action: str, base: str, snap: dict | None) -> str | None:
                 f"(net {net:+.1f}/3 across {snap.get('headlines')} headlines) — "
                 f"SELL vetoed. Top driver: {top}")
     return None
+
+
+def _aligned(action: str, net: float) -> bool | None:
+    """True with-narrative, False against, None when no stance."""
+    if abs(net) < NEWS_ALIGN_MIN:
+        return None
+    return (net > 0) == (action == "BUY")
+
+
+def news_confidence_bias(action: str, snap: dict | None) -> tuple[float, str | None]:
+    """iter-130 · Narrative as a DIRECTIONAL input for the decision agent
+    (was veto-only). Returns (confidence delta, note)."""
+    if action not in ("BUY", "SELL") or not snap:
+        return 0.0, None
+    net = float(snap.get("net") or 0)
+    a = _aligned(action, net)
+    if a is None:
+        return 0.0, None
+    top = (snap.get("drivers") or [{}])[0].get("title", "")
+    if a:
+        return 5.0, (f"News narrative supports {action} (net {net:+.1f}/3) — "
+                     f"confidence +5. Driver: {top}")
+    return -10.0, (f"News narrative opposes {action} (net {net:+.1f}/3) — "
+                   f"confidence -10. Driver: {top}")
+
+
+def narrative_risk_scale(action: str, snap: dict | None) -> tuple[float, str | None]:
+    """iter-130 · Narrative-aware sizing for the risk agent.
+
+    Against a moderate narrative (1.2 ≤ |net| < 2.0) → half size (≥2.0 is a
+    hard veto upstream). A live shock headline (|score| ≥ 2.5, e.g. war
+    escalation / surprise print) → ×0.7 on everything while it decays."""
+    if action not in ("BUY", "SELL") or not snap:
+        return 1.0, None
+    net = float(snap.get("net") or 0)
+    scale, reasons = 1.0, []
+    if _aligned(action, net) is False and abs(net) < NEWS_EXTREME:
+        scale *= 0.5
+        reasons.append(f"{action} against a {snap.get('label')} narrative "
+                       f"(net {net:+.1f}/3) — half size")
+    drivers = snap.get("drivers") or []
+    shock = next((d for d in drivers
+                  if abs(float(d.get("score") or 0)) >= NEWS_SHOCK_SCORE), None)
+    if shock:
+        scale *= 0.7
+        reasons.append(f"live shock headline in play (score "
+                       f"{float(shock['score']):+.1f}): "
+                       f"{str(shock.get('title'))[:80]} — size ×0.7")
+    if scale >= 1.0:
+        return 1.0, None
+    return max(scale, 0.35), "Narrative risk: " + "; ".join(reasons)
