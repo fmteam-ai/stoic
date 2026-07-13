@@ -363,3 +363,9 @@ Context: gold's 2% slide was US-Iran driven; news layer's freshest headline was 
 3. Risk fusion: narrative_risk_scale() — against moderate narrative ×0.5; live shock headline (|score|≥2.5) ×0.7 all trades; floor 0.35. Wired into bot_runner lot sizing (sizing_method "+narrative"), pulse-logged, counters news_bias_applied / news_size_trim.
 - Tests: test_iter130_narrative_fusion.py (17 tests); 61 pass incl. iter-129/97 regression. Backend clean after restart.
 - NOTE: NewsAPI free tier delays articles up to ~24h — RSS wire compensates in real time.
+
+## Iter-130b (2026-07-13) — Post-mortem bot-isolation fix
+User asked whether the bot analyzes lost trades. Verified: YES (35 auto post-mortems today). But found manual trades were leaking into the loop:
+- Manual losing trades were auto-post-mortemed and their pattern_keys counted toward guardrail AUTO-TIGHTENING; manual wins counted toward loosening.
+- Fixed in loss_postmortem.py: (1) _is_postmortem_eligible skips manual origins (force=True from Loss Lab UI still analyzes any trade on demand), (2) post-mortem docs stamp origin, (3) _maybe_autotighten counts exclude manual/forced docs, (4) maybe_record_winner ignores manual wins + wins_after query filters origin:auto, (5) consecutive-loss lookback filters origin:auto.
+- Verified live: manual loss → not eligible; bot loss → eligible. 30 post-mortem tests pass.

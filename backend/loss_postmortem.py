@@ -77,6 +77,11 @@ async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:
     pnl = float(trade.get("pnl") or 0)
     if pnl >= 0:
         return False, ""
+    # Bot-performance isolation: manual trades never AUTO-post-mortem — their
+    # patterns must not feed guardrail tightening. (force=True from the Loss
+    # Lab UI still analyzes any losing trade on demand.)
+    if (trade.get("origin") or "").startswith("manual"):
+        return False, ""
     if "stop_loss" in (trade.get("close_reason") or "").lower():
         return True, "sl_hit"
     prior = await db.trades.find_one(
@@ -84,6 +89,7 @@ async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:
             "user_id": trade["user_id"],
             "symbol": trade["symbol"],
             "status": "closed",
+            "origin": "auto",
             "_id": {"$ne": trade["_id"]},
         },
         sort=[("closed_at", -1)],
@@ -251,6 +257,7 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         "pnl": float(trade.get("pnl") or 0),
         "close_reason": trade.get("close_reason"),
         "account_id": trade.get("account_id"),
+        "origin": trade.get("origin"),
         "pattern_key": pattern_key,
         "trigger": trigger,
         "diff": diff,
@@ -386,6 +393,8 @@ async def maybe_record_winner(db, trade_id) -> dict | None:
         return None
     if float(trade.get("pnl") or 0) <= 0:
         return None  # losses are handled by `maybe_record_postmortem`
+    if (trade.get("origin") or "").startswith("manual"):
+        return None  # bot-performance isolation — manual wins never loosen bot guardrails
 
     user_id = trade["user_id"]
     user = await _user_doc(db, user_id)
@@ -428,6 +437,7 @@ async def maybe_record_winner(db, trade_id) -> dict | None:
         "user_id": user_id,
         "status": "closed",
         "symbol": trade["symbol"],
+        "origin": "auto",
         "pnl": {"$gt": 0},
         "closed_at": {"$gte": win_cutoff},
     })
