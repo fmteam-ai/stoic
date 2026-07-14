@@ -17,7 +17,7 @@ import os
 from collections import defaultdict
 
 from portfolio.sectors import sector_for
-from portfolio.var import calculate_var, _pearson, _close_series
+from portfolio.var import calculate_var
 from portfolio.drawdown import update_and_get as get_drawdown
 
 logger = logging.getLogger("portfolio.risk-manager")
@@ -105,16 +105,20 @@ async def _sector_exposure(positions: list[dict], equity: float,
 
 
 async def _avg_pairwise_corr(symbols: list[str]) -> float:
-    """Mean |pairwise correlation| across the symbol set. 0 when <2 symbols."""
+    """Mean |pairwise correlation| across the symbol set. 0 when <2 symbols.
+    iter-142: timestamp-aligned daily returns; unknown pairs use the
+    conservative UNKNOWN_RHO prior."""
+    from portfolio.var import UNKNOWN_RHO, corr_returns
     unique = sorted(set(s.upper() for s in symbols if s))
     if len(unique) < 2:
         return 0.0
-    series = {s: await _close_series(s) for s in unique}
     pairs = 0
     total = 0.0
     for i, s1 in enumerate(unique):
         for s2 in unique[i + 1:]:
-            c = _pearson(series.get(s1) or [], series.get(s2) or [])
+            c = await corr_returns(s1, s2)
+            if c is None:
+                c = UNKNOWN_RHO
             total += abs(c)
             pairs += 1
     return (total / pairs) if pairs else 0.0

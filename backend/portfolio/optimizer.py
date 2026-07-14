@@ -15,7 +15,7 @@ then normalized to sum to 1.
 import logging
 import math
 
-from portfolio.var import ES_MULT_95, _atr_pct, _close_series, _pearson
+from portfolio.var import ES_MULT_95, UNKNOWN_RHO, _atr_pct, corr_returns
 from portfolio.correlation_kelly import DEFAULT_CVAR_TARGET_PCT, _notional_of
 
 logger = logging.getLogger("portfolio-optimizer")
@@ -67,14 +67,17 @@ async def optimization_report(db, user_id: str) -> dict:
                 "note": "No open positions — nothing to optimize."}
 
     syms = sorted(by_sym)
-    vols, series = {}, {}
+    vols = {}
     for s in syms:
         vols[s] = (await _atr_pct(s)) or 0.01
-        series[s] = await _close_series(s)
     corr: dict = {s: {} for s in syms}
+    unknown_pairs: list[str] = []
     for i, s1 in enumerate(syms):
         for s2 in syms[i + 1:]:
-            rho = _pearson(series.get(s1) or [], series.get(s2) or [])
+            rho = await corr_returns(s1, s2)
+            if rho is None:
+                rho = UNKNOWN_RHO
+                unknown_pairs.append(f"{s1}/{s2}")
             corr[s1][s2] = rho
             corr[s2][s1] = rho
 
@@ -116,6 +119,9 @@ async def optimization_report(db, user_id: str) -> dict:
             if s1 < s2 and rho >= CORR_WARN:
                 warnings.append(f"{s1}/{s2} correlation {rho:.2f} — "
                                 f"positions move together, diversification is illusory")
+    for pair in unknown_pairs:
+        warnings.append(f"{pair} correlation unknown (insufficient overlapping "
+                        f"return history) — assumed conservative ρ={UNKNOWN_RHO}")
     if cvar_pct is not None and cvar_pct > DEFAULT_CVAR_TARGET_PCT:
         warnings.append(f"Portfolio CVaR₉₅ {cvar_pct:.2f}% exceeds the "
                         f"{DEFAULT_CVAR_TARGET_PCT}% daily budget")

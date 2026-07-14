@@ -32,6 +32,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
 
+from monte_carlo import TYPICAL_SPREAD
+from pip_utils import pip_size
+
 logger = logging.getLogger("backtester")
 
 
@@ -161,7 +164,13 @@ class BacktestResult:
 class EngineConfig:
     starting_equity: float = 10_000.0
     macro_absorption_ms: int = 1500    # 500-2000ms recommended
-    slippage_pips: float = 0.5         # per fill
+    # iter-142 · Instrument-aware costs. slippage_pips is in the SYMBOL's
+    # own pips (pip_utils.pip_size: XAUUSD 0.10, BTCUSD 1.00, FX 0.0001) —
+    # the old code multiplied by a hard-coded FX 0.0001 for every symbol,
+    # making gold/crypto backtests effectively frictionless.
+    slippage_pips: float = 0.5         # entry slippage per fill, symbol pips
+    stop_slippage_mult: float = 2.0    # stop exits gap worse than entries
+    spread_map: dict = field(default_factory=lambda: dict(TYPICAL_SPREAD))
     contract_size_map: dict = field(default_factory=lambda: {
         "XAUUSD": 100, "BTCUSD": 1, "ETHUSD": 1, "XAGUSD": 5000
     })
@@ -211,6 +220,19 @@ class Engine:
         """Strategy calls this — order will fill at next bar's open."""
         self._pending_orders.append(order)
 
+    # iter-142 · Cost model helpers (bars are treated as MID prices)
+    def _pip(self, symbol: str) -> float:
+        return pip_size(symbol)
+
+    def _half_spread(self, symbol: str) -> float:
+        return self.cfg.spread_map.get((symbol or "").upper(), 0.0) / 2.0
+
+    def _entry_slip(self, symbol: str) -> float:
+        return self.cfg.slippage_pips * self._pip(symbol)
+
+    def _stop_slip(self, symbol: str) -> float:
+        return self._entry_slip(symbol) * self.cfg.stop_slippage_mult
+
     def run(self, bars: Iterable[BarEvent], strategy: StrategyCallback) -> BacktestResult:
         bars_sorted = sorted(bars, key=lambda b: b.ts)
         for bar in bars_sorted:
@@ -236,7 +258,6 @@ class Engine:
             self._visible_macros.append(ev)
 
     def _settle_pending(self, bar: BarEvent) -> None:
-        slip = self.cfg.slippage_pips
         if not self._pending_orders:
             return
         # quant review C4: orders for OTHER symbols must survive until their
@@ -246,11 +267,18 @@ class Engine:
             if o.symbol != bar.symbol:
                 remaining.append(o)
                 continue
+            hs = self._half_spread(bar.symbol)
             if o.action == "CLOSE":
-                if bar.symbol in self.positions:
-                    self._close_position(bar.symbol, bar.open, bar.ts)
+                p = self.positions.get(bar.symbol)
+                if p is not None:
+                    # market close: BUY exits at bid, SELL exits at ask
+                    px = bar.open - hs if p.action == "BUY" else bar.open + hs
+                    self._close_position(bar.symbol, px, bar.ts)
                 continue
-            fill_price = bar.open + (slip * 0.0001 if o.action == "BUY" else -slip * 0.0001)
+            # iter-142 · fill = mid open ± half-spread ± symbol-pip slippage
+            slip = self._entry_slip(o.symbol)
+            fill_price = (bar.open + hs + slip) if o.action == "BUY" \
+                         else (bar.open - hs - slip)
             self.positions[o.symbol] = Position(
                 symbol=o.symbol, action=o.action, lot_size=o.lot_size,
                 entry_price=fill_price, stop_loss=o.stop_loss,
@@ -259,7 +287,7 @@ class Engine:
             self.result.fills.append(FillEvent(
                 ts=bar.ts, symbol=o.symbol, action=o.action,
                 lot_size=o.lot_size, fill_price=fill_price,
-                slippage_pips=slip, note=o.note,
+                slippage_pips=self.cfg.slippage_pips, note=o.note,
             ))
         self._pending_orders = remaining
 
@@ -267,19 +295,29 @@ class Engine:
         p = self.positions.get(bar.symbol)
         if p is None:
             return
+        # iter-142 · Realistic exits: stop orders fill THROUGH the level
+        # (slippage against the trader) and market/stop exits cross the
+        # spread; TP limit orders fill at the level but still pay the
+        # closing side's half-spread.
+        hs = self._half_spread(bar.symbol)
+        stop_slip = self._stop_slip(bar.symbol)
         if p.action == "BUY":
             if p.stop_loss is not None and bar.low <= p.stop_loss:
-                self._close_position(bar.symbol, p.stop_loss, bar.ts, reason="SL")
+                self._close_position(bar.symbol, p.stop_loss - stop_slip - hs,
+                                     bar.ts, reason="SL")
                 return
             if p.take_profit is not None and bar.high >= p.take_profit:
-                self._close_position(bar.symbol, p.take_profit, bar.ts, reason="TP")
+                self._close_position(bar.symbol, p.take_profit - hs,
+                                     bar.ts, reason="TP")
                 return
         else:
             if p.stop_loss is not None and bar.high >= p.stop_loss:
-                self._close_position(bar.symbol, p.stop_loss, bar.ts, reason="SL")
+                self._close_position(bar.symbol, p.stop_loss + stop_slip + hs,
+                                     bar.ts, reason="SL")
                 return
             if p.take_profit is not None and bar.low <= p.take_profit:
-                self._close_position(bar.symbol, p.take_profit, bar.ts, reason="TP")
+                self._close_position(bar.symbol, p.take_profit + hs,
+                                     bar.ts, reason="TP")
                 return
 
     def _mark_to_market(self, bar: BarEvent) -> None:

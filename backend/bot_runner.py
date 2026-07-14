@@ -615,6 +615,36 @@ async def _process_user_account_locked(db, cfg: dict):
                     reason="Analyser pipeline returned no signal (Strategy or Risk agent failed). Check logs.",
                 )
                 continue
+            # iter-142 · Attach the calibrated probability (realized win rate
+            # for this engine + score bucket) so gates and the decision
+            # ledger see an honest p_win, never the raw setup score.
+            if signal.get("action") in ("BUY", "SELL"):
+                try:
+                    from calibration import calibrated_p_win
+                    signal["calibrated_p_win"] = await calibrated_p_win(
+                        db, user_id, signal.get("scope"),
+                        float(signal.get("confidence") or 0))
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("calibrated_p_win lookup failed: %s", e)
+            # iter-142 · Velocity veto re-wired (the iter-53 guardrail was
+            # silently dropped in the orchestrator refactor). Disarmed by
+            # default; fires only when cfg regime_overrides arm it.
+            if signal.get("action") in ("BUY", "SELL"):
+                try:
+                    from regime_adapter import velocity_veto
+                    _vv = velocity_veto(signal, cfg)
+                except Exception as e:  # noqa: BLE001
+                    _vv = None
+                    logger.debug("velocity veto check failed: %s", e)
+                if _vv:
+                    signal["action"] = "HOLD"
+                    signal["tradeable"] = False
+                    signal["veto_applied"] = True
+                    signal["velocity_veto"] = _vv
+                    signal["reasoning"] = f"{_vv} | {signal.get('reasoning') or ''}"
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn", reason=_vv, signal=signal)
+                    continue
             # iter-121 · Scalp Radar — Telegram ping when M15 alignment arms.
             # State keyed per user+symbol, so 5 configs on XAUUSD ping once.
             try:

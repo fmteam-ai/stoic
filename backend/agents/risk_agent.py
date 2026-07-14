@@ -40,15 +40,6 @@ def _pearson(xs: list[float], ys: list[float]) -> float:
     return num / (dx * dy)
 
 
-async def _close_series(symbol: str, n: int) -> list[float]:
-    try:
-        hist = await get_history(symbol)
-    except Exception:
-        return []
-    closes = [c.get("close") for c in (hist or []) if c.get("close") is not None]
-    return list(closes[-n:])
-
-
 class RiskAgent:
     name = "risk"
 
@@ -84,23 +75,27 @@ class RiskAgent:
         if not same_dir_other:
             return {"veto": False, "reason": "", "corr": None, "correlated_with": None}
 
-        sym_closes = await _close_series(sym, self.lookback_bars)
-        if len(sym_closes) < 3:
-            return {"veto": False, "reason": "", "corr": None, "correlated_with": None}
-
+        # iter-142 · Correlation now measured on timestamp-aligned daily
+        # LOG RETURNS (portfolio.var.corr_returns) — raw close levels read
+        # spuriously high whenever both series merely trended. Unknown
+        # correlation (insufficient overlapping history) substitutes the
+        # conservative UNKNOWN_RHO prior rather than assuming independence.
+        from portfolio.var import UNKNOWN_RHO, corr_returns
         for p in same_dir_other:
             other_sym = (p.get("symbol") or "").upper()
-            other_closes = await _close_series(other_sym, self.lookback_bars)
-            if len(other_closes) < 3:
-                continue
-            corr = _pearson(sym_closes, other_closes)
+            corr = await corr_returns(sym, other_sym)
+            unknown = corr is None
+            if unknown:
+                corr = UNKNOWN_RHO
             if abs(corr) >= self.corr_threshold:
+                suffix = (" (assumed — insufficient overlapping return history)"
+                          if unknown else "")
                 return {
                     "veto": True,
                     "reason": (
                         f"Cross-asset correlation r={corr:+.2f} ≥ "
                         f"{self.corr_threshold:+.2f} with open {other_sym} "
-                        f"{action} — blocking same-direction stack."
+                        f"{action} — blocking same-direction stack.{suffix}"
                     ),
                     "corr": round(corr, 3),
                     "correlated_with": other_sym,

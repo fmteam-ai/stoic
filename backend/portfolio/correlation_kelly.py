@@ -34,7 +34,7 @@ import math
 import os
 from typing import Iterable
 
-from portfolio.var import _atr_pct, _close_series, _pearson, ES_MULT_95
+from portfolio.var import _atr_pct, ES_MULT_95, UNKNOWN_RHO, corr_returns
 
 logger = logging.getLogger("portfolio.correlation-kelly")
 
@@ -108,8 +108,9 @@ async def compute_correlation_aware_scale(
         return base
 
     # ── 1) Correlation penalty ────────────────────────────────────────────
-    # Pearson correlation of closes against the new symbol's series.
-    new_series = await _close_series(new_sym)
+    # iter-142 · Timestamp-aligned daily-return correlation; unknown pairs
+    # (insufficient overlapping history) use the conservative UNKNOWN_RHO
+    # prior instead of assuming independence.
     pressure = 0.0
     same_direction_corr_sum = 0.0  # for the reason string only
     pair_count = 0
@@ -124,8 +125,9 @@ async def compute_correlation_aware_scale(
         if sym == new_sym:
             rho = 1.0
         else:
-            other_series = await _close_series(sym)
-            rho = _pearson(new_series, other_series) if (new_series and other_series) else 0.0
+            rho = await corr_returns(new_sym, sym)
+            if rho is None:
+                rho = UNKNOWN_RHO
         # Direction-aware effective correlation:
         #   matching actions → +ρ (same-direction stacking adds risk)
         #   opposing actions → −ρ (a real hedge — clip to zero, no penalty)
@@ -181,13 +183,15 @@ async def compute_correlation_aware_scale(
     for r in rows:
         r["weight"] = r["notional"] / total_notional
 
-    # Pairwise correlation matrix for hypothetical book.
+    # Pairwise correlation matrix for hypothetical book (aligned returns;
+    # unknown pairs → conservative UNKNOWN_RHO).
     unique = sorted(seen_syms)
-    series = {s: await _close_series(s) for s in unique}
     corr_mat: dict[str, dict[str, float]] = {s: {s: 1.0} for s in unique}
     for i, s1 in enumerate(unique):
         for s2 in unique[i + 1:]:
-            c = _pearson(series.get(s1) or [], series.get(s2) or [])
+            c = await corr_returns(s1, s2)
+            if c is None:
+                c = UNKNOWN_RHO
             corr_mat[s1][s2] = c
             corr_mat[s2][s1] = c
 

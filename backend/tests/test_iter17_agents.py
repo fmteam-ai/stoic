@@ -45,12 +45,25 @@ def test_pearson_too_few_samples():
 # ---------------------------------------------------------------------------
 # Cross-asset correlation veto
 # ---------------------------------------------------------------------------
+def _corr_history(n=25):
+    """iter-142: candles with dates + proportional daily returns so the
+    returns-based correlation reads ~1.0 between the two series."""
+    import math as _m
+    rets = [0.01 * _m.sin(i) for i in range(n)]
+    xau, btc, px_a, px_b = [], [], 2000.0, 60000.0
+    for i, r in enumerate(rets):
+        px_a *= (1 + r)
+        px_b *= (1 + r * 2)     # scaled but perfectly correlated returns
+        d = f"2026-05-{(i % 28) + 1:02d}" if i < 28 else f"2026-06-{i - 27:02d}"
+        xau.append({"date": d, "close": px_a})
+        btc.append({"date": d, "close": px_b})
+    return xau, btc
+
+
 def test_cross_asset_veto_fires_on_same_direction_correlated():
     from agents.risk_agent import RiskAgent
     agent = RiskAgent(corr_threshold=0.7, lookback_bars=20)
-
-    xau = [{"close": 2000 + i} for i in range(20)]
-    btc = [{"close": 60000 + i * 30} for i in range(20)]  # near-perfect positive corr
+    xau, btc = _corr_history()
 
     async def fake_history(sym):
         return xau if sym == "XAUUSD" else btc
@@ -58,7 +71,7 @@ def test_cross_asset_veto_fires_on_same_direction_correlated():
     open_positions = [
         {"symbol": "BTCUSD", "action": "BUY", "status": "open"},
     ]
-    with patch("agents.risk_agent.get_history", side_effect=fake_history):
+    with patch("portfolio.var.get_history", side_effect=fake_history):
         out = _arun(agent.cross_asset_correlation_veto(
             "XAUUSD", "BUY", open_positions,
         ))
@@ -96,9 +109,7 @@ def test_cross_asset_veto_passes_when_no_other_positions():
 def test_review_appends_veto_reason_and_flips_to_hold():
     from agents.risk_agent import RiskAgent
     agent = RiskAgent(corr_threshold=0.5, lookback_bars=10)
-
-    xau = [{"close": 2000 + i} for i in range(10)]
-    btc = [{"close": 60000 + i * 30} for i in range(10)]
+    xau, btc = _corr_history()
 
     async def fake_history(sym):
         return xau if sym == "XAUUSD" else btc
@@ -110,7 +121,7 @@ def test_review_appends_veto_reason_and_flips_to_hold():
         "reasoning": "Claude says buy.",
     }
     positions = [{"symbol": "BTCUSD", "action": "BUY", "status": "open"}]
-    with patch("agents.risk_agent.get_history", side_effect=fake_history):
+    with patch("portfolio.var.get_history", side_effect=fake_history):
         out = _arun(agent.review("XAUUSD", signal, positions))
 
     assert out["approved"] is False

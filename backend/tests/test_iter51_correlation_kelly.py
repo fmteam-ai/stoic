@@ -35,10 +35,8 @@ async def test_var_empty_portfolio_includes_cvar_fields():
 async def test_var_single_position_cvar_proportional_to_var(monkeypatch):
     async def fake_atr_pct(symbol):
         return 0.02
-    async def fake_close_series(symbol, n=30):
-        return [100 + i for i in range(n)]
     monkeypatch.setattr("portfolio.var._atr_pct", fake_atr_pct)
-    monkeypatch.setattr("portfolio.var._close_series", fake_close_series)
+    monkeypatch.setattr("portfolio.var.corr_returns", AsyncMock(return_value=0.9))
 
     out = await calculate_var(
         [{"symbol": "BTCUSD", "lot_size": 0.01, "entry_price": 60_000.0, "status": "open"}],
@@ -66,8 +64,8 @@ async def test_same_symbol_stacking_trims(monkeypatch):
     # Same symbol -> ρ=1.0 hard-coded → strong corr_scale trim.
     monkeypatch.setattr("portfolio.correlation_kelly._atr_pct",
                         AsyncMock(return_value=0.02))
-    monkeypatch.setattr("portfolio.correlation_kelly._close_series",
-                        AsyncMock(return_value=[100 + i for i in range(30)]))
+    monkeypatch.setattr("portfolio.correlation_kelly.corr_returns",
+                        AsyncMock(return_value=0.9))
 
     open_book = [{"symbol": "XAUUSD", "action": "BUY", "lot_size": 0.05,
                   "entry_price": 2050.0, "status": "open"}]
@@ -85,8 +83,8 @@ async def test_opposite_direction_is_a_hedge_no_penalty(monkeypatch):
     # New BUY vs existing SELL on positively-correlated symbol → hedge → no trim.
     monkeypatch.setattr("portfolio.correlation_kelly._atr_pct",
                         AsyncMock(return_value=0.01))
-    monkeypatch.setattr("portfolio.correlation_kelly._close_series",
-                        AsyncMock(return_value=[100 + i for i in range(30)]))
+    monkeypatch.setattr("portfolio.correlation_kelly.corr_returns",
+                        AsyncMock(return_value=0.9))
 
     open_book = [{"symbol": "XAUUSD", "action": "SELL", "lot_size": 0.01,
                   "entry_price": 2050.0, "status": "open"}]
@@ -104,8 +102,8 @@ async def test_cvar_overshoot_triggers_trim(monkeypatch):
     # Force a huge ATR so portfolio sigma blows past CVaR target.
     monkeypatch.setattr("portfolio.correlation_kelly._atr_pct",
                         AsyncMock(return_value=0.20))  # 20% daily vol — extreme
-    monkeypatch.setattr("portfolio.correlation_kelly._close_series",
-                        AsyncMock(return_value=[100 + i for i in range(30)]))
+    monkeypatch.setattr("portfolio.correlation_kelly.corr_returns",
+                        AsyncMock(return_value=0.9))
 
     open_book = [{"symbol": "BTCUSD", "action": "BUY", "lot_size": 0.01,
                   "entry_price": 60_000.0, "status": "open"}]
@@ -124,8 +122,8 @@ async def test_combined_scale_clamps_at_min(monkeypatch):
     # Many correlated same-direction positions → corr_pressure huge → scale floors at MIN_SCALE.
     monkeypatch.setattr("portfolio.correlation_kelly._atr_pct",
                         AsyncMock(return_value=0.02))
-    monkeypatch.setattr("portfolio.correlation_kelly._close_series",
-                        AsyncMock(return_value=[100 + i for i in range(30)]))
+    monkeypatch.setattr("portfolio.correlation_kelly.corr_returns",
+                        AsyncMock(return_value=0.9))
 
     open_book = [
         {"symbol": "XAUUSD", "action": "BUY", "lot_size": 1.0,
@@ -144,8 +142,8 @@ async def test_combined_scale_clamps_at_min(monkeypatch):
 async def test_reason_string_describes_trim(monkeypatch):
     monkeypatch.setattr("portfolio.correlation_kelly._atr_pct",
                         AsyncMock(return_value=0.02))
-    monkeypatch.setattr("portfolio.correlation_kelly._close_series",
-                        AsyncMock(return_value=[100 + i for i in range(30)]))
+    monkeypatch.setattr("portfolio.correlation_kelly.corr_returns",
+                        AsyncMock(return_value=0.9))
 
     open_book = [{"symbol": "XAUUSD", "action": "BUY", "lot_size": 0.10,
                   "entry_price": 2050.0, "status": "open"}]

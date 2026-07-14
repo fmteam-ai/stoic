@@ -72,6 +72,46 @@ async def _close_series(symbol: str, n: int = 30) -> list[float]:
         return []
 
 
+# iter-142 · Correlation rebuilt on timestamp-aligned LOG RETURNS.
+# Correlating raw close levels was spurious (two trending series always
+# read ~1) and the old [-n:] truncation silently misaligned dates when one
+# symbol had gaps. Unknown correlation is now explicit: insufficient
+# overlapping history returns None, and risk callers must substitute the
+# CONSERVATIVE prior UNKNOWN_RHO instead of assuming independence (0).
+MIN_OVERLAP = 10
+UNKNOWN_RHO = 0.5
+
+
+async def _returns_by_date(symbol: str, n: int = 60) -> dict:
+    """{iso_date: log_return} from daily candles, newest n entries."""
+    try:
+        hist = await get_history(symbol)
+    except Exception:  # noqa: BLE001
+        return {}
+    rows = [(str(c.get("date")), float(c.get("close") or 0))
+            for c in hist or [] if c.get("date") and c.get("close")]
+    out = {}
+    for (_, c0), (d1, c1) in zip(rows, rows[1:]):
+        if c0 > 0 and c1 > 0:
+            out[d1] = math.log(c1 / c0)
+    keys = sorted(out)[-n:]
+    return {k: out[k] for k in keys}
+
+
+async def corr_returns(sym_a: str, sym_b: str) -> float | None:
+    """Pearson correlation of date-aligned daily log returns.
+    Returns None when overlap < MIN_OVERLAP — the caller decides how to be
+    conservative (risk code substitutes UNKNOWN_RHO)."""
+    a, b = (sym_a or "").upper(), (sym_b or "").upper()
+    if a == b:
+        return 1.0
+    ra, rb = await _returns_by_date(a), await _returns_by_date(b)
+    common = sorted(set(ra) & set(rb))
+    if len(common) < MIN_OVERLAP:
+        return None
+    return _pearson([ra[d] for d in common], [rb[d] for d in common])
+
+
 async def calculate_var(
     open_positions: Iterable[dict],
     *,
@@ -140,15 +180,24 @@ async def calculate_var(
     for r in rows:
         r["weight"] = r["notional"] / total_notional if total_notional > 0 else 0
 
-    # 2. Pairwise correlation matrix from closes
+    # 2. Pairwise correlation matrix from timestamp-aligned daily returns
+    # (iter-142). Unknown pairs get the conservative UNKNOWN_RHO prior.
     unique = sorted(set(symbols))
-    series = {s: await _close_series(s) for s in unique}
+    unknown_pairs: list[str] = []
     corr: dict[str, dict[str, float]] = {s: {s: 1.0} for s in unique}
     for i, s1 in enumerate(unique):
         for s2 in unique[i + 1:]:
-            c = _pearson(series.get(s1) or [], series.get(s2) or [])
+            c = await corr_returns(s1, s2)
+            if c is None:
+                c = UNKNOWN_RHO
+                unknown_pairs.append(f"{s1}/{s2}")
             corr[s1][s2] = round(c, 3)
             corr[s2][s1] = round(c, 3)
+    if unknown_pairs:
+        notes.append(
+            f"Correlation unknown for {', '.join(unknown_pairs)} "
+            f"(insufficient overlapping return history) — assumed "
+            f"conservative ρ={UNKNOWN_RHO}.")
 
     # 3. Portfolio variance = Σ w_i w_j σ_i σ_j ρ_ij
     var = 0.0

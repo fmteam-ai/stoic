@@ -393,7 +393,12 @@ async def analyze_symbol(symbol: str, risk_level: str,
 
     # ---- ENGINE CONFIRMED — build the trade ---------------------------------
     trade_scope = engine
-    confidence = float(adapted_profile["min_confidence"] + 5)
+    # iter-142 · Honest setup score replaces the synthetic min_conf+5 constant.
+    from setup_score import compute_setup_score
+    _ss = compute_setup_score(engine, action, intraday_pack,
+                              mtf_conf=mtf_conf if mtf_mode else None,
+                              entry_style=entry_style)
+    confidence = float(_ss["score"])
     reasoning = f"{engine_label}: {engine_note}"
     key_factors = [engine_label, engine_note[:80]]
 
@@ -570,6 +575,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "min_confidence_required": adapted_profile["min_confidence"],
         "veto_applied": bool(veto_reason) or bool(rr_veto),
         "engine_params": eng_params,
+        "setup_score": _ss,
+        "confidence_basis": _ss["basis"],
         "engine_geometry": None if is_hold else {
             "stop_loss": sl, "take_profit": tp,
             "tp1": tp1, "tp2": tp2, "tp3": tp3,
