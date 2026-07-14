@@ -369,3 +369,11 @@ User asked whether the bot analyzes lost trades. Verified: YES (35 auto post-mor
 - Manual losing trades were auto-post-mortemed and their pattern_keys counted toward guardrail AUTO-TIGHTENING; manual wins counted toward loosening.
 - Fixed in loss_postmortem.py: (1) _is_postmortem_eligible skips manual origins (force=True from Loss Lab UI still analyzes any trade on demand), (2) post-mortem docs stamp origin, (3) _maybe_autotighten counts exclude manual/forced docs, (4) maybe_record_winner ignores manual wins + wins_after query filters origin:auto, (5) consecutive-loss lookback filters origin:auto.
 - Verified live: manual loss → not eligible; bot loss → eligible. 30 post-mortem tests pass.
+
+## Iter-131 (2026-07-14) — CPI incident: calendar timezone bug fixed
+CPI spiked gold ~600 pips at 12:30 UTC. Findings:
+- BOT: zero trades today, zero positions in the spike (gates kept it flat — no losses). User's MANUAL sells got run over (-$700, -$415).
+- BUG: FF feed times are ALREADY UTC ('12:30pm' = real CPI time) but _parse_event_time assumed ET and added +4h → every pre-event guard armed 4h late (16:30). Fixed: parse verbatim UTC; 'All Day' → midnight UTC.
+- Purged 27 event_outcomes docs (outcome labels were classified on the wrong +4h bar window; priors fall back to BASE_PRIORS and relearn).
+- FF feed 429: bot-identifying UA rejected → switched to standard browser UA; module has 10-min failure backoff. Verified live: 98 events, CPI @12:30 UTC ✓, next high-impact (Fed Chair testimony 14:00 UTC) correctly visible to upcoming_for.
+- Tests: test_iter131_calendar_tz.py (5) + 37 calendar/event tests pass.

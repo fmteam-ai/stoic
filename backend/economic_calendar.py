@@ -36,7 +36,7 @@ SYMBOL_CURRENCIES = {
     "NZDUSD":  {"NZD", "USD"},
 }
 
-UA = {"User-Agent": "Mozilla/5.0 (compatible; EmergentTradingBot/1.0)"}
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
 
 # In-memory cache
 _cache = {"events": None, "expires_at": 0}
@@ -54,11 +54,11 @@ def _after_min() -> int:
 def _parse_event_time(date_str: str, time_str: str) -> datetime:
     """Parse Forex Factory format into UTC datetime.
 
-    Date format: '06-22-2026', time format: '8:30am' / 'All Day' / 'Tentative'.
-    All times in the feed are US Eastern Time (ET). We convert to UTC by assuming
-    ET = UTC-4 (EDT, March-Nov) which covers most of the year. A naive but stable
-    approximation — for high-impact events the bot will freeze within a generous
-    window so a ~1h offset is acceptable.
+    Date format: '06-22-2026', time format: '12:30pm' / 'All Day' / 'Tentative'.
+    iter-131 · The feed's times are ALREADY UTC (verified 2026-07-14: feed said
+    12:30pm for US CPI and the actual spike hit 12:30 UTC = 8:30am ET). The old
+    +4h "ET→UTC" shift double-converted, so every pre-event guard armed 4 hours
+    late and the bot had zero calendar protection during the CPI print.
     """
     try:
         dt = datetime.strptime(date_str.strip(), "%m-%d-%Y")
@@ -66,8 +66,8 @@ def _parse_event_time(date_str: str, time_str: str) -> datetime:
         return None
     t = (time_str or "").strip().lower()
     if not t or t in ("all day", "tentative", "day 1", "day 2"):
-        # No specific time → return midnight ET = 04:00 UTC for filtering purposes
-        return dt.replace(hour=4, minute=0, tzinfo=timezone.utc)
+        # No specific time → midnight UTC for filtering purposes
+        return dt.replace(hour=0, minute=0, tzinfo=timezone.utc)
     try:
         # e.g. "8:30am", "12:45pm"
         clean = t.replace(" ", "")
@@ -81,9 +81,7 @@ def _parse_event_time(date_str: str, time_str: str) -> datetime:
             h += 12
         if ap == "am" and h == 12:
             h = 0
-        # Forex Factory feed is US Eastern; add 4h to convert to UTC (EDT approx).
-        utc_dt = dt.replace(hour=h, minute=m, tzinfo=timezone.utc) + timedelta(hours=4)
-        return utc_dt
+        return dt.replace(hour=h, minute=m, tzinfo=timezone.utc)
     except Exception:
         return None
 
