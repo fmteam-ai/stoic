@@ -386,3 +386,12 @@ Fix in strategy_engines.hf_scalp_signal:
 - Replay: 14:22 CPI-day feats now → BUY "trend-day flag". Exhaustion gate still caps ≥85%.
 - tests/test_iter132_trend_day_continuation.py (10 tests); 70 pass with full engine regression.
 RESOLVED: BREAKOUT HUNTER restored on OnEquity (04cf85) via POST /api/bot/preset/breakout, verified dispatching (2026-07-14 18:36).
+
+## Iter-133 (2026-07-14) — Quant review phase-1 corrections (user-provided review, all 5 verified REAL before fixing)
+1. FAIL-CLOSED (C3): orchestrator RiskAgent & ExecutionOptimizer exceptions now force HOLD + tradeable=False + pipeline_safe_to_execute=False; PortfolioAllocator exception → conservative half-size fallback. pipeline_safe_to_execute stamped on every signal.
+2. Kelly DISABLED by default (C1/H4): compute_lot_for_account(kelly_enabled=False default) → fixed fractional risk = profile.risk_pct; re-enable per-account via cfg kelly_enabled. Extreme profile kelly_cap 1.00→0.50. bot_runner + sizing-preview endpoint honor the flag.
+3. Signal-time lot sizing REMOVED (C2): ai_signals no longer calls compute_kelly_position_size (was equity=$1000, price-dist-as-pips, pip_value=1.0); signals carry sizing_deferred=True + 0.01 placeholder; bot_runner compute_lot_for_account is the ONE authoritative stage.
+4. Backtester pending-order retention (C4): orders for other symbols survive until their bar arrives.
+5. Backtester position ledger (C5): positions dict[str, Position] per symbol, per-symbol stops/closes, portfolio mark-to-market via last-known prices; run.py updated.
+6. tests/test_iter133_quant_review.py (16 tests) + fixed stale tests (backend_test kelly caps, iter25c kelly_enabled, iter20 auth fixture terms/verification/bridge_token). 104 tests pass.
+DEFERRED (backlog): H1-H3, H5-H6 (returns-based correlation, data-unavailable=unknown, geometry-aware payoff, min-conf override policy, paper P&L contract spec), B1-B6 (backtest cost realism), A1-A3 (MarketSnapshot, typed stage results, error classification).

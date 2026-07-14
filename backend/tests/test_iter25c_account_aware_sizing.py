@@ -42,11 +42,11 @@ class TestAccountAwareLotSizing:
         out = compute_lot_for_account(
             account={"equity": 25000.0, "account_type": "standard"},
             symbol="XAUUSD", entry_price=4100.0, stop_loss=4115.0,
-            confidence_pct=70.0, profile=HIGH,
+            confidence_pct=70.0, profile=HIGH, kelly_enabled=True,
         )
         # sl_pips = 150, pip_usd = $10/lot, risk_amount = $25K × ~1.9% = ~$483
         # lots = $483 / (150 × $10) = ~0.32
-        assert out["method"] == "kelly_account_aware"
+        assert out["method"] == "kelly"
         assert 0.20 <= out["lot_size"] <= 0.50, out
         assert out["equity"] == 25000.0
         assert out["sl_pips"] == 150.0
@@ -58,7 +58,7 @@ class TestAccountAwareLotSizing:
         out = compute_lot_for_account(
             account={"equity": 25000.0, "account_type": "standard"},
             symbol="XAUUSD", entry_price=4100.0, stop_loss=4115.0,
-            confidence_pct=56.0, profile=HIGH,
+            confidence_pct=56.0, profile=HIGH, kelly_enabled=True,
         )
         # Lower kelly_f at 56% conf → smaller lot
         assert 0.05 <= out["lot_size"] <= 0.25, out
@@ -66,7 +66,7 @@ class TestAccountAwareLotSizing:
         out70 = compute_lot_for_account(
             account={"equity": 25000.0, "account_type": "standard"},
             symbol="XAUUSD", entry_price=4100.0, stop_loss=4115.0,
-            confidence_pct=70.0, profile=HIGH,
+            confidence_pct=70.0, profile=HIGH, kelly_enabled=True,
         )
         assert out["lot_size"] < out70["lot_size"], (out, out70)
 
@@ -104,7 +104,7 @@ class TestAccountAwareLotSizing:
         out = compute_lot_for_account(
             account={"equity": 10000.0, "account_type": "standard"},
             symbol="XAUUSD", entry_price=4100.0, stop_loss=4115.0,
-            confidence_pct=60.0, profile=LOW,
+            confidence_pct=60.0, profile=LOW, kelly_enabled=True,
         )
         assert out["lot_size"] == 0.01
         assert out["kelly_f"] == 0.0

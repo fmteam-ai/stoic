@@ -135,7 +135,17 @@ class Orchestrator:
             })
         except Exception as e:
             logger.exception("RiskAgent failed: %s", e)
+            # FAIL CLOSED (quant review C3): a broken risk check must never
+            # let a trade through unreviewed.
+            if signal:
+                signal["action"] = "HOLD"
+                signal["tradeable"] = False
+                signal["pipeline_safe_to_execute"] = False
+                signal["reasoning"] = (str(signal.get("reasoning") or "") +
+                                       f"\n\nVETO (risk-agent-error): RiskAgent raised "
+                                       f"{type(e).__name__} — fail-closed, forcing HOLD.")
             steps.append({"agent": "risk", "status": "failed", "error": str(e),
+                          "forced_hold": True,
                           "took_ms": int((time.monotonic() - rk_t0) * 1000)})
 
         # 4. Portfolio Allocator — adjust lot_size when warranted
@@ -159,8 +169,19 @@ class Orchestrator:
                 })
             except Exception as e:
                 logger.exception("PortfolioAllocator failed: %s", e)
+                # Conservative fallback (quant review C3): allocator only
+                # shapes size, so halve the proposed lot instead of blocking.
+                try:
+                    cur = float(signal.get("lot_size") or 0)
+                    if cur > 0.01:
+                        signal["lot_size"] = max(round(cur * 0.5, 2), 0.01)
+                        signal["allocator_fallback"] = (
+                            f"allocator error ({type(e).__name__}) — "
+                            f"conservative half-size {cur} → {signal['lot_size']}")
+                except (TypeError, ValueError):
+                    pass
                 steps.append({"agent": "portfolio_allocator", "status": "failed",
-                              "error": str(e),
+                              "error": str(e), "conservative_fallback": True,
                               "took_ms": int((time.monotonic() - pa_t0) * 1000)})
 
         # 5. Execution Optimizer — may defer this tick (caller respects via `final_action`)
@@ -188,9 +209,20 @@ class Orchestrator:
                 })
             except Exception as e:
                 logger.exception("ExecutionOptimizer failed: %s", e)
+                # FAIL CLOSED (quant review C3): execution shaping errors must
+                # not allow a live order to proceed unshaped.
+                signal["action"] = "HOLD"
+                signal["tradeable"] = False
+                signal["pipeline_safe_to_execute"] = False
+                signal["execution_deferred"] = True
+                signal["execution_defer_reason"] = (
+                    f"ExecutionOptimizer raised {type(e).__name__} — fail-closed")
                 steps.append({"agent": "execution_optimizer", "status": "failed",
-                              "error": str(e),
+                              "error": str(e), "forced_hold": True,
                               "took_ms": int((time.monotonic() - eo_t0) * 1000)})
+
+        if signal is not None and "pipeline_safe_to_execute" not in signal:
+            signal["pipeline_safe_to_execute"] = True
 
         duration_ms = int((time.monotonic() - t0) * 1000)
         await self._log({

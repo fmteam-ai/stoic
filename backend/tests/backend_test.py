@@ -745,12 +745,13 @@ class TestComputeKellyPositionSize:
         assert result["kelly_f"] == 0.0
 
     def test_profile_kelly_caps(self):
-        """Iter-4 spec: low=0.25, medium=0.50, high=0.75, extreme=1.00."""
+        """Iter-4 spec, revised iter-133 (quant review H4): full Kelly on
+        uncalibrated confidence is over-betting — extreme capped at 0.50."""
         from risk import PROFILES
         assert PROFILES["low"]["kelly_cap"] == 0.25
         assert PROFILES["medium"]["kelly_cap"] == 0.50
         assert PROFILES["high"]["kelly_cap"] == 0.75
-        assert PROFILES["extreme"]["kelly_cap"] == 1.00
+        assert PROFILES["extreme"]["kelly_cap"] == 0.50
 
 
 # ---------- Regime classifier (pure function) ----------

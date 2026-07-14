@@ -1431,6 +1431,11 @@ async def _process_user_account_locked(db, cfg: dict):
         if rcap:
             profile = {**profile,
                        "risk_pct": min(float(profile.get("risk_pct") or 0), float(rcap))}
+        # iter-133 · Kelly disabled by default (quant review C1): engine
+        # confidence is a setup score, not a calibrated probability. Fixed
+        # fractional risk until calibration diagnostics exist. Re-enable
+        # per-account via cfg `kelly_enabled: true`.
+        _kelly_on = bool(cfg.get("kelly_enabled", False))
         sized = compute_lot_for_account(
             account=target_account,
             symbol=signal["symbol"],
@@ -1439,6 +1444,7 @@ async def _process_user_account_locked(db, cfg: dict):
             confidence_pct=float(signal.get("confidence") or 0),
             profile=profile,
             locked_profit=locked,
+            kelly_enabled=_kelly_on,
         )
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)
@@ -1451,7 +1457,7 @@ async def _process_user_account_locked(db, cfg: dict):
         # and not the maximum on every trade" — low-confidence signals get
         # proportionally smaller lots, high-confidence signals approach the cap.
         # When max_lot_size is 0 (unset), fall back to absolute Kelly sizing.
-        if max_lot_cap > 0 and kelly_cap > 0:
+        if _kelly_on and max_lot_cap > 0 and kelly_cap > 0:
             conf_scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
             scaled_lot = max(round(max_lot_cap * conf_scale, 2), 0.01)
             # Pick the smaller of: absolute Kelly lot vs confidence-scaled cap.
@@ -1459,10 +1465,10 @@ async def _process_user_account_locked(db, cfg: dict):
             sizing_method = "max_cap_kelly_scaled"
         else:
             effective_lot = absolute_lot
-            # Legacy hard-ceiling clamp (no scaling — only when kelly_cap=0)
+            # Hard-ceiling clamp (fixed-fraction mode or kelly_cap=0)
             if max_lot_cap > 0 and effective_lot > max_lot_cap:
                 effective_lot = max_lot_cap
-            sizing_method = "absolute_kelly"
+            sizing_method = sized.get("method") or "absolute_kelly"
 
         logger.info(
             "Lot sized acct=%s sym=%s equity=$%s conf=%s%% kelly_f=%s "

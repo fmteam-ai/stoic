@@ -31,8 +31,23 @@ ADMIN_PASSWORD = "admin123"
 def _register(email, password):
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/register",
-               json={"email": email, "password": password, "name": "iter20"}, timeout=15)
+               json={"email": email, "password": password, "name": "iter20",
+                     "terms_agreed": True}, timeout=15)
     assert r.status_code in (200, 201), f"Register failed: {r.status_code} {r.text}"
+    # newer auth flow requires email verification — mark verified directly
+    import asyncio as _aio
+    from dotenv import load_dotenv as _ld
+    _ld(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+
+    async def _verify():
+        cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        await cli[os.environ["DB_NAME"]].users.update_one(
+            {"email": email.lower()}, {"$set": {"email_verified": True}})
+        cli.close()
+    _aio.new_event_loop().run_until_complete(_verify())
+    r2 = s.post(f"{BASE_URL}/api/auth/login",
+                json={"email": email, "password": password}, timeout=15)
+    assert r2.status_code == 200, f"Login failed: {r2.status_code} {r2.text}"
     return s
 
 
@@ -333,7 +348,9 @@ async def test_apply_suggestion_user_isolation(user_a, user_b, db):
     uid_b = _me_id(s_b)
 
     # Create a real account doc owned by B (ObjectId format)
-    b_acct = await db.accounts.insert_one({"user_id": uid_b, "name": "B-acct"})
+    b_acct = await db.accounts.insert_one(
+        {"user_id": uid_b, "name": "B-acct",
+         "bridge_token": f"test-{uuid.uuid4().hex}"})
     b_acct_id = str(b_acct.inserted_id)
     await _set_cfg(db, uid_b, b_acct_id, {"risk_level": "high"})
 

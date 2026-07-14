@@ -18,7 +18,7 @@ logger = logging.getLogger("ai_signals")
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 from market import get_quote, get_history, compute_indicators, asset_type_of
-from risk import get_profile, compute_kelly_position_size
+from risk import get_profile
 from news import score_sentiment
 from microstructure import current_session, session_bias_for, classify_regime, is_market_closed
 from economic_calendar import macro_freeze_check, upcoming_for
@@ -494,23 +494,15 @@ async def analyze_symbol(symbol: str, risk_level: str,
                    f"Expected value too low — trade vetoed.")
         final_action = "HOLD"
 
-    # Kelly-modified position sizing — regime-adapted profile.
-    # HF scalps are capped at SCALP_RISK_PCT_CAP per trade (enforced again
-    # at execution time in bot_runner via `risk_pct_cap`).
-    sizing_profile = adapted_profile
-    risk_pct_cap = None
-    if engine in SCALP_ENGINES:
-        risk_pct_cap = SCALP_RISK_PCT_CAP
-        sizing_profile = {**adapted_profile,
-                          "risk_pct": min(float(adapted_profile.get("risk_pct") or 0),
-                                          SCALP_RISK_PCT_CAP)}
-    sizing = compute_kelly_position_size(
-        equity=1000.0,
-        confidence_pct=confidence,
-        sl_pips=sl_dist,
-        profile=sizing_profile,
-        pip_value=1.0,
-    )
+    # iter-133 · Signal-time lot sizing REMOVED (quant review C2): it used a
+    # hardcoded $1000 equity, a PRICE distance under the `sl_pips` parameter
+    # and pip_value=1.0 — orders of magnitude wrong depending on symbol. The
+    # single authoritative sizing stage is compute_lot_for_account() in
+    # bot_runner, immediately before order submission, using the target
+    # account's real equity and per-symbol pip values.
+    risk_pct_cap = SCALP_RISK_PCT_CAP if engine in SCALP_ENGINES else None
+    sizing = {"lot_size": 0.01, "kelly_f": 0.0, "effective_risk_pct": 0.0,
+              "risk_amount": 0.0, "sizing_deferred": True}
 
     if veto_reason:
         reasoning = f"{reasoning}\n\nVETO (news): {veto_reason}"

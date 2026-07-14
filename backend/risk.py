@@ -15,8 +15,10 @@ PROFILES = {
     "high":    {"label": "High",    "risk_pct": 2.5, "sl_atr_mult": 1.2, "tp_atr_mult": 3.0,
                 "min_confidence": 55, "max_concurrent": 4, "leverage_cap": 100, "kelly_cap": 0.75},
     "extreme": {"label": "Extreme", "risk_pct": 5.0, "sl_atr_mult": 1.0, "tp_atr_mult": 4.0,
-                "min_confidence": 45, "max_concurrent": 6, "leverage_cap": 500, "kelly_cap": 1.00},
+                "min_confidence": 45, "max_concurrent": 6, "leverage_cap": 500, "kelly_cap": 0.50},
 }
+# quant review H4: full Kelly (1.00) on uncalibrated confidence is pathological
+# over-betting — extreme profile capped at half-Kelly.
 
 
 def get_profile(level: str) -> dict:
@@ -98,8 +100,15 @@ def derive_sl_tp(action: str, entry: float, atr: float, profile: dict) -> tuple:
 
 def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                             stop_loss: float, confidence_pct: float,
-                            profile: dict, locked_profit: float = 0.0) -> dict:
-    """Account-aware Kelly position sizing — runs at execute time.
+                            profile: dict, locked_profit: float = 0.0,
+                            kelly_enabled: bool = False) -> dict:
+    """Account-aware position sizing — the ONE authoritative stage, run at
+    execute time (quant review C1/C2).
+
+    kelly_enabled=False (default): fixed fractional risk = profile.risk_pct.
+    Kelly stays disabled until confidence values are genuinely calibrated
+    probabilities — the engine confidence is a synthetic setup score, not a
+    p_win, so treating it as one distorts sizing.
 
     Uses the broker's real equity (not a hardcoded $1000), converts the SL
     price distance to pips via the symbol's pip size, and applies the proper
@@ -146,20 +155,23 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         profile_kelly_cap=profile["kelly_cap"],
         payoff_ratio=payoff_ratio,
     )
-    if profile["kelly_cap"] > 0:
+    if kelly_enabled and profile["kelly_cap"] > 0:
         effective_risk_pct = profile["risk_pct"] * (f / profile["kelly_cap"])
+        method = "kelly"
     else:
-        effective_risk_pct = 0.0
+        # Fixed fractional risk — Kelly disabled until calibration exists.
+        effective_risk_pct = float(profile["risk_pct"])
+        method = "fixed_fraction"
     risk_amount_usd = equity * (effective_risk_pct / 100.0)
     lots = risk_amount_usd / (sl_pips * pip_usd)
     return {
         "lot_size": max(round(lots, 2), 0.01),
         "risk_amount_usd": round(risk_amount_usd, 2),
         "kelly_f": round(f, 4),
+        "method": method,
         "effective_risk_pct": round(effective_risk_pct, 3),
         "sl_pips": round(sl_pips, 1),
         "pip_usd_per_lot": round(pip_usd, 4),
         "equity": round(equity, 2),
-        "method": "kelly_account_aware",
     }
 

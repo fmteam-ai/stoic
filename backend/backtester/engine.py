@@ -183,7 +183,11 @@ class Engine:
         self.cfg = cfg or EngineConfig()
         self.equity = self.cfg.starting_equity
         self.peak = self.equity
-        self.position: Optional[Position] = None
+        # quant review C5: a single global position could not model a
+        # multi-asset portfolio — new fills silently overwrote positions in
+        # other symbols. One position per symbol, keyed by symbol.
+        self.positions: dict[str, Position] = {}
+        self._last_px: dict[str, float] = {}
         self.result = BacktestResult()
         self.result.equity_curve.append((datetime.now(timezone.utc), self.equity))
         # macro queue: (visible_at, monotonic_seq, event) — heapq min-heap
@@ -235,14 +239,19 @@ class Engine:
         slip = self.cfg.slippage_pips
         if not self._pending_orders:
             return
+        # quant review C4: orders for OTHER symbols must survive until their
+        # own symbol's next bar arrives (the old code cleared the whole list).
+        remaining: list[OrderEvent] = []
         for o in self._pending_orders:
             if o.symbol != bar.symbol:
+                remaining.append(o)
                 continue
-            if o.action == "CLOSE" and self.position is not None:
-                self._close_position(bar.open, bar.ts)
+            if o.action == "CLOSE":
+                if bar.symbol in self.positions:
+                    self._close_position(bar.symbol, bar.open, bar.ts)
                 continue
             fill_price = bar.open + (slip * 0.0001 if o.action == "BUY" else -slip * 0.0001)
-            self.position = Position(
+            self.positions[o.symbol] = Position(
                 symbol=o.symbol, action=o.action, lot_size=o.lot_size,
                 entry_price=fill_price, stop_loss=o.stop_loss,
                 take_profit=o.take_profit, opened_at=bar.ts,
@@ -252,42 +261,44 @@ class Engine:
                 lot_size=o.lot_size, fill_price=fill_price,
                 slippage_pips=slip, note=o.note,
             ))
-        self._pending_orders.clear()
+        self._pending_orders = remaining
 
     def _check_stops(self, bar: BarEvent) -> None:
-        p = self.position
+        p = self.positions.get(bar.symbol)
         if p is None:
             return
         if p.action == "BUY":
             if p.stop_loss is not None and bar.low <= p.stop_loss:
-                self._close_position(p.stop_loss, bar.ts, reason="SL")
+                self._close_position(bar.symbol, p.stop_loss, bar.ts, reason="SL")
                 return
             if p.take_profit is not None and bar.high >= p.take_profit:
-                self._close_position(p.take_profit, bar.ts, reason="TP")
+                self._close_position(bar.symbol, p.take_profit, bar.ts, reason="TP")
                 return
         else:
             if p.stop_loss is not None and bar.high >= p.stop_loss:
-                self._close_position(p.stop_loss, bar.ts, reason="SL")
+                self._close_position(bar.symbol, p.stop_loss, bar.ts, reason="SL")
                 return
             if p.take_profit is not None and bar.low <= p.take_profit:
-                self._close_position(p.take_profit, bar.ts, reason="TP")
+                self._close_position(bar.symbol, p.take_profit, bar.ts, reason="TP")
                 return
 
     def _mark_to_market(self, bar: BarEvent) -> None:
-        p = self.position
+        self._last_px[bar.symbol] = bar.close
         unreal = 0.0
-        if p is not None:
+        for p in self.positions.values():
             cs = self.cfg.contract_size_map.get(p.symbol, 1)
-            diff = (bar.close - p.entry_price) if p.action == "BUY" else (p.entry_price - bar.close)
-            unreal = diff * p.lot_size * cs
+            px = self._last_px.get(p.symbol, p.entry_price)
+            diff = (px - p.entry_price) if p.action == "BUY" else (p.entry_price - px)
+            unreal += diff * p.lot_size * cs
         marked = self.equity + unreal
         self.peak = max(self.peak, marked)
         dd = (self.peak - marked) / self.peak * 100 if self.peak else 0.0
         self.result.max_drawdown = max(self.result.max_drawdown, dd)
         self.result.equity_curve.append((bar.ts, marked))
 
-    def _close_position(self, exit_price: float, ts: datetime, reason: str = "MANUAL") -> None:
-        p = self.position
+    def _close_position(self, symbol: str, exit_price: float, ts: datetime,
+                        reason: str = "MANUAL") -> None:
+        p = self.positions.get(symbol)
         if p is None:
             return
         cs = self.cfg.contract_size_map.get(p.symbol, 1)
@@ -306,4 +317,4 @@ class Engine:
             fill_price=exit_price, slippage_pips=0.0,
             note=f"close_reason={reason} pnl={pnl:.2f}",
         ))
-        self.position = None
+        del self.positions[symbol]

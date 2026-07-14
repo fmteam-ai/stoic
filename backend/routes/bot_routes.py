@@ -188,6 +188,7 @@ async def sizing_preview(
     cfg = await _get_or_create_config(db, user["id"], account_id)
     profile = get_profile(cfg.get("risk_level", "medium"))
     max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
+    kelly_on = bool(cfg.get("kelly_enabled", False))
 
     # Realistic SL distances per symbol — matches the typical ATR-derived SL
     # the bot uses live. Keeps the preview honest without faking the calc.
@@ -205,11 +206,12 @@ async def sizing_preview(
             account=acct, symbol=symbol,
             entry_price=entry, stop_loss=sl,
             confidence_pct=float(conf), profile=profile,
+            kelly_enabled=kelly_on,
         )
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)
         absolute_lot = float(sized["lot_size"])
-        if max_lot_cap > 0 and kelly_cap > 0:
+        if kelly_on and max_lot_cap > 0 and kelly_cap > 0:
             scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
             scaled = max(round(max_lot_cap * scale, 2), 0.01)
             effective = min(absolute_lot, scaled)

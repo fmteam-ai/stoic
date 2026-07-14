@@ -79,7 +79,7 @@ def _build_strategy(bars: list[BarEvent], velocity_threshold: float):
         k = by_idx[id(bar)]
         velocity = k["k_velocity"]
         # If already in position, hold (SL/TP exits handled by engine).
-        if engine.position is not None:
+        if bar.symbol in engine.positions:
             return []
         atr = _atr(bars, i, period=14)
         if atr <= 0:
