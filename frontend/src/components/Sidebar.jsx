@@ -9,7 +9,7 @@ import {
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers,
-    FileText, ShieldAlert, DatabaseBackup,
+    FileText, ShieldAlert, DatabaseBackup, Trophy,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -40,6 +40,7 @@ const SECTIONS = [
             { to: "/bot-health", label: "Bot Health", icon: Stethoscope, testid: "nav-bot-health" },
             { to: "/analytics", label: "Analytics", icon: BarChart3, testid: "nav-analytics" },
             { to: "/loss-lab", label: "Loss Lab", icon: FlaskConical, testid: "nav-loss-lab" },
+            { to: "/scoreboard", label: "Scoreboard", icon: Trophy, testid: "nav-scoreboard" },
             { to: "/shadow-performance", label: "Shadow Report", icon: Eye, testid: "nav-shadow" },
         ],
     },

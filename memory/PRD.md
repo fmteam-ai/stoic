@@ -402,3 +402,9 @@ DEFERRED (backlog): H1-H3, H5-H6 (returns-based correlation, data-unavailable=un
 3. Cost-aware EV (#4): monte_carlo simulate_trade(cost_price) → cost_r, ev_r_net; mc_gate vetoes on NET EV; typical_cost() per-symbol spread table × 1.5 slippage buffer; bot_runner passes cost.
 4. Invariant/property tests (#14): test_iter134_decision_ledger.py — 600+ randomized sizing checks (lot>0, wider stop never bigger, risk ≤ profile cap, kelly ≤ fixed fraction), cost-EV gate, ledger wiring, version stamps. 63 tests pass.
 Already-covered roadmap items verified: #3 #5 #7 #11 #12 #13 #17 largely exist. Remaining backlog: #9 scoreboard/attribution, #15/#16 ablation, #8/#18 promotion criteria, #1 layer separation, #10 central allocator (partial: portfolio_allocator exists).
+
+## Iter-135 (2026-07-14) — Strategy Scoreboard (roadmap #9) DONE
+- Backend GET /api/trades/scoreboard?days=7|30|90|0: per-engine attribution from closed auto trades (scope stamped iter-133; older trades backfilled via signal_id→signals.scope lookup) — W/L, win rate, P&L, profit factor, avg win/loss, long/short split, per-symbol chips, strategy version; plus decision-funnel gate counts from trade_decisions ledger.
+- Frontend /scoreboard page (Scoreboard.jsx) + Sidebar INSIGHTS nav (Trophy icon, nav-scoreboard): engine cards with verdict badges (EARNING pf≥1.2&pnl>0 / MARGINAL / BLEEDING / SAMPLE TOO SMALL <3 trades), period pills, decision-funnel bars (which gate does the work + executed count).
+- Verified: curl (5 engines, real attribution: range_fade pf 2.53 earning; hf_scalp bleeding) + screenshot (rows render, 7D filter works, nav active). 406 older trades show "unattributed" (pre-scope era) — all future trades attributed.
+Remaining backlog: ablation runs (#16), promotion criteria (#18), research/prod separation (#1), production deployment.

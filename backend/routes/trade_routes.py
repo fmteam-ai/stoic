@@ -115,6 +115,87 @@ def _aggregate_stats(closed: list) -> dict:
     }
 
 
+@router.get("/scoreboard")
+async def strategy_scoreboard(days: int = 30, user=Depends(get_current_user)):
+    """iter-135 · Per-engine attribution (quant roadmap #9): W/L, profit
+    factor, long/short split and version per engine persona, plus the
+    decision-funnel gate counts from the ledger."""
+    db = get_db()
+    q = {"user_id": user["id"], "status": "closed", "origin": "auto",
+         "pnl": {"$ne": None}}
+    if days > 0:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        q["closed_at"] = {"$gte": since}
+    trades = await db.trades.find(q).to_list(3000)
+
+    # Backfill engine scope from the originating signal for pre-iter-133 trades
+    missing = [t["signal_id"] for t in trades if not t.get("scope") and t.get("signal_id")]
+    sig_scope = {}
+    if missing:
+        oids = []
+        for s in set(missing):
+            try:
+                oids.append(ObjectId(s))
+            except Exception:
+                pass
+        async for s in db.signals.find({"_id": {"$in": oids}}, {"scope": 1}):
+            sig_scope[str(s["_id"])] = s.get("scope")
+
+    rows = {}
+    for t in trades:
+        scope = t.get("scope") or sig_scope.get(str(t.get("signal_id"))) or "unattributed"
+        r = rows.setdefault(scope, {
+            "engine": scope, "trades": 0, "wins": 0, "losses": 0,
+            "pnl": 0.0, "gross_win": 0.0, "gross_loss": 0.0,
+            "long_pnl": 0.0, "short_pnl": 0.0, "symbols": {}, "version": None})
+        pnl = float(t.get("pnl") or 0)
+        r["trades"] += 1
+        r["pnl"] += pnl
+        if pnl > 0:
+            r["wins"] += 1
+            r["gross_win"] += pnl
+        elif pnl < 0:
+            r["losses"] += 1
+            r["gross_loss"] += -pnl
+        if (t.get("action") or "").upper() == "BUY":
+            r["long_pnl"] += pnl
+        else:
+            r["short_pnl"] += pnl
+        sym = t.get("symbol") or "?"
+        r["symbols"][sym] = round(r["symbols"].get(sym, 0.0) + pnl, 2)
+        v = (t.get("versions") or {}).get("strategy_version")
+        if v:
+            r["version"] = v
+
+    out = []
+    for r in rows.values():
+        decided = r["wins"] + r["losses"]
+        r["win_rate"] = round(r["wins"] / decided * 100, 1) if decided else 0.0
+        r["profit_factor"] = (round(r["gross_win"] / r["gross_loss"], 2)
+                              if r["gross_loss"] > 0 else None)
+        r["avg_win"] = round(r["gross_win"] / r["wins"], 2) if r["wins"] else 0.0
+        r["avg_loss"] = round(r["gross_loss"] / r["losses"], 2) if r["losses"] else 0.0
+        for k in ("pnl", "gross_win", "gross_loss", "long_pnl", "short_pnl"):
+            r[k] = round(r[k], 2)
+        out.append(r)
+    out.sort(key=lambda x: -x["pnl"])
+
+    # Decision funnel from the permanent ledger
+    dq = {"user_id": user["id"]}
+    if days > 0:
+        dq["ts"] = {"$gte": since}
+    pipeline = [{"$match": dq},
+                {"$group": {"_id": {"stage": "$stage", "status": "$status"},
+                            "n": {"$sum": 1}}}]
+    funnel = []
+    async for g in db.trade_decisions.aggregate(pipeline):
+        funnel.append({"stage": g["_id"]["stage"], "status": g["_id"]["status"],
+                       "count": g["n"]})
+    funnel.sort(key=lambda x: -x["count"])
+    return {"days": days, "engines": out, "funnel": funnel,
+            "total_pnl": round(sum(r["pnl"] for r in out), 2)}
+
+
 @router.get("/decisions")
 async def list_trade_decisions(limit: int = 100, symbol: str = None,
                                status: str = None, stage: str = None,
