@@ -121,6 +121,15 @@ async def evaluate_user_models(db, user_id: str) -> list:
                     "challenger_state", "baseline_state",
                     "evaluated_until_t", "last_evaluated_at")}})
         m["promotion"] = promotion_status(m)
+        if m["promotion"]["ready"] and not m.get("ready_notified"):
+            try:
+                from notifier import notify_shadow_ready
+                await notify_shadow_ready(user_id, m)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("shadow-ready alert failed: %s", e)
+            await db.shadow_models.update_one(
+                {"_id": m["_id"]}, {"$set": {"ready_notified": True}})
+            m["ready_notified"] = True
         m["_id"] = str(m["_id"])
         out.append(m)
     return out

@@ -357,6 +357,24 @@ async def notify_pre_news_close(user_id: str, trade_id: str, symbol: str, event_
         ])
 
 
+async def notify_shadow_ready(user_id: str, model: dict) -> None:
+    """iter-141 · A shadow challenger passed every promotion gate."""
+    ch = model.get("challenger_state") or {}
+    bl = model.get("baseline_state") or {}
+    pf = (model.get("promotion") or {}).get("profit_factor")
+    await send_telegram(user_id, "shadow_ready",
+                        "🧪 Shadow Challenger Ready for Promotion", [
+        f"{model.get('engine')} on {model.get('symbol')}",
+        f"Version: {model.get('version')}",
+        (f"Shadow record: {ch.get('trades', 0)} trades · "
+         f"{ch.get('wins', 0)}W/{ch.get('losses', 0)}L · "
+         f"{ch.get('total_r', 0):+.1f}R"),
+        f"Production baseline: {bl.get('total_r', 0):+.1f}R over the same window",
+        f"Profit factor: {pf}",
+        "All promotion gates passed — open Scoreboard → Shadow Lab to approve.",
+    ])
+
+
 async def notify_auto_guard(user_id: str, action: str, items: list) -> None:
     """iter-55 · Daily Auto-Learning — guard applied / auto-reverted."""
     applied = action == "applied"

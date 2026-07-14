@@ -66,7 +66,7 @@ export function TuningPanel() {
 
     return (
         <Panel title="BAYESIAN TUNING · GP-EI PARAMETER SEARCH" icon={FlaskConical} testid="tuning-panel"
-            subtitle="Walk-forward replay of real M15 bars — proposals are advisory and must survive the Shadow Lab before touching live config.">
+            subtitle="Walk-forward replay of real M15 bars — runs automatically every night for your active engines; promising results are queued straight into the Shadow Lab. Proposals never touch live config without shadow proof.">
             <div className="flex flex-wrap items-center gap-2 mb-3">
                 <select value={engine} onChange={(e) => setEngine(e.target.value)} data-testid="tuning-engine-select"
                     className={`${mono10} bg-[#111111] border border-[#1F1F1F] text-white px-2 py-1.5`}>
@@ -115,13 +115,40 @@ export function TuningPanel() {
 
 export function AllocatorPanel() {
     const [data, setData] = useState(null);
-    useEffect(() => {
+    const load = useCallback(() => {
         api.get("/quant/allocator").then(({ data }) => setData(data)).catch(() => {});
     }, []);
+    useEffect(() => { load(); }, [load]);
+
+    const setMode = async (mode) => {
+        if (mode === "enforce" && !window.confirm("ENFORCE mode: proven-loser engines get their lot sizes cut automatically (down to 0.25×). Continue?")) return;
+        try {
+            const { data: res } = await api.post("/quant/allocator/mode", { mode });
+            toast.success(`Allocator mode → ${res.mode.toUpperCase()} (${res.configs_updated} bot config(s))`);
+            load();
+        } catch (e) { toast.error(formatApiError(e)); }
+    };
+
     const rows = data?.allocations || [];
+    const mode = data?.mode || "advisory";
     return (
         <Panel title="RL CAPITAL ALLOCATOR · WHO DESERVES THE BUDGET" icon={Scale} testid="allocator-panel"
-            subtitle={`Shrink-only capital weights from P(edge>0) over the last ${data?.params?.lookback_days ?? 60} days · mode: ${(data?.mode || "advisory").toUpperCase()}`}>
+            subtitle={`Shrink-only capital weights from P(edge>0) over the last ${data?.params?.lookback_days ?? 60} days`}>
+            <div className="flex items-center gap-2 mb-3" data-testid="allocator-mode-row">
+                <span className={`${mono10} text-[#52525B] tracking-widest`}>MODE</span>
+                {["off", "advisory", "enforce"].map((m) => (
+                    <button key={m} onClick={() => setMode(m)} data-testid={`allocator-mode-${m}`}
+                        className={`${mono10} tracking-widest px-2.5 py-1 border transition-colors ${
+                            mode === m
+                                ? (m === "enforce" ? "border-[#FF3B30] text-[#FF3B30]" : "border-[#00FF41] text-[#00FF41]")
+                                : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]"}`}>
+                        {m.toUpperCase()}
+                    </button>
+                ))}
+                {mode === "enforce" && (
+                    <span className={`${mono10} text-[#FF3B30]`}>· weights below 1.0× actively cut lot sizes</span>
+                )}
+            </div>
             {rows.length ? rows.map((a) => (
                 <div key={a.scope} className="flex flex-wrap items-center gap-3 py-1.5 border-t border-[#141414]" data-testid={`allocator-${a.scope}`}>
                     <div className={`w-36 ${mono10} text-[#A1A1AA] truncate`}>{a.scope}</div>

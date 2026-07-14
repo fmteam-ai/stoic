@@ -62,6 +62,24 @@ async def allocator_weights(user=Depends(get_current_user)):
     }
 
 
+class AllocatorModeRequest(BaseModel):
+    mode: str
+
+
+@router.post("/allocator/mode")
+async def set_allocator_mode(req: AllocatorModeRequest,
+                             user=Depends(get_current_user)):
+    mode = str(req.mode or "").lower()
+    if mode not in ("off", "advisory", "enforce"):
+        raise HTTPException(status_code=422,
+                            detail="mode must be off, advisory or enforce")
+    db = get_db()
+    res = await db.bot_configs.update_many(
+        {"user_id": user["id"], "active": True},
+        {"$set": {"rl_allocator_mode": mode}})
+    return {"mode": mode, "configs_updated": res.modified_count}
+
+
 @router.get("/portfolio-optimization")
 async def portfolio_optimization(user=Depends(get_current_user)):
     from portfolio.optimizer import optimization_report
