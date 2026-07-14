@@ -126,6 +126,7 @@ async def _record_pulse(
     db, cfg: dict, *,
     action: str, reason: str, level: str = "info",
     symbol: str | None = None, next_eligible_at=None,
+    signal: dict | None = None,
 ):
     """Persist the latest bot-cycle verdict on the cfg doc.
 
@@ -161,6 +162,15 @@ async def _record_pulse(
             {"_id": cfg["_id"]},
             {"$set": update},
         )
+        # iter-134 · Permanent decision ledger: every non-routine rejection
+        # becomes an immutable audit record (the pulse above is overwritten
+        # each cycle — the ledger never is).
+        if action in ("SKIP", "BLOCKED") and not is_routine:
+            from trade_decisions import record_decision, infer_stage
+            await record_decision(
+                db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "",
+                status="rejected", stage=infer_stage(reason), reason=reason,
+                cfg=cfg, signal=signal)
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist pulse cfg=%s: %s", cfg.get("_id"), e)
 
@@ -773,14 +783,16 @@ async def _process_user_account_locked(db, cfg: dict):
                     stg = session_trend_gate(signal["action"], _feats, _base)
                     if stg:
                         await _record_pulse(db, cfg, symbol=sym,
-                            action="SKIP", level="warn", reason=stg)
+                            action="SKIP", level="warn", reason=stg,
+                            signal=signal)
                         await inc_intel_counter(user_id, "session_trend_veto")
                         continue
                 if cfg.get("exhaustion_gate_enabled", True):
                     exg = exhaustion_chase_gate(signal["action"], _feats, _base)
                     if exg:
                         await _record_pulse(db, cfg, symbol=sym,
-                            action="SKIP", level="warn", reason=exg)
+                            action="SKIP", level="warn", reason=exg,
+                            signal=signal)
                         await inc_intel_counter(user_id, "exhaustion_chase_veto")
                         continue
                 if cfg.get("trend_ride_enabled", True):
@@ -892,7 +904,8 @@ async def _process_user_account_locked(db, cfg: dict):
                                     or "enforce").lower()
                     if news_mode == "enforce" and not _det_scope:
                         await _record_pulse(db, cfg, symbol=sym,
-                            action="SKIP", level="warn", reason=ng)
+                            action="SKIP", level="warn", reason=ng,
+                            signal=signal)
                         await inc_intel_counter(user_id, "news_gate_veto")
                         continue
                     signal["news_ai_advisory"] = ng
@@ -1159,7 +1172,7 @@ async def _process_user_account_locked(db, cfg: dict):
         if signal.get("action") in ("BUY", "SELL"):
             mc = None
             try:
-                from monte_carlo import simulate_trade, mc_gate
+                from monte_carlo import simulate_trade, mc_gate, typical_cost
                 from pip_utils import base_symbol as _bs_mc
                 _cdoc_mc = await db.intraday_candles.find_one(
                     {"user_id": user_id, "symbol": _bs_mc(sym)}, {"bars": 1})
@@ -1179,7 +1192,8 @@ async def _process_user_account_locked(db, cfg: dict):
                     _sl_mc,
                     _tp_mc,
                     (_cdoc_mc or {}).get("bars") or [],
-                    n_paths=int(cfg.get("monte_carlo_paths") or 10000))
+                    n_paths=int(cfg.get("monte_carlo_paths") or 10000),
+                    cost_price=typical_cost(_bs_mc(sym), _entry_mc))
             except Exception as e:  # noqa: BLE001
                 logger.debug("monte carlo skipped: %s", e)
             if mc:
@@ -1193,7 +1207,8 @@ async def _process_user_account_locked(db, cfg: dict):
                     # mean-reversion; fade entries get advisory treatment
                     if mc_mode == "enforce" and signal.get("entry_style") != "fade":
                         await _record_pulse(db, cfg, symbol=sym,
-                            action="SKIP", level="warn", reason=mg)
+                            action="SKIP", level="warn", reason=mg,
+                            signal=signal)
                         await inc_intel_counter(user_id, "mc_block")
                         continue
                     signal["monte_carlo_advisory"] = mg
@@ -1690,6 +1705,7 @@ async def _process_user_account_locked(db, cfg: dict):
             logger.debug("std risk clamp skipped: %s", e)
 
         engine = engine_for_account(target_account)
+        from versioning import version_stamp
         trade_doc = await engine.execute(
             user_id=user_id,
             account=target_account,
@@ -1702,6 +1718,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 "stop_loss": signal["stop_loss"],
                 "take_profit": signal["take_profit"],
                 "origin": "auto",
+                "scope": signal.get("scope"),
+                "trend_ride": signal.get("trend_ride"),
+                "versions": version_stamp(signal.get("scope")),
             },
             max_concurrent=max_concurrent,
             cfg_account_id=cfg_account_id,
@@ -1714,6 +1733,7 @@ async def _process_user_account_locked(db, cfg: dict):
             await _record_pulse(db, cfg, symbol=sym,
                 action="BLOCKED", level="block",
                 reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
+                signal=signal,
             )
             continue
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
@@ -1728,6 +1748,16 @@ async def _process_user_account_locked(db, cfg: dict):
             action="EXEC", level="info",
             reason=f"Executed {signal['action']} {sym} {effective_lot} lots @ {signal.get('entry_price')} (conf {signal.get('confidence')}%).",
         )
+        # iter-134 · Ledger: approved decisions are permanent audit records too
+        from trade_decisions import record_decision
+        await record_decision(
+            db, user_id=user_id, symbol=sym, status="executed",
+            stage="execution",
+            reason=f"Executed {signal['action']} {effective_lot} lots @ {signal.get('entry_price')}",
+            cfg=cfg, signal=signal,
+            execution={"trade_id": str(trade_doc.get("id")),
+                       "lot_size": effective_lot,
+                       "sizing_method": sizing_method})
         inflight += 1
 
 

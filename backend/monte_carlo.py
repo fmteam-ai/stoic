@@ -32,7 +32,7 @@ def calibrate(bars):
 
 def simulate_trade(action, entry, sl, tp, bars,
                    n_paths=DEFAULT_PATHS, horizon=DEFAULT_HORIZON,
-                   seed=None) -> dict | None:
+                   seed=None, cost_price: float = 0.0) -> dict | None:
     if action not in ("BUY", "SELL") or not entry or not sl or not tp:
         return None
     if not bars or len(bars) < MIN_BARS:
@@ -85,24 +85,46 @@ def simulate_trade(action, entry, sl, tp, bars,
     timeout_r = ((price - entry) if is_buy else (entry - price)) / sl_dist
     to_mean_r = float(timeout_r[active].mean()) if active.any() else 0.0
     ev_r = p_tp * r_tp - p_sl * 1.0 + p_to * to_mean_r
+    # iter-134 · Cost-aware EV (quant roadmap #4): spread + slippage paid on
+    # every trade, expressed in R. Marginal setups that are only +EV before
+    # costs get filtered.
+    cost_r = float(cost_price) / sl_dist if cost_price else 0.0
     dd_r = worst / sl_dist
     return {"paths": int(n_paths), "horizon_bars": int(horizon),
             "p_tp_first": round(p_tp, 3), "p_sl_first": round(p_sl, 3),
             "p_timeout": round(p_to, 3), "rr": round(r_tp, 2),
             "ev_r": round(float(ev_r), 3),
+            "cost_r": round(cost_r, 3),
+            "ev_r_net": round(float(ev_r) - cost_r, 3),
             "timeout_mean_r": round(to_mean_r, 3),
             "max_dd_r_median": round(float(np.median(dd_r)), 2),
             "max_dd_r_p95": round(float(np.quantile(dd_r, 0.95)), 2),
             "median_bars_to_exit": int(np.median(exit_step))}
 
 
+# Typical all-in round-trip cost (spread + slippage buffer) in PRICE units.
+TYPICAL_SPREAD = {"XAUUSD": 0.35, "XAGUSD": 0.035, "BTCUSD": 30.0,
+                  "ETHUSD": 2.5, "US30": 3.0, "NAS100": 2.0, "SPX500": 0.6,
+                  "EURUSD": 0.00012, "GBPUSD": 0.00015, "USDJPY": 0.015}
+SLIPPAGE_BUFFER = 1.5
+
+
+def typical_cost(symbol: str, entry: float) -> float:
+    base = str(symbol or "").upper()
+    spread = TYPICAL_SPREAD.get(base, float(entry or 0) * 0.0001)
+    return spread * SLIPPAGE_BUFFER
+
+
 def mc_gate(mc: dict | None) -> str | None:
-    """Enter only if the simulated expected value is positive."""
+    """Enter only if the simulated expected value NET OF COSTS is positive."""
     if not mc:
         return None
-    if mc["ev_r"] <= 0:
+    ev_net = mc.get("ev_r_net", mc["ev_r"])
+    if ev_net <= 0:
+        cost_note = (f" − {mc['cost_r']:.2f}R costs" if mc.get("cost_r") else "")
         return (f"Monte Carlo gate: {mc['paths']:,} simulated paths — "
                 f"TP first {mc['p_tp_first']:.0%} vs SL first "
                 f"{mc['p_sl_first']:.0%} (R:R {mc['rr']}) → expected value "
-                f"{mc['ev_r']:+.2f}R. Negative EV, trade vetoed.")
+                f"{mc['ev_r']:+.2f}R{cost_note} = {ev_net:+.2f}R net. "
+                f"Negative EV, trade vetoed.")
     return None

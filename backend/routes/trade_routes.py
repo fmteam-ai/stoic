@@ -115,6 +115,34 @@ def _aggregate_stats(closed: list) -> dict:
     }
 
 
+@router.get("/decisions")
+async def list_trade_decisions(limit: int = 100, symbol: str = None,
+                               status: str = None, stage: str = None,
+                               user=Depends(get_current_user)):
+    """iter-134 · Permanent decision-ledger audit trail (quant roadmap #2/#3).
+
+    Every BUY/SELL candidate outcome — rejected (with gate + reason) or
+    executed (with sizing + versions) — queryable forever.
+    """
+    db = get_db()
+    q = {"user_id": user["id"]}
+    if symbol:
+        q["symbol"] = {"$regex": f"^{symbol}", "$options": "i"}
+    if status:
+        q["status"] = status
+    if stage:
+        q["stage"] = stage
+    rows = await db.trade_decisions.find(q).sort("_id", -1).to_list(
+        length=min(int(limit), 500))
+    for r in rows:
+        r["id"] = str(r.pop("_id"))
+    pipeline = [{"$match": q}, {"$group": {"_id": "$stage", "n": {"$sum": 1}}},
+                {"$sort": {"n": -1}}]
+    stages = [{"stage": s["_id"], "count": s["n"]}
+              for s in await db.trade_decisions.aggregate(pipeline).to_list(50)]
+    return {"decisions": rows, "stage_counts": stages}
+
+
 @router.get("/stats")
 async def trade_stats(account_id: Optional[str] = None,
                       user=Depends(get_current_user)):
