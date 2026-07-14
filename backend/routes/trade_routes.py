@@ -147,8 +147,13 @@ async def strategy_scoreboard(days: int = 30, user=Depends(get_current_user)):
         r = rows.setdefault(scope, {
             "engine": scope, "trades": 0, "wins": 0, "losses": 0,
             "pnl": 0.0, "gross_win": 0.0, "gross_loss": 0.0,
-            "long_pnl": 0.0, "short_pnl": 0.0, "symbols": {}, "version": None})
+            "long_pnl": 0.0, "short_pnl": 0.0, "symbols": {}, "version": None,
+            "_pnls": [], "slippage_sum": 0.0, "slippage_n": 0})
         pnl = float(t.get("pnl") or 0)
+        r["_pnls"].append(pnl)
+        if t.get("slippage_pips") is not None:
+            r["slippage_sum"] += abs(float(t.get("slippage_pips") or 0))
+            r["slippage_n"] += 1
         r["trades"] += 1
         r["pnl"] += pnl
         if pnl > 0:
@@ -177,8 +182,33 @@ async def strategy_scoreboard(days: int = 30, user=Depends(get_current_user)):
         r["avg_loss"] = round(r["gross_loss"] / r["losses"], 2) if r["losses"] else 0.0
         for k in ("pnl", "gross_win", "gross_loss", "long_pnl", "short_pnl"):
             r[k] = round(r[k], 2)
+        _sn = r.pop("slippage_n", 0)
+        _ss = r.pop("slippage_sum", 0.0)
+        r["avg_slippage_pips"] = round(_ss / _sn, 2) if _sn else None
+        r.update(_risk_metrics(r.pop("_pnls", [])))
         out.append(r)
     out.sort(key=lambda x: -x["pnl"])
+
+    # Portfolio-level metrics + calibration honesty (iter-137)
+    all_pnls = [float(t.get("pnl") or 0) for t in
+                sorted(trades, key=lambda x: x.get("closed_at") or "")]
+    portfolio = _risk_metrics(all_pnls)
+    gw = sum(p for p in all_pnls if p > 0)
+    gl = sum(-p for p in all_pnls if p < 0)
+    portfolio["profit_factor"] = round(gw / gl, 2) if gl > 0 else None
+    slips = [abs(float(t.get("slippage_pips") or 0)) for t in trades
+             if t.get("slippage_pips") is not None]
+    portfolio["avg_slippage_pips"] = round(sum(slips) / len(slips), 2) if slips else None
+    try:
+        from calibration import compute_calibration
+        cal = await compute_calibration(db, user["id"], days if days > 0 else 90)
+        ns = sum(e["n"] for e in cal.values())
+        portfolio["brier"] = (round(sum(e["brier"] * e["n"] for e in cal.values()) / ns, 4)
+                              if ns else None)
+        for r in out:
+            r["brier"] = (cal.get(r["engine"]) or {}).get("brier")
+    except Exception:
+        portfolio["brier"] = None
 
     # Decision funnel from the permanent ledger
     dq = {"user_id": user["id"]}
@@ -193,7 +223,36 @@ async def strategy_scoreboard(days: int = 30, user=Depends(get_current_user)):
                        "count": g["n"]})
     funnel.sort(key=lambda x: -x["count"])
     return {"days": days, "engines": out, "funnel": funnel,
+            "portfolio": portfolio,
             "total_pnl": round(sum(r["pnl"] for r in out), 2)}
+
+
+def _risk_metrics(pnls: list, window: int = 30) -> dict:
+    """iter-137 · Rolling trade-level Sharpe/Sortino + max drawdown."""
+    import statistics
+    if not pnls:
+        return {"sharpe": None, "sortino": None, "max_dd": 0.0}
+    recent = pnls[-window:]
+    mean = statistics.mean(recent)
+    sd = statistics.pstdev(recent) if len(recent) > 1 else 0.0
+    downside = [p for p in recent if p < 0]
+    dsd = statistics.pstdev(downside) if len(downside) > 1 else (abs(downside[0]) if downside else 0.0)
+    equity, peak, max_dd = 0.0, 0.0, 0.0
+    for p in pnls:
+        equity += p
+        peak = max(peak, equity)
+        max_dd = max(max_dd, peak - equity)
+    return {"sharpe": round(mean / sd, 2) if sd > 0 else None,
+            "sortino": round(mean / dsd, 2) if dsd > 0 else None,
+            "max_dd": round(max_dd, 2)}
+
+
+@router.get("/calibration")
+async def calibration_report(days: int = 90, user=Depends(get_current_user)):
+    """iter-137 · Reliability table + Brier score per engine (roadmap item 1)."""
+    from calibration import compute_calibration
+    return {"days": days,
+            "engines": await compute_calibration(get_db(), user["id"], days)}
 
 
 @router.get("/ablation")

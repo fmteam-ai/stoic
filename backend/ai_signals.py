@@ -131,7 +131,8 @@ async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
 
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
-                         strategy: str | None = None) -> dict:
+                         strategy: str | None = None,
+                         engine_params: dict | None = None) -> dict:
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
@@ -301,6 +302,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
     engine = resolve_engine(strategy)
     engine_label = ENGINE_LABELS.get(engine, engine)
     mtf_mode = MTF_MODE_BY_ENGINE.get(engine)
+    # iter-140 · Promoted shadow-model parameters for this engine (None = defaults)
+    eng_params = (engine_params or {}).get(engine) if isinstance(engine_params, dict) else None
 
     market_closure = is_market_closed(symbol)
     mtf_conf = None
@@ -379,7 +382,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         if not intraday_pack:
             return _hold(f"{engine_label}: no fresh M15 stream from the EA (bridge "
                          f"must be online and streaming candles) — standing by.")
-        sig, note = run_engine(engine, intraday_pack)
+        sig, note = run_engine(engine, intraday_pack, params=eng_params)
         if not sig:
             return _hold(f"{engine_label}: {note} — standing by.")
         action = sig
@@ -566,6 +569,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "key_factors": key_factors,
         "min_confidence_required": adapted_profile["min_confidence"],
         "veto_applied": bool(veto_reason) or bool(rr_veto),
+        "engine_params": eng_params,
         "engine_geometry": None if is_hold else {
             "stop_loss": sl, "take_profit": tp,
             "tp1": tp1, "tp2": tp2, "tp3": tp3,

@@ -1549,6 +1549,24 @@ async def _process_user_account_locked(db, cfg: dict):
             if signal.get("news_size_scale"):
                 sizing_method = sizing_method + "+narrative"
 
+        # iter-139 · RL capital allocator — per-engine capital weight learned
+        # from recent risk-adjusted performance. Shrink-only (weight ≤ 1.0).
+        # A lookup failure means full weight; the fail-closed risk engine
+        # below stays the final pre-trade authority.
+        try:
+            from rl_allocator import allocator_weight_for
+            alloc = await allocator_weight_for(db, user_id, signal.get("scope"), cfg)
+            await db.signals.update_one(
+                {"_id": result.inserted_id}, {"$set": {"allocator": alloc}})
+            if alloc.get("mode") == "enforce" and float(alloc.get("weight") or 1.0) < 1.0:
+                effective_lot = max(round(effective_lot * float(alloc["weight"]), 2), 0.01)
+                sizing_method = sizing_method + "+allocator"
+                logger.info("RL allocator trim ×%.2f scope=%s user=%s: %s",
+                            alloc["weight"], signal.get("scope"), user_id,
+                            alloc.get("reason"))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("rl allocator skipped: %s", e)
+
         # iter-114 · Advanced Risk Engine — final pre-trade authority:
         # drawdown ladder (D/W/M), abnormal-market halt, dynamic leverage,
         # event-window exposure cap, CVaR budget. Block or trim.

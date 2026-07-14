@@ -30,6 +30,27 @@ SCALP_RISK_PCT_CAP = 0.25   # user-selected: 0.25% risk per HF scalp trade
 # advisory-only for these scopes.
 DETERMINISTIC_INTRADAY_SCOPES = {"hf_scalp", "hf_scalp_fast", "range_fade", "breakout_m15"}
 
+# iter-138 · Tunable engine parameters. Defaults are EXACTLY the values that
+# were previously hard-coded — passing params=None never changes behavior.
+DEFAULT_PARAMS = {
+    "hf_scalp": {"slope_min": 0.08, "mom_min": 0.10,
+                 "exhaustion_vdist": 0.35, "flat_fade_min": 0.25},
+    "hf_scalp_fast": {"slope_min": 0.05, "mom_min": 0.06,
+                      "exhaustion_vdist": 0.30, "flat_fade_min": 0.20},
+    "range_fade": {"edge_pct": 20.0, "min_day_pct": 0.5, "min_atr_mult": 3.0},
+    "breakout_m15": {"min_day_rng": 0.3},
+}
+
+PARAM_BOUNDS = {
+    "hf_scalp": {"slope_min": (0.03, 0.20), "mom_min": (0.04, 0.25),
+                 "exhaustion_vdist": (0.20, 0.60), "flat_fade_min": (0.12, 0.45)},
+    "hf_scalp_fast": {"slope_min": (0.02, 0.15), "mom_min": (0.03, 0.20),
+                      "exhaustion_vdist": (0.18, 0.55), "flat_fade_min": (0.10, 0.40)},
+    "range_fade": {"edge_pct": (10.0, 30.0), "min_day_pct": (0.3, 1.0),
+                   "min_atr_mult": (2.0, 5.0)},
+    "breakout_m15": {"min_day_rng": (0.15, 0.80)},
+}
+
 ENGINE_LABELS = {
     "mtf_strict": "SNIPER · Strict MTF Cascade",
     "mtf_moderate": "BALANCED · Moderate MTF Cascade",
@@ -47,10 +68,12 @@ def resolve_engine(preset: str | None) -> str:
     return ENGINE_BY_PRESET.get(str(preset), "mtf_moderate")
 
 
-def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
+def hf_scalp_signal(feats: dict, fast: bool = False,
+                    params: dict | None = None) -> tuple:
     """High-frequency momentum scalper: EMA-stack bursts + VWAP bounces."""
-    slope_min = 0.05 if fast else 0.08   # EMA20 slope %/2h
-    mom_min = 0.06 if fast else 0.10     # 3h momentum %
+    prm = {**DEFAULT_PARAMS["hf_scalp_fast" if fast else "hf_scalp"], **(params or {})}
+    slope_min = float(prm["slope_min"])   # EMA20 slope %/2h
+    mom_min = float(prm["mom_min"])       # 3h momentum %
     if float(feats.get("atr15") or 0) <= 0:
         return None, "no ATR15 yet"
     trend = feats.get("trend")
@@ -99,7 +122,7 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
             return "BUY", (f"trend-day continuation: {day_rng}% up-day, shallow "
                            f"pullback to EMA20 (dist "
                            f"{abs(last - ema20) / ema20 * 100:.2f}%) — riding the trend")
-        if vdist >= (0.30 if fast else 0.35) and mom <= 0 and dch != "BREAK_UP":
+        if vdist >= float(prm["exhaustion_vdist"]) and mom <= 0 and dch != "BREAK_UP":
             k = _knife("SELL")
             if k:
                 return None, f"exhaustion fade blocked: {k}"
@@ -121,7 +144,7 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
             return "SELL", (f"trend-day continuation: {day_rng}% down-day, shallow "
                             f"rally to EMA20 (dist "
                             f"{abs(last - ema20) / ema20 * 100:.2f}%) — riding the trend")
-        if vdist <= -(0.30 if fast else 0.35) and mom >= 0 and dch != "BREAK_DOWN":
+        if vdist <= -float(prm["exhaustion_vdist"]) and mom >= 0 and dch != "BREAK_DOWN":
             k = _knife("BUY")
             if k:
                 return None, f"exhaustion fade blocked: {k}"
@@ -142,7 +165,7 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
         if 15 <= p <= 38 and slope <= 0.02 and mom <= 0.05 and dch != "BREAK_UP":
             return "SELL", (f"trend-day flag: consolidating at {p}% of a "
                             f"{day_rng}% down-day (slope {slope:+}%/2h) — continuation short")
-    fade_min = 0.20 if fast else 0.25   # % distance from VWAP required to fade
+    fade_min = float(prm["flat_fade_min"])   # % distance from VWAP required to fade
     if vdist >= fade_min and dch != "BREAK_UP":
         # iter-129: a persistent grind keeps price on one side of VWAP for
         # hours (2026-07-13: 109 BTC "fade back to VWAP" BUYs in a down
@@ -168,11 +191,12 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
                   f"(dist {vdist}%) — no scalp edge")
 
 
-def range_fade_signal(feats: dict) -> tuple:
+def range_fade_signal(feats: dict, params: dict | None = None) -> tuple:
     """Mean reversion: in a confirmed M15 range, fade extremes toward VWAP."""
-    edge_pct = 20            # extreme = within this % of the session range edge
-    min_day_pct = 0.5        # session must have moved at least this much
-    min_atr_mult = 3.0       # range width must be ≥ this × ATR15
+    p = {**DEFAULT_PARAMS["range_fade"], **(params or {})}
+    edge_pct = float(p["edge_pct"])          # extreme = within this % of the range edge
+    min_day_pct = float(p["min_day_pct"])    # session must have moved at least this much
+    min_atr_mult = float(p["min_atr_mult"])  # range width must be ≥ this × ATR15
     if feats.get("trend") != "FLAT" or feats.get("donchian20") != "INSIDE":
         return None, "not rangebound (trend or breakout active)"
     atr15 = float(feats.get("atr15") or 0)
@@ -200,14 +224,15 @@ def range_fade_signal(feats: dict) -> tuple:
     return None, f"mid-range ({pos}%) — waiting for an extreme"
 
 
-def breakout_signal(feats: dict) -> tuple:
+def breakout_signal(feats: dict, params: dict | None = None) -> tuple:
     """Donchian-20 M15 channel escape in the direction of the break."""
+    p = {**DEFAULT_PARAMS["breakout_m15"], **(params or {})}
     if float(feats.get("atr15") or 0) <= 0:
         return None, "no ATR15 yet"
     dch = feats.get("donchian20")
     mom = float(feats.get("momentum_3h_pct") or 0)
     day_rng = float(feats.get("day_range_pct") or 0)
-    if day_rng < 0.3:
+    if day_rng < float(p["min_day_rng"]):
         return None, f"day range {day_rng}% too quiet for a breakout play"
     if dch == "BREAK_UP":
         if mom < 0:
@@ -220,13 +245,13 @@ def breakout_signal(feats: dict) -> tuple:
     return None, "price inside the Donchian-20 channel — waiting for an escape"
 
 
-def run_engine(engine: str, feats: dict) -> tuple:
+def run_engine(engine: str, feats: dict, params: dict | None = None) -> tuple:
     if engine == "hf_scalp":
-        return hf_scalp_signal(feats, fast=False)
+        return hf_scalp_signal(feats, fast=False, params=params)
     if engine == "hf_scalp_fast":
-        return hf_scalp_signal(feats, fast=True)
+        return hf_scalp_signal(feats, fast=True, params=params)
     if engine == "range_fade":
-        return range_fade_signal(feats)
+        return range_fade_signal(feats, params=params)
     if engine == "breakout_m15":
-        return breakout_signal(feats)
+        return breakout_signal(feats, params=params)
     return None, f"unknown engine '{engine}'"
