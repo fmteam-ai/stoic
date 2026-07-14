@@ -102,6 +102,46 @@ function Funnel({ funnel }) {
     );
 }
 
+function AblationPanel({ days }) {
+    const [ab, setAb] = useState(null);
+    useEffect(() => {
+        api.get(`/trades/ablation?days=${days || 90}`).then(({ data }) => setAb(data)).catch(() => {});
+    }, [days]);
+    const rows = ab?.gates || [];
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="ablation-panel">
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">
+                GATE ABLATION · COUNTERFACTUAL VALUE OF EACH VETO
+            </div>
+            <div className="font-mono text-[10px] text-[#3F3F46] mb-3">
+                Vetoed setups replayed against the bars that actually followed — net R &gt; 0 means the gate avoided more loss than it blocked in winners.
+            </div>
+            {rows.length ? rows.map((g) => (
+                <div key={g.gate} className="flex flex-wrap items-center gap-3 py-1.5 border-t border-[#141414]"
+                    data-testid={`ablation-${g.gate}`}>
+                    <div className="w-44 font-mono text-[10px] text-[#A1A1AA] truncate">{g.gate}</div>
+                    <div className="font-mono text-[10px] text-[#52525B]">{g.replayed} replayed</div>
+                    <div className="font-mono text-[10px]">
+                        <span className="text-[#00FF41]">saved {g.saved_r}R</span>
+                        <span className="text-[#52525B]"> · </span>
+                        <span className="text-[#FF3B30]">blocked {g.blocked_r}R wins</span>
+                    </div>
+                    <div className={`ml-auto font-mono text-[10px] px-2 py-0.5 border ${
+                        g.verdict === "ADDS VALUE" ? "text-[#00FF41] border-[#00FF41]/40"
+                            : g.verdict === "COSTS EDGE" ? "text-[#FF3B30] border-[#FF3B30]/40"
+                                : "text-[#FFD700] border-[#FFD700]/40"}`}>
+                        {g.verdict} · {g.net_r >= 0 ? "+" : ""}{g.net_r}R
+                    </div>
+                </div>
+            )) : (
+                <div className="font-mono text-xs text-[#52525B]" data-testid="ablation-empty">
+                    Collecting rejection snapshots — the ledger started recording them recently; this panel fills in as vetoes accrue.
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function Scoreboard() {
     const [data, setData] = useState(null);
     const [days, setDays] = useState(30);
@@ -158,6 +198,7 @@ export default function Scoreboard() {
                             )}
                         </div>
                         <Funnel funnel={data?.funnel || []} />
+                        <AblationPanel days={days} />
                     </>
                 )}
             </div>

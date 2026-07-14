@@ -408,3 +408,9 @@ Already-covered roadmap items verified: #3 #5 #7 #11 #12 #13 #17 largely exist. 
 - Frontend /scoreboard page (Scoreboard.jsx) + Sidebar INSIGHTS nav (Trophy icon, nav-scoreboard): engine cards with verdict badges (EARNING pf≥1.2&pnl>0 / MARGINAL / BLEEDING / SAMPLE TOO SMALL <3 trades), period pills, decision-funnel bars (which gate does the work + executed count).
 - Verified: curl (5 engines, real attribution: range_fade pf 2.53 earning; hf_scalp bleeding) + screenshot (rows render, 7D filter works, nav active). 406 older trades show "unattributed" (pre-scope era) — all future trades attributed.
 Remaining backlog: ablation runs (#16), promotion criteria (#18), research/prod separation (#1), production deployment.
+
+## Iter-136 (2026-07-14) — Roadmap #16 #18 #1 DONE
+1. Gate ablation (#16): ablation.py — counterfactual replay of vetoed setups (from decision-ledger snapshots) against actual subsequent M15 bars → per-gate saved_r vs blocked_r, verdict ADDS VALUE / NEUTRAL / COSTS EDGE. GET /api/trades/ablation?days=N + AblationPanel on Scoreboard. Snapshot coverage: added contextvar _CURRENT_SIGNAL in bot_runner so ALL 34 veto sites auto-attach signal snapshots (symbol-mismatch guard against stale ctx). Live-verified (2 replays already).
+2. Promotion criteria (#18): /app/docs/PROMOTION_CRITERIA.md — P1 sample/walk-forward, P2 risk quality (PF≥1.25, DD≤12%, concentration limits, perturbation stability), P3 shadow parity with locked versions, P4 operational invariants; demotion triggers tied to Scoreboard verdicts + ablation + drift.
+3. Layer separation (#1): /app/docs/ARCHITECTURE_LAYERS.md (research/simulation/production boundaries) + backend/research/ package + tests/test_iter136_layer_separation.py AST-based import guard (production never imports backtester/research; backtester/ablation never import live execution; nothing imports research). 36 tests pass; UI screenshot verified.
+Remaining: PRODUCTION DEPLOYMENT (user approval).

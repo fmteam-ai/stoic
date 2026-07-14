@@ -196,6 +196,16 @@ async def strategy_scoreboard(days: int = 30, user=Depends(get_current_user)):
             "total_pnl": round(sum(r["pnl"] for r in out), 2)}
 
 
+@router.get("/ablation")
+async def gate_ablation(days: int = 30, user=Depends(get_current_user)):
+    """iter-136 · Gate ablation (quant roadmap #16): counterfactual replay of
+    every vetoed setup — did each gate's rejections avoid losses or block
+    winners?"""
+    from ablation import run_gate_ablation
+    db = get_db()
+    return await run_gate_ablation(db, user["id"], days=days)
+
+
 @router.get("/decisions")
 async def list_trade_decisions(limit: int = 100, symbol: str = None,
                                status: str = None, stage: str = None,

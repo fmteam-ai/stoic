@@ -10,6 +10,7 @@ Runs as a single asyncio task started at app startup. Each loop tick:
 """
 import os
 import asyncio
+import contextvars
 import logging
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
@@ -35,6 +36,7 @@ from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
 
 logger = logging.getLogger("bot-runner")
+_CURRENT_SIGNAL: contextvars.ContextVar = contextvars.ContextVar("current_signal")
 
 # Internal cooldown tracker { (user_id, symbol): datetime_next_eligible }
 _next_signal_at: dict = {}
@@ -167,10 +169,13 @@ async def _record_pulse(
         # each cycle — the ledger never is).
         if action in ("SKIP", "BLOCKED") and not is_routine:
             from trade_decisions import record_decision, infer_stage
+            _sig = signal or _CURRENT_SIGNAL.get(None)
+            if _sig is not None and _sig.get("symbol") and symbol and _sig.get("symbol") != symbol:
+                _sig = None  # stale context from another symbol — don't mislabel
             await record_decision(
                 db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "",
                 status="rejected", stage=infer_stage(reason), reason=reason,
-                cfg=cfg, signal=signal)
+                cfg=cfg, signal=_sig)
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist pulse cfg=%s: %s", cfg.get("_id"), e)
 
@@ -603,6 +608,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 user_cfg=cfg,
             )
             signal = tick_out.get("signal")
+            _CURRENT_SIGNAL.set(signal)  # iter-136 · auto-snapshot for the decision ledger
             if not signal:
                 await _record_pulse(db, cfg, symbol=sym,
                     action="HOLD", level="warn",
