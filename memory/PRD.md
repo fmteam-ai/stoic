@@ -377,3 +377,12 @@ CPI spiked gold ~600 pips at 12:30 UTC. Findings:
 - Purged 27 event_outcomes docs (outcome labels were classified on the wrong +4h bar window; priors fall back to BASE_PRIORS and relearn).
 - FF feed 429: bot-identifying UA rejected → switched to standard browser UA; module has 10-min failure backoff. Verified live: 98 events, CPI @12:30 UTC ✓, next high-impact (Fed Chair testimony 14:00 UTC) correctly visible to upcoming_for.
 - Tests: test_iter131_calendar_tz.py (5) + 37 calendar/event tests pass.
+
+## Iter-132 (2026-07-14) — "Bot missed the 600-pip trend day" diagnosis + continuation entries
+Diagnosis: (1) all 5 active engines are scalp presets — breakout/mean-reversion personas inactive since Jul 13 ~10:00 (config state, not a bug); (2) scalp engines had NO entry path on gap-and-run days (momentum_3h diluted by consolidation; price never returns to VWAP); (3) Jul-13 auto-tighten raised one account's min_conf to 70 → 65-67% signals became HOLD; (4) event freeze + knife filter correctly prevented bad fades; 2 fade SELLs executed 18:01.
+Fix in strategy_engines.hf_scalp_signal:
+- UP/DOWN branches: EMA20 shallow-pullback continuation (day_rng≥1.0, pos 55-85 / 15-45, |price-EMA20|≤0.15%, slope agrees, no fresh counter-break).
+- FLAT branch: trend-day flag (day_rng≥1.2, consolidating 62-85% of up-day / 15-38% of down-day with slope/mom not opposing) → continuation entry; placed BEFORE VWAP fades.
+- Replay: 14:22 CPI-day feats now → BUY "trend-day flag". Exhaustion gate still caps ≥85%.
+- tests/test_iter132_trend_day_continuation.py (10 tests); 70 pass with full engine regression.
+OPEN QUESTION for user: restore BREAKOUT HUNTER / MEAN REVERSION preset on any account?

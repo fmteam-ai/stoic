@@ -89,6 +89,16 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
                            f"3h momentum +{mom}%, price above EMA20")
         if -0.20 <= vdist <= 0.05:
             return "BUY", f"VWAP bounce: uptrend pullback to session VWAP (dist {vdist}%)"
+        # iter-132 · Trend-day continuation (2026-07-14: 600-pip CPI rally,
+        # zero long entries all day — price gapped away from VWAP and never
+        # returned; 3h momentum diluted to ~0 by the consolidation). Buy
+        # shallow EMA20 pullbacks instead. Exhaustion gate caps the extreme.
+        if (day_rng >= 1.0 and pos is not None and 55 <= float(pos) <= 85
+                and ema20 > 0 and abs(last - ema20) / ema20 * 100 <= 0.15
+                and slope >= 0 and dch != "BREAK_DOWN"):
+            return "BUY", (f"trend-day continuation: {day_rng}% up-day, shallow "
+                           f"pullback to EMA20 (dist "
+                           f"{abs(last - ema20) / ema20 * 100:.2f}%) — riding the trend")
         if vdist >= (0.30 if fast else 0.35) and mom <= 0 and dch != "BREAK_UP":
             k = _knife("SELL")
             if k:
@@ -105,6 +115,12 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
                             f"3h momentum {mom}%, price below EMA20")
         if -0.05 <= vdist <= 0.20:
             return "SELL", f"VWAP bounce: downtrend rally to session VWAP (dist {vdist}%)"
+        if (day_rng >= 1.0 and pos is not None and 15 <= float(pos) <= 45
+                and ema20 > 0 and abs(last - ema20) / ema20 * 100 <= 0.15
+                and slope <= 0 and dch != "BREAK_UP"):
+            return "SELL", (f"trend-day continuation: {day_rng}% down-day, shallow "
+                            f"rally to EMA20 (dist "
+                            f"{abs(last - ema20) / ema20 * 100:.2f}%) — riding the trend")
         if vdist <= -(0.30 if fast else 0.35) and mom >= 0 and dch != "BREAK_DOWN":
             k = _knife("BUY")
             if k:
@@ -115,6 +131,17 @@ def hf_scalp_signal(feats: dict, fast: bool = False) -> tuple:
                       f"need ≤-{slope_min}%/-{mom_min}%, price≤EMA20) and no VWAP touch (dist {vdist}%)")
     # FLAT market — micro mean-reversion around session VWAP (the classic
     # high-frequency "small doses" behavior; tight stop is the protection)
+    # iter-132 · Trend-day flag: after a big directional day the M15 EMA
+    # stack converges during consolidation and reads FLAT — but holding the
+    # upper third of a 1.2%+ up-day is a continuation flag, not a fade zone.
+    if day_rng >= 1.2 and pos is not None:
+        p = float(pos)
+        if 62 <= p <= 85 and slope >= -0.02 and mom >= -0.05 and dch != "BREAK_DOWN":
+            return "BUY", (f"trend-day flag: consolidating at {p}% of a "
+                           f"{day_rng}% up-day (slope {slope:+}%/2h) — continuation long")
+        if 15 <= p <= 38 and slope <= 0.02 and mom <= 0.05 and dch != "BREAK_UP":
+            return "SELL", (f"trend-day flag: consolidating at {p}% of a "
+                            f"{day_rng}% down-day (slope {slope:+}%/2h) — continuation short")
     fade_min = 0.20 if fast else 0.25   # % distance from VWAP required to fade
     if vdist >= fade_min and dch != "BREAK_UP":
         # iter-129: a persistent grind keeps price on one side of VWAP for
