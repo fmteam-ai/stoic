@@ -385,4 +385,4 @@ Fix in strategy_engines.hf_scalp_signal:
 - FLAT branch: trend-day flag (day_rng≥1.2, consolidating 62-85% of up-day / 15-38% of down-day with slope/mom not opposing) → continuation entry; placed BEFORE VWAP fades.
 - Replay: 14:22 CPI-day feats now → BUY "trend-day flag". Exhaustion gate still caps ≥85%.
 - tests/test_iter132_trend_day_continuation.py (10 tests); 70 pass with full engine regression.
-OPEN QUESTION for user: restore BREAKOUT HUNTER / MEAN REVERSION preset on any account?
+RESOLVED: BREAKOUT HUNTER restored on OnEquity (04cf85) via POST /api/bot/preset/breakout, verified dispatching (2026-07-14 18:36).
