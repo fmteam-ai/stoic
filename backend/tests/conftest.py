@@ -72,30 +72,47 @@ def _silence_outbound_notifications():
         notifier.send_telegram = original
 
 
-@pytest.fixture(autouse=True)
-def _ensure_event_loop():
-    """Legacy tests call `asyncio.get_event_loop().run_until_complete(...)`.
+_loop_ref: dict = {"loop": None}
 
-    After any earlier test used `asyncio.run()` (which clears the current
-    loop) that pattern raises `RuntimeError: There is no current event loop`
-    in full-suite runs while passing in isolation. Guarantee a usable loop
-    per test; when a NEW loop must be created, reset the motor singletons so
-    the cached client is never bound to a dead loop.
-    """
+
+def _shared_loop():
+    """Round 9 item 10 — EXPLICIT event-loop management. No test may rely on
+    the deprecated `asyncio.get_event_loop()` implicit-creation behaviour;
+    this holder owns one long-lived loop for the whole suite and recreates it
+    (resetting the motor client singletons, which would otherwise stay bound
+    to a dead loop) only when the previous one was closed."""
     import asyncio
-    need_new = False
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            need_new = True
-    except RuntimeError:
-        need_new = True
-    if need_new:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+    loop = _loop_ref["loop"]
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _loop_ref["loop"] = loop
         try:
             import database as _dbmod
             _dbmod._client = None
             _dbmod._db = None
         except Exception:
             pass
+    return loop
+
+
+def run_async(coro):
+    """Run a coroutine on the suite's shared loop (sync test helper)."""
+    return _shared_loop().run_until_complete(coro)
+
+
+@pytest.fixture(autouse=True)
+def _ensure_event_loop():
+    """Guarantee a usable current loop per test — explicitly created and
+    installed, never implicitly via deprecated `asyncio.get_event_loop()`.
+    The motor singletons are reset per test: a client created inside one
+    test's loop (`asyncio.run` or the shared loop) must never be reused on
+    a different loop by the next test."""
+    import asyncio
+    asyncio.set_event_loop(_shared_loop())
+    try:
+        import database as _dbmod
+        _dbmod._client = None
+        _dbmod._db = None
+    except Exception:
+        pass
     yield

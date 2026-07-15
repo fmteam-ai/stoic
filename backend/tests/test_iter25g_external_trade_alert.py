@@ -15,11 +15,6 @@ import asyncio
 from unittest.mock import patch, AsyncMock
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro) \
-        if asyncio.get_event_loop().is_running() is False else asyncio.run(coro)
-
-
 def test_notify_trade_opened_external_uses_distinct_title():
     from notifier import notify_trade_opened
     captured = {}

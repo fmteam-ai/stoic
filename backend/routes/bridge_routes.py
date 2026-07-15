@@ -692,6 +692,15 @@ async def modification_ack(payload: BridgeModificationAck):
     if payload.success:
         if payload.type == "MODIFY_SL" and payload.new_sl is not None:
             update["stop_loss"] = float(payload.new_sl)
+            # round 9 item 8 — explicit protection acknowledgment: the broker
+            # CONFIRMED a protective stop. Record the confirmed value and,
+            # if this trade was in emergency recovery, resolve it only now.
+            if trade.get("protection_state") == "EMERGENCY_STOP_PENDING":
+                update["confirmed_stop_loss"] = float(payload.new_sl)
+                update["protection_state"] = "RESOLVED"
+                update["protection_missing"] = False
+                update["protection_resolved_at"] = \
+                    datetime.now(timezone.utc).isoformat()
             if not trade.get("breakeven_set"):
                 # Mark BE only when SL moved to/past entry
                 entry = float(trade.get("entry_price") or 0)
@@ -732,6 +741,11 @@ async def modification_ack(payload: BridgeModificationAck):
             update["tp3_closed"] = True
     else:
         update["last_modification_error"] = payload.error or "unknown EA error"
+        # round 9 item 8 — a FAILED emergency-stop ack returns the trade to
+        # PROTECTION_UNKNOWN so the guard retries (or escalates to close
+        # once MAX_STOP_ATTEMPTS is exhausted). Never assume protection.
+        if trade.get("protection_state") == "EMERGENCY_STOP_PENDING":
+            update["protection_state"] = "PROTECTION_UNKNOWN"
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
     await ws_manager.broadcast(acc["user_id"], "trade_updated", {
@@ -1218,14 +1232,25 @@ async def external_deal(payload: BridgeExternalDeal):
         # lost the order context: this record carries zero SL/TP, invisible
         # to stop-risk math. Flag it so Safety Guardian / users see it needs
         # protection instead of silently running unstopped.
+        protection_unknown = False
         if payload.magic == STOIC_MAGIC:
             trade_doc["protection_missing"] = True
             trade_doc["protection_state"] = "PROTECTION_UNKNOWN"
+            # round 9 item 1 — IMMEDIATE remediation, not next-sweep:
+            from scalp.engine import set_protection_block
+            set_protection_block(account_id, True)
+            protection_unknown = True
             logger.warning(
                 "bot-owned 'in' deal %s (ticket %s) had no pending sibling — "
                 "trade created with protection_missing=True",
                 payload.deal_id, payload.mt5_ticket)
         result = await db.trades.insert_one(trade_doc)
+        if protection_unknown:
+            # fire the recovery state machine NOW — an unprotected bot
+            # position must not wait for the next scheduled sweep
+            import asyncio as _aio
+            from protection_guard import repair_unprotected_positions
+            _aio.create_task(repair_unprotected_positions(db))
         tid = str(result.inserted_id)
         await ws_manager.broadcast(user_id, "trade_updated", {
             "trade_id": tid, "status": "open", "external_open": is_external,

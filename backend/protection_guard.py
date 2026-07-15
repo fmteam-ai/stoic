@@ -32,14 +32,21 @@ FALLBACK_PRICE_PCT = 0.5       # stop distance cap: 0.5% of entry price
 def calculate_emergency_stop(entry: float, direction: str, lot: float,
                              symbol: str, equity: float) -> float | None:
     """Budget-based protective stop: distance = risk budget / (lot × pip
-    value), capped at FALLBACK_PRICE_PCT of the entry price."""
+    value), capped at FALLBACK_PRICE_PCT of the entry price. Round 9 item 5:
+    the budget is NEVER silently inflated — if equity is too small to place
+    a meaningful stop, return None and let the guard escalate to an
+    emergency full close instead."""
     if not entry or not lot:
         return None
+    from pip_utils import pip_size
     pv = pip_value_usd_per_lot(symbol, None) or 10.0
-    pip = 0.01 if any(k in (symbol or "").upper()
-                      for k in ("XAU", "GOLD", "JPY")) else 0.0001
-    budget = max(10.0, (equity or 0) * EMERGENCY_RISK_PCT / 100.0)
+    pip = pip_size(symbol) or 0.0001
+    budget = (equity or 0) * EMERGENCY_RISK_PCT / 100.0
+    if budget <= 0:
+        return None
     dist_pips = budget / max(lot * pv, 1e-9)
+    if dist_pips < 1.0:
+        return None                      # tighter than 1 pip is not a stop
     dist_px = min(dist_pips * pip, entry * FALLBACK_PRICE_PCT / 100.0)
     if dist_px <= 0:
         return None
@@ -58,11 +65,14 @@ async def repair_unprotected_positions(db) -> dict:
     for tr in trades:
         tid = tr["_id"]
         account_id = str(tr.get("account_id") or "")
-        # EA reported a protective stop since the flag was raised → RESOLVED
+        # EA reported a protective stop since the flag was raised → RESOLVED.
+        # Round 9 item 8 — the resolving stop value is recorded as the
+        # broker-confirmed protection level, not just assumed.
         if float(tr.get("stop_loss") or 0) != 0.0:
             await db.trades.update_one({"_id": tid}, {"$set": {
                 "protection_missing": False,
                 "protection_state": "RESOLVED",
+                "confirmed_stop_loss": float(tr["stop_loss"]),
                 "protection_resolved_at": now_iso}})
             resolved += 1
             continue
@@ -105,6 +115,7 @@ async def repair_unprotected_positions(db) -> dict:
             continue
         await db.trades.update_one({"_id": tid}, {
             "$set": {"protection_state": "EMERGENCY_STOP_PENDING",
+                     "requested_stop_loss": sl,
                      "pending_modification": {
                          "type": "MODIFY_SL", "new_sl": sl,
                          "reason": "emergency_protection",

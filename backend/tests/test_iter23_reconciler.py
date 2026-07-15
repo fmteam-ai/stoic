@@ -78,16 +78,11 @@ def seeded(db):
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro) if asyncio._get_running_loop() else asyncio.run(coro)
+    return _arun(coro)
 
 
-# Shared event loop so the cached motor client lives across all tests
-_LOOP = asyncio.new_event_loop()
-asyncio.set_event_loop(_LOOP)
-
-
-def _arun(coro):
-    return _LOOP.run_until_complete(coro)
+# Round 9 — shared suite loop from conftest; no deprecated get_event_loop()
+from conftest import run_async as _arun  # noqa: E402
 
 
 def test_reconcile_closes_all_when_broker_reports_zero(db, seeded):

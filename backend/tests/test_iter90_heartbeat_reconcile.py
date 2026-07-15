@@ -100,7 +100,8 @@ def test_reconcile_account_closes_orphan_when_broker_reports_zero():
     })
 
     try:
-        result = asyncio.get_event_loop().run_until_complete(
+        from conftest import run_async
+        result = run_async(
             reconcile_account(aid, open_tickets=[], source="test_iter90")
         )
         # Should have closed exactly 1 orphan
@@ -143,7 +144,8 @@ def test_reconcile_account_skips_freshly_opened_trade_within_grace_window():
     })
 
     try:
-        result = asyncio.get_event_loop().run_until_complete(
+        from conftest import run_async
+        result = run_async(
             reconcile_account(aid, open_tickets=[], source="test_iter90_grace")
         )
         assert result["closed_count"] == 0, \

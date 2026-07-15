@@ -80,6 +80,8 @@ async def ensure_indexes():
     await db.scalp_risk_state.create_index([("account_id", 1), ("symbol", 1)],
                                            unique=True)
     await db.scalp_financial_events.create_index([("account_id", 1), ("at", -1)])
+    await db.scalp_financial_events.create_index(
+        [("account_id", 1), ("deal_id", 1), ("event_type", 1)], unique=True)
     await db.broker_time_offsets.create_index([("account_id", 1),
                                                ("effective_from", -1)])
 

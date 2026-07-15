@@ -314,21 +314,28 @@ async def _auto_heal_loop():
 
 
 async def _scalp_reconcile_loop():
-    """Round 6 · crash-recovery sweep for scalp financial reconciliation —
-    resumes broker deals persisted as 'pending' that never reached the
-    scalp runner (process died between persist and apply).
-    Round 8 · also runs the protection-recovery state machine and the
-    reconciliation invariant checks every cycle."""
-    from scalp.engine import recover_pending_deals, verify_account_invariants, _runners
+    """Round 9 cadences — one scheduler, three sweep frequencies:
+      • protection safety sweep: every 10s (unprotected scalps can't wait)
+      • financial pending-deal sweep: every 45s
+      • full invariant + durable-state sweep: every 300s"""
+    from scalp.engine import (recover_pending_deals, verify_account_invariants,
+                              verify_durable_invariants, _runners)
     from protection_guard import repair_unprotected_positions
-    INTERVAL = int(os.environ.get("SCALP_RECONCILE_INTERVAL_SEC", "300"))
+    PROT = int(os.environ.get("SCALP_PROTECTION_SWEEP_SEC", "10"))
+    FIN = int(os.environ.get("SCALP_RECONCILE_INTERVAL_SEC", "45"))
+    FULL = int(os.environ.get("SCALP_INVARIANT_SWEEP_SEC", "300"))
+    t = 0
     while True:
         try:
-            await asyncio.sleep(INTERVAL)
-            await recover_pending_deals(get_db())
+            await asyncio.sleep(PROT)
+            t += PROT
             await repair_unprotected_positions(get_db())
-            for account_id in {k.split(":")[0] for k in list(_runners)}:
-                verify_account_invariants(account_id)
+            if t % FIN < PROT:
+                await recover_pending_deals(get_db())
+            if t % FULL < PROT:
+                await verify_durable_invariants(get_db())
+                for account_id in {k.split(":")[0] for k in list(_runners)}:
+                    verify_account_invariants(account_id)
         except asyncio.CancelledError:
             raise
         except Exception as e:

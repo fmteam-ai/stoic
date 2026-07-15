@@ -134,7 +134,8 @@ def test_seed_admin_autoheal_clears_stale_flags_on_active_bots():
     })
 
     try:
-        asyncio.get_event_loop().run_until_complete(ensure_indexes())
+        from conftest import run_async
+        run_async(ensure_indexes())
         healed = db.bot_configs.find_one({"_id": cfg_id})
         assert "tripped_at" not in healed, f"stale flag not healed: {healed}"
         assert "tripped_reason" not in healed

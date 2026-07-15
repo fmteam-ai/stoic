@@ -113,10 +113,12 @@ def verify_account_invariants(account_id: str) -> list:
                 violations.append(f"open scalp {tid} has no protective stop")
     acct_risk = sum(v for k, v in ars.stop_risk_by_trade.items()
                     if k != "unprotected_positions")
-    if abs(acct_risk - trade_risk) > max(1.0, 0.05 * max(acct_risk, trade_risk)):
+    # round 9 item 9 — tolerance scaled to rounding precision, not 5%
+    tol = max(0.01, 0.0001 * max(acct_risk, trade_risk, 1.0))
+    if abs(acct_risk - trade_risk) > tol:
         violations.append(
             f"account stop risk ${acct_risk:.2f} != sum of open trade "
-            f"stop risks ${trade_risk:.2f}")
+            f"stop risks ${trade_risk:.2f} (tol ${tol:.2f})")
     if violations:
         _invariant_block.add(account_id)
         logger.error("scalp invariant violations on %s: %s",
@@ -285,6 +287,7 @@ class ScalpRunner:
         self._closed_awaiting_financials: dict = {}
         self.exec_attempts = 0
         self.exec_fills = 0
+        self._last_financial_event: dict | None = None
         self.account: dict | None = None       # preloaded on ingest (item 5)
         self.equity = 0.0
         self.mode = "shadow"
@@ -545,11 +548,22 @@ class ScalpRunner:
             sl, tp = entry - fc.stop_pips * pip, entry + fc.target_pips * pip
         else:
             sl, tp = entry + fc.stop_pips * pip, entry - fc.target_pips * pip
-        from execution import engine_for_account
+        from execution import for_account as engine_for_account
         account = self.account
         if not account:
             return
         engine = engine_for_account(account)
+        # round 9 item 4 — re-confirm account ownership at the LAST moment
+        # before broker submission; a worker that lost its lease mid-pause
+        # must not submit from stale state.
+        if not await ensure_account_lease(db, self.account_id):
+            self.state.record_reject()
+            _bg(lambda: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]},
+                {"$set": {"verdict": "rejected",
+                          "reject_stage": "lease_lost_before_submit"}}),
+                "decision_update")
+            return
         submit_ms = now_ms()
         trade = await engine.execute(
             user_id=self.user_id, account=account,
@@ -781,8 +795,11 @@ class ScalpRunner:
                   "commission": commission, "swap": swap,
                   "risk_applied": True, "lease_epoch": _lease_epoch.get(self.account_id, 0),
                   "at": datetime.now(timezone.utc).isoformat()}
-            _bg(lambda e=ev: db.scalp_financial_events.insert_one(e),
-                "financial_event")
+            self._last_financial_event = ev
+            _bg(lambda e=ev: db.scalp_financial_events.update_one(
+                {"account_id": e["account_id"], "deal_id": e["deal_id"],
+                 "event_type": e["event_type"]},
+                {"$setOnInsert": e}, upsert=True), "financial_event")
             if info:
                 outcome = {
                     "requested_entry_price": info.get("requested_entry"),
@@ -873,8 +890,11 @@ class ScalpRunner:
                   "remaining_lots": float(remaining_lots or 0),
                   "risk_applied": True, "lease_epoch": _lease_epoch.get(self.account_id, 0),
                   "at": datetime.now(timezone.utc).isoformat()}
-            _bg(lambda e=ev: db.scalp_financial_events.insert_one(e),
-                "financial_event")
+            self._last_financial_event = ev
+            _bg(lambda e=ev: db.scalp_financial_events.update_one(
+                {"account_id": e["account_id"], "deal_id": e["deal_id"],
+                 "event_type": e["event_type"]},
+                {"$setOnInsert": e}, upsert=True), "financial_event")
             if info and info.get("decision_id"):
                 rec = {"deal_id": deal_id,
                        "closed_lots": float(closed_lots or 0),
@@ -919,21 +939,50 @@ class ScalpRunner:
                                   "applied_deal_ids": list(self._applied_deal_ids),
                                   "lease_epoch": epoch, "saved_at": now_iso}},
                 upsert=True)
-        await db.scalp_risk_state.update_one(
-            {"account_id": self.account_id, "symbol": "_ACCOUNT"},
+        await self._fenced_account_write(db, epoch, now_iso)
+
+    async def _fenced_account_write(self, db, epoch: int, now_iso: str):
+        """Round 9 critical — the shared _ACCOUNT doc is fenced too."""
+        fence = {"$or": [{"lease_epoch": {"$exists": False}},
+                         {"lease_epoch": {"$lte": epoch}}]}
+        res = await db.scalp_risk_state.update_one(
+            {"account_id": self.account_id, "symbol": "_ACCOUNT", **fence},
             {"$set": {"user_id": self.user_id, **self.account_risk.to_doc(),
-                      "saved_at": now_iso}}, upsert=True)
+                      "lease_epoch": epoch, "saved_at": now_iso}},
+            upsert=False)
+        if not res.matched_count:
+            existing = await db.scalp_risk_state.find_one(
+                {"account_id": self.account_id, "symbol": "_ACCOUNT"},
+                {"lease_epoch": 1})
+            if existing is not None:
+                raise RuntimeError(
+                    f"account risk persist fenced out (stale epoch {epoch} < "
+                    f"{existing.get('lease_epoch')})")
+            await db.scalp_risk_state.update_one(
+                {"account_id": self.account_id, "symbol": "_ACCOUNT"},
+                {"$setOnInsert": {"user_id": self.user_id,
+                                  **self.account_risk.to_doc(),
+                                  "lease_epoch": epoch, "saved_at": now_iso}},
+                upsert=True)
 
     def _persist_risk(self, db):
+        """Async telemetry mirror of the risk snapshots — FENCED like the
+        synchronous path (round 9): a stale-epoch worker's background write
+        silently loses instead of clobbering the owner's state."""
+        epoch = _lease_epoch.get(self.account_id, 0)
+        fence = {"$or": [{"lease_epoch": {"$exists": False}},
+                         {"lease_epoch": {"$lte": epoch}}]}
         _bg(lambda: db.scalp_risk_state.update_one(
-            {"account_id": self.account_id, "symbol": self.symbol},
+            {"account_id": self.account_id, "symbol": self.symbol, **fence},
             {"$set": {"user_id": self.user_id, **self.risk_state.to_doc(),
                       "applied_deal_ids": list(self._applied_deal_ids),
+                      "lease_epoch": epoch,
                       "saved_at": datetime.now(timezone.utc).isoformat()}},
             upsert=True), "risk_state")
         _bg(lambda: db.scalp_risk_state.update_one(
-            {"account_id": self.account_id, "symbol": "_ACCOUNT"},
+            {"account_id": self.account_id, "symbol": "_ACCOUNT", **fence},
             {"$set": {"user_id": self.user_id, **self.account_risk.to_doc(),
+                      "lease_epoch": epoch,
                       "saved_at": datetime.now(timezone.utc).isoformat()}},
             upsert=True), "account_risk_state")
 
@@ -1191,9 +1240,57 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
         # item 6 — risk state + applied deal id are DURABLE before the
         # caller may flip the broker deal to complete
         await r.persist_risk_now(db)
+        # round 9 item 2 — financial event persisted SYNCHRONOUSLY and
+        # idempotently (unique account+deal+event_type) before completion
+        ev = getattr(r, "_last_financial_event", None)
+        if ev and str(ev.get("deal_id")) == str(deal_id):
+            await db.scalp_financial_events.update_one(
+                {"account_id": ev["account_id"], "deal_id": ev["deal_id"],
+                 "event_type": ev["event_type"]},
+                {"$setOnInsert": ev}, upsert=True)
     except Exception as e:  # noqa: BLE001
         return {"applied": False, "reason": f"apply_failed: {e}"}
     return {"applied": True, "reason": None}
+
+
+async def verify_durable_invariants(db) -> dict:
+    """Round 9 item 3 — DATABASE-side invariants that cannot fail open when
+    no runner is loaded: any account with open scalp trades in the DB but no
+    restored runner stays BLOCKED until restoration completes; open scalps
+    without a protective stop block their account too; a restored runner's
+    live position set must equal the DB's open scalp set (broker == DB is
+    enforced separately on every heartbeat by trade_reconciler)."""
+    blocked = []
+    open_trades = await db.trades.find(
+        {"scope": "scalp_fast", "status": "open"}).to_list(200)
+    by_account: dict = {}
+    for tr in open_trades:
+        by_account.setdefault(str(tr.get("account_id")), []).append(tr)
+    for account_id, trs in by_account.items():
+        runners = runners_for_account(account_id)
+        restored = any(r._risk_restored for r in runners)
+        no_stop = [t for t in trs if not float(t.get("stop_loss") or 0)]
+        position_mismatch = False
+        if restored:
+            db_ids = {str(t["_id"]) for t in trs}
+            runner_ids = {tid for r in runners
+                          for tid, lt in r.live_trades.items()
+                          if lt.get("state") == "OPEN"}
+            position_mismatch = db_ids != runner_ids
+        if not restored or no_stop or position_mismatch:
+            _invariant_block.add(account_id)
+            blocked.append({"account_id": account_id,
+                            "open_in_db": len(trs),
+                            "runner_restored": restored,
+                            "position_mismatch": position_mismatch,
+                            "unstopped": len(no_stop)})
+        elif account_id in _invariant_block:
+            # clean durable state — re-run the in-memory checks, which
+            # clear the block themselves on a clean pass
+            verify_account_invariants(account_id)
+    if blocked:
+        logger.error("durable invariant violations: %s", blocked)
+    return {"blocked": blocked}
 
 
 async def recover_pending_deals(db, older_than_sec: int = 60,

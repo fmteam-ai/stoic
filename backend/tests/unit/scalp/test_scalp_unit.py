@@ -283,7 +283,8 @@ class TestModelCalibration:
 def _stub_db():
     db = MagicMock()
     for coll in ("scalp_decisions", "scalp_ticks", "scalp_risk_state",
-                 "scalp_configs", "trades", "broker_deals", "scalp_owners"):
+                 "scalp_configs", "trades", "broker_deals", "scalp_owners",
+                 "scalp_financial_events"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
         c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
@@ -1203,7 +1204,6 @@ class TestRound8InvariantsAndFencing:
                                "entry_px": 1.08, "stop_px": 1.079,
                                "decision_id": "d", "est_cost_usd": 0.5}
         db = _stub_db()
-        db.scalp_financial_events.insert_one = AsyncMock()
 
         async def run():
             r.on_trade_closed("t1", pnl=-2.0, commission=-0.3, swap=0.0,
@@ -1211,7 +1211,14 @@ class TestRound8InvariantsAndFencing:
             for _ in range(5):
                 await asyncio.sleep(0)
         asyncio.run(run())
-        ev = db.scalp_financial_events.insert_one.call_args.args[0]
+        # round 9 — the ledger write is an idempotent upsert keyed on
+        # (account_id, deal_id, event_type)
+        call = db.scalp_financial_events.update_one.call_args
+        flt, update = call.args
+        assert flt == {"account_id": "r8-ledger", "deal_id": "L1",
+                       "event_type": "full_close"}
+        assert call.kwargs.get("upsert") is True
+        ev = update["$setOnInsert"]
         assert ev["event_type"] == "full_close"
         assert ev["net_pnl"] == pytest.approx(-2.3)
         assert ev["risk_applied"] is True and ev["deal_id"] == "L1"
@@ -1231,3 +1238,193 @@ def test_ea_144_tick_stream_wiring():
     # v1.45 — remaining position volume on every live deal report
     assert '\\"position_volume\\":%.2f' in src
     assert "POSITION_VOLUME" in src
+
+
+# ---------------- round-9 review behaviors ----------------
+class TestRound9Hardening:
+    def test_account_doc_write_fenced_out(self):
+        """Round 9 item 1 — the shared _ACCOUNT risk doc is fenced: a stale
+        epoch may not overwrite a newer owner's state."""
+        r = ScalpRunner("r9-acct-fence", "u1", "EURUSD")
+        db = _stub_db()
+        db.scalp_risk_state.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=0))
+        db.scalp_risk_state.find_one = AsyncMock(
+            return_value={"lease_epoch": 9})
+        with pytest.raises(RuntimeError, match="account risk persist fenced"):
+            asyncio.run(r._fenced_account_write(
+                db, 3, "2026-06-01T00:00:00+00:00"))
+
+    def test_account_doc_write_inserts_when_absent(self):
+        r = ScalpRunner("r9-acct-new", "u1", "EURUSD")
+        db = _stub_db()
+        db.scalp_risk_state.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=0))
+        db.scalp_risk_state.find_one = AsyncMock(return_value=None)
+        asyncio.run(r._fenced_account_write(
+            db, 3, "2026-06-01T00:00:00+00:00"))
+        last = db.scalp_risk_state.update_one.call_args
+        assert last.kwargs.get("upsert") is True
+        assert last.args[1]["$setOnInsert"]["lease_epoch"] == 3
+
+    def test_background_persist_carries_fence(self):
+        """Round 9 item 1 — asynchronous risk mirrors carry the SAME fence
+        as the synchronous path (filter + stored epoch)."""
+        from scalp import engine as eng
+        r = ScalpRunner("r9-bg-fence", "u1", "EURUSD")
+        eng._lease_epoch["r9-bg-fence"] = 5
+        db = _stub_db()
+
+        async def run():
+            r._persist_risk(db)
+            for _ in range(5):
+                await asyncio.sleep(0)
+        asyncio.run(run())
+        calls = db.scalp_risk_state.update_one.call_args_list
+        assert len(calls) == 2                    # symbol doc + _ACCOUNT doc
+        for c in calls:
+            flt, update = c.args
+            assert "$or" in flt                   # fence filter present
+            assert update["$set"]["lease_epoch"] == 5
+
+    def test_lease_lost_before_submit_rejected(self):
+        """Round 9 item 4 — ownership is re-confirmed at the LAST moment
+        before broker submission; a worker without the lease never submits."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from scalp import engine as eng
+        r = ScalpRunner("r9-lease-sub", "u1", "EURUSD")
+        r.account = {"_id": "acc9", "equity": 10_000.0}
+        now = int(time.time() * 1000)
+        r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=now,
+                                 received_time_ms=now, bid=1.08,
+                                 ask=1.08004))
+        mid = (1.08 + 1.08004) / 2.0
+        decision = {"decision_id": "d9", "direction": "BUY",
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": mid}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0)
+        fake_engine = MagicMock(execute=AsyncMock())
+        db = _stub_db()
+
+        async def run():
+            with patch("execution.for_account",
+                       return_value=fake_engine), \
+                 patch.object(eng, "ensure_account_lease",
+                              AsyncMock(return_value=False)):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(5):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        fake_engine.execute.assert_not_awaited()
+        sets = [c.args[1]["$set"] for c
+                in db.scalp_decisions.update_one.call_args_list]
+        assert any(s.get("reject_stage") == "lease_lost_before_submit"
+                   for s in sets)
+
+    def test_durable_invariants_block_unrestored_and_unstopped(self):
+        """Round 9 item 3 — DB-side invariants: open scalps with no restored
+        runner, or without a protective stop, block their account."""
+        from scalp.engine import (verify_durable_invariants,
+                                  _invariant_block, _runners)
+        db = _stub_db()
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[
+            {"account_id": "r9-din-1", "stop_loss": 1.07},   # no runner
+            {"_id": "t2", "account_id": "r9-din-2", "stop_loss": 0.0},
+            {"_id": "t3", "account_id": "r9-din-3", "stop_loss": 1.07},
+        ])
+        db.trades.find = MagicMock(return_value=cursor)
+        r2 = ScalpRunner("r9-din-2", "u1", "EURUSD")
+        r2._risk_restored = True
+        _runners["r9-din-2:EURUSD"] = r2
+        # r9-din-3: restored AND consistent (DB open set == runner live set)
+        r3 = ScalpRunner("r9-din-3", "u1", "EURUSD")
+        r3._risk_restored = True
+        r3.live_trades["t3"] = {"state": "OPEN", "stop_px": 1.07,
+                                "stop_risk_usd": 5.0}
+        r3.account_risk.open_scalps = 1
+        r3.account_risk.stop_risk_by_trade.clear()
+        r3.account_risk.add_stop_risk("t3", 5.0)
+        _runners["r9-din-3:EURUSD"] = r3
+        try:
+            out = asyncio.run(verify_durable_invariants(db))
+            blocked = {b["account_id"]: b for b in out["blocked"]}
+            assert set(blocked) == {"r9-din-1", "r9-din-2"}
+            assert blocked["r9-din-2"]["position_mismatch"] is True
+            assert "r9-din-1" in _invariant_block
+            assert "r9-din-2" in _invariant_block
+            assert "r9-din-3" not in _invariant_block
+        finally:
+            _invariant_block.discard("r9-din-1")
+            _invariant_block.discard("r9-din-2")
+            _runners.pop("r9-din-2:EURUSD", None)
+            _runners.pop("r9-din-3:EURUSD", None)
+
+    def test_emergency_stop_uses_instrument_registry_pip(self):
+        """Round 9 item 5 — no hardcoded pip sizes: XAUUSD uses the
+        authoritative registry (0.1), not the old 0.01 guess."""
+        from protection_guard import (calculate_emergency_stop,
+                                      EMERGENCY_RISK_PCT, FALLBACK_PRICE_PCT)
+        from pip_utils import pip_size, pip_value_usd_per_lot
+        assert pip_size("XAUUSD") == pytest.approx(0.1)
+        entry, lot, equity = 2400.0, 0.01, 10_000.0
+        sl = calculate_emergency_stop(entry, "BUY", lot, "XAUUSD", equity)
+        pv = pip_value_usd_per_lot("XAUUSD", None) or 10.0
+        budget = equity * EMERGENCY_RISK_PCT / 100.0
+        dist = min((budget / (lot * pv)) * pip_size("XAUUSD"),
+                   entry * FALLBACK_PRICE_PCT / 100.0)
+        assert sl == pytest.approx(entry - dist, abs=1e-4)
+
+    def test_emergency_stop_none_on_zero_equity_or_subpip(self):
+        """Round 9 item 5 — the budget is never silently inflated: zero
+        equity or a sub-pip stop distance escalates to a close instead."""
+        from protection_guard import calculate_emergency_stop
+        assert calculate_emergency_stop(1.08, "BUY", 0.05, "EURUSD", 0.0) is None
+        assert calculate_emergency_stop(1.08, "BUY", 10.0, "EURUSD", 100.0) is None
+
+    def _ack_env(self, trade):
+        from unittest.mock import patch
+        import routes.bridge_routes as br
+        db = _stub_db()
+        db.trades.find_one = AsyncMock(return_value=trade)
+        acc = {"_id": "acc-ack", "user_id": "u1"}
+        patches = [patch.object(br, "get_db", return_value=db),
+                   patch.object(br, "_account_by_token",
+                                AsyncMock(return_value=acc)),
+                   patch.object(br.ws_manager, "broadcast", AsyncMock())]
+        return br, db, patches
+
+    def test_modification_ack_confirms_emergency_protection(self):
+        """Round 9 item 8 — protection is RESOLVED only on an explicit
+        broker acknowledgment: confirmed_stop_loss is recorded."""
+        trade = {"_id": "0" * 24, "account_id": "acc-ack", "action": "BUY",
+                 "entry_price": 1.08, "protection_state":
+                 "EMERGENCY_STOP_PENDING", "requested_stop_loss": 1.079,
+                 "breakeven_set": False}
+        br, db, patches = self._ack_env(trade)
+        payload = br.BridgeModificationAck(
+            bridge_token="t", trade_id="0" * 24, type="MODIFY_SL",
+            success=True, new_sl=1.079)
+        with patches[0], patches[1], patches[2]:
+            asyncio.run(br.modification_ack(payload))
+        update = db.trades.update_one.call_args.args[1]["$set"]
+        assert update["protection_state"] == "RESOLVED"
+        assert update["protection_missing"] is False
+        assert update["confirmed_stop_loss"] == pytest.approx(1.079)
+        assert update["stop_loss"] == pytest.approx(1.079)
+
+    def test_modification_ack_failure_returns_to_unknown(self):
+        """Round 9 item 8 — a FAILED emergency-stop ack never assumes
+        protection: the trade returns to PROTECTION_UNKNOWN for retry."""
+        trade = {"_id": "0" * 24, "account_id": "acc-ack", "action": "BUY",
+                 "entry_price": 1.08,
+                 "protection_state": "EMERGENCY_STOP_PENDING"}
+        br, db, patches = self._ack_env(trade)
+        payload = br.BridgeModificationAck(
+            bridge_token="t", trade_id="0" * 24, type="MODIFY_SL",
+            success=False, error="broker rejected SL")
+        with patches[0], patches[1], patches[2]:
+            asyncio.run(br.modification_ack(payload))
+        update = db.trades.update_one.call_args.args[1]["$set"]
+        assert update["protection_state"] == "PROTECTION_UNKNOWN"
+        assert update["last_modification_error"] == "broker rejected SL"
