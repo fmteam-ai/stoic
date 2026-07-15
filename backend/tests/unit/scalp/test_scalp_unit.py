@@ -900,7 +900,10 @@ class TestRound7ApplyConfirmedReconciliation:
         assert res["applied"] is False
         assert res["reason"] == "runner_unavailable"
 
-    def test_recovery_no_trade_completes_with_note(self):
+    def test_recovery_no_trade_grace_retries_then_escalates(self):
+        """Round 8 item 7 — a missing trade may be a RACE: grace-retry with
+        attempt counting, escalate to manual review after 5, NEVER silently
+        complete."""
         from scalp.engine import recover_pending_deals
         deal = {"deal_id": 801, "account_id": "r7-nt", "mt5_ticket": 1,
                 "financial_reconciliation_status": "pending",
@@ -909,9 +912,20 @@ class TestRound7ApplyConfirmedReconciliation:
         db.broker_deals.find = MagicMock(return_value=_AsyncCursor([deal]))
         db.trades.find_one = AsyncMock(return_value=None)
         out = asyncio.run(recover_pending_deals(db, older_than_sec=0))
-        assert out == {"recovered": 0, "marked_complete": 1, "kept_pending": 0}
-        marked = db.broker_deals.update_one.call_args.args[1]["$set"]
-        assert marked["reconciliation_note"] == "no_matching_trade"
+        assert out == {"recovered": 0, "marked_complete": 0, "kept_pending": 1}
+        upd = db.broker_deals.update_one.call_args.args[1]
+        assert upd["$set"]["reconciliation_error"] == "no_matching_trade_yet"
+        assert upd["$inc"]["reconciliation_attempts"] == 1
+        # after 5 attempts → escalation, still not "complete"
+        deal5 = {**deal, "reconciliation_attempts": 5}
+        db2 = _stub_db()
+        db2.broker_deals.find = MagicMock(return_value=_AsyncCursor([deal5]))
+        db2.trades.find_one = AsyncMock(return_value=None)
+        out2 = asyncio.run(recover_pending_deals(db2, older_than_sec=0))
+        assert out2["kept_pending"] == 1 and out2["marked_complete"] == 0
+        esc = db2.broker_deals.update_one.call_args.args[1]["$set"]
+        assert esc["financial_reconciliation_status"] == "manual_reconciliation_required"
+        assert esc["reconciliation_note"] == "no_matching_trade"
 
     def test_recovery_non_scalp_completes_with_note(self):
         from scalp.engine import recover_pending_deals
@@ -1017,6 +1031,191 @@ class TestRound7DealsAndLease:
                         in db.scalp_risk_state.find_one.await_args_list
                         if c.args[0].get("symbol") == "_ACCOUNT"]
         assert len(acct_queries) == 1          # NOT re-run by second runner
+
+
+# ---------------- round-8 review behaviors ----------------
+class TestRound8ProtectionRecovery:
+    def _trade(self, **kw):
+        base = {"_id": "trP", "account_id": "000000000000000000000001",
+                "user_id": "u1", "symbol": "EURUSD", "action": "BUY",
+                "status": "open", "entry_price": 1.08, "lot_size": 0.05,
+                "stop_loss": 0.0, "take_profit": 0.0,
+                "protection_missing": True, "mt5_ticket": 42}
+        base.update(kw)
+        return base
+
+    def _guard_db(self, trades):
+        db = _stub_db()
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=trades)
+        db.trades.find = MagicMock(return_value=cursor)
+        db.trades.distinct = AsyncMock(
+            return_value=[t["account_id"] for t in trades
+                          if t.get("protection_missing")])
+        db.notifications.insert_one = AsyncMock()
+        db.accounts.find_one = AsyncMock(return_value={"equity": 10_000.0})
+        return db
+
+    def test_emergency_stop_calculation(self):
+        from protection_guard import calculate_emergency_stop
+        sl = calculate_emergency_stop(1.08, "BUY", 0.05, "EURUSD", 10_000.0)
+        assert sl is not None and sl < 1.08
+        # capped at 0.5% of price
+        assert 1.08 - sl <= 1.08 * 0.005 + 1e-9
+        sl_sell = calculate_emergency_stop(1.08, "SELL", 0.05, "EURUSD", 10_000.0)
+        assert sl_sell > 1.08
+
+    def test_unprotected_position_gets_emergency_stop_queued(self):
+        from protection_guard import repair_unprotected_positions
+        tr = self._trade()
+        db = self._guard_db([tr])
+        out = asyncio.run(repair_unprotected_positions(db))
+        assert out["stops_queued"] == 1
+        sets = [c.args[1] for c in db.trades.update_one.call_args_list]
+        mod = [s for s in sets if s.get("$set", {}).get("protection_state")
+               == "EMERGENCY_STOP_PENDING"][0]
+        pend = mod["$set"]["pending_modification"]
+        assert pend["type"] == "MODIFY_SL" and pend["new_sl"] < 1.08
+        assert mod["$inc"]["protection_repair_attempts"] == 1
+        db.notifications.insert_one.assert_awaited()
+        # new scalp entries blocked for the account
+        from scalp.engine import _protection_block
+        assert tr["account_id"] in _protection_block
+
+    def test_protection_resolved_when_stop_confirmed(self):
+        from protection_guard import repair_unprotected_positions
+        from scalp.engine import _protection_block
+        tr = self._trade(_id="trR8", account_id="000000000000000000000002",
+                         stop_loss=1.0795)
+        db = self._guard_db([tr])
+        db.trades.distinct = AsyncMock(return_value=[])   # nothing left flagged
+        out = asyncio.run(repair_unprotected_positions(db))
+        assert out["resolved"] == 1 and out["stops_queued"] == 0
+        sets = [c.args[1]["$set"] for c in db.trades.update_one.call_args_list]
+        assert any(s.get("protection_state") == "RESOLVED"
+                   and s.get("protection_missing") is False for s in sets)
+        assert "000000000000000000000002" not in _protection_block
+
+    def test_exhausted_attempts_escalate_to_emergency_close(self):
+        from protection_guard import repair_unprotected_positions
+        tr = self._trade(_id="trC8", account_id="000000000000000000000003",
+                         protection_repair_attempts=3)
+        db = self._guard_db([tr])
+        out = asyncio.run(repair_unprotected_positions(db))
+        assert out["closes_queued"] == 1
+        sets = [c.args[1]["$set"] for c in db.trades.update_one.call_args_list]
+        close = [s for s in sets
+                 if s.get("protection_state") == "EMERGENCY_CLOSE_PENDING"][0]
+        assert close["close_requested"] is True
+        assert close["pending_modification"]["type"] == "FULL_CLOSE"
+
+    def test_pending_modification_waits_for_ea_ack(self):
+        from protection_guard import repair_unprotected_positions
+        tr = self._trade(_id="trW8", account_id="000000000000000000000004",
+                         pending_modification={"type": "MODIFY_SL"})
+        db = self._guard_db([tr])
+        out = asyncio.run(repair_unprotected_positions(db))
+        assert out == {"resolved": 0, "stops_queued": 0, "closes_queued": 0,
+                       "accounts_blocked": ["000000000000000000000004"]}
+
+    def test_protection_block_vetoes_scalp_entries(self):
+        from scalp.engine import set_protection_block, _protection_block
+        set_protection_block("acct-pb", True)
+        assert "acct-pb" in _protection_block
+        set_protection_block("acct-pb", False)
+        assert "acct-pb" not in _protection_block
+
+    def test_conservative_risk_counted_while_unprotected(self):
+        from protection_guard import repair_unprotected_positions
+        from scalp.engine import account_risk_state, set_protection_block
+        tr = self._trade(_id="trK8", account_id="000000000000000000000005")
+        db = self._guard_db([tr])
+        asyncio.run(repair_unprotected_positions(db))
+        ars = account_risk_state("000000000000000000000005")
+        assert ars.stop_risk_by_trade["unprotected_positions"] == pytest.approx(50.0)
+        set_protection_block("000000000000000000000005", False)
+        ars.remove_stop_risk("unprotected_positions")
+
+
+class TestRound8InvariantsAndFencing:
+    def test_invariants_pass_on_consistent_state(self):
+        from scalp.engine import verify_account_invariants, _runners
+        r = ScalpRunner("r8-inv-ok", "u1", "EURUSD")
+        _runners["r8-inv-ok:EURUSD"] = r
+        r.live_trades["t1"] = {"state": "OPEN", "stop_px": 1.079,
+                               "stop_risk_usd": 10.0}
+        r.account_risk.open_scalps = 1
+        r.account_risk.stop_risk_by_trade.clear()
+        r.account_risk.add_stop_risk("t1", 10.0)
+        assert verify_account_invariants("r8-inv-ok") == []
+
+    def test_invariants_catch_missing_stop_and_risk_mismatch(self):
+        from scalp.engine import (verify_account_invariants, _runners,
+                                  _invariant_block)
+        r = ScalpRunner("r8-inv-bad", "u1", "EURUSD")
+        _runners["r8-inv-bad:EURUSD"] = r
+        r.live_trades["t1"] = {"state": "OPEN", "stop_px": None,
+                               "stop_risk_usd": 10.0}
+        r.account_risk.open_scalps = 5          # wrong count
+        r.account_risk.stop_risk_by_trade.clear()
+        r.account_risk.add_stop_risk("t1", 99.0)  # wrong amount
+        v = verify_account_invariants("r8-inv-bad")
+        assert len(v) >= 2
+        assert "r8-inv-bad" in _invariant_block
+        # clean state clears the block
+        r.live_trades["t1"]["stop_px"] = 1.079
+        r.account_risk.open_scalps = 1
+        r.account_risk.stop_risk_by_trade["t1"] = 10.0
+        assert verify_account_invariants("r8-inv-bad") == []
+        assert "r8-inv-bad" not in _invariant_block
+
+    def test_stale_epoch_persist_fenced_out(self):
+        from scalp import engine as eng
+        r = ScalpRunner("r8-fence", "u1", "EURUSD")
+        eng._lease_epoch["r8-fence"] = 3
+        db = _stub_db()
+        # fence filter does not match (doc holds a newer epoch)...
+        db.scalp_risk_state.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=0))
+        # ...and the doc EXISTS → stale worker must be rejected
+        db.scalp_risk_state.find_one = AsyncMock(
+            return_value={"lease_epoch": 7})
+        with pytest.raises(RuntimeError, match="fenced out"):
+            asyncio.run(r.persist_risk_now(db))
+
+    def test_partial_close_exact_stop_risk_recompute(self):
+        """Round 8 item 6 — remaining risk = remaining_lots × stop distance
+        × pip value (exact), not proportional scaling."""
+        r = ScalpRunner("r8-exact", "u1", "EURUSD")
+        r.live_trades["t1"] = {"state": "OPEN", "opened_ms": 0,
+                               "direction": "BUY", "lot": 0.10,
+                               "entry_px": 1.0800, "stop_px": 1.0785,
+                               "decision_id": "d", "est_cost_usd": 0.5}
+        r.account_risk.add_stop_risk("t1", 999.0)   # stale/wrong value
+        r.on_partial_close("t1", 0.06, 0.04, pnl=1.0, deal_id="EX1")
+        # 0.04 lots × 15 pips × $10 = $6.00 exactly
+        assert r.account_risk.stop_risk_by_trade["t1"] == pytest.approx(6.0)
+
+    def test_financial_event_ledger_written(self):
+        r = ScalpRunner("r8-ledger", "u1", "EURUSD")
+        r.live_trades["t1"] = {"state": "OPEN", "opened_ms": 0,
+                               "direction": "BUY", "lot": 0.05,
+                               "entry_px": 1.08, "stop_px": 1.079,
+                               "decision_id": "d", "est_cost_usd": 0.5}
+        db = _stub_db()
+        db.scalp_financial_events.insert_one = AsyncMock()
+
+        async def run():
+            r.on_trade_closed("t1", pnl=-2.0, commission=-0.3, swap=0.0,
+                              deal_id="L1", source="broker_deal", db=db)
+            for _ in range(5):
+                await asyncio.sleep(0)
+        asyncio.run(run())
+        ev = db.scalp_financial_events.insert_one.call_args.args[0]
+        assert ev["event_type"] == "full_close"
+        assert ev["net_pnl"] == pytest.approx(-2.3)
+        assert ev["risk_applied"] is True and ev["deal_id"] == "L1"
+
 
 
 # ---------------- EA coherence (project-relative path) ----------------

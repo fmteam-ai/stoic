@@ -316,13 +316,19 @@ async def _auto_heal_loop():
 async def _scalp_reconcile_loop():
     """Round 6 · crash-recovery sweep for scalp financial reconciliation —
     resumes broker deals persisted as 'pending' that never reached the
-    scalp runner (process died between persist and apply)."""
-    from scalp.engine import recover_pending_deals
+    scalp runner (process died between persist and apply).
+    Round 8 · also runs the protection-recovery state machine and the
+    reconciliation invariant checks every cycle."""
+    from scalp.engine import recover_pending_deals, verify_account_invariants, _runners
+    from protection_guard import repair_unprotected_positions
     INTERVAL = int(os.environ.get("SCALP_RECONCILE_INTERVAL_SEC", "300"))
     while True:
         try:
             await asyncio.sleep(INTERVAL)
             await recover_pending_deals(get_db())
+            await repair_unprotected_positions(get_db())
+            for account_id in {k.split(":")[0] for k in list(_runners)}:
+                verify_account_invariants(account_id)
         except asyncio.CancelledError:
             raise
         except Exception as e:

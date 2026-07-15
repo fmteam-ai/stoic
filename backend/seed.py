@@ -71,6 +71,17 @@ async def ensure_indexes():
         [("user_id", 1), ("account_id", 1)], unique=True
     )
     await db.conditional_triggers.create_index([("user_id", 1), ("active", 1)])
+    # Round 8 item 1 — scalp reconciliation / ownership integrity constraints
+    await db.scalp_owners.create_index("account_id", unique=True)
+    await db.broker_deals.create_index([("account_id", 1), ("deal_id", 1)],
+                                       unique=True)
+    await db.broker_deals.create_index([("financial_reconciliation_status", 1),
+                                        ("received_at", 1)])
+    await db.scalp_risk_state.create_index([("account_id", 1), ("symbol", 1)],
+                                           unique=True)
+    await db.scalp_financial_events.create_index([("account_id", 1), ("at", -1)])
+    await db.broker_time_offsets.create_index([("account_id", 1),
+                                               ("effective_from", -1)])
 
     # broker_deals — idempotency log of every MT5 deal reported via
     # /bridge/external-deal. Unique on (deal_id, account_id) so a single

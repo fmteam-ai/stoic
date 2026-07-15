@@ -481,3 +481,21 @@ Remaining: dedicated stateful scalp worker / sticky routing for multi-worker dep
 6. persist_risk_now awaited before completion (risk state durable before deal flips complete); dead-letter now writes JSONL synchronously FIRST then replicates to Mongo outbox async.
 - Tests: 12 new Round-7 tests (apply-confirmed application, recovery notes/kept-pending, lease contention/claim/renew, classify_close, single account init). Scalp suite 86 pass; FULL backend suite 1946 passed / 0 failed.
 Remaining: dedicated stateful scalp service (lease is minimum enforcement), reconciliation_event_id hard requirement in live mode (P3), financial event ledger with atomic DB-side counters (P2), expected-net-return regression model (P1), GBPUSD after validation (P2).
+
+## Scalp Review Round 8 (2026-07 session) — Protection Auto-Remediation + Fencing DONE
+1. CRITICAL: /app/backend/protection_guard.py — protection-recovery state machine (PROTECTION_UNKNOWN → EMERGENCY_STOP_PENDING → RESOLVED | EMERGENCY_CLOSE_PENDING). repair_unprotected_positions(db) sweep: EA-confirmed SL → RESOLVED; else queue MODIFY_SL emergency stop (calculate_emergency_stop: 0.5% equity budget, capped 0.5% of price); after 3 attempts → FULL_CLOSE; waits for pending EA ack. While unprotected: scalp entries blocked (engine._protection_block via set_protection_block), conservative 0.5%-equity risk counted (stop_risk key "unprotected_positions"), user notified (db.notifications). Wired into _scalp_reconcile_loop.
+2. Reconciliation invariants: engine.verify_account_invariants(account_id) — open count, stop-risk sum equality, every open scalp has a stop; violations → _invariant_block vetoes new entries; run each reconcile cycle.
+3. Lease fencing (item 2): lease_epoch $inc on ownership CHANGE (not renewal); persist_risk_now epoch-fenced ($lte filter) — stale worker raises "fenced out"; ledger events carry epoch.
+4. Financial event ledger (item 3, lightweight): scalp_financial_events immutable rows (full_close/partial_close, net/trading pnl, cost, remaining_lots, risk_applied, lease_epoch) on every close.
+5. Recovery grace (item 7): no_matching_trade → grace retry ($inc attempts, error no_matching_trade_yet); after 5 attempts → manual_reconciliation_required (never silently complete); not_scalp_scope stays definitive-complete.
+6. Reversal policy (item 4): scalp_fast inout reversals queue immediate FULL_CLOSE (close_reason unexpected_reversal, EMERGENCY_CLOSE_PENDING); non-scalp reversals tracked + protection_missing repaired by guard.
+7. classify_close uses instrument min_lot/lot_step from scalp.instruments (item 5); partial close recomputes EXACT remaining stop risk (remaining_lots × stop distance × pip value) instead of proportional scaling (item 6).
+8. Unique indexes (item 1, seed.py): scalp_owners.account_id, broker_deals(account_id,deal_id), scalp_risk_state(account_id,symbol) + query indexes broker_deals(status,received_at), scalp_financial_events, broker_time_offsets. No dup rows existed; backend restart clean.
+9. Broker offset history (item 8): db.broker_time_offsets rows on offset change; backfilled deals use offset effective AT deal timestamp.
+10. Fixed pytest class-scoped fixture warning (test_scalp_api ctx → @staticmethod).
+- Tests: 12 new Round-8 tests. Scalp suite 98 pass; FULL suite 1958 passed / 0 failed.
+
+## Trade review findings (Jul 15, user request)
+- "Silence" root causes: PANIC LOCK pressed 3× (bots off 01:40–13:23, 17:29–18:00, and since 21:11 — STILL OFF); when on, MC gate vetoed 214 BUY intents (drift-blind simulation: 42–47% TP-first in trend), exhaustion gate blocked late chases, anti-tilt froze 1h, EOD quiet 20:44–21:04 (correct).
+- "5 of 6 losses": Jul-15-closed autos = Jul-14 evening SELLs force-flattened by user panic (4/5 losers never hit SL) + 2 counter-trend scalps panic-closed. Two-day net ≈ -$15.
+- Structural defects identified (NOT yet fixed, awaiting user choice): (b) drift-aware Monte Carlo, (c) symmetric counter-trend fade gate, (d) EOD flatten for intraday entries.

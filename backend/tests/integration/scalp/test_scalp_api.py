@@ -44,8 +44,9 @@ def _impulse_pullback_path(pip=0.0001):
 
 
 class TestScalpApi:
+    @staticmethod
     @pytest.fixture(scope="class")
-    def ctx(self):
+    def ctx():
         api = _api_base()
         s = requests.Session()
         email = f"TEST_scalp_{uuid.uuid4().hex[:6]}@example.com"

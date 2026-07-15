@@ -1091,7 +1091,16 @@ async def external_deal(payload: BridgeExternalDeal):
             deal_dt = datetime.fromtimestamp(int(broker_deal_epoch), tz=timezone.utc)
             age_sec = (now_dt - deal_dt).total_seconds()
             if payload.backfill or age_sec > 600:
+                # Round 8 item 8 — use the offset that was VALID AT the deal
+                # timestamp (offset history), not just the current one; DST
+                # transitions and broker server-time changes stay correct.
                 offset = int(acc.get("broker_utc_offset_sec") or 0)
+                hist = await db.broker_time_offsets.find_one(
+                    {"account_id": account_id,
+                     "effective_from": {"$lte": deal_dt.isoformat()}},
+                    sort=[("effective_from", -1)])
+                if hist is not None:
+                    offset = int(hist.get("offset_seconds") or offset)
                 deal_iso = datetime.fromtimestamp(
                     int(broker_deal_epoch) - offset, tz=timezone.utc
                 ).isoformat()
@@ -1104,6 +1113,13 @@ async def external_deal(payload: BridgeExternalDeal):
                         {"_id": acc["_id"]},
                         {"$set": {"broker_utc_offset_sec": snapped}},
                     )
+                    # persist offset history with effective dates (round 8)
+                    await db.broker_time_offsets.insert_one({
+                        "account_id": account_id,
+                        "broker_server": acc.get("broker_server") or acc.get("broker"),
+                        "offset_seconds": snapped,
+                        "effective_from": now_dt.isoformat(),
+                    })
         except (ValueError, OSError, OverflowError):
             pass
 
@@ -1204,6 +1220,7 @@ async def external_deal(payload: BridgeExternalDeal):
         # protection instead of silently running unstopped.
         if payload.magic == STOIC_MAGIC:
             trade_doc["protection_missing"] = True
+            trade_doc["protection_state"] = "PROTECTION_UNKNOWN"
             logger.warning(
                 "bot-owned 'in' deal %s (ticket %s) had no pending sibling — "
                 "trade created with protection_missing=True",
@@ -1236,11 +1253,16 @@ async def external_deal(payload: BridgeExternalDeal):
         # Round 7 items 3/4 — broker position_volume is authoritative but a
         # sub-minimum rounding residual must NOT count as an open position,
         # and broker-reported volume is NEVER inflated to the minimum lot.
+        # Round 8 item 5 — use the instrument's real volume spec when known.
         from scalp.deals import classify_close
+        from scalp.instruments import approved as _scalp_approved
+        cfg = _scalp_approved((existing.get("symbol") or "").upper())
         is_partial_close, remaining_lots = classify_close(
             payload.position_volume,
             float(existing.get("lot_size") or 0),
-            float(payload.lots or 0))
+            float(payload.lots or 0),
+            min_lot=cfg.min_lot if cfg else 0.01,
+            lot_step=cfg.lot_step if cfg else 0.01)
 
     if is_partial_close:
         new_lot = round(remaining_lots, 3)
@@ -1346,6 +1368,7 @@ async def external_deal(payload: BridgeExternalDeal):
         # flag it protection_missing (no SL/TP known yet).
         if (payload.deal_entry == "inout" and payload.position_volume
                 and float(payload.position_volume) >= 0.005):
+            was_scalp = existing.get("scope") == "scalp_fast"
             rev_doc = {
                 "user_id": user_id, "account_id": account_id,
                 "symbol": payload.symbol, "action": payload.action,
@@ -1359,13 +1382,28 @@ async def external_deal(payload: BridgeExternalDeal):
                 "origin": trade_origin, "magic_number": int(payload.magic or 0),
                 "external_open": True, "reversal_open": True,
                 "protection_missing": True,
+                "protection_state": "PROTECTION_UNKNOWN",
             }
+            if was_scalp:
+                # Round 8 item 4 — scalp strategies do NOT support reversals:
+                # flatten the unexpected opposite position immediately.
+                rev_doc.update({
+                    "close_requested": True,
+                    "close_reason": "unexpected_reversal",
+                    "protection_state": "EMERGENCY_CLOSE_PENDING",
+                    "pending_modification": {
+                        "type": "FULL_CLOSE",
+                        "reason": "unexpected_scalp_reversal",
+                        "requested_at": datetime.now(timezone.utc).isoformat()},
+                })
             rev = await db.trades.insert_one(rev_doc)
             logger.warning(
                 "inout REVERSAL on ticket %s: closed tracked side, broker "
-                "still holds %.2f lots %s — created trade %s with "
-                "protection_missing=True", payload.mt5_ticket,
-                float(payload.position_volume), payload.action,
+                "still holds %.2f lots %s — %s (trade %s)",
+                payload.mt5_ticket, float(payload.position_volume),
+                payload.action,
+                "EMERGENCY CLOSE queued (scalp)" if was_scalp
+                else "tracked with protection_missing=True",
                 str(rev.inserted_id))
     else:
         # Close event with no matching trade — user opened AND closed on MT5

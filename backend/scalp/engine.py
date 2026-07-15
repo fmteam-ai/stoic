@@ -64,6 +64,9 @@ _owner_pid = os.getpid()
 _worker_id = f"{os.uname().nodename}:{_owner_pid}"
 LEASE_TTL_SEC = 30
 _lease_cache: dict = {}                # account_id -> (expires_epoch, owned)
+_lease_epoch: dict = {}                # account_id -> fencing token we hold
+_protection_block: set = set()         # accounts with unprotected positions
+_invariant_block: set = set()          # accounts failing invariant checks
 _runners: dict = {}
 _account_risk: dict = {}               # account_id -> account-wide RiskState
 _account_restored: set = set()         # account-level state loaded once
@@ -79,6 +82,50 @@ def account_risk_state(account_id: str) -> RiskState:
     return rs
 
 
+def set_protection_block(account_id: str, blocked: bool) -> None:
+    """Round 8 — while an account has ANY unprotected open position, new
+    scalp entries are refused (flag maintained by protection_guard sweep)."""
+    if blocked:
+        _protection_block.add(account_id)
+    else:
+        _protection_block.discard(account_id)
+
+
+def verify_account_invariants(account_id: str) -> list:
+    """Round 8 item 9 — in-memory reconciliation invariants. Violations
+    block new entries for the account until a clean pass."""
+    violations = []
+    runners = runners_for_account(account_id)
+    if not runners:
+        _invariant_block.discard(account_id)
+        return violations
+    ars = account_risk_state(account_id)
+    open_total = sum(len(r.live_trades) for r in runners)
+    if ars.open_scalps != open_total:
+        violations.append(
+            f"account open count {ars.open_scalps} != live trades {open_total}")
+    trade_risk = 0.0
+    for r in runners:
+        for tid, info in r.live_trades.items():
+            trade_risk += float(info.get("stop_risk_usd") or
+                                ars.stop_risk_by_trade.get(tid, 0.0))
+            if not info.get("stop_px"):
+                violations.append(f"open scalp {tid} has no protective stop")
+    acct_risk = sum(v for k, v in ars.stop_risk_by_trade.items()
+                    if k != "unprotected_positions")
+    if abs(acct_risk - trade_risk) > max(1.0, 0.05 * max(acct_risk, trade_risk)):
+        violations.append(
+            f"account stop risk ${acct_risk:.2f} != sum of open trade "
+            f"stop risks ${trade_risk:.2f}")
+    if violations:
+        _invariant_block.add(account_id)
+        logger.error("scalp invariant violations on %s: %s",
+                     account_id, violations)
+    else:
+        _invariant_block.discard(account_id)
+    return violations
+
+
 async def acquire_account_lease(db, account_id: str,
                                 worker_id: str | None = None,
                                 ttl_sec: int = LEASE_TTL_SEC) -> bool:
@@ -92,18 +139,32 @@ async def acquire_account_lease(db, account_id: str,
     lease = {"worker_id": wid,
              "lease_until": (now + timedelta(seconds=ttl_sec)).isoformat(),
              "heartbeat": now_iso}
+    # round 8 item 2 — monotonic fencing token: every ownership CHANGE bumps
+    # lease_epoch; stale workers carry an older epoch and their persisted
+    # writes are rejected (see persist_risk_now).
     res = await db.scalp_owners.update_one(
-        {"account_id": account_id,
-         "$or": [{"worker_id": wid}, {"lease_until": {"$lt": now_iso}}]},
+        {"account_id": account_id, "worker_id": wid},
         {"$set": lease})
+    if res.matched_count:                      # renewal — epoch unchanged
+        return True
+    res = await db.scalp_owners.update_one(
+        {"account_id": account_id, "lease_until": {"$lt": now_iso}},
+        {"$set": lease, "$inc": {"lease_epoch": 1}})
     if res.matched_count:
+        doc = await db.scalp_owners.find_one({"account_id": account_id})
+        if doc:
+            _lease_epoch[account_id] = int(doc.get("lease_epoch") or 0)
         return True
     doc = await db.scalp_owners.find_one({"account_id": account_id})
     if doc is None:
         await db.scalp_owners.update_one(
-            {"account_id": account_id}, {"$setOnInsert": lease}, upsert=True)
+            {"account_id": account_id},
+            {"$setOnInsert": {**lease, "lease_epoch": 1}}, upsert=True)
         doc = await db.scalp_owners.find_one({"account_id": account_id})
-    return bool(doc and doc.get("worker_id") == wid)
+    owned = bool(doc and doc.get("worker_id") == wid)
+    if owned and doc:
+        _lease_epoch[account_id] = int(doc.get("lease_epoch") or 0)
+    return owned
 
 
 async def ensure_account_lease(db, account_id: str) -> bool:
@@ -345,8 +406,19 @@ class ScalpRunner:
         pip_val = pip_value_usd_per_lot(self.symbol, None)
         # round 6 items 4/5 — EXPLICIT account-level policy: open-position
         # count AND monetary stop-risk budget across ALL runners.
+        # round 8 — protection/invariant blocks veto entries outright.
         account_open = sum(len(r.live_trades) for r in runners_for_account(self.account_id))
-        if account_open >= ACCOUNT_LIMITS.max_total_open_positions:
+        if self.account_id in _protection_block:
+            risk_res = {"ok": False, "lot": 0.0,
+                        "reason": ("unprotected position on account — new "
+                                   "scalp entries blocked until protection "
+                                   "is confirmed")}
+        elif self.account_id in _invariant_block:
+            risk_res = {"ok": False, "lot": 0.0,
+                        "reason": ("reconciliation invariant violation — new "
+                                   "scalp entries blocked until state is "
+                                   "consistent")}
+        elif account_open >= ACCOUNT_LIMITS.max_total_open_positions:
             risk_res = {"ok": False, "lot": 0.0,
                         "reason": "account-level max open scalp positions"}
         else:
@@ -698,6 +770,19 @@ class ScalpRunner:
             exit_slip = round(adverse, 2)
         if db is not None:
             self._persist_risk(db)
+            # round 8 item 3 — immutable financial-event ledger (replayable
+            # audit trail; risk snapshots stay the fast-path cache)
+            ev = {"account_id": self.account_id, "symbol": self.symbol,
+                  "trade_id": trade_id, "deal_id": deal_id,
+                  "event_type": "full_close",
+                  "net_pnl": round(net_pnl, 2),
+                  "trading_pnl": round(trading_pnl, 2),
+                  "execution_cost": round(cost_used, 2),
+                  "commission": commission, "swap": swap,
+                  "risk_applied": True, "lease_epoch": _lease_epoch.get(self.account_id, 0),
+                  "at": datetime.now(timezone.utc).isoformat()}
+            _bg(lambda e=ev: db.scalp_financial_events.insert_one(e),
+                "financial_event")
             if info:
                 outcome = {
                     "requested_entry_price": info.get("requested_entry"),
@@ -758,8 +843,18 @@ class ScalpRunner:
         if info is not None:
             prior_lot = float(info.get("lot") or 0)
             info["lot"] = max(0.0, float(remaining_lots or 0))
-            if prior_lot > 0 and info["lot"] > 0:
-                self.account_risk.scale_stop_risk(trade_id, info["lot"] / prior_lot)
+            # round 8 item 6 — EXACT remaining stop risk from the broker's
+            # remaining volume and the stored stop, not proportional scaling
+            entry, stop = info.get("entry_px"), info.get("stop_px")
+            if info["lot"] > 0 and entry and stop:
+                from pip_utils import pip_value_usd_per_lot
+                pv = pip_value_usd_per_lot(self.symbol, None) or 10.0
+                self.account_risk.add_stop_risk(
+                    trade_id, info["lot"] * abs(float(entry) - float(stop))
+                    / self.cfg.pip_size * pv)
+            elif prior_lot > 0 and info["lot"] > 0:
+                self.account_risk.scale_stop_risk(trade_id,
+                                                  info["lot"] / prior_lot)
             elif info["lot"] <= 0:
                 self.account_risk.remove_stop_risk(trade_id)
             info.setdefault("partial_exits", []).append({
@@ -768,6 +863,18 @@ class ScalpRunner:
                 "ts_ms": now_ms()})
         if db is not None:
             self._persist_risk(db)
+            ev = {"account_id": self.account_id, "symbol": self.symbol,
+                  "trade_id": trade_id, "deal_id": deal_id,
+                  "event_type": "partial_close",
+                  "net_pnl": round(net_pnl, 2),
+                  "trading_pnl": round(trading_pnl, 2),
+                  "execution_cost": round(execution_cost, 2),
+                  "commission": commission, "swap": swap,
+                  "remaining_lots": float(remaining_lots or 0),
+                  "risk_applied": True, "lease_epoch": _lease_epoch.get(self.account_id, 0),
+                  "at": datetime.now(timezone.utc).isoformat()}
+            _bg(lambda e=ev: db.scalp_financial_events.insert_one(e),
+                "financial_event")
             if info and info.get("decision_id"):
                 rec = {"deal_id": deal_id,
                        "closed_lots": float(closed_lots or 0),
@@ -785,14 +892,33 @@ class ScalpRunner:
 
     async def persist_risk_now(self, db):
         """Round 7 item 6 — SYNCHRONOUS risk + deal-id persistence, awaited
-        BEFORE a broker deal may be marked reconciliation-complete. The
-        async _persist_risk stays for hot-path mirroring only."""
+        BEFORE a broker deal may be marked reconciliation-complete.
+        Round 8 item 2 — epoch-fenced: a stale worker (older lease_epoch)
+        cannot overwrite state persisted by the current owner."""
         now_iso = datetime.now(timezone.utc).isoformat()
-        await db.scalp_risk_state.update_one(
-            {"account_id": self.account_id, "symbol": self.symbol},
+        epoch = _lease_epoch.get(self.account_id, 0)
+        fence = {"$or": [{"lease_epoch": {"$exists": False}},
+                         {"lease_epoch": {"$lte": epoch}}]}
+        res = await db.scalp_risk_state.update_one(
+            {"account_id": self.account_id, "symbol": self.symbol, **fence},
             {"$set": {"user_id": self.user_id, **self.risk_state.to_doc(),
                       "applied_deal_ids": list(self._applied_deal_ids),
-                      "saved_at": now_iso}}, upsert=True)
+                      "lease_epoch": epoch, "saved_at": now_iso}}, upsert=False)
+        if not res.matched_count:
+            existing = await db.scalp_risk_state.find_one(
+                {"account_id": self.account_id, "symbol": self.symbol},
+                {"lease_epoch": 1})
+            if existing is not None:
+                raise RuntimeError(
+                    f"risk persist fenced out (stale lease epoch {epoch} < "
+                    f"{existing.get('lease_epoch')})")
+            await db.scalp_risk_state.update_one(
+                {"account_id": self.account_id, "symbol": self.symbol},
+                {"$setOnInsert": {"user_id": self.user_id,
+                                  **self.risk_state.to_doc(),
+                                  "applied_deal_ids": list(self._applied_deal_ids),
+                                  "lease_epoch": epoch, "saved_at": now_iso}},
+                upsert=True)
         await db.scalp_risk_state.update_one(
             {"account_id": self.account_id, "symbol": "_ACCOUNT"},
             {"$set": {"user_id": self.user_id, **self.account_risk.to_doc(),
@@ -1090,13 +1216,30 @@ async def recover_pending_deals(db, older_than_sec: int = 60,
                 {"account_id": deal["account_id"],
                  "mt5_ticket": deal.get("mt5_ticket")})
             if not trade or trade.get("scope") != "scalp_fast":
-                # item 2 — explicit note: nothing for the runner to apply
+                if not trade:
+                    # round 8 item 7 — a missing trade can be a RACE (deal
+                    # arrived before trade adoption): grace-retry, then
+                    # escalate to manual review; never silently complete.
+                    attempts = int(deal.get("reconciliation_attempts") or 0)
+                    if attempts < 5:
+                        await db.broker_deals.update_one(key, {
+                            "$set": {"reconciliation_error": "no_matching_trade_yet"},
+                            "$inc": {"reconciliation_attempts": 1}})
+                        kept_pending += 1
+                    else:
+                        await db.broker_deals.update_one(key, {"$set": {
+                            "financial_reconciliation_status":
+                                "manual_reconciliation_required",
+                            "reconciliation_note": "no_matching_trade",
+                            "escalated_at": now_iso}})
+                        kept_pending += 1
+                    continue
+                # trade exists but is not a scalp target — definitive
                 await db.broker_deals.update_one(key, {"$set": {
                     "financial_reconciliation_status": "complete",
                     "financial_reconciled_at": now_iso,
                     "financial_reconciled_by": "recovery_job",
-                    "reconciliation_note": ("no_matching_trade" if not trade
-                                            else "not_scalp_scope")}})
+                    "reconciliation_note": "not_scalp_scope"}})
                 closed_out += 1
                 continue
             res = await apply_broker_deal(
