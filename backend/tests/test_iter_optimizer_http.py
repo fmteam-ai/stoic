@@ -70,6 +70,7 @@ def test_account(test_user):
         "account_number": "999999",
         "account_type": "demo",
         "status": "disconnected",
+        "bridge_token": f"ITEROPT-{uuid.uuid4().hex[:12]}",
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     return str(res.inserted_id)

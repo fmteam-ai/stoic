@@ -26,10 +26,8 @@ def _fresh_email(prefix="qa_2fa"):
 
 
 def _register(email: str, password: str = "pass123"):
-    s = requests.Session()
-    r = s.post(f"{API}/auth/register", json={"email": email, "password": password, "name": "QA"}, timeout=15)
-    assert r.status_code == 200, r.text
-    return s
+    from helpers import register_and_login
+    return register_and_login(email, password, name="QA")
 
 
 @pytest.fixture(scope="module", autouse=True)

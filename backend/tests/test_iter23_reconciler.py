@@ -9,7 +9,7 @@ import os
 import sys
 import asyncio
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from pymongo import MongoClient
 
@@ -59,7 +59,9 @@ def seeded(db):
             "status": "open",
             "mt5_ticket": tk,
             "_test_iter23": True,
-            "opened_at": _now(),
+            # older than the iter-90 45s reconcile grace window
+            "opened_at": (datetime.now(timezone.utc)
+                          - timedelta(seconds=120)).isoformat(),
         })
         trade_ids.append(str(r.inserted_id))
 

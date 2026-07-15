@@ -1482,21 +1482,46 @@ async def _process_user_account_locked(db, cfg: dict):
         if rcap:
             profile = {**profile,
                        "risk_pct": min(float(profile.get("risk_pct") or 0), float(rcap))}
-        # iter-133 · Kelly disabled by default (quant review C1): engine
-        # confidence is a setup score, not a calibrated probability. Fixed
-        # fractional risk until calibration diagnostics exist. Re-enable
-        # per-account via cfg `kelly_enabled: true`.
+        # iter-133 · Kelly disabled by default (quant review C1). iter-144 C2:
+        # when enabled, Kelly may ONLY consume a CALIBRATED probability — the
+        # setup score is quality, not p_win. Gate on the Wilson lower bound
+        # with a real sample; if calibration is absent/thin, force fixed
+        # fractional for this trade.
         _kelly_on = bool(cfg.get("kelly_enabled", False))
+        _cal = signal.get("calibrated_p_win") or {}
+        _cal_ok = (_cal.get("p_win_lb") is not None
+                   and int(_cal.get("n") or 0) >= 30)
+        if _kelly_on and not _cal_ok:
+            _kelly_on = False
+            logger.info("Kelly requested but calibration absent/thin (%s) — "
+                        "fixed fractional used. user=%s", _cal.get("basis"),
+                        user_id)
+        sizing_conf = (float(_cal["p_win_lb"]) * 100.0 if _kelly_on
+                       else float(signal.get("confidence") or 0))
         sized = compute_lot_for_account(
             account=target_account,
             symbol=signal["symbol"],
             entry_price=signal["entry_price"],
             stop_loss=signal["stop_loss"],
-            confidence_pct=float(signal.get("confidence") or 0),
+            confidence_pct=sizing_conf,
             profile=profile,
             locked_profit=locked,
             kelly_enabled=_kelly_on,
         )
+        # iter-144 C5 · fail-closed sizing: if risk can't be computed or the
+        # broker minimum overshoots the budget, the trade does NOT happen.
+        if not sized.get("sizing_valid", True):
+            reason = sized.get("reject_reason") or sized.get("method") or "sizing rejected"
+            logger.warning("Sizing rejected user=%s sym=%s: %s",
+                           user_id, sym, reason)
+            await db.signals.update_one(
+                {"_id": result.inserted_id},
+                {"$set": {"sizing_rejected": reason, "tradeable": False}})
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP",
+                                level="warn",
+                                reason=f"Sizing rejected: {reason}",
+                                signal=signal)
+            continue
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)
         absolute_lot = float(sized["lot_size"])

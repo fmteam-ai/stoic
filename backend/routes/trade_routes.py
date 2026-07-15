@@ -518,6 +518,11 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
         confidence_pct=float(signal.get("confidence") or 0),
         profile=profile,
     )
+    # iter-144 C5 · fail-closed sizing on the manual execute path too
+    if not sized.get("sizing_valid", True):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Sizing rejected: {sized.get('reject_reason') or sized.get('method')}")
     absolute_lot = float(sized.get("lot_size") or signal.get("lot_size", 0.01))
     # iter-142 · Implicit Kelly removed (quant review): the old branch scaled
     # the user's max_lot_size cap by the Kelly fraction even though Kelly

@@ -21,9 +21,11 @@ def _fresh_email():
 
 
 def _register(email, password="pass123"):
-    s = requests.Session()
-    r = s.post(f"{API}/auth/register", json={"email": email, "password": password, "name": "QA Limits"}, timeout=15)
-    assert r.status_code == 200, r.text
+    from helpers import make_elite, register_and_login
+    s = register_and_login(email, password, name="QA Limits")
+    # iter-60 tier quotas (Starter=1/Pro=3) fire with 402 BEFORE the broker
+    # caps this suite tests — Elite (unlimited accounts) exposes the caps.
+    make_elite(email)
     return s
 
 

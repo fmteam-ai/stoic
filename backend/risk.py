@@ -137,16 +137,22 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
     if locked_profit > 0:
         equity = max(0.0, equity - float(locked_profit))
     if equity <= 0:
-        return {"lot_size": 0.01, "method": "fallback_no_equity"}
+        return {"lot_size": 0.0, "sizing_valid": False,
+                "method": "rejected_no_equity",
+                "reject_reason": "equity unavailable — cannot compute risk"}
 
     sl_distance_price = abs(float(entry_price) - float(stop_loss))
     sl_pips = price_to_pips(symbol, sl_distance_price)
     if sl_pips <= 0:
-        return {"lot_size": 0.01, "method": "fallback_zero_sl"}
+        return {"lot_size": 0.0, "sizing_valid": False,
+                "method": "rejected_zero_sl",
+                "reject_reason": "stop distance is zero — risk undefined"}
 
     pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"))
     if pip_usd <= 0:
-        return {"lot_size": 0.01, "method": "fallback_zero_pip_value"}
+        return {"lot_size": 0.0, "sizing_valid": False,
+                "method": "rejected_zero_pip_value",
+                "reject_reason": f"no pip value for {symbol} — risk undefined"}
 
     payoff_ratio = profile["tp_atr_mult"] / max(profile["sl_atr_mult"], 0.1)
     f = kelly_fraction(
@@ -164,9 +170,29 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         method = "fixed_fraction"
     risk_amount_usd = equity * (effective_risk_pct / 100.0)
     lots = risk_amount_usd / (sl_pips * pip_usd)
+    lot_size = max(round(lots, 2), 0.01)
+    # iter-144 C5 · verify the ACTUAL risk after broker-step rounding and the
+    # 0.01 minimum. If the broker minimum forces materially more risk than
+    # the budget (e.g. tiny equity, wide stop), REJECT instead of trading a
+    # position whose risk was never approved.
+    actual_risk_usd = lot_size * sl_pips * pip_usd
+    if actual_risk_usd > risk_amount_usd * RISK_OVERSHOOT_TOLERANCE:
+        return {
+            "lot_size": 0.0, "sizing_valid": False,
+            "method": "rejected_min_lot_risk",
+            "reject_reason": (
+                f"broker-minimum 0.01 lot risks ${actual_risk_usd:.2f} vs the "
+                f"${risk_amount_usd:.2f} budget ({effective_risk_pct:.2f}% of "
+                f"equity) — stop too wide for this account"),
+            "risk_amount_usd": round(risk_amount_usd, 2),
+            "actual_risk_usd": round(actual_risk_usd, 2),
+            "sl_pips": round(sl_pips, 1), "equity": round(equity, 2),
+        }
     return {
-        "lot_size": max(round(lots, 2), 0.01),
+        "lot_size": lot_size,
+        "sizing_valid": True,
         "risk_amount_usd": round(risk_amount_usd, 2),
+        "actual_risk_usd": round(actual_risk_usd, 2),
         "kelly_f": round(f, 4),
         "method": method,
         "effective_risk_pct": round(effective_risk_pct, 3),

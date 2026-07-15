@@ -39,14 +39,12 @@ def admin_session():
 
 @pytest.fixture(scope="module")
 def user_session():
-    s = requests.Session()
+    from helpers import register_and_login
     email = f"TEST_iter18_safety_{uuid.uuid4().hex[:8]}@example.com"
-    r = s.post(f"{BASE_URL}/api/auth/register",
-               json={"email": email, "password": "Passw0rd!", "name": "T18"},
-               timeout=15)
-    if r.status_code not in (200, 201):
-        pytest.skip(f"User register failed: {r.status_code} {r.text[:200]}")
-    return s
+    try:
+        return register_and_login(email, "Passw0rd!", name="T18")
+    except AssertionError as e:
+        pytest.skip(f"User register/login failed: {e}")
 
 
 def _flatten_checks(data: dict) -> list:

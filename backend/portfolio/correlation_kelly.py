@@ -59,10 +59,10 @@ def _normalize_action(a: str | None) -> str:
 
 
 def _notional_of(p: dict) -> float:
-    sym = (p.get("symbol") or "").upper()
-    lot = float(p.get("lot_size") or 0)
-    entry = float(p.get("entry_price") or 0)
-    return lot * entry * (100 if sym == "XAUUSD" else 1)
+    # iter-144 C4 · canonical registry (FX = 100k units, metals/crypto CFDs)
+    from instruments import notional_usd
+    return notional_usd(p.get("symbol") or "", p.get("lot_size") or 0,
+                        p.get("entry_price") or 0)
 
 
 async def compute_correlation_aware_scale(

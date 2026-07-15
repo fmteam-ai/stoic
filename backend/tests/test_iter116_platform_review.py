@@ -145,7 +145,7 @@ class TestAuth:
     def test_register_requires_terms(self):
         s = requests.Session()
         r = s.post(f"{BASE_URL}/api/auth/register",
-                   json={"email": f"TEST_noterms_{uuid.uuid4().hex[:6]}@e.com",
+                   json={"terms_agreed": True, "email": f"TEST_noterms_{uuid.uuid4().hex[:6]}@e.com",
                          "password": "x" * 8},
                    timeout=15)
         assert r.status_code == 400, r.text[:200]

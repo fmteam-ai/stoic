@@ -154,10 +154,11 @@ async def calculate_var(
         entry = float(p.get("entry_price") or 0)
         if lot <= 0 or entry <= 0:
             continue
-        # MT5 contract size: gold 100oz, crypto 1, FX 100k. Heuristic — we
-        # use lot×entry as a notional proxy; for FX this understates by 100k
-        # but the VaR % comes out the same since both numerator/denominator scale.
-        notional = lot * entry * (100 if sym == "XAUUSD" else 1)
+        # iter-144 C4 · canonical instrument registry: FX lots are 100k base
+        # units — the old `lot × entry` proxy understated FX notional ~100,000×
+        # and silently gutted VaR/CVaR (equity is NOT scaled by the same factor).
+        from instruments import notional_usd
+        notional = notional_usd(sym, lot, entry)
         atr_pct = await _atr_pct(sym)
         if atr_pct is None:
             atr_pct = 0.01  # 1% fallback when no history

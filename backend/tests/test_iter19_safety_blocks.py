@@ -25,11 +25,8 @@ def _login(email, password):
 
 
 def _register(email, password):
-    s = requests.Session()
-    r = s.post(f"{BASE_URL}/api/auth/register",
-               json={"email": email, "password": password, "name": "iter19"}, timeout=15)
-    assert r.status_code in (200, 201), f"Register failed: {r.status_code} {r.text}"
-    return s
+    from helpers import register_and_login
+    return register_and_login(email, password, name="iter19")
 
 
 @pytest.fixture(scope="module")

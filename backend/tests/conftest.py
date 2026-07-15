@@ -14,6 +14,26 @@ notifier's HTTP send to a no-op for the entire test session.
 import os
 import pytest
 
+# iter-143 · Load backend/.env (MONGO_URL, DB_NAME) and default
+# REACT_APP_BACKEND_URL from frontend/.env so every suite runs green
+# without manual env exports.
+_BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_BACKEND, ".env"))
+except ImportError:
+    pass
+if not os.environ.get("REACT_APP_BACKEND_URL"):
+    try:
+        with open(os.path.join(os.path.dirname(_BACKEND), "frontend", ".env")) as _f:
+            for _line in _f:
+                if _line.startswith("REACT_APP_BACKEND_URL="):
+                    os.environ["REACT_APP_BACKEND_URL"] = \
+                        _line.split("=", 1)[1].strip().strip('"')
+                    break
+    except OSError:
+        pass
+
 
 @pytest.fixture(autouse=True, scope="session")
 def _silence_outbound_notifications():

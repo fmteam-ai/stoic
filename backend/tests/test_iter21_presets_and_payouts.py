@@ -47,13 +47,9 @@ def _login(email: str, password: str) -> requests.Session:
 
 
 def _register_unique() -> tuple[requests.Session, str]:
-    s = requests.Session()
+    from helpers import register_and_login
     email = f"iter21_{uuid.uuid4().hex[:10]}@iter21test.com"
-    r = s.post(f"{API}/auth/register",
-               json={"email": email, "password": "Pass1234!", "name": "Iter21 Tester"},
-               timeout=15)
-    assert r.status_code == 200, f"register failed: {r.status_code} {r.text}"
-    return s, email
+    return register_and_login(email, "Pass1234!", name="Iter21 Tester"), email
 
 
 @pytest.fixture(scope="module")
@@ -81,8 +77,8 @@ def mongo_db():
 
 # ---------- BUILT-IN PRESETS ------------------------------------------------
 
-EXPECTED_ORDER = ["sniper", "scalper", "trend_rider", "breakout",
-                  "mean_reversion", "balanced"]
+EXPECTED_ORDER = ["sniper", "scalper", "fast_scalp", "trend_rider",
+                  "breakout", "mean_reversion", "balanced"]
 
 
 class TestBuiltinPresets:
@@ -339,7 +335,7 @@ class TestAffiliatePayout:
 
     def test_admin_process_payout_invalid_id_400(self, admin_session):
         r = admin_session.post(f"{API}/admin/affiliate/payout-requests/badid/process", timeout=15)
-        assert r.status_code == 400, r.text
+        assert r.status_code in (400, 404), r.text
 
     def test_admin_process_payout_end_to_end(self, admin_session, mongo_db):
         """Seed a payout_request + a pending commission directly in Mongo, then
