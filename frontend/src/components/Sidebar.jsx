@@ -49,6 +49,7 @@ const SECTIONS = [
         label: "AUTOMATION",
         items: [
             { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
+            { to: "/scalp", label: "Scalp Fast Path", icon: Zap, testid: "nav-scalp" },
             { to: "/strategies", label: "Strategies", icon: Sparkles, testid: "nav-strategies" },
             { to: "/agents", label: "Agents", icon: Cpu, testid: "nav-agents" },
             { to: "/research", label: "Research Agent", icon: Brain, testid: "nav-research" },

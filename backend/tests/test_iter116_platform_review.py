@@ -300,8 +300,11 @@ class TestEADistribution:
         r = admin_session.get(f"{BASE_URL}/api/ea-script", timeout=15)
         assert r.status_code == 200
         text = r.text
-        assert '#property version   "1.43"' in text or 'version   "1.43"' in text, \
-            "EA version 1.43 marker missing"
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+        from ea_version import current_ea_version
+        v = current_ea_version()
+        assert f'#property version   "{v}"' in text, f"EA version {v} marker missing"
         assert "SendDom" in text, "SendDom function missing from EA"
         assert "SendCandles" in text, "SendCandles function missing from EA"
 

@@ -437,6 +437,36 @@ async def receive_candles(payload: BridgeCandles):
     return {"status": "ok", "stored": len(bars)}
 
 
+class BridgeTicks(BaseModel):
+    bridge_token: str
+    symbol: str
+    sent_at_ms: int | None = None
+    ticks: list = []
+
+
+@router.post("/ticks")
+async def receive_ticks(payload: BridgeTicks):
+    """EA v1.44 — bid/ask tick stream for the scalp fast path."""
+    db = get_db()
+    account = await _account_by_token(payload.bridge_token)
+    base = base_symbol(payload.symbol)
+    from scalp.engine import get_runner
+    runner = get_runner(str(account["_id"]), account["user_id"], base)
+    if runner is None:
+        return {"status": "ignored", "reason": f"{base} not in approved scalp universe"}
+    if not getattr(runner, "_hydrated", False):
+        runner._hydrated = True
+        cfg_doc = await db.scalp_configs.find_one(
+            {"account_id": str(account["_id"]), "symbol": base})
+        if cfg_doc:
+            runner.enabled = bool(cfg_doc.get("enabled"))
+            runner.mode = cfg_doc.get("mode", "shadow")
+            from scalp.model import load_persisted
+            await load_persisted(db, base)
+    out = await runner.ingest(db, account, payload.ticks or [], payload.sent_at_ms)
+    return {"status": "ok", **out}
+
+
 class BridgeDom(BaseModel):
     bridge_token: str
     symbol: str
@@ -833,6 +863,14 @@ async def report_trade(payload: BridgeTradeReport):
             update["close_reason"] = close_reason
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    # Scalp fast-path fill reconciliation (EA v1.44): feed the risk counters.
+    if payload.status == "closed" and trade.get("scope") == "scalp_fast":
+        try:
+            from scalp.engine import runners_for_account
+            for r in runners_for_account(str(acc["_id"])):
+                r.on_trade_closed(payload.trade_id, float(payload.pnl or 0))
+        except Exception:
+            pass
     if slippage_force_close:
         try:
             await inc_intel_counter(acc["user_id"], "slippage_veto")

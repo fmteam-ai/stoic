@@ -145,6 +145,8 @@
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
 //| v1.43 — Depth of Market feed. Subscribes to the broker's order    |
+//| v1.44 — Scalp tick stream. Millisecond timer batches EURUSD       |
+//|         bid/ask ticks to /api/bridge/ticks for the fast path.     |
 //|         book (MarketBookAdd) and streams bid/ask depth to STOIC   |
 //|         every DomSeconds (30s) for the Liquidity Mapping agent    |
 //|         (resting liquidity, walls, book imbalance). Degrades      |
@@ -153,14 +155,14 @@
 //|         liquidity from candles alone.                             |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.43"
+#property version   "1.44"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.43"
+#define EA_CLIENT_VERSION "1.44"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -185,6 +187,16 @@ input int    CandlesSeconds         = 300;
 // EA v1.43 · Depth of Market feed for the Liquidity Mapping agent.
 input bool   DomEnabled             = true;
 input int    DomSeconds             = 30;
+
+// EA v1.44 · Scalp fast path — bid/ask tick stream (EURUSD subsystem).
+// When enabled the EA switches to a millisecond timer and batches every
+// tick of TickStreamSymbol to /api/bridge/ticks each TickBatchMs.
+input bool   TickStreamEnabled      = false;
+input string TickStreamSymbol       = "EURUSD";
+input int    TickBatchMs            = 1000;
+
+datetime _last_slow_run        = 0;
+ulong    _last_tick_msc        = 0;
 
 datetime _last_candles_sent    = 0;
 datetime _last_dom_sent        = 0;
@@ -248,7 +260,14 @@ string ResolveBridgeToken() {
 
 //+------------------------------------------------------------------+
 int OnInit() {
-   EventSetTimer(PollSeconds);
+   // EA v1.44 — tick streaming needs a sub-second timer; slow tasks below
+   // keep their PollSeconds cadence via the _last_slow_run gate in OnTimer.
+   if (TickStreamEnabled) {
+      SymbolSelect(TickStreamSymbol, true);
+      EventSetMillisecondTimer(MathMax(250, TickBatchMs));
+   } else {
+      EventSetTimer(PollSeconds);
+   }
    // First sweep covers HistoryLookbackSeconds backwards so any ghosts
    // (closed on another terminal while EA was offline) get backfilled
    // automatically once the user installs v1.26.
@@ -307,6 +326,11 @@ bool IsEodQuietWindow() {
 }
 
 void OnTimer() {
+   // EA v1.44 — fast lane: stream ticks every timer fire when enabled.
+   if (TickStreamEnabled) SendTicks();
+   // Slow lane: heartbeat / polls / feeds keep their PollSeconds cadence.
+   if (TimeCurrent() - _last_slow_run < PollSeconds) return;
+   _last_slow_run = TimeCurrent();
    SendHeartbeat();
    PollPendingTrades();
    // EA v1.42 — M15 candle feed for the Market Structure agent.
@@ -509,6 +533,36 @@ void SweepDealHistory() {
       Print("STOIC history sweep pushed ", pushed, " deals (window ",
             TimeToString(from_ts), " → ", TimeToString(to_ts), ")");
    }
+}
+
+//+------------------------------------------------------------------+
+//| EA v1.44 — scalp tick stream. Batches every bid/ask tick of       |
+//| TickStreamSymbol since the last post to /api/bridge/ticks.        |
+//+------------------------------------------------------------------+
+void SendTicks() {
+   if (StringLen(TickStreamSymbol) == 0 || StringLen(EffectiveToken) == 0) return;
+   MqlTick last_tick;
+   if (!SymbolInfoTick(TickStreamSymbol, last_tick)) return;
+   ulong now_msc = (ulong)last_tick.time_msc;
+   if (now_msc == 0) return;
+   ulong from = (_last_tick_msc == 0) ? now_msc - 2000 : _last_tick_msc + 1;
+   if (from > now_msc) return;
+   MqlTick ticks[];
+   int n = CopyTicksRange(TickStreamSymbol, ticks, COPY_TICKS_INFO, from, now_msc);
+   if (n <= 0) return;
+   int start = MathMax(0, n - 120);   // cap batch size
+   string body = "{\"bridge_token\":\"" + EffectiveToken +
+                 "\",\"symbol\":\"" + TickStreamSymbol +
+                 "\",\"sent_at_ms\":" + (string)now_msc + ",\"ticks\":[";
+   for (int i = start; i < n; i++) {
+      if (i > start) body += ",";
+      body += "{\"tm\":" + (string)ticks[i].time_msc +
+              ",\"b\":" + DoubleToString(ticks[i].bid, 5) +
+              ",\"a\":" + DoubleToString(ticks[i].ask, 5) + "}";
+   }
+   body += "]}";
+   _last_tick_msc = (ulong)ticks[n - 1].time_msc;
+   HttpPost(ServerUrl + "/api/bridge/ticks", body);
 }
 
 //+------------------------------------------------------------------+

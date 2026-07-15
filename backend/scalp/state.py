@@ -1,0 +1,88 @@
+"""Scalp subsystem · Step 3 — in-memory rolling tick state.
+
+Everything here is O(1)-ish per tick. NO database reads, NO LLM calls,
+NO indicator-history recomputation on the hot path.
+"""
+import time
+from collections import deque
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class TickEvent:
+    symbol: str
+    broker_time_ms: int      # MT5 time_msc (broker/server quote time)
+    received_time_ms: int    # local arrival (backend clock)
+    bid: float
+    ask: float
+    bid_size: float | None = None
+    ask_size: float | None = None
+    source_sequence: int | None = None
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+class ScalpState:
+    """Rolling per-(account, symbol) microstructure state."""
+
+    def __init__(self, pip_size: float):
+        self.pip = pip_size
+        # (broker_ms, bid, ask, mid)
+        self.ticks: deque = deque(maxlen=3000)
+        self.spreads: deque = deque(maxlen=900)     # pips, session proxy
+        self.last_tick: TickEvent | None = None
+        self.last_price_change_ms: int = 0
+        self.vwap_ewma: float = 0.0                 # tick-volume-less mid EWMA
+        self._vwap_alpha = 0.02
+        # execution quality (Step 3 "recent order-fill quality")
+        self.slippage_ewma_pips: float = 0.0
+        self.fills_seen: int = 0
+        self.rejects_recent: deque = deque(maxlen=50)   # (ms, 0|1)
+        # clock drift broker vs local (ms), EWMA
+        self.clock_drift_ms: float = 0.0
+
+    def update(self, t: TickEvent) -> None:
+        mid = (t.bid + t.ask) / 2.0
+        prev = self.ticks[-1] if self.ticks else None
+        self.ticks.append((t.broker_time_ms, t.bid, t.ask, mid))
+        self.spreads.append((t.ask - t.bid) / self.pip)
+        if prev is None or mid != prev[3]:
+            self.last_price_change_ms = t.broker_time_ms
+        if self.vwap_ewma == 0.0:
+            self.vwap_ewma = mid
+        else:
+            self.vwap_ewma += self._vwap_alpha * (mid - self.vwap_ewma)
+        drift = t.received_time_ms - t.broker_time_ms
+        self.clock_drift_ms = (0.9 * self.clock_drift_ms + 0.1 * drift
+                               if self.last_tick else float(drift))
+        self.last_tick = t
+
+    # -------- execution feedback --------
+    def record_fill(self, slippage_pips: float) -> None:
+        self.fills_seen += 1
+        a = 0.2 if self.fills_seen > 5 else 0.5
+        self.slippage_ewma_pips += a * (abs(slippage_pips) - self.slippage_ewma_pips)
+        self.rejects_recent.append((now_ms(), 0))
+
+    def record_reject(self) -> None:
+        self.rejects_recent.append((now_ms(), 1))
+
+    def reject_rate(self) -> float:
+        if not self.rejects_recent:
+            return 0.0
+        return sum(r for _, r in self.rejects_recent) / len(self.rejects_recent)
+
+    # -------- basic reads --------
+    def mid(self) -> float | None:
+        return self.ticks[-1][3] if self.ticks else None
+
+    def spread_pips(self) -> float | None:
+        return self.spreads[-1] if self.spreads else None
+
+    def quote_age_ms(self) -> int:
+        if self.last_tick is None:
+            return 1 << 30
+        # age vs local clock, corrected by measured broker/local drift
+        return max(0, now_ms() - self.last_tick.received_time_ms)

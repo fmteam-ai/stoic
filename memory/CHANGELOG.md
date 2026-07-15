@@ -1161,3 +1161,26 @@ No core risk logic changed — only observability. User can lower `anti_tilt_fre
 - H6: calibration buckets carry payoff distribution (avg_win_r/avg_loss_r from risk_amount) + conservative ev_r = p_lb·E[win_R] − (1−p_lb)·E[loss_R]. bot_runner EV gate (cfg.ev_gate_enabled, default on): negative conservative EV with n≥30 → trade skipped + pulse recorded.
 - H7: test isolation — emergentintegrations imports now lazy (function-level) in 12 modules; database.py motor import lazy; strategy_code_generator uses patchable module-attr lazy pattern. Verified: domain modules import with emergentintegrations+motor BLOCKED.
 **Test suite: 1860 passed, 0 failed** (was 61 failed). Fixes: conftest _ensure_event_loop fixture (dead-loop RuntimeError killed 20+ tests in full runs), tests/ea_version.py dynamic EA version helper (6 files no longer pin stale versions), setup_routes ea_latest_version drift 1.42→1.43, stale tests updated to fail-closed sizing contract / origin:"manual" taxonomy / accumulated candle counts / 45s reconcile grace window / origin:"auto" breaker filter / register terms payload / auto_deleverage bot_configs mock.
+
+## Iter-146 (2026-07-15) — Scalp Fast Path subsystem (EURUSD) DONE
+User requested a dedicated low-latency scalp subsystem (15s–5min holds, NOT HFT), control plane + fast path split, EURUSD only, shadow-first with demo-live toggle, EA tick streaming, deterministic baseline + logistic model trained on accumulating labels.
+**Backend `/app/backend/scalp/`:**
+- instruments.py — ScalpInstrumentConfig registry, EURUSD ONLY approved (others 422/ignored).
+- state.py — TickEvent (broker_ms + received_ms), in-memory ScalpState (deques, spread history, slippage EWMA, clock drift, reject rate). O(1) per tick, zero DB on hot path.
+- features.py — FEATURE_KEYS contract: ret 1/3/5/10/30s (pips), accel, vwap_dist, vol_short/long, tick_rate, spread pctl, uptick_ratio, quote age.
+- setup.py — ONE setup: micro-pullback momentum continuation (impulse ≥ max(1.5p, 1.8×vol), 15–60% pullback, accelerating resumption).
+- forecast.py — ScalpForecast: p_target_before_stop (det. base 0.48±bonuses, clamp 0.40–0.60; logistic model overrides when usable), stop=max(2×spread,1.5×vol) clamp 1–5p, target=1.3×stop, uncertainty pips.
+- costs.py — spread + 2×slippage(EWMA after 5 fills) + commission; dynamic spread limit = min(abs cap, session p75).
+- edge.py — EV = p·target − (1−p)·stop − cost − uncertainty ≥ 0.15p AND cost ≤ 25% of gross alpha.
+- risk.py — 0.05%/trade, max 1 open, 20/hr, 4-loss→30min cooldown, daily loss 0.5%, cost budget 0.35%, 5min max hold. Sizing FAIL-CLOSED (min lot > budget → reject).
+- gate.py — final fresh-quote gate (quote age, spread, signal age ≤3s, edge, health).
+- kill.py — Step 17 auto-shutdown; open_allowed vs close_allowed SEPARATE (closing always permitted).
+- permissions.py — slow control plane cache (30s refresh, 120s stale → FAIL CLOSED): UTC session window, high-impact news blackout (fail closed on error), M15 EMA-slope regime (TRENDING_UP/DOWN/FLAT/VOL_SHOCK).
+- model.py — pure-numpy logistic, trains on barrier labels (target_first/stop_first, timeouts excluded), walk-forward OOS AUC; used ONLY if n≥200 & OOS AUC ≥0.53; auto-retrain every 200 resolutions + POST /api/scalp/retrain.
+- engine.py — ScalpRunner per (account,symbol): ingest→state→health→throttled eval (1/s)→decision doc; barrier ShadowSim for EVERY forecast-stage candidate (unbiased labels, exits on executable side); demo_live submits via engine_for_account with broker-visible SL/TP, scope="scalp_fast", origin="auto"; fast exits (timeout/spread shock/degraded) via FULL_CLOSE pending_modification; tick recording batched to scalp_ticks (200/10s).
+**API `/api/scalp/*`:** config (EURUSD-only 422 guard; demo_live requires confirm_live), status, decisions, metrics (Step 18 alpha/execution/model/verdicts), retrain. Bridge: POST /api/bridge/ticks (EA v1.44), fill reconciliation hook in /bridge/report for scope=scalp_fast.
+**EA v1.44:** TickStreamEnabled/TickStreamSymbol/TickBatchMs inputs; EventSetMillisecondTimer fast lane + PollSeconds slow-lane gate; SendTicks() via CopyTicksRange (batch cap 120). All LATEST_EA refs bumped to 1.44.
+**Frontend:** /scalp page (Scalp.jsx) + sidebar "Scalp Fast Path": account select, ENABLE SHADOW / DEMO LIVE (confirm dialog) / DISABLE, runner cards (health/regime/counters/spread/quote age), shadow-performance metrics, decisions table with reject reasons. data-testids throughout.
+**DB:** scalp_configs, scalp_decisions, scalp_ticks, scalp_models.
+**Tests:** tests/test_iter146_scalp.py — 33 tests incl. e2e HTTP tick→decision (fail-closed permission verdict verified). Full suite green (~1893). Fixed stale v1.43 pin in test_iter116.
+**User setup:** re-download EA v1.44, attach with TickStreamEnabled=true, TickStreamSymbol=EURUSD; enable Shadow on /scalp page.
