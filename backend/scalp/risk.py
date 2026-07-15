@@ -62,6 +62,28 @@ class RiskState:
     def record_close(self):
         self.open_scalps = max(0, self.open_scalps - 1)
 
+    # ---- persistence (review item 9): survive restarts ----
+    def to_doc(self) -> dict:
+        return {
+            "trade_times": list(self.trade_times),
+            "consecutive_losses": self.consecutive_losses,
+            "cooldown_until": self.cooldown_until,
+            "daily_loss_usd": self.daily_loss_usd,
+            "daily_cost_usd": self.daily_cost_usd,
+            "daily_key": self.daily_key,
+        }
+
+    def load_doc(self, doc: dict) -> None:
+        self.trade_times = deque(
+            [float(t) for t in doc.get("trade_times") or []], maxlen=200)
+        self.consecutive_losses = int(doc.get("consecutive_losses") or 0)
+        self.cooldown_until = float(doc.get("cooldown_until") or 0.0)
+        key = time.strftime("%Y-%m-%d", time.gmtime())
+        if doc.get("daily_key") == key:      # same UTC day → restore budgets
+            self.daily_key = key
+            self.daily_loss_usd = float(doc.get("daily_loss_usd") or 0.0)
+            self.daily_cost_usd = float(doc.get("daily_cost_usd") or 0.0)
+
 
 def size_lot(equity: float, stop_pips: float, pip_value_per_lot: float,
              cfg, limits: ScalpRiskLimits) -> dict:

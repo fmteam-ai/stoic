@@ -39,12 +39,13 @@ async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
             if str(ev.get("impact", "")).lower() != "high":
                 continue
             ts = ev.get("time") or ev.get("timestamp")
-            if not ts:
-                continue
             try:
                 evt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-            except ValueError:
-                continue
+            except (ValueError, TypeError):
+                # item 20 — a HIGH-impact event we cannot time is UNKNOWN
+                # risk for a scalper: fail closed instead of skipping it.
+                perms["reasons"].append("news event timestamp invalid — fail closed")
+                return perms
             mins = (evt - now).total_seconds() / 60.0
             if -cfg.news_blackout_minutes <= mins <= cfg.news_blackout_minutes:
                 perms["reasons"].append(f"news blackout: {ev.get('title') or ev.get('name')}")

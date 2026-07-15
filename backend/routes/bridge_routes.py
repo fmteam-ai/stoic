@@ -461,8 +461,15 @@ async def receive_ticks(payload: BridgeTicks):
         if cfg_doc:
             runner.enabled = bool(cfg_doc.get("enabled"))
             runner.mode = cfg_doc.get("mode", "shadow")
-            from scalp.model import load_persisted
-            await load_persisted(db, base)
+            runner.commission_usd_per_lot_side = float(
+                cfg_doc.get("commission_usd_per_lot_side") or 0.0)
+        runner.broker = str(account.get("broker") or "")
+        runner.account_type = str(account.get("account_type") or "")
+        # item 9 — restore risk counters + reconcile open positions BEFORE
+        # any new entry is permitted
+        await runner.restore_risk(db)
+        from scalp.model import load_persisted
+        await load_persisted(db, runner.model_key())
     out = await runner.ingest(db, account, payload.ticks or [], payload.sent_at_ms)
     return {"status": "ok", **out}
 
@@ -868,7 +875,7 @@ async def report_trade(payload: BridgeTradeReport):
         try:
             from scalp.engine import runners_for_account
             for r in runners_for_account(str(acc["_id"])):
-                r.on_trade_closed(payload.trade_id, float(payload.pnl or 0))
+                r.on_trade_closed(payload.trade_id, float(payload.pnl or 0), db=db)
         except Exception:
             pass
     if slippage_force_close:

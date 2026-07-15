@@ -15,6 +15,7 @@ class ScalpConfigRequest(BaseModel):
     enabled: bool = False
     mode: str = "shadow"          # shadow | demo_live
     confirm_live: bool = False
+    commission_usd_per_lot_side: float = 0.0
 
 
 @router.post("/config")
@@ -34,7 +35,8 @@ async def set_config(req: ScalpConfigRequest, user=Depends(get_current_user)):
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     from scalp.engine import apply_config
-    runner = await apply_config(db, account, req.symbol, req.enabled, req.mode)
+    runner = await apply_config(db, account, req.symbol, req.enabled, req.mode,
+                                commission_usd_per_lot_side=req.commission_usd_per_lot_side)
     return {"ok": True, "status": runner.status()}
 
 
@@ -81,7 +83,12 @@ async def metrics(symbol: str = "EURUSD", user=Depends(get_current_user)):
         return {"symbol": symbol.upper(), "n": 0}
     tf = [d for d in docs if d["outcome"]["result"] == "target_first"]
     sf = [d for d in docs if d["outcome"]["result"] == "stop_first"]
+    # Review item 1: outcome.net_pips is ALREADY fully cost-loaded
+    # (spread + entry/exit slippage + commission) — never subtract expected
+    # costs a second time. gross_move_pips is the mid-to-mid reference.
     net = [float(d["outcome"].get("net_pips") or 0) for d in docs]
+    gross = [float(d["outcome"].get("gross_move_pips",
+                                    d["outcome"].get("net_pips") or 0)) for d in docs]
     costs = [float(d.get("cost_pips") or 0) for d in docs]
     wins = [p for p in net if p > 0]
     losses = [p for p in net if p < 0]
@@ -95,8 +102,10 @@ async def metrics(symbol: str = "EURUSD", user=Depends(get_current_user)):
         "symbol": symbol.upper(), "n": n,
         "alpha": {
             "target_before_stop_rate": round(len(tf) / resolved_dir, 3) if resolved_dir else None,
-            "gross_expectancy_pips": round(sum(net) / n, 3),
-            "net_expectancy_pips": round((sum(net) - sum(costs)) / n, 3),
+            "gross_expectancy_pips": round(sum(gross) / n, 3),
+            "net_expectancy_pips": round(sum(net) / n, 3),
+            "stressed_net_expectancy_pips": round(
+                (sum(net) - 0.5 * sum(costs)) / n, 3),
             "avg_winner_pips": round(sum(wins) / len(wins), 2) if wins else None,
             "avg_loser_pips": round(sum(losses) / len(losses), 2) if losses else None,
             "profit_factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
@@ -120,6 +129,16 @@ async def metrics(symbol: str = "EURUSD", user=Depends(get_current_user)):
 
 
 @router.post("/retrain")
-async def retrain(symbol: str = "EURUSD", user=Depends(get_current_user)):
+async def retrain(symbol: str = "EURUSD", account_id: str = None,
+                  user=Depends(get_current_user)):
     from scalp.model import retrain as do_retrain
-    return await do_retrain(get_db(), symbol.upper())
+    db = get_db()
+    broker, account_type = "any", "any"
+    if account_id:
+        acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"),
+                                          "user_id": user["id"]})
+        if acc:
+            broker = str(acc.get("broker") or "any")
+            account_type = str(acc.get("account_type") or "any")
+    return await do_retrain(db, symbol.upper(), broker=broker,
+                            account_type=account_type)

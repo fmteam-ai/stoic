@@ -5,8 +5,9 @@ which broke on every EA bump. All version tests now assert COHERENCE
 against the live `#define EA_CLIENT_VERSION` instead of a stale pin.
 """
 import re
+from pathlib import Path
 
-EA_PATH = "/app/backend/static/EmergentTradingBridge.mq5"
+EA_PATH = str(Path(__file__).resolve().parents[1] / "static" / "EmergentTradingBridge.mq5")
 
 
 def current_ea_version() -> str:

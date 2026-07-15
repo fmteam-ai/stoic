@@ -1184,3 +1184,25 @@ User requested a dedicated low-latency scalp subsystem (15s–5min holds, NOT HF
 **DB:** scalp_configs, scalp_decisions, scalp_ticks, scalp_models.
 **Tests:** tests/test_iter146_scalp.py — 33 tests incl. e2e HTTP tick→decision (fail-closed permission verdict verified). Full suite green (~1893). Fixed stale v1.43 pin in test_iter116.
 **User setup:** re-download EA v1.44, attach with TickStreamEnabled=true, TickStreamSymbol=EURUSD; enable Shadow on /scalp page.
+
+## Iter-147 (2026-07-15) — Scalp Review Hardening (items 1–20) DONE
+**Critical:**
+- 1 Cost accounting: ShadowSim explicit gross/cost/net — net_pips = exec-to-exec − exit slip (stop/timeout only, not limit target) − commission; gross_move_pips = mid-to-mid; metrics use outcome.net_pips DIRECTLY (double-count removed); stressed metric = net − 0.5×cost.
+- 2/3 Model calibration + deployment gates: chronological train 40% / Platt-calibration 30% / eval 30%; tracks Brier vs baseline, ECE, OOS AUC; usable requires ALL: AUC≥0.55, Brier≤baseline, OOS net expectancy>0 on model-SELECTED trades, +50% cost-stress survival, ≥65% profitable windows, n≥300. Verified: synthetic model w/ AUC .78 correctly SHELVED for failing cost stress.
+- 4 Broker-keyed models: model_key = broker|account_type|symbol; training query filtered; decisions store broker/account_type.
+- 5 Hot path: decision_id = local uuid4, insert fire-and-forget, account preloaded on ingest (no find_one before order).
+- 6 Signal freshness from initiating tick received_time_ms; decision docs record signal_ts/feature_snapshot_ts/order_submit_ts.
+- 7 Pre-submit recheck: adverse drift ≤ 0.5×stop + fresh spread limit; EA entry_price slippage veto is broker-side last gate; reject stages recorded (pre_submit_drift/spread/broker_blocked).
+- 8 Commission: scalp_config.commission_usd_per_lot_side → pips via pip value; flows through forecast/edge/live cost.
+**High:**
+- 9 Risk persistence: RiskState.to_doc/load_doc → scalp_risk_state collection; restored on hydration + open-position reconciliation; NO entries until _risk_restored.
+- 10 Dataset tags: candidate / submitted / filled_live on decisions.
+- 11 Overlap suppression: same-direction candidates skipped while a sim is active (suppressed_overlap counter).
+- 12 Drift protection: artifacts expire after 7 days; predict_p refuses OOD inputs (|z|>6) → deterministic fallback.
+- 13 Live close feeds real (or estimated) execution cost into daily cost budget.
+- 14 Close states: OPEN→CLOSE_REQUESTED→confirmed close; position stays monitored until broker /bridge/report confirms.
+- 15 Account-level open-scalp cap across all runners.
+- 20 News: malformed high-impact timestamp → fail closed.
+- Tick ingest drops duplicate/out-of-order ticks.
+**Tests refactored:** tests/unit/scalp/test_scalp_unit.py (28, pure imports, project-relative paths, no env reads) + tests/integration/scalp/test_scalp_api.py (12, lazy env). ea_version.py path-relative. Full suite: 1899 passed (1 live-data race flake, passes rerun).
+**Deferred (ROADMAP):** item 16 setup-score bucket shrinkage, 17 conditional target/stop (MFE/MAE models), 18 sub-second eval (measure signal half-life first), 19 session-bucket validation, EA-side report commission/swap fields.

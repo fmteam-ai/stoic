@@ -54,7 +54,7 @@ def make(feats: dict, candidate: dict, state, cfg,
     if model_p is not None:
         # trained + calibrated model wins, clamped to a sane scalp band
         p = _clamp(model_p, 0.30, 0.70)
-        p_source = "logistic_oos"
+        p_source = "logistic_calibrated"
 
     costs = expected_costs(feats, state, cfg, commission_pips)
     uncertainty = round(max(0.15, 0.25 * vol_short), 2)
