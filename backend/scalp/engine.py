@@ -57,11 +57,16 @@ AUDIT_BACKLOG_HALT = 500               # pending persist tasks that halt NEW ent
 FAILED_ATTEMPT_COST_PIPS = 0.1         # opportunity/ops cost of a rejected order
 MIN_FILL_ATTEMPTS_FOR_GATE = 20        # below this the fill-prob prior dominates
 
-# Runner ownership is PROCESS-LOCAL (round 5 item 10): this service must run
-# as a single worker (supervisor default) or with sticky routing per account.
+# Runner ownership is PROCESS-LOCAL (round 5 item 10): enforcement is a
+# distributed account lease (round 7 item 1) — a worker must own
+# scalp_owners:{account_id} before processing ticks or applying financials.
 _owner_pid = os.getpid()
+_worker_id = f"{os.uname().nodename}:{_owner_pid}"
+LEASE_TTL_SEC = 30
+_lease_cache: dict = {}                # account_id -> (expires_epoch, owned)
 _runners: dict = {}
 _account_risk: dict = {}               # account_id -> account-wide RiskState
+_account_restored: set = set()         # account-level state loaded once
 _audit_pending = 0
 _audit_failures = 0
 
@@ -72,6 +77,75 @@ def account_risk_state(account_id: str) -> RiskState:
         rs = RiskState(DEFAULT_LIMITS)
         _account_risk[account_id] = rs
     return rs
+
+
+async def acquire_account_lease(db, account_id: str,
+                                worker_id: str | None = None,
+                                ttl_sec: int = LEASE_TTL_SEC) -> bool:
+    """Round 7 item 1 — distributed account ownership. Atomically claims
+    scalp_owners:{account_id} when this worker already owns it or the lease
+    expired. A worker that does NOT own the account must not process ticks,
+    create orders or apply financials for it."""
+    wid = worker_id or _worker_id
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    lease = {"worker_id": wid,
+             "lease_until": (now + timedelta(seconds=ttl_sec)).isoformat(),
+             "heartbeat": now_iso}
+    res = await db.scalp_owners.update_one(
+        {"account_id": account_id,
+         "$or": [{"worker_id": wid}, {"lease_until": {"$lt": now_iso}}]},
+        {"$set": lease})
+    if res.matched_count:
+        return True
+    doc = await db.scalp_owners.find_one({"account_id": account_id})
+    if doc is None:
+        await db.scalp_owners.update_one(
+            {"account_id": account_id}, {"$setOnInsert": lease}, upsert=True)
+        doc = await db.scalp_owners.find_one({"account_id": account_id})
+    return bool(doc and doc.get("worker_id") == wid)
+
+
+async def ensure_account_lease(db, account_id: str) -> bool:
+    """Locally-cached lease check: one DB round-trip per ~half TTL keeps the
+    tick hot path free of per-batch database reads."""
+    import time as _t
+    cached = _lease_cache.get(account_id)
+    if cached and _t.time() < cached[0]:
+        return cached[1]
+    owned = await acquire_account_lease(db, account_id)
+    _lease_cache[account_id] = (_t.time() + LEASE_TTL_SEC / 2, owned)
+    return owned
+
+
+async def _restore_account_state(db, account_id: str, force: bool = False):
+    """Round 7 item 5 — ONE account-level initialization: load account risk,
+    scan ALL open scalp trades once, rebuild monetary stop risk and the open
+    count. Symbol runners no longer independently reconstruct the account."""
+    if account_id in _account_restored and not force:
+        return
+    _account_restored.add(account_id)
+    ars = account_risk_state(account_id)
+    doc = await db.scalp_risk_state.find_one(
+        {"account_id": account_id, "symbol": "_ACCOUNT"})
+    if doc:
+        ars.load_doc(doc)
+    open_trades = await db.trades.find(
+        {"account_id": account_id, "scope": "scalp_fast",
+         "status": "open"}).to_list(100)
+    ars.stop_risk_by_trade.clear()
+    from pip_utils import pip_value_usd_per_lot
+    for tr in open_trades:
+        lot = float(tr.get("lot_size") or 0)
+        entry = tr.get("entry_price")
+        stop = tr.get("stop_loss")
+        cfg = approved(tr.get("symbol") or "")
+        pip = cfg.pip_size if cfg else 0.0001
+        if lot > 0 and entry and stop:
+            pv = pip_value_usd_per_lot(tr.get("symbol") or "EURUSD", None) or 10.0
+            ars.add_stop_risk(str(tr["_id"]),
+                              lot * abs(float(entry) - float(stop)) / pip * pv)
+    ars.open_scalps = len(open_trades)
 
 
 class ShadowSim:
@@ -709,6 +783,21 @@ class ScalpRunner:
 
     # ---------------- risk-state persistence (item 9) ----------------
 
+    async def persist_risk_now(self, db):
+        """Round 7 item 6 — SYNCHRONOUS risk + deal-id persistence, awaited
+        BEFORE a broker deal may be marked reconciliation-complete. The
+        async _persist_risk stays for hot-path mirroring only."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.scalp_risk_state.update_one(
+            {"account_id": self.account_id, "symbol": self.symbol},
+            {"$set": {"user_id": self.user_id, **self.risk_state.to_doc(),
+                      "applied_deal_ids": list(self._applied_deal_ids),
+                      "saved_at": now_iso}}, upsert=True)
+        await db.scalp_risk_state.update_one(
+            {"account_id": self.account_id, "symbol": "_ACCOUNT"},
+            {"$set": {"user_id": self.user_id, **self.account_risk.to_doc(),
+                      "saved_at": now_iso}}, upsert=True)
+
     def _persist_risk(self, db):
         _bg(lambda: db.scalp_risk_state.update_one(
             {"account_id": self.account_id, "symbol": self.symbol},
@@ -731,10 +820,9 @@ class ScalpRunner:
             # restarts; the broker_deals reconciliation status is authoritative
             for did in (doc.get("applied_deal_ids") or [])[-500:]:
                 self._applied_deal_ids.append(did)
-        acct_doc = await db.scalp_risk_state.find_one(
-            {"account_id": self.account_id, "symbol": "_ACCOUNT"})
-        if acct_doc:
-            self.account_risk.load_doc(acct_doc)
+        # round 7 item 5 — account-level state (risk doc, stop risk, open
+        # count) initializes ONCE per account, not per symbol runner
+        await _restore_account_state(db, self.account_id)
         # round 5 item 5 — reconstruct DETAILED open-position state so a
         # restarted process can still run max-holding / spread-shock exits
         # and attribute exit slippage correctly.
@@ -773,19 +861,6 @@ class ScalpRunner:
                         float(dec.get("cost_pips") or 0) * pv
                         * float(dec.get("lot") or 0), 2)
             self.live_trades[tid] = info
-        # round 6 items 3/5 — rebuild account-level open count and MONETARY
-        # stop risk consistently across all runners on this account
-        from pip_utils import pip_value_usd_per_lot
-        pv = pip_value_usd_per_lot(self.symbol, None) or 10.0
-        for tid, info in self.live_trades.items():
-            lot = float(info.get("lot") or 0)
-            entry, stop = info.get("entry_px"), info.get("stop_px")
-            if lot > 0 and entry and stop:
-                self.account_risk.add_stop_risk(
-                    tid, lot * abs(float(entry) - float(stop)) / self.cfg.pip_size * pv)
-        others = [r for r in runners_for_account(self.account_id) if r is not self]
-        self.account_risk.open_scalps = (len(self.live_trades)
-                                         + sum(len(r.live_trades) for r in others))
         self._risk_restored = True
 
     # ---------------- tick recording (Step 2, off hot path) ----------------
@@ -903,24 +978,27 @@ DEAD_LETTER_PATH = os.environ.get(
 
 
 def _dead_letter(desc: str, error: str):
-    """Round 6 item 10 — durable outbox first (Mongo collection), local
-    JSONL only as the emergency fallback when the DB itself is the failure."""
+    """Round 6 item 10 / round 7 item 10 — synchronous durable append FIRST
+    (local JSONL), then best-effort async replication to the Mongo outbox.
+    The file write completes before this function returns, so a failing or
+    shutting-down process still leaves a durable record."""
     rec = {"ts": datetime.now(timezone.utc).isoformat(),
            "op": desc, "error": error, "pid": _owner_pid}
-    try:
-        from database import get_db
-        loop = asyncio.get_running_loop()
-        loop.create_task(get_db().scalp_dead_letter.insert_one(dict(rec)))
-    except Exception:  # noqa: BLE001 — DB unavailable → file fallback below
-        pass
     try:
         import json
         p = Path(DEAD_LETTER_PATH)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "a") as f:
             f.write(json.dumps(rec) + "\n")
+            f.flush()
     except OSError:
         logger.error("scalp dead-letter write failed: %s / %s", desc, error)
+    try:
+        from database import get_db
+        loop = asyncio.get_running_loop()
+        loop.create_task(get_db().scalp_dead_letter.insert_one(dict(rec)))
+    except Exception:  # noqa: BLE001 — replication is best-effort
+        pass
 
 
 def audit_backlog() -> dict:
@@ -947,64 +1025,105 @@ def runners_for_account(account_id: str) -> list:
     return [r for k, r in _runners.items() if k.startswith(f"{account_id}:")]
 
 
+async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
+                            lots: float, profit: float, commission: float,
+                            swap: float, price, partial: bool,
+                            remaining_lots: float | None = None) -> dict:
+    """Round 7 critical item — the ONE way a broker deal reaches a scalp
+    runner. Returns {"applied": bool, "reason": str|None}; callers may mark
+    the broker deal reconciliation-complete ONLY when applied is True.
+    Constructs and restores the runner if it does not exist yet."""
+    symbol = (trade.get("symbol") or "").upper()
+    if not await ensure_account_lease(db, account_id):
+        return {"applied": False, "reason": "account_owned_by_other_worker"}
+    r = get_runner(account_id, str(trade.get("user_id") or ""), symbol)
+    if r is None:
+        return {"applied": False, "reason": "runner_unavailable"}
+    if not r._risk_restored:
+        try:
+            await r.restore_risk(db)
+        except Exception as e:  # noqa: BLE001
+            return {"applied": False, "reason": f"restore_failed: {e}"}
+    try:
+        if partial:
+            r.on_partial_close(
+                trade_id=str(trade["_id"]), closed_lots=float(lots or 0),
+                remaining_lots=(float(remaining_lots)
+                                if remaining_lots is not None
+                                else float(trade.get("lot_size") or 0)),
+                pnl=float(profit or 0), commission=float(commission or 0),
+                swap=float(swap or 0),
+                exit_price=float(price) if price else None,
+                deal_id=str(deal_id), db=db)
+        else:
+            r.on_trade_closed(
+                trade_id=str(trade["_id"]), pnl=float(profit or 0),
+                commission=float(commission or 0), swap=float(swap or 0),
+                exit_price=float(price) if price else None,
+                deal_id=str(deal_id), close_reason=trade.get("close_reason"),
+                source="broker_deal", db=db)
+        # item 6 — risk state + applied deal id are DURABLE before the
+        # caller may flip the broker deal to complete
+        await r.persist_risk_now(db)
+    except Exception as e:  # noqa: BLE001
+        return {"applied": False, "reason": f"apply_failed: {e}"}
+    return {"applied": True, "reason": None}
+
+
 async def recover_pending_deals(db, older_than_sec: int = 60,
                                 limit: int = 100) -> dict:
-    """Round 6 critical item — crash-recovery sweep for financial
-    reconciliation. Broker deals are persisted with
-    financial_reconciliation_status='pending' BEFORE the runner applies
-    them; if the process dies in between, this job resumes the application.
-    Runner-level deal-id idempotency (persisted in scalp_risk_state) makes
-    replays safe."""
+    """Round 6/7 — crash-recovery sweep. A deal flips to 'complete' ONLY
+    after a runner confirmed the financial application; deals that are not
+    scalp targets complete with an explicit note; failures stay pending
+    with reconciliation_error + attempt count."""
     cutoff = (datetime.now(timezone.utc)
               - timedelta(seconds=older_than_sec)).isoformat()
     cur = db.broker_deals.find(
         {"financial_reconciliation_status": "pending",
          "received_at": {"$lt": cutoff}}).limit(limit)
-    recovered = closed_out = 0
+    recovered = closed_out = kept_pending = 0
     async for deal in cur:
-        done = {"financial_reconciliation_status": "complete",
-                "financial_reconciled_at": datetime.now(timezone.utc).isoformat(),
-                "financial_reconciled_by": "recovery_job"}
+        key = {"deal_id": deal["deal_id"], "account_id": deal["account_id"]}
+        now_iso = datetime.now(timezone.utc).isoformat()
         try:
             trade = await db.trades.find_one(
                 {"account_id": deal["account_id"],
                  "mt5_ticket": deal.get("mt5_ticket")})
-            if trade and trade.get("scope") == "scalp_fast":
-                r = get_runner(deal["account_id"],
-                               trade.get("user_id", ""),
-                               trade.get("symbol", ""))
-                if r is not None:
-                    if not r._risk_restored:
-                        await r.restore_risk(db)
-                    if trade.get("status") == "open":
-                        r.on_partial_close(
-                            trade_id=str(trade["_id"]),
-                            closed_lots=float(deal.get("lots") or 0),
-                            remaining_lots=float(trade.get("lot_size") or 0),
-                            pnl=float(deal.get("profit") or 0),
-                            commission=float(deal.get("commission") or 0),
-                            swap=float(deal.get("swap") or 0),
-                            exit_price=deal.get("price"),
-                            deal_id=str(deal["deal_id"]), db=db)
-                    else:
-                        r.on_trade_closed(
-                            trade_id=str(trade["_id"]),
-                            pnl=float(deal.get("profit") or 0),
-                            commission=float(deal.get("commission") or 0),
-                            swap=float(deal.get("swap") or 0),
-                            exit_price=deal.get("price"),
-                            deal_id=str(deal["deal_id"]),
-                            close_reason=trade.get("close_reason"),
-                            source="broker_deal", db=db)
-                    recovered += 1
-            await db.broker_deals.update_one(
-                {"deal_id": deal["deal_id"], "account_id": deal["account_id"]},
-                {"$set": done})
-            closed_out += 1
+            if not trade or trade.get("scope") != "scalp_fast":
+                # item 2 — explicit note: nothing for the runner to apply
+                await db.broker_deals.update_one(key, {"$set": {
+                    "financial_reconciliation_status": "complete",
+                    "financial_reconciled_at": now_iso,
+                    "financial_reconciled_by": "recovery_job",
+                    "reconciliation_note": ("no_matching_trade" if not trade
+                                            else "not_scalp_scope")}})
+                closed_out += 1
+                continue
+            res = await apply_broker_deal(
+                db, deal["account_id"], trade,
+                deal_id=deal["deal_id"], lots=deal.get("lots") or 0,
+                profit=deal.get("profit") or 0,
+                commission=deal.get("commission") or 0,
+                swap=deal.get("swap") or 0, price=deal.get("price"),
+                partial=(trade.get("status") == "open"))
+            if res["applied"]:
+                await db.broker_deals.update_one(key, {"$set": {
+                    "financial_reconciliation_status": "complete",
+                    "financial_reconciled_at": now_iso,
+                    "financial_reconciled_by": "recovery_job"}})
+                recovered += 1
+                closed_out += 1
+            else:
+                await db.broker_deals.update_one(key, {
+                    "$set": {"reconciliation_error": res["reason"]},
+                    "$inc": {"reconciliation_attempts": 1}})
+                kept_pending += 1
         except Exception as e:  # noqa: BLE001 — keep sweeping other deals
             logger.warning("scalp deal recovery failed deal=%s: %s",
                            deal.get("deal_id"), e)
-    return {"recovered": recovered, "marked_complete": closed_out}
+            kept_pending += 1
+    return {"recovered": recovered, "marked_complete": closed_out,
+            "kept_pending": kept_pending}
 
 
 async def apply_config(db, account: dict, symbol: str, enabled: bool, mode: str,

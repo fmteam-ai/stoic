@@ -450,7 +450,12 @@ async def receive_ticks(payload: BridgeTicks):
     db = get_db()
     account = await _account_by_token(payload.bridge_token)
     base = base_symbol(payload.symbol)
-    from scalp.engine import get_runner
+    from scalp.engine import get_runner, ensure_account_lease
+    # Round 7 item 1 — enforced account ownership: a worker without the
+    # distributed lease must not process ticks for this account (locally
+    # cached, ~1 DB round-trip per half-TTL — off the per-tick hot path).
+    if not await ensure_account_lease(db, str(account["_id"])):
+        return {"status": "rejected", "reason": "account_owned_by_other_worker"}
     runner = get_runner(str(account["_id"]), account["user_id"], base)
     if runner is None:
         return {"status": "ignored", "reason": f"{base} not in approved scalp universe"}
@@ -933,50 +938,40 @@ async def report_trade(payload: BridgeTradeReport):
     return {"ok": True}
 
 
-async def _mark_deal_reconciled(db, deal_id, account_id: str):
+async def _mark_deal_reconciled(db, deal_id, account_id: str, note: str | None = None):
+    doc = {"financial_reconciliation_status": "complete",
+           "financial_reconciled_at": datetime.now(timezone.utc).isoformat()}
+    if note:
+        doc["reconciliation_note"] = note
     await db.broker_deals.update_one(
-        {"deal_id": deal_id, "account_id": account_id},
-        {"$set": {"financial_reconciliation_status": "complete",
-                  "financial_reconciled_at": datetime.now(timezone.utc).isoformat()}})
+        {"deal_id": deal_id, "account_id": account_id}, {"$set": doc})
 
 
 async def _scalp_reconcile_close(db, account_id: str, trade: dict, payload,
-                                 partial: bool = False):
-    """Round 6 — apply the authoritative broker deal to the scalp runner,
-    then mark the broker_deals row 'complete' (durable reconciliation
-    state). On failure the row stays 'pending' so the recovery sweep or the
-    EA's next retry resumes it; runner deal-id idempotency makes replays
-    safe."""
-    try:
-        from scalp.engine import runners_for_account
-        for r in runners_for_account(account_id):
-            if r.symbol != (trade.get("symbol") or "").upper():
-                continue
-            if partial:
-                r.on_partial_close(
-                    trade_id=str(trade["_id"]),
-                    closed_lots=float(payload.lots or 0),
-                    remaining_lots=float(trade.get("lot_size") or 0),
-                    pnl=float(payload.profit or 0),
-                    commission=float(payload.commission or 0),
-                    swap=float(payload.swap or 0),
-                    exit_price=float(payload.price) if payload.price else None,
-                    deal_id=str(payload.deal_id), db=db)
-            else:
-                r.on_trade_closed(
-                    trade_id=str(trade["_id"]),
-                    pnl=float(payload.profit or 0),
-                    commission=float(payload.commission or 0),
-                    swap=float(payload.swap or 0),
-                    exit_price=float(payload.price) if payload.price else None,
-                    deal_id=str(payload.deal_id),
-                    close_reason=trade.get("close_reason"),
-                    source="broker_deal", db=db)
-    except Exception:
-        logger.exception("scalp financial reconciliation failed deal=%s",
-                         payload.deal_id)
-        return
-    await _mark_deal_reconciled(db, payload.deal_id, account_id)
+                                 partial: bool = False,
+                                 remaining_lots: float | None = None):
+    """Round 7 critical item — a broker deal flips to 'complete' ONLY after
+    engine.apply_broker_deal confirms the runner applied it (the runner is
+    constructed + restored on demand). On failure the deal STAYS pending
+    with reconciliation_error, so the recovery sweep retries it."""
+    from scalp.engine import apply_broker_deal
+    res = await apply_broker_deal(
+        db, account_id, trade,
+        deal_id=payload.deal_id, lots=payload.lots or 0,
+        profit=payload.profit or 0, commission=payload.commission or 0,
+        swap=payload.swap or 0, price=payload.price,
+        partial=partial, remaining_lots=remaining_lots)
+    if res["applied"]:
+        await _mark_deal_reconciled(db, payload.deal_id, account_id)
+    else:
+        logger.warning("scalp reconciliation NOT applied deal=%s: %s",
+                       payload.deal_id, res["reason"])
+        await db.broker_deals.update_one(
+            {"deal_id": payload.deal_id, "account_id": account_id},
+            {"$set": {"reconciliation_error": res["reason"],
+                      "reconciliation_target": "scalp_runner"},
+             "$inc": {"reconciliation_attempts": 1}})
+    return res
 
 
 @router.post("/external-deal")
@@ -1203,6 +1198,16 @@ async def external_deal(payload: BridgeExternalDeal):
             "magic_number": int(payload.magic or 0),
             "external_open": is_external,
         }
+        # Round 7 item 9 — a bot-owned open with NO pending sibling means we
+        # lost the order context: this record carries zero SL/TP, invisible
+        # to stop-risk math. Flag it so Safety Guardian / users see it needs
+        # protection instead of silently running unstopped.
+        if payload.magic == STOIC_MAGIC:
+            trade_doc["protection_missing"] = True
+            logger.warning(
+                "bot-owned 'in' deal %s (ticket %s) had no pending sibling — "
+                "trade created with protection_missing=True",
+                payload.deal_id, payload.mt5_ticket)
         result = await db.trades.insert_one(trade_doc)
         tid = str(result.inserted_id)
         await ws_manager.broadcast(user_id, "trade_updated", {
@@ -1226,24 +1231,25 @@ async def external_deal(payload: BridgeExternalDeal):
     # 696627605 / 696637253 bug — STOIC closed positions that the broker
     # still had open with reduced size.
     is_partial_close = False
+    remaining_lots = 0.0
     if existing and existing.get("status") == "open":
-        prior_lot = float(existing.get("lot_size") or 0)
-        deal_lot = float(payload.lots or 0)
-        if payload.position_volume is not None:
-            # Round 6 item 7 — the broker's REMAINING position volume is the
-            # authority (EA v1.45+): >0 → partial, 0 → full close. Immune to
-            # multi-fill closes, volume rounding and out-of-order deals.
-            is_partial_close = float(payload.position_volume) > 1e-9
-        # 1% tolerance for floating-point rounding by the broker (fallback)
-        elif prior_lot > 0 and deal_lot > 0 and deal_lot < prior_lot * 0.99:
-            is_partial_close = True
+        # Round 7 items 3/4 — broker position_volume is authoritative but a
+        # sub-minimum rounding residual must NOT count as an open position,
+        # and broker-reported volume is NEVER inflated to the minimum lot.
+        from scalp.deals import classify_close
+        is_partial_close, remaining_lots = classify_close(
+            payload.position_volume,
+            float(existing.get("lot_size") or 0),
+            float(payload.lots or 0))
 
     if is_partial_close:
-        new_lot = round(float(existing["lot_size"]) - float(payload.lots), 2)
-        if payload.position_volume is not None:
-            new_lot = round(float(payload.position_volume), 2)
+        new_lot = round(remaining_lots, 3)
         update = {
-            "lot_size": max(new_lot, 0.01),
+            # broker volume stored EXACTLY (round 7 item 3) — classify_close
+            # already guarantees new_lot >= min_lot when broker-reported;
+            # only the legacy lot-arithmetic fallback needs the floor.
+            "lot_size": (new_lot if payload.position_volume is not None
+                         else max(new_lot, 0.01)),
             "partial_closed": True,
             "partial_closed_at": deal_iso,
             "broker_deal_id": payload.deal_id,
@@ -1270,9 +1276,10 @@ async def external_deal(payload: BridgeExternalDeal):
             await _scalp_reconcile_close(
                 db, account_id,
                 {**existing, "lot_size": update["lot_size"], "status": "open"},
-                payload, partial=True)
+                payload, partial=True, remaining_lots=update["lot_size"])
         else:
-            await _mark_deal_reconciled(db, payload.deal_id, account_id)
+            await _mark_deal_reconciled(db, payload.deal_id, account_id,
+                                        note="not_scalp_scope")
         await ws_manager.broadcast(user_id, "trade_updated", {
             "trade_id": str(existing["_id"]),
             "lot_size": update["lot_size"],
@@ -1331,7 +1338,35 @@ async def external_deal(payload: BridgeExternalDeal):
                 db, account_id, {**existing, **update, "_id": existing["_id"]},
                 payload, partial=False)
         else:
-            await _mark_deal_reconciled(db, payload.deal_id, account_id)
+            await _mark_deal_reconciled(db, payload.deal_id, account_id,
+                                        note="not_scalp_scope")
+        # Round 7 item 8 — netting-account REVERSAL: an "inout" deal closes
+        # the tracked direction AND opens the opposite one in a single deal.
+        # Track the remaining broker position so STOIC never runs blind, and
+        # flag it protection_missing (no SL/TP known yet).
+        if (payload.deal_entry == "inout" and payload.position_volume
+                and float(payload.position_volume) >= 0.005):
+            rev_doc = {
+                "user_id": user_id, "account_id": account_id,
+                "symbol": payload.symbol, "action": payload.action,
+                "lot_size": round(float(payload.position_volume), 3),
+                "entry_price": payload.price,
+                "stop_loss": 0.0, "take_profit": 0.0,
+                "exit_price": None, "pnl": 0.0, "status": "open",
+                "mode": "live", "broker": acc.get("broker", "MT5"),
+                "mt5_ticket": payload.mt5_ticket,
+                "opened_at": deal_iso, "closed_at": None,
+                "origin": trade_origin, "magic_number": int(payload.magic or 0),
+                "external_open": True, "reversal_open": True,
+                "protection_missing": True,
+            }
+            rev = await db.trades.insert_one(rev_doc)
+            logger.warning(
+                "inout REVERSAL on ticket %s: closed tracked side, broker "
+                "still holds %.2f lots %s — created trade %s with "
+                "protection_missing=True", payload.mt5_ticket,
+                float(payload.position_volume), payload.action,
+                str(rev.inserted_id))
     else:
         # Close event with no matching trade — user opened AND closed on MT5
         # without STOIC ever tracking it. Insert a fully-closed audit row so
@@ -1357,7 +1392,8 @@ async def external_deal(payload: BridgeExternalDeal):
         }
         result = await db.trades.insert_one(trade_doc)
         tid = str(result.inserted_id)
-        await _mark_deal_reconciled(db, payload.deal_id, account_id)
+        await _mark_deal_reconciled(db, payload.deal_id, account_id,
+                                    note="no_tracked_trade_audit_row")
 
     await ws_manager.broadcast(user_id, "trade_updated", {
         "trade_id": tid, **update,

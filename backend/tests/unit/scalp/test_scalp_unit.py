@@ -283,10 +283,11 @@ class TestModelCalibration:
 def _stub_db():
     db = MagicMock()
     for coll in ("scalp_decisions", "scalp_ticks", "scalp_risk_state",
-                 "scalp_configs", "trades"):
+                 "scalp_configs", "trades", "broker_deals", "scalp_owners"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
-        c.update_one = AsyncMock()
+        c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
+                                                        modified_count=1))
         c.find_one = AsyncMock(return_value=None)
     return db
 
@@ -845,6 +846,177 @@ class TestRound6PartialAndDurability:
         assert rr.risk_state.daily_loss_usd == pytest.approx(4.3)
         marked = db.broker_deals.update_one.call_args.args[1]["$set"]
         assert marked["financial_reconciliation_status"] == "complete"
+
+
+# ---------------- round-7 review behaviors ----------------
+class _AsyncCursor:
+    def __init__(self, docs):
+        self.docs = docs
+
+    def limit(self, n):
+        return self
+
+    def __aiter__(self):
+        async def gen():
+            for d in self.docs:
+                yield d
+        return gen()
+
+
+class TestRound7ApplyConfirmedReconciliation:
+    def test_apply_broker_deal_constructs_and_restores_runner(self):
+        """CRITICAL — a deal arriving before any runner exists must still be
+        APPLIED (runner built + restored on demand), never skipped."""
+        from scalp.engine import apply_broker_deal, get_runner
+        db = _stub_db()
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[])
+        db.trades.find = MagicMock(return_value=cursor)
+        trade = {"_id": "trN", "symbol": "EURUSD", "user_id": "u1",
+                 "status": "closed", "close_reason": "stop_loss"}
+
+        async def run():
+            res = await apply_broker_deal(
+                db, "r7-new", trade, deal_id=9, lots=0.05, profit=-3.0,
+                commission=-0.2, swap=0.0, price=1.079, partial=False)
+            for _ in range(5):
+                await asyncio.sleep(0)
+            return res
+        res = asyncio.run(run())
+        assert res["applied"] is True
+        r = get_runner("r7-new", "u1", "EURUSD")
+        assert r._risk_restored is True
+        assert r.risk_state.daily_loss_usd == pytest.approx(3.2)
+        # item 6 — risk persisted SYNCHRONOUSLY before caller marks complete
+        assert db.scalp_risk_state.update_one.await_count >= 2
+
+    def test_apply_broker_deal_unavailable_runner_not_applied(self):
+        from scalp.engine import apply_broker_deal
+        db = _stub_db()
+        trade = {"_id": "trU", "symbol": "GBPUSD", "user_id": "u1"}
+        res = asyncio.run(apply_broker_deal(
+            db, "r7-un", trade, deal_id=10, lots=0.05, profit=-1.0,
+            commission=0.0, swap=0.0, price=1.25, partial=False))
+        assert res["applied"] is False
+        assert res["reason"] == "runner_unavailable"
+
+    def test_recovery_no_trade_completes_with_note(self):
+        from scalp.engine import recover_pending_deals
+        deal = {"deal_id": 801, "account_id": "r7-nt", "mt5_ticket": 1,
+                "financial_reconciliation_status": "pending",
+                "received_at": "2020-01-01T00:00:00+00:00"}
+        db = _stub_db()
+        db.broker_deals.find = MagicMock(return_value=_AsyncCursor([deal]))
+        db.trades.find_one = AsyncMock(return_value=None)
+        out = asyncio.run(recover_pending_deals(db, older_than_sec=0))
+        assert out == {"recovered": 0, "marked_complete": 1, "kept_pending": 0}
+        marked = db.broker_deals.update_one.call_args.args[1]["$set"]
+        assert marked["reconciliation_note"] == "no_matching_trade"
+
+    def test_recovery_non_scalp_completes_with_note(self):
+        from scalp.engine import recover_pending_deals
+        deal = {"deal_id": 802, "account_id": "r7-ns", "mt5_ticket": 2,
+                "financial_reconciliation_status": "pending",
+                "received_at": "2020-01-01T00:00:00+00:00"}
+        db = _stub_db()
+        db.broker_deals.find = MagicMock(return_value=_AsyncCursor([deal]))
+        db.trades.find_one = AsyncMock(return_value={"_id": "t", "scope": None})
+        out = asyncio.run(recover_pending_deals(db, older_than_sec=0))
+        assert out["recovered"] == 0 and out["marked_complete"] == 1
+        marked = db.broker_deals.update_one.call_args.args[1]["$set"]
+        assert marked["reconciliation_note"] == "not_scalp_scope"
+
+    def test_recovery_apply_failure_stays_pending(self):
+        """CRITICAL — an unapplied deal must NOT flip to complete."""
+        from scalp.engine import recover_pending_deals
+        deal = {"deal_id": 803, "account_id": "r7-kp", "mt5_ticket": 3,
+                "profit": -2.0, "commission": 0.0, "swap": 0.0,
+                "lots": 0.05, "price": 1.25,
+                "financial_reconciliation_status": "pending",
+                "received_at": "2020-01-01T00:00:00+00:00"}
+        trade = {"_id": "trK", "scope": "scalp_fast", "status": "closed",
+                 "symbol": "GBPUSD", "user_id": "u1"}   # unapproved symbol
+        db = _stub_db()
+        db.broker_deals.find = MagicMock(return_value=_AsyncCursor([deal]))
+        db.trades.find_one = AsyncMock(return_value=trade)
+        out = asyncio.run(recover_pending_deals(db, older_than_sec=0))
+        assert out["kept_pending"] == 1 and out["marked_complete"] == 0
+        upd = db.broker_deals.update_one.call_args.args[1]
+        assert upd["$set"]["reconciliation_error"] == "runner_unavailable"
+        assert upd["$inc"]["reconciliation_attempts"] == 1
+        assert "financial_reconciliation_status" not in upd["$set"]
+
+
+class TestRound7DealsAndLease:
+    def test_tiny_residual_is_full_close(self):
+        from scalp.deals import classify_close
+        assert classify_close(1e-7, 0.05, 0.05) == (False, 0.0)
+        assert classify_close(0.004, 0.05, 0.046) == (False, 0.0)
+
+    def test_broker_volume_stored_exactly_never_inflated(self):
+        from scalp.deals import classify_close
+        partial, remaining = classify_close(0.03, 0.05, 0.02)
+        assert partial is True and remaining == pytest.approx(0.03)
+        partial, remaining = classify_close(0.01, 0.05, 0.04)
+        assert partial is True and remaining == pytest.approx(0.01)
+
+    def test_legacy_lot_arithmetic_fallback(self):
+        from scalp.deals import classify_close
+        assert classify_close(None, 0.05, 0.02) == (True, 0.03)
+        assert classify_close(None, 0.05, 0.05) == (False, 0.0)
+
+    def test_lease_rejected_when_other_worker_owns(self):
+        from scalp import engine as eng
+        db = _stub_db()
+        db.scalp_owners.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=0))
+        db.scalp_owners.find_one = AsyncMock(return_value={
+            "account_id": "L1", "worker_id": "other-host:999",
+            "lease_until": "9999-01-01T00:00:00+00:00"})
+        assert asyncio.run(eng.acquire_account_lease(db, "L1")) is False
+
+    def test_lease_claimed_when_unowned(self):
+        from scalp import engine as eng
+        db = _stub_db()
+        db.scalp_owners.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=0))
+        db.scalp_owners.find_one = AsyncMock(
+            side_effect=[None, {"account_id": "L2",
+                                "worker_id": eng._worker_id}])
+        assert asyncio.run(eng.acquire_account_lease(db, "L2")) is True
+
+    def test_lease_renewed_for_current_owner(self):
+        from scalp import engine as eng
+        db = _stub_db()   # update_one matched_count=1 → owned/renewed
+        assert asyncio.run(eng.acquire_account_lease(db, "L3")) is True
+
+    def test_account_state_initializes_once(self):
+        """Round 7 item 5 — account risk/stop-risk loads ONCE, not per
+        symbol runner."""
+        from scalp import engine as eng
+        db = _stub_db()
+        trade_doc = {"_id": "trOnce", "action": "BUY", "entry_price": 1.08,
+                     "stop_loss": 1.079, "take_profit": 1.082,
+                     "lot_size": 0.10, "symbol": "EURUSD",
+                     "scalp_decision_id": "",
+                     "opened_at": "2026-06-01T10:00:00+00:00"}
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[trade_doc])
+        db.trades.find = MagicMock(return_value=cursor)
+        r1 = ScalpRunner("r7-once", "u1", "EURUSD")
+        asyncio.run(r1.restore_risk(db))
+        assert "r7-once" in eng._account_restored
+        assert r1.account_risk.stop_risk_by_trade["trOnce"] == pytest.approx(10.0)
+        acct_queries = [c.args[0] for c
+                        in db.scalp_risk_state.find_one.await_args_list
+                        if c.args[0].get("symbol") == "_ACCOUNT"]
+        assert len(acct_queries) == 1
+        r2 = ScalpRunner("r7-once", "u1", "EURUSD")
+        asyncio.run(r2.restore_risk(db))
+        acct_queries = [c.args[0] for c
+                        in db.scalp_risk_state.find_one.await_args_list
+                        if c.args[0].get("symbol") == "_ACCOUNT"]
+        assert len(acct_queries) == 1          # NOT re-run by second runner
 
 
 # ---------------- EA coherence (project-relative path) ----------------
