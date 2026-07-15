@@ -870,22 +870,26 @@ async def report_trade(payload: BridgeTradeReport):
             update["close_reason"] = close_reason
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
-    # Scalp fast-path fill reconciliation (EA v1.44): feed the risk counters
-    # and real entry slippage back into the scalp state.
+    # Scalp fast-path reconciliation (EA v1.44). /bridge/report is the
+    # OPERATIONAL acknowledgement path only: it feeds fill confirmation and
+    # frees the position slot. Financial reconciliation (P&L, commission,
+    # swap) is applied EXCLUSIVELY by /bridge/external-deal, which carries
+    # the authoritative signed MT5 deal fields (round 5 item 1).
     if trade.get("scope") == "scalp_fast":
         try:
             from scalp.engine import runners_for_account
             for r in runners_for_account(str(acc["_id"])):
+                if r.symbol != (trade.get("symbol") or "").upper():
+                    continue
                 if payload.status == "open" and payload.entry_price is not None:
                     r.on_trade_opened(payload.trade_id,
                                       float(trade.get("entry_price") or 0) or None,
                                       float(payload.entry_price), db=db)
                 elif payload.status == "closed":
-                    r.on_trade_closed(payload.trade_id,
-                                      float(payload.pnl or 0),
-                                      exit_price=(float(payload.exit_price)
-                                                  if payload.exit_price else None),
-                                      db=db)
+                    r.on_close_ack(payload.trade_id,
+                                   exit_price=(float(payload.exit_price)
+                                               if payload.exit_price else None),
+                                   db=db)
         except Exception:
             pass
     if slippage_force_close:
@@ -1237,6 +1241,27 @@ async def external_deal(payload: BridgeExternalDeal):
                 update["auto_repaired_at"] = datetime.now(timezone.utc).isoformat()
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
         tid = str(existing["_id"])
+        # Scalp fast-path AUTHORITATIVE financial reconciliation (round 5
+        # item 1): the broker deal carries SIGNED profit/commission/swap and
+        # the exact exit price. The runner is idempotent per deal_id, so EA
+        # retries and the /bridge/report ack can never double-apply.
+        if existing.get("scope") == "scalp_fast":
+            try:
+                from scalp.engine import runners_for_account
+                for r in runners_for_account(account_id):
+                    if r.symbol != (existing.get("symbol") or "").upper():
+                        continue
+                    r.on_trade_closed(
+                        trade_id=tid,
+                        pnl=float(payload.profit or 0),
+                        commission=float(payload.commission or 0),
+                        swap=float(payload.swap or 0),
+                        exit_price=float(payload.price) if payload.price else None,
+                        deal_id=str(payload.deal_id),
+                        source="broker_deal", db=db)
+            except Exception:
+                logger.exception("scalp financial reconciliation failed deal=%s",
+                                 payload.deal_id)
     else:
         # Close event with no matching trade — user opened AND closed on MT5
         # without STOIC ever tracking it. Insert a fully-closed audit row so

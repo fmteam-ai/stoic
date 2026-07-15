@@ -29,8 +29,11 @@ overlapping same-direction candidates are suppressed while a sim is active.
 """
 import asyncio
 import logging
+import os
 import uuid
+from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 
 from scalp import edge, gate, kill, permissions, setup
 from scalp import model as scalp_model
@@ -38,7 +41,8 @@ from scalp.costs import dynamic_spread_limit
 from scalp.features import snapshot
 from scalp.forecast import make as make_forecast
 from scalp.instruments import approved
-from scalp.risk import DEFAULT_LIMITS, RiskState, check as risk_check
+from scalp.risk import (DEFAULT_LIMITS, RiskState, check as risk_check,
+                        check_account)
 from scalp.state import ScalpState, TickEvent, now_ms
 
 logger = logging.getLogger("scalp.engine")
@@ -50,10 +54,24 @@ RETRAIN_EVERY_RESOLUTIONS = 200
 MAX_DRIFT_BEFORE_SUBMIT_FRAC = 0.5     # of stop distance, ABSOLUTE drift
 MAX_BATCH_TRANSPORT_AGE_MS = 3000      # sent_at → arrival; older batches can't trade
 AUDIT_BACKLOG_HALT = 500               # pending persist tasks that halt NEW entries
+FAILED_ATTEMPT_COST_PIPS = 0.1         # opportunity/ops cost of a rejected order
+MIN_FILL_ATTEMPTS_FOR_GATE = 20        # below this the fill-prob prior dominates
 
+# Runner ownership is PROCESS-LOCAL (round 5 item 10): this service must run
+# as a single worker (supervisor default) or with sticky routing per account.
+_owner_pid = os.getpid()
 _runners: dict = {}
+_account_risk: dict = {}               # account_id -> account-wide RiskState
 _audit_pending = 0
 _audit_failures = 0
+
+
+def account_risk_state(account_id: str) -> RiskState:
+    rs = _account_risk.get(account_id)
+    if rs is None:
+        rs = RiskState(DEFAULT_LIMITS)
+        _account_risk[account_id] = rs
+    return rs
 
 
 class ShadowSim:
@@ -126,6 +144,12 @@ class ScalpRunner:
         self.cfg = approved(symbol)
         self.state = ScalpState(self.cfg.pip_size)
         self.risk_state = RiskState(DEFAULT_LIMITS)
+        self.account_risk = account_risk_state(account_id)
+        self._applied_deal_ids: deque = deque(maxlen=500)
+        self._financials_applied: deque = deque(maxlen=500)
+        self._closed_awaiting_financials: dict = {}
+        self.exec_attempts = 0
+        self.exec_fills = 0
         self.account: dict | None = None       # preloaded on ingest (item 5)
         self.equity = 0.0
         self.mode = "shadow"
@@ -247,9 +271,13 @@ class ScalpRunner:
         pip_val = pip_value_usd_per_lot(self.symbol, None)
         # item 15 — account-level open-scalp cap across ALL runners
         account_open = sum(len(r.live_trades) for r in runners_for_account(self.account_id))
+        acct_check = check_account(self.account_risk, self.equity)
         if account_open >= self.risk_state.limits.max_open_positions:
             risk_res = {"ok": False, "lot": 0.0,
                         "reason": "account-level max open scalp positions"}
+        elif not acct_check["ok"]:
+            # round 5 item 4 — account-wide layer beats symbol-local checks
+            risk_res = {"ok": False, "lot": 0.0, "reason": acct_check["reason"]}
         else:
             risk_res = risk_check(self.risk_state, self.equity, fc.stop_pips,
                                   pip_val, self.cfg)
@@ -348,6 +376,19 @@ class ScalpRunner:
                 "decision_update")
             return
         entry = t.ask if decision["direction"] == "BUY" else t.bid
+        # round 5 item 8 — attempt-level EV: EV = P(fill)·EV(filled) − C(fail)
+        fs = self.fill_stats()
+        ev_attempt = (fs["p_fill"] * decision["net_edge_pips"]
+                      - (1 - fs["p_fill"]) * FAILED_ATTEMPT_COST_PIPS)
+        if fs["attempts"] >= MIN_FILL_ATTEMPTS_FOR_GATE and ev_attempt <= 0:
+            self.state.record_reject()
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "low_fill_probability_ev",
+                          "fill_stats": fs,
+                          "ev_attempt_pips": round(ev_attempt, 3)}: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
         if decision["direction"] == "BUY":
             sl, tp = entry - fc.stop_pips * pip, entry + fc.target_pips * pip
         else:
@@ -369,13 +410,18 @@ class ScalpRunner:
             cfg_account_id=self.account_id)
         if trade.get("blocked"):
             self.state.record_reject()
+            # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
+            # empirical fill-probability model, not just an audit trail.
             _bg(lambda s={"verdict": "rejected", "reject_stage": "broker_blocked",
+                          "dataset": "attempt_failed",
+                          "submission_result": trade.get("reason"),
                           "block_reason": trade.get("reason")}: db.scalp_decisions.update_one(
                 {"decision_id": decision["decision_id"]}, {"$set": s}),
                 "decision_update")
             return
         tid = str(trade.get("id") or trade.get("_id") or "")
         self.risk_state.record_open()
+        self.account_risk.record_open()
         self._persist_risk(db)
         self.counters["live_trades"] += 1
         # estimated execution cost in USD for the daily cost budget (item 13)
@@ -436,6 +482,14 @@ class ScalpRunner:
             if reason:
                 info["state"] = "CLOSE_REQUESTED"
                 info["close_requested_ms"] = nm
+                # round 5 item 9 — exact exit-slippage baseline captured at
+                # close request: reference quotes + requested exit price.
+                lt = self.state.last_tick
+                if lt is not None:
+                    info["exit_reference_bid"] = lt.bid
+                    info["exit_reference_ask"] = lt.ask
+                    info["requested_exit_price"] = (
+                        lt.bid if info.get("direction") == "BUY" else lt.ask)
                 _bg(lambda t=tid, rs=reason: self._request_close(db, t, rs),
                     "request_close")
 
@@ -453,6 +507,9 @@ class ScalpRunner:
         """Broker fill confirmation (round 3 item 5): feed REAL entry slippage
         back into the state so the cost model learns from live fills."""
         info = self.live_trades.get(trade_id)
+        if info is not None and not info.get("fill_counted"):
+            info["fill_counted"] = True
+            self.exec_fills += 1
         if requested_price and actual_price:
             direction = (info or {}).get("direction", "BUY")
             signed = ((actual_price - requested_price) if direction == "BUY"
@@ -470,34 +527,100 @@ class ScalpRunner:
                               "entry_slippage_pips": round(signed, 2)}}),
                     "entry_fill")
 
+    def on_close_ack(self, trade_id: str, exit_price: float | None = None,
+                     db=None):
+        """Operational close acknowledgement (/bridge/report). Frees the
+        position slot and stops exit monitoring — but applies NO financials.
+        /bridge/external-deal is the authoritative reconciliation source
+        (round 5 item 1); the info dict is parked until its deal arrives."""
+        if trade_id in self._financials_applied:
+            return
+        info = self.live_trades.pop(trade_id, None)
+        if info is None:
+            return
+        info["close_ack_ms"] = now_ms()
+        if exit_price:
+            info["ack_exit_price"] = exit_price
+        self._closed_awaiting_financials[trade_id] = info
+        if len(self._closed_awaiting_financials) > 200:
+            self._closed_awaiting_financials.pop(
+                next(iter(self._closed_awaiting_financials)))
+        self.risk_state.record_close()
+        self.account_risk.record_close()
+        if db is not None:
+            self._persist_risk(db)
+
     def on_trade_closed(self, trade_id: str, pnl: float,
                         commission: float = 0.0, swap: float = 0.0,
-                        exit_price: float | None = None, db=None):
-        """Broker-confirmed close (item 13/14): only NOW the position leaves
-        the book and real execution cost hits the daily cost budget."""
+                        exit_price: float | None = None,
+                        deal_id: str | None = None,
+                        source: str = "report", db=None):
+        """Authoritative financial reconciliation (round 5 items 1/2) —
+        normally fed by /bridge/external-deal with SIGNED broker figures.
+        Idempotent per deal_id AND per trade_id: financials apply exactly
+        once even when both reporting paths fire.
+
+        SIGNED MT5 semantics: net = profit + commission + swap. abs() would
+        erase positive-swap credits and commission rebates."""
+        if deal_id is not None and deal_id in self._applied_deal_ids:
+            return
+        if trade_id in self._financials_applied:
+            return
         info = self.live_trades.pop(trade_id, None)
+        if info is not None:
+            self.risk_state.record_close()
+            self.account_risk.record_close()
+        else:
+            info = self._closed_awaiting_financials.pop(trade_id, None)
+        if deal_id is not None:
+            self._applied_deal_ids.append(deal_id)
+        self._financials_applied.append(trade_id)
+        pnl = float(pnl or 0)
+        commission = float(commission or 0)
+        swap = float(swap or 0)
+        net_pnl = pnl + commission + swap
+        execution_cost = max(0.0, -commission) + max(0.0, -swap)
+        financing_credit = max(0.0, swap)
         est_cost = float(info.get("est_cost_usd", 0.0)) if info else 0.0
-        real_cost = abs(commission) + abs(swap)
-        total_cost = real_cost if real_cost > 0 else est_cost
-        self.risk_state.record_close()
-        self.risk_state.record_result(float(pnl or 0), total_cost)
+        broker_costs_known = (commission != 0.0 or swap != 0.0
+                              or source == "broker_deal")
+        cost_used = execution_cost if broker_costs_known else est_cost
+        self.risk_state.record_result(net_pnl, cost_used)
+        self.account_risk.record_result(net_pnl, cost_used)
+        # round 5 item 9 — exact exit slippage vs the requested exit (close
+        # request quote) or the stop level for broker-side stop exits.
+        exit_slip = None
+        req_exit = (info or {}).get("requested_exit_price")
+        if req_exit is None and info and exit_price and info.get("stop_px"):
+            if abs(exit_price - float(info["stop_px"])) <= 3 * self.cfg.pip_size:
+                req_exit = float(info["stop_px"])
+        if info and exit_price and req_exit:
+            d = info.get("direction", "BUY")
+            adverse = ((req_exit - exit_price) if d == "BUY"
+                       else (exit_price - req_exit)) / self.cfg.pip_size
+            exit_slip = round(adverse, 2)
         if db is not None:
             self._persist_risk(db)
             if info:
-                # round 4 item 6 — canonical execution record with EXPLICIT
-                # field semantics; consumers never guess what "pnl" means.
                 outcome = {
                     "requested_entry_price": info.get("requested_entry"),
                     "actual_entry_price": info.get("actual_entry", info.get("entry_px")),
-                    "actual_exit_price": exit_price,
                     "entry_slippage_pips": info.get("entry_slippage_pips"),
-                    "gross_market_pnl_usd": float(pnl or 0),   # broker-reported, pre-commission
-                    "commission_usd": float(commission or 0),
-                    "swap_usd": float(swap or 0),
-                    "net_pnl_usd": round(float(pnl or 0)
-                                         - abs(commission) - abs(swap), 2),
-                    "execution_cost_usd_used": round(total_cost, 2),
-                    "cost_source": "broker" if real_cost > 0 else "estimated",
+                    "requested_exit_price": req_exit,
+                    "actual_exit_price": exit_price,
+                    "exit_reference_bid": info.get("exit_reference_bid"),
+                    "exit_reference_ask": info.get("exit_reference_ask"),
+                    "exit_slippage_pips": exit_slip,
+                    "close_request_ts_ms": info.get("close_requested_ms"),
+                    "gross_market_pnl_usd": pnl,
+                    "commission_usd": commission,          # SIGNED
+                    "swap_usd": swap,                      # SIGNED
+                    "net_pnl_usd": round(net_pnl, 2),
+                    "execution_cost_usd": round(execution_cost, 2),
+                    "financing_credit_usd": round(financing_credit, 2),
+                    "execution_cost_usd_used": round(cost_used, 2),
+                    "cost_source": "broker" if broker_costs_known else "estimated",
+                    "broker_deal_id": deal_id,
                 }
                 _bg(lambda o=outcome: db.scalp_decisions.update_one(
                     {"decision_id": info.get("decision_id", "")},
@@ -515,30 +638,58 @@ class ScalpRunner:
             {"$set": {"user_id": self.user_id, **self.risk_state.to_doc(),
                       "saved_at": datetime.now(timezone.utc).isoformat()}},
             upsert=True), "risk_state")
+        _bg(lambda: db.scalp_risk_state.update_one(
+            {"account_id": self.account_id, "symbol": "_ACCOUNT"},
+            {"$set": {"user_id": self.user_id, **self.account_risk.to_doc(),
+                      "saved_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True), "account_risk_state")
 
     async def restore_risk(self, db):
         doc = await db.scalp_risk_state.find_one(
             {"account_id": self.account_id, "symbol": self.symbol})
         if doc:
             self.risk_state.load_doc(doc)
-        # reconcile open live scalp positions from the trades collection
+        acct_doc = await db.scalp_risk_state.find_one(
+            {"account_id": self.account_id, "symbol": "_ACCOUNT"})
+        if acct_doc:
+            self.account_risk.load_doc(acct_doc)
+        # round 5 item 5 — reconstruct DETAILED open-position state so a
+        # restarted process can still run max-holding / spread-shock exits
+        # and attribute exit slippage correctly.
         open_trades = await db.trades.find(
             {"account_id": self.account_id, "scope": "scalp_fast",
              "status": "open"}).to_list(50)
         self.risk_state.open_scalps = len(open_trades)
         for tr in open_trades:
             tid = str(tr["_id"])
-            if tid not in self.live_trades:
-                pend = (tr.get("pending_modification") or {}).get("type")
-                self.live_trades[tid] = {
-                    "state": "CLOSE_REQUESTED" if pend == "FULL_CLOSE" else "OPEN",
-                    "opened_ms": now_ms(),
-                    "direction": tr.get("action"),
-                    "entry_px": tr.get("entry_price"),
-                    "stop_px": tr.get("stop_loss"), "target_px": tr.get("take_profit"),
-                    "decision_id": tr.get("scalp_decision_id", ""),
-                    "est_cost_usd": 0.0,
-                }
+            if tid in self.live_trades:
+                continue
+            pend = tr.get("pending_modification") or {}
+            info = {
+                "state": "CLOSE_REQUESTED" if pend.get("type") == "FULL_CLOSE" else "OPEN",
+                "opened_ms": _iso_to_ms(tr.get("opened_at")) or now_ms(),
+                "direction": tr.get("action"),
+                "entry_px": tr.get("entry_price"),
+                "requested_entry": tr.get("requested_price") or tr.get("intended_entry_price"),
+                "actual_entry": tr.get("entry_price"),
+                "entry_slippage_pips": tr.get("slippage_pips"),
+                "stop_px": tr.get("stop_loss"), "target_px": tr.get("take_profit"),
+                "decision_id": tr.get("scalp_decision_id", ""),
+                "est_cost_usd": 0.0,
+            }
+            if info["state"] == "CLOSE_REQUESTED":
+                info["close_requested_ms"] = _iso_to_ms(pend.get("requested_at")) or now_ms()
+            if tr.get("scalp_decision_id"):
+                dec = await db.scalp_decisions.find_one(
+                    {"decision_id": tr["scalp_decision_id"]},
+                    {"cost_pips": 1, "lot": 1})
+                if dec:
+                    from pip_utils import pip_value_usd_per_lot
+                    pv = pip_value_usd_per_lot(self.symbol, None) or 10.0
+                    info["est_cost_usd"] = round(
+                        float(dec.get("cost_pips") or 0) * pv
+                        * float(dec.get("lot") or 0), 2)
+            self.live_trades[tid] = info
         self._risk_restored = True
 
     # ---------------- tick recording (Step 2, off hot path) ----------------
@@ -556,6 +707,13 @@ class ScalpRunner:
                 "stored_at": datetime.now(timezone.utc).isoformat(),
                 "ticks": b}), "tick_batch")
 
+    def fill_stats(self) -> dict:
+        """Empirical fill probability with an optimistic Beta(8,1) prior so a
+        cold start never blocks; live rejections pull it down fast."""
+        p = (self.exec_fills + 8.0) / (self.exec_attempts + 9.0)
+        return {"attempts": self.exec_attempts, "fills": self.exec_fills,
+                "p_fill": round(p, 3)}
+
     def status(self) -> dict:
         feats = snapshot(self.state)
         return {
@@ -568,6 +726,8 @@ class ScalpRunner:
             "counters": self.counters,
             "open_sims": len(self.open_sims),
             "open_live": len(self.live_trades),
+            "fill_stats": self.fill_stats(),
+            "awaiting_financials": len(self._closed_awaiting_financials),
             "live_states": {tid: i.get("state") for tid, i in self.live_trades.items()},
             "equity": self.equity,
             "spread_pips": self.state.spread_pips(),
@@ -580,6 +740,12 @@ class ScalpRunner:
                 "daily_cost_usd": round(self.risk_state.daily_cost_usd, 2),
                 "open_scalps": self.risk_state.open_scalps,
             },
+            "account_risk": {
+                "consecutive_losses": self.account_risk.consecutive_losses,
+                "daily_loss_usd": round(self.account_risk.daily_loss_usd, 2),
+                "daily_cost_usd": round(self.account_risk.daily_cost_usd, 2),
+                "open_scalps": self.account_risk.open_scalps,
+            },
             "last_decision": ({k: v for k, v in self.last_decision.items()
                                if k != "features"} if self.last_decision else None),
         }
@@ -591,6 +757,16 @@ def _oid(s):
         return ObjectId(s)
     except Exception:
         return s
+
+
+def _iso_to_ms(iso: str | None) -> int | None:
+    if not iso:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+                   .timestamp() * 1000)
+    except (ValueError, TypeError):
+        return None
 
 
 def _bg(factory, desc: str = ""):
@@ -625,13 +801,17 @@ async def _run_operation(factory, desc: str = ""):
         _audit_pending = max(0, _audit_pending - 1)
 
 
-DEAD_LETTER_PATH = "/app/backend/scalp_dead_letter.jsonl"
+DEAD_LETTER_PATH = os.environ.get(
+    "SCALP_DEAD_LETTER_PATH",
+    str(Path(__file__).resolve().parent.parent / "scalp_dead_letter.jsonl"))
 
 
 def _dead_letter(desc: str, error: str):
     try:
         import json
-        with open(DEAD_LETTER_PATH, "a") as f:
+        p = Path(DEAD_LETTER_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as f:
             f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
                                 "op": desc, "error": error}) + "\n")
     except OSError:
@@ -639,8 +819,12 @@ def _dead_letter(desc: str, error: str):
 
 
 def audit_backlog() -> dict:
+    # counters are PROCESS-LOCAL (round 5 item 3): pid identifies the worker
+    # that owns the runners; multi-worker deployments need sticky routing.
     return {"pending": _audit_pending, "failures": _audit_failures,
-            "halted": _audit_pending >= AUDIT_BACKLOG_HALT}
+            "halted": _audit_pending >= AUDIT_BACKLOG_HALT,
+            "pid": _owner_pid,
+            "dead_letter_path": DEAD_LETTER_PATH}
 
 
 def get_runner(account_id: str, user_id: str, symbol: str) -> ScalpRunner | None:

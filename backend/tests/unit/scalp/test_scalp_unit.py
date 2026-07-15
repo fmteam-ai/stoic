@@ -411,7 +411,8 @@ class TestRound3Hardening:
     def test_audit_backlog_reporting(self):
         from scalp import engine as eng
         info = eng.audit_backlog()
-        assert set(info) == {"pending", "failures", "halted"}
+        assert {"pending", "failures", "halted", "pid",
+                "dead_letter_path"} <= set(info)
         assert info["halted"] is False
 
     def test_close_requested_restored_after_restart(self):
@@ -429,6 +430,246 @@ class TestRound3Hardening:
         asyncio.run(r.restore_risk(db))
         assert r._risk_restored is True
         assert r.live_trades["tr1"]["state"] == "CLOSE_REQUESTED"
+
+
+# ---------------- round-5 review behaviors ----------------
+class TestRound5FinancialReconciliation:
+    def _open_runner(self, acc="r5a"):
+        r = ScalpRunner(acc, "u1", "EURUSD")
+        r.live_trades["t1"] = {"state": "OPEN", "opened_ms": 0,
+                               "direction": "BUY", "entry_px": 1.08,
+                               "requested_entry": 1.08, "actual_entry": 1.08002,
+                               "stop_px": 1.079, "target_px": 1.082,
+                               "decision_id": "d1", "est_cost_usd": 1.5}
+        r.risk_state.open_scalps = 1
+        r.account_risk.open_scalps = 1
+        return r
+
+    def test_signed_broker_semantics_positive_swap_credit(self):
+        """net = profit + commission + swap (SIGNED) — never abs()."""
+        r = self._open_runner("r5b")
+        r.on_trade_closed("t1", pnl=10.0, commission=-0.5, swap=0.2,
+                          exit_price=1.0805, deal_id="D1", source="broker_deal")
+        # net = 10 - 0.5 + 0.2 = 9.7 profit → no daily loss
+        assert r.risk_state.daily_loss_usd == 0.0
+        # execution cost counts only the NEGATIVE components
+        assert r.risk_state.daily_cost_usd == pytest.approx(0.5)
+        assert r.account_risk.daily_cost_usd == pytest.approx(0.5)
+
+    def test_signed_loss_with_commission(self):
+        r = self._open_runner("r5c")
+        r.on_trade_closed("t1", pnl=-8.0, commission=-0.7, swap=-0.3,
+                          deal_id="D2", source="broker_deal")
+        assert r.risk_state.daily_loss_usd == pytest.approx(9.0)  # -8-0.7-0.3
+        assert r.risk_state.daily_cost_usd == pytest.approx(1.0)
+        assert r.risk_state.consecutive_losses == 1
+
+    def test_duplicate_deal_id_never_double_counts(self):
+        r = self._open_runner("r5d")
+        for _ in range(3):
+            r.on_trade_closed("t1", pnl=-5.0, commission=-0.5, swap=0.0,
+                              deal_id="D3", source="broker_deal")
+        assert r.risk_state.daily_loss_usd == pytest.approx(5.5)
+        assert r.risk_state.daily_cost_usd == pytest.approx(0.5)
+        assert r.risk_state.open_scalps == 0
+
+    def test_close_ack_applies_no_financials(self):
+        """/bridge/report is operational only: slot freed, budgets untouched."""
+        r = self._open_runner("r5e")
+        r.on_close_ack("t1", exit_price=1.0795)
+        assert "t1" not in r.live_trades
+        assert r.risk_state.open_scalps == 0
+        assert r.risk_state.daily_loss_usd == 0.0
+        assert r.risk_state.daily_cost_usd == 0.0
+        assert "t1" in r._closed_awaiting_financials
+
+    def test_ack_then_external_deal_exactly_once(self):
+        r = self._open_runner("r5f")
+        r.on_close_ack("t1", exit_price=1.0795)
+        r.on_trade_closed("t1", pnl=-6.0, commission=-0.4, swap=0.0,
+                          exit_price=1.0795, deal_id="D4", source="broker_deal")
+        # financials once, position count not double-decremented
+        assert r.risk_state.daily_loss_usd == pytest.approx(6.4)
+        assert r.risk_state.open_scalps == 0
+        assert "t1" not in r._closed_awaiting_financials
+        # a second report-path call after financials is a no-op
+        r.on_close_ack("t1")
+        r.on_trade_closed("t1", pnl=-6.0, deal_id="D4b", source="broker_deal")
+        assert r.risk_state.daily_loss_usd == pytest.approx(6.4)
+
+    def test_exit_slippage_attribution_in_canonical_record(self):
+        r = self._open_runner("r5g")
+        r.live_trades["t1"]["requested_exit_price"] = 1.08000
+        r.live_trades["t1"]["exit_reference_bid"] = 1.08000
+        r.live_trades["t1"]["exit_reference_ask"] = 1.08006
+        r.live_trades["t1"]["close_requested_ms"] = 123
+        db = _stub_db()
+
+        async def run():
+            r.on_trade_closed("t1", pnl=-3.0, commission=-0.4, swap=0.1,
+                              exit_price=1.07996, deal_id="D5",
+                              source="broker_deal", db=db)
+            for _ in range(5):
+                await asyncio.sleep(0)
+        asyncio.run(run())
+        sets = [c.args[1]["$set"] for c in db.scalp_decisions.update_one.call_args_list]
+        recs = [s for s in sets if "execution_outcome" in s]
+        assert recs, "canonical execution record was not written"
+        o = recs[0]["execution_outcome"]
+        assert o["requested_exit_price"] == 1.08000
+        assert o["actual_exit_price"] == 1.07996
+        assert o["exit_slippage_pips"] == pytest.approx(0.4)   # adverse for BUY
+        assert o["exit_reference_bid"] == 1.08000
+        assert o["net_pnl_usd"] == pytest.approx(-3.3)         # -3 - 0.4 + 0.1
+        assert o["commission_usd"] == -0.4                     # SIGNED
+        assert o["swap_usd"] == 0.1                            # SIGNED
+        assert o["financing_credit_usd"] == pytest.approx(0.1)
+        assert o["execution_cost_usd"] == pytest.approx(0.4)
+        assert o["cost_source"] == "broker"
+        assert o["broker_deal_id"] == "D5"
+
+    def test_broker_stop_exit_slippage_vs_stop_level(self):
+        """No CLOSE_REQUESTED (broker-side SL hit) → stop price is the
+        requested-exit baseline when the fill lands near it."""
+        r = self._open_runner("r5h")
+        db = _stub_db()
+
+        async def run():
+            r.on_trade_closed("t1", pnl=-10.0, commission=-0.5, swap=0.0,
+                              exit_price=1.07895, deal_id="D6",
+                              source="broker_deal", db=db)
+            for _ in range(5):
+                await asyncio.sleep(0)
+        asyncio.run(run())
+        sets = [c.args[1]["$set"] for c in db.scalp_decisions.update_one.call_args_list]
+        o = [s for s in sets if "execution_outcome" in s][0]["execution_outcome"]
+        assert o["requested_exit_price"] == pytest.approx(1.079)
+        assert o["exit_slippage_pips"] == pytest.approx(0.5)   # stopped 0.5p worse
+
+
+class TestRound5AccountRisk:
+    def test_account_state_shared_across_runners(self):
+        from scalp.engine import account_risk_state
+        r1 = ScalpRunner("acct-shared-1", "u1", "EURUSD")
+        assert r1.account_risk is account_risk_state("acct-shared-1")
+
+    def test_account_wide_daily_loss_blocks_all_symbols(self):
+        from scalp.risk import check_account
+        r1 = ScalpRunner("acct-wide-1", "u1", "EURUSD")
+        r1.live_trades["t1"] = {"state": "OPEN", "opened_ms": 0,
+                                "direction": "BUY", "est_cost_usd": 0.0}
+        # loss exceeding 0.5% of 1000 equity account-wide
+        r1.on_trade_closed("t1", pnl=-6.0, commission=0.0, swap=0.0,
+                           deal_id="DA", source="broker_deal")
+        # ANY other runner on the same account is now blocked
+        r2 = ScalpRunner("acct-wide-1", "u2-any", "EURUSD")
+        res = check_account(r2.account_risk, 1000.0)
+        assert res["ok"] is False
+        assert "account-wide daily scalp loss" in res["reason"]
+
+    def test_account_cooldown_blocks(self):
+        from scalp.risk import check_account
+        r = ScalpRunner("acct-cool-1", "u1", "EURUSD")
+        r.account_risk.cooldown_until = time.time() + 600
+        res = check_account(r.account_risk, 10_000.0)
+        assert res["ok"] is False and "cooldown" in res["reason"]
+
+    def test_account_risk_persisted_alongside_symbol(self):
+        r = ScalpRunner("acct-persist-1", "u1", "EURUSD")
+        db = _stub_db()
+
+        async def run():
+            r._persist_risk(db)
+            for _ in range(5):
+                await asyncio.sleep(0)
+        asyncio.run(run())
+        filters = [c.args[0] for c in db.scalp_risk_state.update_one.call_args_list]
+        symbols = {f["symbol"] for f in filters}
+        assert symbols == {"EURUSD", "_ACCOUNT"}
+
+
+class TestRound5RestoreAndDurability:
+    def test_detailed_open_state_restored(self):
+        r = ScalpRunner("acct-rest-1", "u1", "EURUSD")
+        db = _stub_db()
+        opened_iso = "2026-06-01T10:00:00+00:00"
+        trade_doc = {"_id": "tr9", "action": "SELL", "entry_price": 1.0810,
+                     "requested_price": 1.0811, "slippage_pips": 1.0,
+                     "stop_loss": 1.0820, "take_profit": 1.0790,
+                     "scalp_decision_id": "d9", "opened_at": opened_iso,
+                     "pending_modification": {"type": "FULL_CLOSE",
+                                              "requested_at": "2026-06-01T10:03:00+00:00"}}
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[trade_doc])
+        db.trades.find = MagicMock(return_value=cursor)
+        db.scalp_decisions.find_one = AsyncMock(
+            return_value={"cost_pips": 1.2, "lot": 0.02})
+        asyncio.run(r.restore_risk(db))
+        info = r.live_trades["tr9"]
+        from scalp.engine import _iso_to_ms
+        assert info["state"] == "CLOSE_REQUESTED"
+        assert info["opened_ms"] == _iso_to_ms(opened_iso)
+        assert info["close_requested_ms"] == _iso_to_ms("2026-06-01T10:03:00+00:00")
+        assert info["requested_entry"] == 1.0811
+        assert info["entry_slippage_pips"] == 1.0
+        assert info["est_cost_usd"] > 0
+
+    def test_dead_letter_path_env_configurable(self, tmp_path, monkeypatch):
+        from scalp import engine as eng
+        target = tmp_path / "sub" / "dl.jsonl"
+        monkeypatch.setattr(eng, "DEAD_LETTER_PATH", str(target))
+        eng._dead_letter("test_op", "boom")
+        assert target.exists()
+        import json
+        rec = json.loads(target.read_text().strip())
+        assert rec["op"] == "test_op" and rec["error"] == "boom"
+
+    def test_fill_stats_prior_and_counting(self):
+        r = ScalpRunner("acct-fill-1", "u1", "EURUSD")
+        assert r.fill_stats()["p_fill"] == pytest.approx(8 / 9, abs=0.01)
+        r.exec_attempts = 20
+        r.exec_fills = 2
+        assert r.fill_stats()["p_fill"] == pytest.approx(10 / 29, abs=0.01)
+        # fills counted once per trade via on_trade_opened
+        r.live_trades["tf"] = {"state": "OPEN", "direction": "BUY",
+                               "decision_id": "d", "opened_ms": 0,
+                               "est_cost_usd": 0}
+        r.on_trade_opened("tf", requested_price=1.08, actual_price=1.08001)
+        r.on_trade_opened("tf", requested_price=1.08, actual_price=1.08001)
+        assert r.exec_fills == 3
+
+
+class TestRound5Statistics:
+    def test_block_bootstrap_lower_bound_sign(self):
+        rng = np.random.default_rng(7)
+        pos = rng.normal(1.0, 0.5, 400)
+        lb = scalp_model._lower_bound(pos)
+        assert 0 < lb < pos.mean()
+        neg = rng.normal(-0.5, 0.5, 400)
+        assert scalp_model._lower_bound(neg) < 0
+
+    def test_block_bootstrap_widens_under_dependence(self):
+        """Clustered (serially dependent) outcomes must yield a WIDER (lower)
+        bound than the same values shuffled to look independent."""
+        rng = np.random.default_rng(3)
+        block_means = rng.normal(0.3, 1.0, 40)
+        clustered = np.repeat(block_means, 10)          # 400 pts, 40 clusters
+        shuffled = clustered.copy()
+        rng.shuffle(shuffled)
+        lb_clustered = scalp_model._lower_bound(clustered)
+        lb_shuffled = scalp_model._lower_bound(shuffled)
+        assert lb_clustered < lb_shuffled
+
+    def test_purge_embargo_drops_overlapping_labels(self):
+        n = 100
+        ts = np.arange(n, dtype=np.int64) * 60_000      # 1 trade / minute
+        mask = np.ones(n, dtype=bool)
+        boundary = 50
+        purged = scalp_model._purge(mask, ts, boundary)
+        # 5-minute embargo → the 5 samples before the boundary are dropped
+        assert purged[:45].all()
+        assert not purged[45:50].any()
+        assert purged[50:].all()                        # eval side untouched
 
 
 # ---------------- EA coherence (project-relative path) ----------------

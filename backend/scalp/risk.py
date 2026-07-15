@@ -85,6 +85,27 @@ class RiskState:
             self.daily_cost_usd = float(doc.get("daily_cost_usd") or 0.0)
 
 
+def check_account(rs: RiskState, equity: float) -> dict:
+    """Account-WIDE risk layer (round 5 item 4): daily loss, daily cost,
+    loss-streak cooldown and hourly cap aggregated across ALL scalp symbols
+    on the account. Symbol-local limits remain a second layer below this."""
+    rs._roll_day()
+    L = rs.limits
+    now = time.time()
+    if now < rs.cooldown_until:
+        return {"ok": False,
+                "reason": f"account loss-streak cooldown ({int(rs.cooldown_until - now)}s left)"}
+    hour_ago = now - 3600
+    if sum(1 for t in rs.trade_times if t >= hour_ago) >= L.max_trades_per_symbol_per_hour * 2:
+        return {"ok": False, "reason": "account-wide hourly scalp cap"}
+    if equity > 0:
+        if rs.daily_loss_usd >= equity * L.max_daily_loss_pct / 100.0:
+            return {"ok": False, "reason": "account-wide daily scalp loss limit"}
+        if rs.daily_cost_usd >= equity * L.max_daily_cost_pct / 100.0:
+            return {"ok": False, "reason": "account-wide daily cost budget exhausted"}
+    return {"ok": True, "reason": None}
+
+
 def size_lot(equity: float, stop_pips: float, pip_value_per_lot: float,
              cfg, limits: ScalpRiskLimits) -> dict:
     """Step 11 sizing — reject when the broker minimum exceeds the budget."""

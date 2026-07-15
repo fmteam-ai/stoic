@@ -26,12 +26,15 @@ logger = logging.getLogger("scalp.model")
 MIN_SAMPLES = 300
 MIN_OOS_AUC = 0.55
 MIN_SELECTED_TRADES = 200      # round 4 item 9: 10 was far too small
-CONFIDENCE_Z = 1.645           # one-sided 95% lower bound must be positive
 MIN_PROFITABLE_WINDOWS = 0.65
 MIN_ROLLING_POSITIVE = 2 / 3   # rolling shifted-window promotions (item 8)
 COST_STRESS_MULT = 1.5
 MODEL_TTL_DAYS = 7
 OOD_Z_LIMIT = 6.0
+EMBARGO_MS = 300_000           # = max holding period → label overlap window
+BOOTSTRAP_BLOCK = 10
+BOOTSTRAP_ITERS = 500
+BOOTSTRAP_SEED = 42
 EPOCHS = 400
 LR = 0.1
 L2 = 1e-3
@@ -117,16 +120,41 @@ def _trade_selected(p_cal, target, stop, cost):
 
 
 def _lower_bound(vals: np.ndarray) -> float:
-    """One-sided 95% lower confidence bound on the mean."""
-    if len(vals) < 2:
+    """One-sided 95% lower bound on the mean via BLOCK bootstrap (round 5
+    item 6). Nearby scalps share impulses, spread regimes and future paths —
+    resampling CONTIGUOUS blocks preserves that serial dependence, so the
+    bound reflects the effective independent sample size, not raw count."""
+    n = len(vals)
+    if n < 2:
         return float("-inf")
-    return float(vals.mean() - CONFIDENCE_Z * vals.std(ddof=1) / np.sqrt(len(vals)))
+    block = min(BOOTSTRAP_BLOCK, max(1, n // 5))
+    n_blocks = int(np.ceil(n / block))
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    starts = rng.integers(0, n - block + 1, size=(BOOTSTRAP_ITERS, n_blocks))
+    offs = np.arange(block)
+    means = np.empty(BOOTSTRAP_ITERS)
+    for i in range(BOOTSTRAP_ITERS):
+        idx = (starts[i][:, None] + offs[None, :]).ravel()[:n]
+        means[i] = vals[idx].mean()
+    return float(np.quantile(means, 0.05))
 
 
-def _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n) -> float | None:
+def _purge(mask: np.ndarray, ts: np.ndarray, boundary_idx: int) -> np.ndarray:
+    """Round 5 item 7 — purge + embargo: drop train/cal samples whose label
+    window (max holding period) can overlap the next fold's first sample."""
+    if boundary_idx >= len(ts) or boundary_idx <= 0:
+        return mask
+    cutoff = ts[boundary_idx] - EMBARGO_MS
+    out = mask.copy()
+    idx = np.arange(len(ts))
+    out[(idx < boundary_idx) & (ts >= cutoff)] = False
+    return out
+
+
+def _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n, ts=None) -> float | None:
     """Item 8 — three shifted train/cal/eval windows; ratio with a positive
     net expectancy on model-selected trades. Guards promotion against
-    overfitting one favorable final block."""
+    overfitting one favorable final block. Folds are PURGED + EMBARGOED."""
     ratios = []
     for f_tr, f_cal, f_ev in ((0.35, 0.50, 0.65), (0.45, 0.60, 0.75),
                               (0.55, 0.70, 0.85)):
@@ -134,6 +162,9 @@ def _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n) -> float | None:
         dm = res != "timeout"
         m_tr = dm.copy(); m_tr[i1:] = False
         m_cl = dm.copy(); m_cl[:i1] = False; m_cl[i2:] = False
+        if ts is not None:
+            m_tr = _purge(m_tr, ts, i1)
+            m_cl = _purge(m_cl, ts, i2)
         if m_tr.sum() < 40 or m_cl.sum() < 20 or i3 - i2 < 20:
             continue
         if len(set(y[m_tr].tolist())) < 2:
@@ -169,7 +200,7 @@ async def retrain(db, symbol: str, broker: str = "any",
         q, {"features": 1, "outcome": 1, "ts_ms": 1, "forecast": 1,
             "cost_pips": 1}).sort("ts_ms", 1)
     docs = await cur.to_list(20_000)
-    X, res, net, tgt, stp, cost = [], [], [], [], [], []
+    X, res, net, tgt, stp, cost, ts = [], [], [], [], [], [], []
     for d in docs:
         v = vectorize(d.get("features") or {})
         if v is None:
@@ -181,9 +212,11 @@ async def retrain(db, symbol: str, broker: str = "any",
         tgt.append(float(fc.get("target_pips") or 2.0))
         stp.append(float(fc.get("stop_pips") or 2.0))
         cost.append(float(d.get("cost_pips") or 1.0))
+        ts.append(int(d.get("ts_ms") or 0))
     n = len(res)
     X = np.array(X) if X else np.zeros((0, len(FEATURE_KEYS)))
     net, tgt, stp, cost = map(np.array, (net, tgt, stp, cost))
+    ts = np.array(ts, dtype=np.int64)
     res = np.array(res)
     dir_mask = res != "timeout"
     y = (res == "target_first").astype(float)
@@ -192,12 +225,14 @@ async def retrain(db, symbol: str, broker: str = "any",
         return {"trained": False, "model_key": key, "n": n, "n_directional": n_dir,
                 "reason": f"insufficient directional samples ({n_dir}/{MIN_SAMPLES})"}
 
-    # ---- chronological split over the FULL timeline ----
+    # ---- chronological split over the FULL timeline (purged + embargoed) ----
     i_cal = max(50, int(n * 0.5))
     i_eval = int(n * 0.7)
     m_train = dir_mask.copy(); m_train[i_cal:] = False
     m_cal = dir_mask.copy(); m_cal[:i_cal] = False; m_cal[i_eval:] = False
     m_evald = dir_mask.copy(); m_evald[:i_eval] = False
+    m_train = _purge(m_train, ts, i_cal)
+    m_cal = _purge(m_cal, ts, i_eval)
     if (len(set(y[m_train].tolist())) < 2 or m_cal.sum() < 30
             or m_evald.sum() < 30):
         return {"trained": False, "model_key": key, "n": n, "n_directional": n_dir,
@@ -240,7 +275,8 @@ async def retrain(db, symbol: str, broker: str = "any",
         oos_net_exp = net_exp_lb = stressed_exp = stressed_lb = prof_ratio = None
         profit_factor = None
 
-    rolling_ratio = _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n)
+    rolling_ratio = _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n,
+                                            ts=ts)
 
     usable = bool(
         oos_auc >= MIN_OOS_AUC
