@@ -5,6 +5,10 @@ from pip_utils import price_to_pips, pip_value_usd_per_lot
 
 RiskLevel = Literal["low", "medium", "high", "extreme"]
 
+# C5: broker-minimum rounding may only overshoot the approved risk budget by
+# this factor before the trade is rejected outright (fail-closed sizing).
+RISK_OVERSHOOT_TOLERANCE = 1.5
+
 # `kelly_cap` is the maximum fraction of profile risk to deploy on a 100%-confidence
 # signal. Lower-risk profiles cap Kelly tighter to avoid over-betting.
 PROFILES = {
