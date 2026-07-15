@@ -499,3 +499,29 @@ Remaining: dedicated stateful scalp service (lease is minimum enforcement), reco
 - "Silence" root causes: PANIC LOCK pressed 3× (bots off 01:40–13:23, 17:29–18:00, and since 21:11 — STILL OFF); when on, MC gate vetoed 214 BUY intents (drift-blind simulation: 42–47% TP-first in trend), exhaustion gate blocked late chases, anti-tilt froze 1h, EOD quiet 20:44–21:04 (correct).
 - "5 of 6 losses": Jul-15-closed autos = Jul-14 evening SELLs force-flattened by user panic (4/5 losers never hit SL) + 2 counter-trend scalps panic-closed. Two-day net ≈ -$15.
 - Structural defects identified (NOT yet fixed, awaiting user choice): (b) drift-aware Monte Carlo, (c) symmetric counter-trend fade gate, (d) EOD flatten for intraday entries.
+
+## Scalp Review Round 9 (2026-07-15 session, forked job) — Distributed Fencing Complete DONE
+1. _ACCOUNT risk doc fenced: ScalpRunner._fenced_account_write (epoch $lte filter, RuntimeError "account risk persist fenced out" on stale epoch, $setOnInsert insert path); _persist_risk background mirrors carry the SAME fence filter + stored lease_epoch.
+2. Three-cadence reconcile scheduler (server.py _scalp_reconcile_loop): protection safety sweep 10s (SCALP_PROTECTION_SWEEP_SEC), financial pending-deal sweep 45s (SCALP_RECONCILE_INTERVAL_SEC), full durable-invariant sweep 300s (SCALP_INVARIANT_SWEEP_SEC).
+3. Durable financial ledger: unique index (account_id, deal_id, event_type) in seed.py; ledger writes are idempotent $setOnInsert upserts; apply_broker_deal persists the financial event SYNCHRONOUSLY before a deal may flip complete.
+4. engine.verify_durable_invariants(db): DB-side checks that cannot fail open — open scalps w/o restored runner → block; unstopped open scalps → block; restored runner live set must EQUAL DB open set (position_mismatch); broker==DB enforced per-heartbeat by trade_reconciler.
+5. Lease re-confirmed at the LAST moment before broker submission in _submit_live (reject_stage lease_lost_before_submit). FIXED REAL LATENT BUG found by the new test: _submit_live imported non-existent `engine_for_account` from execution (module only exports `for_account`) — live submissions would have crashed with ImportError.
+6. protection_guard.calculate_emergency_stop uses pip_utils.pip_size registry (XAUUSD 0.1, not hardcoded 0.01); returns None on zero equity or sub-1-pip distance (escalates to close, never inflates budget).
+7. Explicit protection acknowledgment: guard stores requested_stop_loss; bridge modification-ack on MODIFY_SL success for EMERGENCY_STOP_PENDING sets confirmed_stop_loss + RESOLVED; on failure reverts to PROTECTION_UNKNOWN for retry/escalation. Immediate remediation task fired from /bridge/external-deal when a bot-owned deal arrives unprotected.
+8. asyncio.get_event_loop() removed from test suite: conftest holds one explicit shared loop (_shared_loop + run_async), motor singletons reset per test; test_iter23/90/91/25g migrated.
+- Also fixed: corrupted duplicate tail in protection_guard.py left by previous session (syntax error).
+- Tests: 9 new Round-9 tests (TestRound9Hardening incl. modification-ack unit tests). Scalp suite 100 pass; FULL suite 1966 passed / 1 order-flaky (test_iter25l websocket, passes standalone).
+
+## iter-135 Trend-aware Monte Carlo + symmetric counter-trend gate (2026-07-15) DONE
+- monte_carlo.simulate_trade: recent-drift measurement (last DRIFT_LOOKBACK=24 bars vs full window; applied only when ≥1 std error significant; excess capped at 0.5σ/bar; decays with 16-bar half-life). New output fields: drift_price_per_bar, drift_sig, trend (up/down/flat), trend_aligned.
+- mc_gate: symmetric counter-trend rule — fading a ≥2σ trend (trend_aligned False) requires ev_net ≥ +0.10R else "Counter-trend gate ... vetoed"; negative-EV message now notes injected drift. bot_runner enforce mode no longer exempts entry_style=fade. explainer notes trend in MC rationale.
+- Tests: 5 new iter-135 tests in test_iter112_monte_carlo.py (flat no-drift, with-trend BUY passes, counter-trend SELL vetoed, backward-compat gate, JSON-safe output). Testing agent iteration_43: backend 175/175 target suites, frontend 4/4.
+
+## Scalp page fixes (2026-07-15) DONE
+- /scalp account dropdown no longer resets every 15s (accounts fetch moved to mount-only effect with functional setState guard); status fetched WITHOUT account_id so ALL enabled runners show; each runner card shows account-name chip (data-testid scalp-runner-account); enable/disable toasts include the account name; EA version text bumped to v1.46.
+
+## Live-ops diagnosis (2026-07-15 late)
+- Scalp silent on OnEquity 1080930: EA input TickStreamEnabled=false → ZERO tick batches ever received. USER ACTION REQUIRED: set TickStreamEnabled=true in EA inputs (EA default is false — consider defaulting true in v1.47).
+- MTF bots: evaluating every minute; entries vetoed by drift-blind MC (now fixed by iter-135). OnEquity Live bot_config active=False (user must re-enable if desired).
+
+Remaining backlog: EOD flatten for intraday entries (P2), expected-net-return regression model (P2), GBPUSD scalp after EURUSD validation (P2), production deploy (P1), stateful scalp worker / sticky routing (P2), MC constants configurable via bot_config (P3, testing-agent suggestion), EA v1.47 with TickStreamEnabled default true (P3).
