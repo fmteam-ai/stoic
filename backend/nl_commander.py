@@ -16,7 +16,6 @@ import os
 import json
 import uuid
 import re
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 
 # --- Strategy Builder -------------------------------------------------------
@@ -89,6 +88,7 @@ def _parse_json(text: str) -> dict:
 
 async def build_strategy(prompt: str) -> dict:
     """Convert NL strategy description → structured bot config."""
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
     chat = LlmChat(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"strategy-{uuid.uuid4().hex[:8]}",
@@ -102,6 +102,7 @@ async def build_strategy(prompt: str) -> dict:
 
 async def interpret_command(prompt: str) -> dict:
     """Convert NL command → structured action list."""
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
     chat = LlmChat(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"command-{uuid.uuid4().hex[:8]}",

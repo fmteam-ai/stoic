@@ -188,8 +188,10 @@ class TestWiring:
             assert token in src, token
 
     def test_ea_142_candle_feed(self):
+        from ea_version import current_ea_version
+        v = current_ea_version()
         src = open(os.path.join(BACKEND, "static", "EmergentTradingBridge.mq5")).read()
-        assert '#property version   "1.42"' in src
-        assert '#define EA_CLIENT_VERSION "1.42"' in src
+        assert f'#property version   "{v}"' in src
+        assert f'#define EA_CLIENT_VERSION "{v}"' in src
         assert "void SendCandles()" in src and "/api/bridge/candles" in src
         assert "input int    CandlesSeconds" in src

@@ -35,7 +35,6 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 from database import get_db
 
@@ -255,6 +254,7 @@ async def _ask_llm(telemetry: dict) -> dict:
         + json.dumps(telemetry, default=str)
     )
     try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"bot-doctor-{uuid.uuid4().hex[:8]}",

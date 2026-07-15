@@ -154,7 +154,7 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
     async for s in db.signals.find({"_id": {"$in": sig_ids}}):
         sig_map[str(s["_id"])] = s
 
-    X, y, sessions, pnls = [], [], [], []
+    X, y, sessions, pnls, entered = [], [], [], [], []
     for t in trades:
         sig = sig_map.get(str(t.get("signal_id") or ""))
         if not sig:
@@ -166,9 +166,18 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
         # context at trade-open, which is what inference sees.
         entered_at = t.get("entered_at") or t.get("opened_at") or sig.get("created_at")
         sessions.append(session_bucket(entered_at))
+        entered.append(str(entered_at or ""))
         X.append(feats)
         y.append(1 if float(t.get("pnl") or 0) > 0 else 0)
         pnls.append(abs(float(t.get("pnl") or 0)))
+
+    # H5 · chronological order — walk-forward OOS calibration requires it
+    if X:
+        order = sorted(range(len(X)), key=lambda i: entered[i])
+        X = [X[i] for i in order]
+        y = [y[i] for i in order]
+        sessions = [sessions[i] for i in order]
+        pnls = [pnls[i] for i in order]
 
     # iter-42 · Profit-weighted samples — win rate and profit tied. Each
     # trade's training weight scales with |pnl| (normalised to the median),
@@ -273,6 +282,40 @@ def _xgb_predict_proba(model_bytes: bytes, X: np.ndarray) -> np.ndarray:
     return booster.predict(dmat)
 
 
+def _walk_forward_oos(X: np.ndarray, y: np.ndarray,
+                      sample_w: np.ndarray | None, use_xgb: bool,
+                      n_folds: int = 4, min_train: int = 20):
+    """H5 · Expanding-window walk-forward: train on trades [0, lo), predict
+    fold [lo, hi). Returns (indices, oos_predictions) or (None, None) when
+    the dataset is too small. Data MUST be in chronological order."""
+    n = len(y)
+    start = max(min_train, int(n * 0.4))
+    if n - start < 10:
+        return None, None
+    bounds = np.linspace(start, n, n_folds + 1).astype(int)
+    idx, preds = [], []
+    for k in range(n_folds):
+        lo, hi = int(bounds[k]), int(bounds[k + 1])
+        if hi <= lo:
+            continue
+        ytr = y[:lo]
+        if len(set(ytr.tolist())) < 2:
+            continue
+        swtr = sample_w[:lo] if (sample_w is not None and len(sample_w) == n) else None
+        if use_xgb:
+            mb, _, _ = _train_xgb(X[:lo], ytr, swtr)
+            p = _xgb_predict_proba(mb, X[lo:hi])
+        else:
+            w, mu, sd, _ = _train_logreg(X[:lo], ytr, swtr)
+            Xn = np.hstack([(X[lo:hi] - mu) / sd, np.ones((hi - lo, 1))])
+            p = _sigmoid(Xn @ w)
+        idx.extend(range(lo, hi))
+        preds.extend(np.asarray(p).ravel().tolist())
+    if len(preds) < 10:
+        return None, None
+    return np.array(idx, dtype=int), np.array(preds, dtype=float)
+
+
 def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
                   sample_w: np.ndarray | None = None) -> dict:
     """Train one classifier on (X, y) and return the persistable artifact dict.
@@ -306,22 +349,36 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
             "sd": sd.tolist(),
         }
 
+    # H5 · quant review: threshold + Platt calibration must be fit on
+    # walk-forward OUT-OF-SAMPLE predictions, never on the training fit —
+    # in-sample calibration is systematically overconfident. The deployed
+    # model still trains on ALL data; only evaluation/calibration is OOS.
+    oos_idx, oos_p = _walk_forward_oos(X, y, sample_w, use_xgb)
+    if oos_p is not None and len(set(y[oos_idx].tolist())) == 2:
+        p_eval, y_eval = oos_p, y[oos_idx]
+        cal_source = "walk_forward_oos"
+        oos_auc = round(_auc(y_eval, p_eval), 4)
+    else:
+        p_eval, y_eval = p_final, y
+        cal_source = "in_sample_fallback"
+        oos_auc = None
+
     # Calibrate threshold: lowest p_win below which precision_of_rejection >= 0.6
     threshold = 0.45
     for cand in np.arange(0.30, 0.50, 0.01):
-        rejected = p_final < cand
+        rejected = p_eval < cand
         if rejected.sum() == 0:
             continue
-        if (y[rejected] == 0).mean() >= 0.6:
+        if (y_eval[rejected] == 0).mean() >= 0.6:
             threshold = float(cand)
             break
 
-    # iter-52 · Platt scaling for calibrated probabilities.
-    brier_raw = brier_score(p_final, y)
-    platt = fit_platt(p_final, y)
+    # iter-52 · Platt scaling for calibrated probabilities (H5: fit on OOS).
+    brier_raw = brier_score(p_eval, y_eval)
+    platt = fit_platt(p_eval, y_eval)
     if not platt.get("skipped"):
-        p_cal = np.array([apply_platt(float(pi), platt) for pi in p_final])
-        brier_cal = brier_score(p_cal, y)
+        p_cal = np.array([apply_platt(float(pi), platt) for pi in p_eval])
+        brier_cal = brier_score(p_cal, y_eval)
         platt["brier_raw"] = round(brier_raw, 4)
         platt["brier_calibrated"] = round(brier_cal, 4)
 
@@ -332,6 +389,8 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
         **model_payload,
         "threshold": threshold,
         "train_auc": round(auc, 4),
+        "oos_auc": oos_auc,
+        "calibration_source": cal_source,
         "n_samples": int(n),
         "n_wins": int(y.sum()),
         "profit_weighted": bool(sample_w is not None and len(sample_w) == n),

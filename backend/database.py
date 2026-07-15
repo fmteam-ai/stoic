@@ -1,5 +1,4 @@
 import os
-from motor.motor_asyncio import AsyncIOMotorClient
 
 _client = None
 _db = None
@@ -8,6 +7,8 @@ _db = None
 def get_client():
     global _client
     if _client is None:
+        # lazy import (H7): pure-logic unit tests must not require motor
+        from motor.motor_asyncio import AsyncIOMotorClient
         _client = AsyncIOMotorClient(os.environ["MONGO_URL"])
     return _client
 

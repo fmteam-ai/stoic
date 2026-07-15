@@ -145,7 +145,7 @@ class TestAuth:
     def test_register_requires_terms(self):
         s = requests.Session()
         r = s.post(f"{BASE_URL}/api/auth/register",
-                   json={"terms_agreed": True, "email": f"TEST_noterms_{uuid.uuid4().hex[:6]}@e.com",
+                   json={"terms_agreed": False, "email": f"TEST_noterms_{uuid.uuid4().hex[:6]}@e.com",
                          "password": "x" * 8},
                    timeout=15)
         assert r.status_code == 400, r.text[:200]
@@ -329,7 +329,9 @@ class TestBridge:
         assert r.status_code == 200, f"{r.status_code} {r.text[:200]}"
         body = r.json()
         assert body["status"] == "ok"
-        assert int(body["stored"]) == 40
+        # iter-125: server accumulates history (cap 800) — stored is the
+        # TOTAL retained bar count, not this batch's size.
+        assert 40 <= int(body["stored"]) <= 800
 
     def test_candles_invalid_token_401(self):
         r = requests.post(f"{BASE_URL}/api/bridge/candles",

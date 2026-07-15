@@ -9,7 +9,6 @@ import os
 import uuid
 import json
 from datetime import datetime, timezone
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 from database import get_db
 
@@ -150,6 +149,7 @@ async def chat(user_id: str, message: str, session_id: str | None = None) -> dic
         + json.dumps(snapshot, default=str, indent=2)
     )
 
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
     chat_client = LlmChat(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=session["session_id"],

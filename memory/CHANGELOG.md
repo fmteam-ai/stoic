@@ -1144,3 +1144,20 @@ Files: `/app/backend/routes/diagnostic_routes.py`, `/app/frontend/src/components
 
 No core risk logic changed — only observability. User can lower `anti_tilt_freeze_hours` / `anti_tilt_consecutive_losses` or disable in Bot Config if intentional.
 
+
+## Iter-144/145 (2026-07-15) — Quant Review Round 4 (C1-C5, H1-H7) DONE
+**Critical fixes:**
+- C1: calibration.py cache keyed per user (was global — first user's table leaked to all tenants). invalidate_cache(user_id).
+- C2: bot_runner Kelly sizing now receives calibrated p_win_lb×100 (Wilson lower bound), auto-disabled when calibration absent/thin. Never the raw setup score.
+- C3: MIN_BUCKET_N 8→30, MIN_SCOPE_N 50, MIN_GLOBAL_N 80; every estimate carries Wilson 95% one-sided lower bound (p_win_lb) — consumers gate on the LB, never the point estimate.
+- C4: instruments.py canonical registry (contract size, pip size, FX 100k units). portfolio/var.py notional via notional_usd() — old lot×entry proxy understated FX exposure ~100,000×.
+- C5: compute_lot_for_account fail-closed — invalid equity/SL/pip → lot_size=0, sizing_valid=False, reject_reason. Post-rounding actual risk checked vs budget×RISK_OVERSHOOT_TOLERANCE (1.5); trade REJECTED if broker-minimum 0.01 overshoots. Wired into bot_runner AND manual execute route (422). Fixed missing RISK_OVERSHOOT_TOLERANCE constant (crashed all trade execution).
+**High-priority fixes:**
+- H1: backtester Engine.run() settles ALL open positions at end-of-test (last executable bid/ask, note=EOD_SETTLEMENT) — final P&L/win rate fully realized.
+- H2: duplicate same-symbol entries explicitly REJECTED (result.rejected_orders) until book is position_id-keyed.
+- H3: opening-gap stop fills — long SL fills at min(stop, open)−slip−hs; TP gaps fill at the better open. Shorts mirrored.
+- H4: EngineConfig commission_usd_per_lot_side + swap_usd_per_lot_day; round-turn commission + per-day swap deducted in _close_position; result.total_costs.
+- H5: learned_meta.py walk-forward OOS — dataset chronologically sorted; _walk_forward_oos() expanding-window folds; Platt calibration + rejection threshold + oos_auc now fit on OUT-OF-SAMPLE predictions (calibration_source field; in_sample_fallback only when <10 OOS samples). Verified: train_auc 1.0 vs oos_auc 0.88 on synthetic data (exposes overconfidence).
+- H6: calibration buckets carry payoff distribution (avg_win_r/avg_loss_r from risk_amount) + conservative ev_r = p_lb·E[win_R] − (1−p_lb)·E[loss_R]. bot_runner EV gate (cfg.ev_gate_enabled, default on): negative conservative EV with n≥30 → trade skipped + pulse recorded.
+- H7: test isolation — emergentintegrations imports now lazy (function-level) in 12 modules; database.py motor import lazy; strategy_code_generator uses patchable module-attr lazy pattern. Verified: domain modules import with emergentintegrations+motor BLOCKED.
+**Test suite: 1860 passed, 0 failed** (was 61 failed). Fixes: conftest _ensure_event_loop fixture (dead-loop RuntimeError killed 20+ tests in full runs), tests/ea_version.py dynamic EA version helper (6 files no longer pin stale versions), setup_routes ea_latest_version drift 1.42→1.43, stale tests updated to fail-closed sizing contract / origin:"manual" taxonomy / accumulated candle counts / 45s reconcile grace window / origin:"auto" breaker filter / register terms payload / auto_deleverage bot_configs mock.

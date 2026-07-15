@@ -18,22 +18,26 @@ LOW = get_profile("low")
 
 class TestAccountAwareLotSizing:
     def test_zero_equity_returns_minimum_lot(self):
+        # C5 fail-closed: no equity → REJECT (lot 0), never a tradeable 0.01
         out = compute_lot_for_account(
             account={"balance": 0, "equity": 0, "account_type": "standard"},
             symbol="XAUUSD", entry_price=4100.0, stop_loss=4115.0,
             confidence_pct=70.0, profile=HIGH,
         )
-        assert out["lot_size"] == 0.01
-        assert out["method"] == "fallback_no_equity"
+        assert out["lot_size"] == 0.0
+        assert out["sizing_valid"] is False
+        assert out["method"] == "rejected_no_equity"
 
     def test_zero_sl_returns_minimum_lot(self):
+        # C5 fail-closed: zero stop distance → risk undefined → REJECT
         out = compute_lot_for_account(
             account={"equity": 1000.0, "account_type": "standard"},
             symbol="XAUUSD", entry_price=4100.0, stop_loss=4100.0,
             confidence_pct=70.0, profile=HIGH,
         )
-        assert out["lot_size"] == 0.01
-        assert out["method"] == "fallback_zero_sl"
+        assert out["lot_size"] == 0.0
+        assert out["sizing_valid"] is False
+        assert out["method"] == "rejected_zero_sl"
 
     def test_xau_25k_high_conf_high_profile_below_old_kelly(self):
         """Real $25K USD account, HIGH profile, 70% confidence, 15 USD SL.
@@ -100,11 +104,13 @@ class TestAccountAwareLotSizing:
         assert 0.05 <= out["lot_size"] <= 0.50, out
 
     def test_below_min_confidence_returns_minimum_lot(self):
-        """LOW profile requires 75% confidence; a 60% signal yields f=0 → lot 0.01."""
+        """LOW profile requires 75% confidence; a 60% signal yields f=0 →
+        zero risk budget → C5 rejects (the old code traded a 0.01 dust lot
+        whose risk was never approved)."""
         out = compute_lot_for_account(
             account={"equity": 10000.0, "account_type": "standard"},
             symbol="XAUUSD", entry_price=4100.0, stop_loss=4115.0,
             confidence_pct=60.0, profile=LOW, kelly_enabled=True,
         )
-        assert out["lot_size"] == 0.01
-        assert out["kelly_f"] == 0.0
+        assert out["lot_size"] == 0.0
+        assert out["sizing_valid"] is False

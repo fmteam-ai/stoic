@@ -7,7 +7,6 @@ import os
 import time
 
 import httpx
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +53,7 @@ async def get_fed_tone() -> dict | None:
         + "\n".join(f"- {h['title']} ({h['source']})" for h in heads[:8])
     )
     try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"fed-tone-{int(now)}",

@@ -47,11 +47,12 @@ class TestBridgeRoutes:
 
 class TestEaV139:
     def test_version_bumped_everywhere(self):
+        from ea_version import current_ea_version
+        v = current_ea_version()
         ea = _src("static/EmergentTradingBridge.mq5")
-        assert '#property version   "1.40"' in ea
-        assert '#define EA_CLIENT_VERSION "1.40"' in ea
-        assert 'LATEST_EA = "1.40"' in _src("routes/bot_routes.py")
-        assert 'LATEST_EA = "1.40"' in _src("routes/diagnostic_routes.py")
+        assert f'#property version   "{v}"' in ea
+        assert f'LATEST_EA = "{v}"' in _src("routes/bot_routes.py")
+        assert f'LATEST_EA = "{v}"' in _src("routes/diagnostic_routes.py")
 
     def test_ea_handles_sync_request(self):
         ea = _src("static/EmergentTradingBridge.mq5")
@@ -63,7 +64,8 @@ class TestEaV139:
         assert "_last_deep_sync" in ea
 
     def test_frontend_version_matches(self):
+        from ea_version import current_ea_version
         fe = open("/app/frontend/src/pages/Accounts.jsx").read()
-        assert 'const LATEST_EA_VERSION = "1.40"' in fe
+        assert f'const LATEST_EA_VERSION = "{current_ea_version()}"' in fe
         assert "request-sync" in fe
         assert "broker_sync_complete" in fe

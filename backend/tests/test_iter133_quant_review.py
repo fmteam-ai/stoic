@@ -147,5 +147,8 @@ class TestPositionLedger:
                 bar("XAUUSD", 2, 4005, 4012, 4004, 4011),
                 bar("BTCUSD", 3, 63050, 63060, 63040, 63055)]
         res = eng.run(bars, strat)
-        assert res.total_trades == 1 and res.wins == 1  # gold TP hit
-        assert "BTCUSD" in eng.positions  # still open, never overwritten
+        # H1: gold TP hit intra-test; BTC settles at end-of-test (EOD policy)
+        assert res.total_trades == 2
+        assert any("EOD_SETTLEMENT" in f.note for f in res.fills
+                   if f.action == "CLOSE")
+        assert not eng.positions  # H1: nothing left unrealized after run()

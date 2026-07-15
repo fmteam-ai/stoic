@@ -148,6 +148,8 @@ class BacktestResult:
     total_trades: int = 0
     wins: int = 0
     losses: int = 0
+    rejected_orders: int = 0   # H2: duplicate same-symbol entries refused
+    total_costs: float = 0.0   # H4: commission + swap paid
     total_pnl: float = 0.0
     max_drawdown: float = 0.0
     equity_curve: list[tuple[datetime, float]] = field(default_factory=list)
@@ -170,6 +172,9 @@ class EngineConfig:
     # making gold/crypto backtests effectively frictionless.
     slippage_pips: float = 0.5         # entry slippage per fill, symbol pips
     stop_slippage_mult: float = 2.0    # stop exits gap worse than entries
+    # H4 · commission per lot per side (USD) + overnight swap per lot per day
+    commission_usd_per_lot_side: float = 0.0
+    swap_usd_per_lot_day: float = 0.0
     spread_map: dict = field(default_factory=lambda: dict(TYPICAL_SPREAD))
     contract_size_map: dict = field(default_factory=lambda: {
         "XAUUSD": 100, "BTCUSD": 1, "ETHUSD": 1, "XAGUSD": 5000
@@ -197,6 +202,7 @@ class Engine:
         # other symbols. One position per symbol, keyed by symbol.
         self.positions: dict[str, Position] = {}
         self._last_px: dict[str, float] = {}
+        self._last_ts: dict[str, datetime] = {}
         self.result = BacktestResult()
         self.result.equity_curve.append((datetime.now(timezone.utc), self.equity))
         # macro queue: (visible_at, monotonic_seq, event) — heapq min-heap
@@ -248,6 +254,17 @@ class Engine:
             new_orders = strategy(bar, list(self._visible_macros), self) or []
             for o in new_orders:
                 self.place_order(o)
+        # H1 · End-of-test settlement: close every remaining position at the
+        # last seen executable bid/ask so final P&L, trade count and win rate
+        # are fully realized instead of silently ignoring open exposure.
+        last_ts = bars_sorted[-1].ts if bars_sorted else datetime.now(timezone.utc)
+        for sym in list(self.positions.keys()):
+            p = self.positions[sym]
+            px = self._last_px.get(sym, p.entry_price)
+            hs = self._half_spread(sym)
+            exit_px = (px - hs) if p.action == "BUY" else (px + hs)
+            self._close_position(sym, exit_px, self._last_ts.get(sym, last_ts),
+                                 reason="EOD_SETTLEMENT")
         return self.result
 
     # -------- internals --------
@@ -275,6 +292,14 @@ class Engine:
                     px = bar.open - hs if p.action == "BUY" else bar.open + hs
                     self._close_position(bar.symbol, px, bar.ts)
                 continue
+            # H2 · one position per symbol — a second same-symbol entry would
+            # silently overwrite the first. Reject explicitly until the book
+            # is keyed by position_id.
+            if bar.symbol in self.positions:
+                self.result.rejected_orders += 1
+                logger.warning("order rejected: %s already has an open position",
+                               bar.symbol)
+                continue
             # iter-142 · fill = mid open ± half-spread ± symbol-pip slippage
             slip = self._entry_slip(o.symbol)
             fill_price = (bar.open + hs + slip) if o.action == "BUY" \
@@ -301,27 +326,36 @@ class Engine:
         # closing side's half-spread.
         hs = self._half_spread(bar.symbol)
         stop_slip = self._stop_slip(bar.symbol)
+        # H3 · Opening gaps: if the bar OPENS beyond the stop, the historical
+        # stop level was never executable — fill at the adverse open instead.
+        # TP limit orders gapping in the trader's favour fill at the better
+        # open price.
         if p.action == "BUY":
             if p.stop_loss is not None and bar.low <= p.stop_loss:
-                self._close_position(bar.symbol, p.stop_loss - stop_slip - hs,
+                level = min(p.stop_loss, bar.open)
+                self._close_position(bar.symbol, level - stop_slip - hs,
                                      bar.ts, reason="SL")
                 return
             if p.take_profit is not None and bar.high >= p.take_profit:
-                self._close_position(bar.symbol, p.take_profit - hs,
+                level = max(p.take_profit, bar.open)
+                self._close_position(bar.symbol, level - hs,
                                      bar.ts, reason="TP")
                 return
         else:
             if p.stop_loss is not None and bar.high >= p.stop_loss:
-                self._close_position(bar.symbol, p.stop_loss + stop_slip + hs,
+                level = max(p.stop_loss, bar.open)
+                self._close_position(bar.symbol, level + stop_slip + hs,
                                      bar.ts, reason="SL")
                 return
             if p.take_profit is not None and bar.low <= p.take_profit:
-                self._close_position(bar.symbol, p.take_profit + hs,
+                level = min(p.take_profit, bar.open)
+                self._close_position(bar.symbol, level + hs,
                                      bar.ts, reason="TP")
                 return
 
     def _mark_to_market(self, bar: BarEvent) -> None:
         self._last_px[bar.symbol] = bar.close
+        self._last_ts[bar.symbol] = bar.ts
         unreal = 0.0
         for p in self.positions.values():
             cs = self.cfg.contract_size_map.get(p.symbol, 1)
@@ -342,6 +376,15 @@ class Engine:
         cs = self.cfg.contract_size_map.get(p.symbol, 1)
         diff = (exit_price - p.entry_price) if p.action == "BUY" else (p.entry_price - exit_price)
         pnl = diff * p.lot_size * cs
+        # H4 · round-turn commission + overnight swap per full day held
+        commission = 2.0 * self.cfg.commission_usd_per_lot_side * p.lot_size
+        days_held = 0
+        if p.opened_at is not None and ts is not None:
+            days_held = max(0, int((ts - p.opened_at).total_seconds() // 86400))
+        swap = self.cfg.swap_usd_per_lot_day * p.lot_size * days_held
+        costs = commission + swap
+        pnl -= costs
+        self.result.total_costs += costs
         self.equity += pnl
         self.result.total_pnl += pnl
         self.result.total_trades += 1

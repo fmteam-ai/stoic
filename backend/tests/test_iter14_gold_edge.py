@@ -162,9 +162,9 @@ class TestSignalsDXYWiring:
         if not isinstance(sig, dict) or "action" not in sig:
             pytest.skip(f"signal payload not parseable: {str(body)[:200]}")
         assert "dxy_gate" in sig, "dxy_gate missing from XAUUSD signal"
-        # dxy may be None if upstream throttled, but dxy_gate must be a dict
-        assert isinstance(sig["dxy_gate"], dict)
-        assert "passed" in sig["dxy_gate"]
+        # dxy_gate retired into setup_score factors — None is valid now;
+        # the DXY feature itself must still be plumbed through.
+        assert "dxy" in sig, "dxy feature missing from XAUUSD signal"
 
 
 # =====================================================================
@@ -191,6 +191,7 @@ class TestWeeklyDrawdown:
                 "status": "closed",
                 "closed_at": closed_at,
                 "pnl": -20.0,
+                "origin": "auto",
                 "symbol": "XAUUSD",
                 "_qa": True,
             })
@@ -253,7 +254,8 @@ class TestWeeklyDrawdown:
         today = datetime.now(timezone.utc).date().isoformat()
         self.db.trades.insert_one({
             "user_id": self.uid, "status": "closed",
-            "closed_at": today, "pnl": -150.0, "symbol": "XAUUSD", "_qa": True,
+            "closed_at": today, "pnl": -150.0, "origin": "auto",
+            "symbol": "XAUUSD", "_qa": True,
         })
         cfg = {
             "user_id": self.uid, "active": True, "risk_level": "medium",

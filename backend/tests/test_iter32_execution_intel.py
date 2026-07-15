@@ -223,8 +223,7 @@ async def test_auto_deleverage_fires_when_needed(monkeypatch):
         ])
     ))
     db.trades.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
-
-    # Fake a snapshot that wants deleveraging
+    db.bot_configs.find_one = AsyncMock(return_value=None)
     fake_snap = {
         "needs_deleveraging": True,
         "triggers": ["hard_drawdown"],

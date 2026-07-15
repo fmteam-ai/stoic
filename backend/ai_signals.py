@@ -15,7 +15,6 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger("ai_signals")
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 from market import get_quote, get_history, compute_indicators, asset_type_of
 from risk import get_profile
@@ -411,6 +410,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
             f"Live break of {mtf_conf.get('swing_level')}",
         ]
         try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
             chat = LlmChat(
                 api_key=os.environ["EMERGENT_LLM_KEY"],
                 session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",

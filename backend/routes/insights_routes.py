@@ -14,7 +14,6 @@ from bson import ObjectId
 from auth import get_current_user
 from database import get_db
 from email_sender import send_email, is_configured as email_is_configured
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -41,6 +40,7 @@ async def _generate_ai_reflection(digest_payload: dict) -> Optional[str]:
     if not key:
         return None
     try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
             api_key=key,
             session_id=f"weekly-digest-{uuid.uuid4().hex[:8]}",

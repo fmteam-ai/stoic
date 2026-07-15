@@ -31,11 +31,10 @@ def test_cheap_hold_response_shape_keys():
     }
     import ai_signals
     src = open(ai_signals.__file__).read()
-    # All expected keys must appear in the cheap-HOLD return block (which lives
-    # between the "CHEAP HOLD pre-filter" comment and the "chat = LlmChat" call).
-    cheap_block_start = src.index("CHEAP HOLD pre-filter")
-    cheap_block_end = src.index("chat = LlmChat(", cheap_block_start)
-    cheap_block = src[cheap_block_start:cheap_block_end]
+    # The "CHEAP HOLD pre-filter" comment was refactored away — anchor on the
+    # cheap_hold key itself and inspect the surrounding return-dict block.
+    anchor = src.index('"cheap_hold": True')
+    cheap_block = src[max(0, anchor - 4000):anchor + 500]
     missing = [k for k in expected_keys if f'"{k}"' not in cheap_block]
     assert not missing, f"Cheap-HOLD block missing keys: {missing}"
 

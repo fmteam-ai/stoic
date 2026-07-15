@@ -29,7 +29,6 @@ from datetime import datetime, timezone, timedelta
 
 from database import get_db
 from strategy_presets import PRESETS, get_preset
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger("ai-optimizer")
 
@@ -230,6 +229,7 @@ async def _call_llm(window_hours: int, payload: dict) -> tuple[dict | None, str 
     text = json.dumps(payload, default=str)
     for provider, model in MODEL_CANDIDATES:
         try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
             chat = LlmChat(
                 api_key=os.environ["EMERGENT_LLM_KEY"],
                 session_id=f"optimizer-{uuid.uuid4().hex[:10]}",

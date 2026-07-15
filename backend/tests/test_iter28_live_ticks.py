@@ -60,6 +60,7 @@ async def test_heartbeat_broadcasts_position_ticks(monkeypatch):
     fake_db.accounts.update_one = AsyncMock()
     fake_db.trades.find_one = AsyncMock(return_value=None)  # nothing tracked yet
     fake_db.trades.insert_one = AsyncMock()
+    fake_db.trades.count_documents = AsyncMock(return_value=0)
     fake_db.trades.find = MagicMock(return_value=MagicMock(
         to_list=AsyncMock(return_value=[]),
     ))
@@ -109,6 +110,7 @@ async def test_heartbeat_skips_broadcast_when_no_current_price(monkeypatch):
     fake_db.accounts.update_one = AsyncMock()
     fake_db.trades.find_one = AsyncMock(return_value=None)
     fake_db.trades.insert_one = AsyncMock()
+    fake_db.trades.count_documents = AsyncMock(return_value=0)
     fake_db.trades.find = MagicMock(return_value=MagicMock(
         to_list=AsyncMock(return_value=[]),
     ))
@@ -144,6 +146,7 @@ async def test_heartbeat_skips_broadcast_on_terminal_mismatch(monkeypatch):
     fake_db.accounts.update_one = AsyncMock()
     fake_db.trades.find_one = AsyncMock(return_value=None)
     fake_db.trades.insert_one = AsyncMock()
+    fake_db.trades.count_documents = AsyncMock(return_value=0)
     fake_db.trades.find = MagicMock(return_value=MagicMock(
         to_list=AsyncMock(return_value=[]),
     ))

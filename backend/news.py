@@ -12,7 +12,6 @@ import uuid
 import asyncio
 import httpx
 from datetime import datetime, timezone, timedelta
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 NEWSAPI_URL = "https://newsapi.org/v2/everything"
 
@@ -157,6 +156,7 @@ async def score_sentiment(symbol: str) -> dict:
         )
         user_text = f"Market: {sym}\nHeadlines (last 24h):\n{compact}"
 
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"sent-{sym}-{uuid.uuid4().hex[:6]}",

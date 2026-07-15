@@ -29,7 +29,6 @@ from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 
 from database import get_db
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger("loss-postmortem")
 
@@ -149,6 +148,7 @@ async def _claude_narrative(trade: dict, signal: dict, diff: dict) -> dict:
     }, default=str)
 
     try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"postmortem-{trade.get('symbol','?')}-{uuid.uuid4().hex[:8]}",

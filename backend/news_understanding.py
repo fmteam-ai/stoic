@@ -14,7 +14,6 @@ import time
 from datetime import datetime, timezone
 
 import httpx
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +220,7 @@ async def _score_headlines(base: str, heads: list) -> list:
         f"0 = irrelevant/no impact. Half-points allowed.\n"
         f'Respond ONLY with a JSON array: [{{"i": <index>, "score": <float>, '
         f'"why": "<max 10 words>"}}, ...] — one entry per headline.\n\n{numbered}')
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
     chat = LlmChat(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"news-ai-{base}-{int(time.time())}",

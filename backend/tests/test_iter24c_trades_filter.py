@@ -68,13 +68,17 @@ class TestTradesByAccount:
         """
         if len(accounts) < 2:
             pytest.skip("need 2+ accounts for partition test")
-        all_trades = admin_session.get(f"{API}/trades?limit=500", timeout=15).json()
+        all_trades = admin_session.get(f"{API}/trades?limit=10000", timeout=15).json()
         per_account_sum = 0
         for a in accounts:
-            r = admin_session.get(f"{API}/trades?limit=500&account_id={a['id']}", timeout=15)
+            r = admin_session.get(f"{API}/trades?limit=10000&account_id={a['id']}", timeout=15)
             per_account_sum += len(r.json())
-        # Trades without an account_id are dropped by the per-account filter; allow that gap.
-        unassigned = sum(1 for t in all_trades if not t.get("account_id"))
+        # Trades without an account_id — or pointing at a since-deleted
+        # account (QA cleanup leaves orphans) — are dropped by the
+        # per-account filter; allow that gap.
+        acct_ids = {a["id"] for a in accounts}
+        unassigned = sum(1 for t in all_trades
+                         if t.get("account_id") not in acct_ids)
         assert per_account_sum + unassigned == len(all_trades)
 
     def test_stats_filtered_by_account(self, admin_session, accounts):

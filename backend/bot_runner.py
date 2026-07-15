@@ -626,6 +626,27 @@ async def _process_user_account_locked(db, cfg: dict):
                         float(signal.get("confidence") or 0))
                 except Exception as e:  # noqa: BLE001
                     logger.debug("calibrated_p_win lookup failed: %s", e)
+            # iter-145 H6 · EV gate — a high win rate can still lose money.
+            # When calibration provides a conservative expected value
+            # (Wilson lower-bound p_win × realized payoffs, bucket n≥30)
+            # and it is negative, skip the trade. cfg.ev_gate_enabled
+            # (default on) can disarm it.
+            if (signal.get("action") in ("BUY", "SELL")
+                    and cfg.get("ev_gate_enabled", True)):
+                _evc = signal.get("calibrated_p_win") or {}
+                _ev = _evc.get("ev_r")
+                if _ev is not None and float(_ev) < 0:
+                    _msg = (f"EV gate: conservative expected value {_ev}R < 0 "
+                            f"({_evc.get('basis')}) — trade skipped")
+                    signal["action"] = "HOLD"
+                    signal["tradeable"] = False
+                    signal["veto_applied"] = True
+                    signal["ev_gate"] = {"ev_r": _ev, "basis": _evc.get("basis"),
+                                         "n": _evc.get("n")}
+                    signal["reasoning"] = f"{_msg} | {signal.get('reasoning') or ''}"
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn", reason=_msg, signal=signal)
+                    continue
             # iter-142 · Velocity veto re-wired (the iter-53 guardrail was
             # silently dropped in the orchestrator refactor). Disarmed by
             # default; fires only when cfg regime_overrides arm it.

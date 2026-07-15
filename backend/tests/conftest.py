@@ -70,3 +70,32 @@ def _silence_outbound_notifications():
         yield
     finally:
         notifier.send_telegram = original
+
+
+@pytest.fixture(autouse=True)
+def _ensure_event_loop():
+    """Legacy tests call `asyncio.get_event_loop().run_until_complete(...)`.
+
+    After any earlier test used `asyncio.run()` (which clears the current
+    loop) that pattern raises `RuntimeError: There is no current event loop`
+    in full-suite runs while passing in isolation. Guarantee a usable loop
+    per test; when a NEW loop must be created, reset the motor singletons so
+    the cached client is never bound to a dead loop.
+    """
+    import asyncio
+    need_new = False
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            need_new = True
+    except RuntimeError:
+        need_new = True
+    if need_new:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        try:
+            import database as _dbmod
+            _dbmod._client = None
+            _dbmod._db = None
+        except Exception:
+            pass
+    yield

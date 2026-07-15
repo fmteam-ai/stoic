@@ -62,9 +62,10 @@ def test_locked_profit_floor_at_zero():
         account, "XAUUSD", entry_price=2000.0, stop_loss=1990.0,
         confidence_pct=80, profile=get_profile("medium"), locked_profit=99_999.0,
     )
-    # 0 equity → fallback path
-    assert out["lot_size"] == 0.01
-    assert "fallback" in out["method"]
+    # 0 equity → C5 fail-closed rejection (never a tradeable 0.01)
+    assert out["lot_size"] == 0.0
+    assert out["sizing_valid"] is False
+    assert out["method"] == "rejected_no_equity"
 
 
 # ──────────────────── HTTP endpoint tests ────────────────────

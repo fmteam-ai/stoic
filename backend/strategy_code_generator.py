@@ -40,7 +40,6 @@ import re
 import uuid
 import logging
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger("strategy-code-generator")
 
@@ -148,8 +147,24 @@ def _validate(dsl: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
+# H7 lazy-loaded LLM SDK — module attrs stay patchable by tests
+LlmChat = None
+UserMessage = None
+
+
+def _ensure_llm():
+    global LlmChat, UserMessage
+    if LlmChat is None or UserMessage is None:
+        from emergentintegrations.llm.chat import LlmChat as _L, UserMessage as _U
+        if LlmChat is None:
+            LlmChat = _L
+        if UserMessage is None:
+            UserMessage = _U
+
+
 async def generate_code(compiled: dict) -> dict:
     """Expand a compiled NL strategy into the DSL + pseudocode."""
+    _ensure_llm()
     chat = LlmChat(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"strat-code-{uuid.uuid4().hex[:8]}",

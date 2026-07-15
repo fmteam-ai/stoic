@@ -67,14 +67,16 @@ class TestSlippageVeto:
 
 class TestEaV140:
     def test_versions(self):
+        from ea_version import current_ea_version
+        v = current_ea_version()
         ea = _src("static/EmergentTradingBridge.mq5")
-        assert '#property version   "1.40"' in ea
-        assert '#define EA_CLIENT_VERSION "1.40"' in ea
-        assert 'LATEST_EA = "1.40"' in _src("routes/bot_routes.py")
-        assert 'LATEST_EA = "1.40"' in _src("routes/diagnostic_routes.py")
-        assert '"ea_latest_version": "1.40"' in _src("routes/setup_routes.py")
+        assert f'#property version   "{v}"' in ea
+        assert f'#define EA_CLIENT_VERSION "{v}"' in ea
+        assert f'LATEST_EA = "{v}"' in _src("routes/bot_routes.py")
+        assert f'LATEST_EA = "{v}"' in _src("routes/diagnostic_routes.py")
+        assert f'"ea_latest_version": "{v}"' in _src("routes/setup_routes.py")
         fe = open("/app/frontend/src/pages/Accounts.jsx").read()
-        assert 'LATEST_EA_VERSION = "1.40"' in fe
+        assert f'LATEST_EA_VERSION = "{v}"' in fe
 
     def test_full_close_consumed(self):
         ea = _src("static/EmergentTradingBridge.mq5")

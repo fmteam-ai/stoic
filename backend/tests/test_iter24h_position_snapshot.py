@@ -97,7 +97,7 @@ class TestPositionSnapshotBackfill:
                 doc = mongo_db.trades.find_one({"mt5_ticket": t})
                 assert doc is not None
                 assert doc["status"] == "open"
-                assert doc["origin"] == "external"   # magic=0
+                assert doc["origin"] == "manual"   # magic=0 → manual terminal trade
                 assert doc["backfilled_from_snapshot"] is True
         finally:
             _cleanup(mongo_db, tickets)
@@ -147,7 +147,7 @@ class TestPositionSnapshotBackfill:
                           json=_hb_with_positions(live_account["bridge_token"], configured, external, magic=0),
                           timeout=10)
             ext = mongo_db.trades.find_one({"mt5_ticket": external[0]})
-            assert ext["origin"] == "external"
+            assert ext["origin"] == "manual"  # magic=0 → manual terminal trade
             assert ext["external_open"] is True
             # bot (magic != 0)
             requests.post(f"{API}/bridge/heartbeat",

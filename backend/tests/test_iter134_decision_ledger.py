@@ -27,12 +27,18 @@ class TestSizingInvariants:
             profile=get_profile(profile_key), kelly_enabled=kelly)
 
     def test_lot_never_negative_or_zero(self):
+        # C5 fail-closed contract: valid sizing → lot ≥ 0.01; invalid sizing
+        # (broker-minimum overshoots the risk budget) → lot 0 + reject reason.
         for _ in range(200):
             r = self._size(random.uniform(100, 1e6), random.uniform(500, 5000),
                            random.uniform(0.5, 100), random.uniform(0, 100),
                            random.choice(["low", "medium", "high", "extreme"]),
                            random.random() < 0.5)
-            assert r["lot_size"] >= 0.01
+            if r.get("sizing_valid", True):
+                assert r["lot_size"] >= 0.01
+            else:
+                assert r["lot_size"] == 0.0
+                assert r.get("reject_reason")
 
     def test_wider_stop_never_increases_size(self):
         for _ in range(100):
@@ -48,6 +54,7 @@ class TestSizingInvariants:
             assert r2["lot_size"] <= r1["lot_size"] + 1e-9, (d1, d2, r1, r2)
 
     def test_risk_never_exceeds_profile_cap(self):
+        from risk import RISK_OVERSHOOT_TOLERANCE
         for _ in range(200):
             pk = random.choice(["low", "medium", "high", "extreme"])
             p = get_profile(pk)
@@ -55,7 +62,12 @@ class TestSizingInvariants:
                            random.uniform(1000, 5000),
                            random.uniform(1, 50), random.uniform(0, 100), pk,
                            random.random() < 0.5)
+            if not r.get("sizing_valid", True):
+                continue  # C5: rejected sizing never reaches the broker
             assert r["effective_risk_pct"] <= p["risk_pct"] + 1e-9
+            # C5: post-rounding ACTUAL risk stays within budget × tolerance
+            assert (r["actual_risk_usd"]
+                    <= r["risk_amount_usd"] * RISK_OVERSHOOT_TOLERANCE + 1e-6)
 
     def test_kelly_never_sizes_larger_than_fixed_fraction(self):
         for _ in range(100):

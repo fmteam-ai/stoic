@@ -15,7 +15,7 @@ import os
 import pathlib
 import pytest
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
 _FRONT_ENV = pathlib.Path("/app/frontend/.env")
@@ -93,7 +93,7 @@ class TestForceSyncRespectsOpenTickets:
         """Plant 4 open trades, set the EA's open_tickets to include them all,
         run Force Sync. None should be closed — the EA says they're all live.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past iter-90 45s grace window
         tickets = [700001001, 700001002, 700001003, 700001004]
         tids = []
         for tk in tickets:
@@ -127,7 +127,7 @@ class TestForceSyncRespectsOpenTickets:
     ):
         """Plant 2 trades. EA only reports 1 ticket open. Force Sync must
         close the orphan but leave the live one alone."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past iter-90 45s grace window
         live = mongo_db.trades.insert_one({
             "user_id": me["id"], "account_id": str(fresh_account["_id"]),
             "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.2,
@@ -160,7 +160,7 @@ class TestHeartbeatTicketRevive:
         """A trade was prematurely closed (close_reason=slippage_veto). The
         EA's next heartbeat lists its ticket as STILL OPEN. STOIC must auto-
         revive without waiting for the user to click anything."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past iter-90 45s grace window
         tid = mongo_db.trades.insert_one({
             "user_id": me["id"], "account_id": str(fresh_account["_id"]),
             "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.2,
@@ -191,7 +191,7 @@ class TestHeartbeatTicketRevive:
         """If exit_price is already set, the trade was *legitimately* closed
         by EA report — don't auto-revive even if the ticket appears in
         open_tickets again (covers EA replay scenarios)."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past iter-90 45s grace window
         tid = mongo_db.trades.insert_one({
             "user_id": me["id"], "account_id": str(fresh_account["_id"]),
             "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.2,

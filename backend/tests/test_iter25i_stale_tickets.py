@@ -16,7 +16,7 @@ import os
 import pathlib
 import pytest
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
 _FRONT_ENV = pathlib.Path("/app/frontend/.env")
@@ -93,7 +93,7 @@ class TestStaleTicketsDetection:
     ):
         """positions=0 but tickets=[4 ghost ones] → STOIC must close all 4
         and NOT loop-revive them."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past iter-90 45s grace window
         tickets = [700009001, 700009002, 700009003, 700009004]
         tids = []
         for tk in tickets:
@@ -126,7 +126,7 @@ class TestStaleTicketsDetection:
     ):
         """A closed-without-exit trade whose ticket is in a STALE list must
         NOT be revived — this was the loop bug."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past iter-90 45s grace window
         tid = mongo_db.trades.insert_one({
             "user_id": me["id"], "account_id": str(fresh_account["_id"]),
             "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.2,
@@ -155,7 +155,7 @@ class TestStaleTicketsDetection:
     ):
         """When positions and tickets agree, the normal revive + reconcile
         flow runs unaffected by the new guard."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past iter-90 45s grace window
         # 1 ghost (broker has it open, STOIC closed it)
         ghost = mongo_db.trades.insert_one({
             "user_id": me["id"], "account_id": str(fresh_account["_id"]),

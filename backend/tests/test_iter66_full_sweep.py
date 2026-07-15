@@ -180,8 +180,9 @@ class TestUnitLayer:
         out = compute_lot_for_account(account, "EURUSD", 1.0800, 1.0750,
                                       confidence_pct=75.0, profile=PROFILE,
                                       locked_profit=2000.0)
-        assert out["method"] == "fallback_no_equity", \
-            f"locked > equity must hit fallback_no_equity, got {out}"
+        assert out["method"] == "rejected_no_equity", \
+            f"locked > equity must fail closed (C5), got {out}"
+        assert out["lot_size"] == 0.0 and out["sizing_valid"] is False
 
     def test_market_closed_weekend_xauusd(self):
         from microstructure import is_market_closed

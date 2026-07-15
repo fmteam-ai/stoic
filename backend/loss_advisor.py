@@ -29,7 +29,6 @@ from bson import ObjectId
 from pip_utils import base_symbol
 from regime_adapter import velocity_veto
 from ws_manager import manager as ws_manager
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger("loss-advisor")
 
@@ -255,6 +254,7 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
 # -------------------------------------------------------------------- LLM
 async def _claude_measures(payload: dict) -> dict:
     try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"loss-review-{uuid.uuid4().hex[:8]}",
