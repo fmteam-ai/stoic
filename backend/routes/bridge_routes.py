@@ -870,12 +870,19 @@ async def report_trade(payload: BridgeTradeReport):
             update["close_reason"] = close_reason
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
-    # Scalp fast-path fill reconciliation (EA v1.44): feed the risk counters.
-    if payload.status == "closed" and trade.get("scope") == "scalp_fast":
+    # Scalp fast-path fill reconciliation (EA v1.44): feed the risk counters
+    # and real entry slippage back into the scalp state.
+    if trade.get("scope") == "scalp_fast":
         try:
             from scalp.engine import runners_for_account
             for r in runners_for_account(str(acc["_id"])):
-                r.on_trade_closed(payload.trade_id, float(payload.pnl or 0), db=db)
+                if payload.status == "open" and payload.entry_price is not None:
+                    r.on_trade_opened(payload.trade_id,
+                                      float(trade.get("entry_price") or 0) or None,
+                                      float(payload.entry_price), db=db)
+                elif payload.status == "closed":
+                    r.on_trade_closed(payload.trade_id,
+                                      float(payload.pnl or 0), db=db)
         except Exception:
             pass
     if slippage_force_close:

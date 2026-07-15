@@ -115,9 +115,16 @@ def _trade_selected(p_cal, target, stop, cost):
 
 async def retrain(db, symbol: str, broker: str = "any",
                   account_type: str = "any") -> dict:
+    """Option C design (review): train 50% | calibrate 20% | evaluate 30%.
+    The DEPLOYED artifact is the 50%-trained base model WITH its own Platt
+    calibrator — the model is NEVER retrained after calibration, so the
+    calibrator always corresponds to the deployed weights.
+
+    Timeout outcomes are excluded from the DIRECTIONAL label (target-before-
+    stop) but INCLUDED in every profitability/deployment calculation."""
     key = make_key(broker, account_type, symbol)
     q = {"symbol": symbol.upper(),
-         "outcome.result": {"$in": ["target_first", "stop_first"]}}
+         "outcome.result": {"$in": ["target_first", "stop_first", "timeout"]}}
     if broker and broker != "any":
         q["broker"] = broker
     if account_type and account_type != "any":
@@ -126,49 +133,60 @@ async def retrain(db, symbol: str, broker: str = "any",
         q, {"features": 1, "outcome": 1, "ts_ms": 1, "forecast": 1,
             "cost_pips": 1}).sort("ts_ms", 1)
     docs = await cur.to_list(20_000)
-    X, y, net, tgt, stp, cost = [], [], [], [], [], []
+    X, res, net, tgt, stp, cost = [], [], [], [], [], []
     for d in docs:
         v = vectorize(d.get("features") or {})
         if v is None:
             continue
         fc = d.get("forecast") or {}
         X.append(v)
-        y.append(1.0 if d["outcome"]["result"] == "target_first" else 0.0)
+        res.append(d["outcome"]["result"])
         net.append(float(d["outcome"].get("net_pips") or 0))
         tgt.append(float(fc.get("target_pips") or 2.0))
         stp.append(float(fc.get("stop_pips") or 2.0))
         cost.append(float(d.get("cost_pips") or 1.0))
-    n = len(y)
-    if n < MIN_SAMPLES or len(set(y)) < 2:
-        return {"trained": False, "model_key": key, "n": n,
-                "reason": f"insufficient labeled samples ({n}/{MIN_SAMPLES})"}
-    X, y = np.array(X), np.array(y)
+    n = len(res)
+    X = np.array(X) if X else np.zeros((0, len(FEATURE_KEYS)))
     net, tgt, stp, cost = map(np.array, (net, tgt, stp, cost))
+    res = np.array(res)
+    dir_mask = res != "timeout"
+    y = (res == "target_first").astype(float)
+    n_dir = int(dir_mask.sum())
+    if n_dir < MIN_SAMPLES or len(set(y[dir_mask].tolist())) < 2:
+        return {"trained": False, "model_key": key, "n": n, "n_directional": n_dir,
+                "reason": f"insufficient directional samples ({n_dir}/{MIN_SAMPLES})"}
 
-    # ---- chronological split: train 40% | calibrate 30% | evaluate 30% ----
-    i_cal = max(50, int(n * 0.4))
+    # ---- chronological split over the FULL timeline ----
+    i_cal = max(50, int(n * 0.5))
     i_eval = int(n * 0.7)
-    if len(set(y[:i_cal].tolist())) < 2 or n - i_eval < 30:
-        return {"trained": False, "model_key": key, "n": n,
-                "reason": "insufficient class balance / eval window"}
-    w, mu, sd = _fit(X[:i_cal], y[:i_cal])
-    p_cal_win = _predict(w, mu, sd, X[i_cal:i_eval])
-    a, b = fit_platt(p_cal_win, y[i_cal:i_eval])
+    m_train = dir_mask.copy(); m_train[i_cal:] = False
+    m_cal = dir_mask.copy(); m_cal[:i_cal] = False; m_cal[i_eval:] = False
+    m_evald = dir_mask.copy(); m_evald[:i_eval] = False
+    if (len(set(y[m_train].tolist())) < 2 or m_cal.sum() < 30
+            or m_evald.sum() < 30):
+        return {"trained": False, "model_key": key, "n": n, "n_directional": n_dir,
+                "reason": "insufficient class balance / cal / eval windows"}
 
-    p_eval_raw = _predict(w, mu, sd, X[i_eval:])
-    p_eval = apply_platt(p_eval_raw, a, b)
-    y_eval = y[i_eval:]
+    # deployed base model = 50% train block; calibrator fit on ITS outputs
+    w, mu, sd = _fit(X[m_train], y[m_train])
+    a, b = fit_platt(_predict(w, mu, sd, X[m_cal]), y[m_cal])
+
+    # untouched final evaluation with the EXACT deployed model + calibrator
+    p_eval = apply_platt(_predict(w, mu, sd, X[m_evald]), a, b)
+    y_eval = y[m_evald]
     oos_auc = round(_auc(y_eval, p_eval), 4)
     b_model = round(brier(p_eval, y_eval), 4)
-    b_base = round(brier(np.full_like(y_eval, y[:i_eval].mean()), y_eval), 4)
+    b_base = round(brier(np.full_like(y_eval, y[m_train | m_cal].mean()), y_eval), 4)
     ece_v = round(ece(p_eval, y_eval), 4)
 
-    # ---- profitability gates on model-SELECTED trades ----
-    sel = _trade_selected(p_eval, tgt[i_eval:], stp[i_eval:], cost[i_eval:])
-    net_eval = net[i_eval:]
+    # ---- profitability gates over ALL eval-window outcomes incl. TIMEOUTS ----
+    m_eval_all = np.zeros(n, dtype=bool); m_eval_all[i_eval:] = True
+    p_all = apply_platt(_predict(w, mu, sd, X[m_eval_all]), a, b)
+    sel = _trade_selected(p_all, tgt[m_eval_all], stp[m_eval_all], cost[m_eval_all])
+    net_eval = net[m_eval_all]
     if sel.sum() >= 10:
         oos_net_exp = round(float(net_eval[sel].mean()), 3)
-        stressed = net_eval[sel] - (COST_STRESS_MULT - 1.0) * cost[i_eval:][sel]
+        stressed = net_eval[sel] - (COST_STRESS_MULT - 1.0) * cost[m_eval_all][sel]
         stressed_exp = round(float(stressed.mean()), 3)
         wins = float(net_eval[sel][net_eval[sel] > 0].sum())
         losses = abs(float(net_eval[sel][net_eval[sel] < 0].sum()))
@@ -190,21 +208,21 @@ async def retrain(db, symbol: str, broker: str = "any",
         and prof_ratio is not None and prof_ratio >= MIN_PROFITABLE_WINDOWS
     )
 
-    # deploy: retrain base model on train+cal, keep the held-out calibrator
-    w_f, mu_f, sd_f = _fit(X[:i_eval], y[:i_eval])
     expires = (datetime.now(timezone.utc) + timedelta(days=MODEL_TTL_DAYS)).isoformat()
     artifact = {
         "model_key": key, "symbol": symbol.upper(),
         "broker": broker, "account_type": account_type,
-        "n_samples": int(n),
-        "weights": w_f.tolist(), "mu": mu_f.tolist(), "sd": sd_f.tolist(),
+        "n_samples": int(n), "n_directional": n_dir,
+        "weights": w.tolist(), "mu": mu.tolist(), "sd": sd.tolist(),
         "platt_a": a, "platt_b": b,
+        "calibrator_matches_deployed_model": True,   # Option C invariant
         "oos_auc": oos_auc, "brier": b_model, "brier_baseline": b_base,
         "ece": ece_v,
         "oos_net_expectancy_pips": oos_net_exp,
         "stressed_net_expectancy_pips": stressed_exp,
         "profit_factor": profit_factor,
         "profitable_windows_ratio": prof_ratio,
+        "timeouts_in_eval": int((res[m_eval_all] == "timeout").sum()),
         "usable": usable,
         "feature_keys": FEATURE_KEYS,
         "trained_at": datetime.now(timezone.utc).isoformat(),
@@ -212,13 +230,16 @@ async def retrain(db, symbol: str, broker: str = "any",
     }
     await db.scalp_models.update_one({"model_key": key}, {"$set": artifact},
                                      upsert=True)
+    # selection-bias audit trail: EVERY candidate is kept, rejected included
+    await db.scalp_model_history.insert_one(dict(artifact))
     if usable:
         _active[key] = _to_runtime(artifact)
     else:
         _active.pop(key, None)
     logger.info("scalp model %s n=%d auc=%.3f brier=%.4f/%.4f netexp=%s usable=%s",
                 key, n, oos_auc, b_model, b_base, oos_net_exp, usable)
-    return {"trained": True, "model_key": key, "n": n, "oos_auc": oos_auc,
+    return {"trained": True, "model_key": key, "n": n, "n_directional": n_dir,
+            "oos_auc": oos_auc,
             "brier": b_model, "brier_baseline": b_base, "ece": ece_v,
             "oos_net_expectancy_pips": oos_net_exp,
             "stressed_net_expectancy_pips": stressed_exp,
@@ -233,28 +254,39 @@ def _to_runtime(artifact: dict) -> dict:
             "ts": time.time()}
 
 
-def predict_p(model_key: str, features: dict) -> float | None:
-    """Calibrated probability, or None → deterministic baseline keeps control.
+def predict(model_key: str, features: dict) -> dict:
+    """Structured prediction (review item 10).
 
-    Refuses expired artifacts (item 12) and out-of-distribution inputs."""
+    Returns {"p": float|None, "source": "model"|"deterministic",
+             "fallback_reason": str|None}."""
     ent = _active.get(model_key)
     if ent is None:
-        return None
+        return {"p": None, "source": "deterministic", "fallback_reason": "no_model"}
     try:
         if datetime.fromisoformat(ent["expires_at"]) < datetime.now(timezone.utc):
             _active.pop(model_key, None)
-            return None
+            return {"p": None, "source": "deterministic",
+                    "fallback_reason": "model_expired"}
     except (ValueError, TypeError):
-        return None
+        return {"p": None, "source": "deterministic",
+                "fallback_reason": "invalid_expiry"}
     v = vectorize(features)
     if v is None:
-        return None
+        return {"p": None, "source": "deterministic",
+                "fallback_reason": "invalid_features"}
     x = np.array(v)
     z = np.abs((x - ent["mu"]) / ent["sd"])
     if float(z.max()) > OOD_Z_LIMIT:
-        return None                       # feature drift / OOD guard
+        return {"p": None, "source": "deterministic",
+                "fallback_reason": "ood_features"}
     p_raw = _predict(ent["w"], ent["mu"], ent["sd"], x.reshape(1, -1))[0]
-    return float(apply_platt(np.array([p_raw]), ent["platt_a"], ent["platt_b"])[0])
+    p = float(apply_platt(np.array([p_raw]), ent["platt_a"], ent["platt_b"])[0])
+    return {"p": p, "source": "model", "fallback_reason": None}
+
+
+def predict_p(model_key: str, features: dict) -> float | None:
+    """Calibrated probability, or None → deterministic baseline keeps control."""
+    return predict(model_key, features)["p"]
 
 
 async def load_persisted(db, model_key: str) -> bool:

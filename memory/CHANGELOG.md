@@ -1206,3 +1206,17 @@ User requested a dedicated low-latency scalp subsystem (15s–5min holds, NOT HF
 - Tick ingest drops duplicate/out-of-order ticks.
 **Tests refactored:** tests/unit/scalp/test_scalp_unit.py (28, pure imports, project-relative paths, no env reads) + tests/integration/scalp/test_scalp_api.py (12, lazy env). ea_version.py path-relative. Full suite: 1899 passed (1 live-data race flake, passes rerun).
 **Deferred (ROADMAP):** item 16 setup-score bucket shrinkage, 17 conditional target/stop (MFE/MAE models), 18 sub-second eval (measure signal half-life first), 19 session-bucket validation, EA-side report commission/swap fields.
+
+## Iter-148 (2026-07-15) — Scalp Review Round 3 DONE
+- CRITICAL model/calibrator mismatch → Option C: train 50% | calibrate 20% | eval 30%; the DEPLOYED artifact is the 50%-trained model WITH its own Platt calibrator, never retrained after calibration (`calibrator_matches_deployed_model: True` invariant on every artifact).
+- Delayed-batch guard: new entries require transport age (now − sent_at_ms) ≤ 3s AND broker-adjusted quote age (clock-offset corrected via state.broker_adjusted_age_ms()) ≤ cfg limit; stale batches still update state/labels but cannot trade (stale_batches counter, ingest returns batch_fresh/transport_age_ms/broker_age_ms).
+- Timeout economics: retrain query includes timeouts; directional label still excludes them but ALL profitability/deployment gates (net exp, stress, windows) evaluate over every outcome incl. timeouts (timeouts_in_eval recorded).
+- Model audit: every candidate artifact (incl. rejected) persisted to scalp_model_history for selection-bias monitoring.
+- Structured predictions: scalp_model.predict() → {p, source, fallback_reason: no_model|model_expired|ood_features|invalid_features|invalid_expiry}; stored on every decision (model_source/model_fallback_reason).
+- Real slippage feedback: /bridge/report "open" status → runner.on_trade_opened() computes signed entry slippage vs requested price → state.record_fill(); requested/actual entry persisted on the decision.
+- ABSOLUTE drift guard pre-submit (favorable drift also rejects — geometry invalid; next cycle re-forecasts).
+- Overlap: ANY active sim (either direction) suppresses new labels — one setup event per symbol.
+- Audit backpressure: _bg tracks pending/failed writes with one retry; ≥500 pending halts NEW entries; /scalp/status returns audit {pending, failures, halted}.
+- Restart during CLOSE_REQUESTED: restore_risk re-marks trades with pending_modification FULL_CLOSE as CLOSE_REQUESTED.
+- Tests: 9 new unit tests (delayed batch, broker age, fill feedback, structured fallback, restart close-state, etc.) — 48 scalp tests green; synthetic Option C validation passed (AUC .85, calibrated, timeouts in eval, usable=True end-to-end); full suite 1907 passed (1 live-data flake, green rerun).
+- DEFERRED (ROADMAP): shared account-level risk state (needed before 2nd symbol), durable event-log persistence, eval-interval study (100ms–2s), session-bucket validation, MFE/MAE conditional targets, EA report commission/swap fields.

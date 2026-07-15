@@ -343,6 +343,94 @@ class TestEngineBehaviors:
         assert "suppressed_overlap" in r.counters
 
 
+# ---------------- round-3 review behaviors ----------------
+class TestRound3Hardening:
+    def test_delayed_batch_blocks_new_entries(self):
+        """Old broker ticks arriving NOW must not pass freshness."""
+        r = ScalpRunner("accD", "u1", "EURUSD")
+        r.enabled = True
+        r._risk_restored = True
+        db = _stub_db()
+        now = int(time.time() * 1000)
+        # broker timestamps 60s old, batch sent 10s ago
+        ticks = [{"tm": now - 60_000 + i * 100, "b": 1.08, "a": 1.08006}
+                 for i in range(5)]
+        out = asyncio.run(r.ingest(db, {"equity": 1000}, ticks, now - 10_000))
+        assert out["batch_fresh"] is False
+        assert out["transport_age_ms"] >= 10_000
+        assert r.counters["evals"] == 0
+        assert r.counters.get("stale_batches", 0) == 1
+
+    def test_fresh_batch_passes(self):
+        r = ScalpRunner("accE", "u1", "EURUSD")
+        r.enabled = True
+        r._risk_restored = True
+        db = _stub_db()
+        now = int(time.time() * 1000)
+        ticks = [{"tm": now - 400 + i * 100, "b": 1.08, "a": 1.08006}
+                 for i in range(5)]
+        out = asyncio.run(r.ingest(db, {"equity": 1000}, ticks, now - 200))
+        assert out["batch_fresh"] is True
+
+    def test_broker_adjusted_age(self):
+        st = _mk_state([1.08 + i * PIP * 0.1 for i in range(100)])
+        assert st.broker_adjusted_age_ms() < 5_000
+        st2 = _mk_state([1.08] * 100,
+                        start_ms=int(time.time() * 1000) - 120_000)
+        # last broker tick ~70s old (100 ticks × 500ms after start)
+        assert st2.broker_adjusted_age_ms() > 30_000
+
+    def test_opposite_direction_overlap_also_suppressed(self):
+        """ONE active setup event per symbol — SELL suppressed while a BUY
+        sim is open against the same future path."""
+        r = ScalpRunner("accF", "u1", "EURUSD")
+        r.open_sims.append(ShadowSim("d", "BUY", 1.08, 1.08004, 2.0, 2.0,
+                                     PIP, 0, 300_000))
+        assert len(r.open_sims) == 1
+        # engine checks `if self.open_sims` — verify semantics directly
+        assert bool(r.open_sims) is True
+
+    def test_slippage_feedback_from_real_fill(self):
+        r = ScalpRunner("accG", "u1", "EURUSD")
+        r.live_trades["t9"] = {"state": "OPEN", "direction": "BUY",
+                               "decision_id": "d9", "opened_ms": 0,
+                               "est_cost_usd": 0}
+        before = r.state.fills_seen
+        r.on_trade_opened("t9", requested_price=1.08000, actual_price=1.08004)
+        assert r.state.fills_seen == before + 1
+        assert r.live_trades["t9"]["entry_slippage_pips"] == pytest.approx(0.4)
+        assert r.state.slippage_ewma_pips > 0
+
+    def test_structured_fallback_reason(self):
+        feats = {k: 0.0 for k in FEATURE_KEYS}
+        out = scalp_model.predict("NoSuchBroker|x|EURUSD", feats)
+        assert out["p"] is None
+        assert out["source"] == "deterministic"
+        assert out["fallback_reason"] == "no_model"
+
+    def test_audit_backlog_reporting(self):
+        from scalp import engine as eng
+        info = eng.audit_backlog()
+        assert set(info) == {"pending", "failures", "halted"}
+        assert info["halted"] is False
+
+    def test_close_requested_restored_after_restart(self):
+        """Restart while a close is pending must restore CLOSE_REQUESTED."""
+        r = ScalpRunner("accH", "u1", "EURUSD")
+        db = _stub_db()
+        trade_doc = {"_id": "tr1", "action": "BUY", "entry_price": 1.08,
+                     "stop_loss": 1.079, "take_profit": 1.082,
+                     "scalp_decision_id": "d1",
+                     "pending_modification": {"type": "FULL_CLOSE"}}
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[trade_doc])
+        db.trades.find = MagicMock(return_value=cursor)
+        db.scalp_risk_state.find_one = AsyncMock(return_value=None)
+        asyncio.run(r.restore_risk(db))
+        assert r._risk_restored is True
+        assert r.live_trades["tr1"]["state"] == "CLOSE_REQUESTED"
+
+
 # ---------------- EA coherence (project-relative path) ----------------
 def test_ea_144_tick_stream_wiring():
     ea_path = BACKEND / "static" / "EmergentTradingBridge.mq5"

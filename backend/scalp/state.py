@@ -86,3 +86,12 @@ class ScalpState:
             return 1 << 30
         # age vs local clock, corrected by measured broker/local drift
         return max(0, now_ms() - self.last_tick.received_time_ms)
+
+    def broker_adjusted_age_ms(self) -> int:
+        """Age of the newest BROKER-MARKET timestamp, corrected by the
+        measured clock offset. Guards against delayed batches whose local
+        receipt time looks fresh."""
+        if self.last_tick is None:
+            return 1 << 30
+        return max(0, int(now_ms() - self.last_tick.broker_time_ms
+                          - self.clock_drift_ms))

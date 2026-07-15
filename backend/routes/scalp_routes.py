@@ -55,7 +55,8 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
             r.mode = cfg.get("mode", "shadow")
     out = [r.status() for r in _runners.values() if r.user_id == user["id"]
            and (not account_id or r.account_id == account_id)]
-    return {"runners": out}
+    from scalp.engine import audit_backlog
+    return {"runners": out, "audit": audit_backlog()}
 
 
 @router.get("/decisions")

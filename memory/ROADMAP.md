@@ -11,3 +11,6 @@
 - **P2** Partial-close ladder + chandelier-exit trail.
 - **P2** Walk-forward auto-retune of confluence weights every 4 weeks.
 - **P2** Trades page "load more" / server-side date-range beyond 100-row cap.
+- **Scalp pre-multi-symbol**: shared AccountScalpRiskState (daily loss/cost/streak/cooldown across symbols) — required before adding GBPUSD.
+- **Scalp research**: eval-interval study (100ms–2s), session-bucket validation (early London / overlap / late NY), MFE/MAE conditional target-stop, setup-score bucket shrinkage.
+- **Scalp infra**: durable audit event log (dead-letter + flush-on-shutdown), EA report commission/swap fields for exact live cost attribution.

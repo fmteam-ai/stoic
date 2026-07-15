@@ -47,9 +47,13 @@ EVAL_THROTTLE_MS = 1000
 TICK_FLUSH_N = 200
 TICK_FLUSH_MS = 10_000
 RETRAIN_EVERY_RESOLUTIONS = 200
-MAX_DRIFT_BEFORE_SUBMIT_FRAC = 0.5     # of stop distance
+MAX_DRIFT_BEFORE_SUBMIT_FRAC = 0.5     # of stop distance, ABSOLUTE drift
+MAX_BATCH_TRANSPORT_AGE_MS = 3000      # sent_at → arrival; older batches can't trade
+AUDIT_BACKLOG_HALT = 500               # pending persist tasks that halt NEW entries
 
 _runners: dict = {}
+_audit_pending = 0
+_audit_failures = 0
 
 
 class ShadowSim:
@@ -175,11 +179,24 @@ class ScalpRunner:
         self.health = kill.evaluate(self.state, self.cfg)
         permissions.maybe_refresh(db, self.user_id, self.symbol, self.cfg)
         self._maybe_flush_ticks(db)
-        if self.enabled and self._risk_restored:
+        # Delayed-batch guard (round 3): old broker ticks arriving NOW must
+        # not look fresh. New entries require BOTH recent transport AND a
+        # recent broker-market timestamp (clock-offset corrected).
+        transport_age = (recv - int(sent_at_ms)) if sent_at_ms else 0
+        broker_age = self.state.broker_adjusted_age_ms()
+        batch_fresh = (transport_age <= MAX_BATCH_TRANSPORT_AGE_MS
+                       and broker_age <= self.cfg.max_quote_age_ms)
+        if not batch_fresh:
+            self.counters["stale_batches"] = self.counters.get("stale_batches", 0) + 1
+        audit_ok = _audit_pending < AUDIT_BACKLOG_HALT
+        if self.enabled and self._risk_restored and batch_fresh and audit_ok:
             await self._maybe_evaluate(db)
         return {"ok": True, "ticks": len(ticks),
                 "health": self.health["status"], "enabled": self.enabled,
-                "risk_restored": self._risk_restored}
+                "risk_restored": self._risk_restored,
+                "batch_fresh": batch_fresh,
+                "transport_age_ms": transport_age,
+                "broker_age_ms": broker_age}
 
     # ---------------- decision pipeline ----------------
 
@@ -205,8 +222,9 @@ class ScalpRunner:
         if cand is None:
             return
         direction = cand["direction"]
-        # item 11 — suppress overlapping same-direction labels
-        if any(s.direction == direction for s in self.open_sims):
+        # item 3 (round 3) — ONE active setup event per symbol: any live sim
+        # (either direction) suppresses new labels against the same path
+        if self.open_sims:
             self.counters["suppressed_overlap"] += 1
             return
         self.counters["candidates"] += 1
@@ -214,7 +232,8 @@ class ScalpRunner:
                    else perms.get("short_enabled"))
 
         commission_pips = self._commission_pips()
-        model_p = scalp_model.predict_p(self.model_key(), feats)
+        pred = scalp_model.predict(self.model_key(), feats)
+        model_p = pred["p"]
         fc = make_forecast(feats, cand, self.state, self.cfg,
                            model_p=model_p, commission_pips=commission_pips)
         edge_res = edge.evaluate(fc)
@@ -266,6 +285,8 @@ class ScalpRunner:
             "direction": direction, "mode": self.mode,
             "features": {k: v for k, v in feats.items() if not k.startswith("_")},
             "setup": cand, "forecast": fc.to_dict(),
+            "model_source": pred["source"],
+            "model_fallback_reason": pred["fallback_reason"],
             "net_edge_pips": edge_res["net_edge_pips"],
             "cost_pips": edge_res["cost_pips"],
             "cost_ratio": edge_res["cost_ratio"],
@@ -300,17 +321,18 @@ class ScalpRunner:
         the EA's entry_price slippage veto is the broker-side last gate."""
         t = self.state.last_tick
         pip = self.cfg.pip_size
-        # price-drift guard vs the decision's entry reference
+        # ABSOLUTE price-drift guard (round 3 item 7): favorable drift also
+        # invalidates the forecast geometry — reject either way, the next
+        # evaluation cycle re-forecasts from the new price state.
         ref = decision["sim"]["entry_mid"]
         cur_mid = (t.bid + t.ask) / 2.0
-        adverse = ((cur_mid - ref) if decision["direction"] == "BUY"
-                   else (ref - cur_mid)) / pip
-        if adverse > MAX_DRIFT_BEFORE_SUBMIT_FRAC * fc.stop_pips:
+        drift = abs(cur_mid - ref) / pip
+        if drift > MAX_DRIFT_BEFORE_SUBMIT_FRAC * fc.stop_pips:
             self.state.record_reject()
             _bg(db.scalp_decisions.update_one(
                 {"decision_id": decision["decision_id"]},
                 {"$set": {"verdict": "rejected", "reject_stage": "pre_submit_drift",
-                          "adverse_drift_pips": round(adverse, 2)}}))
+                          "drift_pips": round(drift, 2)}}))
             return
         sp = self.state.spread_pips()
         if sp is None or sp > dynamic_spread_limit(self.state, self.cfg):
@@ -418,6 +440,27 @@ class ScalpRunner:
                 "reason": f"scalp_{reason}"},
                 "close_reason": f"scalp_{reason}"}})
 
+    def on_trade_opened(self, trade_id: str, requested_price: float | None,
+                        actual_price: float | None, db=None):
+        """Broker fill confirmation (round 3 item 5): feed REAL entry slippage
+        back into the state so the cost model learns from live fills."""
+        info = self.live_trades.get(trade_id)
+        if requested_price and actual_price:
+            direction = (info or {}).get("direction", "BUY")
+            signed = ((actual_price - requested_price) if direction == "BUY"
+                      else (requested_price - actual_price)) / self.cfg.pip_size
+            self.state.record_fill(signed)
+            if info is not None:
+                info["requested_entry"] = requested_price
+                info["actual_entry"] = actual_price
+                info["entry_slippage_pips"] = round(signed, 2)
+            if db is not None and info:
+                _bg(db.scalp_decisions.update_one(
+                    {"decision_id": info.get("decision_id", "")},
+                    {"$set": {"requested_entry": requested_price,
+                              "actual_entry": actual_price,
+                              "entry_slippage_pips": round(signed, 2)}}))
+
     def on_trade_closed(self, trade_id: str, pnl: float,
                         commission: float = 0.0, swap: float = 0.0, db=None):
         """Broker-confirmed close (item 13/14): only NOW the position leaves
@@ -459,8 +502,10 @@ class ScalpRunner:
         for tr in open_trades:
             tid = str(tr["_id"])
             if tid not in self.live_trades:
+                pend = (tr.get("pending_modification") or {}).get("type")
                 self.live_trades[tid] = {
-                    "state": "OPEN", "opened_ms": now_ms(),
+                    "state": "CLOSE_REQUESTED" if pend == "FULL_CLOSE" else "OPEN",
+                    "opened_ms": now_ms(),
                     "direction": tr.get("action"),
                     "entry_px": tr.get("entry_price"),
                     "stop_px": tr.get("stop_loss"), "target_px": tr.get("take_profit"),
@@ -522,17 +567,32 @@ def _oid(s):
 
 
 def _bg(coro):
+    global _audit_pending
     try:
+        _audit_pending += 1
         asyncio.get_running_loop().create_task(_coro_safe(coro))
     except RuntimeError:
-        pass
+        _audit_pending -= 1
 
 
 async def _coro_safe(coro):
+    """One retry, then dead-letter log — the audit backlog counter feeds the
+    entry halt in ingest() (round 3 item 8)."""
+    global _audit_pending, _audit_failures
     try:
-        await coro
-    except Exception as e:  # noqa: BLE001
-        logger.debug("scalp bg task failed: %s", e)
+        try:
+            await coro
+        except Exception:
+            await asyncio.sleep(0.5)
+            _audit_failures += 1
+            logger.warning("scalp audit write failed (failures=%d)", _audit_failures)
+    finally:
+        _audit_pending = max(0, _audit_pending - 1)
+
+
+def audit_backlog() -> dict:
+    return {"pending": _audit_pending, "failures": _audit_failures,
+            "halted": _audit_pending >= AUDIT_BACKLOG_HALT}
 
 
 def get_runner(account_id: str, user_id: str, symbol: str) -> ScalpRunner | None:
