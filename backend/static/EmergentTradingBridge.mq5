@@ -147,6 +147,10 @@
 //| v1.43 — Depth of Market feed. Subscribes to the broker's order    |
 //| v1.44 — Scalp tick stream. Millisecond timer batches EURUSD       |
 //|         bid/ask ticks to /api/bridge/ticks for the fast path.     |
+//| v1.45 — Deal reports carry position_volume: the broker's          |
+//|         REMAINING position volume after each deal, so the server  |
+//|         discriminates partial vs full closes from broker state    |
+//|         instead of lot arithmetic.                                |
 //|         book (MarketBookAdd) and streams bid/ask depth to STOIC   |
 //|         every DomSeconds (30s) for the Liquidity Mapping agent    |
 //|         (resting liquidity, walls, book imbalance). Degrades      |
@@ -155,14 +159,14 @@
 //|         liquidity from candles alone.                             |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.44"
+#property version   "1.45"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.44"
+#define EA_CLIENT_VERSION "1.45"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -447,15 +451,22 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    // position direction when needed.
    string action = (dt == DEAL_TYPE_BUY) ? "BUY" : "SELL";
 
+   // v1.45 — the broker's REMAINING position volume after this deal.
+   // 0.0 = position fully closed; >0 = partial close. The server uses this
+   // as the AUTHORITY for partial-vs-full discrimination.
+   double pos_vol = 0.0;
+   if (PositionSelectByTicket((ulong)position_id))
+      pos_vol = PositionGetDouble(POSITION_VOLUME);
+
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"mt5_ticket\":%I64d,\"deal_id\":%I64u,"
       "\"deal_entry\":\"%s\",\"symbol\":\"%s\",\"action\":\"%s\","
       "\"lots\":%.2f,\"price\":%.5f,\"profit\":%.2f,"
       "\"commission\":%.2f,\"swap\":%.2f,"
-      "\"deal_time\":%I64d,\"magic\":%I64d}",
+      "\"deal_time\":%I64d,\"magic\":%I64d,\"position_volume\":%.2f}",
       EffectiveToken, position_id, deal_id,
       entry_str, symbol, action,
-      volume, price, profit, commission, swap, deal_time, magic);
+      volume, price, profit, commission, swap, deal_time, magic, pos_vol);
 
    HttpPost(ServerUrl + "/api/bridge/external-deal", body);
 }

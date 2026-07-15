@@ -672,11 +672,191 @@ class TestRound5Statistics:
         assert purged[50:].all()                        # eval side untouched
 
 
+# ---------------- round-6 review behaviors ----------------
+class TestRound6PartialAndDurability:
+    def _runner_with_open(self, acc):
+        r = ScalpRunner(acc, "u1", "EURUSD")
+        r.live_trades["t1"] = {"state": "OPEN", "opened_ms": 0,
+                               "direction": "BUY", "lot": 0.10,
+                               "entry_px": 1.08, "stop_px": 1.079,
+                               "target_px": 1.082, "decision_id": "d1",
+                               "est_cost_usd": 1.0}
+        r.risk_state.open_scalps = 1
+        r.account_risk.open_scalps = 1
+        r.account_risk.add_stop_risk("t1", 10.0)
+        return r
+
+    def test_partial_close_applies_financials_keeps_position(self):
+        r = self._runner_with_open("r6a")
+        r.on_partial_close("t1", closed_lots=0.05, remaining_lots=0.05,
+                           pnl=-2.0, commission=-0.2, swap=0.0,
+                           exit_price=1.0795, deal_id="P1")
+        assert "t1" in r.live_trades                      # position STAYS open
+        assert r.live_trades["t1"]["lot"] == pytest.approx(0.05)
+        assert r.risk_state.open_scalps == 1              # no record_close
+        assert r.risk_state.daily_loss_usd == pytest.approx(2.2)
+        assert r.risk_state.daily_cost_usd == pytest.approx(0.2)
+        assert r.account_risk.daily_loss_usd == pytest.approx(2.2)
+        # stop risk scaled by remaining/prior lot
+        assert r.account_risk.stop_risk_by_trade["t1"] == pytest.approx(5.0)
+
+    def test_partial_close_idempotent_per_deal(self):
+        r = self._runner_with_open("r6b")
+        for _ in range(3):
+            r.on_partial_close("t1", 0.05, 0.05, pnl=-2.0, commission=-0.2,
+                               deal_id="P2")
+        assert r.risk_state.daily_loss_usd == pytest.approx(2.2)
+
+    def test_swap_credit_does_not_reset_loss_streak(self):
+        """Round 6 item 9 — a financing credit can't mask a losing scalp."""
+        r = self._runner_with_open("r6c")
+        r.risk_state.consecutive_losses = 2
+        r.on_trade_closed("t1", pnl=-1.0, commission=-0.2, swap=1.5,
+                          deal_id="S1", source="broker_deal")
+        # net = +0.3 → NO daily loss...
+        assert r.risk_state.daily_loss_usd == 0.0
+        # ...but trading P&L = -1.2 → the streak still grows
+        assert r.risk_state.consecutive_losses == 3
+
+    def test_stop_loss_reason_forces_stop_baseline_on_gap(self):
+        """Round 6 item 8 — gap-through-stop MUST still measure slippage."""
+        r = self._runner_with_open("r6d")
+        db = _stub_db()
+
+        async def run():
+            r.on_trade_closed("t1", pnl=-90.0, commission=-0.5, swap=0.0,
+                              exit_price=1.0700, deal_id="S2",
+                              close_reason="stop_loss",
+                              source="broker_deal", db=db)
+            for _ in range(5):
+                await asyncio.sleep(0)
+        asyncio.run(run())
+        sets = [c.args[1]["$set"] for c in db.scalp_decisions.update_one.call_args_list]
+        o = [s for s in sets if "execution_outcome" in s][0]["execution_outcome"]
+        assert o["requested_exit_price"] == pytest.approx(1.079)
+        assert o["exit_slippage_pips"] == pytest.approx(90.0)  # 1.079 → 1.0700
+        assert o["exit_reason"] == "stop_loss"
+
+    def test_account_stop_risk_budget_blocks(self):
+        from scalp.risk import check_account, ACCOUNT_LIMITS
+        r = ScalpRunner("r6e", "u1", "EURUSD")
+        equity = 10_000.0
+        budget = equity * ACCOUNT_LIMITS.max_total_stop_risk_pct / 100.0  # $15
+        r.account_risk.add_stop_risk("x", budget - 1.0)
+        ok = check_account(r.account_risk, equity, proposed_stop_risk_usd=0.5)
+        assert ok["ok"] is True
+        blocked = check_account(r.account_risk, equity, proposed_stop_risk_usd=2.0)
+        assert blocked["ok"] is False and "stop risk" in blocked["reason"]
+
+    def test_account_hourly_cap_is_explicit_policy(self):
+        from scalp.risk import check_account, ACCOUNT_LIMITS
+        import time as _t
+        r = ScalpRunner("r6f", "u1", "EURUSD")
+        for _ in range(ACCOUNT_LIMITS.max_total_trades_per_hour):
+            r.account_risk.trade_times.append(_t.time())
+        res = check_account(r.account_risk, 10_000.0)
+        assert res["ok"] is False and "hourly" in res["reason"]
+
+    def test_applied_deal_ids_persisted_and_restored(self):
+        r = self._runner_with_open("r6g")
+        db = _stub_db()
+
+        async def run():
+            r.on_trade_closed("t1", pnl=-1.0, commission=-0.1, swap=0.0,
+                              deal_id="DUR1", source="broker_deal", db=db)
+            for _ in range(5):
+                await asyncio.sleep(0)
+        asyncio.run(run())
+        sets = [c.args[1]["$set"] for c in db.scalp_risk_state.update_one.call_args_list]
+        sym_doc = [s for s in sets if "applied_deal_ids" in s][0]
+        assert "DUR1" in sym_doc["applied_deal_ids"]
+        # a fresh runner (post-restart) restores the dedupe cache
+        r2 = ScalpRunner("r6g-fresh", "u1", "EURUSD")
+        db2 = _stub_db()
+        db2.scalp_risk_state.find_one = AsyncMock(
+            side_effect=[{**r.risk_state.to_doc(), "applied_deal_ids": ["DUR1"]},
+                         None])
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[])
+        db2.trades.find = MagicMock(return_value=cursor)
+        asyncio.run(r2.restore_risk(db2))
+        assert "DUR1" in r2._applied_deal_ids
+        before = r2.risk_state.daily_loss_usd
+        r2.on_trade_closed("tX", pnl=-9.0, deal_id="DUR1", source="broker_deal")
+        assert r2.risk_state.daily_loss_usd == before      # replay is a no-op
+
+    def test_restore_rebuilds_account_stop_risk_and_open_count(self):
+        r = ScalpRunner("r6h", "u1", "EURUSD")
+        db = _stub_db()
+        trade_doc = {"_id": "trS", "action": "BUY", "entry_price": 1.0800,
+                     "stop_loss": 1.0790, "take_profit": 1.0820,
+                     "lot_size": 0.10, "scalp_decision_id": "",
+                     "opened_at": "2026-06-01T10:00:00+00:00"}
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[trade_doc])
+        db.trades.find = MagicMock(return_value=cursor)
+        asyncio.run(r.restore_risk(db))
+        # 10 pips × $10/pip/lot × 0.10 lots = $10 at stop
+        assert r.account_risk.stop_risk_by_trade["trS"] == pytest.approx(10.0)
+        assert r.account_risk.open_scalps >= 1
+        assert r.live_trades["trS"]["lot"] == pytest.approx(0.10)
+
+    def test_recovery_job_resumes_pending_deal(self):
+        from scalp.engine import recover_pending_deals
+
+        class _Cursor:
+            def __init__(self, docs):
+                self.docs = docs
+
+            def limit(self, n):
+                return self
+
+            def __aiter__(self):
+                async def gen():
+                    for d in self.docs:
+                        yield d
+                return gen()
+
+        deal = {"deal_id": 777, "account_id": "r6i", "mt5_ticket": 42,
+                "profit": -4.0, "commission": -0.3, "swap": 0.0,
+                "price": 1.0790, "lots": 0.05,
+                "financial_reconciliation_status": "pending",
+                "received_at": "2020-01-01T00:00:00+00:00"}
+        trade = {"_id": "trR", "scope": "scalp_fast", "status": "closed",
+                 "symbol": "EURUSD", "user_id": "u1",
+                 "close_reason": "stop_loss"}
+        db = _stub_db()
+        db.broker_deals.find = MagicMock(return_value=_Cursor([deal]))
+        db.broker_deals.update_one = AsyncMock()
+        db.trades.find_one = AsyncMock(return_value=trade)
+        cursor = MagicMock()
+        cursor.to_list = AsyncMock(return_value=[])
+        db.trades.find = MagicMock(return_value=cursor)
+
+        async def run():
+            out = await recover_pending_deals(db, older_than_sec=0)
+            for _ in range(5):
+                await asyncio.sleep(0)
+            return out
+        out = asyncio.run(run())
+        assert out["recovered"] == 1 and out["marked_complete"] == 1
+        from scalp.engine import get_runner
+        rr = get_runner("r6i", "u1", "EURUSD")
+        assert rr.risk_state.daily_loss_usd == pytest.approx(4.3)
+        marked = db.broker_deals.update_one.call_args.args[1]["$set"]
+        assert marked["financial_reconciliation_status"] == "complete"
+
+
 # ---------------- EA coherence (project-relative path) ----------------
 def test_ea_144_tick_stream_wiring():
     ea_path = BACKEND / "static" / "EmergentTradingBridge.mq5"
     src = ea_path.read_text()
-    assert '#define EA_CLIENT_VERSION "1.44"' in src
+    import re
+    m = re.search(r'#define\s+EA_CLIENT_VERSION\s+"([\d.]+)"', src)
+    assert m and float(m.group(1)) >= 1.45      # no stale version pins
     assert "void SendTicks()" in src
     assert "/api/bridge/ticks" in src
     assert "EventSetMillisecondTimer" in src
+    # v1.45 — remaining position volume on every live deal report
+    assert '\\"position_volume\\":%.2f' in src
+    assert "POSITION_VOLUME" in src

@@ -416,6 +416,7 @@ class BridgeExternalDeal(BaseModel):
     deal_time: int = 0                    # unix seconds (broker time)
     backfill: bool = False                # EA v1.40+: history-sweep / deep-sync push
     magic: int = 0                        # 0 = manual broker-side; else our MagicNumber
+    position_volume: Optional[float] = None  # EA v1.45+: broker's REMAINING position volume after this deal
 
 
 # ---------- Market ----------

@@ -933,6 +933,52 @@ async def report_trade(payload: BridgeTradeReport):
     return {"ok": True}
 
 
+async def _mark_deal_reconciled(db, deal_id, account_id: str):
+    await db.broker_deals.update_one(
+        {"deal_id": deal_id, "account_id": account_id},
+        {"$set": {"financial_reconciliation_status": "complete",
+                  "financial_reconciled_at": datetime.now(timezone.utc).isoformat()}})
+
+
+async def _scalp_reconcile_close(db, account_id: str, trade: dict, payload,
+                                 partial: bool = False):
+    """Round 6 — apply the authoritative broker deal to the scalp runner,
+    then mark the broker_deals row 'complete' (durable reconciliation
+    state). On failure the row stays 'pending' so the recovery sweep or the
+    EA's next retry resumes it; runner deal-id idempotency makes replays
+    safe."""
+    try:
+        from scalp.engine import runners_for_account
+        for r in runners_for_account(account_id):
+            if r.symbol != (trade.get("symbol") or "").upper():
+                continue
+            if partial:
+                r.on_partial_close(
+                    trade_id=str(trade["_id"]),
+                    closed_lots=float(payload.lots or 0),
+                    remaining_lots=float(trade.get("lot_size") or 0),
+                    pnl=float(payload.profit or 0),
+                    commission=float(payload.commission or 0),
+                    swap=float(payload.swap or 0),
+                    exit_price=float(payload.price) if payload.price else None,
+                    deal_id=str(payload.deal_id), db=db)
+            else:
+                r.on_trade_closed(
+                    trade_id=str(trade["_id"]),
+                    pnl=float(payload.profit or 0),
+                    commission=float(payload.commission or 0),
+                    swap=float(payload.swap or 0),
+                    exit_price=float(payload.price) if payload.price else None,
+                    deal_id=str(payload.deal_id),
+                    close_reason=trade.get("close_reason"),
+                    source="broker_deal", db=db)
+    except Exception:
+        logger.exception("scalp financial reconciliation failed deal=%s",
+                         payload.deal_id)
+        return
+    await _mark_deal_reconciled(db, payload.deal_id, account_id)
+
+
 @router.post("/external-deal")
 async def external_deal(payload: BridgeExternalDeal):
     """Report any broker-side deal — bot-initiated AND manual.
@@ -967,6 +1013,13 @@ async def external_deal(payload: BridgeExternalDeal):
         "swap": payload.swap,
         "deal_time": payload.deal_time,
         "magic": payload.magic,
+        "position_volume": payload.position_volume,
+        # Round 6 — durable financial-reconciliation state: close deals stay
+        # 'pending' until the runner/trade application completes; a recovery
+        # sweep resumes any deal stranded by a crash in between.
+        "financial_reconciliation_status": ("pending" if payload.deal_entry != "in"
+                                            else "none"),
+        "financial_reconciled_at": None,
         "received_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -983,6 +1036,18 @@ async def external_deal(payload: BridgeExternalDeal):
         t = await db.trades.find_one({
             "account_id": account_id, "mt5_ticket": payload.mt5_ticket,
         })
+        # Round 6 — RESUME interrupted scalp financial reconciliation: the
+        # deal row exists but the process may have died before the runner
+        # received it. Runner deal-id idempotency makes this replay safe.
+        deal_row = await db.broker_deals.find_one(
+            {"deal_id": payload.deal_id, "account_id": account_id})
+        if (t is not None and t.get("scope") == "scalp_fast"
+                and deal_row is not None
+                and deal_row.get("financial_reconciliation_status") == "pending"):
+            await _scalp_reconcile_close(db, account_id, t, payload,
+                                         partial=(t.get("status") == "open"))
+            return {"ok": True, "duplicate": True, "deal_id": payload.deal_id,
+                    "reconciliation_resumed": True}
         needs_repair = (
             t is not None and t.get("status") == "closed"
             and (t.get("pnl_estimated") or t.get("pnl_unknown")
@@ -1164,12 +1229,19 @@ async def external_deal(payload: BridgeExternalDeal):
     if existing and existing.get("status") == "open":
         prior_lot = float(existing.get("lot_size") or 0)
         deal_lot = float(payload.lots or 0)
-        # 1% tolerance for floating-point rounding by the broker
-        if prior_lot > 0 and deal_lot > 0 and deal_lot < prior_lot * 0.99:
+        if payload.position_volume is not None:
+            # Round 6 item 7 — the broker's REMAINING position volume is the
+            # authority (EA v1.45+): >0 → partial, 0 → full close. Immune to
+            # multi-fill closes, volume rounding and out-of-order deals.
+            is_partial_close = float(payload.position_volume) > 1e-9
+        # 1% tolerance for floating-point rounding by the broker (fallback)
+        elif prior_lot > 0 and deal_lot > 0 and deal_lot < prior_lot * 0.99:
             is_partial_close = True
 
     if is_partial_close:
         new_lot = round(float(existing["lot_size"]) - float(payload.lots), 2)
+        if payload.position_volume is not None:
+            new_lot = round(float(payload.position_volume), 2)
         update = {
             "lot_size": max(new_lot, 0.01),
             "partial_closed": True,
@@ -1192,6 +1264,15 @@ async def external_deal(payload: BridgeExternalDeal):
             {"deal_id": payload.deal_id, "account_id": str(acc["_id"])},
             {"$set": {"deal_entry_kind": "partial_out"}},
         )
+        # Round 6 item 1 — partial scalp closes hit the SAME financial
+        # budgets as full closes (realized P&L, signed costs, lot shrink).
+        if existing.get("scope") == "scalp_fast":
+            await _scalp_reconcile_close(
+                db, account_id,
+                {**existing, "lot_size": update["lot_size"], "status": "open"},
+                payload, partial=True)
+        else:
+            await _mark_deal_reconciled(db, payload.deal_id, account_id)
         await ws_manager.broadcast(user_id, "trade_updated", {
             "trade_id": str(existing["_id"]),
             "lot_size": update["lot_size"],
@@ -1242,26 +1323,15 @@ async def external_deal(payload: BridgeExternalDeal):
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
         tid = str(existing["_id"])
         # Scalp fast-path AUTHORITATIVE financial reconciliation (round 5
-        # item 1): the broker deal carries SIGNED profit/commission/swap and
-        # the exact exit price. The runner is idempotent per deal_id, so EA
-        # retries and the /bridge/report ack can never double-apply.
+        # item 1 / round 6 durable state): SIGNED profit/commission/swap +
+        # exact exit price, idempotent per deal_id, marks the broker deal
+        # 'complete' only after the runner applied it.
         if existing.get("scope") == "scalp_fast":
-            try:
-                from scalp.engine import runners_for_account
-                for r in runners_for_account(account_id):
-                    if r.symbol != (existing.get("symbol") or "").upper():
-                        continue
-                    r.on_trade_closed(
-                        trade_id=tid,
-                        pnl=float(payload.profit or 0),
-                        commission=float(payload.commission or 0),
-                        swap=float(payload.swap or 0),
-                        exit_price=float(payload.price) if payload.price else None,
-                        deal_id=str(payload.deal_id),
-                        source="broker_deal", db=db)
-            except Exception:
-                logger.exception("scalp financial reconciliation failed deal=%s",
-                                 payload.deal_id)
+            await _scalp_reconcile_close(
+                db, account_id, {**existing, **update, "_id": existing["_id"]},
+                payload, partial=False)
+        else:
+            await _mark_deal_reconciled(db, payload.deal_id, account_id)
     else:
         # Close event with no matching trade — user opened AND closed on MT5
         # without STOIC ever tracking it. Insert a fully-closed audit row so
@@ -1287,6 +1357,7 @@ async def external_deal(payload: BridgeExternalDeal):
         }
         result = await db.trades.insert_one(trade_doc)
         tid = str(result.inserted_id)
+        await _mark_deal_reconciled(db, payload.deal_id, account_id)
 
     await ws_manager.broadcast(user_id, "trade_updated", {
         "trade_id": tid, **update,

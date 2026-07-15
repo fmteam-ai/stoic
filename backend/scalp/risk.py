@@ -20,7 +20,19 @@ class ScalpRiskLimits:
     max_holding_ms: int = 300_000          # 5 min hard timeout
 
 
+@dataclass(frozen=True)
+class AccountScalpRiskLimits:
+    """Round 6 item 4 — EXPLICIT account-level policy, never derived from
+    symbol policy. Governs the aggregate across all scalp instruments."""
+    max_total_trades_per_hour: int = 30
+    max_total_open_positions: int = 2
+    max_total_stop_risk_pct: float = 0.15  # % of equity at risk across all stops
+    max_daily_loss_pct: float = 0.5
+    max_daily_cost_pct: float = 0.35
+
+
 DEFAULT_LIMITS = ScalpRiskLimits()
+ACCOUNT_LIMITS = AccountScalpRiskLimits()
 
 
 class RiskState:
@@ -35,6 +47,21 @@ class RiskState:
         self.daily_cost_usd = 0.0
         self.daily_key = ""
         self.open_scalps = 0
+        # round 6 item 5 — MONETARY stop risk per open trade (USD at stop)
+        self.stop_risk_by_trade: dict = {}
+
+    def add_stop_risk(self, trade_id: str, usd: float) -> None:
+        self.stop_risk_by_trade[trade_id] = max(0.0, float(usd))
+
+    def scale_stop_risk(self, trade_id: str, factor: float) -> None:
+        if trade_id in self.stop_risk_by_trade:
+            self.stop_risk_by_trade[trade_id] *= max(0.0, factor)
+
+    def remove_stop_risk(self, trade_id: str) -> None:
+        self.stop_risk_by_trade.pop(trade_id, None)
+
+    def total_stop_risk_usd(self) -> float:
+        return sum(self.stop_risk_by_trade.values())
 
     def _roll_day(self):
         key = time.strftime("%Y-%m-%d", time.gmtime())
@@ -43,11 +70,17 @@ class RiskState:
             self.daily_loss_usd = 0.0
             self.daily_cost_usd = 0.0
 
-    def record_result(self, net_pnl_usd: float, cost_usd: float):
+    def record_result(self, net_pnl_usd: float, cost_usd: float,
+                      trading_pnl_usd: float | None = None):
+        """Round 6 item 9 — daily budgets use NET financial P&L; the loss
+        STREAK uses trading P&L (market result + commission, excluding
+        financing credits) so a swap credit can't mask a losing scalp."""
         self._roll_day()
         self.daily_cost_usd += abs(cost_usd)
+        streak_pnl = net_pnl_usd if trading_pnl_usd is None else trading_pnl_usd
         if net_pnl_usd < 0:
             self.daily_loss_usd += -net_pnl_usd
+        if streak_pnl < 0:
             self.consecutive_losses += 1
             if self.consecutive_losses >= self.limits.max_consecutive_losses:
                 self.cooldown_until = time.time() + \
@@ -85,24 +118,32 @@ class RiskState:
             self.daily_cost_usd = float(doc.get("daily_cost_usd") or 0.0)
 
 
-def check_account(rs: RiskState, equity: float) -> dict:
-    """Account-WIDE risk layer (round 5 item 4): daily loss, daily cost,
-    loss-streak cooldown and hourly cap aggregated across ALL scalp symbols
-    on the account. Symbol-local limits remain a second layer below this."""
+def check_account(rs: RiskState, equity: float,
+                  limits: AccountScalpRiskLimits = ACCOUNT_LIMITS,
+                  proposed_stop_risk_usd: float = 0.0) -> dict:
+    """Account-WIDE risk layer (round 5 item 4 / round 6 items 4-5):
+    aggregate daily loss, daily cost, loss-streak cooldown, hourly cap and
+    MONETARY open stop risk across ALL scalp symbols on the account.
+    Symbol-local limits remain a second layer below this."""
     rs._roll_day()
-    L = rs.limits
     now = time.time()
     if now < rs.cooldown_until:
         return {"ok": False,
                 "reason": f"account loss-streak cooldown ({int(rs.cooldown_until - now)}s left)"}
     hour_ago = now - 3600
-    if sum(1 for t in rs.trade_times if t >= hour_ago) >= L.max_trades_per_symbol_per_hour * 2:
+    if sum(1 for t in rs.trade_times if t >= hour_ago) >= limits.max_total_trades_per_hour:
         return {"ok": False, "reason": "account-wide hourly scalp cap"}
     if equity > 0:
-        if rs.daily_loss_usd >= equity * L.max_daily_loss_pct / 100.0:
+        if rs.daily_loss_usd >= equity * limits.max_daily_loss_pct / 100.0:
             return {"ok": False, "reason": "account-wide daily scalp loss limit"}
-        if rs.daily_cost_usd >= equity * L.max_daily_cost_pct / 100.0:
+        if rs.daily_cost_usd >= equity * limits.max_daily_cost_pct / 100.0:
             return {"ok": False, "reason": "account-wide daily cost budget exhausted"}
+        budget = equity * limits.max_total_stop_risk_pct / 100.0
+        if rs.total_stop_risk_usd() + proposed_stop_risk_usd > budget:
+            return {"ok": False,
+                    "reason": (f"account-wide open stop risk "
+                               f"${rs.total_stop_risk_usd() + proposed_stop_risk_usd:.2f} "
+                               f"exceeds ${budget:.2f} budget")}
     return {"ok": True, "reason": None}
 
 

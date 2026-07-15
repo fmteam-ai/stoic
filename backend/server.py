@@ -265,6 +265,7 @@ _auto_heal_task = None
 _stuck_sync_task = None
 _optimizer_task = None
 _nightly_tuner_task = None
+_scalp_reconcile_task = None
 
 
 async def _nightly_tuning_loop():
@@ -310,6 +311,22 @@ async def _auto_heal_loop():
             raise
         except Exception as e:
             logger.warning("auto-heal sweep failed: %s", e)
+
+
+async def _scalp_reconcile_loop():
+    """Round 6 · crash-recovery sweep for scalp financial reconciliation —
+    resumes broker deals persisted as 'pending' that never reached the
+    scalp runner (process died between persist and apply)."""
+    from scalp.engine import recover_pending_deals
+    INTERVAL = int(os.environ.get("SCALP_RECONCILE_INTERVAL_SEC", "300"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            await recover_pending_deals(get_db())
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("scalp reconcile sweep failed: %s", e)
 
 
 async def _stuck_open_sync_loop():
@@ -434,7 +451,7 @@ async def _stuck_open_sync_loop():
 
 @app.on_event("startup")
 async def on_startup():
-    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task
+    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
     try:
         await ensure_indexes()
         await seed_admin()
@@ -446,6 +463,7 @@ async def on_startup():
         _stuck_sync_task = asyncio.create_task(_stuck_open_sync_loop())
         _optimizer_task = asyncio.create_task(_optimizer_loop())
         _nightly_tuner_task = asyncio.create_task(_nightly_tuning_loop())
+        _scalp_reconcile_task = asyncio.create_task(_scalp_reconcile_loop())
         logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
@@ -455,7 +473,7 @@ async def on_startup():
 async def on_shutdown():
     for task in (_bot_runner_task, _warmer_task, _trade_manager_task,
                  _auto_heal_task, _stuck_sync_task, _optimizer_task,
-                 _nightly_tuner_task):
+                 _nightly_tuner_task, _scalp_reconcile_task):
         if task and not task.done():
             task.cancel()
             try:
