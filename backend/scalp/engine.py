@@ -159,19 +159,25 @@ class ScalpRunner:
         self.broker = str(account.get("broker") or "")
         self.account_type = str(account.get("account_type") or "")
         recv = now_ms()
-        last_tm = None
+        # round 4 items 3/5: transport age known BEFORE processing; missing
+        # sender timestamp is UNKNOWN, not fresh — fail closed for entries.
+        transport_age = (recv - int(sent_at_ms)) if sent_at_ms else None
+        trusted = transport_age is not None and transport_age <= MAX_BATCH_TRANSPORT_AGE_MS
+        # round 4 item 4: ordering watermark spans BATCHES, not just this one
+        last_tm = (self.state.last_tick.broker_time_ms
+                   if self.state.last_tick else None)
         for raw in ticks:
             try:
                 tm = int(raw["tm"])
                 if last_tm is not None and tm <= last_tm:
-                    continue                    # duplicate / out-of-order tick
+                    continue                    # duplicate / out-of-order / old batch
                 last_tm = tm
                 t = TickEvent(symbol=self.symbol, broker_time_ms=tm,
                               received_time_ms=recv,
                               bid=float(raw["b"]), ask=float(raw["a"]))
             except (KeyError, TypeError, ValueError):
                 continue
-            self.state.update(t)
+            self.state.update(t, trusted=trusted)
             self.counters["ticks"] += 1
             self._advance_sims(db, t)
             self._monitor_live_exits(db, t)
@@ -182,10 +188,8 @@ class ScalpRunner:
         # Delayed-batch guard (round 3): old broker ticks arriving NOW must
         # not look fresh. New entries require BOTH recent transport AND a
         # recent broker-market timestamp (clock-offset corrected).
-        transport_age = (recv - int(sent_at_ms)) if sent_at_ms else 0
         broker_age = self.state.broker_adjusted_age_ms()
-        batch_fresh = (transport_age <= MAX_BATCH_TRANSPORT_AGE_MS
-                       and broker_age <= self.cfg.max_quote_age_ms)
+        batch_fresh = (trusted and broker_age <= self.cfg.max_quote_age_ms)
         if not batch_fresh:
             self.counters["stale_batches"] = self.counters.get("stale_batches", 0) + 1
         audit_ok = _audit_pending < AUDIT_BACKLOG_HALT
@@ -196,6 +200,7 @@ class ScalpRunner:
                 "risk_restored": self._risk_restored,
                 "batch_fresh": batch_fresh,
                 "transport_age_ms": transport_age,
+                "trusted": trusted,
                 "broker_age_ms": broker_age}
 
     # ---------------- decision pipeline ----------------
@@ -301,7 +306,8 @@ class ScalpRunner:
                     "target_pips": fc.target_pips, "stop_pips": fc.stop_pips},
             "outcome": None,
         }
-        _bg(db.scalp_decisions.insert_one(dict(doc)))   # fire-and-forget persist
+        _bg(lambda d=dict(doc): db.scalp_decisions.insert_one(dict(d)),
+            "decision_insert")
         self.last_decision = doc
 
         self.open_sims.append(ShadowSim(
@@ -329,17 +335,17 @@ class ScalpRunner:
         drift = abs(cur_mid - ref) / pip
         if drift > MAX_DRIFT_BEFORE_SUBMIT_FRAC * fc.stop_pips:
             self.state.record_reject()
-            _bg(db.scalp_decisions.update_one(
-                {"decision_id": decision["decision_id"]},
-                {"$set": {"verdict": "rejected", "reject_stage": "pre_submit_drift",
-                          "drift_pips": round(drift, 2)}}))
+            _bg(lambda s={"verdict": "rejected", "reject_stage": "pre_submit_drift",
+                          "drift_pips": round(drift, 2)}: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
             return
         sp = self.state.spread_pips()
         if sp is None or sp > dynamic_spread_limit(self.state, self.cfg):
             self.state.record_reject()
-            _bg(db.scalp_decisions.update_one(
-                {"decision_id": decision["decision_id"]},
-                {"$set": {"verdict": "rejected", "reject_stage": "pre_submit_spread"}}))
+            _bg(lambda s={"verdict": "rejected", "reject_stage": "pre_submit_spread"}: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
             return
         entry = t.ask if decision["direction"] == "BUY" else t.bid
         if decision["direction"] == "BUY":
@@ -363,10 +369,10 @@ class ScalpRunner:
             cfg_account_id=self.account_id)
         if trade.get("blocked"):
             self.state.record_reject()
-            _bg(db.scalp_decisions.update_one(
-                {"decision_id": decision["decision_id"]},
-                {"$set": {"verdict": "rejected", "reject_stage": "broker_blocked",
-                          "block_reason": trade.get("reason")}}))
+            _bg(lambda s={"verdict": "rejected", "reject_stage": "broker_blocked",
+                          "block_reason": trade.get("reason")}: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
             return
         tid = str(trade.get("id") or trade.get("_id") or "")
         self.risk_state.record_open()
@@ -385,10 +391,10 @@ class ScalpRunner:
             "order_submit_ts_ms": submit_ms,
             "est_cost_usd": round(est_cost_usd, 2),
         }
-        _bg(db.scalp_decisions.update_one(
-            {"decision_id": decision["decision_id"]},
-            {"$set": {"dataset": "submitted", "trade_id": tid,
-                      "order_submit_ts_ms": submit_ms}}))
+        _bg(lambda s={"dataset": "submitted", "trade_id": tid,
+                      "order_submit_ts_ms": submit_ms}: db.scalp_decisions.update_one(
+            {"decision_id": decision["decision_id"]}, {"$set": s}),
+            "decision_update")
 
     # ---------------- exits & sims ----------------
 
@@ -400,14 +406,15 @@ class ScalpRunner:
                 still.append(sim)
                 continue
             self._resolutions_since_retrain += 1
-            _bg(db.scalp_decisions.update_one(
-                {"decision_id": sim.decision_id}, {"$set": {"outcome": out}}))
+            _bg(lambda d=sim.decision_id, o=out: db.scalp_decisions.update_one(
+                {"decision_id": d}, {"$set": {"outcome": o}}), "sim_outcome")
         self.open_sims = still
         if self._resolutions_since_retrain >= RETRAIN_EVERY_RESOLUTIONS:
             self._resolutions_since_retrain = 0
-            _bg(scalp_model.retrain(db, self.symbol,
-                                    broker=self.broker,
-                                    account_type=self.account_type))
+            _bg(lambda: scalp_model.retrain(db, self.symbol,
+                                            broker=self.broker,
+                                            account_type=self.account_type),
+                "model_retrain")
 
     def _monitor_live_exits(self, db, t: TickEvent):
         """Item 14 — positions stay monitored through CLOSE_REQUESTED until
@@ -429,7 +436,8 @@ class ScalpRunner:
             if reason:
                 info["state"] = "CLOSE_REQUESTED"
                 info["close_requested_ms"] = nm
-                _bg(self._request_close(db, tid, reason))
+                _bg(lambda t=tid, rs=reason: self._request_close(db, t, rs),
+                    "request_close")
 
     async def _request_close(self, db, trade_id: str, reason: str):
         await db.trades.update_one(
@@ -455,14 +463,16 @@ class ScalpRunner:
                 info["actual_entry"] = actual_price
                 info["entry_slippage_pips"] = round(signed, 2)
             if db is not None and info:
-                _bg(db.scalp_decisions.update_one(
+                _bg(lambda: db.scalp_decisions.update_one(
                     {"decision_id": info.get("decision_id", "")},
                     {"$set": {"requested_entry": requested_price,
                               "actual_entry": actual_price,
-                              "entry_slippage_pips": round(signed, 2)}}))
+                              "entry_slippage_pips": round(signed, 2)}}),
+                    "entry_fill")
 
     def on_trade_closed(self, trade_id: str, pnl: float,
-                        commission: float = 0.0, swap: float = 0.0, db=None):
+                        commission: float = 0.0, swap: float = 0.0,
+                        exit_price: float | None = None, db=None):
         """Broker-confirmed close (item 13/14): only NOW the position leaves
         the book and real execution cost hits the daily cost budget."""
         info = self.live_trades.pop(trade_id, None)
@@ -474,20 +484,37 @@ class ScalpRunner:
         if db is not None:
             self._persist_risk(db)
             if info:
-                _bg(db.scalp_decisions.update_one(
+                # round 4 item 6 — canonical execution record with EXPLICIT
+                # field semantics; consumers never guess what "pnl" means.
+                outcome = {
+                    "requested_entry_price": info.get("requested_entry"),
+                    "actual_entry_price": info.get("actual_entry", info.get("entry_px")),
+                    "actual_exit_price": exit_price,
+                    "entry_slippage_pips": info.get("entry_slippage_pips"),
+                    "gross_market_pnl_usd": float(pnl or 0),   # broker-reported, pre-commission
+                    "commission_usd": float(commission or 0),
+                    "swap_usd": float(swap or 0),
+                    "net_pnl_usd": round(float(pnl or 0)
+                                         - abs(commission) - abs(swap), 2),
+                    "execution_cost_usd_used": round(total_cost, 2),
+                    "cost_source": "broker" if real_cost > 0 else "estimated",
+                }
+                _bg(lambda o=outcome: db.scalp_decisions.update_one(
                     {"decision_id": info.get("decision_id", "")},
                     {"$set": {"dataset": "filled_live",
-                              "live_pnl_usd": float(pnl or 0),
-                              "live_cost_usd": round(total_cost, 2)}}))
+                              "execution_outcome": o,
+                              "live_pnl_usd": o["net_pnl_usd"],
+                              "live_cost_usd": o["execution_cost_usd_used"]}}),
+                    "live_close")
 
     # ---------------- risk-state persistence (item 9) ----------------
 
     def _persist_risk(self, db):
-        _bg(db.scalp_risk_state.update_one(
+        _bg(lambda: db.scalp_risk_state.update_one(
             {"account_id": self.account_id, "symbol": self.symbol},
             {"$set": {"user_id": self.user_id, **self.risk_state.to_doc(),
                       "saved_at": datetime.now(timezone.utc).isoformat()}},
-            upsert=True))
+            upsert=True), "risk_state")
 
     async def restore_risk(self, db):
         doc = await db.scalp_risk_state.find_one(
@@ -522,12 +549,12 @@ class ScalpRunner:
                 or (self._tick_buffer and nm - self._last_flush_ms >= TICK_FLUSH_MS)):
             batch, self._tick_buffer = self._tick_buffer, []
             self._last_flush_ms = nm
-            _bg(db.scalp_ticks.insert_one({
+            _bg(lambda b=batch: db.scalp_ticks.insert_one({
                 "user_id": self.user_id, "account_id": self.account_id,
-                "symbol": self.symbol, "n": len(batch),
-                "first_ms": batch[0]["tm"], "last_ms": batch[-1]["tm"],
+                "symbol": self.symbol, "n": len(b),
+                "first_ms": b[0]["tm"], "last_ms": b[-1]["tm"],
                 "stored_at": datetime.now(timezone.utc).isoformat(),
-                "ticks": batch}))
+                "ticks": b}), "tick_batch")
 
     def status(self) -> dict:
         feats = snapshot(self.state)
@@ -566,28 +593,49 @@ def _oid(s):
         return s
 
 
-def _bg(coro):
+def _bg(factory, desc: str = ""):
+    """Schedule a persistence op. `factory` is a CALLABLE returning a fresh
+    coroutine — never a coroutine object — so retries can re-create it and
+    nothing leaks when no loop is running (round 4 item 1)."""
     global _audit_pending
     try:
-        _audit_pending += 1
-        asyncio.get_running_loop().create_task(_coro_safe(coro))
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        _audit_pending -= 1
+        return False
+    _audit_pending += 1
+    loop.create_task(_run_operation(factory, desc))
+    return True
 
 
-async def _coro_safe(coro):
-    """One retry, then dead-letter log — the audit backlog counter feeds the
-    entry halt in ingest() (round 3 item 8)."""
+async def _run_operation(factory, desc: str = ""):
+    """One REAL retry (fresh coroutine), then durable file dead-letter."""
     global _audit_pending, _audit_failures
     try:
-        try:
-            await coro
-        except Exception:
-            await asyncio.sleep(0.5)
-            _audit_failures += 1
-            logger.warning("scalp audit write failed (failures=%d)", _audit_failures)
+        for attempt in range(2):
+            try:
+                await factory()
+                return
+            except Exception as e:  # noqa: BLE001
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+                else:
+                    _audit_failures += 1
+                    _dead_letter(desc, str(e))
     finally:
         _audit_pending = max(0, _audit_pending - 1)
+
+
+DEAD_LETTER_PATH = "/app/backend/scalp_dead_letter.jsonl"
+
+
+def _dead_letter(desc: str, error: str):
+    try:
+        import json
+        with open(DEAD_LETTER_PATH, "a") as f:
+            f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                                "op": desc, "error": error}) + "\n")
+    except OSError:
+        logger.error("scalp dead-letter write failed: %s / %s", desc, error)
 
 
 def audit_backlog() -> dict:

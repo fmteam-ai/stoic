@@ -25,7 +25,10 @@ logger = logging.getLogger("scalp.model")
 
 MIN_SAMPLES = 300
 MIN_OOS_AUC = 0.55
+MIN_SELECTED_TRADES = 200      # round 4 item 9: 10 was far too small
+CONFIDENCE_Z = 1.645           # one-sided 95% lower bound must be positive
 MIN_PROFITABLE_WINDOWS = 0.65
+MIN_ROLLING_POSITIVE = 2 / 3   # rolling shifted-window promotions (item 8)
 COST_STRESS_MULT = 1.5
 MODEL_TTL_DAYS = 7
 OOD_Z_LIMIT = 6.0
@@ -113,6 +116,39 @@ def _trade_selected(p_cal, target, stop, cost):
     return p_cal * target - (1 - p_cal) * stop - cost > 0
 
 
+def _lower_bound(vals: np.ndarray) -> float:
+    """One-sided 95% lower confidence bound on the mean."""
+    if len(vals) < 2:
+        return float("-inf")
+    return float(vals.mean() - CONFIDENCE_Z * vals.std(ddof=1) / np.sqrt(len(vals)))
+
+
+def _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n) -> float | None:
+    """Item 8 — three shifted train/cal/eval windows; ratio with a positive
+    net expectancy on model-selected trades. Guards promotion against
+    overfitting one favorable final block."""
+    ratios = []
+    for f_tr, f_cal, f_ev in ((0.35, 0.50, 0.65), (0.45, 0.60, 0.75),
+                              (0.55, 0.70, 0.85)):
+        i1, i2, i3 = int(n * f_tr), int(n * f_cal), int(n * f_ev)
+        dm = res != "timeout"
+        m_tr = dm.copy(); m_tr[i1:] = False
+        m_cl = dm.copy(); m_cl[:i1] = False; m_cl[i2:] = False
+        if m_tr.sum() < 40 or m_cl.sum() < 20 or i3 - i2 < 20:
+            continue
+        if len(set(y[m_tr].tolist())) < 2:
+            continue
+        w, mu, sd = _fit(X[m_tr], y[m_tr])
+        a, b = fit_platt(_predict(w, mu, sd, X[m_cl]), y[m_cl])
+        m_ev = np.zeros(n, dtype=bool); m_ev[i2:i3] = True
+        p = apply_platt(_predict(w, mu, sd, X[m_ev]), a, b)
+        sel = _trade_selected(p, tgt[m_ev], stp[m_ev], cost[m_ev])
+        if sel.sum() < 10:
+            continue
+        ratios.append(1.0 if float(net[m_ev][sel].mean()) > 0 else 0.0)
+    return round(float(np.mean(ratios)), 2) if len(ratios) >= 2 else None
+
+
 async def retrain(db, symbol: str, broker: str = "any",
                   account_type: str = "any") -> dict:
     """Option C design (review): train 50% | calibrate 20% | evaluate 30%.
@@ -184,12 +220,16 @@ async def retrain(db, symbol: str, broker: str = "any",
     p_all = apply_platt(_predict(w, mu, sd, X[m_eval_all]), a, b)
     sel = _trade_selected(p_all, tgt[m_eval_all], stp[m_eval_all], cost[m_eval_all])
     net_eval = net[m_eval_all]
-    if sel.sum() >= 10:
-        oos_net_exp = round(float(net_eval[sel].mean()), 3)
-        stressed = net_eval[sel] - (COST_STRESS_MULT - 1.0) * cost[m_eval_all][sel]
+    if sel.sum() >= MIN_SELECTED_TRADES:
+        chosen = net_eval[sel]
+        oos_net_exp = round(float(chosen.mean()), 3)
+        # item 9 — a positive AVERAGE with a negative lower bound must fail
+        net_exp_lb = round(_lower_bound(chosen), 3)
+        stressed = chosen - (COST_STRESS_MULT - 1.0) * cost[m_eval_all][sel]
         stressed_exp = round(float(stressed.mean()), 3)
-        wins = float(net_eval[sel][net_eval[sel] > 0].sum())
-        losses = abs(float(net_eval[sel][net_eval[sel] < 0].sum()))
+        stressed_lb = round(_lower_bound(stressed), 3)
+        wins = float(chosen[chosen > 0].sum())
+        losses = abs(float(chosen[chosen < 0].sum()))
         profit_factor = round(wins / losses, 2) if losses > 0 else None
         k = max(3, int(sel.sum() // 25))
         idx = np.where(sel)[0]
@@ -197,15 +237,18 @@ async def retrain(db, symbol: str, broker: str = "any",
         prof_ratio = round(float(np.mean([wd.mean() > 0 for wd in windows
                                           if len(wd)])), 2)
     else:
-        oos_net_exp = stressed_exp = prof_ratio = None
+        oos_net_exp = net_exp_lb = stressed_exp = stressed_lb = prof_ratio = None
         profit_factor = None
+
+    rolling_ratio = _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n)
 
     usable = bool(
         oos_auc >= MIN_OOS_AUC
         and b_model <= b_base
-        and oos_net_exp is not None and oos_net_exp > 0
-        and stressed_exp is not None and stressed_exp > 0
+        and net_exp_lb is not None and net_exp_lb > 0
+        and stressed_lb is not None and stressed_lb > 0
         and prof_ratio is not None and prof_ratio >= MIN_PROFITABLE_WINDOWS
+        and rolling_ratio is not None and rolling_ratio >= MIN_ROLLING_POSITIVE
     )
 
     expires = (datetime.now(timezone.utc) + timedelta(days=MODEL_TTL_DAYS)).isoformat()
@@ -219,7 +262,11 @@ async def retrain(db, symbol: str, broker: str = "any",
         "oos_auc": oos_auc, "brier": b_model, "brier_baseline": b_base,
         "ece": ece_v,
         "oos_net_expectancy_pips": oos_net_exp,
+        "net_expectancy_lower_bound_pips": net_exp_lb,
         "stressed_net_expectancy_pips": stressed_exp,
+        "stressed_lower_bound_pips": stressed_lb,
+        "rolling_positive_ratio": rolling_ratio,
+        "selected_eval_trades": int(sel.sum()),
         "profit_factor": profit_factor,
         "profitable_windows_ratio": prof_ratio,
         "timeouts_in_eval": int((res[m_eval_all] == "timeout").sum()),
@@ -242,7 +289,11 @@ async def retrain(db, symbol: str, broker: str = "any",
             "oos_auc": oos_auc,
             "brier": b_model, "brier_baseline": b_base, "ece": ece_v,
             "oos_net_expectancy_pips": oos_net_exp,
+            "net_expectancy_lower_bound_pips": net_exp_lb,
             "stressed_net_expectancy_pips": stressed_exp,
+            "stressed_lower_bound_pips": stressed_lb,
+            "rolling_positive_ratio": rolling_ratio,
+            "selected_eval_trades": int(sel.sum()),
             "profitable_windows_ratio": prof_ratio, "usable": usable}
 
 

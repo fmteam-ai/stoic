@@ -882,7 +882,10 @@ async def report_trade(payload: BridgeTradeReport):
                                       float(payload.entry_price), db=db)
                 elif payload.status == "closed":
                     r.on_trade_closed(payload.trade_id,
-                                      float(payload.pnl or 0), db=db)
+                                      float(payload.pnl or 0),
+                                      exit_price=(float(payload.exit_price)
+                                                  if payload.exit_price else None),
+                                      db=db)
         except Exception:
             pass
     if slippage_force_close:
