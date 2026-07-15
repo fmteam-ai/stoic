@@ -157,7 +157,7 @@ export default function Scalp() {
                             <div>Shadow <span className="text-[#E4E4E7] font-mono">{r.counters?.shadow_trades}</span></div>
                             <div>Live <span className="text-[#E4E4E7] font-mono">{r.counters?.live_trades}</span></div>
                             <div>Spread <span className="text-[#E4E4E7] font-mono">{fmt(r.spread_pips, 2)}p</span></div>
-                            <div>Quote age <span className="text-[#E4E4E7] font-mono">{r.quote_age_ms}ms</span></div>
+                            <div>Quote age <span className="text-[#E4E4E7] font-mono">{(r.quote_age_ms == null || r.quote_age_ms >= 86400000) ? "—" : `${r.quote_age_ms}ms`}</span></div>
                         </div>
                         {(r.health?.reasons?.length > 0 || r.permissions?.reasons?.length > 0) && (
                             <div className="text-xs text-[#FF9F0A] mt-2" data-testid="scalp-runner-reasons">
