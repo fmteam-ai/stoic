@@ -19,6 +19,15 @@ DEFAULT_PATHS = 10000
 DEFAULT_HORIZON = 96          # 24h of M15
 MIN_BARS = 40
 
+# iter-135 · trend-aware drift (July-15 diagnostic: IID bootstrap is
+# drift-blind — with-trend entries on directional days were auto-vetoed)
+DRIFT_LOOKBACK = 24           # 6h of M15 — recent-trend measurement window
+DRIFT_HALF_LIFE = 16          # bars — injected drift decays as the trend ages
+DRIFT_CAP_SIGMA = 0.5         # |excess drift| capped at 0.5σ per bar
+DRIFT_MIN_SIG = 1.0           # inject only when |recent mean| ≥ 1 std error
+STRONG_TREND_SIG = 2.0        # counter-trend gate arms at 2 std errors
+CT_MIN_EV_R = 0.10            # fading a strong trend needs ≥ +0.10R net EV
+
 
 def calibrate(bars):
     dcs, uws, dws = [], [], []
@@ -46,6 +55,25 @@ def simulate_trade(action, entry, sl, tp, bars,
     rng = np.random.default_rng(seed)
     is_buy = action == "BUY"
 
+    # iter-135 · measure recent drift vs the full calibration window. The
+    # bootstrap already carries the FULL-sample mean drift (≈0 over weeks);
+    # inject only the statistically significant EXCESS of the recent window,
+    # capped and decaying, so directional days are priced without letting a
+    # 6h move extrapolate for 24h.
+    k = min(DRIFT_LOOKBACK, n_hist)
+    recent = dcs[-k:]
+    sigma = float(dcs.std(ddof=1)) if n_hist > 1 else 0.0
+    se = sigma / (k ** 0.5) if k > 0 and sigma > 0 else 0.0
+    mu_recent = float(recent.mean()) if k else 0.0
+    drift_sig = abs(mu_recent) / se if se > 0 else 0.0
+    excess_drift = 0.0
+    if drift_sig >= DRIFT_MIN_SIG and sigma > 0:
+        cap = DRIFT_CAP_SIGMA * sigma
+        excess_drift = float(np.clip(mu_recent - float(dcs.mean()), -cap, cap))
+    trend = ("up" if mu_recent > 0 else "down") \
+        if drift_sig >= DRIFT_MIN_SIG else "flat"
+    trend_aligned = None if trend == "flat" else ((trend == "up") == is_buy)
+
     price = np.full(n_paths, entry)
     active = np.ones(n_paths, dtype=bool)
     tp_hit = np.zeros(n_paths, dtype=bool)
@@ -55,7 +83,9 @@ def simulate_trade(action, entry, sl, tp, bars,
 
     for step in range(horizon):
         idx = rng.integers(0, n_hist, n_paths)
-        new = price + dcs[idx]
+        step_drift = (excess_drift * (0.5 ** (step / DRIFT_HALF_LIFE))
+                      if excess_drift else 0.0)
+        new = price + dcs[idx] + step_drift
         hi = np.maximum(price, new) + uws[idx]
         lo = np.minimum(price, new) - dws[idx]
         if is_buy:
@@ -97,6 +127,9 @@ def simulate_trade(action, entry, sl, tp, bars,
             "cost_r": round(cost_r, 3),
             "ev_r_net": round(float(ev_r) - cost_r, 3),
             "timeout_mean_r": round(to_mean_r, 3),
+            "drift_price_per_bar": round(excess_drift, 6),
+            "drift_sig": round(drift_sig, 2),
+            "trend": trend, "trend_aligned": trend_aligned,
             "max_dd_r_median": round(float(np.median(dd_r)), 2),
             "max_dd_r_p95": round(float(np.quantile(dd_r, 0.95)), 2),
             "median_bars_to_exit": int(np.median(exit_step))}
@@ -116,15 +149,29 @@ def typical_cost(symbol: str, entry: float) -> float:
 
 
 def mc_gate(mc: dict | None) -> str | None:
-    """Enter only if the simulated expected value NET OF COSTS is positive."""
+    """Enter only if the simulated expected value NET OF COSTS is positive.
+    Symmetric counter-trend rule (iter-135): fading a strong recent trend
+    (≥2σ drift) demands a strictly positive EV margin — the same rigor that
+    blocks chasing negative-EV breakouts blocks fading directional days."""
     if not mc:
         return None
     ev_net = mc.get("ev_r_net", mc["ev_r"])
+    if (mc.get("trend_aligned") is False
+            and float(mc.get("drift_sig") or 0) >= STRONG_TREND_SIG
+            and ev_net < CT_MIN_EV_R):
+        return (f"Counter-trend gate: fading a strong {mc.get('trend')}-trend "
+                f"({mc['drift_sig']:.1f}σ recent drift) requires ≥ "
+                f"+{CT_MIN_EV_R:.2f}R net EV — simulation shows "
+                f"{ev_net:+.2f}R net. Trade vetoed.")
     if ev_net <= 0:
         cost_note = (f" − {mc['cost_r']:.2f}R costs" if mc.get("cost_r") else "")
+        trend_note = ""
+        if mc.get("trend") in ("up", "down"):
+            trend_note = (f" [trend-aware: {mc['trend']} drift "
+                          f"{mc['drift_sig']:.1f}σ priced in]")
         return (f"Monte Carlo gate: {mc['paths']:,} simulated paths — "
                 f"TP first {mc['p_tp_first']:.0%} vs SL first "
                 f"{mc['p_sl_first']:.0%} (R:R {mc['rr']}) → expected value "
-                f"{mc['ev_r']:+.2f}R{cost_note} = {ev_net:+.2f}R net. "
-                f"Negative EV, trade vetoed.")
+                f"{mc['ev_r']:+.2f}R{cost_note} = {ev_net:+.2f}R net."
+                f"{trend_note} Negative EV, trade vetoed.")
     return None

@@ -90,10 +90,14 @@ def explain_decision(signal: dict) -> dict:
 
     mc = signal.get("monte_carlo") or {}
     if mc.get("ev_r") is not None:
+        trend_bit = ""
+        if mc.get("trend") in ("up", "down"):
+            trend_bit = (f" ({mc['trend']}-trend {mc.get('drift_sig', 0):.1f}σ "
+                         f"priced into paths)")
         because.append(f"Monte Carlo: {mc['paths']:,} paths → TP first "
                        f"{round(mc['p_tp_first'] * 100)}% vs SL "
                        f"{round(mc['p_sl_first'] * 100)}%, EV "
-                       f"{mc['ev_r']:+.2f}R")
+                       f"{mc['ev_r']:+.2f}R{trend_bit}")
     cal = signal.get("calendar_policy") or {}
     if cal.get("mode") == "CAUTION":
         despite.append(cal["reason"])

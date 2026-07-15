@@ -87,6 +87,63 @@ def test_deterministic_with_seed():
     assert a == b
 
 
+# ---------------- iter-135 · trend-aware drift ----------------
+def trending_bars(trend=0.35, trend_bars=30, seed=7):
+    """Driftless history followed by a strong directional leg."""
+    bars = random_walk_bars(170, seed=seed)
+    rng = random.Random(seed + 1)
+    c = bars[-1]["c"]
+    for _ in range(trend_bars):
+        o = c
+        c = o + trend + rng.gauss(0, 0.1)
+        h = max(o, c) + abs(rng.gauss(0, 0.1))
+        l = min(o, c) - abs(rng.gauss(0, 0.1))
+        bars.append({"t": len(bars) * 900, "o": o, "h": h, "l": l,
+                     "c": c, "v": 100})
+    return bars
+
+
+TREND_BARS = trending_bars()
+TREND_ENTRY = TREND_BARS[-1]["c"]
+
+
+def test_flat_market_injects_no_drift():
+    r = simulate_trade("BUY", 100.0, 98.0, 102.0, BARS, n_paths=2000, seed=1)
+    assert r["trend"] == "flat" and r["trend_aligned"] is None
+    assert r["drift_price_per_bar"] == 0.0
+
+
+def test_uptrend_reported_and_with_trend_buy_passes():
+    buy = simulate_trade("BUY", TREND_ENTRY, TREND_ENTRY - 2, TREND_ENTRY + 2,
+                         TREND_BARS, n_paths=6000, seed=3)
+    assert buy["trend"] == "up" and buy["trend_aligned"] is True
+    assert buy["drift_sig"] >= 2.0
+    assert buy["drift_price_per_bar"] > 0
+    assert buy["p_tp_first"] > buy["p_sl_first"]
+    assert mc_gate(buy) is None                 # no longer auto-vetoed
+
+
+def test_counter_trend_fade_vetoed_symmetrically():
+    sell = simulate_trade("SELL", TREND_ENTRY, TREND_ENTRY + 2,
+                          TREND_ENTRY - 2, TREND_BARS, n_paths=6000, seed=3)
+    assert sell["trend"] == "up" and sell["trend_aligned"] is False
+    msg = mc_gate(sell)
+    assert msg and "Counter-trend" in msg and "vetoed" in msg
+
+
+def test_mc_gate_backward_compatible_without_trend_fields():
+    msg = mc_gate({"paths": 1000, "p_tp_first": .4, "p_sl_first": .6,
+                   "rr": 1.0, "ev_r": -0.2})
+    assert msg and "Negative EV" in msg
+
+
+def test_mc_output_json_safe():
+    import json
+    r = simulate_trade("BUY", TREND_ENTRY, TREND_ENTRY - 2, TREND_ENTRY + 2,
+                       TREND_BARS, n_paths=500, seed=5)
+    json.dumps(r)                               # no numpy scalars leak out
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

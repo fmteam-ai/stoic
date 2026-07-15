@@ -1260,9 +1260,10 @@ async def _process_user_account_locked(db, cfg: dict):
                     mc_mode = str(cfg.get("monte_carlo_mode")
                                   or "enforce").lower()
                     await inc_intel_counter(user_id, "mc_negative_ev")
-                    # IID bootstrap inherits recent drift → it can't price
-                    # mean-reversion; fade entries get advisory treatment
-                    if mc_mode == "enforce" and signal.get("entry_style") != "fade":
+                    # iter-135 · the trend-aware bootstrap prices drift
+                    # directly, so fades are gated with the same rigor as
+                    # trend-chasing (symmetric counter-trend rule)
+                    if mc_mode == "enforce":
                         await _record_pulse(db, cfg, symbol=sym,
                             action="SKIP", level="warn", reason=mg,
                             signal=signal)

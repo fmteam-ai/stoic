@@ -36,11 +36,10 @@ export default function Scalp() {
     const [saving, setSaving] = useState(false);
 
     const load = useCallback(async () => {
-        if (!accountId) return;
         setLoading(true);
         try {
             const [st, mt, dc] = await Promise.all([
-                api.get(`/scalp/status?account_id=${accountId}`),
+                api.get("/scalp/status"),
                 api.get("/scalp/metrics?symbol=EURUSD"),
                 api.get("/scalp/decisions?limit=25&symbol=EURUSD"),
             ]);
@@ -52,17 +51,25 @@ export default function Scalp() {
         } finally {
             setLoading(false);
         }
-    }, [accountId]);
+    }, []);
 
     useEffect(() => {
         api.get("/accounts").then((r) => {
             setAccounts(r.data || []);
-            if (r.data?.length) setAccountId(r.data[0].id);
+            if (r.data?.length) setAccountId((cur) => cur || r.data[0].id);
         }).catch(() => {});
+    }, []);
+
+    useEffect(() => {
         load();
         const t = setInterval(load, 15000);
         return () => clearInterval(t);
     }, [load]);
+
+    const acctName = (id) => {
+        const ac = accounts.find((x) => x.id === id);
+        return ac ? (ac.label || ac.account_number) : (id || "").slice(-6);
+    };
 
     const setConfig = async (enabled, mode) => {
         if (!accountId) return toast.error("Select an account first");
@@ -75,7 +82,9 @@ export default function Scalp() {
                 account_id: accountId, symbol: "EURUSD",
                 enabled, mode, confirm_live: mode === "demo_live",
             });
-            toast.success(enabled ? `Scalp ${mode.toUpperCase()} enabled` : "Scalp disabled");
+            toast.success(enabled
+                ? `Scalp ${mode.toUpperCase()} enabled on ${acctName(accountId)}`
+                : `Scalp disabled on ${acctName(accountId)}`);
             load();
         } catch (e) {
             toast.error(formatApiError(e));
@@ -126,7 +135,7 @@ export default function Scalp() {
                     </button>
                 </div>
                 <p className="text-xs text-[#52525B] mt-3">
-                    Requires EA v1.45 attached with <span className="font-mono text-[#A1A1AA]">TickStreamEnabled=true, TickStreamSymbol=EURUSD</span>.
+                    Requires EA v1.46 attached with <span className="font-mono text-[#A1A1AA]">TickStreamEnabled=true, TickStreamSymbol=EURUSD</span>.
                     Shadow mode runs the full pipeline and logs decisions without sending orders.
                 </p>
             </div>
@@ -135,7 +144,7 @@ export default function Scalp() {
             <div className="grid gap-4 mb-6">
                 {runners.length === 0 && (
                     <div className="text-sm text-[#52525B]" data-testid="scalp-no-runners">
-                        No tick stream received yet — attach EA v1.45 with tick streaming enabled.
+                        No tick stream received yet — attach EA v1.46 with tick streaming enabled.
                     </div>
                 )}
                 {runners.map((r) => (
@@ -144,6 +153,10 @@ export default function Scalp() {
                          data-testid={`scalp-runner-${r.symbol}`}>
                         <div className="flex flex-wrap items-center gap-2 mb-3">
                             <span className="text-[#E4E4E7] font-mono">{r.symbol}</span>
+                            <span className="text-xs text-[#A1A1AA] border border-[#1F1F1F] px-2 py-0.5"
+                                  data-testid="scalp-runner-account">
+                                {acctName(r.account_id)}
+                            </span>
                             <Chip ok={r.enabled} label={r.enabled ? `ON · ${r.mode.toUpperCase()}` : "OFF"}
                                   testid="scalp-runner-enabled" />
                             <Chip ok={r.health?.status === "OK"} label={`HEALTH ${r.health?.status}`}
