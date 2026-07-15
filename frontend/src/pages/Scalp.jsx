@@ -36,10 +36,11 @@ export default function Scalp() {
     const [saving, setSaving] = useState(false);
 
     const load = useCallback(async () => {
+        if (!accountId) return;
         setLoading(true);
         try {
             const [st, mt, dc] = await Promise.all([
-                api.get("/scalp/status"),
+                api.get(`/scalp/status?account_id=${accountId}`),
                 api.get("/scalp/metrics?symbol=EURUSD"),
                 api.get("/scalp/decisions?limit=25&symbol=EURUSD"),
             ]);
@@ -51,7 +52,7 @@ export default function Scalp() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [accountId]);
 
     useEffect(() => {
         api.get("/accounts").then((r) => {

@@ -151,6 +151,10 @@
 //|         REMAINING position volume after each deal, so the server  |
 //|         discriminates partial vs full closes from broker state    |
 //|         instead of lot arithmetic.                                |
+//| v1.46 — Tick-stream hardening. TickStreamSymbol auto-resolves     |
+//|         broker suffixes (EURUSD → EURUSD#, EURUSD.r, ...) and     |
+//|         SendTicks prints throttled diagnostics to the Experts     |
+//|         tab instead of failing silently.                          |
 //|         book (MarketBookAdd) and streams bid/ask depth to STOIC   |
 //|         every DomSeconds (30s) for the Liquidity Mapping agent    |
 //|         (resting liquidity, walls, book imbalance). Degrades      |
@@ -159,14 +163,14 @@
 //|         liquidity from candles alone.                             |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.45"
+#property version   "1.46"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.45"
+#define EA_CLIENT_VERSION "1.46"
 
 input string ServerUrl              = "https://your-app.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -201,6 +205,33 @@ input int    TickBatchMs            = 1000;
 
 datetime _last_slow_run        = 0;
 ulong    _last_tick_msc        = 0;
+string   _tick_symbol          = "";       // v1.46: broker-resolved stream symbol
+datetime _last_tick_warn       = 0;        // v1.46: throttle diagnostics
+
+// v1.46 — resolve the broker's actual symbol name for the tick stream.
+// Accepts a base name (EURUSD) and finds suffixed variants (EURUSD#,
+// EURUSD.r, EURUSD+, ...) in the broker's symbol list.
+string ResolveTickSymbol(string want) {
+   MqlTick probe;
+   if (SymbolInfoTick(want, probe)) return want;
+   SymbolSelect(want, true);
+   if (SymbolInfoTick(want, probe)) return want;
+   int total = SymbolsTotal(false);
+   for (int i = 0; i < total; i++) {
+      string s = SymbolName(i, false);
+      if (StringFind(s, want) == 0) {
+         SymbolSelect(s, true);
+         return s;
+      }
+   }
+   return want;
+}
+
+void TickStreamWarn(string msg) {
+   if (TimeCurrent() - _last_tick_warn < 60) return;   // 1 line/min max
+   _last_tick_warn = TimeCurrent();
+   Print("STOIC TickStream: ", msg);
+}
 
 datetime _last_candles_sent    = 0;
 datetime _last_dom_sent        = 0;
@@ -267,7 +298,13 @@ int OnInit() {
    // EA v1.44 — tick streaming needs a sub-second timer; slow tasks below
    // keep their PollSeconds cadence via the _last_slow_run gate in OnTimer.
    if (TickStreamEnabled) {
-      SymbolSelect(TickStreamSymbol, true);
+      _tick_symbol = ResolveTickSymbol(TickStreamSymbol);
+      SymbolSelect(_tick_symbol, true);
+      if (StringCompare(_tick_symbol, TickStreamSymbol) != 0)
+         Print("STOIC TickStream: resolved '", TickStreamSymbol,
+               "' to broker symbol '", _tick_symbol, "'");
+      Print("STOIC TickStream: ENABLED for ", _tick_symbol,
+            " (batch ", MathMax(250, TickBatchMs), "ms)");
       EventSetMillisecondTimer(MathMax(250, TickBatchMs));
    } else {
       EventSetTimer(PollSeconds);
@@ -551,19 +588,35 @@ void SweepDealHistory() {
 //| TickStreamSymbol since the last post to /api/bridge/ticks.        |
 //+------------------------------------------------------------------+
 void SendTicks() {
-   if (StringLen(TickStreamSymbol) == 0 || StringLen(EffectiveToken) == 0) return;
+   if (StringLen(_tick_symbol) == 0) _tick_symbol = ResolveTickSymbol(TickStreamSymbol);
+   if (StringLen(_tick_symbol) == 0 || StringLen(EffectiveToken) == 0) {
+      TickStreamWarn("no symbol or bridge token — stream idle");
+      return;
+   }
    MqlTick last_tick;
-   if (!SymbolInfoTick(TickStreamSymbol, last_tick)) return;
+   if (!SymbolInfoTick(_tick_symbol, last_tick)) {
+      TickStreamWarn("SymbolInfoTick failed for '" + _tick_symbol +
+                     "' — check the exact Market Watch name");
+      return;
+   }
    ulong now_msc = (ulong)last_tick.time_msc;
-   if (now_msc == 0) return;
+   if (now_msc == 0) {
+      TickStreamWarn("no quote yet for " + _tick_symbol + " (market closed?)");
+      return;
+   }
    ulong from = (_last_tick_msc == 0) ? now_msc - 2000 : _last_tick_msc + 1;
    if (from > now_msc) return;
    MqlTick ticks[];
-   int n = CopyTicksRange(TickStreamSymbol, ticks, COPY_TICKS_INFO, from, now_msc);
-   if (n <= 0) return;
+   int n = CopyTicksRange(_tick_symbol, ticks, COPY_TICKS_INFO, from, now_msc);
+   if (n <= 0) {
+      if (n < 0)
+         TickStreamWarn("CopyTicksRange error " + (string)GetLastError() +
+                        " for " + _tick_symbol);
+      return;
+   }
    int start = MathMax(0, n - 120);   // cap batch size
    string body = "{\"bridge_token\":\"" + EffectiveToken +
-                 "\",\"symbol\":\"" + TickStreamSymbol +
+                 "\",\"symbol\":\"" + _tick_symbol +
                  "\",\"sent_at_ms\":" + (string)now_msc + ",\"ticks\":[";
    for (int i = start; i < n; i++) {
       if (i > start) body += ",";
