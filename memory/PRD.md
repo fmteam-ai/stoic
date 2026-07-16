@@ -584,3 +584,9 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - Invariant scan telemetry in audit.invariant_scan; stale scan (>900s since success, only after first attempt) vetoes new entries.
 - Unit suite dependency-free: ack tests use apply_protection_ack; find_account uses looks_like_object_id (no BSON dependence for classification).
 - Tests: TestRound12Hardening (7), test_iter48_round12_e2e.py (5, by testing agent). Full suite 2020 passed (iter127 pulse-label load-flaky only).
+
+## Session 2026-07-16 (cont.) — TP pip caps (user request, iter-49: 112/112 verified)
+- User: gold trade TP was 450 pips away, wants TP1=100 / TP2=200 pips.
+- ai_signals.py: MTF_TP1_MAX_PIPS=100, MTF_TP2_MAX_PIPS=200, MTF_TP3_MAX_PIPS=200 (env-overridable) hard-cap the ATR geometry; monotonic tp1<=tp2<=tp3; broker order TP (=tp3) now <=200 pips. SL_MAX_PIPS 250→120 so weighted R:R (1.25) stays above the 1.1 floor (bot keeps trading gold).
+- Caps only shrink, never extend — EURUSD/small-ATR geometry untouched.
+- Open micro XAUUSD trade (entry 4006.78, +224 pips at review) predates the fix — user advised to close manually or approve a TP tighten; NOT retro-modified without consent.
