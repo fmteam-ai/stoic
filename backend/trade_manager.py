@@ -25,8 +25,9 @@ from notifier import notify_circuit_breaker
 logger = logging.getLogger("trade-manager")
 
 # Default pip targets (override per-trade if signal provided them)
-DEFAULT_SL_PIPS = 150
-DEFAULT_TP_PIPS = (100, 200, 300)   # (TP1, TP2, TP3)
+# user policy (2026-07-16): TP1 100 / TP2 200, bank half at TP1, rest at TP2
+DEFAULT_SL_PIPS = 120
+DEFAULT_TP_PIPS = (100, 200, 200)   # (TP1, TP2, TP3) — tp3<=tp2 → 2-tier
 DEFAULT_BE_TRIGGER_PIPS = 100        # move SL to entry at +100 pips
 
 
@@ -134,12 +135,36 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
         # NOTE: no Telegram here — fires from modification_ack on EA confirm.
         return
 
-    # Tier 2 — close another 25% at +tp2 pips (remaining = 25% of original).
+    # Tier 2 — at +tp2 pips.
+    # Two-tier mode (user policy 2026-07-16): when tp3 <= tp2 there is no
+    # third target — half was banked at TP1, the REST closes fully here.
+    # Legacy 3-tier mode: close another 25% (remaining = 25% of original);
     # let_winners_run: full size is still on at TP2 (no TP1 banking), so
     # close half here — remaining = 50% of original rides to TP3.
     if (not trade.get("tp2_closed")
             and trade.get("tp1_closed")
             and pips_up >= tp2_pips):
+        if tp3_pips <= tp2_pips:
+            await db.trades.update_one(
+                {"_id": trade_id},
+                {"$set": {
+                    "close_requested": True,
+                    "tp2_closed": True,
+                    "tp3_closed": True,
+                    "pending_modification": {
+                        "type": "FULL_CLOSE",
+                        "requested_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }},
+            )
+            await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                "trade_id": str(trade_id),
+                "action": "FULL_CLOSE_TP2",
+                "from_lot": current_lot,
+                "to_lot": 0.0,
+                "pips": round(pips_up, 1),
+            })
+            return
         tier2_frac = 0.5 if cfg.get("let_winners_run") else 0.25
         new_lot = round(original_lot * tier2_frac, 2)
         if new_lot >= 0.01:

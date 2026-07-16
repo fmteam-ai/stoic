@@ -860,11 +860,31 @@ async def _process_user_account_locked(db, cfg: dict):
                             _tp = float(signal.get("take_profit") or 0)
                             _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
                             if _entry and _tp and _mult > 1.0:
+                                # user policy (2026-07-16): trend-ride may
+                                # widen the TP but NEVER past the hard cap —
+                                # this is what produced 450-pip gold TPs.
+                                from ai_signals import MTF_TP3_MAX_PIPS
+                                from pip_utils import pips_to_price
+                                _cap = pips_to_price(_base, MTF_TP3_MAX_PIPS)
+                                _dist = min(abs(_tp - _entry) * _mult, _cap)
+                                _sign = 1 if _tp >= _entry else -1
                                 signal["take_profit"] = round(
-                                    _entry + (_tp - _entry) * _mult, 5)
-                                if signal.get("tp_pips"):
-                                    signal["tp_pips"] = round(
-                                        float(signal["tp_pips"]) * _mult, 1)
+                                    _entry + _sign * _dist, 5)
+                                _tps = signal.get("tp_pips")
+                                if isinstance(_tps, (int, float)):
+                                    signal["tp_pips"] = round(min(
+                                        float(_tps) * _mult,
+                                        MTF_TP3_MAX_PIPS), 1)
+                                elif isinstance(_tps, list) and _tps:
+                                    from ai_signals import (
+                                        MTF_TP1_MAX_PIPS, MTF_TP2_MAX_PIPS)
+                                    _caps = [MTF_TP1_MAX_PIPS,
+                                             MTF_TP2_MAX_PIPS,
+                                             MTF_TP3_MAX_PIPS]
+                                    signal["tp_pips"] = [
+                                        round(min(float(v) * _mult,
+                                                  _caps[min(i, 2)]), 1)
+                                        for i, v in enumerate(_tps)]
                                 signal["trend_ride"] = ride
                                 await inc_intel_counter(user_id, "trend_ride_applied")
                                 await _record_pulse(db, cfg, symbol=sym,
