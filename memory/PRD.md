@@ -590,3 +590,8 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - ai_signals.py: MTF_TP1_MAX_PIPS=100, MTF_TP2_MAX_PIPS=200, MTF_TP3_MAX_PIPS=200 (env-overridable) hard-cap the ATR geometry; monotonic tp1<=tp2<=tp3; broker order TP (=tp3) now <=200 pips. SL_MAX_PIPS 250→120 so weighted R:R (1.25) stays above the 1.1 floor (bot keeps trading gold).
 - Caps only shrink, never extend — EURUSD/small-ATR geometry untouched.
 - Open micro XAUUSD trade (entry 4006.78, +224 pips at review) predates the fix — user advised to close manually or approve a TP tighten; NOT retro-modified without consent.
+
+## Session 2026-07-17 — Two-tier Partial Take-Profit (user request, iter-50: 177/177 verified)
+- trade_manager.py: DEFAULT_TP_PIPS (100,200,200), DEFAULT_SL_PIPS 120. NEW two-tier mode: when tp3<=tp2, tier-2 issues FULL_CLOSE of the remainder at +tp2 (close_requested + tp2_closed + tp3_closed + FULL_CLOSE_TP2 broadcast). Tier-1 unchanged: bank 50% of original lot at +tp1 AND move SL to break-even. Legacy [100,200,300] trades keep 25% tier-2 partial.
+- bot_runner.py trend-ride: TP widening (×1.8) HARD-CAPPED at MTF_TP3_MAX_PIPS from entry (this multiplier created the user's 450-pip gold TP); list tp_pips scaled element-wise with per-index caps [100,200,200]; float(list) TypeError fixed.
+- Tests: tests/test_iter50_two_tier_partials.py (6). E2E deliberately skipped (live trade_manager loop would touch inserted docs); unit-mocked coverage instead.
