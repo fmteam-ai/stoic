@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="1" tests="15" time="4.037" timestamp="2026-07-16T15:53:56.010219+00:00" hostname="agent-env-2200cdf2-f1ac-4afa-b2ce-c55c517faa44"><testcase classname="tests.test_iter45_round10_hardening" name="test_pollTrades_stale_epoch_cancelled" time="1.280" /><testcase classname="tests.test_iter45_round10_hardening" name="test_pollTrades_epoch_geq_dispatches_and_raises_max" time="0.174" /><testcase classname="tests.test_iter45_round10_hardening" name="test_pollTrades_legacy_scalp_no_epoch_dispatches" time="0.210" /><testcase classname="tests.test_iter45_round10_hardening" name="test_pollTrades_non_scalp_unaffected" time="0.111" /><testcase classname="tests.test_iter45_round10_hardening" name="test_external_deal_creates_applied_ledger_event" time="1.186"><failure message="AssertionError: event not applied: {'_id': ObjectId('6a58fe96d8222527fe438ab6'), 'event_type': 'full_close', 'account_id': '6a58fe952771025f129cd3db', 'deal_id': '1784217238009', 'at': '2026-07-16T15:53:58.129836+00:00', 'commission': -0.2, 'execution_cost': 0.2, 'lease_epoch': 1, 'net_pnl': -1.7, 'risk_applied': False, 'status': 'pending', 'swap': 0.0, 'symbol': 'EURUSD', 'trade_id': '6a58fe96dc67e814089268f7', 'trading_pnl': -1.7}&#10;assert 'pending' == 'applied'&#10;  &#10;  - applied&#10;  + pending">ctx = {'s': &lt;requests.sessions.Session object at 0xfae41e94c5d0&gt;, 'email': 'TEST_iter45_983caa1d@example.com', 'acc': {'user_id': '6a58fe942771025f129cd3d6', 'label': 'TEST_iter45_acc', 'broker': 'TestBroker', 'server': 'T', ...}}
+
+    def test_external_deal_creates_applied_ledger_event(ctx):
+        db = mongo_db()
+        acc = ctx["acc"]
+        account_id = acc["id"]
+        user_id_row = db.users.find_one({"email": ctx["email"].lower()})
+        user_id = str(user_id_row["_id"])
+    
+        # Ensure THIS worker acquires the lease by deleting any existing owner.
+        db.scalp_owners.delete_many({"account_id": account_id})
+    
+        # Create an OPEN scalp trade with a specific mt5_ticket
+        mt5_ticket = int(time.time() * 1000) % 100000000
+        trade_doc = {
+            "account_id": account_id, "user_id": user_id,
+            "status": "open", "scope": "scalp_fast",
+            "symbol": "EURUSD", "action": "BUY", "lot_size": 0.01,
+            "entry_price": 1.08, "stop_loss": 1.077, "take_profit": 1.085,
+            "mt5_ticket": mt5_ticket,
+            "opened_at": _now_iso(),
+        }
+        trade_res = db.trades.insert_one(trade_doc)
+        trade_id = str(trade_res.inserted_id)
+    
+        # POST /bridge/external-deal 'out' close
+        deal_id = int(time.time() * 1000)
+        payload = {
+            "bridge_token": acc["bridge_token"],
+            "mt5_ticket": mt5_ticket,
+            "deal_id": deal_id,
+            "deal_entry": "out",
+            "symbol": "EURUSD",
+            "action": "SELL",
+            "lots": 0.01,
+            "price": 1.079,
+            "profit": -1.5,
+            "commission": -0.2,
+            "swap": 0.0,
+            "deal_time": int(time.time()),
+            "magic": 0,
+            "position_volume": 0.0,
+        }
+        r = requests.post(f"{API}/bridge/external-deal", json=payload, timeout=20)
+        assert r.status_code == 200, r.text
+    
+        # allow async application to settle
+        time.sleep(1.0)
+    
+        # Verify exactly ONE scalp_financial_events doc for this deal
+        events = list(db.scalp_financial_events.find({
+            "account_id": account_id, "deal_id": str(deal_id),
+            "event_type": "full_close"}))
+        assert len(events) == 1, f"expected 1 ledger event, got {len(events)}: {events}"
+        ev = events[0]
+&gt;       assert ev.get("status") == "applied", f"event not applied: {ev}"
+E       AssertionError: event not applied: {'_id': ObjectId('6a58fe96d8222527fe438ab6'), 'event_type': 'full_close', 'account_id': '6a58fe952771025f129cd3db', 'deal_id': '1784217238009', 'at': '2026-07-16T15:53:58.129836+00:00', 'commission': -0.2, 'execution_cost': 0.2, 'lease_epoch': 1, 'net_pnl': -1.7, 'risk_applied': False, 'status': 'pending', 'swap': 0.0, 'symbol': 'EURUSD', 'trade_id': '6a58fe96dc67e814089268f7', 'trading_pnl': -1.7}
+E       assert 'pending' == 'applied'
+E         
+E         - applied
+E         + pending
+
+tests/test_iter45_round10_hardening.py:297: AssertionError</failure></testcase><testcase classname="tests.test_iter45_round10_hardening" name="test_crash_recovery_reconstructs_missing_ledger_event" time="0.000"><skipped type="pytest.skip" message="prerequisite test_external_deal_creates_applied_ledger_event skipped/failed">/app/backend/tests/test_iter45_round10_hardening.py:324: prerequisite test_external_deal_creates_applied_ledger_event skipped/failed</skipped></testcase><testcase classname="tests.test_iter45_round10_hardening" name="test_scalp_status_admin_shows_service_block_null" time="0.493" /><testcase classname="tests.test_iter45_round10_hardening" name="test_suffixed_symbol_tick_regression" time="0.112" /><testcase classname="tests.unit.scalp.test_scalp_unit.TestRound10Hardening" name="test_confirm_lease_for_order_not_owned" time="0.010" /><testcase classname="tests.unit.scalp.test_scalp_unit.TestRound10Hardening" name="test_confirm_lease_for_order_owned_updates_epoch" time="0.008" /><testcase classname="tests.unit.scalp.test_scalp_unit.TestRound10Hardening" name="test_submit_live_stamps_lease_epoch_into_signal" time="0.186" /><testcase classname="tests.unit.scalp.test_scalp_unit.TestRound10Hardening" name="test_build_financial_event_signed_math" time="0.001" /><testcase classname="tests.unit.scalp.test_scalp_unit.TestRound10Hardening" name="test_apply_broker_deal_writes_pending_ledger_before_apply" time="0.011" /><testcase classname="tests.unit.scalp.test_scalp_unit.TestRound10Hardening" name="test_pip_value_strict_fails_closed_on_unknown" time="0.000" /><testcase classname="tests.unit.scalp.test_scalp_unit.TestRound10Hardening" name="test_service_block_vetoes_entries" time="0.000" /></testsuite></testsuites>

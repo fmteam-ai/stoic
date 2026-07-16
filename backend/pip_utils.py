@@ -122,6 +122,21 @@ def price_to_pips(symbol: Optional[str], price_diff: float) -> float:
     return float(price_diff) / ps
 
 
+def pip_value_usd_per_lot_strict(symbol: Optional[str]) -> Optional[float]:
+    """Round 10 item 3 — AUTHORITATIVE per-lot pip value or None.
+
+    Returns a value only when the symbol is in the explicit contract table
+    or is a USD-quoted FX major (standard $10/pip/lot). Cross pairs, exotic
+    contracts and unknown symbols return None so risk restoration can mark
+    exposure UNKNOWN and fail closed instead of silently assuming $10."""
+    base = base_symbol(symbol)
+    if base in PIP_VALUE_USD_PER_STANDARD_LOT:
+        return PIP_VALUE_USD_PER_STANDARD_LOT[base]
+    if len(base) == 6 and base.endswith("USD") and base.isalpha():
+        return DEFAULT_PIP_VALUE_USD
+    return None
+
+
 def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = None) -> float:
     """USD value of 1 pip per 1.00 lot in the given account's lot convention.
 

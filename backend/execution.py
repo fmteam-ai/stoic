@@ -169,6 +169,7 @@ class MT5BridgeEngine(ExecutionEngine):
             "error": None,
             "origin": signal.get("origin", "manual"),
             "scope": signal.get("scope"),
+            "scalp_lease_epoch": signal.get("scalp_lease_epoch"),
             "trend_ride": signal.get("trend_ride"),
             "versions": signal.get("versions"),
             "partial_closed": False,

@@ -141,15 +141,22 @@ async def repair_unprotected_positions(db) -> dict:
         ars = account_risk_state(account_id)
         key = "unprotected_positions"
         if blocked:
+            # Round 10 item 2 (review) — unknown exposure is an UNCONDITIONAL
+            # VETO (set_protection_block above), not an arbitrary dollar
+            # amount. Record a capped, clearly-labelled estimate for
+            # monitoring only: 0.5% of equity, never a fixed $50 floor that
+            # distorts small accounts.
             try:
                 from bson import ObjectId
                 acc = await db.accounts.find_one({"_id": ObjectId(account_id)})
                 equity = float((acc or {}).get("equity") or 0)
             except Exception:  # noqa: BLE001
                 equity = 0.0
-            ars.add_stop_risk(key, max(50.0,
-                                       equity * CONSERVATIVE_RISK_PCT / 100.0))
+            ars.unknown_risk = True
+            ars.add_stop_risk(
+                key, round(equity * CONSERVATIVE_RISK_PCT / 100.0, 2))
         else:
+            ars.unknown_risk = False
             ars.remove_stop_risk(key)
     if resolved or stops_queued or closes_queued:
         logger.warning("protection guard: resolved=%d stops_queued=%d "

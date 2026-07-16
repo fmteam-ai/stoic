@@ -553,6 +553,29 @@ async def poll_trades(payload: PollRequest):
         )
         if not t:
             break
+        # Round 10 item 1 — fencing-epoch enforcement at the dispatch fence:
+        # the bridge remembers the newest accepted scalp lease epoch per
+        # account and refuses to dispatch orders stamped with an older epoch
+        # (a stale worker's order must never reach the broker).
+        if t.get("scope") == "scalp_fast" and t.get("scalp_lease_epoch") is not None:
+            ep = int(t.get("scalp_lease_epoch") or 0)
+            await db.scalp_owners.update_one(
+                {"account_id": str(acc["_id"])},
+                {"$max": {"max_order_epoch": ep}}, upsert=True)
+            owner = await db.scalp_owners.find_one(
+                {"account_id": str(acc["_id"])}, {"max_order_epoch": 1})
+            if ep < int((owner or {}).get("max_order_epoch") or 0):
+                await db.trades.update_one(
+                    {"_id": t["_id"]},
+                    {"$set": {"status": "cancelled",
+                              "error": "stale_scalp_lease_epoch",
+                              "close_reason": "stale_scalp_lease_epoch",
+                              "closed_at": datetime.now(timezone.utc).isoformat()}})
+                logger.warning(
+                    "rejected stale-epoch scalp order trade=%s epoch=%d < %d",
+                    str(t["_id"]), ep,
+                    int((owner or {}).get("max_order_epoch") or 0))
+                continue
         out.append({
             "trade_id": str(t["_id"]),
             "symbol": t["symbol"],

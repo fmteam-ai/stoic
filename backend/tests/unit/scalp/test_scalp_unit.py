@@ -1309,8 +1309,8 @@ class TestRound9Hardening:
         async def run():
             with patch("execution.for_account",
                        return_value=fake_engine), \
-                 patch.object(eng, "ensure_account_lease",
-                              AsyncMock(return_value=False)):
+                 patch.object(eng, "confirm_account_lease_for_order",
+                              AsyncMock(return_value=(False, 0))):
                 await r._submit_live(db, decision, fc, {"lot": 0.01})
                 for _ in range(5):
                     await asyncio.sleep(0)
@@ -1428,3 +1428,130 @@ class TestRound9Hardening:
         update = db.trades.update_one.call_args.args[1]["$set"]
         assert update["protection_state"] == "PROTECTION_UNKNOWN"
         assert update["last_modification_error"] == "broker rejected SL"
+
+
+class TestRound10Hardening:
+    def test_confirm_lease_for_order_not_owned(self):
+        from scalp import engine as eng
+        db = _stub_db()
+        db.scalp_owners.find_one = AsyncMock(return_value=None)
+        owned, epoch = asyncio.run(
+            eng.confirm_account_lease_for_order(db, "acc10"))
+        assert owned is False and epoch == 0
+        # the query must be worker- and expiry-scoped (non-cached, live doc)
+        flt = db.scalp_owners.find_one.call_args.args[0]
+        assert flt["worker_id"] == eng._worker_id
+        assert "$gt" in flt["lease_until"]
+
+    def test_confirm_lease_for_order_owned_updates_epoch(self):
+        from scalp import engine as eng
+        db = _stub_db()
+        db.scalp_owners.find_one = AsyncMock(return_value={"lease_epoch": 7})
+        owned, epoch = asyncio.run(
+            eng.confirm_account_lease_for_order(db, "acc10b"))
+        assert owned is True and epoch == 7
+        assert eng._lease_epoch["acc10b"] == 7
+
+    def test_submit_live_stamps_lease_epoch_into_signal(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from scalp import engine as eng
+        r = ScalpRunner("acc10c", "u1", "EURUSD")
+        r.account = {"_id": "acc10c", "equity": 10_000.0}
+        now = int(time.time() * 1000)
+        r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=now,
+                                 received_time_ms=now, bid=1.08,
+                                 ask=1.08004))
+        mid = (1.08 + 1.08004) / 2.0
+        decision = {"decision_id": "d10", "direction": "BUY",
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": mid}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1)
+        fake_engine = MagicMock(
+            execute=AsyncMock(return_value={"id": "t10"}))
+        db = _stub_db()
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine), \
+                 patch.object(eng, "confirm_account_lease_for_order",
+                              AsyncMock(return_value=(True, 9))):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(5):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        signal = fake_engine.execute.await_args.kwargs["signal"]
+        assert signal["scalp_lease_epoch"] == 9
+
+    def test_build_financial_event_signed_math(self):
+        from scalp.deals import build_financial_event
+        ev = build_financial_event(
+            account_id="a", symbol="EURUSD", trade_id="t", deal_id=42,
+            event_type="full_close", profit=-3.0, commission=-0.7, swap=0.2,
+            lease_epoch=3)
+        assert ev["deal_id"] == "42"
+        assert ev["net_pnl"] == -3.5            # -3.0 - 0.7 + 0.2
+        assert ev["trading_pnl"] == -3.7        # excludes financing credit
+        assert ev["execution_cost"] == 0.7      # only negative legs
+        assert ev["lease_epoch"] == 3
+        assert "remaining_lots" not in ev
+        ev2 = build_financial_event(
+            account_id="a", symbol="EURUSD", trade_id="t", deal_id=43,
+            event_type="partial_close", profit=1.0, commission=0.0,
+            swap=-0.1, remaining_lots=0.02)
+        assert ev2["remaining_lots"] == 0.02
+        assert ev2["net_pnl"] == 0.9
+
+    def test_apply_broker_deal_writes_pending_ledger_before_apply(self):
+        from unittest.mock import patch
+        from scalp import engine as eng
+        db = _stub_db()
+        calls = []
+
+        async def track_update(flt, update, upsert=False):
+            calls.append((dict(flt), update))
+            return MagicMock(matched_count=1, modified_count=1)
+        db.scalp_financial_events.update_one = AsyncMock(
+            side_effect=track_update)
+        r = ScalpRunner("acc10d", "u1", "EURUSD")
+        r._risk_restored = True
+        eng._runners["acc10d:EURUSD"] = r
+
+        async def run():
+            with patch.object(eng, "ensure_account_lease",
+                              AsyncMock(return_value=True)), \
+                 patch.object(ScalpRunner, "persist_risk_now", AsyncMock()):
+                return await eng.apply_broker_deal(
+                    db, "acc10d",
+                    {"_id": "tr1", "symbol": "EURUSD", "user_id": "u1"},
+                    deal_id="d-77", lots=0.01, profit=-1.0, commission=-0.1,
+                    swap=0.0, price=1.08, partial=False)
+        res = asyncio.run(run())
+        eng._runners.pop("acc10d:EURUSD", None)
+        assert res["applied"] is True
+        # first ledger write: PENDING via $setOnInsert (before risk apply)
+        first = calls[0][1]
+        assert first["$setOnInsert"]["status"] == "pending"
+        assert first["$setOnInsert"]["risk_applied"] is False
+        assert first["$setOnInsert"]["net_pnl"] == -1.1
+        # a ledger write flips it to APPLIED after the fenced persist
+        applied_sets = [u["$set"] for _, u in calls if "$set" in u]
+        assert any(s.get("status") == "applied" and s.get("risk_applied")
+                   for s in applied_sets)
+
+    def test_pip_value_strict_fails_closed_on_unknown(self):
+        from pip_utils import pip_value_usd_per_lot_strict
+        assert pip_value_usd_per_lot_strict("EURUSD") == 10.0
+        assert pip_value_usd_per_lot_strict("EURUSD#") == 10.0
+        assert pip_value_usd_per_lot_strict("XAUUSD.fx") == 10.0
+        assert pip_value_usd_per_lot_strict("EURGBP") is None   # cross pair
+        assert pip_value_usd_per_lot_strict("WEIRDSYM") is None
+
+    def test_service_block_vetoes_entries(self):
+        from scalp import engine as eng
+        eng.set_service_block("critical index creation failed: boom")
+        try:
+            assert eng.service_block_reason().startswith("critical index")
+            assert eng.audit_backlog()["service_block"] is not None
+        finally:
+            eng.set_service_block(None)
+        assert eng.audit_backlog()["service_block"] is None

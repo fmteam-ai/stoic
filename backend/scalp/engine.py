@@ -181,6 +181,40 @@ async def ensure_account_lease(db, account_id: str) -> bool:
     return owned
 
 
+async def confirm_account_lease_for_order(db, account_id: str) -> tuple:
+    """Round 10 item 1 — NON-CACHED ownership confirmation for order
+    execution. The cached helper can return a stale owned=True for up to
+    half the lease TTL; a worker that paused past its lease while another
+    worker acquired a newer fencing epoch could still submit a broker order
+    (fencing protects later DB writes but cannot undo a submitted order).
+    This check always reads the ownership record. Returns (owned, epoch)."""
+    now = datetime.now(timezone.utc).isoformat()
+    doc = await db.scalp_owners.find_one(
+        {"account_id": account_id, "worker_id": _worker_id,
+         "lease_until": {"$gt": now}},
+        {"lease_epoch": 1})
+    if not doc:
+        return False, 0
+    epoch = int(doc.get("lease_epoch") or 0)
+    _lease_epoch[account_id] = epoch
+    return True, epoch
+
+
+_service_block_reason: str | None = None
+
+
+def set_service_block(reason: str | None) -> None:
+    """Round 10 item 5 — scalp-critical startup failures (e.g. unique-index
+    creation) fail the WHOLE scalp service closed: no new entries anywhere
+    until the block is cleared."""
+    global _service_block_reason
+    _service_block_reason = reason
+
+
+def service_block_reason() -> str | None:
+    return _service_block_reason
+
+
 async def _restore_account_state(db, account_id: str, force: bool = False):
     """Round 7 item 5 — ONE account-level initialization: load account risk,
     scan ALL open scalp trades once, rebuild monetary stop risk and the open
@@ -197,7 +231,8 @@ async def _restore_account_state(db, account_id: str, force: bool = False):
         {"account_id": account_id, "scope": "scalp_fast",
          "status": "open"}).to_list(100)
     ars.stop_risk_by_trade.clear()
-    from pip_utils import pip_value_usd_per_lot
+    from pip_utils import pip_value_usd_per_lot_strict
+    risk_unknown = False
     for tr in open_trades:
         lot = float(tr.get("lot_size") or 0)
         entry = tr.get("entry_price")
@@ -205,9 +240,22 @@ async def _restore_account_state(db, account_id: str, force: bool = False):
         cfg = approved(tr.get("symbol") or "")
         pip = cfg.pip_size if cfg else 0.0001
         if lot > 0 and entry and stop:
-            pv = pip_value_usd_per_lot(tr.get("symbol") or "EURUSD", None) or 10.0
+            # round 10 item 3 — never silently assume $10/pip: an
+            # unpriceable symbol marks account risk UNKNOWN and blocks
+            # new entries instead of restoring a fabricated number.
+            pv = pip_value_usd_per_lot_strict(tr.get("symbol") or "EURUSD")
+            if pv is None:
+                risk_unknown = True
+                logger.error(
+                    "risk restore: no authoritative pip value for %s "
+                    "(trade %s) — account %s risk marked UNKNOWN, "
+                    "entries blocked", tr.get("symbol"), tr["_id"],
+                    account_id)
+                continue
             ars.add_stop_risk(str(tr["_id"]),
                               lot * abs(float(entry) - float(stop)) / pip * pv)
+    if risk_unknown:
+        _invariant_block.add(account_id)
     ars.open_scalps = len(open_trades)
 
 
@@ -411,7 +459,10 @@ class ScalpRunner:
         # count AND monetary stop-risk budget across ALL runners.
         # round 8 — protection/invariant blocks veto entries outright.
         account_open = sum(len(r.live_trades) for r in runners_for_account(self.account_id))
-        if self.account_id in _protection_block:
+        if _service_block_reason:
+            risk_res = {"ok": False, "lot": 0.0,
+                        "reason": f"scalp service blocked: {_service_block_reason}"}
+        elif self.account_id in _protection_block:
             risk_res = {"ok": False, "lot": 0.0,
                         "reason": ("unprotected position on account — new "
                                    "scalp entries blocked until protection "
@@ -553,10 +604,13 @@ class ScalpRunner:
         if not account:
             return
         engine = engine_for_account(account)
-        # round 9 item 4 — re-confirm account ownership at the LAST moment
-        # before broker submission; a worker that lost its lease mid-pause
-        # must not submit from stale state.
-        if not await ensure_account_lease(db, self.account_id):
+        # round 9 item 4 / round 10 item 1 — re-confirm account ownership at
+        # the LAST moment before broker submission with a NON-CACHED read;
+        # the cached helper could return stale owned=True after another
+        # worker acquired a newer fencing epoch.
+        owned, lease_epoch = await confirm_account_lease_for_order(
+            db, self.account_id)
+        if not owned:
             self.state.record_reject()
             _bg(lambda: db.scalp_decisions.update_one(
                 {"decision_id": decision["decision_id"]},
@@ -572,7 +626,8 @@ class ScalpRunner:
                     "entry_price": round(entry, 5),
                     "stop_loss": round(sl, 5), "take_profit": round(tp, 5),
                     "origin": "auto", "scope": "scalp_fast",
-                    "scalp_decision_id": decision["decision_id"]},
+                    "scalp_decision_id": decision["decision_id"],
+                    "scalp_lease_epoch": lease_epoch},
             cfg_account_id=self.account_id)
         if trade.get("blocked"):
             self.state.record_reject()
@@ -888,7 +943,8 @@ class ScalpRunner:
                   "execution_cost": round(execution_cost, 2),
                   "commission": commission, "swap": swap,
                   "remaining_lots": float(remaining_lots or 0),
-                  "risk_applied": True, "lease_epoch": _lease_epoch.get(self.account_id, 0),
+                  "risk_applied": True, "status": "applied",
+                  "lease_epoch": _lease_epoch.get(self.account_id, 0),
                   "at": datetime.now(timezone.utc).isoformat()}
             self._last_financial_event = ev
             _bg(lambda e=ev: db.scalp_financial_events.update_one(
@@ -1182,6 +1238,7 @@ def audit_backlog() -> dict:
     return {"pending": _audit_pending, "failures": _audit_failures,
             "halted": _audit_pending >= AUDIT_BACKLOG_HALT,
             "pid": _owner_pid,
+            "service_block": _service_block_reason,
             "dead_letter_path": DEAD_LETTER_PATH}
 
 
@@ -1220,6 +1277,28 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
             await r.restore_risk(db)
         except Exception as e:  # noqa: BLE001
             return {"applied": False, "reason": f"restore_failed: {e}"}
+    # Round 10 item 2 — durable ledger-first state machine. The financial
+    # event is built from immutable broker-deal facts and persisted as
+    # PENDING before any risk mutation. On crash-recovery this upsert
+    # re-creates a missing ledger event even when the runner's dedup cache
+    # (applied_deal_ids restored from risk state) skips the risk mutation.
+    from scalp.deals import build_financial_event
+    ev = build_financial_event(
+        account_id=account_id, symbol=symbol, trade_id=str(trade["_id"]),
+        deal_id=deal_id,
+        event_type="partial_close" if partial else "full_close",
+        profit=profit, commission=commission, swap=swap,
+        remaining_lots=(remaining_lots if partial else None),
+        lease_epoch=_lease_epoch.get(account_id, 0))
+    ev_key = {"account_id": ev["account_id"], "deal_id": ev["deal_id"],
+              "event_type": ev["event_type"]}
+    try:
+        await db.scalp_financial_events.update_one(
+            ev_key,
+            {"$setOnInsert": {**ev, "status": "pending",
+                              "risk_applied": False}}, upsert=True)
+    except Exception as e:  # noqa: BLE001
+        return {"applied": False, "reason": f"ledger_write_failed: {e}"}
     try:
         if partial:
             r.on_partial_close(
@@ -1241,14 +1320,11 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
         # item 6 — risk state + applied deal id are DURABLE before the
         # caller may flip the broker deal to complete
         await r.persist_risk_now(db)
-        # round 9 item 2 — financial event persisted SYNCHRONOUSLY and
-        # idempotently (unique account+deal+event_type) before completion
-        ev = getattr(r, "_last_financial_event", None)
-        if ev and str(ev.get("deal_id")) == str(deal_id):
-            await db.scalp_financial_events.update_one(
-                {"account_id": ev["account_id"], "deal_id": ev["deal_id"],
-                 "event_type": ev["event_type"]},
-                {"$setOnInsert": ev}, upsert=True)
+        # ledger event flips to APPLIED only after the fenced risk persist
+        await db.scalp_financial_events.update_one(
+            ev_key,
+            {"$set": {"status": "applied", "risk_applied": True,
+                      "applied_at": datetime.now(timezone.utc).isoformat()}})
     except Exception as e:  # noqa: BLE001
         return {"applied": False, "reason": f"apply_failed: {e}"}
     return {"applied": True, "reason": None}
@@ -1291,7 +1367,52 @@ async def verify_durable_invariants(db) -> dict:
             verify_account_invariants(account_id)
     if blocked:
         logger.error("durable invariant violations: %s", blocked)
-    return {"blocked": blocked}
+    # Round 10 item 4 — financial-ledger invariants (DB-side, runner-free):
+    #   BLOCKING: every scalp broker deal reconciled in the last 24h must
+    #   have its ledger event (a reconciled deal with no event means the
+    #   ledger silently lost a financial fact).
+    #   WARNING: per-account sum of today's applied negative net-P&L events
+    #   should equal the persisted _ACCOUNT daily_loss_usd (report-path
+    #   closes without a deal_id can legitimately diverge, so mismatches
+    #   are surfaced for review instead of hard-blocking).
+    fin_blocked, fin_warnings = [], []
+    day_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    async for deal in db.broker_deals.find(
+            {"financial_reconciliation_status": "complete",
+             "financial_reconciled_at": {"$gte": day_ago},
+             "reconciliation_note": {"$ne": "not_scalp_scope"}}).limit(500):
+        n = await db.scalp_financial_events.count_documents(
+            {"account_id": deal["account_id"], "deal_id": str(deal["deal_id"])})
+        if n == 0:
+            acct = str(deal["account_id"])
+            _invariant_block.add(acct)
+            fin_blocked.append({"account_id": acct,
+                                "deal_id": str(deal["deal_id"]),
+                                "issue": "reconciled_deal_missing_ledger_event"})
+    day_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
+    async for rs in db.scalp_risk_state.find({"symbol": "_ACCOUNT"}).limit(200):
+        acct = str(rs["account_id"])
+        loss_sum = 0.0
+        async for ev in db.scalp_financial_events.find(
+                {"account_id": acct, "risk_applied": True,
+                 "at": {"$gte": day_start}}).limit(500):
+            net = float(ev.get("net_pnl") or 0)
+            if net < 0:
+                loss_sum += -net
+        persisted = float(rs.get("daily_loss_usd") or 0)
+        tol = max(0.02, 0.001 * max(loss_sum, persisted))
+        if abs(loss_sum - persisted) > tol:
+            fin_warnings.append({
+                "account_id": acct,
+                "issue": "daily_loss_ledger_mismatch",
+                "ledger_loss_sum": round(loss_sum, 2),
+                "persisted_daily_loss": round(persisted, 2)})
+    if fin_blocked:
+        logger.error("financial ledger invariant violations: %s", fin_blocked)
+    if fin_warnings:
+        logger.warning("financial ledger warnings: %s", fin_warnings)
+    return {"blocked": blocked, "financial_blocked": fin_blocked,
+            "financial_warnings": fin_warnings}
 
 
 async def recover_pending_deals(db, older_than_sec: int = 60,

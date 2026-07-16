@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime, timezone
 from database import get_db
 from auth import hash_password, verify_password
@@ -71,17 +72,30 @@ async def ensure_indexes():
         [("user_id", 1), ("account_id", 1)], unique=True
     )
     await db.conditional_triggers.create_index([("user_id", 1), ("active", 1)])
-    # Round 8 item 1 — scalp reconciliation / ownership integrity constraints
-    await db.scalp_owners.create_index("account_id", unique=True)
-    await db.broker_deals.create_index([("account_id", 1), ("deal_id", 1)],
-                                       unique=True)
-    await db.broker_deals.create_index([("financial_reconciliation_status", 1),
-                                        ("received_at", 1)])
-    await db.scalp_risk_state.create_index([("account_id", 1), ("symbol", 1)],
+    # Round 8 item 1 / Round 10 item 5 — scalp reconciliation / ownership
+    # integrity constraints. These unique indexes ARE the distributed-safety
+    # guarantees (single lease owner, exactly-once deal application, one
+    # risk snapshot per account+symbol, one ledger event per deal+type).
+    # Failure to create ANY of them is FATAL for the scalp service: the
+    # whole subsystem fails closed until indexes are healthy.
+    try:
+        await db.scalp_owners.create_index("account_id", unique=True)
+        await db.broker_deals.create_index([("account_id", 1), ("deal_id", 1)],
                                            unique=True)
-    await db.scalp_financial_events.create_index([("account_id", 1), ("at", -1)])
-    await db.scalp_financial_events.create_index(
-        [("account_id", 1), ("deal_id", 1), ("event_type", 1)], unique=True)
+        await db.broker_deals.create_index([("financial_reconciliation_status", 1),
+                                            ("received_at", 1)])
+        await db.scalp_risk_state.create_index([("account_id", 1), ("symbol", 1)],
+                                               unique=True)
+        await db.scalp_financial_events.create_index([("account_id", 1), ("at", -1)])
+        await db.scalp_financial_events.create_index(
+            [("account_id", 1), ("deal_id", 1), ("event_type", 1)], unique=True)
+        from scalp.engine import set_service_block
+        set_service_block(None)
+    except Exception as e:  # noqa: BLE001
+        from scalp.engine import set_service_block
+        set_service_block(f"critical index creation failed: {e}")
+        logging.getLogger("trading-bot").critical(
+            "SCALP SERVICE BLOCKED — unique index creation failed: %s", e)
     await db.broker_time_offsets.create_index([("account_id", 1),
                                                ("effective_from", -1)])
 
