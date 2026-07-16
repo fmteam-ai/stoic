@@ -572,3 +572,15 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - protection_guard: find_account (ObjectId→string-id, explicit reason ok/invalid_id/missing/db_error); apply_protection_ack pure dependency-free policy used by modification_ack route; emergency-close escalation (re-queue after 120s, notifications alert 'emergency_close_stuck' after 3 retries, entry halt persists).
 - Tests: test_iter45 updated to equality semantics, TestRound11Hardening (5 unit), test_iter47_round11_e2e.py (5 e2e by testing agent). Full suite 2004 passed (test_iter127 bot_pulse label is load-flaky only).
 - Reviewer's '103 passed 4 failed' again did not reproduce here — all green.
+
+## Session 2026-07-16 (cont.) — Scalp Review Round 12 implemented & verified (iter-48: 159/159, 100%)
+- P0: verify_durable_invariants full async cursor (no .to_list(200) truncation), docs_examined telemetry.
+- Ownership intent split: confirm_or_adopt_account_lease (live callbacks; adopts only when NO owner record) vs acquire_expired_ownership_for_recovery (recovery sweeps, logged 'RECOVERY TAKEOVER'); apply_broker_deal(recovery=...) plumbed; e2e verified both paths (live path refuses foreign expired lease, recovery completes it).
+- Ledger state machine: pending → risk_applying (+apply_attempts, last_attempt_at) → applied; report_delay_sec/reconcile_delay_sec recorded on applied events; pending events >600s block their account.
+- Protection repair: priority cursor (lot desc, oldest first) with 8s time budget, awaiting/processed/oldest_unresolved_age_sec metrics, CRITICAL escalation when backlog >100.
+- calculate_emergency_stop: strict pip (unpriceable → None → close), snaps to instrument tick_size.
+- Protection resolves ONLY on confirmed_stop_loss (broker-confirmed evidence); broker position snapshots stamp confirmed_stop_loss at backfill; local stop alone re-queues.
+- Scheduler: independent monotonic deadlines (no modulo drift). Verified live: invariant sweep success at 17:19 UTC, 5ms.
+- Invariant scan telemetry in audit.invariant_scan; stale scan (>900s since success, only after first attempt) vetoes new entries.
+- Unit suite dependency-free: ack tests use apply_protection_ack; find_account uses looks_like_object_id (no BSON dependence for classification).
+- Tests: TestRound12Hardening (7), test_iter48_round12_e2e.py (5, by testing agent). Full suite 2020 passed (iter127 pulse-label load-flaky only).
