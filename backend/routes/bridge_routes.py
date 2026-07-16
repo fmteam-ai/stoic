@@ -334,6 +334,8 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "lot_size": p.volume,
                 "entry_price": p.price_open,
                 "stop_loss": p.sl or 0.0,
+                # broker snapshot IS confirmed protection evidence (round 12)
+                "confirmed_stop_loss": p.sl or 0.0,
                 "take_profit": p.tp or 0.0,
                 "exit_price": None,
                 "pnl": 0.0,

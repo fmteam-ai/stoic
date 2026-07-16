@@ -1047,9 +1047,28 @@ class TestRound8ProtectionRecovery:
 
     def _guard_db(self, trades):
         db = _stub_db()
-        cursor = MagicMock()
-        cursor.to_list = AsyncMock(return_value=trades)
-        db.trades.find = MagicMock(return_value=cursor)
+
+        class _AsyncCursor:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def sort(self, *a, **k):
+                return self
+
+            def __aiter__(self):
+                self._it = iter(self._items)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        db.trades.find = MagicMock(side_effect=lambda *a, **k: _AsyncCursor(trades))
+        db.trades.count_documents = AsyncMock(return_value=len(trades))
+        db.trades.find_one = AsyncMock(
+            return_value=(trades[0] if trades else None))
         db.trades.distinct = AsyncMock(
             return_value=[t["account_id"] for t in trades
                           if t.get("protection_missing")])
@@ -1086,8 +1105,9 @@ class TestRound8ProtectionRecovery:
     def test_protection_resolved_when_stop_confirmed(self):
         from protection_guard import repair_unprotected_positions
         from scalp.engine import _protection_block
+        # round 12 item 7 — only BROKER-CONFIRMED evidence resolves
         tr = self._trade(_id="trR8", account_id="000000000000000000000002",
-                         stop_loss=1.0795)
+                         stop_loss=1.0795, confirmed_stop_loss=1.0795)
         db = self._guard_db([tr])
         db.trades.distinct = AsyncMock(return_value=[])   # nothing left flagged
         out = asyncio.run(repair_unprotected_positions(db))
@@ -1096,6 +1116,18 @@ class TestRound8ProtectionRecovery:
         assert any(s.get("protection_state") == "RESOLVED"
                    and s.get("protection_missing") is False for s in sets)
         assert "000000000000000000000002" not in _protection_block
+
+    def test_local_stop_alone_does_not_resolve_protection(self):
+        # round 12 item 7 — a locally proposed stop_loss WITHOUT broker
+        # confirmation must keep the trade in repair (stop re-queued)
+        from protection_guard import repair_unprotected_positions
+        tr = self._trade(_id="trR12", account_id="000000000000000000000012",
+                         stop_loss=1.0795)          # no confirmed_stop_loss
+        db = self._guard_db([tr])
+        out = asyncio.run(repair_unprotected_positions(db))
+        assert out["resolved"] == 0 and out["stops_queued"] == 1
+        from scalp.engine import set_protection_block
+        set_protection_block("000000000000000000000012", False)
 
     def test_exhausted_attempts_escalate_to_emergency_close(self):
         from protection_guard import repair_unprotected_positions
@@ -1116,8 +1148,9 @@ class TestRound8ProtectionRecovery:
                          pending_modification={"type": "MODIFY_SL"})
         db = self._guard_db([tr])
         out = asyncio.run(repair_unprotected_positions(db))
-        assert out == {"resolved": 0, "stops_queued": 0, "closes_queued": 0,
-                       "accounts_blocked": ["000000000000000000000004"]}
+        assert out["resolved"] == 0 and out["stops_queued"] == 0
+        assert out["closes_queued"] == 0
+        assert out["accounts_blocked"] == ["000000000000000000000004"]
 
     def test_protection_block_vetoes_scalp_entries(self):
         from scalp.engine import set_protection_block, _protection_block
@@ -1327,13 +1360,29 @@ class TestRound9Hardening:
         from scalp.engine import (verify_durable_invariants,
                                   _invariant_block, _runners)
         db = _stub_db()
-        cursor = MagicMock()
-        cursor.to_list = AsyncMock(return_value=[
+
+        class _AC:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def sort(self, *a, **k):
+                return self
+
+            def __aiter__(self):
+                self._it = iter(self._items)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        db.trades.find = MagicMock(side_effect=lambda *a, **k: _AC([
             {"account_id": "r9-din-1", "stop_loss": 1.07},   # no runner
             {"_id": "t2", "account_id": "r9-din-2", "stop_loss": 0.0},
             {"_id": "t3", "account_id": "r9-din-3", "stop_loss": 1.07},
-        ])
-        db.trades.find = MagicMock(return_value=cursor)
+        ]))
         r2 = ScalpRunner("r9-din-2", "u1", "EURUSD")
         r2._risk_restored = True
         _runners["r9-din-2:EURUSD"] = r2
@@ -1382,50 +1431,27 @@ class TestRound9Hardening:
         assert calculate_emergency_stop(1.08, "BUY", 0.05, "EURUSD", 0.0) is None
         assert calculate_emergency_stop(1.08, "BUY", 10.0, "EURUSD", 100.0) is None
 
-    def _ack_env(self, trade):
-        from unittest.mock import patch
-        import routes.bridge_routes as br
-        db = _stub_db()
-        db.trades.find_one = AsyncMock(return_value=trade)
-        acc = {"_id": "acc-ack", "user_id": "u1"}
-        patches = [patch.object(br, "get_db", return_value=db),
-                   patch.object(br, "_account_by_token",
-                                AsyncMock(return_value=acc)),
-                   patch.object(br.ws_manager, "broadcast", AsyncMock())]
-        return br, db, patches
-
     def test_modification_ack_confirms_emergency_protection(self):
-        """Round 9 item 8 — protection is RESOLVED only on an explicit
-        broker acknowledgment: confirmed_stop_loss is recorded."""
-        trade = {"_id": "0" * 24, "account_id": "acc-ack", "action": "BUY",
-                 "entry_price": 1.08, "protection_state":
-                 "EMERGENCY_STOP_PENDING", "requested_stop_loss": 1.079,
-                 "breakeven_set": False}
-        br, db, patches = self._ack_env(trade)
-        payload = br.BridgeModificationAck(
-            bridge_token="t", trade_id="0" * 24, type="MODIFY_SL",
-            success=True, new_sl=1.079)
-        with patches[0], patches[1], patches[2]:
-            asyncio.run(br.modification_ack(payload))
-        update = db.trades.update_one.call_args.args[1]["$set"]
+        """Round 9 item 8 / round 12 item 1 — the protection-ack policy is
+        tested through the dependency-free helper (no FastAPI/BSON/route
+        imports); the full route flow lives in the integration suite."""
+        from protection_guard import apply_protection_ack
+        trade = {"action": "BUY", "entry_price": 1.08,
+                 "protection_state": "EMERGENCY_STOP_PENDING",
+                 "requested_stop_loss": 1.079, "breakeven_set": False}
+        update = apply_protection_ack(trade, True, new_sl=1.079, now_iso="T9")
         assert update["protection_state"] == "RESOLVED"
         assert update["protection_missing"] is False
         assert update["confirmed_stop_loss"] == pytest.approx(1.079)
-        assert update["stop_loss"] == pytest.approx(1.079)
+        assert update["protection_resolved_at"] == "T9"
 
     def test_modification_ack_failure_returns_to_unknown(self):
         """Round 9 item 8 — a FAILED emergency-stop ack never assumes
         protection: the trade returns to PROTECTION_UNKNOWN for retry."""
-        trade = {"_id": "0" * 24, "account_id": "acc-ack", "action": "BUY",
-                 "entry_price": 1.08,
+        from protection_guard import apply_protection_ack
+        trade = {"action": "BUY", "entry_price": 1.08,
                  "protection_state": "EMERGENCY_STOP_PENDING"}
-        br, db, patches = self._ack_env(trade)
-        payload = br.BridgeModificationAck(
-            bridge_token="t", trade_id="0" * 24, type="MODIFY_SL",
-            success=False, error="broker rejected SL")
-        with patches[0], patches[1], patches[2]:
-            asyncio.run(br.modification_ack(payload))
-        update = db.trades.update_one.call_args.args[1]["$set"]
+        update = apply_protection_ack(trade, False, error="broker rejected SL")
         assert update["protection_state"] == "PROTECTION_UNKNOWN"
         assert update["last_modification_error"] == "broker rejected SL"
 
@@ -1631,3 +1657,115 @@ class TestRound11Hardening:
         r2.symbol = "EURGBP"          # cross pair — no authoritative value
         r2.commission_usd_per_lot_side = 3.5
         assert r2._commission_pips() == 999.0
+
+
+class TestRound12Hardening:
+    def test_looks_like_object_id(self):
+        from protection_guard import looks_like_object_id
+        assert looks_like_object_id("0" * 24)
+        assert looks_like_object_id("a1B2c3D4e5F6a1B2c3D4e5F6")
+        assert not looks_like_object_id("not-an-objectid")
+        assert not looks_like_object_id("0" * 23)
+        assert not looks_like_object_id("g" * 24)
+
+    def test_emergency_stop_none_for_unpriceable_symbol(self):
+        from protection_guard import calculate_emergency_stop
+        # cross pair — no authoritative pip value → None → caller closes
+        assert calculate_emergency_stop(
+            0.86, "BUY", 0.05, "EURGBP", 10_000.0) is None
+
+    def test_emergency_stop_snaps_to_tick(self):
+        from protection_guard import calculate_emergency_stop
+        from scalp.instruments import approved
+        tick = approved("EURUSD").tick_size
+        sl = calculate_emergency_stop(1.08123, "BUY", 0.05, "EURUSD", 10_000.0)
+        assert sl is not None
+        assert abs((sl / tick) - round(sl / tick)) < 1e-6
+
+    def test_confirm_or_adopt_first_touch_vs_foreign_owner(self):
+        from unittest.mock import patch
+        from scalp import engine as eng
+        db = _stub_db()
+        # no owner doc at all → first-touch adoption acquires
+        db.scalp_owners.find_one = AsyncMock(return_value=None)
+        with patch.object(eng, "acquire_account_lease",
+                          AsyncMock(return_value=True)) as acq:
+            assert asyncio.run(eng.confirm_or_adopt_account_lease(db, "aX"))
+            acq.assert_awaited_once()
+        # foreign owner doc present (even expired) → live path refuses
+        async def fo(flt, proj=None):
+            if "worker_id" in flt:            # confirm query
+                return None
+            return {"worker_id": "other:1"}   # ownership record exists
+        db.scalp_owners.find_one = AsyncMock(side_effect=fo)
+        with patch.object(eng, "acquire_account_lease",
+                          AsyncMock(return_value=True)) as acq:
+            assert not asyncio.run(eng.confirm_or_adopt_account_lease(db, "aY"))
+            acq.assert_not_awaited()
+
+    def test_recovery_takeover_is_logged_acquire(self):
+        from unittest.mock import patch
+        from scalp import engine as eng
+        db = _stub_db()
+        db.scalp_owners.find_one = AsyncMock(
+            return_value={"worker_id": "other:1", "lease_epoch": 4})
+        with patch.object(eng, "acquire_account_lease",
+                          AsyncMock(return_value=True)):
+            assert asyncio.run(
+                eng.acquire_expired_ownership_for_recovery(db, "aZ"))
+
+    def test_invariant_scan_stale_reason(self):
+        from datetime import datetime, timedelta, timezone
+        from scalp import engine as eng
+        saved = dict(eng._invariant_scan)
+        try:
+            eng._invariant_scan.update(
+                {"last_attempt_at": None, "last_success_at": None})
+            assert eng.invariant_scan_stale_reason() is None  # never ran
+            now = datetime.now(timezone.utc)
+            eng._invariant_scan.update(
+                {"last_attempt_at": now.isoformat(),
+                 "last_success_at": now.isoformat()})
+            assert eng.invariant_scan_stale_reason() is None  # fresh
+            old = (now - timedelta(seconds=eng.INVARIANT_SCAN_STALE_SEC + 60))
+            eng._invariant_scan.update(
+                {"last_attempt_at": now.isoformat(),
+                 "last_success_at": old.isoformat()})
+            reason = eng.invariant_scan_stale_reason()
+            assert reason and "invariant scan stale" in reason
+            # attempted but NEVER succeeded → also stale
+            eng._invariant_scan.update(
+                {"last_attempt_at": now.isoformat(), "last_success_at": None})
+            assert eng.invariant_scan_stale_reason() is not None
+        finally:
+            eng._invariant_scan.clear()
+            eng._invariant_scan.update(saved)
+
+    def test_repair_reports_queue_metrics(self):
+        from protection_guard import repair_unprotected_positions
+
+        class _AsyncCursor:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def sort(self, *a, **k):
+                return self
+
+            def __aiter__(self):
+                self._it = iter(self._items)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        db = _stub_db()
+        db.trades.find = MagicMock(side_effect=lambda *a, **k: _AsyncCursor([]))
+        db.trades.count_documents = AsyncMock(return_value=0)
+        db.trades.find_one = AsyncMock(return_value=None)
+        db.trades.distinct = AsyncMock(return_value=[])
+        out = asyncio.run(repair_unprotected_positions(db))
+        assert out["awaiting"] == 0 and out["processed"] == 0
+        assert "oldest_unresolved_age_sec" in out

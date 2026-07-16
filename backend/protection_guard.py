@@ -19,7 +19,7 @@ While any unprotected position exists on an account:
 import logging
 from datetime import datetime, timezone
 
-from pip_utils import pip_value_usd_per_lot
+from pip_utils import pip_value_usd_per_lot_strict  # noqa: F401 (re-export)
 
 logger = logging.getLogger(__name__)
 
@@ -29,31 +29,38 @@ CONSERVATIVE_RISK_PCT = 0.5    # unknown position counted at 0.5% equity
 FALLBACK_PRICE_PCT = 0.5       # stop distance cap: 0.5% of entry price
 CLOSE_ACK_ESCALATION_SEC = 120  # re-queue FULL_CLOSE if no EA ack by then
 CLOSE_ALERT_ATTEMPTS = 3        # operational alert after this many retries
+REPAIR_TIME_BUDGET_SEC = 8      # per-sweep processing budget (round 12)
+REPAIR_QUEUE_ALERT = 100        # global escalation threshold (round 12)
+
+
+def looks_like_object_id(value: str) -> bool:
+    """Dependency-free ObjectId-shape check (24 hex chars) — classification
+    must not depend on whether BSON happens to be installed."""
+    return (isinstance(value, str) and len(value) == 24
+            and all(c in "0123456789abcdefABCDEF" for c in value))
 
 
 async def find_account(db, account_id: str) -> tuple:
-    """Round 11 item 7 — centralized account lookup with an EXPLICIT reason.
-
-    Returns (account_or_None, reason) where reason is one of:
-    'ok', 'invalid_id', 'missing', 'db_error'. Tries ObjectId first, then a
-    raw string _id, so a valid account stored under another identifier
-    format is never mistaken for a missing one."""
+    """Round 11/12 item 7 — centralized account lookup with an EXPLICIT
+    reason: 'ok', 'invalid_id', 'missing', 'db_error'. Tries ObjectId first
+    (when the id is ObjectId-shaped and BSON is available), then a raw
+    string _id, so a valid account stored under another identifier format
+    is never mistaken for a missing one."""
     if not account_id:
         return None, "invalid_id"
-    oid = None
-    try:
-        from bson import ObjectId
-        oid = ObjectId(account_id)
-    except Exception:  # noqa: BLE001 — not a valid ObjectId string
-        oid = None
+    shaped = looks_like_object_id(account_id)
     try:
         acc = None
-        if oid is not None:
-            acc = await db.accounts.find_one({"_id": oid})
+        if shaped:
+            try:
+                from bson import ObjectId
+                acc = await db.accounts.find_one({"_id": ObjectId(account_id)})
+            except ImportError:
+                acc = None
         if acc is None:
             acc = await db.accounts.find_one({"_id": account_id})
         if acc is None:
-            return None, ("missing" if oid is not None else "invalid_id")
+            return None, ("missing" if shaped else "invalid_id")
         return acc, "ok"
     except Exception as e:  # noqa: BLE001
         logger.error("account lookup failed for %s: %s", account_id, e)
@@ -97,8 +104,13 @@ def calculate_emergency_stop(entry: float, direction: str, lot: float,
     emergency full close instead."""
     if not entry or not lot:
         return None
-    from pip_utils import pip_size
-    pv = pip_value_usd_per_lot(symbol, None) or 10.0
+    from pip_utils import pip_size, pip_value_usd_per_lot_strict
+    from scalp.instruments import approved
+    # round 12 item 5 — NEVER fabricate a pip value: unpriceable symbol →
+    # None → the caller queues an emergency close instead.
+    pv = pip_value_usd_per_lot_strict(symbol)
+    if pv is None:
+        return None
     pip = pip_size(symbol) or 0.0001
     budget = (equity or 0) * EMERGENCY_RISK_PCT / 100.0
     if budget <= 0:
@@ -110,6 +122,13 @@ def calculate_emergency_stop(entry: float, direction: str, lot: float,
     if dist_px <= 0:
         return None
     sl = entry - dist_px if (direction or "BUY").upper() == "BUY" else entry + dist_px
+    # round 12 item 6 — snap to the instrument's tick size instead of
+    # assuming 5-decimal FX precision. (Broker min-stop-distance / freeze
+    # level verification stays EA-side where those limits are known.)
+    cfg = approved(symbol)
+    tick = float(getattr(cfg, "tick_size", 0) or 0) if cfg else 0.0
+    if tick > 0:
+        sl = round(round(sl / tick) * tick, 8)
     return round(sl, 5)
 
 
@@ -117,21 +136,51 @@ async def repair_unprotected_positions(db) -> dict:
     """One sweep of the recovery state machine. Idempotent; safe to run
     every reconcile interval."""
     now_iso = datetime.now(timezone.utc).isoformat()
-    trades = await db.trades.find(
-        {"status": "open", "protection_missing": True}).to_list(50)
-    resolved = stops_queued = closes_queued = 0
+    q = {"status": "open", "protection_missing": True}
+    # Round 12 item 4 — no fixed 50-trade cap: priority-ordered cursor
+    # (largest exposure proxy first, then oldest) processed inside a time
+    # budget; queue metrics + global escalation when the backlog grows.
+    total_awaiting = await db.trades.count_documents(q)
+    oldest_doc = await db.trades.find_one(q, {"opened_at": 1},
+                                          sort=[("opened_at", 1)])
+    oldest_age_sec = None
+    if oldest_doc and oldest_doc.get("opened_at"):
+        try:
+            oldest_age_sec = int(
+                (datetime.now(timezone.utc)
+                 - datetime.fromisoformat(oldest_doc["opened_at"]))
+                .total_seconds())
+        except ValueError:
+            pass
+    if total_awaiting > REPAIR_QUEUE_ALERT:
+        logger.critical(
+            "protection repair backlog %d exceeds %d — global operational "
+            "escalation (oldest unresolved %ss)",
+            total_awaiting, REPAIR_QUEUE_ALERT, oldest_age_sec)
+    import time as _time
+    deadline = _time.monotonic() + REPAIR_TIME_BUDGET_SEC
+    resolved = stops_queued = closes_queued = processed = 0
     accounts_blocked: set = set()
-    for tr in trades:
+    async for tr in db.trades.find(q).sort([("lot_size", -1),
+                                            ("opened_at", 1)]):
+        if _time.monotonic() > deadline:
+            logger.warning(
+                "protection repair time budget hit after %d/%d trades — "
+                "remainder next sweep", processed, total_awaiting)
+            break
+        processed += 1
         tid = tr["_id"]
         account_id = str(tr.get("account_id") or "")
-        # EA reported a protective stop since the flag was raised → RESOLVED.
-        # Round 9 item 8 — the resolving stop value is recorded as the
-        # broker-confirmed protection level, not just assumed.
-        if float(tr.get("stop_loss") or 0) != 0.0:
+        # Round 12 item 7 — protection resolves ONLY on broker-confirmed
+        # evidence (confirmed_stop_loss from an EA modification ack or a
+        # broker position snapshot). A locally proposed/stale stop_loss
+        # value is NOT sufficient.
+        confirmed = float(tr.get("confirmed_stop_loss") or 0)
+        if confirmed != 0.0:
             await db.trades.update_one({"_id": tid}, {"$set": {
                 "protection_missing": False,
                 "protection_state": "RESOLVED",
-                "confirmed_stop_loss": float(tr["stop_loss"]),
+                "confirmed_stop_loss": confirmed,
                 "protection_resolved_at": now_iso}})
             resolved += 1
             continue
@@ -263,4 +312,6 @@ async def repair_unprotected_positions(db) -> dict:
                        "closes_queued=%d", resolved, stops_queued, closes_queued)
     return {"resolved": resolved, "stops_queued": stops_queued,
             "closes_queued": closes_queued,
-            "accounts_blocked": sorted(open_flagged)}
+            "accounts_blocked": sorted(open_flagged),
+            "awaiting": total_awaiting, "processed": processed,
+            "oldest_unresolved_age_sec": oldest_age_sec}

@@ -324,16 +324,27 @@ async def _scalp_reconcile_loop():
     PROT = int(os.environ.get("SCALP_PROTECTION_SWEEP_SEC", "10"))
     FIN = int(os.environ.get("SCALP_RECONCILE_INTERVAL_SEC", "45"))
     FULL = int(os.environ.get("SCALP_INVARIANT_SWEEP_SEC", "300"))
-    t = 0
+    # Round 12 item 8 — independent monotonic deadlines per sweep: exact
+    # cadence regardless of interval ratios, no drift when a sweep is slow.
+    from time import monotonic
+    next_fin = monotonic() + FIN
+    next_full = monotonic() + FULL
     while True:
         try:
             await asyncio.sleep(PROT)
-            t += PROT
             await repair_unprotected_positions(get_db())
-            if t % FIN < PROT:
+            now_m = monotonic()
+            if now_m >= next_fin:
+                next_fin = now_m + FIN
                 await recover_pending_deals(get_db())
-            if t % FULL < PROT:
-                await verify_durable_invariants(get_db())
+            if now_m >= next_full:
+                next_full = now_m + FULL
+                try:
+                    await verify_durable_invariants(get_db())
+                except Exception as e:  # noqa: BLE001
+                    from scalp.engine import _invariant_scan
+                    _invariant_scan["last_error"] = str(e)
+                    raise
                 for account_id in {k.split(":")[0] for k in list(_runners)}:
                     verify_account_invariants(account_id)
         except asyncio.CancelledError:

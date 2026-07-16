@@ -30,6 +30,7 @@ overlapping same-direction candidates are suppressed while a sim is active.
 import asyncio
 import logging
 import os
+import time
 import uuid
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -213,6 +214,70 @@ def set_service_block(reason: str | None) -> None:
 
 def service_block_reason() -> str | None:
     return _service_block_reason
+
+
+# Round 12 item 9 — invariant-scan health telemetry. A stale or failing
+# integrity scan is itself a risk condition: entries are vetoed when the
+# last successful sweep is older than the grace window.
+_invariant_scan: dict = {"last_attempt_at": None, "last_success_at": None,
+                         "last_error": None, "last_duration_ms": None,
+                         "docs_examined": 0, "blocked_accounts": 0,
+                         "ledger_mismatches": 0,
+                         "oldest_pending_event_sec": None}
+INVARIANT_SCAN_STALE_SEC = int(os.environ.get(
+    "SCALP_INVARIANT_SCAN_STALE_SEC", "900"))
+PENDING_EVENT_MAX_AGE_SEC = int(os.environ.get(
+    "SCALP_PENDING_EVENT_MAX_AGE_SEC", "600"))
+
+
+def invariant_scan_stale_reason() -> str | None:
+    """Veto reason when integrity scanning has run before but has not
+    SUCCEEDED within the grace window (never blocks environments where the
+    scheduler hasn't started scanning at all)."""
+    attempted = _invariant_scan.get("last_attempt_at")
+    success = _invariant_scan.get("last_success_at")
+    if not attempted:
+        return None
+    ref = success or attempted
+    try:
+        age = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(ref)).total_seconds()
+    except ValueError:
+        return None
+    if success is None or age > INVARIANT_SCAN_STALE_SEC:
+        return (f"invariant scan stale ({int(age)}s since last success; "
+                f"last_error={_invariant_scan.get('last_error')})")
+    return None
+
+
+async def confirm_or_adopt_account_lease(db, account_id: str) -> bool:
+    """Round 12 item 2 — LIVE-callback ownership check. Confirms current
+    ownership; adopts the account ONLY when no ownership record exists at
+    all (first touch). Never takes over another worker's expired lease —
+    that is the recovery sweep's clearly-logged job."""
+    owned, _ = await confirm_account_lease_now(db, account_id)
+    if owned:
+        return True
+    doc = await db.scalp_owners.find_one(
+        {"account_id": account_id}, {"worker_id": 1})
+    if doc is None:
+        return await acquire_account_lease(db, account_id)
+    return False
+
+
+async def acquire_expired_ownership_for_recovery(db, account_id: str) -> bool:
+    """Round 12 item 2 — RECOVERY takeover of an expired lease, explicitly
+    logged so ownership transitions are auditable."""
+    prev = await db.scalp_owners.find_one(
+        {"account_id": account_id}, {"worker_id": 1, "lease_epoch": 1})
+    ok = await acquire_account_lease(db, account_id)
+    if ok and prev is not None and prev.get("worker_id") != _worker_id:
+        logger.warning(
+            "RECOVERY TAKEOVER account=%s from worker=%s (epoch %s → %s) "
+            "by %s", account_id, prev.get("worker_id"),
+            prev.get("lease_epoch"), _lease_epoch.get(account_id),
+            _worker_id)
+    return ok
 
 
 async def _restore_account_state(db, account_id: str, force: bool = False):
@@ -464,6 +529,9 @@ class ScalpRunner:
         if _service_block_reason:
             risk_res = {"ok": False, "lot": 0.0,
                         "reason": f"scalp service blocked: {_service_block_reason}"}
+        elif (scan_stale := invariant_scan_stale_reason()) is not None:
+            # round 12 item 9 — a stale/failed integrity scan fails closed
+            risk_res = {"ok": False, "lot": 0.0, "reason": scan_stale}
         elif pip_val is None:
             # round 11 item 6 — no authoritative pip value → risk UNKNOWN
             risk_res = {"ok": False, "lot": 0.0,
@@ -1284,6 +1352,7 @@ def audit_backlog() -> dict:
             "halted": _audit_pending >= AUDIT_BACKLOG_HALT,
             "pid": _owner_pid,
             "service_block": _service_block_reason,
+            "invariant_scan": dict(_invariant_scan),
             "dead_letter_path": DEAD_LETTER_PATH}
 
 
@@ -1306,17 +1375,22 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
                             lots: float, profit: float, commission: float,
                             swap: float, price, partial: bool,
                             remaining_lots: float | None = None,
-                            occurred_at_iso: str | None = None) -> dict:
+                            occurred_at_iso: str | None = None,
+                            recovery: bool = False) -> dict:
     """Round 7 critical item — the ONE way a broker deal reaches a scalp
     runner. Returns {"applied": bool, "reason": str|None}; callers may mark
     the broker deal reconciliation-complete ONLY when applied is True.
     Constructs and restores the runner if it does not exist yet."""
     from pip_utils import base_symbol
     symbol = base_symbol(trade.get("symbol") or "")
-    # Round 11 item 1 — FRESH (non-cached) lease confirmation for financial
-    # reconciliation too: a stale worker must not mutate local risk state
-    # only to be rejected later at the fenced persist.
-    if not await acquire_account_lease(db, account_id):
+    # Round 12 item 2 — EXPLICIT ownership intent: a live broker callback
+    # confirms (or first-touch adopts) current ownership; only the recovery
+    # sweep may take over another worker's expired lease (logged takeover).
+    if recovery:
+        owned = await acquire_expired_ownership_for_recovery(db, account_id)
+    else:
+        owned = await confirm_or_adopt_account_lease(db, account_id)
+    if not owned:
         return {"applied": False, "reason": "account_owned_by_other_worker"}
     r = get_runner(account_id, str(trade.get("user_id") or ""), symbol)
     if r is None:
@@ -1349,6 +1423,16 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
                               "risk_applied": False}}, upsert=True)
     except Exception as e:  # noqa: BLE001
         return {"applied": False, "reason": f"ledger_write_failed: {e}"}
+    # Round 12 item 3 — explicit, idempotent state transition: mark the
+    # (re-)application attempt so a crash window is visible in the ledger.
+    try:
+        await db.scalp_financial_events.update_one(
+            {**ev_key, "status": {"$ne": "applied"}},
+            {"$set": {"status": "risk_applying",
+                      "last_attempt_at": datetime.now(timezone.utc).isoformat()},
+             "$inc": {"apply_attempts": 1}})
+    except Exception:  # noqa: BLE001 — telemetry only
+        pass
     try:
         if partial:
             r.on_partial_close(
@@ -1370,11 +1454,23 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
         # item 6 — risk state + applied deal id are DURABLE before the
         # caller may flip the broker deal to complete
         await r.persist_risk_now(db)
-        # ledger event flips to APPLIED only after the fenced risk persist
+        # ledger event flips to APPLIED only after the fenced risk persist;
+        # round 12 item 10 — record reconciliation latency (economic time →
+        # server receipt → risk application) for lag monitoring.
+        _applied_now = datetime.now(timezone.utc)
+        _lat = {}
+        try:
+            _occ = datetime.fromisoformat(ev["occurred_at"])
+            _rec = datetime.fromisoformat(ev["received_at"])
+            _lat = {"report_delay_sec": round((_rec - _occ).total_seconds(), 3),
+                    "reconcile_delay_sec": round(
+                        (_applied_now - _rec).total_seconds(), 3)}
+        except (ValueError, KeyError):
+            pass
         await db.scalp_financial_events.update_one(
             ev_key,
             {"$set": {"status": "applied", "risk_applied": True,
-                      "applied_at": datetime.now(timezone.utc).isoformat()}})
+                      "applied_at": _applied_now.isoformat(), **_lat}})
     except Exception as e:  # noqa: BLE001
         return {"applied": False, "reason": f"apply_failed: {e}"}
     return {"applied": True, "reason": None}
@@ -1388,10 +1484,15 @@ async def verify_durable_invariants(db) -> dict:
     live position set must equal the DB's open scalp set (broker == DB is
     enforced separately on every heartbeat by trade_reconciler)."""
     blocked = []
-    open_trades = await db.trades.find(
-        {"scope": "scalp_fast", "status": "open"}).to_list(200)
+    _invariant_scan["last_attempt_at"] = datetime.now(timezone.utc).isoformat()
+    scan_t0 = time.monotonic()
+    docs_examined = 0
+    # Round 12 P0 — NO global truncation on safety integrity checks: iterate
+    # the full open-scalp cursor (grouped per account) instead of .to_list(200).
     by_account: dict = {}
-    for tr in open_trades:
+    async for tr in db.trades.find(
+            {"scope": "scalp_fast", "status": "open"}).sort("_id", 1):
+        docs_examined += 1
         by_account.setdefault(str(tr.get("account_id")), []).append(tr)
     for account_id, trs in by_account.items():
         runners = runners_for_account(account_id)
@@ -1493,6 +1594,35 @@ async def verify_durable_invariants(db) -> dict:
         logger.error("financial ledger invariant violations: %s", fin_blocked)
     if fin_warnings:
         logger.warning("financial ledger warnings: %s", fin_warnings)
+    # Round 12 item 10 — reconciliation-lag guardrail: a pending ledger
+    # event older than the max age means account risk may be stale → halt
+    # new entries on that account until it reconciles.
+    now_dt = datetime.now(timezone.utc)
+    oldest_pending_sec = None
+    async for g in db.scalp_financial_events.aggregate([
+            {"$match": {"status": {"$ne": "applied"}}},
+            {"$group": {"_id": "$account_id",
+                        "oldest": {"$min": "$received_at"}}}]):
+        try:
+            age = (now_dt - datetime.fromisoformat(g["oldest"])).total_seconds()
+        except (ValueError, TypeError):
+            continue
+        oldest_pending_sec = max(oldest_pending_sec or 0, age)
+        if age > PENDING_EVENT_MAX_AGE_SEC:
+            acct = str(g["_id"])
+            _invariant_block.add(acct)
+            fin_blocked.append({"account_id": acct,
+                                "issue": "pending_ledger_event_overdue",
+                                "age_sec": int(age)})
+    _invariant_scan.update({
+        "last_success_at": now_dt.isoformat(), "last_error": None,
+        "last_duration_ms": int((time.monotonic() - scan_t0) * 1000),
+        "docs_examined": docs_examined,
+        "blocked_accounts": len(blocked) + len(fin_blocked),
+        "ledger_mismatches": len(fin_warnings),
+        "oldest_pending_event_sec": (int(oldest_pending_sec)
+                                     if oldest_pending_sec is not None
+                                     else None)})
     return {"blocked": blocked, "financial_blocked": fin_blocked,
             "financial_warnings": fin_warnings}
 
@@ -1551,7 +1681,8 @@ async def recover_pending_deals(db, older_than_sec: int = 60,
                 swap=deal.get("swap") or 0, price=deal.get("price"),
                 partial=(trade.get("status") == "open"),
                 occurred_at_iso=(deal.get("occurred_at")
-                                 or deal.get("received_at")))
+                                 or deal.get("received_at")),
+                recovery=True)
             if res["applied"]:
                 await db.broker_deals.update_one(key, {"$set": {
                     "financial_reconciliation_status": "complete",
