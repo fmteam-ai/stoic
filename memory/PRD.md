@@ -548,3 +548,17 @@ UNRESOLVED (client-side, verified by troubleshoot agent):
 - LAST REMAINING USER STEP: on OnEquity demo EURUSD chart press F7 → set TickStreamEnabled=true (their v1.47 download predates the default change). Ticks will then flow and permissions/regime will compute (session window 7-20 UTC).
 - Other terminals (VTMarkets, RoboForex, StarTrader, OnEquity Live) still point at the old URL — user should update ServerUrl + WebRequest whitelist on each.
 - 15:21 UTC FINAL CONFIRMATION: user set TickStreamEnabled=true → ticks flowing (177 in first minute, spread 0.4p, quote age 106ms), permissions computed, regime TRENDING_DOWN, shadow engine evaluating. Scalp fast path fully operational end-to-end on OnEquity demo 1080930. All 6 terminals on v1.47 pointed at algo-trade-135. Issue CLOSED.
+
+## Session 2026-07-16 (cont.) — Scalp Review Round 10 implemented & verified
+User-submitted quantitative review, all items implemented (testing_agent iter-45 + iter-46 retest: 136/136 pass):
+- P0-1 Lease: confirm_account_lease_for_order() — NON-cached ownership read immediately before engine.execute() in _submit_live; fencing epoch stamped into order (trades.scalp_lease_epoch via execution.py); bridge poll-trades enforces newest-epoch per account (scalp_owners.max_order_epoch $max) and cancels stale-epoch scalp orders (error=stale_scalp_lease_epoch).
+- P0-2 Ledger-first financial events: scalp/deals.py build_financial_event (pure, built from immutable broker-deal facts); apply_broker_deal upserts event status='pending' BEFORE risk mutation, flips to 'applied' after fenced persist; recovery reconstructs missing events from broker_deals (no reliance on _last_financial_event).
+- iter-45 found+fixed P0 race: persist_risk_now/_fenced_account_write raised 'fenced out' on doc PRESENCE without comparing epochs (self-race vs own bg _persist_risk insert). Now stale ONLY when existing epoch strictly greater; equal/older → fenced retry. True staleness still rejected (iter-46 tests).
+- pip_value_usd_per_lot_strict: risk restoration fails closed (risk UNKNOWN + entries blocked via _invariant_block) for cross pairs/unknown symbols; no more silent $10 assumption.
+- protection_guard: unknown exposure = unconditional veto + capped 0.5%-equity estimate (removed $50 floor).
+- verify_durable_invariants: financial ledger invariants — BLOCKING reconciled-deal-missing-ledger-event; WARNING daily-loss ledger-sum mismatch.
+- seed.ensure_indexes: scalp-critical unique-index failure → set_service_block (whole scalp service fails closed; exposed as audit.service_block in /api/scalp/status; cleared on success).
+- Transactions (review item 6): Mongo standalone (no replica set) → idempotent ledger-first state machine is the accepted alternative; documented.
+- Note: reviewer's '97 passed 3 failed' (emergency-protection ObjectId fixture, bson-import unit tests) does NOT reproduce here — all suites green (1954 passed full suite; 2 transient HTTP-timeout flakes pass on rerun).
+- Test files: tests/test_iter45_round10_hardening.py (8), tests/test_iter46_true_staleness.py (4), TestRound10Hardening in tests/unit/scalp/test_scalp_unit.py (7).
+- Live at close: OnEquity scalp streaming (ticks flowing, regime computing), service_block=None.
