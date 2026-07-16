@@ -562,3 +562,13 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - Note: reviewer's '97 passed 3 failed' (emergency-protection ObjectId fixture, bson-import unit tests) does NOT reproduce here — all suites green (1954 passed full suite; 2 transient HTTP-timeout flakes pass on rerun).
 - Test files: tests/test_iter45_round10_hardening.py (8), tests/test_iter46_true_staleness.py (4), TestRound10Hardening in tests/unit/scalp/test_scalp_unit.py (7).
 - Live at close: OnEquity scalp streaming (ticks flowing, regime computing), service_block=None.
+
+## Session 2026-07-16 (cont.) — Scalp Review Round 11 implemented & verified (iter-47: 146/146)
+- P0: poll-trades dispatch now AUTHORITATIVE — trade scalp_lease_epoch must EQUAL current scalp_owners.lease_epoch AND lease unexpired; any mismatch/expired/missing owner cancels (stale_scalp_lease_epoch). max_order_epoch kept as monotonic watermark only.
+- apply_broker_deal: fresh non-cached lease (acquire_account_lease); confirm_account_lease_for_order renamed confirm_account_lease_now.
+- Ledger economic time: broker_deals.occurred_at stamped from normalized broker deal time; events carry at/occurred_at (economic) + received_at (processing); recovery passes through.
+- Invariants: $lookup aggregation, no global 500 cap; canonical daily metrics daily_gross_loss_usd/daily_net_pnl_usd/daily_cost_usd persisted separately (daily_loss_usd legacy alias), reconciled as warnings.
+- Strict pip everywhere in scalp: _commission_pips → 999-pip veto if unpriceable; _maybe_evaluate blocks entry; partial-close/restore mark risk unknown + invariant block.
+- protection_guard: find_account (ObjectId→string-id, explicit reason ok/invalid_id/missing/db_error); apply_protection_ack pure dependency-free policy used by modification_ack route; emergency-close escalation (re-queue after 120s, notifications alert 'emergency_close_stuck' after 3 retries, entry halt persists).
+- Tests: test_iter45 updated to equality semantics, TestRound11Hardening (5 unit), test_iter47_round11_e2e.py (5 e2e by testing agent). Full suite 2004 passed (test_iter127 bot_pulse label is load-flaky only).
+- Reviewer's '103 passed 4 failed' again did not reproduce here — all green.
