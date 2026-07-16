@@ -203,7 +203,7 @@ input int    DomSeconds             = 30;
 // EA v1.44 · Scalp fast path — bid/ask tick stream (EURUSD subsystem).
 // When enabled the EA switches to a millisecond timer and batches every
 // tick of TickStreamSymbol to /api/bridge/ticks each TickBatchMs.
-input bool   TickStreamEnabled      = false;
+input bool   TickStreamEnabled      = true;
 input string TickStreamSymbol       = "EURUSD";
 input int    TickBatchMs            = 1000;
 
