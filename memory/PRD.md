@@ -525,3 +525,17 @@ Remaining: dedicated stateful scalp service (lease is minimum enforcement), reco
 - MTF bots: evaluating every minute; entries vetoed by drift-blind MC (now fixed by iter-135). OnEquity Live bot_config active=False (user must re-enable if desired).
 
 Remaining backlog: EOD flatten for intraday entries (P2), expected-net-return regression model (P2), GBPUSD scalp after EURUSD validation (P2), production deploy (P1), stateful scalp worker / sticky routing (P2), MC constants configurable via bot_config (P3, testing-agent suggestion), EA v1.47 with TickStreamEnabled default true (P3).
+
+## Session 2026-07-16 (fork) — Scalp "Ticks 0" investigation, STOPPED BY USER
+Fixes shipped (all unit-tested, full-suite regression ~99% green at stop time):
+- base_symbol() in pip_utils.py now resolves suffixed FX majors (EURUSD# → EURUSD). Root cause of scalp ticks being dropped ("not in approved universe") and candles stored under orphaned EURUSD# doc.
+- Migrated intraday_candles EURUSD# → EURUSD (627 bars merged; EURUSD now fresh).
+- EA v1.47: SendCandles now streams chart symbol + ALL TrackedSymbols (suffix-resolved) — fixes BTCUSD candle starvation when EA moved off the BTCUSD chart. Frontend version strings bumped to 1.47.
+- apply_broker_deal now normalizes symbol via base_symbol.
+- /api/trades/live response now includes account_id (fixed test_iter24c failure).
+- CRITICAL: backend_test.py test_panic used to POST /api/panic AS REAL ADMIN → every full pytest run disabled all user bots and requested close on real open trades (happened 00:06 UTC on a live OnEquity GOLD trade). Test rewritten to use isolated throwaway user. Admin's 7 bot_configs restored (active=true, trip flags cleared). GOLD trade close request was later re-issued by auto_deleverage_hard_drawdown protection (legitimate — NOT overridden).
+
+UNRESOLVED (client-side, verified by troubleshoot agent):
+- ALL user MT5 terminals except "OnEquity Live" stopped sending heartbeats/candles/ticks at 00:04:21 UTC (OnEquity demo 1080930 = the scalp account, VTMarkets, RoboForex, STARTRADER, Tauro — likely one host/VPS went down). Server verified healthy and externally reachable; test heartbeat with valid token accepted. NOTHING server-side can fix this — user must check the machine running those terminals, confirm EAs attached, and set TickStreamEnabled=true on OnEquity demo EA (inputs reset to default false on EA upgrade).
+- User stopped the session frustrated; the scalp card will show Ticks 0 until their terminal reconnects.
+- Post-stop cleanup: bumped remaining EA version constants (diagnostic_routes.py, bot_routes.py, setup_routes.py) to 1.47 — all version tests pass. Final suite state: only 2 failures remain (test_iter126 mtf_confluence_cascade_shape, test_iter127 mtf_confluence_endpoint_ok) and both are LIVE-DATA dependent: they require fresh M15 candles which cannot arrive while the user's terminals are offline. Not code defects.
