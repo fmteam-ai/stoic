@@ -161,14 +161,17 @@ def test_pollTrades_stale_epoch_cancelled(ctx):
 # ================================================================
 
 def test_pollTrades_epoch_geq_dispatches_and_raises_max(ctx):
+    """Round 11 — dispatch requires the trade epoch to EQUAL the account's
+    CURRENT live lease_epoch (authoritative ownership doc), not merely to
+    clear the max_order_epoch watermark."""
     db = mongo_db()
     acc = ctx["acc"]
     account_id = acc["id"]
     user_id_row = db.users.find_one({"email": ctx["email"].lower()})
     user_id = str(user_id_row["_id"])
 
-    _install_alien_owner(db, account_id, epoch=5, max_order_epoch=5)
-    tid = _insert_pending_trade(db, account_id, user_id, epoch=6)
+    _install_alien_owner(db, account_id, epoch=5, max_order_epoch=4)
+    tid = _insert_pending_trade(db, account_id, user_id, epoch=5)
 
     r = requests.post(f"{API}/bridge/poll-trades",
                       json={"bridge_token": acc["bridge_token"]}, timeout=15)
@@ -176,17 +179,28 @@ def test_pollTrades_epoch_geq_dispatches_and_raises_max(ctx):
     body = r.json()
     trade_ids = [t["trade_id"] for t in body.get("trades", [])]
     assert tid in trade_ids, \
-        f"epoch=6 (>= max=5) trade should be dispatched: {trade_ids}"
+        f"epoch=5 (== current lease_epoch) trade should be dispatched: {trade_ids}"
 
     doc = db.trades.find_one({"_id": _oid(tid)})
     assert doc.get("status") == "pending"
     assert doc.get("_dispatched_at") is not None
 
     owner = db.scalp_owners.find_one({"account_id": account_id})
-    assert int(owner.get("max_order_epoch") or 0) == 6, \
-        f"max_order_epoch should be raised to 6: {owner}"
+    assert int(owner.get("max_order_epoch") or 0) == 5, \
+        f"max_order_epoch should be raised to 5: {owner}"
 
-    db.trades.delete_one({"_id": _oid(tid)})
+    # a NEWER-than-current epoch must ALSO be rejected (epoch mismatch —
+    # such an order cannot belong to the current owner)
+    tid2 = _insert_pending_trade(db, account_id, user_id, epoch=6)
+    r = requests.post(f"{API}/bridge/poll-trades",
+                      json={"bridge_token": acc["bridge_token"]}, timeout=15)
+    assert r.status_code == 200, r.text
+    assert tid2 not in [t["trade_id"] for t in r.json().get("trades", [])]
+    doc2 = db.trades.find_one({"_id": _oid(tid2)})
+    assert doc2.get("status") == "cancelled"
+    assert doc2.get("error") == "stale_scalp_lease_epoch"
+
+    db.trades.delete_many({"_id": {"$in": [_oid(tid), _oid(tid2)]}})
     db.scalp_owners.delete_one({"account_id": account_id})
 
 
@@ -409,6 +423,9 @@ def test_scalp_status_admin_shows_service_block_null():
 
 def test_suffixed_symbol_tick_regression(ctx):
     acc = ctx["acc"]
+    # release any lease grabbed in-process by the crash-recovery test (that
+    # lease belongs to the PYTEST worker, not the backend server worker)
+    mongo_db().scalp_owners.delete_many({"account_id": acc["id"]})
     now = int(time.time() * 1000)
     ticks = [{"tm": now - i * 100, "b": 1.08497 + i * 0.00001,
               "a": 1.08503 + i * 0.00001} for i in range(10)]

@@ -40,6 +40,12 @@ def build_financial_event(*, account_id: str, symbol: str, trade_id: str,
     net_pnl = pnl + commission + swap
     trading_pnl = pnl + commission + min(0.0, swap)
     execution_cost = max(0.0, -commission) + max(0.0, -swap)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Round 11 item 2 — `at`/`occurred_at` carry the ECONOMIC event time
+    # (normalized broker-deal time when available) so delayed or recovered
+    # reconciliation cannot shift a loss onto the wrong calendar day;
+    # `received_at` records processing time separately.
+    occurred = at_iso or now_iso
     ev = {"account_id": account_id, "symbol": symbol,
           "trade_id": trade_id, "deal_id": str(deal_id),
           "event_type": event_type,
@@ -48,7 +54,7 @@ def build_financial_event(*, account_id: str, symbol: str, trade_id: str,
           "execution_cost": round(execution_cost, 2),
           "commission": commission, "swap": swap,
           "lease_epoch": int(lease_epoch or 0),
-          "at": at_iso or datetime.now(timezone.utc).isoformat()}
+          "at": occurred, "occurred_at": occurred, "received_at": now_iso}
     if remaining_lots is not None:
         ev["remaining_lots"] = float(remaining_lots)
     return ev

@@ -181,7 +181,7 @@ async def ensure_account_lease(db, account_id: str) -> bool:
     return owned
 
 
-async def confirm_account_lease_for_order(db, account_id: str) -> tuple:
+async def confirm_account_lease_now(db, account_id: str) -> tuple:
     """Round 10 item 1 — NON-CACHED ownership confirmation for order
     execution. The cached helper can return a stale owned=True for up to
     half the lease TTL; a worker that paused past its lease while another
@@ -418,8 +418,10 @@ class ScalpRunner:
     def _commission_pips(self, lot_neutral: bool = True) -> float:
         if self.commission_usd_per_lot_side <= 0:
             return 0.0
-        from pip_utils import pip_value_usd_per_lot
-        pv = pip_value_usd_per_lot(self.symbol, None) or 10.0
+        from pip_utils import pip_value_usd_per_lot_strict
+        pv = pip_value_usd_per_lot_strict(self.symbol)
+        if pv is None:
+            return 999.0        # unpriceable symbol → cost vetoes any entry
         return round(self.commission_usd_per_lot_side * 2.0 / pv, 3)
 
     async def _maybe_evaluate(self, db):
@@ -453,8 +455,8 @@ class ScalpRunner:
                            model_p=model_p, commission_pips=commission_pips)
         edge_res = edge.evaluate(fc)
 
-        from pip_utils import pip_value_usd_per_lot
-        pip_val = pip_value_usd_per_lot(self.symbol, None)
+        from pip_utils import pip_value_usd_per_lot_strict
+        pip_val = pip_value_usd_per_lot_strict(self.symbol)
         # round 6 items 4/5 — EXPLICIT account-level policy: open-position
         # count AND monetary stop-risk budget across ALL runners.
         # round 8 — protection/invariant blocks veto entries outright.
@@ -462,6 +464,12 @@ class ScalpRunner:
         if _service_block_reason:
             risk_res = {"ok": False, "lot": 0.0,
                         "reason": f"scalp service blocked: {_service_block_reason}"}
+        elif pip_val is None:
+            # round 11 item 6 — no authoritative pip value → risk UNKNOWN
+            risk_res = {"ok": False, "lot": 0.0,
+                        "reason": (f"no authoritative pip value for "
+                                   f"{self.symbol} — risk unknown, entry "
+                                   f"blocked")}
         elif self.account_id in _protection_block:
             risk_res = {"ok": False, "lot": 0.0,
                         "reason": ("unprotected position on account — new "
@@ -480,7 +488,7 @@ class ScalpRunner:
                                   pip_val, self.cfg)
             if risk_res["ok"]:
                 proposed_stop_risk = (risk_res["lot"] * fc.stop_pips
-                                      * (pip_val or 10.0))
+                                      * pip_val)
                 acct_check = check_account(
                     self.account_risk, self.equity,
                     proposed_stop_risk_usd=proposed_stop_risk)
@@ -608,7 +616,7 @@ class ScalpRunner:
         # the LAST moment before broker submission with a NON-CACHED read;
         # the cached helper could return stale owned=True after another
         # worker acquired a newer fencing epoch.
-        owned, lease_epoch = await confirm_account_lease_for_order(
+        owned, lease_epoch = await confirm_account_lease_now(
             db, self.account_id)
         if not owned:
             self.state.record_reject()
@@ -646,8 +654,11 @@ class ScalpRunner:
         self._persist_risk(db)
         self.counters["live_trades"] += 1
         # estimated execution cost in USD for the daily cost budget (item 13)
-        from pip_utils import pip_value_usd_per_lot
-        pv = pip_value_usd_per_lot(self.symbol, None) or 10.0
+        from pip_utils import pip_value_usd_per_lot_strict
+        pv = pip_value_usd_per_lot_strict(self.symbol)
+        if pv is None:                    # defensive: evaluate already vetoes
+            _invariant_block.add(self.account_id)
+            pv = 0.0
         est_cost_usd = ((sp or 0) + 2 * fc.expected_slippage_pips) * pv * risk_res["lot"] \
             + self.commission_usd_per_lot_side * 2 * risk_res["lot"]
         # round 6 item 5 — register this position's monetary stop risk
@@ -919,11 +930,18 @@ class ScalpRunner:
             # remaining volume and the stored stop, not proportional scaling
             entry, stop = info.get("entry_px"), info.get("stop_px")
             if info["lot"] > 0 and entry and stop:
-                from pip_utils import pip_value_usd_per_lot
-                pv = pip_value_usd_per_lot(self.symbol, None) or 10.0
-                self.account_risk.add_stop_risk(
-                    trade_id, info["lot"] * abs(float(entry) - float(stop))
-                    / self.cfg.pip_size * pv)
+                from pip_utils import pip_value_usd_per_lot_strict
+                pv = pip_value_usd_per_lot_strict(self.symbol)
+                if pv is None:
+                    # round 11 item 6 — unpriceable: risk UNKNOWN, block
+                    _invariant_block.add(self.account_id)
+                    if prior_lot > 0:
+                        self.account_risk.scale_stop_risk(
+                            trade_id, info["lot"] / prior_lot)
+                else:
+                    self.account_risk.add_stop_risk(
+                        trade_id, info["lot"] * abs(float(entry) - float(stop))
+                        / self.cfg.pip_size * pv)
             elif prior_lot > 0 and info["lot"] > 0:
                 self.account_risk.scale_stop_risk(trade_id,
                                                   info["lot"] / prior_lot)
@@ -1112,11 +1130,12 @@ class ScalpRunner:
                     {"decision_id": tr["scalp_decision_id"]},
                     {"cost_pips": 1, "lot": 1})
                 if dec:
-                    from pip_utils import pip_value_usd_per_lot
-                    pv = pip_value_usd_per_lot(self.symbol, None) or 10.0
-                    info["est_cost_usd"] = round(
-                        float(dec.get("cost_pips") or 0) * pv
-                        * float(dec.get("lot") or 0), 2)
+                    from pip_utils import pip_value_usd_per_lot_strict
+                    pv = pip_value_usd_per_lot_strict(self.symbol)
+                    if pv is not None:
+                        info["est_cost_usd"] = round(
+                            float(dec.get("cost_pips") or 0) * pv
+                            * float(dec.get("lot") or 0), 2)
             self.live_trades[tid] = info
         self._risk_restored = True
 
@@ -1286,14 +1305,18 @@ def runners_for_account(account_id: str) -> list:
 async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
                             lots: float, profit: float, commission: float,
                             swap: float, price, partial: bool,
-                            remaining_lots: float | None = None) -> dict:
+                            remaining_lots: float | None = None,
+                            occurred_at_iso: str | None = None) -> dict:
     """Round 7 critical item — the ONE way a broker deal reaches a scalp
     runner. Returns {"applied": bool, "reason": str|None}; callers may mark
     the broker deal reconciliation-complete ONLY when applied is True.
     Constructs and restores the runner if it does not exist yet."""
     from pip_utils import base_symbol
     symbol = base_symbol(trade.get("symbol") or "")
-    if not await ensure_account_lease(db, account_id):
+    # Round 11 item 1 — FRESH (non-cached) lease confirmation for financial
+    # reconciliation too: a stale worker must not mutate local risk state
+    # only to be rejected later at the fenced persist.
+    if not await acquire_account_lease(db, account_id):
         return {"applied": False, "reason": "account_owned_by_other_worker"}
     r = get_runner(account_id, str(trade.get("user_id") or ""), symbol)
     if r is None:
@@ -1315,7 +1338,8 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
         event_type="partial_close" if partial else "full_close",
         profit=profit, commission=commission, swap=swap,
         remaining_lots=(remaining_lots if partial else None),
-        lease_epoch=_lease_epoch.get(account_id, 0))
+        lease_epoch=_lease_epoch.get(account_id, 0),
+        at_iso=occurred_at_iso)
     ev_key = {"account_id": ev["account_id"], "deal_id": ev["deal_id"],
               "event_type": ev["event_type"]}
     try:
@@ -1403,36 +1427,68 @@ async def verify_durable_invariants(db) -> dict:
     #   are surfaced for review instead of hard-blocking).
     fin_blocked, fin_warnings = [], []
     day_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    async for deal in db.broker_deals.find(
-            {"financial_reconciliation_status": "complete",
-             "financial_reconciled_at": {"$gte": day_ago},
-             "reconciliation_note": {"$ne": "not_scalp_scope"}}).limit(500):
-        n = await db.scalp_financial_events.count_documents(
-            {"account_id": deal["account_id"], "deal_id": str(deal["deal_id"])})
-        if n == 0:
-            acct = str(deal["account_id"])
-            _invariant_block.add(acct)
-            fin_blocked.append({"account_id": acct,
-                                "deal_id": str(deal["deal_id"]),
-                                "issue": "reconciled_deal_missing_ledger_event"})
+    # Round 11 item 3 — NO global fixed limit for financial integrity: an
+    # aggregation left-joins every completed scalp deal of the window against
+    # the ledger and returns EVERY missing event.
+    missing_pipeline = [
+        {"$match": {"financial_reconciliation_status": "complete",
+                    "financial_reconciled_at": {"$gte": day_ago},
+                    "reconciliation_note": {"$ne": "not_scalp_scope"}}},
+        {"$lookup": {
+            "from": "scalp_financial_events",
+            "let": {"acct": "$account_id", "did": {"$toString": "$deal_id"}},
+            "pipeline": [
+                {"$match": {"$expr": {"$and": [
+                    {"$eq": ["$account_id", "$$acct"]},
+                    {"$eq": ["$deal_id", "$$did"]}]}}},
+                {"$limit": 1}],
+            "as": "ev"}},
+        {"$match": {"ev": {"$size": 0}}},
+        {"$project": {"account_id": 1, "deal_id": 1}},
+    ]
+    async for deal in db.broker_deals.aggregate(missing_pipeline):
+        acct = str(deal["account_id"])
+        _invariant_block.add(acct)
+        fin_blocked.append({"account_id": acct,
+                            "deal_id": str(deal["deal_id"]),
+                            "issue": "reconciled_deal_missing_ledger_event"})
+    # Round 11 item 5 — canonical daily metrics reconciled separately:
+    # gross loss / net P&L per account from applied ledger events vs the
+    # persisted _ACCOUNT snapshot (report-path closes without deal ids can
+    # legitimately diverge → WARNING, not a block).
     day_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
-    async for rs in db.scalp_risk_state.find({"symbol": "_ACCOUNT"}).limit(200):
+    sums = {}
+    async for g in db.scalp_financial_events.aggregate([
+            {"$match": {"risk_applied": True, "at": {"$gte": day_start}}},
+            {"$group": {
+                "_id": "$account_id",
+                "net": {"$sum": "$net_pnl"},
+                "gross_loss": {"$sum": {"$cond": [
+                    {"$lt": ["$net_pnl", 0]},
+                    {"$subtract": [0, "$net_pnl"]}, 0]}}}}]):
+        sums[str(g["_id"])] = g
+    async for rs in db.scalp_risk_state.find({"symbol": "_ACCOUNT"}):
         acct = str(rs["account_id"])
-        loss_sum = 0.0
-        async for ev in db.scalp_financial_events.find(
-                {"account_id": acct, "risk_applied": True,
-                 "at": {"$gte": day_start}}).limit(500):
-            net = float(ev.get("net_pnl") or 0)
-            if net < 0:
-                loss_sum += -net
-        persisted = float(rs.get("daily_loss_usd") or 0)
-        tol = max(0.02, 0.001 * max(loss_sum, persisted))
-        if abs(loss_sum - persisted) > tol:
-            fin_warnings.append({
-                "account_id": acct,
-                "issue": "daily_loss_ledger_mismatch",
-                "ledger_loss_sum": round(loss_sum, 2),
-                "persisted_daily_loss": round(persisted, 2)})
+        if rs.get("daily_key") and rs["daily_key"] != day_start[:10]:
+            continue                       # snapshot belongs to a prior day
+        g = sums.get(acct, {"net": 0.0, "gross_loss": 0.0})
+        for metric, persisted_key in (
+                ("gross_loss", "daily_gross_loss_usd"),
+                ("net", "daily_net_pnl_usd")):
+            persisted_val = rs.get(persisted_key)
+            if persisted_val is None and persisted_key == "daily_gross_loss_usd":
+                persisted_val = rs.get("daily_loss_usd")
+            if persisted_val is None:
+                continue                   # legacy snapshot without metric
+            ledger_val = float(g.get(metric) or 0)
+            persisted = float(persisted_val or 0)
+            tol = max(0.02, 0.001 * max(abs(ledger_val), abs(persisted)))
+            if abs(ledger_val - persisted) > tol:
+                fin_warnings.append({
+                    "account_id": acct,
+                    "issue": f"daily_{metric}_ledger_mismatch",
+                    "ledger_value": round(ledger_val, 2),
+                    "persisted_value": round(persisted, 2)})
     if fin_blocked:
         logger.error("financial ledger invariant violations: %s", fin_blocked)
     if fin_warnings:
@@ -1493,7 +1549,9 @@ async def recover_pending_deals(db, older_than_sec: int = 60,
                 profit=deal.get("profit") or 0,
                 commission=deal.get("commission") or 0,
                 swap=deal.get("swap") or 0, price=deal.get("price"),
-                partial=(trade.get("status") == "open"))
+                partial=(trade.get("status") == "open"),
+                occurred_at_iso=(deal.get("occurred_at")
+                                 or deal.get("received_at")))
             if res["applied"]:
                 await db.broker_deals.update_one(key, {"$set": {
                     "financial_reconciliation_status": "complete",

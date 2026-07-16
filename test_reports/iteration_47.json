@@ -1,0 +1,37 @@
+{
+  "summary": "iter-47 RETEST — STOIC Scalp Review Round 11 P0 items PASSED cleanly. (1) Round 10/11 P0 authoritative epoch enforcement: tests/test_iter45_round10_hardening.py + tests/test_iter46_true_staleness.py = 12/12 passed, incl. updated test_pollTrades_epoch_geq_dispatches_and_raises_max asserting NEWER-than-current epoch is CANCELLED. (2) Round 11 unit batch: tests/unit/scalp/test_scalp_unit.py::TestRound11Hardening = 5/5 passed (apply_protection_ack pure policy, find_account reasons, canonical daily metrics, occurred_at vs received_at, commission fail-closed). (3) Full scalp regression = 141/141 in ~12s. (4) NEW E2E cases per review request landed in /app/backend/tests/test_iter47_round11_e2e.py (5/5 passed) — expired-lease rejection, missing-owner rejection, backfill occurred_at end-to-end (broker_deals.occurred_at ≈ past deal_time, ledger.at == occurred_at, received_at ~ now), modification-ack success (EMERGENCY_STOP_PENDING → RESOLVED with confirmed_stop_loss + protection_missing=false), modification-ack failure (EMERGENCY_STOP_PENDING → PROTECTION_UNKNOWN + last_modification_error). Combined grand total 146/146 (141 baseline + 5 iter47 E2E). No admin real broker terminals, tokens, accounts, or scalp_owners touched.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter45_round10_hardening.py",
+    "/app/backend/tests/test_iter46_true_staleness.py",
+    "/app/backend/tests/test_iter47_round11_e2e.py",
+    "/app/backend/tests/unit/scalp/test_scalp_unit.py::TestRound11Hardening",
+    "/app/test_reports/pytest/iter47_full.xml",
+    "/app/test_reports/pytest/iter47_scalp_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "OK · bridge_routes.poll_trades (lines 556–587) now correctly implements the authoritative epoch check: `stale = (not lease_live) OR ep != cur_epoch OR ep < max_order_epoch`. Comment block explicitly documents that max_order_epoch is an extra monotonic watermark, not a substitute for the live lease check. Confirmed by (a) equal epoch + live lease dispatches, (b) newer epoch cancelled, (c) expired lease_until cancelled, (d) missing owner doc cancelled.",
+    "OK · protection_guard.apply_protection_ack (lines 63–88) is dependency-free (no FastAPI/BSON/Mongo imports) and returns a pure dict of update fields; modification_ack route (bridge_routes.py:727-731) imports and composes it into the trade update. Confirmed E2E for both success (RESOLVED + confirmed_stop_loss + protection_missing=false) and failure (PROTECTION_UNKNOWN + last_modification_error) transitions from EMERGENCY_STOP_PENDING.",
+    "OK · external-deal occurred_at path (bridge_routes.py:1138-1184) — after broker-time normalization deal_iso is $set on broker_deals.occurred_at, and downstream apply_broker_deal/build_financial_event carry it through to scalp_financial_events.at while received_at stamps at ingest time. Verified with a backfill=true deal 2 days in the past: broker_deals.occurred_at drift <5s from the raw deal_time (offset=0 for TestBroker), ledger.at matches, received_at is ~now (>3600s AFTER occurred_at).",
+    "OPTIONAL P3 (carried from iter-45/46) · poll_trades $max on max_order_epoch (line ~587) happens AFTER the authoritative live-lease check. Now that max_order_epoch is only a monotonic watermark and never a gate on its own, the comment at line 559–562 is exactly right; no further change needed but keeping the note for continuity.",
+    "OPTIONAL P4 (carried) · poll-trades response body could echo the effective epoch used for dispatch decisions to aid EA-side forensics when a scalp order is fence-cancelled. Nice-to-have, not blocking.",
+    "OPTIONAL P5 (carried) · audit_backlog surfaces service_block on /api/scalp/status but there is still no admin API to CLEAR service_block once the offending unique index has been dropped out-of-band. A `POST /api/scalp/service-block/clear` admin route would ease ops recovery.",
+    "OBSERVATION · engine.apply_broker_deal now uses fresh acquire_account_lease (not cached ensure_account_lease) and confirm_account_lease_now — this pairs correctly with the poll-trades dispatch semantics: recovery/deal-apply can TAKE OVER expired leases (correct), but the dispatch check does NOT acquire so an expired owner doc stays expired for dispatch (also correct). The two policies are internally consistent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter47_round11_e2e.py"
+  ],
+  "success_rate": {"backend": "100% (146/146 = 141 scalp regression + 5 iter47 new E2E; and 12/12 iter45+46 + 5/5 Round11 unit batch)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@trading.bot / admin123 (existing, read-only usage). Per-test TEST_iter47_<uuid>@example.com users + TestBroker/standard accounts created + torn down per module.",
+  "seed_data_creation": "No persistent seed. iter47 module-scoped fixture creates one isolated TEST_iter47_* user + one TestBroker account + a scalp EURUSD config, and tears them + all owned trades/broker_deals/scalp_financial_events/scalp_owners/scalp_decisions/scalp_configs/intraday_candles down after the module. Verified admin account (7 real broker accounts) is untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Round 11 hardening is fully verified end-to-end. Authoritative epoch check in poll-trades correctly enforces (a) live-lease + (b) trade.scalp_lease_epoch == owner.lease_epoch + (c) monotonic max_order_epoch watermark — verified for stale-older-epoch, newer-epoch, expired-lease-until, and missing-owner-doc scenarios. modification-ack via protection_guard.apply_protection_ack correctly resolves EMERGENCY_STOP_PENDING on MODIFY_SL success (records confirmed_stop_loss, sets RESOLVED, clears protection_missing) and downgrades to PROTECTION_UNKNOWN on failure (records last_modification_error, never applies stop_loss). broker_deals.occurred_at is stamped from the broker-time-normalized epoch and flows through to scalp_financial_events.at while received_at stamps at ingest — verified with a 2-day-old backfill. New file /app/backend/tests/test_iter47_round11_e2e.py (5 tests, ~3.5s) serves as the fast regression guard for these Round 11 E2E semantics; keep it. Full regression command remains: `cd /app/backend && python -m pytest tests/unit/scalp tests/integration/scalp tests/test_iter44_suffixed_symbol_scalp.py tests/test_iter45_round10_hardening.py tests/test_iter46_true_staleness.py tests/test_iter47_round11_e2e.py -q` → 146 passed in ~15s.",
+  "rca of the issue": "N/A — no bugs found this iteration. Round 11 spec is implemented correctly on the code paths under review. All P0/P1 items from the review request (authoritative epoch check, occurred_at vs received_at, canonical daily metrics, dependency-free protection-ack policy, find_account reasons, strict pip fail-closed) are covered by passing unit + E2E tests."
+}

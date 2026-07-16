@@ -1309,7 +1309,7 @@ class TestRound9Hardening:
         async def run():
             with patch("execution.for_account",
                        return_value=fake_engine), \
-                 patch.object(eng, "confirm_account_lease_for_order",
+                 patch.object(eng, "confirm_account_lease_now",
                               AsyncMock(return_value=(False, 0))):
                 await r._submit_live(db, decision, fc, {"lot": 0.01})
                 for _ in range(5):
@@ -1436,7 +1436,7 @@ class TestRound10Hardening:
         db = _stub_db()
         db.scalp_owners.find_one = AsyncMock(return_value=None)
         owned, epoch = asyncio.run(
-            eng.confirm_account_lease_for_order(db, "acc10"))
+            eng.confirm_account_lease_now(db, "acc10"))
         assert owned is False and epoch == 0
         # the query must be worker- and expiry-scoped (non-cached, live doc)
         flt = db.scalp_owners.find_one.call_args.args[0]
@@ -1448,7 +1448,7 @@ class TestRound10Hardening:
         db = _stub_db()
         db.scalp_owners.find_one = AsyncMock(return_value={"lease_epoch": 7})
         owned, epoch = asyncio.run(
-            eng.confirm_account_lease_for_order(db, "acc10b"))
+            eng.confirm_account_lease_now(db, "acc10b"))
         assert owned is True and epoch == 7
         assert eng._lease_epoch["acc10b"] == 7
 
@@ -1473,7 +1473,7 @@ class TestRound10Hardening:
 
         async def run():
             with patch("execution.for_account", return_value=fake_engine), \
-                 patch.object(eng, "confirm_account_lease_for_order",
+                 patch.object(eng, "confirm_account_lease_now",
                               AsyncMock(return_value=(True, 9))):
                 await r._submit_live(db, decision, fc, {"lot": 0.01})
                 for _ in range(5):
@@ -1555,3 +1555,79 @@ class TestRound10Hardening:
         finally:
             eng.set_service_block(None)
         assert eng.audit_backlog()["service_block"] is None
+
+
+class TestRound11Hardening:
+    def test_apply_protection_ack_pure(self):
+        # dependency-free: no FastAPI/BSON/Mongo needed
+        from protection_guard import apply_protection_ack
+        tr = {"protection_state": "EMERGENCY_STOP_PENDING"}
+        up = apply_protection_ack(tr, True, new_sl=1.077, now_iso="T")
+        assert up == {"confirmed_stop_loss": 1.077,
+                      "protection_state": "RESOLVED",
+                      "protection_missing": False,
+                      "protection_resolved_at": "T"}
+        up = apply_protection_ack(tr, False, error="broker rejected SL")
+        assert up["last_modification_error"] == "broker rejected SL"
+        assert up["protection_state"] == "PROTECTION_UNKNOWN"
+        # non-emergency trades: success ack adds nothing protection-related
+        assert apply_protection_ack({}, True, new_sl=1.08) == {}
+        # non-emergency failure records the error only
+        up = apply_protection_ack({}, False, error=None)
+        assert up == {"last_modification_error": "unknown EA error"}
+
+    def test_find_account_reasons(self):
+        from protection_guard import find_account
+        db = MagicMock()
+        db.accounts.find_one = AsyncMock(return_value=None)
+        acc, why = asyncio.run(find_account(db, ""))
+        assert acc is None and why == "invalid_id"
+        acc, why = asyncio.run(find_account(db, "not-an-objectid"))
+        assert acc is None and why == "invalid_id"
+        acc, why = asyncio.run(find_account(db, "0" * 24))
+        assert acc is None and why == "missing"
+        db.accounts.find_one = AsyncMock(
+            side_effect=[None, {"_id": "str-id", "equity": 55.0}])
+        acc, why = asyncio.run(find_account(db, "0" * 24))
+        assert acc is not None and why == "ok"
+        db.accounts.find_one = AsyncMock(side_effect=RuntimeError("down"))
+        acc, why = asyncio.run(find_account(db, "0" * 24))
+        assert acc is None and why == "db_error"
+
+    def test_daily_metrics_are_separate(self):
+        from scalp.risk import RiskState
+        rs = RiskState()
+        rs.record_result(-5.0, 0.4)
+        rs.record_result(3.0, 0.3)
+        rs.record_result(-2.0, 0.2)
+        doc = rs.to_doc()
+        assert doc["daily_gross_loss_usd"] == pytest.approx(7.0)
+        assert doc["daily_net_pnl_usd"] == pytest.approx(-4.0)
+        assert doc["daily_cost_usd"] == pytest.approx(0.9)
+        rs2 = RiskState()
+        rs2.load_doc(doc)
+        assert rs2.daily_loss_usd == pytest.approx(7.0)
+        assert rs2.daily_net_pnl_usd == pytest.approx(-4.0)
+
+    def test_financial_event_occurred_vs_received(self):
+        from scalp.deals import build_financial_event
+        ev = build_financial_event(
+            account_id="a", symbol="EURUSD", trade_id="t", deal_id=1,
+            event_type="full_close", profit=-1, commission=0, swap=0,
+            at_iso="2026-07-15T23:59:58+00:00")
+        assert ev["at"] == "2026-07-15T23:59:58+00:00"
+        assert ev["occurred_at"] == ev["at"]
+        assert ev["received_at"] != ev["occurred_at"]
+        ev2 = build_financial_event(
+            account_id="a", symbol="EURUSD", trade_id="t", deal_id=2,
+            event_type="full_close", profit=1, commission=0, swap=0)
+        assert ev2["occurred_at"] == ev2["received_at"]
+
+    def test_commission_pips_fails_closed_on_unpriceable(self):
+        r = ScalpRunner("acc11", "u1", "EURUSD")
+        r.commission_usd_per_lot_side = 3.5
+        assert r._commission_pips() == pytest.approx(0.7)
+        r2 = ScalpRunner("acc11b", "u1", "EURUSD")
+        r2.symbol = "EURGBP"          # cross pair — no authoritative value
+        r2.commission_usd_per_lot_side = 3.5
+        assert r2._commission_pips() == 999.0

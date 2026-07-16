@@ -44,6 +44,7 @@ class RiskState:
         self.consecutive_losses = 0
         self.cooldown_until = 0.0
         self.daily_loss_usd = 0.0
+        self.daily_net_pnl_usd = 0.0
         self.daily_cost_usd = 0.0
         self.daily_key = ""
         self.open_scalps = 0
@@ -68,6 +69,7 @@ class RiskState:
         if key != self.daily_key:
             self.daily_key = key
             self.daily_loss_usd = 0.0
+            self.daily_net_pnl_usd = 0.0
             self.daily_cost_usd = 0.0
 
     def record_result(self, net_pnl_usd: float, cost_usd: float,
@@ -77,6 +79,7 @@ class RiskState:
         financing credits) so a swap credit can't mask a losing scalp."""
         self._roll_day()
         self.daily_cost_usd += abs(cost_usd)
+        self.daily_net_pnl_usd += net_pnl_usd
         streak_pnl = net_pnl_usd if trading_pnl_usd is None else trading_pnl_usd
         if net_pnl_usd < 0:
             self.daily_loss_usd += -net_pnl_usd
@@ -102,6 +105,11 @@ class RiskState:
             "consecutive_losses": self.consecutive_losses,
             "cooldown_until": self.cooldown_until,
             "daily_loss_usd": self.daily_loss_usd,
+            # round 11 item 5 — canonical daily metrics, each persisted
+            # separately (daily_loss_usd kept as the legacy alias of
+            # daily_gross_loss_usd for older snapshots/limit checks)
+            "daily_gross_loss_usd": self.daily_loss_usd,
+            "daily_net_pnl_usd": self.daily_net_pnl_usd,
             "daily_cost_usd": self.daily_cost_usd,
             "daily_key": self.daily_key,
         }
@@ -114,7 +122,10 @@ class RiskState:
         key = time.strftime("%Y-%m-%d", time.gmtime())
         if doc.get("daily_key") == key:      # same UTC day → restore budgets
             self.daily_key = key
-            self.daily_loss_usd = float(doc.get("daily_loss_usd") or 0.0)
+            self.daily_loss_usd = float(
+                doc.get("daily_gross_loss_usd",
+                        doc.get("daily_loss_usd")) or 0.0)
+            self.daily_net_pnl_usd = float(doc.get("daily_net_pnl_usd") or 0.0)
             self.daily_cost_usd = float(doc.get("daily_cost_usd") or 0.0)
 
 
