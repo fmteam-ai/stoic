@@ -1,0 +1,32 @@
+{
+  "summary": "iter-46 RETEST of Round-10 fence-check fix — PASSED cleanly. The iter-45 P0 blocker is resolved. persist_risk_now (engine.py:983-1012) and _fenced_account_write (engine.py:1024-1048) now compare `int(existing.get('lease_epoch') or 0) > epoch` BEFORE raising 'fenced out', and retry the fenced $set write when the observed doc holds an equal/older epoch (the self-race against the worker's own background _persist_risk between update_one and find_one). 8/8 iter-45 hardening tests pass — including test_external_deal_creates_applied_ledger_event (scalp_financial_events.status='applied', risk_applied=True, net_pnl correct, broker_deals status='complete') and test_crash_recovery_reconstructs_missing_ledger_event (event re-created by recover_pending_deals after deletion + deal re-pended; test now releases scalp_owners lease + clears engine._lease_cache to simulate the crashed-owner lease expiry). Full scalp regression is 132/132 (unit/scalp + integration/scalp + test_iter44 + test_iter45). Additionally wrote /app/backend/tests/test_iter46_true_staleness.py (4 unit tests using the _stub_db pattern) that explicitly verify: (a) strictly-newer existing epoch STILL raises 'risk persist fenced out', (b) equal epoch retries and succeeds, (c) older existing epoch retries and succeeds, (d) strictly-newer existing epoch on the _ACCOUNT branch raises 'account risk persist fenced out'. Grand total: 136/136 passed. No admin real accounts, trades, bridge tokens, or scalp_owners were touched during testing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter45_round10_hardening.py",
+    "/app/backend/tests/test_iter46_true_staleness.py",
+    "/app/test_reports/pytest/iter46_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "OPTIONAL P2 (unchanged from iter-45) · engine.on_trade_closed still fires a background self._persist_risk (line ~841) while apply_broker_deal awaits persist_risk_now moments later. Two writes to the same doc via two code paths is still racy in practice — the iter-45 fix correctly handles the race, but suppressing the redundant bg write when the sync path is imminent (or short-circuiting on the sync callsite) would eliminate the race entirely and drop one Mongo round-trip per close. Not blocking.",
+    "OPTIONAL P3 (unchanged) · bridge_routes.poll_trades $max on max_order_epoch happens BEFORE the readback — intentional read-after-write semantic; a one-line comment near line ~562 would improve readability.",
+    "OPTIONAL P4 (unchanged) · poll_trades response body could echo the epoch used for the dispatch decision to make EA-side forensics easier if a legitimate scalp trade is ever fence-cancelled.",
+    "OPTIONAL P5 (unchanged) · audit_backlog surfaces service_block, but there is no admin API to clear it once the offending unique index has been dropped out-of-band. A `set_service_block(None)` admin route would ease ops recovery.",
+    "New OBSERVATION · The fix path in persist_risk_now performs update_one → find_one → (if equal/older) another update_one, then always calls _fenced_account_write which repeats the same pattern for _ACCOUNT. In the worst case this is 4 write RPCs + 2 read RPCs per close event. Acceptable given the correctness guarantee, but could be collapsed to a single upsert-with-fence via aggregation-pipeline $set if latency matters later."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter46_true_staleness.py"
+  ],
+  "success_rate": {"backend": "100% (136/136 = 8/8 iter-45 hardening + 4/4 iter-46 true-staleness + 124/124 remaining scalp suites)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@trading.bot / admin123 (cookie auth, from /app/memory/test_credentials.md convention). Per-test TEST_iter45_<uuid>@example.com users + TestBroker/standard accounts created + torn down per module (existing iter45 fixture).",
+  "seed_data_creation": "No new seed data. iter45 module-scoped fixtures create/teardown their own isolated test users + accounts. The new iter46 unit tests use pure MagicMock/AsyncMock stubs — zero Mongo writes.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The iter-45 Round-10 P0 fence-check race is FIXED and independently confirmed. persist_risk_now and _fenced_account_write in /app/backend/scalp/engine.py both apply the `int(existing.get('lease_epoch') or 0) > epoch` guard before raising, and retry the fenced write on equal/older observed epoch (self-race with bg _persist_risk). Regression = 136/136 (`cd /app/backend && python -m pytest tests/unit/scalp tests/integration/scalp tests/test_iter44_suffixed_symbol_scalp.py tests/test_iter45_round10_hardening.py tests/test_iter46_true_staleness.py -q` in ~16s). New file /app/backend/tests/test_iter46_true_staleness.py serves as a fast (0.2s) regression guard against any future refactor that accidentally re-broadens the fence-rejection to plain `existing is not None`. If iter-46 is finalized, keep this file — it complements the end-to-end iter-45 tests with cheap unit-level coverage of the RCA scenario.",
+  "rca of the issue": "iter-45 RCA was correct and the fix in engine.py addresses it precisely: the fence-rejection path in persist_risk_now/_fenced_account_write now checks that the observed existing doc's lease_epoch is STRICTLY GREATER than the runner's epoch before raising 'fenced out'. When the epoch is equal (the self-race against the worker's own bg _persist_risk between update_one and find_one) or older (should never happen with proper leasing, defensive), the code performs a retry of the fenced $set — which succeeds because the doc now exists. Verified end-to-end (external-deal close → applied ledger + complete broker_deals) and unit-level (strictly-newer epoch still raises for both per-symbol and _ACCOUNT branches). No open issues."
+}

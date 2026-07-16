@@ -984,17 +984,32 @@ class ScalpRunner:
             existing = await db.scalp_risk_state.find_one(
                 {"account_id": self.account_id, "symbol": self.symbol},
                 {"lease_epoch": 1})
-            if existing is not None:
+            # Round 10 fix (iter-45) — stale ONLY when the existing doc holds
+            # a strictly NEWER epoch. A doc with our own (or older) epoch
+            # means we lost an insert race against our own background
+            # _persist_risk between update_one and find_one: retry the
+            # fenced write instead of falsely failing the reconciliation.
+            if existing is not None and int(existing.get("lease_epoch") or 0) > epoch:
                 raise RuntimeError(
                     f"risk persist fenced out (stale lease epoch {epoch} < "
                     f"{existing.get('lease_epoch')})")
-            await db.scalp_risk_state.update_one(
-                {"account_id": self.account_id, "symbol": self.symbol},
-                {"$setOnInsert": {"user_id": self.user_id,
-                                  **self.risk_state.to_doc(),
-                                  "applied_deal_ids": list(self._applied_deal_ids),
-                                  "lease_epoch": epoch, "saved_at": now_iso}},
-                upsert=True)
+            if existing is not None:
+                await db.scalp_risk_state.update_one(
+                    {"account_id": self.account_id, "symbol": self.symbol,
+                     **fence},
+                    {"$set": {"user_id": self.user_id,
+                              **self.risk_state.to_doc(),
+                              "applied_deal_ids": list(self._applied_deal_ids),
+                              "lease_epoch": epoch, "saved_at": now_iso}},
+                    upsert=False)
+            else:
+                await db.scalp_risk_state.update_one(
+                    {"account_id": self.account_id, "symbol": self.symbol},
+                    {"$setOnInsert": {"user_id": self.user_id,
+                                      **self.risk_state.to_doc(),
+                                      "applied_deal_ids": list(self._applied_deal_ids),
+                                      "lease_epoch": epoch, "saved_at": now_iso}},
+                    upsert=True)
         await self._fenced_account_write(db, epoch, now_iso)
 
     async def _fenced_account_write(self, db, epoch: int, now_iso: str):
@@ -1010,16 +1025,27 @@ class ScalpRunner:
             existing = await db.scalp_risk_state.find_one(
                 {"account_id": self.account_id, "symbol": "_ACCOUNT"},
                 {"lease_epoch": 1})
-            if existing is not None:
+            # Round 10 fix (iter-45) — same epoch-aware rejection as
+            # persist_risk_now: only a strictly newer epoch is stale.
+            if existing is not None and int(existing.get("lease_epoch") or 0) > epoch:
                 raise RuntimeError(
                     f"account risk persist fenced out (stale epoch {epoch} < "
                     f"{existing.get('lease_epoch')})")
-            await db.scalp_risk_state.update_one(
-                {"account_id": self.account_id, "symbol": "_ACCOUNT"},
-                {"$setOnInsert": {"user_id": self.user_id,
-                                  **self.account_risk.to_doc(),
-                                  "lease_epoch": epoch, "saved_at": now_iso}},
-                upsert=True)
+            if existing is not None:
+                await db.scalp_risk_state.update_one(
+                    {"account_id": self.account_id, "symbol": "_ACCOUNT",
+                     **fence},
+                    {"$set": {"user_id": self.user_id,
+                              **self.account_risk.to_doc(),
+                              "lease_epoch": epoch, "saved_at": now_iso}},
+                    upsert=False)
+            else:
+                await db.scalp_risk_state.update_one(
+                    {"account_id": self.account_id, "symbol": "_ACCOUNT"},
+                    {"$setOnInsert": {"user_id": self.user_id,
+                                      **self.account_risk.to_doc(),
+                                      "lease_epoch": epoch, "saved_at": now_iso}},
+                    upsert=True)
 
     def _persist_risk(self, db):
         """Async telemetry mirror of the risk snapshots — FENCED like the

@@ -330,6 +330,12 @@ def test_crash_recovery_reconstructs_missing_ledger_event(ctx):
     # Delete the ledger event and reset broker_deals to pending, aged.
     db.scalp_financial_events.delete_many({
         "account_id": account_id, "deal_id": str(deal_id)})
+    # Release the lease held by the BACKEND worker (previous test's HTTP
+    # flow) — simulates the crashed owner's lease expiring so the recovery
+    # process (this pytest worker) can acquire ownership.
+    db.scalp_owners.delete_many({"account_id": account_id})
+    from scalp import engine as _eng
+    _eng._lease_cache.pop(account_id, None)
     aged = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat()
     db.broker_deals.update_one(
         {"deal_id": deal_id, "account_id": account_id},
