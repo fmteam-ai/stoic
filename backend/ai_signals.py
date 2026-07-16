@@ -40,7 +40,14 @@ from pip_utils import pips_to_price, price_to_pips
 ATR_SL_MULTIPLIER = float(os.environ.get("ATR_SL_MULTIPLIER", "1.5"))
 ATR_TP_MULTIPLIER = float(os.environ.get("ATR_TP_MULTIPLIER", "5.0"))   # gives weighted R:R ≈ 2.08x
 SL_MIN_PIPS = float(os.environ.get("SL_MIN_PIPS", "80"))
-SL_MAX_PIPS = float(os.environ.get("SL_MAX_PIPS", "250"))
+# user policy (2026-07-16): keep SL compatible with the tight TP caps below —
+# weighted TP ≈ 150 pips, so SL beyond ~135 pips would auto-veto on R:R.
+SL_MAX_PIPS = float(os.environ.get("SL_MAX_PIPS", "120"))
+# user policy (2026-07-16): TPs must stay realistically reachable — hard pip
+# caps on every target (a 450-pip gold TP is a target that never fills).
+MTF_TP1_MAX_PIPS = float(os.environ.get("MTF_TP1_MAX_PIPS", "100"))
+MTF_TP2_MAX_PIPS = float(os.environ.get("MTF_TP2_MAX_PIPS", "200"))
+MTF_TP3_MAX_PIPS = float(os.environ.get("MTF_TP3_MAX_PIPS", "200"))
 MTF_RR_FLOOR = float(os.environ.get("MTF_RR_FLOOR", "1.1"))
 
 NARRATOR_PROMPT = """You are the explanation layer of STOIC, an institutional-grade
@@ -472,6 +479,12 @@ async def analyze_symbol(symbol: str, risk_level: str,
     tp1_dist = tp_dist_price * 0.4
     tp2_dist = tp_dist_price * 0.7
     tp3_dist = tp_dist_price * 1.0
+    # user policy (2026-07-16): hard TP pip caps (TP1 ≤ 100, TP2/TP3 ≤ 200)
+    tp1_dist = min(tp1_dist, pips_to_price(symbol, MTF_TP1_MAX_PIPS))
+    tp2_dist = min(tp2_dist, pips_to_price(symbol, MTF_TP2_MAX_PIPS))
+    tp3_dist = min(tp3_dist, pips_to_price(symbol, MTF_TP3_MAX_PIPS))
+    tp2_dist = max(tp2_dist, tp1_dist)
+    tp3_dist = max(tp3_dist, tp2_dist)
     if action == "BUY":
         sl = round(current_price - sl_dist_price, 5)
         tp1 = round(current_price + tp1_dist, 5)
