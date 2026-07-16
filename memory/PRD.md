@@ -547,3 +547,4 @@ UNRESOLVED (client-side, verified by troubleshoot agent):
 - EA .mq5 default TickStreamEnabled changed false → true (MT5 resets inputs on version load; this kept silently disabling the stream).
 - LAST REMAINING USER STEP: on OnEquity demo EURUSD chart press F7 → set TickStreamEnabled=true (their v1.47 download predates the default change). Ticks will then flow and permissions/regime will compute (session window 7-20 UTC).
 - Other terminals (VTMarkets, RoboForex, StarTrader, OnEquity Live) still point at the old URL — user should update ServerUrl + WebRequest whitelist on each.
+- 15:21 UTC FINAL CONFIRMATION: user set TickStreamEnabled=true → ticks flowing (177 in first minute, spread 0.4p, quote age 106ms), permissions computed, regime TRENDING_DOWN, shadow engine evaluating. Scalp fast path fully operational end-to-end on OnEquity demo 1080930. All 6 terminals on v1.47 pointed at algo-trade-135. Issue CLOSED.
