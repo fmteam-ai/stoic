@@ -26,7 +26,7 @@ import websockets
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://risk-managed-trading-4.preview.emergentagent.com",
+    "https://algo-trade-135.preview.emergentagent.com",
 ).rstrip("/")
 WS_URL = BASE_URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
 

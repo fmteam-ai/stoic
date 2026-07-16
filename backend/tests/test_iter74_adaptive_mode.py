@@ -27,7 +27,7 @@ from adaptive_mode import (
 
 # ───────────────────────── helpers ─────────────────────────
 
-BASE_URL = "https://risk-managed-trading-4.preview.emergentagent.com"
+BASE_URL = "https://algo-trade-135.preview.emergentagent.com"
 if "REACT_APP_BACKEND_URL" not in os.environ:
     try:
         with open("/app/frontend/.env") as f:

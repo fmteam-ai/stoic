@@ -16,7 +16,7 @@ import requests
 from unittest.mock import AsyncMock, MagicMock
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
-                          "https://risk-managed-trading-4.preview.emergentagent.com").rstrip("/")
+                          "https://algo-trade-135.preview.emergentagent.com").rstrip("/")
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASS = "admin123"
 

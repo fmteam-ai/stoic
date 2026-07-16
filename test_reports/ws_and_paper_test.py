@@ -1,6 +1,6 @@
 """Verify WebSocket broadcasts panic event + paper trade ExecutionFactory routing."""
 import os, requests, json, asyncio, secrets
-BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://risk-managed-trading-4.preview.emergentagent.com").rstrip("/")
+BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://algo-trade-135.preview.emergentagent.com").rstrip("/")
 WS_URL = BASE.replace("https://", "wss://").replace("http://", "ws://") + "/api/ws"
 
 s = requests.Session()

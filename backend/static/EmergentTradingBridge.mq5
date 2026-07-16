@@ -6,10 +6,10 @@
 //| 1. Copy this file to: <MT5 Data Folder>/MQL5/Experts/             |
 //| 2. In MT5: Tools > Options > Expert Advisors                     |
 //|       - Tick: "Allow WebRequest for listed URL"                  |
-//|       - Add your server URL (e.g. https://your-app.preview.emergentagent.com)
+//|       - Add your server URL (e.g. https://algo-trade-135.preview.emergentagent.com)
 //| 3. Compile in MetaEditor (F7) and attach to ANY chart            |
 //| 4. Inputs:                                                       |
-//|       ServerUrl   = https://your-app.preview.emergentagent.com   |
+//|       ServerUrl   = https://algo-trade-135.preview.emergentagent.com   |
 //|       BridgeToken = (paste from the dashboard > Accounts)         |
 //|       PollSeconds = 5                                             |
 //|                                                                  |
@@ -155,6 +155,10 @@
 //|         broker suffixes (EURUSD → EURUSD#, EURUSD.r, ...) and     |
 //|         SendTicks prints throttled diagnostics to the Experts     |
 //|         tab instead of failing silently.                          |
+//| v1.47 — Multi-symbol candle feed. SendCandles streams M15 bars    |
+//|         for the chart symbol AND every TrackedSymbols entry       |
+//|         (broker-suffix resolved), so moving the EA to another     |
+//|         chart no longer silently starves other pairs of data.     |
 //|         book (MarketBookAdd) and streams bid/ask depth to STOIC   |
 //|         every DomSeconds (30s) for the Liquidity Mapping agent    |
 //|         (resting liquidity, walls, book imbalance). Degrades      |
@@ -163,16 +167,16 @@
 //|         liquidity from candles alone.                             |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.46"
+#property version   "1.47"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.46"
+#define EA_CLIENT_VERSION "1.47"
 
-input string ServerUrl              = "https://your-app.preview.emergentagent.com";
+input string ServerUrl              = "https://algo-trade-135.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
 input string TrackedSymbols         = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
 input int    PollSeconds            = 5;
@@ -393,12 +397,15 @@ void OnTimer() {
 }
 
 //+------------------------------------------------------------------+
-//| EA v1.42 — stream the chart symbol's M15 candles to STOIC so the  |
-//| Market Structure agent can detect BOS / liquidity sweeps / FVGs.  |
+//| EA v1.42 — stream M15 candles to STOIC so the Market Structure    |
+//| agent can detect BOS / liquidity sweeps / FVGs.                   |
+//| EA v1.47 — sends the chart symbol AND every TrackedSymbols entry  |
+//| (broker-suffix resolved) so all tracked pairs keep fresh data     |
+//| regardless of which chart the EA is attached to.                  |
 //+------------------------------------------------------------------+
-void SendCandles() {
+void SendCandlesFor(string sym) {
    MqlRates rates[];
-   int n = CopyRates(_Symbol, PERIOD_M15, 0, 96, rates);
+   int n = CopyRates(sym, PERIOD_M15, 0, 96, rates);
    if (n < 10) return;
    string bars = "[";
    for (int i = 0; i < n; i++) {
@@ -411,8 +418,24 @@ void SendCandles() {
    bars += "]";
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M15\",\"bars\":%s}",
-      EffectiveToken, _Symbol, bars);
+      EffectiveToken, sym, bars);
    HttpPost(ServerUrl + "/api/bridge/candles", body);
+}
+
+void SendCandles() {
+   string sent = "," + _Symbol + ",";
+   SendCandlesFor(_Symbol);
+   string list = TrackedSymbols;
+   StringReplace(list, " ", "");
+   string parts[];
+   int k = StringSplit(list, ',', parts);
+   for (int i = 0; i < k; i++) {
+      if (StringLen(parts[i]) == 0) continue;
+      string resolved = ResolveTickSymbol(parts[i]);
+      if (StringFind(sent, "," + resolved + ",") >= 0) continue;
+      sent += resolved + ",";
+      SendCandlesFor(resolved);
+   }
 }
 
 //+------------------------------------------------------------------+

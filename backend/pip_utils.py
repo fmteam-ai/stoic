@@ -64,6 +64,15 @@ ACCOUNT_TYPE_LOT_MULTIPLIER = {
     "microcent": 0.001,  # 1 microcent lot = 0.001 standard
 }
 
+# FX-major bases NOT in PIP_SIZE (they use DEFAULT_PIP) — needed so broker
+# suffixed tickers (EURUSD#, GBPUSD.r) still resolve to the STOIC base.
+FX_MAJOR_BASES = (
+    "EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF",
+    "EURGBP", "EURCHF", "EURAUD", "EURNZD", "EURCAD",
+    "GBPCHF", "GBPAUD", "GBPNZD", "GBPCAD",
+    "AUDNZD", "AUDCAD", "AUDCHF", "NZDCAD", "NZDCHF", "CADCHF",
+)
+
 # Broker-alias bases (GOLD# → XAUUSD etc.) — mirrors broker_symbol_detector.
 SYMBOL_ALIASES = {
     "GOLD": "XAUUSD",
@@ -87,6 +96,9 @@ def base_symbol(symbol: Optional[str]) -> str:
     for alias, base in SYMBOL_ALIASES.items():
         if s.startswith(alias):
             return base
+    for fx in FX_MAJOR_BASES:
+        if s.startswith(fx):
+            return fx
     return s
 
 

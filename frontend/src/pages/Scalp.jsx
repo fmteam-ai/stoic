@@ -135,7 +135,7 @@ export default function Scalp() {
                     </button>
                 </div>
                 <p className="text-xs text-[#52525B] mt-3">
-                    Requires EA v1.46 attached with <span className="font-mono text-[#A1A1AA]">TickStreamEnabled=true, TickStreamSymbol=EURUSD</span>.
+                    Requires EA v1.47 attached with <span className="font-mono text-[#A1A1AA]">TickStreamEnabled=true, TickStreamSymbol=EURUSD</span>.
                     Shadow mode runs the full pipeline and logs decisions without sending orders.
                 </p>
             </div>
@@ -144,7 +144,7 @@ export default function Scalp() {
             <div className="grid gap-4 mb-6">
                 {runners.length === 0 && (
                     <div className="text-sm text-[#52525B]" data-testid="scalp-no-runners">
-                        No tick stream received yet — attach EA v1.46 with tick streaming enabled.
+                        No tick stream received yet — attach EA v1.47 with tick streaming enabled.
                     </div>
                 )}
                 {runners.map((r) => (

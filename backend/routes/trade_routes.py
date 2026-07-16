@@ -443,6 +443,7 @@ async def live_open_trades(account_id: Optional[str] = None,
 
         out.append({
             "id": str(t["_id"]),
+            "account_id": t.get("account_id"),
             "symbol": sym,
             "action": action,
             "lot_size": lot,

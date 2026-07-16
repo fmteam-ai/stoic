@@ -9,7 +9,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://risk-managed-trading-4.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://algo-trade-135.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@trading.bot")
@@ -1624,8 +1624,30 @@ class TestTimeSeriesCollections:
 
 # ---------- Prior endpoints regression ----------
 class TestPriorEndpointsRegression:
-    def test_panic(self, admin_session):
-        r = admin_session.post(f"{API}/panic", timeout=10)
+    def test_panic(self):
+        """Panic endpoint MUST be tested on an isolated throwaway user.
+
+        Running it as the live admin disables every real bot_config and
+        requests close on REAL open trades (happened 2026-07-16 — a live
+        OnEquity GOLD position got a panic close request from this test).
+        """
+        import uuid
+        from pymongo import MongoClient
+        email = f"panic_test_{uuid.uuid4().hex[:10]}@example.com"
+        password = "PanicTest123!"
+        r = requests.post(f"{API}/auth/register", json={
+            "email": email, "password": password,
+            "name": "Panic Tester", "terms_agreed": True}, timeout=10)
+        assert r.status_code in (200, 201), r.text
+        client = MongoClient(os.environ.get("MONGO_URL"))
+        db = client[os.environ.get("DB_NAME", "ai_trading_bot")]
+        db.users.update_one({"email": email}, {"$set": {"email_verified": True}})
+        client.close()
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login",
+                   json={"email": email, "password": password}, timeout=10)
+        assert r.status_code == 200, r.text
+        r = s.post(f"{API}/panic", timeout=10)
         assert r.status_code == 200
 
     def test_trades_stats(self, admin_session):
@@ -1948,7 +1970,7 @@ class TestSubscriptionStatus:
         assert r.status_code == 401
 
 
-ORIGIN = os.environ.get("REACT_APP_BACKEND_URL", "https://risk-managed-trading-4.preview.emergentagent.com").rstrip("/")
+ORIGIN = os.environ.get("REACT_APP_BACKEND_URL", "https://algo-trade-135.preview.emergentagent.com").rstrip("/")
 
 
 class TestSubscriptionCheckout:

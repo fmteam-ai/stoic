@@ -45,6 +45,17 @@ class TestBaseSymbol:
         # $1.06 on GOLD# must be 10.6 pips, NOT 10600
         assert abs(price_to_pips("GOLD#", 1.06) - 10.6) < 1e-9
 
+    def test_suffixed_fx_majors_resolve(self):
+        # OnEquity publishes EURUSD as EURUSD# — the scalp fast path and
+        # candle store must both resolve it to the STOIC base, otherwise
+        # ticks are dropped ("not in approved universe") and candles land
+        # in an orphaned EURUSD# document.
+        for sym in ("EURUSD#", "EURUSD.r", "EURUSDm", "EURUSD-ECN"):
+            assert base_symbol(sym) == "EURUSD", sym
+        assert base_symbol("GBPUSD#") == "GBPUSD"
+        assert base_symbol("AUDUSD.raw") == "AUDUSD"
+        assert base_symbol("TESTSYM") == "TESTSYM"  # unknowns untouched
+
 
 class TestSlippageVeto:
     def test_direction_aware_and_true_baseline(self):

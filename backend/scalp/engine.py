@@ -1208,7 +1208,8 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
     runner. Returns {"applied": bool, "reason": str|None}; callers may mark
     the broker deal reconciliation-complete ONLY when applied is True.
     Constructs and restores the runner if it does not exist yet."""
-    symbol = (trade.get("symbol") or "").upper()
+    from pip_utils import base_symbol
+    symbol = base_symbol(trade.get("symbol") or "")
     if not await ensure_account_lease(db, account_id):
         return {"applied": False, "reason": "account_owned_by_other_worker"}
     r = get_runner(account_id, str(trade.get("user_id") or ""), symbol)
