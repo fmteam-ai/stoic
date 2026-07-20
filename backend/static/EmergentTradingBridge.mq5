@@ -165,16 +165,21 @@
 //|         gracefully: if the broker provides no DOM for the symbol  |
 //|         (common on CFD feeds) nothing is sent and the agent maps  |
 //|         liquidity from candles alone.                             |
+//| v1.48 — Heartbeat reports per-symbol broker stop constraints      |
+//|         (SYMBOL_TRADE_STOPS_LEVEL / FREEZE_LEVEL in points +      |
+//|         point size) for the chart symbol, TrackedSymbols and all  |
+//|         open-position symbols, so the backend can respect precise |
+//|         minimum stop distances when placing emergency stops.      |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.47"
+#property version   "1.48"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.47"
+#define EA_CLIENT_VERSION "1.48"
 
 input string ServerUrl              = "https://algo-trade-135.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -852,6 +857,52 @@ string BuildAvailableSymbolsJson() {
    return out;
 }
 
+// v1.48 — {"EURUSD":{"point":0.00001,"digits":5,"stops_level_points":10,
+//          "freeze_level_points":0}, ...} for the chart symbol, every
+// TrackedSymbols entry and every open-position symbol. Backend's
+// protection_guard uses these to respect precise broker stop constraints.
+void AppendSymbolSpec(string &json, string sym, bool &first) {
+   if (sym == "" || StringFind(json, "\"" + sym + "\":") >= 0) return;
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   if (point <= 0) return;
+   long digits  = SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   long stops   = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+   long freeze  = SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL);
+   if (!first) json += ",";
+   json += StringFormat(
+      "\"%s\":{\"point\":%.8f,\"digits\":%I64d,"
+      "\"stops_level_points\":%I64d,\"freeze_level_points\":%I64d}",
+      sym, point, digits, stops, freeze);
+   first = false;
+}
+
+string BuildSymbolSpecsJson() {
+   string out = "{";
+   bool first = true;
+   AppendSymbolSpec(out, _Symbol, first);
+   // TrackedSymbols comma list
+   string list = TrackedSymbols;
+   int start = 0;
+   for (int i = 0; i <= StringLen(list); i++) {
+      if (i == StringLen(list) || StringGetCharacter(list, i) == ',') {
+         string sym = StringSubstr(list, start, i - start);
+         StringTrimLeft(sym); StringTrimRight(sym);
+         if (StringLen(sym) > 0) AppendSymbolSpec(out, sym, first);
+         start = i + 1;
+      }
+   }
+   // every open-position symbol (these are where stops actually get placed)
+   int totalPos = PositionsTotal();
+   for (int p = 0; p < totalPos; p++) {
+      ulong specTicket = PositionGetTicket(p);
+      if (specTicket == 0 || !PositionSelectByTicket(specTicket)) continue;
+      AppendSymbolSpec(out, PositionGetString(POSITION_SYMBOL), first);
+   }
+   out += "}";
+   return out;
+}
+
+
 void SendHeartbeat() {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -885,9 +936,10 @@ void SendHeartbeat() {
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
       "\"positions\":%s,\"client_version\":\"%s\","
+      "\"symbol_specs\":%s,"
       "\"available_symbols\":%s}",
       EffectiveToken, balance, equity, openPos, spreads, login, ccy, positions,
-      EA_CLIENT_VERSION, CACHED_AVAILABLE_SYMBOLS);
+      EA_CLIENT_VERSION, BuildSymbolSpecsJson(), CACHED_AVAILABLE_SYMBOLS);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 

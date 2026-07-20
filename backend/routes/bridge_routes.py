@@ -75,6 +75,17 @@ async def heartbeat(payload: BridgeHeartbeat):
         if clean:
             set_doc["current_spreads"] = clean
             set_doc["spreads_updated_at"] = now_iso
+    # EA v1.48+ — persist precise broker stop constraints per BASE symbol
+    # (round 13 item 5); protection_guard consumes these when computing
+    # emergency stops.
+    if payload.symbol_specs:
+        specs = {}
+        for sym, spec in payload.symbol_specs.items():
+            if spec.point > 0:
+                specs[base_symbol(str(sym).upper())] = spec.model_dump()
+        if specs:
+            set_doc["symbol_specs"] = specs
+            set_doc["symbol_specs_updated_at"] = now_iso
 
     # EA v1.24+: persist the broker-side login + currency so the Accounts UI
     # can display the actual account the EA is reading from. We already
@@ -987,8 +998,12 @@ async def _mark_deal_reconciled(db, deal_id, account_id: str, note: str | None =
            "financial_reconciled_at": datetime.now(timezone.utc).isoformat()}
     if note:
         doc["reconciliation_note"] = note
+    # Round 13 item 7 — completion is guarded: a deal already marked
+    # complete is never re-stamped by a racing reconciliation path.
     await db.broker_deals.update_one(
-        {"deal_id": deal_id, "account_id": account_id}, {"$set": doc})
+        {"deal_id": deal_id, "account_id": account_id,
+         "financial_reconciliation_status": {"$ne": "complete"}},
+        {"$set": doc})
 
 
 async def _scalp_reconcile_close(db, account_id: str, trade: dict, payload,

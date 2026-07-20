@@ -312,7 +312,10 @@ def test_bot_pulse_per_account_engine_label(admin_session):
     for it in active_items:
         pulse = it.get("pulse") or {}
         notable = it.get("notable") or {}
-        reason = str(pulse.get("reason") or notable.get("reason") or "").upper()
+        # Check BOTH reasons: transient cooldown SKIPs legitimately carry no
+        # engine label, but the notable (last decision) reason does.
+        reason = (str(pulse.get("reason") or "") + " "
+                  + str(notable.get("reason") or "")).upper()
         if any(tok in reason for tok in all_engine_tokens):
             matched += 1
     # At least one active account should show an engine label in its reason

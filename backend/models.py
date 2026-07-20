@@ -349,6 +349,15 @@ class BridgePosition(BaseModel):
     current_price: Optional[float] = None
 
 
+class BridgeSymbolSpec(BaseModel):
+    """EA v1.48+: per-symbol broker stop-placement constraints so the backend
+    can respect precise minimum stop / freeze distances (round 13 item 5)."""
+    point: float = 0.0
+    digits: int = 0
+    stops_level_points: float = 0.0
+    freeze_level_points: float = 0.0
+
+
 class BridgeHeartbeat(BaseModel):
     bridge_token: str
     balance: float
@@ -372,6 +381,9 @@ class BridgeHeartbeat(BaseModel):
     # OnTradeTransaction). Backfills the "I see 4 trades on MT5 but only 0
     # on STOIC" gap.
     positions: Optional[list[BridgePosition]] = None
+    # EA v1.48+: per-symbol broker constraints (SYMBOL_TRADE_STOPS_LEVEL /
+    # SYMBOL_TRADE_FREEZE_LEVEL in points + point size) — round 13 item 5.
+    symbol_specs: Optional[Dict[str, BridgeSymbolSpec]] = None
     # EA v1.26+: the EA's own semantic version string. Drives the "EA Version"
     # badge on the Dashboard so the user can tell at a glance which terminals
     # are running stale builds (e.g. missing the autonomous deal-history sweep).

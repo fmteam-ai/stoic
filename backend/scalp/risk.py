@@ -6,6 +6,13 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
+
+
+def utc_day_key() -> str:
+    """Round 13 item 6 — the daily risk boundary is EXPLICITLY the UTC
+    calendar day (offset-aware), shared by roll, restore and ledger checks."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 @dataclass(frozen=True)
@@ -65,7 +72,7 @@ class RiskState:
         return sum(self.stop_risk_by_trade.values())
 
     def _roll_day(self):
-        key = time.strftime("%Y-%m-%d", time.gmtime())
+        key = utc_day_key()
         if key != self.daily_key:
             self.daily_key = key
             self.daily_loss_usd = 0.0
@@ -119,7 +126,7 @@ class RiskState:
             [float(t) for t in doc.get("trade_times") or []], maxlen=200)
         self.consecutive_losses = int(doc.get("consecutive_losses") or 0)
         self.cooldown_until = float(doc.get("cooldown_until") or 0.0)
-        key = time.strftime("%Y-%m-%d", time.gmtime())
+        key = utc_day_key()
         if doc.get("daily_key") == key:      # same UTC day → restore budgets
             self.daily_key = key
             self.daily_loss_usd = float(

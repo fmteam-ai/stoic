@@ -64,10 +64,19 @@ MIN_FILL_ATTEMPTS_FOR_GATE = 20        # below this the fill-prob prior dominate
 _owner_pid = os.getpid()
 _worker_id = f"{os.uname().nodename}:{_owner_pid}"
 LEASE_TTL_SEC = 30
+RECONCILE_CLAIM_TTL_SEC = 60           # recovery-sweep per-deal claim TTL
 _lease_cache: dict = {}                # account_id -> (expires_epoch, owned)
 _lease_epoch: dict = {}                # account_id -> fencing token we hold
-_protection_block: set = set()         # accounts with unprotected positions
-_invariant_block: set = set()          # accounts failing invariant checks
+# Round 13 item 9 — REASON-LEVEL account blocks: account_id -> set of reason
+# codes. Every subsystem owns specific reason(s) and may only add/clear its
+# own; one subsystem's clean pass can never clear another subsystem's block.
+BLOCK_MISSING_PROTECTION = "missing_protection"
+BLOCK_RISK_UNKNOWN = "risk_unknown"
+BLOCK_INVARIANT = "invariant_violation"
+BLOCK_DURABLE_INVARIANT = "durable_invariant"
+BLOCK_LEDGER = "ledger_integrity"
+BLOCK_PENDING_LEDGER = "pending_ledger_overdue"
+_account_blocks: dict = {}
 _runners: dict = {}
 _account_risk: dict = {}               # account_id -> account-wide RiskState
 _account_restored: set = set()         # account-level state loaded once
@@ -83,13 +92,29 @@ def account_risk_state(account_id: str) -> RiskState:
     return rs
 
 
+def add_account_block(account_id: str, reason: str) -> None:
+    _account_blocks.setdefault(account_id, set()).add(reason)
+
+
+def clear_account_block(account_id: str, reason: str) -> None:
+    s = _account_blocks.get(account_id)
+    if s is not None:
+        s.discard(reason)
+        if not s:
+            _account_blocks.pop(account_id, None)
+
+
+def account_block_reasons(account_id: str) -> set:
+    return set(_account_blocks.get(account_id) or ())
+
+
 def set_protection_block(account_id: str, blocked: bool) -> None:
     """Round 8 — while an account has ANY unprotected open position, new
     scalp entries are refused (flag maintained by protection_guard sweep)."""
     if blocked:
-        _protection_block.add(account_id)
+        add_account_block(account_id, BLOCK_MISSING_PROTECTION)
     else:
-        _protection_block.discard(account_id)
+        clear_account_block(account_id, BLOCK_MISSING_PROTECTION)
 
 
 def verify_account_invariants(account_id: str) -> list:
@@ -98,7 +123,7 @@ def verify_account_invariants(account_id: str) -> list:
     violations = []
     runners = runners_for_account(account_id)
     if not runners:
-        _invariant_block.discard(account_id)
+        clear_account_block(account_id, BLOCK_INVARIANT)
         return violations
     ars = account_risk_state(account_id)
     open_total = sum(len(r.live_trades) for r in runners)
@@ -121,11 +146,11 @@ def verify_account_invariants(account_id: str) -> list:
             f"account stop risk ${acct_risk:.2f} != sum of open trade "
             f"stop risks ${trade_risk:.2f} (tol ${tol:.2f})")
     if violations:
-        _invariant_block.add(account_id)
+        add_account_block(account_id, BLOCK_INVARIANT)
         logger.error("scalp invariant violations on %s: %s",
                      account_id, violations)
     else:
-        _invariant_block.discard(account_id)
+        clear_account_block(account_id, BLOCK_INVARIANT)
     return violations
 
 
@@ -250,6 +275,32 @@ def invariant_scan_stale_reason() -> str | None:
     return None
 
 
+# Round 13 item 8 — readiness requires a FRESH broker account snapshot: the
+# heartbeat feeds equity/balance/positions, and sizing on a stale snapshot
+# is trading blind. Entries are vetoed while broker state is stale.
+BROKER_STATE_STALE_SEC = int(os.environ.get(
+    "SCALP_BROKER_STATE_STALE_SEC", "90"))
+
+
+def broker_state_stale_reason(account: dict | None) -> str | None:
+    if not account:
+        return "broker state unknown (no account snapshot)"
+    hb = account.get("last_heartbeat")
+    if not hb:
+        return "broker state stale (no heartbeat recorded)"
+    try:
+        age = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(str(hb))).total_seconds()
+    except ValueError:
+        return "broker state stale (unparseable heartbeat timestamp)"
+    if age > BROKER_STATE_STALE_SEC:
+        return f"broker state stale (last heartbeat {int(age)}s ago)"
+    status = str(account.get("status") or "")
+    if status and status != "connected":
+        return f"broker state not connected (status={status})"
+    return None
+
+
 async def confirm_or_adopt_account_lease(db, account_id: str) -> bool:
     """Round 12 item 2 — LIVE-callback ownership check. Confirms current
     ownership; adopts the account ONLY when no ownership record exists at
@@ -292,13 +343,16 @@ async def _restore_account_state(db, account_id: str, force: bool = False):
         {"account_id": account_id, "symbol": "_ACCOUNT"})
     if doc:
         ars.load_doc(doc)
-    open_trades = await db.trades.find(
-        {"account_id": account_id, "scope": "scalp_fast",
-         "status": "open"}).to_list(100)
     ars.stop_risk_by_trade.clear()
     from pip_utils import pip_value_usd_per_lot_strict
     risk_unknown = False
-    for tr in open_trades:
+    open_count = 0
+    # round 13 item 1 — FULL cursor: a truncated .to_list(N) would silently
+    # drop open positions past N from the restored risk picture
+    async for tr in db.trades.find(
+            {"account_id": account_id, "scope": "scalp_fast",
+             "status": "open"}):
+        open_count += 1
         lot = float(tr.get("lot_size") or 0)
         entry = tr.get("entry_price")
         stop = tr.get("stop_loss")
@@ -320,8 +374,10 @@ async def _restore_account_state(db, account_id: str, force: bool = False):
             ars.add_stop_risk(str(tr["_id"]),
                               lot * abs(float(entry) - float(stop)) / pip * pv)
     if risk_unknown:
-        _invariant_block.add(account_id)
-    ars.open_scalps = len(open_trades)
+        add_account_block(account_id, BLOCK_RISK_UNKNOWN)
+    else:
+        clear_account_block(account_id, BLOCK_RISK_UNKNOWN)
+    ars.open_scalps = open_count
 
 
 class ShadowSim:
@@ -538,16 +594,15 @@ class ScalpRunner:
                         "reason": (f"no authoritative pip value for "
                                    f"{self.symbol} — risk unknown, entry "
                                    f"blocked")}
-        elif self.account_id in _protection_block:
+        elif (stale_reason := broker_state_stale_reason(self.account)) is not None:
+            # round 13 item 8 — readiness requires FRESH broker state
+            risk_res = {"ok": False, "lot": 0.0, "reason": stale_reason}
+        elif (block_reasons := account_block_reasons(self.account_id)):
+            # round 13 item 9 — reason-level blocks: every owning subsystem
+            # must clear its own reason before entries resume
             risk_res = {"ok": False, "lot": 0.0,
-                        "reason": ("unprotected position on account — new "
-                                   "scalp entries blocked until protection "
-                                   "is confirmed")}
-        elif self.account_id in _invariant_block:
-            risk_res = {"ok": False, "lot": 0.0,
-                        "reason": ("reconciliation invariant violation — new "
-                                   "scalp entries blocked until state is "
-                                   "consistent")}
+                        "reason": ("account blocked: "
+                                   + ", ".join(sorted(block_reasons)))}
         elif account_open >= ACCOUNT_LIMITS.max_total_open_positions:
             risk_res = {"ok": False, "lot": 0.0,
                         "reason": "account-level max open scalp positions"}
@@ -725,7 +780,7 @@ class ScalpRunner:
         from pip_utils import pip_value_usd_per_lot_strict
         pv = pip_value_usd_per_lot_strict(self.symbol)
         if pv is None:                    # defensive: evaluate already vetoes
-            _invariant_block.add(self.account_id)
+            add_account_block(self.account_id, BLOCK_RISK_UNKNOWN)
             pv = 0.0
         est_cost_usd = ((sp or 0) + 2 * fc.expected_slippage_pips) * pv * risk_res["lot"] \
             + self.commission_usd_per_lot_side * 2 * risk_res["lot"]
@@ -1002,7 +1057,7 @@ class ScalpRunner:
                 pv = pip_value_usd_per_lot_strict(self.symbol)
                 if pv is None:
                     # round 11 item 6 — unpriceable: risk UNKNOWN, block
-                    _invariant_block.add(self.account_id)
+                    add_account_block(self.account_id, BLOCK_RISK_UNKNOWN)
                     if prior_lot > 0:
                         self.account_risk.scale_stop_risk(
                             trade_id, info["lot"] / prior_lot)
@@ -1169,11 +1224,18 @@ class ScalpRunner:
         # round 5 item 5 — reconstruct DETAILED open-position state so a
         # restarted process can still run max-holding / spread-shock exits
         # and attribute exit slippage correctly.
-        open_trades = await db.trades.find(
-            {"account_id": self.account_id, "scope": "scalp_fast",
-             "status": "open"}).to_list(50)
-        self.risk_state.open_scalps = len(open_trades)
-        for tr in open_trades:
+        # round 13 items 1/2 — FULL cursor (no .to_list truncation) and
+        # STRICT symbol scoping: this runner tracks ONLY its own symbol's
+        # open scalp trades; account-wide state lives in _ACCOUNT via
+        # _restore_account_state.
+        from pip_utils import base_symbol
+        open_count = 0
+        async for tr in db.trades.find(
+                {"account_id": self.account_id, "scope": "scalp_fast",
+                 "status": "open"}):
+            if base_symbol(tr.get("symbol") or "") != self.symbol:
+                continue
+            open_count += 1
             tid = str(tr["_id"])
             if tid in self.live_trades:
                 continue
@@ -1205,6 +1267,7 @@ class ScalpRunner:
                             float(dec.get("cost_pips") or 0) * pv
                             * float(dec.get("lot") or 0), 2)
             self.live_trades[tid] = info
+        self.risk_state.open_scalps = open_count
         self._risk_restored = True
 
     # ---------------- tick recording (Step 2, off hot path) ----------------
@@ -1237,6 +1300,8 @@ class ScalpRunner:
             "model_key": self.model_key(),
             "risk_restored": self._risk_restored,
             "health": self.health,
+            "block_reasons": sorted(account_block_reasons(self.account_id)),
+            "broker_state_stale": broker_state_stale_reason(self.account),
             "permissions": permissions.get_cached(self.user_id, self.symbol),
             "counters": self.counters,
             "open_sims": len(self.open_sims),
@@ -1247,6 +1312,7 @@ class ScalpRunner:
             "equity": self.equity,
             "spread_pips": self.state.spread_pips(),
             "quote_age_ms": self.state.quote_age_ms(),
+            "clock_drift_ms": self.state.clock_drift_ms,
             "features": ({k: round(v, 3) for k, v in feats.items()
                           if not k.startswith("_")} if feats else None),
             "risk": {
@@ -1352,6 +1418,8 @@ def audit_backlog() -> dict:
             "halted": _audit_pending >= AUDIT_BACKLOG_HALT,
             "pid": _owner_pid,
             "service_block": _service_block_reason,
+            "account_blocks": {k: sorted(v)
+                               for k, v in _account_blocks.items()},
             "invariant_scan": dict(_invariant_scan),
             "dead_letter_path": DEAD_LETTER_PATH}
 
@@ -1506,16 +1574,23 @@ async def verify_durable_invariants(db) -> dict:
                           if lt.get("state") == "OPEN"}
             position_mismatch = db_ids != runner_ids
         if not restored or no_stop or position_mismatch:
-            _invariant_block.add(account_id)
+            add_account_block(account_id, BLOCK_DURABLE_INVARIANT)
             blocked.append({"account_id": account_id,
                             "open_in_db": len(trs),
                             "runner_restored": restored,
                             "position_mismatch": position_mismatch,
                             "unstopped": len(no_stop)})
-        elif account_id in _invariant_block:
-            # clean durable state — re-run the in-memory checks, which
-            # clear the block themselves on a clean pass
-            verify_account_invariants(account_id)
+        else:
+            # clean durable state — this sweep clears ONLY its own reason;
+            # the in-memory checks own (and clear) invariant_violation
+            clear_account_block(account_id, BLOCK_DURABLE_INVARIANT)
+            if BLOCK_INVARIANT in account_block_reasons(account_id):
+                verify_account_invariants(account_id)
+    # accounts with no open scalp trades left cannot hold a durable-invariant
+    # block — clear the sweep-owned reason (other reasons stay untouched)
+    for acct in [a for a, rs in list(_account_blocks.items())
+                 if BLOCK_DURABLE_INVARIANT in rs and a not in by_account]:
+        clear_account_block(acct, BLOCK_DURABLE_INVARIANT)
     if blocked:
         logger.error("durable invariant violations: %s", blocked)
     # Round 10 item 4 — financial-ledger invariants (DB-side, runner-free):
@@ -1547,17 +1622,25 @@ async def verify_durable_invariants(db) -> dict:
         {"$match": {"ev": {"$size": 0}}},
         {"$project": {"account_id": 1, "deal_id": 1}},
     ]
+    ledger_flagged: set = set()
     async for deal in db.broker_deals.aggregate(missing_pipeline):
         acct = str(deal["account_id"])
-        _invariant_block.add(acct)
+        add_account_block(acct, BLOCK_LEDGER)
+        ledger_flagged.add(acct)
         fin_blocked.append({"account_id": acct,
                             "deal_id": str(deal["deal_id"]),
                             "issue": "reconciled_deal_missing_ledger_event"})
+    for acct in [a for a, rs in list(_account_blocks.items())
+                 if BLOCK_LEDGER in rs and a not in ledger_flagged]:
+        clear_account_block(acct, BLOCK_LEDGER)
     # Round 11 item 5 — canonical daily metrics reconciled separately:
     # gross loss / net P&L per account from applied ledger events vs the
     # persisted _ACCOUNT snapshot (report-path closes without deal ids can
     # legitimately diverge → WARNING, not a block).
-    day_start = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
+    # Round 13 item 6 — EXPLICIT UTC day boundary (offset-aware midnight),
+    # matching RiskState's UTC daily_key convention.
+    day_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0).isoformat()
     sums = {}
     async for g in db.scalp_financial_events.aggregate([
             {"$match": {"risk_applied": True, "at": {"$gte": day_start}}},
@@ -1599,6 +1682,7 @@ async def verify_durable_invariants(db) -> dict:
     # new entries on that account until it reconciles.
     now_dt = datetime.now(timezone.utc)
     oldest_pending_sec = None
+    pending_flagged: set = set()
     async for g in db.scalp_financial_events.aggregate([
             {"$match": {"status": {"$ne": "applied"}}},
             {"$group": {"_id": "$account_id",
@@ -1610,10 +1694,14 @@ async def verify_durable_invariants(db) -> dict:
         oldest_pending_sec = max(oldest_pending_sec or 0, age)
         if age > PENDING_EVENT_MAX_AGE_SEC:
             acct = str(g["_id"])
-            _invariant_block.add(acct)
+            add_account_block(acct, BLOCK_PENDING_LEDGER)
+            pending_flagged.add(acct)
             fin_blocked.append({"account_id": acct,
                                 "issue": "pending_ledger_event_overdue",
                                 "age_sec": int(age)})
+    for acct in [a for a, rs in list(_account_blocks.items())
+                 if BLOCK_PENDING_LEDGER in rs and a not in pending_flagged]:
+        clear_account_block(acct, BLOCK_PENDING_LEDGER)
     _invariant_scan.update({
         "last_success_at": now_dt.isoformat(), "last_error": None,
         "last_duration_ms": int((time.monotonic() - scan_t0) * 1000),
@@ -1642,6 +1730,19 @@ async def recover_pending_deals(db, older_than_sec: int = 60,
     async for deal in cur:
         key = {"deal_id": deal["deal_id"], "account_id": deal["account_id"]}
         now_iso = datetime.now(timezone.utc).isoformat()
+        # Round 13 item 7 — TRANSACTIONAL sweep: atomically CLAIM the deal
+        # before touching it, so two concurrent sweeps can never double-apply
+        # the same pending deal; the claim expires after RECONCILE_CLAIM_TTL.
+        claim = await db.broker_deals.update_one(
+            {**key, "financial_reconciliation_status": "pending",
+             "$or": [{"reconcile_claim_until": {"$exists": False}},
+                     {"reconcile_claim_until": {"$lt": now_iso}}]},
+            {"$set": {"reconcile_claim_until": (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=RECONCILE_CLAIM_TTL_SEC)).isoformat(),
+                "reconcile_claimed_by": _worker_id}})
+        if claim.matched_count == 0:
+            continue                # claimed by another sweep, or completed
         try:
             trade = await db.trades.find_one(
                 {"account_id": deal["account_id"],
@@ -1666,11 +1767,14 @@ async def recover_pending_deals(db, older_than_sec: int = 60,
                         kept_pending += 1
                     continue
                 # trade exists but is not a scalp target — definitive
-                await db.broker_deals.update_one(key, {"$set": {
-                    "financial_reconciliation_status": "complete",
-                    "financial_reconciled_at": now_iso,
-                    "financial_reconciled_by": "recovery_job",
-                    "reconciliation_note": "not_scalp_scope"}})
+                await db.broker_deals.update_one(
+                    {**key,
+                     "financial_reconciliation_status": {"$ne": "complete"}},
+                    {"$set": {
+                        "financial_reconciliation_status": "complete",
+                        "financial_reconciled_at": now_iso,
+                        "financial_reconciled_by": "recovery_job",
+                        "reconciliation_note": "not_scalp_scope"}})
                 closed_out += 1
                 continue
             res = await apply_broker_deal(
@@ -1684,10 +1788,13 @@ async def recover_pending_deals(db, older_than_sec: int = 60,
                                  or deal.get("received_at")),
                 recovery=True)
             if res["applied"]:
-                await db.broker_deals.update_one(key, {"$set": {
-                    "financial_reconciliation_status": "complete",
-                    "financial_reconciled_at": now_iso,
-                    "financial_reconciled_by": "recovery_job"}})
+                await db.broker_deals.update_one(
+                    {**key,
+                     "financial_reconciliation_status": {"$ne": "complete"}},
+                    {"$set": {
+                        "financial_reconciliation_status": "complete",
+                        "financial_reconciled_at": now_iso,
+                        "financial_reconciled_by": "recovery_job"}})
                 recovered += 1
                 closed_out += 1
             else:

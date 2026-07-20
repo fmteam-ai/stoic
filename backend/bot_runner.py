@@ -1329,11 +1329,15 @@ async def _process_user_account_locked(db, cfg: dict):
         if not (auto_exec and signal["tradeable"]):
             sig_act = signal.get("action") or "HOLD"
             sig_conf = signal.get("confidence") or 0
+            # iter-127 follow-up · every active-account pulse reason carries
+            # its own engine label, including non-executing branches.
+            eng_lbl = signal.get("engine_label")
+            eng_prefix = f"{eng_lbl} — " if eng_lbl else ""
             if shadow_only:
-                p_reason = f"Paper-shadow mode: signal {sig_act} {sig_conf}% logged (no live execution)."
+                p_reason = f"{eng_prefix}Paper-shadow mode: signal {sig_act} {sig_conf}% logged (no live execution)."
                 p_level = "info"
             elif not auto_exec:
-                p_reason = f"Auto-execute disabled on this bot — signal {sig_act} {sig_conf}% not fired."
+                p_reason = f"{eng_prefix}Auto-execute disabled on this bot — signal {sig_act} {sig_conf}% not fired."
                 p_level = "info"
             else:
                 # Not tradeable — surface the AI's stated reasoning if present

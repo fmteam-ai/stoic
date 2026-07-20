@@ -423,11 +423,9 @@ class TestRound3Hardening:
         db = _stub_db()
         trade_doc = {"_id": "tr1", "action": "BUY", "entry_price": 1.08,
                      "stop_loss": 1.079, "take_profit": 1.082,
-                     "scalp_decision_id": "d1",
+                     "symbol": "EURUSD", "scalp_decision_id": "d1",
                      "pending_modification": {"type": "FULL_CLOSE"}}
-        cursor = MagicMock()
-        cursor.to_list = AsyncMock(return_value=[trade_doc])
-        db.trades.find = MagicMock(return_value=cursor)
+        db.trades.find = MagicMock(return_value=_AsyncCursor([trade_doc]))
         db.scalp_risk_state.find_one = AsyncMock(return_value=None)
         asyncio.run(r.restore_risk(db))
         assert r._risk_restored is True
@@ -598,12 +596,11 @@ class TestRound5RestoreAndDurability:
         trade_doc = {"_id": "tr9", "action": "SELL", "entry_price": 1.0810,
                      "requested_price": 1.0811, "slippage_pips": 1.0,
                      "stop_loss": 1.0820, "take_profit": 1.0790,
+                     "symbol": "EURUSD",
                      "scalp_decision_id": "d9", "opened_at": opened_iso,
                      "pending_modification": {"type": "FULL_CLOSE",
                                               "requested_at": "2026-06-01T10:03:00+00:00"}}
-        cursor = MagicMock()
-        cursor.to_list = AsyncMock(return_value=[trade_doc])
-        db.trades.find = MagicMock(return_value=cursor)
+        db.trades.find = MagicMock(return_value=_AsyncCursor([trade_doc]))
         db.scalp_decisions.find_one = AsyncMock(
             return_value={"cost_pips": 1.2, "lot": 0.02})
         asyncio.run(r.restore_risk(db))
@@ -792,11 +789,10 @@ class TestRound6PartialAndDurability:
         db = _stub_db()
         trade_doc = {"_id": "trS", "action": "BUY", "entry_price": 1.0800,
                      "stop_loss": 1.0790, "take_profit": 1.0820,
-                     "lot_size": 0.10, "scalp_decision_id": "",
+                     "lot_size": 0.10, "symbol": "EURUSD",
+                     "scalp_decision_id": "",
                      "opened_at": "2026-06-01T10:00:00+00:00"}
-        cursor = MagicMock()
-        cursor.to_list = AsyncMock(return_value=[trade_doc])
-        db.trades.find = MagicMock(return_value=cursor)
+        db.trades.find = MagicMock(return_value=_AsyncCursor([trade_doc]))
         asyncio.run(r.restore_risk(db))
         # 10 pips × $10/pip/lot × 0.10 lots = $10 at stop
         assert r.account_risk.stop_risk_by_trade["trS"] == pytest.approx(10.0)
@@ -1015,9 +1011,7 @@ class TestRound7DealsAndLease:
                      "lot_size": 0.10, "symbol": "EURUSD",
                      "scalp_decision_id": "",
                      "opened_at": "2026-06-01T10:00:00+00:00"}
-        cursor = MagicMock()
-        cursor.to_list = AsyncMock(return_value=[trade_doc])
-        db.trades.find = MagicMock(return_value=cursor)
+        db.trades.find = MagicMock(return_value=_AsyncCursor([trade_doc]))
         r1 = ScalpRunner("r7-once", "u1", "EURUSD")
         asyncio.run(r1.restore_risk(db))
         assert "r7-once" in eng._account_restored
@@ -1099,12 +1093,12 @@ class TestRound8ProtectionRecovery:
         assert mod["$inc"]["protection_repair_attempts"] == 1
         db.notifications.insert_one.assert_awaited()
         # new scalp entries blocked for the account
-        from scalp.engine import _protection_block
-        assert tr["account_id"] in _protection_block
+        from scalp.engine import BLOCK_MISSING_PROTECTION, account_block_reasons
+        assert BLOCK_MISSING_PROTECTION in account_block_reasons(tr["account_id"])
 
     def test_protection_resolved_when_stop_confirmed(self):
         from protection_guard import repair_unprotected_positions
-        from scalp.engine import _protection_block
+        from scalp.engine import BLOCK_MISSING_PROTECTION, account_block_reasons
         # round 12 item 7 — only BROKER-CONFIRMED evidence resolves
         tr = self._trade(_id="trR8", account_id="000000000000000000000002",
                          stop_loss=1.0795, confirmed_stop_loss=1.0795)
@@ -1115,7 +1109,8 @@ class TestRound8ProtectionRecovery:
         sets = [c.args[1]["$set"] for c in db.trades.update_one.call_args_list]
         assert any(s.get("protection_state") == "RESOLVED"
                    and s.get("protection_missing") is False for s in sets)
-        assert "000000000000000000000002" not in _protection_block
+        assert BLOCK_MISSING_PROTECTION not in account_block_reasons(
+            "000000000000000000000002")
 
     def test_local_stop_alone_does_not_resolve_protection(self):
         # round 12 item 7 — a locally proposed stop_loss WITHOUT broker
@@ -1153,11 +1148,12 @@ class TestRound8ProtectionRecovery:
         assert out["accounts_blocked"] == ["000000000000000000000004"]
 
     def test_protection_block_vetoes_scalp_entries(self):
-        from scalp.engine import set_protection_block, _protection_block
+        from scalp.engine import (BLOCK_MISSING_PROTECTION,
+                                  account_block_reasons, set_protection_block)
         set_protection_block("acct-pb", True)
-        assert "acct-pb" in _protection_block
+        assert BLOCK_MISSING_PROTECTION in account_block_reasons("acct-pb")
         set_protection_block("acct-pb", False)
-        assert "acct-pb" not in _protection_block
+        assert BLOCK_MISSING_PROTECTION not in account_block_reasons("acct-pb")
 
     def test_conservative_risk_counted_while_unprotected(self):
         from protection_guard import repair_unprotected_positions
@@ -1184,8 +1180,8 @@ class TestRound8InvariantsAndFencing:
         assert verify_account_invariants("r8-inv-ok") == []
 
     def test_invariants_catch_missing_stop_and_risk_mismatch(self):
-        from scalp.engine import (verify_account_invariants, _runners,
-                                  _invariant_block)
+        from scalp.engine import (BLOCK_INVARIANT, account_block_reasons,
+                                  verify_account_invariants, _runners)
         r = ScalpRunner("r8-inv-bad", "u1", "EURUSD")
         _runners["r8-inv-bad:EURUSD"] = r
         r.live_trades["t1"] = {"state": "OPEN", "stop_px": None,
@@ -1195,13 +1191,13 @@ class TestRound8InvariantsAndFencing:
         r.account_risk.add_stop_risk("t1", 99.0)  # wrong amount
         v = verify_account_invariants("r8-inv-bad")
         assert len(v) >= 2
-        assert "r8-inv-bad" in _invariant_block
+        assert BLOCK_INVARIANT in account_block_reasons("r8-inv-bad")
         # clean state clears the block
         r.live_trades["t1"]["stop_px"] = 1.079
         r.account_risk.open_scalps = 1
         r.account_risk.stop_risk_by_trade["t1"] = 10.0
         assert verify_account_invariants("r8-inv-bad") == []
-        assert "r8-inv-bad" not in _invariant_block
+        assert BLOCK_INVARIANT not in account_block_reasons("r8-inv-bad")
 
     def test_stale_epoch_persist_fenced_out(self):
         from scalp import engine as eng
@@ -1357,8 +1353,9 @@ class TestRound9Hardening:
     def test_durable_invariants_block_unrestored_and_unstopped(self):
         """Round 9 item 3 — DB-side invariants: open scalps with no restored
         runner, or without a protective stop, block their account."""
-        from scalp.engine import (verify_durable_invariants,
-                                  _invariant_block, _runners)
+        from scalp.engine import (BLOCK_DURABLE_INVARIANT,
+                                  account_block_reasons, clear_account_block,
+                                  verify_durable_invariants, _runners)
         db = _stub_db()
 
         class _AC:
@@ -1400,12 +1397,12 @@ class TestRound9Hardening:
             blocked = {b["account_id"]: b for b in out["blocked"]}
             assert set(blocked) == {"r9-din-1", "r9-din-2"}
             assert blocked["r9-din-2"]["position_mismatch"] is True
-            assert "r9-din-1" in _invariant_block
-            assert "r9-din-2" in _invariant_block
-            assert "r9-din-3" not in _invariant_block
+            assert BLOCK_DURABLE_INVARIANT in account_block_reasons("r9-din-1")
+            assert BLOCK_DURABLE_INVARIANT in account_block_reasons("r9-din-2")
+            assert BLOCK_DURABLE_INVARIANT not in account_block_reasons("r9-din-3")
         finally:
-            _invariant_block.discard("r9-din-1")
-            _invariant_block.discard("r9-din-2")
+            clear_account_block("r9-din-1", BLOCK_DURABLE_INVARIANT)
+            clear_account_block("r9-din-2", BLOCK_DURABLE_INVARIANT)
             _runners.pop("r9-din-2:EURUSD", None)
             _runners.pop("r9-din-3:EURUSD", None)
 
@@ -1769,3 +1766,153 @@ class TestRound12Hardening:
         out = asyncio.run(repair_unprotected_positions(db))
         assert out["awaiting"] == 0 and out["processed"] == 0
         assert "oldest_unresolved_age_sec" in out
+
+
+# ---------------- round-13 hardening behaviors ----------------
+class TestRound13Hardening:
+    def test_reason_level_blocks_are_owned_per_subsystem(self):
+        """Item 9 — clearing one subsystem's reason never clears another's."""
+        from scalp import engine as eng
+        acct = "r13-own"
+        eng.add_account_block(acct, eng.BLOCK_RISK_UNKNOWN)
+        eng.set_protection_block(acct, True)
+        assert eng.account_block_reasons(acct) == {
+            eng.BLOCK_RISK_UNKNOWN, eng.BLOCK_MISSING_PROTECTION}
+        eng.set_protection_block(acct, False)      # clears ONLY protection
+        assert eng.account_block_reasons(acct) == {eng.BLOCK_RISK_UNKNOWN}
+        eng.clear_account_block(acct, eng.BLOCK_RISK_UNKNOWN)
+        assert eng.account_block_reasons(acct) == set()
+
+    def test_broker_state_staleness_vetoes(self):
+        """Item 8 — readiness requires a fresh, connected broker snapshot."""
+        from datetime import datetime, timedelta, timezone
+        from scalp.engine import broker_state_stale_reason
+        now_iso = datetime.now(timezone.utc).isoformat()
+        assert broker_state_stale_reason(
+            {"last_heartbeat": now_iso, "status": "connected"}) is None
+        assert broker_state_stale_reason(None) is not None
+        assert "no heartbeat" in broker_state_stale_reason({"equity": 1000})
+        old = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+        assert "stale" in broker_state_stale_reason({"last_heartbeat": old})
+        assert "not connected" in broker_state_stale_reason(
+            {"last_heartbeat": now_iso, "status": "disconnected"})
+
+    def test_restore_scopes_runner_to_its_own_symbol(self):
+        """Item 2 — a runner restores ONLY its own symbol's open trades
+        (suffix-tolerant); other symbols stay out of its book."""
+        r = ScalpRunner("r13-sym", "u1", "EURUSD")
+        db = _stub_db()
+        docs = [
+            {"_id": "tE", "action": "BUY", "entry_price": 1.08,
+             "stop_loss": 1.079, "take_profit": 1.082, "lot_size": 0.05,
+             "symbol": "EURUSD.a", "scalp_decision_id": ""},
+            {"_id": "tX", "action": "BUY", "entry_price": 2400.0,
+             "stop_loss": 2390.0, "take_profit": 2420.0, "lot_size": 0.01,
+             "symbol": "XAUUSD", "scalp_decision_id": ""},
+        ]
+        db.trades.find = MagicMock(return_value=_AsyncCursor(docs))
+        asyncio.run(r.restore_risk(db))
+        assert set(r.live_trades) == {"tE"}
+        assert r.risk_state.open_scalps == 1
+        # account-level state still covers ALL symbols
+        assert r.account_risk.open_scalps == 2
+
+    def test_restore_clears_only_its_own_risk_unknown_reason(self):
+        from scalp import engine as eng
+        acct = "r13-clear"
+        eng.add_account_block(acct, eng.BLOCK_RISK_UNKNOWN)
+        eng.add_account_block(acct, eng.BLOCK_MISSING_PROTECTION)
+        r = ScalpRunner(acct, "u1", "EURUSD")
+        db = _stub_db()
+        db.trades.find = MagicMock(return_value=_AsyncCursor([]))
+        asyncio.run(r.restore_risk(db))
+        # clean restore clears risk_unknown but NOT the protection block
+        assert eng.account_block_reasons(acct) == {
+            eng.BLOCK_MISSING_PROTECTION}
+        eng.set_protection_block(acct, False)
+
+    def test_status_exposes_block_reasons_and_staleness(self):
+        from scalp import engine as eng
+        r = ScalpRunner("r13-status", "u1", "EURUSD")
+        eng.add_account_block("r13-status", eng.BLOCK_RISK_UNKNOWN)
+        st = r.status()
+        assert st["block_reasons"] == ["risk_unknown"]
+        assert st["broker_state_stale"] is not None   # no account snapshot
+        eng.clear_account_block("r13-status", eng.BLOCK_RISK_UNKNOWN)
+
+    def test_rounding_digits_derived_from_step(self):
+        """Item 4 — decimals come from the instrument step, never a
+        hardcoded 5-decimal FX assumption."""
+        from protection_guard import rounding_digits
+        assert rounding_digits(0.00001) == 5
+        assert rounding_digits(0.001) == 3
+        assert rounding_digits(0.1) == 1
+        assert rounding_digits(0.25) == 2
+        assert rounding_digits(1.0) == 0
+
+    def test_emergency_stop_respects_broker_min_stop_distance(self):
+        """Item 5 — a stop tighter than the broker minimum is unplaceable;
+        the budget is never widened → escalate (None) instead."""
+        from protection_guard import (broker_stop_constraints,
+                                      calculate_emergency_stop)
+        acc = {"symbol_specs": {"EURUSD": {
+            "point": 0.00001, "digits": 5,
+            "stops_level_points": 20, "freeze_level_points": 0}}}
+        bc = broker_stop_constraints(acc, "EURUSD.a")
+        assert bc["min_stop_distance_px"] == pytest.approx(0.0002)
+        sl0 = calculate_emergency_stop(1.08, "BUY", 0.05, "EURUSD", 10_000.0)
+        sl1 = calculate_emergency_stop(1.08, "BUY", 0.05, "EURUSD", 10_000.0,
+                                       broker_constraints=bc)
+        assert sl1 == pytest.approx(sl0)      # constraint satisfied
+        huge = {"min_stop_distance_px": 1.0, "freeze_distance_px": 0.0}
+        assert calculate_emergency_stop(
+            1.08, "BUY", 0.05, "EURUSD", 10_000.0,
+            broker_constraints=huge) is None
+        # missing/unreported specs → no constraint object
+        assert broker_stop_constraints({}, "EURUSD") is None
+        assert broker_stop_constraints(
+            {"symbol_specs": {"EURUSD": {"point": 0}}}, "EURUSD") is None
+
+    def test_daily_risk_boundary_is_explicit_utc(self):
+        """Item 6 — the daily boundary is the UTC calendar day everywhere."""
+        from datetime import datetime, timezone
+        from scalp.risk import utc_day_key
+        assert utc_day_key() == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rs = RiskState(DEFAULT_LIMITS)
+        rs.record_result(-5.0, 1.0)
+        assert rs.daily_key == utc_day_key()
+
+    def test_recovery_sweep_claims_deal_before_processing(self):
+        """Item 7 — transactional sweep: a deal that cannot be atomically
+        claimed (another worker holds it / already completed) is skipped
+        without touching trades or risk."""
+        from scalp.engine import recover_pending_deals
+        deal = {"deal_id": 1313, "account_id": "r13-claim", "mt5_ticket": 9,
+                "profit": -1.0, "commission": 0.0, "swap": 0.0,
+                "price": 1.079, "lots": 0.05,
+                "financial_reconciliation_status": "pending",
+                "received_at": "2020-01-01T00:00:00+00:00"}
+        db = _stub_db()
+        db.broker_deals.find = MagicMock(return_value=_AsyncCursor([deal]))
+        db.broker_deals.update_one = AsyncMock(
+            return_value=MagicMock(matched_count=0))
+        db.trades.find_one = AsyncMock()
+        out = asyncio.run(recover_pending_deals(db, older_than_sec=0))
+        assert out == {"recovered": 0, "marked_complete": 0,
+                       "kept_pending": 0}
+        db.trades.find_one.assert_not_awaited()
+        filt = db.broker_deals.update_one.call_args.args[0]
+        assert filt["financial_reconciliation_status"] == "pending"
+        assert "$or" in filt                     # unclaimed-or-expired guard
+
+    def test_clock_drift_ignores_broker_timezone_offset(self):
+        """Broker tick clocks are broker-LOCAL (UTC+2/+3 EET, UTC+5:30):
+        the constant timezone offset is not drift and must not trip the
+        kill-switch; genuine residual skew still halts."""
+        from scalp.kill import clock_drift_residual_ms, MAX_CLOCK_DRIFT_MS
+        assert abs(clock_drift_residual_ms(-10_800_000)) < MAX_CLOCK_DRIFT_MS
+        assert abs(clock_drift_residual_ms(-7_200_000 + 1200)) < MAX_CLOCK_DRIFT_MS
+        assert abs(clock_drift_residual_ms(-19_800_000)) < MAX_CLOCK_DRIFT_MS
+        assert abs(clock_drift_residual_ms(0.0)) < MAX_CLOCK_DRIFT_MS
+        assert abs(clock_drift_residual_ms(-10_800_000 - 8000)) > MAX_CLOCK_DRIFT_MS
+        assert abs(clock_drift_residual_ms(600_000)) > MAX_CLOCK_DRIFT_MS

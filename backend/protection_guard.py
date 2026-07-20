@@ -40,6 +40,36 @@ def looks_like_object_id(value: str) -> bool:
             and all(c in "0123456789abcdefABCDEF" for c in value))
 
 
+def rounding_digits(step: float) -> int:
+    """Round 13 item 4 — decimal places implied by a price step (tick or
+    pip size), instead of a hardcoded 5-decimal FX assumption."""
+    from decimal import Decimal, InvalidOperation
+    try:
+        exp = Decimal(str(step)).normalize().as_tuple().exponent
+    except (InvalidOperation, ValueError):
+        return 5
+    return max(0, -int(exp)) if isinstance(exp, int) else 5
+
+
+def broker_stop_constraints(account: dict | None, symbol: str) -> dict | None:
+    """Round 13 item 5 — precise broker stop-placement constraints
+    (SYMBOL_TRADE_STOPS_LEVEL / FREEZE_LEVEL in points) tracked per symbol
+    from EA heartbeats, converted to price distances. None when the broker
+    never reported them — the EA stays the broker-side enforcement then."""
+    from pip_utils import base_symbol
+    specs = (account or {}).get("symbol_specs") or {}
+    spec = specs.get(base_symbol(symbol)) or specs.get(str(symbol).upper())
+    if not isinstance(spec, dict):
+        return None
+    point = float(spec.get("point") or 0)
+    if point <= 0:
+        return None
+    return {"min_stop_distance_px":
+            float(spec.get("stops_level_points") or 0) * point,
+            "freeze_distance_px":
+            float(spec.get("freeze_level_points") or 0) * point}
+
+
 async def find_account(db, account_id: str) -> tuple:
     """Round 11/12 item 7 — centralized account lookup with an EXPLICIT
     reason: 'ok', 'invalid_id', 'missing', 'db_error'. Tries ObjectId first
@@ -96,7 +126,9 @@ def apply_protection_ack(trade: dict, success: bool, new_sl=None,
 
 
 def calculate_emergency_stop(entry: float, direction: str, lot: float,
-                             symbol: str, equity: float) -> float | None:
+                             symbol: str, equity: float,
+                             broker_constraints: dict | None = None
+                             ) -> float | None:
     """Budget-based protective stop: distance = risk budget / (lot × pip
     value), capped at FALLBACK_PRICE_PCT of the entry price. Round 9 item 5:
     the budget is NEVER silently inflated — if equity is too small to place
@@ -121,15 +153,24 @@ def calculate_emergency_stop(entry: float, direction: str, lot: float,
     dist_px = min(dist_pips * pip, entry * FALLBACK_PRICE_PCT / 100.0)
     if dist_px <= 0:
         return None
+    # round 13 item 5 — a budget distance TIGHTER than the broker's minimum
+    # stop distance / freeze level can never be placed; the budget is NEVER
+    # silently widened — escalate to an emergency close instead.
+    if broker_constraints:
+        min_dist_px = max(
+            float(broker_constraints.get("min_stop_distance_px") or 0),
+            float(broker_constraints.get("freeze_distance_px") or 0))
+        if min_dist_px > 0 and dist_px < min_dist_px:
+            return None
     sl = entry - dist_px if (direction or "BUY").upper() == "BUY" else entry + dist_px
-    # round 12 item 6 — snap to the instrument's tick size instead of
-    # assuming 5-decimal FX precision. (Broker min-stop-distance / freeze
-    # level verification stays EA-side where those limits are known.)
+    # round 12 item 6 / round 13 item 4 — snap to the instrument's tick size
+    # and round to the digits IMPLIED by that tick; unknown tick falls back
+    # to pip-derived digits + 1 (never a hardcoded 5-decimal FX assumption).
     cfg = approved(symbol)
     tick = float(getattr(cfg, "tick_size", 0) or 0) if cfg else 0.0
     if tick > 0:
-        sl = round(round(sl / tick) * tick, 8)
-    return round(sl, 5)
+        return round(round(sl / tick) * tick, rounding_digits(tick))
+    return round(sl, rounding_digits(pip) + 1)
 
 
 async def repair_unprotected_positions(db) -> dict:
@@ -251,7 +292,9 @@ async def repair_unprotected_positions(db) -> dict:
         equity = float((acc or {}).get("equity") or 0)
         sl = calculate_emergency_stop(
             float(tr.get("entry_price") or 0), tr.get("action"),
-            float(tr.get("lot_size") or 0), tr.get("symbol") or "", equity)
+            float(tr.get("lot_size") or 0), tr.get("symbol") or "", equity,
+            broker_constraints=broker_stop_constraints(
+                acc, tr.get("symbol") or ""))
         if sl is None:
             await db.trades.update_one({"_id": tid}, {"$set": {
                 "protection_state": "EMERGENCY_CLOSE_PENDING",
