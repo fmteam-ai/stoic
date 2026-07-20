@@ -2325,3 +2325,76 @@ class TestRound15Hardening:
                      (datetime.now(timezone.utc)
                       - timedelta(days=2)).isoformat()}
         assert symbol_specs_status(stale, "EURUSD") == "stale"
+
+
+class TestRound16Presubmit:
+    def test_edge_revalidation_rejects_decayed_edge(self):
+        """Round 16 items 7/8 — spread expansion + adverse drift since the
+        decision snapshot must not turn an approved marginal edge negative:
+        final_net_edge = net_edge − max(0, sp − decision_spread)
+                         − max(0, adverse) must clear
+        MIN_NET_EDGE_PIPS + LATENCY_EDGE_BUFFER_PIPS."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from scalp import edge as edge_mod
+        from scalp import engine as eng
+        r = _r15_runner("r16-edge")
+        # live spread 0.4p; decision assumed 0.0p spread → penalty 0.4p
+        decision = {"decision_id": "d16e", "direction": "BUY",
+                    "ts_ms": int(time.time() * 1000),
+                    "net_edge_pips": 0.3, "sim": {"entry_mid": 1.08002}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.0)
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        db = _stub_db()
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine), \
+                 patch.object(eng, "confirm_account_lease_now",
+                              AsyncMock(return_value=(True, 7))):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(6):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        fake_engine.execute.assert_not_awaited()
+        sets = [c.args[1]["$set"]
+                for c in db.scalp_decisions.update_one.await_args_list]
+        rej = [s for s in sets
+               if s.get("reject_stage") == "pre_submit_edge_revalidation"]
+        assert rej, sets
+        # 0.3 − 0.4 spread delta = −0.1 < 0.15 + 0.05 buffer
+        assert rej[0]["final_net_edge_pips"] == pytest.approx(-0.1, abs=0.02)
+        assert rej[0]["spread_delta_pips"] == pytest.approx(0.4, abs=0.02)
+        assert (edge_mod.MIN_NET_EDGE_PIPS
+                + eng.LATENCY_EDGE_BUFFER_PIPS) == pytest.approx(0.2)
+
+    def test_edge_revalidation_passes_when_edge_holds(self):
+        """A healthy edge with unchanged spread sails through to submit."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from scalp import engine as eng
+        r = _r15_runner("r16-edge-ok")
+        decision = {"decision_id": "d16f", "direction": "BUY",
+                    "ts_ms": int(time.time() * 1000),
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.4)
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        db = _stub_db()
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine), \
+                 patch.object(eng, "confirm_account_lease_now",
+                              AsyncMock(return_value=(True, 7))):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(6):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        fake_engine.execute.assert_awaited()
+        sets = [c.args[1]["$set"]
+                for c in db.scalp_decisions.update_one.await_args_list]
+        snap = [s for s in sets if "final_net_edge_pips" in s
+                and s.get("submission_status") == "submitted"]
+        assert snap and snap[0]["final_net_edge_pips"] > 0

@@ -636,3 +636,18 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - Metrics: model key from ACCOUNT DOC (make_key broker|type|symbol, restart-proof), lifetime canonical filter + population label, expectancy_by_mode shadow vs broker_fills with separate CIs, latency p50/p95/p99.
 - CI split: scripts/run_unit_tests.sh (Mongo-free, 157 tests) + run_integration_tests.sh (dependency preflight); seed.dependency_health_check() at startup (deps/ping/critical indexes) — caught + fixed missing scalp_decisions.decision_id unique partial index (+account/symbol/ts index).
 - Tests: TestRound15Hardening (7); scalp+flatten 164/164; testing agent iteration_54 zero issues.
+
+## Session 2026-07-20 (cont.) — Round 16 Hardening + Regime-Adaptive Dispatch (iter-55: 100%, 0 issues)
+- LEASED SLOT SEMAPHORE (scalp_submission_slots) fully replaces the Round-15 scalp_submission_caps counter: one doc per capacity unit (6/broker), token-fenced acquire/renew/release, crashed holder = harmless lease expiry (90s). Fairness caps: MAX_ACCOUNT_ACTIVE_SUBMISSIONS=2, MAX_SYMBOL_ACTIVE_SUBMISSIONS=3 (both env-overridable).
+- _submit_live final-commitment revalidation: fresh-quote net edge re-check (edge.MIN_NET_EDGE_PIPS + LATENCY_EDGE_BUFFER_PIPS 0.05, reject_stage pre_submit_edge_revalidation), fail-closed margin (BROKER_MARGIN_PREFLIGHT toggle, margin_enforcement recorded), exposure preflight (pre_submit_exposure + forced re-restore), explicit execution_mode/outcome_source fields on decisions.
+- /api/scalp/metrics gains expectancy_by_regime {regime: {n, net_expectancy_pips, ci95}} alongside expectancy_by_mode.
+- REGIME-ADAPTIVE DISPATCH: new 'adaptive' preset → 'regime_adaptive' engine (strategy_engines.dispatch_engine_for_regime): HIGH_VOL_TREND→mtf_relaxed, LOW_VOL_TREND→mtf_moderate, RANGE→range_fade, CHOP/unknown→stand down. Signal payloads carry regime_dispatch; ai_signals holds with 'ADAPTIVE · Regime Dispatch: …' when standing down. Fixes the 4-day FLAT-regime silence for users who opt in.
+- adaptive_mode.REGIME_TO_PRESET fixed: HIGH_VOL_TREND/DYNAMIC_MOMENTUM→trend_rider, LOW_VOL_TREND→balanced, RANGE→mean_reversion (previously fell through to balanced). Guide.jsx mapping list updated; BotConfig Compass icon added.
+- DB cleanup: deleted 4,825 orphan inactive bot_configs (test-suite registrations, users with no accounts/trades); 478 remain, all 6 active intact.
+- Tests: tests/unit/scalp/test_round16_slots.py (7 concurrency tests: 8-worker/6-slot contention, crash/lease expiry, token fencing, fairness caps, churn no-double-grant, audit fields), tests/test_regime_dispatch.py (9), TestRound16Presubmit (2, edge-revalidation math). Unit CI 166 passed; full suite 1956 passed / 7 skipped (test_iter21 preset order updated 7→8). Testing agent iteration_55: zero issues, zero action items.
+
+### Backlog (carried)
+- P1: State Tuning Panel — UI to tune Monte Carlo drift, TP caps, counter-trend thresholds without redeploy.
+- P1: Deploy stable shadow/demo to production K8s.
+- P2: Regression model for expected net P&L after costs.
+- P2: Add GBPUSD to scalp universe after EURUSD validation.
