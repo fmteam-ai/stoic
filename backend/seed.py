@@ -5,6 +5,50 @@ from database import get_db
 from auth import hash_password, verify_password
 
 
+async def dependency_health_check() -> dict:
+    """Round 15 item 10 — startup dependency + index health check. Verifies
+    the driver stack (bson/pymongo/motor), a live DB ping, and that the
+    safety-critical unique indexes actually exist. Logs CRITICAL on any
+    failure so a bad deploy is visible immediately."""
+    import logging
+    log = logging.getLogger("startup-health")
+    result = {"deps_ok": True, "db_ok": False, "indexes_ok": False,
+              "missing_indexes": []}
+    try:
+        import bson  # noqa: F401
+        import pymongo  # noqa: F401
+        import motor  # noqa: F401
+    except ImportError as e:
+        result["deps_ok"] = False
+        log.critical("driver dependency missing: %s", e)
+        return result
+    db = get_db()
+    try:
+        await db.command("ping")
+        result["db_ok"] = True
+    except Exception as e:  # noqa: BLE001
+        log.critical("MongoDB ping failed: %s", e)
+        return result
+    critical = {"users": "email", "accounts": "bridge_token",
+                "trades": "account_id", "scalp_owners": "account_id",
+                "scalp_decisions": "decision_id"}
+    missing = []
+    for coll, field in critical.items():
+        try:
+            info = await db[coll].index_information()
+            if not any(field in str(k) for k in info):
+                missing.append(f"{coll}.{field}")
+        except Exception as e:  # noqa: BLE001
+            missing.append(f"{coll} (unreadable: {e})")
+    result["missing_indexes"] = missing
+    result["indexes_ok"] = not missing
+    if missing:
+        log.critical("critical indexes missing/unverifiable: %s", missing)
+    else:
+        log.info("dependency + index health check passed")
+    return result
+
+
 async def seed_admin():
     db = get_db()
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@trading.bot").lower()
@@ -61,6 +105,15 @@ async def ensure_indexes():
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])
+    # Round 15 item 10 — decision updates key on decision_id everywhere;
+    # without this index every update is a collection scan (caught by
+    # dependency_health_check on first deploy). Partial: legacy docs
+    # without a decision_id are exempt from the uniqueness constraint.
+    await db.scalp_decisions.create_index(
+        "decision_id", unique=True,
+        partialFilterExpression={"decision_id": {"$type": "string"}})
+    await db.scalp_decisions.create_index([("account_id", 1), ("symbol", 1),
+                                           ("ts_ms", -1)])
     # bot_configs is now keyed by (user_id, account_id). account_id=None marks
     # the user's default profile; other docs are per-account overrides.
     # Drop the old unique(user_id) index if it exists, then create the composite.

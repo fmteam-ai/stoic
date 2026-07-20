@@ -56,18 +56,15 @@ def rounding_digits(step: float) -> int:
     return max(0, -int(exp)) if isinstance(exp, int) else 5
 
 
-def broker_stop_constraints(account: dict | None, symbol: str) -> dict | None:
-    """Round 13 item 5 — precise broker stop-placement constraints
-    (SYMBOL_TRADE_STOPS_LEVEL / FREEZE_LEVEL in points) tracked per symbol
-    from EA heartbeats, converted to price distances. None when the broker
-    never reported them — the EA stays the broker-side enforcement then."""
+def symbol_specs_status(account: dict | None, symbol: str) -> str:
+    """Round 15 item 5 — 'ok' (fresh specs), 'stale' (reported but older
+    than SYMBOL_SPEC_MAX_AGE_SEC: the EA stopped refreshing) or 'absent'
+    (broker never reported them: pre-v1.48 EA)."""
     from pip_utils import base_symbol
     specs = (account or {}).get("symbol_specs") or {}
     spec = specs.get(base_symbol(symbol)) or specs.get(str(symbol).upper())
-    if not isinstance(spec, dict):
-        return None
-    # round 14 item 9 — stale specs are not trusted: fall back to
-    # constraint-free math (the EA clamps broker-side) and log for refresh.
+    if not isinstance(spec, dict) or float(spec.get("point") or 0) <= 0:
+        return "absent"
     updated = (account or {}).get("symbol_specs_updated_at")
     if updated:
         try:
@@ -76,11 +73,20 @@ def broker_stop_constraints(account: dict | None, symbol: str) -> dict | None:
         except ValueError:
             age = None
         if age is not None and age > SYMBOL_SPEC_MAX_AGE_SEC:
-            logger.warning(
-                "symbol specs for %s stale (%ds > %ds) — ignoring broker "
-                "stop constraints until the EA refreshes them",
-                symbol, int(age), SYMBOL_SPEC_MAX_AGE_SEC)
-            return None
+            return "stale"
+    return "ok"
+
+
+def broker_stop_constraints(account: dict | None, symbol: str) -> dict | None:
+    """Round 13 item 5 — precise broker stop-placement constraints
+    (SYMBOL_TRADE_STOPS_LEVEL / FREEZE_LEVEL in points) tracked per symbol
+    from EA heartbeats, converted to price distances. None unless the specs
+    are present AND fresh (round 14 item 9 / round 15 item 5)."""
+    if symbol_specs_status(account, symbol) != "ok":
+        return None
+    from pip_utils import base_symbol
+    specs = (account or {}).get("symbol_specs") or {}
+    spec = specs.get(base_symbol(symbol)) or specs.get(str(symbol).upper())
     point = float(spec.get("point") or 0)
     if point <= 0:
         return None
@@ -317,6 +323,29 @@ async def repair_unprotected_positions(db) -> dict:
                 "unavailable, failing closed for trade %s",
                 account_id, lookup_reason, tid)
         equity = float((acc or {}).get("equity") or 0)
+        # round 15 item 5 — emergency protection must never rely on
+        # constraints of UNKNOWN freshness: stale specs mean the EA stopped
+        # refreshing (offline/downgraded), so its server-side clamping can't
+        # be assumed either. Request a refresh and escalate to a close.
+        spec_status = symbol_specs_status(acc, tr.get("symbol") or "")
+        if spec_status == "stale":
+            await db.accounts.update_one(
+                {"_id": (acc or {}).get("_id")},
+                {"$set": {"symbol_specs_refresh_requested_at": now_iso}})
+            await db.trades.update_one({"_id": tid}, {"$set": {
+                "protection_state": "EMERGENCY_CLOSE_PENDING",
+                "close_requested": True,
+                "close_reason": "emergency_specs_stale",
+                "pending_modification": {
+                    "type": "FULL_CLOSE",
+                    "reason": "emergency_specs_stale",
+                    "requested_at": now_iso}}})
+            closes_queued += 1
+            logger.critical(
+                "unprotected position %s on account %s with STALE symbol "
+                "specs — emergency close queued (constraints unverifiable)",
+                tid, account_id)
+            continue
         sl = calculate_emergency_stop(
             float(tr.get("entry_price") or 0), tr.get("action"),
             float(tr.get("lot_size") or 0), tr.get("symbol") or "", equity,

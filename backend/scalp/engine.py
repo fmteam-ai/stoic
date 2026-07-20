@@ -116,6 +116,71 @@ def account_block_reasons(account_id: str) -> set:
     return set(_account_blocks.get(account_id) or ())
 
 
+def margin_audit(account: dict | None, symbol: str, lot: float,
+                 price: float) -> dict:
+    """Round 15 item 1 — explicit pre-submission margin audit. When broker
+    leverage is unknown the check is recorded as unavailable (None), never
+    silently assumed; the EA/broker remain the hard enforcement."""
+    fm = (account or {}).get("free_margin")
+    out = {"fresh_free_margin": float(fm) if fm is not None else None,
+           "estimated_required_margin": None,
+           "margin_utilization_after_order": None,
+           "margin_check_passed": None}
+    try:
+        lev = float((account or {}).get("leverage") or 0)
+    except (TypeError, ValueError):
+        lev = 0.0
+    if lev > 0 and lot > 0 and price and fm is not None:
+        contract = 100_000.0             # FX standard lot (scalp universe)
+        req = lot * contract * float(price) / lev
+        fm_f = float(fm)
+        out["estimated_required_margin"] = round(req, 2)
+        out["margin_check_passed"] = fm_f >= req * 1.2   # +20% buffer
+        if fm_f > 0:
+            out["margin_utilization_after_order"] = round(req / fm_f, 4)
+        if not out["margin_check_passed"]:
+            out["reason"] = (f"insufficient free margin: need ~${req:.2f} "
+                             f"(+20% buffer), have ${fm_f:.2f}")
+    return out
+
+
+# Round 15 item 3 — DISTRIBUTED per-broker submission capacity: the local
+# _active_submissions counter protects one worker only; this DB-backed
+# conditional counter bounds concurrent submissions across ALL workers.
+MAX_BROKER_CONCURRENT_SUBMISSIONS = int(os.environ.get(
+    "SCALP_MAX_BROKER_CONCURRENT_SUBMISSIONS", "6"))
+SUBMISSION_SLOT_STALE_SEC = 30
+
+
+def _broker_cap_key(broker: str) -> str:
+    return f"broker:{(broker or 'unknown').strip().lower()}"
+
+
+async def acquire_broker_submission_slot(db, broker: str) -> bool:
+    key = _broker_cap_key(broker)
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    stale_iso = (now - timedelta(seconds=SUBMISSION_SLOT_STALE_SEC)).isoformat()
+    await db.scalp_submission_caps.update_one(
+        {"_id": key},
+        {"$setOnInsert": {"active": 0, "updated_at": now_iso}}, upsert=True)
+    # crash-leak recovery: a counter untouched for the stale window resets
+    await db.scalp_submission_caps.update_one(
+        {"_id": key, "active": {"$gt": 0}, "updated_at": {"$lt": stale_iso}},
+        {"$set": {"active": 0, "updated_at": now_iso}})
+    res = await db.scalp_submission_caps.update_one(
+        {"_id": key, "active": {"$lt": MAX_BROKER_CONCURRENT_SUBMISSIONS}},
+        {"$inc": {"active": 1}, "$set": {"updated_at": now_iso}})
+    return bool(res.modified_count)
+
+
+async def release_broker_submission_slot(db, broker: str) -> None:
+    await db.scalp_submission_caps.update_one(
+        {"_id": _broker_cap_key(broker), "active": {"$gt": 0}},
+        {"$inc": {"active": -1},
+         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}})
+
+
 def update_account_snapshot(account_id: str, snapshot: dict) -> None:
     """Round 14 P0 — every heartbeat propagates the FRESH account snapshot
     into all in-memory runners for the account. Without this, staleness
@@ -810,17 +875,74 @@ class ScalpRunner:
                 {"decision_id": decision["decision_id"]}, {"$set": s}),
                 "decision_update")
             return
+        decision_equity = self.equity
         if eq is not None:
             self.equity = float(eq)
-        # round 14 item 10 — submission-capacity guard: bounded concurrent
-        # broker submissions per worker; excess rejects (next eval retries).
+        # round 15 main — RE-RUN sizing on the FINAL accepted snapshot: the
+        # lot submitted to the broker must be the lot the fresh equity and
+        # current account risk support. Conservative: min(decision lot,
+        # freshly sized lot); reject when the fresh checks say no or the
+        # smaller lot falls below the broker minimum volume.
+        from pip_utils import pip_value_usd_per_lot_strict
+        pip_val = pip_value_usd_per_lot_strict(self.symbol)
+        if pip_val is None:
+            add_account_block(self.account_id, BLOCK_RISK_UNKNOWN)
+            self.state.record_reject()
+            _bg(lambda: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]},
+                {"$set": {"verdict": "rejected",
+                          "reject_stage": "pre_submit_risk_unknown"}}),
+                "decision_update")
+            return
+        fresh_risk = risk_check(self.risk_state, self.equity, fc.stop_pips,
+                                pip_val, self.cfg)
+        final_lot = round(min(float(risk_res["lot"]),
+                              float(fresh_risk.get("lot") or 0)), 2)
+        acct_check = {"ok": True, "reason": None}
+        if fresh_risk["ok"] and final_lot >= self.cfg.min_lot:
+            acct_check = check_account(
+                self.account_risk, self.equity,
+                proposed_stop_risk_usd=final_lot * fc.stop_pips * pip_val)
+        margin = margin_audit(self.account, self.symbol, final_lot, entry)
+        if (not fresh_risk["ok"] or final_lot < self.cfg.min_lot
+                or not acct_check["ok"]
+                or margin["margin_check_passed"] is False):
+            self.state.record_reject()
+            why = (fresh_risk.get("reason") or acct_check.get("reason")
+                   or margin.get("reason")
+                   or "fresh sizing below broker minimum volume")
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "pre_submit_resize",
+                          "resize_reason": why,
+                          "fresh_risk": {"ok": fresh_risk["ok"],
+                                         "lot": fresh_risk.get("lot"),
+                                         "reason": fresh_risk.get("reason")},
+                          "margin_audit": margin}: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
+        risk_res = {**risk_res, "lot": final_lot}
+        # round 14 item 10 — worker-local guard; round 15 item 3 adds the
+        # DISTRIBUTED per-broker slot below. Round 15 item 4: capacity
+        # rejections carry their own dataset label so infrastructure
+        # saturation is never mistaken for broker/strategy quality.
         global _active_submissions
         if _active_submissions >= MAX_CONCURRENT_SUBMISSIONS:
             self.state.record_reject()
             _bg(lambda: db.scalp_decisions.update_one(
                 {"decision_id": decision["decision_id"]},
                 {"$set": {"verdict": "rejected",
-                          "reject_stage": "submission_capacity"}}),
+                          "reject_stage": "submission_capacity",
+                          "dataset": "attempt_not_submitted_capacity"}}),
+                "decision_update")
+            return
+        if not await acquire_broker_submission_slot(db, self.broker):
+            self.state.record_reject()
+            _bg(lambda: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]},
+                {"$set": {"verdict": "rejected",
+                          "reject_stage": "submission_capacity_broker",
+                          "dataset": "attempt_not_submitted_capacity"}}),
                 "decision_update")
             return
         submit_ms = now_ms()
@@ -829,7 +951,7 @@ class ScalpRunner:
             trade = await engine.execute(
                 user_id=self.user_id, account=account,
                 signal={"symbol": self.symbol, "action": decision["direction"],
-                        "lot_size": risk_res["lot"],
+                        "lot_size": final_lot,
                         "entry_price": round(entry, 5),
                         "stop_loss": round(sl, 5), "take_profit": round(tp, 5),
                         "origin": "auto", "scope": "scalp_fast",
@@ -838,6 +960,30 @@ class ScalpRunner:
                 cfg_account_id=self.account_id)
         finally:
             _active_submissions = max(0, _active_submissions - 1)
+            _bg(lambda: release_broker_submission_slot(db, self.broker),
+                "release_submission_slot")
+        # round 15 items 2/9 — persist the COMMITMENT context: the final
+        # pre-submit snapshot the order was actually sized against, plus
+        # latency decomposition stamps (EA poll latency lives on the trade
+        # doc as _dispatched_at; broker ack lands via on_trade_opened).
+        _bg(lambda s={
+            "pre_submit_account_snapshot": {
+                "equity": self.equity,
+                "equity_delta": round(self.equity - decision_equity, 2),
+                "free_margin": (self.account or {}).get("free_margin"),
+                "heartbeat_at": (self.account or {}).get("last_heartbeat"),
+                "final_lot": final_lot,
+                "lease_epoch": lease_epoch,
+                "margin_audit": margin,
+            },
+            "submitted_lot": final_lot,
+            "submission_start_ts_ms": submit_ms,
+            "db_trade_created_ts_ms": now_ms(),
+            "decision_to_submit_ms": max(0, submit_ms
+                                         - int(decision.get("ts_ms") or submit_ms)),
+        }: db.scalp_decisions.update_one(
+            {"decision_id": decision["decision_id"]}, {"$set": s}),
+            "decision_update")
         if trade.get("blocked"):
             self.state.record_reject()
             # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
@@ -959,11 +1105,17 @@ class ScalpRunner:
                 info["actual_entry"] = actual_price
                 info["entry_slippage_pips"] = round(signed, 2)
             if db is not None and info:
+                ack_ms = self.last_order_ack_ms
+                sub_ms = info.get("order_submit_ts_ms")
                 _bg(lambda: db.scalp_decisions.update_one(
                     {"decision_id": info.get("decision_id", "")},
                     {"$set": {"requested_entry": requested_price,
                               "actual_entry": actual_price,
-                              "entry_slippage_pips": round(signed, 2)}}),
+                              "entry_slippage_pips": round(signed, 2),
+                              # round 15 item 9 — latency decomposition
+                              "broker_ack_ts_ms": ack_ms,
+                              "submit_to_ack_ms": (max(0, ack_ms - int(sub_ms))
+                                                   if sub_ms else None)}}),
                     "entry_fill")
 
     def on_close_ack(self, trade_id: str, exit_price: float | None = None,

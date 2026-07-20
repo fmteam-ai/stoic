@@ -284,7 +284,8 @@ def _stub_db():
     db = MagicMock()
     for coll in ("scalp_decisions", "scalp_ticks", "scalp_risk_state",
                  "scalp_configs", "trades", "broker_deals", "scalp_owners",
-                 "scalp_financial_events", "accounts"):
+                 "scalp_financial_events", "accounts",
+                 "scalp_submission_caps"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
         c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
@@ -2171,3 +2172,150 @@ class TestRound14Hardening:
         src = inspect.getsource(eng.ScalpRunner._maybe_evaluate)
         assert '"account_snapshot"' in src
         assert '"free_margin"' in src and '"heartbeat_at"' in src
+
+
+# ---------------- round-15 hardening behaviors ----------------
+def _r15_runner(name):
+    from datetime import datetime, timezone
+    r = ScalpRunner(name, "u1", "EURUSD")
+    r.equity = 10_000.0
+    r.account = {"_id": name, "equity": 10_000.0, "status": "connected",
+                 "last_heartbeat": datetime.now(timezone.utc).isoformat()}
+    now = int(time.time() * 1000)
+    r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=now,
+                             received_time_ms=now, bid=1.08, ask=1.08004))
+    return r
+
+
+def _r15_submit(r, db, fake_engine, lot=0.9):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from scalp import engine as eng
+    decision = {"decision_id": "d15", "direction": "BUY",
+                "ts_ms": int(time.time() * 1000),
+                "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
+    fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                         expected_slippage_pips=0.1)
+
+    async def run():
+        with patch("execution.for_account", return_value=fake_engine), \
+             patch.object(eng, "confirm_account_lease_now",
+                          AsyncMock(return_value=(True, 7))):
+            await r._submit_live(db, decision, fc, {"lot": lot})
+            for _ in range(6):
+                await asyncio.sleep(0)
+    asyncio.run(run())
+
+
+class TestRound15Hardening:
+    def test_submitted_lot_resized_to_fresh_equity(self):
+        """Main item — the broker receives min(decision lot, lot sized from
+        the FINAL accepted snapshot), never the stale-equity lot."""
+        from scalp.risk import check as risk_check
+        r = _r15_runner("r15-resize")
+        db = _stub_db()
+        from datetime import datetime, timezone
+        db.accounts.find_one = AsyncMock(return_value={
+            "_id": "r15-resize", "equity": 9_900.0, "status": "connected",
+            "last_heartbeat": datetime.now(timezone.utc).isoformat()})
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t15"}))
+        from pip_utils import pip_value_usd_per_lot_strict
+        expected = risk_check(r.risk_state, 9_900.0, 3.0,
+                              pip_value_usd_per_lot_strict("EURUSD"),
+                              r.cfg)["lot"]
+        _r15_submit(r, db, fake_engine, lot=0.9)
+        sig = fake_engine.execute.await_args.kwargs["signal"]
+        assert sig["lot_size"] == pytest.approx(min(0.9, expected))
+        assert sig["lot_size"] < 0.9
+
+    def test_presubmit_rejects_when_fresh_risk_fails(self):
+        from scalp.risk import utc_day_key
+        r = _r15_runner("r15-riskfail")
+        r.risk_state.daily_key = utc_day_key()
+        r.risk_state.daily_loss_usd = 1e9      # daily loss limit breached
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        _r15_submit(r, db, fake_engine)
+        fake_engine.execute.assert_not_awaited()
+        stages = [c.args[1]["$set"].get("reject_stage")
+                  for c in db.scalp_decisions.update_one.await_args_list]
+        assert "pre_submit_resize" in stages
+
+    def test_distributed_broker_capacity_denies_and_labels_dataset(self):
+        """Items 3/4 — DB-backed per-broker slot denied → reject labelled
+        attempt_not_submitted_capacity (infrastructure, not strategy)."""
+        r = _r15_runner("r15-slot")
+        db = _stub_db()
+        db.scalp_submission_caps.update_one = AsyncMock(
+            return_value=MagicMock(modified_count=0))
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        _r15_submit(r, db, fake_engine)
+        fake_engine.execute.assert_not_awaited()
+        sets = [c.args[1]["$set"]
+                for c in db.scalp_decisions.update_one.await_args_list]
+        cap = [s for s in sets
+               if s.get("reject_stage") == "submission_capacity_broker"]
+        assert cap and cap[0]["dataset"] == "attempt_not_submitted_capacity"
+
+    def test_slot_acquire_release_roundtrip(self):
+        from scalp.engine import (acquire_broker_submission_slot,
+                                  release_broker_submission_slot)
+        db = _stub_db()
+        assert asyncio.run(acquire_broker_submission_slot(db, "OnEquity"))
+        asyncio.run(release_broker_submission_slot(db, "OnEquity"))
+        filt = db.scalp_submission_caps.update_one.await_args.args[0]
+        assert filt["_id"] == "broker:onequity"
+
+    def test_success_records_pre_submit_snapshot_and_latency(self):
+        """Items 2/9 — the decision doc gains the commitment context."""
+        r = _r15_runner("r15-snap2")
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        _r15_submit(r, db, fake_engine, lot=0.01)
+        sets = [c.args[1]["$set"]
+                for c in db.scalp_decisions.update_one.await_args_list]
+        snap = [s for s in sets if "pre_submit_account_snapshot" in s]
+        assert snap, sets
+        s = snap[0]
+        pss = s["pre_submit_account_snapshot"]
+        assert pss["final_lot"] == 0.01 and pss["lease_epoch"] == 7
+        assert "equity_delta" in pss and "margin_audit" in pss
+        assert s["submitted_lot"] == 0.01
+        assert s["decision_to_submit_ms"] >= 0
+        assert "submission_start_ts_ms" in s
+
+    def test_margin_audit_states(self):
+        """Item 1 — explicit, explainable margin audit."""
+        from scalp.engine import margin_audit
+        # leverage unknown → recorded as unavailable, never assumed
+        out = margin_audit({"free_margin": 500.0}, "EURUSD", 0.5, 1.08)
+        assert out["margin_check_passed"] is None
+        # insufficient free margin → explicit fail + reason
+        out = margin_audit({"free_margin": 100.0, "leverage": 30},
+                           "EURUSD", 0.5, 1.08)
+        assert out["margin_check_passed"] is False
+        assert out["estimated_required_margin"] == pytest.approx(1800.0)
+        assert "insufficient free margin" in out["reason"]
+        # ample margin → pass with utilization recorded
+        out = margin_audit({"free_margin": 10_000.0, "leverage": 30},
+                           "EURUSD", 0.5, 1.08)
+        assert out["margin_check_passed"] is True
+        assert 0 < out["margin_utilization_after_order"] < 1
+
+    def test_symbol_specs_status_absent_stale_ok(self):
+        """Item 5 — spec freshness is an explicit tri-state."""
+        from datetime import datetime, timedelta, timezone
+        from protection_guard import symbol_specs_status
+        spec = {"point": 0.00001, "stops_level_points": 10}
+        assert symbol_specs_status({}, "EURUSD") == "absent"
+        assert symbol_specs_status(
+            {"symbol_specs": {"EURUSD": {"point": 0}}}, "EURUSD") == "absent"
+        fresh = {"symbol_specs": {"EURUSD": spec},
+                 "symbol_specs_updated_at":
+                     datetime.now(timezone.utc).isoformat()}
+        assert symbol_specs_status(fresh, "EURUSD.a") == "ok"
+        stale = {"symbol_specs": {"EURUSD": spec},
+                 "symbol_specs_updated_at":
+                     (datetime.now(timezone.utc)
+                      - timedelta(days=2)).isoformat()}
+        assert symbol_specs_status(stale, "EURUSD") == "stale"

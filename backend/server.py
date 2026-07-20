@@ -494,6 +494,8 @@ async def on_startup():
     try:
         await ensure_indexes()
         await seed_admin()
+        from seed import dependency_health_check
+        await dependency_health_check()
         logger.info("Startup: indexes ensured, admin seeded.")
         _bot_runner_task = asyncio.create_task(bot_runner.loop())
         _warmer_task = asyncio.create_task(warmer.loop())

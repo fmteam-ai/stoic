@@ -104,36 +104,84 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
     gross_win = sum(wins)
     gross_loss = abs(sum(losses))
     resolved_dir = len(tf) + len(sf)
-    # Round 14 item 5 — model artifacts are broker/account-type specific:
-    # resolve by the runner's model key when an account is specified, never
-    # blindly by symbol (which could show another broker's model).
+    # Round 14 item 5 / Round 15 item 6 — model artifacts are broker/
+    # account-type specific: derive the model key from the ACCOUNT DOCUMENT
+    # (survives restarts and runner-less accounts); the in-memory runner is
+    # only used for the cached commission check.
     model_doc = None
     model_scope = "symbol_only"
     runner = None
+    acc = None
     if account_id:
+        from protection_guard import find_account
+        from scalp import model as scalp_model
         from scalp.engine import _runners
         runner = _runners.get(f"{account_id}:{symbol.upper()}")
-        if runner is not None:
+        acc, _why = await find_account(db, account_id)
+        if acc is not None:
+            model_scope = scalp_model.make_key(
+                str(acc.get("broker") or ""),
+                str(acc.get("account_type") or ""), symbol.upper())
             model_doc = await db.scalp_models.find_one(
-                {"model_key": runner.model_key()})
-            model_scope = runner.model_key()
+                {"model_key": model_scope})
     if model_doc is None and not account_id:
         model_doc = await db.scalp_models.find_one({"symbol": symbol.upper()})
     tick_count = await db.scalp_ticks.count_documents({"user_id": user["id"],
                                                        "symbol": symbol.upper()})
-    # Round 14 item 6 — lifetime aggregates alongside the rolling window
+    # Round 14 item 6 / Round 15 item 7 — lifetime aggregates over a
+    # CANONICAL resolved population: numeric net_pips, resolved outcomes
+    # only (q already pins outcome.result), no partial/administrative docs.
     lifetime = None
+    lifetime_match = {**q, "outcome.net_pips": {"$type": "number"}}
     async for g in db.scalp_decisions.aggregate([
-            {"$match": q},
+            {"$match": lifetime_match},
             {"$group": {"_id": None, "n": {"$sum": 1},
                         "net_sum": {"$sum": "$outcome.net_pips"}}}]):
         lifetime = {"n": int(g["n"]),
                     "net_expectancy_pips": round(
-                        float(g["net_sum"] or 0) / max(1, int(g["n"])), 3)}
-    # Round 14 item 7 — block-bootstrap CI on net expectancy (time-ordered,
-    # oldest → newest) so a lucky recent window is not read as edge.
+                        float(g["net_sum"] or 0) / max(1, int(g["n"])), 3),
+                    "population": ("resolved outcomes (target_first/"
+                                   "stop_first/timeout) with numeric "
+                                   "outcome.net_pips")}
+    # Round 14 item 7 / Round 15 item 8 — bootstrap CIs SPLIT by execution
+    # mode: shadow sims and broker fills have different cost/fill
+    # distributions; only broker outcomes support executable-profit claims.
     from scalp.stats import block_bootstrap_ci
     net_ci95 = block_bootstrap_ci(list(reversed(net)))
+
+    def _mode_stats(datasets):
+        sub = [float((d.get("outcome") or {}).get("net_pips") or 0)
+               for d in docs if d.get("dataset") in datasets]
+        return {"n": len(sub),
+                "net_expectancy_pips": (round(sum(sub) / len(sub), 3)
+                                        if sub else None),
+                "ci95": block_bootstrap_ci(list(reversed(sub)))}
+
+    expectancy_by_mode = {
+        "shadow": _mode_stats(("candidate",)),
+        "broker_fills": {**_mode_stats(("filled_live",)),
+                         "account_type": (acc or {}).get("account_type")},
+    }
+    # Round 15 item 9 — latency decomposition percentiles (rolling window)
+    def _pct(vals, p):
+        if not vals:
+            return None
+        vs = sorted(vals)
+        return vs[min(len(vs) - 1, int(p / 100 * len(vs)))]
+
+    d2s = [int(d["decision_to_submit_ms"]) for d in docs
+           if d.get("decision_to_submit_ms") is not None]
+    s2a = [int(d["submit_to_ack_ms"]) for d in docs
+           if d.get("submit_to_ack_ms") is not None]
+    latency = {
+        "decision_to_submit_ms": {"n": len(d2s), "p50": _pct(d2s, 50),
+                                  "p95": _pct(d2s, 95), "p99": _pct(d2s, 99)},
+        "submit_to_broker_ack_ms": {"n": len(s2a), "p50": _pct(s2a, 50),
+                                    "p95": _pct(s2a, 95),
+                                    "p99": _pct(s2a, 99)},
+        "note": ("EA poll latency is on trade docs (_dispatched_at); "
+                 "P95/P99 matter more than averages for scalping"),
+    }
     return {
         "symbol": symbol.upper(), "n": n,
         "window": {
@@ -144,6 +192,8 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
                      "`lifetime` for all-time aggregates"),
         },
         "lifetime": lifetime,
+        "expectancy_by_mode": expectancy_by_mode,
+        "latency": latency,
         "commission_check": (runner.commission_check
                              if runner is not None else None),
         "alpha": {
