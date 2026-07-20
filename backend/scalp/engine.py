@@ -76,6 +76,17 @@ _active_submissions = 0
 # round 16 item 8 — final-commitment edge buffer for decision→submit latency
 LATENCY_EDGE_BUFFER_PIPS = float(os.environ.get(
     "SCALP_LATENCY_EDGE_BUFFER_PIPS", "0.05"))
+# round 17 item 1 — pre-submit quote validity: the last streamed tick must
+# be recent, sequenced and two-sided or the commitment is refused outright.
+MAX_SUBMIT_QUOTE_AGE_MS = int(os.environ.get(
+    "SCALP_MAX_SUBMIT_QUOTE_AGE_MS", "3000"))
+# round 17 item 2 — material-change thresholds beyond which the lightweight
+# edge adjustment is NOT enough: regenerate the full forecast from a fresh
+# feature snapshot (fresh probability, move, costs, geometry).
+REQUOTE_DRIFT_FRAC = float(os.environ.get(
+    "SCALP_REQUOTE_DRIFT_FRAC", "0.25"))          # of stop distance
+REQUOTE_SPREAD_DELTA_PIPS = float(os.environ.get(
+    "SCALP_REQUOTE_SPREAD_DELTA_PIPS", "0.3"))
 # round 16 item 3 — MT5 OrderSend enforces margin broker-side and its
 # rejects persist as attempt_failed; set false to hard-block unknown margin.
 BROKER_MARGIN_PREFLIGHT = os.environ.get(
@@ -137,6 +148,14 @@ def margin_audit(account: dict | None, symbol: str, lot: float,
         lev = float((account or {}).get("leverage") or 0)
     except (TypeError, ValueError):
         lev = 0.0
+    # round 17 item 5 — the standard-lot FX formula is ONLY valid for the
+    # approved scalp FX universe: any other instrument (metals, indices,
+    # crypto, exotics) needs broker-native margin fields, so the backend
+    # estimate is explicitly recorded as unavailable, never guessed.
+    if approved(symbol) is None:
+        out["reason"] = (f"backend margin model not approved for {symbol} — "
+                         f"broker-native enforcement only")
+        return out
     if lev > 0 and lot > 0 and price and fm is not None:
         contract = 100_000.0             # FX standard lot (scalp universe)
         req = lot * contract * float(price) / lev
@@ -165,52 +184,84 @@ MAX_ACCOUNT_ACTIVE_SUBMISSIONS = int(os.environ.get(
     "SCALP_MAX_ACCOUNT_ACTIVE_SUBMISSIONS", "2"))
 MAX_SYMBOL_ACTIVE_SUBMISSIONS = int(os.environ.get(
     "SCALP_MAX_SYMBOL_ACTIVE_SUBMISSIONS", "3"))
+# round 17 item 9 — SEPARATE bounded pool for emergency risk-reducing ops:
+# they never wait behind entries, but a widespread incident must not flood
+# the broker either. Short leases double as queue-rate throttling.
+EMERGENCY_MAX_CONCURRENT = int(os.environ.get(
+    "SCALP_EMERGENCY_MAX_CONCURRENT", "12"))
+EMERGENCY_LEASE_SEC = int(os.environ.get(
+    "SCALP_EMERGENCY_LEASE_SEC", "20"))
+# round 17 item 11 — slot↔trade invariant state (per broker_key): violations
+# fail NEW entries closed until a clean sweep passes.
+_capacity_violations: dict = {}
+_slot_metrics = {"renewals": 0, "renewal_failures": 0, "orphan_releases": 0,
+                 "terminal_releases": 0, "violations": 0,
+                 "emergency_throttled": 0, "last_sweep_at": None}
 _EPOCH_ISO = "1970-01-01T00:00:00+00:00"
 _slots_ready: set = set()
 
 
-def _broker_cap_key(broker: str) -> str:
-    return f"broker:{(broker or 'unknown').strip().lower()}"
+def _broker_cap_key(broker: str, pool: str = "entry") -> str:
+    base = f"broker:{(broker or 'unknown').strip().lower()}"
+    return base if pool == "entry" else f"{pool}:{base}"
 
 
-async def _ensure_submission_slots(db, broker_key: str) -> None:
-    for i in range(MAX_BROKER_CONCURRENT_SUBMISSIONS):
+def _pool_size(pool: str) -> int:
+    return (MAX_BROKER_CONCURRENT_SUBMISSIONS if pool == "entry"
+            else EMERGENCY_MAX_CONCURRENT)
+
+
+async def _ensure_submission_slots(db, broker_key: str,
+                                   pool: str = "entry") -> None:
+    n = _pool_size(pool)
+    for i in range(n):
         await db.scalp_submission_slots.update_one(
             {"broker_key": broker_key, "slot_id": i},
             {"$setOnInsert": {"lease_until": _EPOCH_ISO,
                               "worker_id": None, "token": None}},
             upsert=True)
+    # round 17 item 7 — a REDUCED pool must not leave stale higher-numbered
+    # slots grantable; expired extras are deleted deliberately (live leases
+    # are left to expire, then removed on the next ensure).
+    await db.scalp_submission_slots.delete_many(
+        {"broker_key": broker_key, "slot_id": {"$gte": n},
+         "lease_until": {"$lt": datetime.now(timezone.utc).isoformat()}})
 
 
 async def acquire_broker_submission_slot(db, broker: str,
                                          account_id: str = "",
                                          decision_id: str = "",
-                                         symbol: str = "") -> dict | None:
+                                         symbol: str = "",
+                                         pool: str = "entry") -> dict | None:
     """Returns a slot handle {broker_key, slot_id, token} or None when the
     pool (or a per-account / per-symbol fairness cap) is exhausted.
-    Emergency closes / protection ops never pass through here — they use the
-    EA pending-modification queue and are NEVER throttled by entry capacity."""
-    broker_key = _broker_cap_key(broker)
+    Emergency closes / protection ops NEVER pass through the entry pool —
+    they use their own bounded pool (pool='emergency', item 9)."""
+    broker_key = _broker_cap_key(broker, pool)
     if broker_key not in _slots_ready:
-        await _ensure_submission_slots(db, broker_key)
+        await _ensure_submission_slots(db, broker_key, pool)
         _slots_ready.add(broker_key)
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
-    if account_id:
-        held = await db.scalp_submission_slots.count_documents(
-            {"broker_key": broker_key, "account_id": account_id,
-             "lease_until": {"$gte": now_iso}})
-        if isinstance(held, int) and held >= MAX_ACCOUNT_ACTIVE_SUBMISSIONS:
-            return None
-    if symbol:
-        held = await db.scalp_submission_slots.count_documents(
-            {"broker_key": broker_key, "symbol": symbol,
-             "lease_until": {"$gte": now_iso}})
-        if isinstance(held, int) and held >= MAX_SYMBOL_ACTIVE_SUBMISSIONS:
-            return None
+
+    async def _held(extra: dict) -> int:
+        cnt = await db.scalp_submission_slots.count_documents(
+            {"broker_key": broker_key, "lease_until": {"$gte": now_iso},
+             **extra})
+        return cnt if isinstance(cnt, int) else 0
+
+    fair = pool == "entry"
+    if fair and account_id and (await _held({"account_id": account_id})
+                                >= MAX_ACCOUNT_ACTIVE_SUBMISSIONS):
+        return None
+    if fair and symbol and (await _held({"symbol": symbol})
+                            >= MAX_SYMBOL_ACTIVE_SUBMISSIONS):
+        return None
     token = uuid.uuid4().hex
-    lease_until = (now + timedelta(seconds=SUBMISSION_LEASE_SEC)).isoformat()
-    for slot_id in range(MAX_BROKER_CONCURRENT_SUBMISSIONS):
+    lease_sec = (SUBMISSION_LEASE_SEC if pool == "entry"
+                 else EMERGENCY_LEASE_SEC)
+    lease_until = (now + timedelta(seconds=lease_sec)).isoformat()
+    for slot_id in range(_pool_size(pool)):
         res = await db.scalp_submission_slots.update_one(
             {"broker_key": broker_key, "slot_id": slot_id,
              "lease_until": {"$lt": now_iso}},
@@ -219,8 +270,23 @@ async def acquire_broker_submission_slot(db, broker: str,
                       "symbol": symbol,
                       "decision_id": decision_id, "acquired_at": now_iso}})
         if bool(getattr(res, "modified_count", 0)):
-            return {"broker_key": broker_key, "slot_id": slot_id,
+            slot = {"broker_key": broker_key, "slot_id": slot_id,
                     "token": token}
+            # round 17 item 8 — fairness check + claim are not atomic: two
+            # workers can pass the pre-count together. COMPENSATE after the
+            # claim: recount including our own slot; on overshoot, release
+            # our own slot and deny. Brief overshoot self-corrects; the
+            # global pool bound is never exceeded either way.
+            if fair and account_id and (await _held(
+                    {"account_id": account_id})
+                    > MAX_ACCOUNT_ACTIVE_SUBMISSIONS):
+                await release_broker_submission_slot(db, slot)
+                return None
+            if fair and symbol and (await _held({"symbol": symbol})
+                                    > MAX_SYMBOL_ACTIVE_SUBMISSIONS):
+                await release_broker_submission_slot(db, slot)
+                return None
+            return slot
     return None
 
 
@@ -246,6 +312,124 @@ async def release_broker_submission_slot(db, slot: dict | None) -> None:
         {"broker_key": slot["broker_key"], "slot_id": slot["slot_id"],
          "token": slot["token"]},
         {"$set": {"lease_until": _EPOCH_ISO, "token": None}})
+
+
+def round_to_tick(price: float, tick: float) -> float:
+    """Round 17 item 6 — snap prices to the instrument tick grid instead of
+    generic 5-decimal rounding (wrong for non-5-digit instruments)."""
+    from decimal import ROUND_HALF_UP, Decimal
+    if not tick or tick <= 0:
+        return price
+    q = Decimal(str(tick))
+    return float((Decimal(str(price)) / q)
+                 .to_integral_value(rounding=ROUND_HALF_UP) * q)
+
+
+def _submission_terminal(trade: dict) -> bool:
+    """A submission is terminal once the broker acknowledged it (ticket) or
+    the order reached a final state — only then may its slot be freed."""
+    if trade.get("mt5_ticket"):
+        return True
+    return str(trade.get("status") or "") in (
+        "open", "closed", "rejected", "failed", "cancelled", "expired")
+
+
+def capacity_integrity_reason(broker_key: str | None = None) -> str | None:
+    if broker_key is not None:
+        v = _capacity_violations.get(broker_key)
+        return v and v.get("reason")
+    for v in _capacity_violations.values():
+        if v:
+            return v.get("reason")
+    return None
+
+
+async def sweep_submission_slots(db) -> dict:
+    """Round 17 main — slot↔trade lifecycle sweep (runs every ~lease/3):
+
+    1. RENEW leases of slots whose linked trade is still awaiting broker
+       acknowledgement (token-fenced; works cross-worker because the token
+       is persisted on the trade doc).
+    2. RELEASE slots whose linked trade reached a terminal submission state
+       and slots that no trade references (orphans past a grace period).
+    3. INVARIANTS: a nonterminal pending order whose recorded token no
+       longer owns its slot, or a token owning >1 slot, is a capacity
+       integrity violation → NEW entries for that broker fail closed until
+       a clean sweep passes."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    grace_iso = (now - timedelta(seconds=30)).isoformat()
+    report = {"renewed": 0, "released_terminal": 0, "released_orphan": 0,
+              "violations": []}
+    seen_tokens: dict = {}
+    live_by_token: dict = {}
+    async for slot in db.scalp_submission_slots.find(
+            {"lease_until": {"$gte": now_iso}, "token": {"$ne": None}}):
+        handle = {"broker_key": slot["broker_key"],
+                  "slot_id": slot["slot_id"], "token": slot["token"]}
+        if slot["token"] in seen_tokens:
+            report["violations"].append(
+                {"type": "token_owns_multiple_slots",
+                 "broker_key": slot["broker_key"], "token": slot["token"]})
+            continue
+        seen_tokens[slot["token"]] = handle
+        live_by_token[slot["token"]] = slot
+        trade = await db.trades.find_one(
+            {"submission_slot.token": slot["token"]},
+            {"status": 1, "mt5_ticket": 1})
+        if trade is None:
+            if str(slot.get("acquired_at") or "") < grace_iso:
+                await release_broker_submission_slot(db, handle)
+                _slot_metrics["orphan_releases"] += 1
+                report["released_orphan"] += 1
+            continue
+        if _submission_terminal(trade):
+            await release_broker_submission_slot(db, handle)
+            _bg(lambda tid=trade["_id"]: db.trades.update_one(
+                {"_id": tid}, {"$unset": {"submission_slot": ""}}),
+                "slot_unlink")
+            _slot_metrics["terminal_releases"] += 1
+            report["released_terminal"] += 1
+        else:
+            if await renew_submission_slot(db, handle):
+                _slot_metrics["renewals"] += 1
+                report["renewed"] += 1
+            else:
+                _slot_metrics["renewal_failures"] += 1
+    # nonterminal pending orders must still own their recorded slot; an
+    # EXPIRED lease is recoverable (re-renew via the persisted token), a
+    # token overtaken by a different holder is a hard violation.
+    async for tr in db.trades.find(
+            {"scope": "scalp_fast", "status": "pending",
+             "submission_slot.token": {"$exists": True}},
+            {"submission_slot": 1, "status": 1, "mt5_ticket": 1}):
+        ref = tr["submission_slot"]
+        cur = await db.scalp_submission_slots.find_one(
+            {"broker_key": ref["broker_key"], "slot_id": ref["slot_id"]})
+        if cur is None:
+            continue
+        if cur.get("token") == ref.get("token"):
+            if str(cur.get("lease_until") or "") < now_iso:
+                if await renew_submission_slot(db, ref):     # crashed worker
+                    _slot_metrics["renewals"] += 1
+                    report["renewed"] += 1
+        elif cur.get("token") is not None:
+            report["violations"].append(
+                {"type": "pending_order_lost_slot",
+                 "broker_key": ref["broker_key"], "trade_id": str(tr["_id"])})
+    by_broker: dict = {}
+    for v in report["violations"]:
+        by_broker.setdefault(v["broker_key"], []).append(v)
+    for bk, vs in by_broker.items():
+        _capacity_violations[bk] = {
+            "reason": f"capacity integrity violated: {vs[0]['type']}",
+            "violations": vs, "at": now_iso}
+        _slot_metrics["violations"] += len(vs)
+        logger.critical("submission-slot invariant violations %s: %s", bk, vs)
+    for bk in [k for k in list(_capacity_violations) if k not in by_broker]:
+        _capacity_violations.pop(bk, None)
+    _slot_metrics["last_sweep_at"] = now_iso
+    return report
 
 
 def update_account_snapshot(account_id: str, snapshot: dict) -> None:
@@ -869,6 +1053,35 @@ class ScalpRunner:
         the EA's entry_price slippage veto is the broker-side last gate."""
         t = self.state.last_tick
         pip = self.cfg.pip_size
+        # round 17 item 1 — QUOTE VALIDITY at commitment time: the freshest
+        # streamed tick must be recent, two-sided and from THIS runner's
+        # account stream (keyed account:symbol by construction); a stalled
+        # or one-sided quote refuses the commitment outright. Stale broker
+        # symbol specs also refuse (EA stopped refreshing → its clamps and
+        # stop constraints can't be trusted at order time).
+        nm_now = now_ms()
+        from protection_guard import symbol_specs_status
+        spec_status = symbol_specs_status(self.account, self.symbol)
+        quote_bad = (t is None or t.bid <= 0 or t.ask <= 0 or t.ask < t.bid
+                     or nm_now - t.received_time_ms > MAX_SUBMIT_QUOTE_AGE_MS)
+        if quote_bad or spec_status == "stale":
+            self.state.record_reject()
+            why = ("stale symbol specs" if not quote_bad else
+                   ("no valid two-sided quote" if t is None or t.bid <= 0
+                    or t.ask <= 0 or t.ask < t.bid
+                    else f"quote {nm_now - t.received_time_ms}ms old "
+                         f"> {MAX_SUBMIT_QUOTE_AGE_MS}ms"))
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "pre_submit_quote_invalid",
+                          "quote_reason": why,
+                          "quote_age_ms": (nm_now - t.received_time_ms
+                                           if t else None),
+                          "quote_source": f"{self.account_id}:{self.symbol}",
+                          "symbol_specs_status": spec_status}:
+                db.scalp_decisions.update_one(
+                    {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
         # ABSOLUTE price-drift guard (round 3 item 7): favorable drift also
         # invalidates the forecast geometry — reject either way, the next
         # evaluation cycle re-forecasts from the new price state.
@@ -891,21 +1104,57 @@ class ScalpRunner:
             return
         entry = t.ask if decision["direction"] == "BUY" else t.bid
         # round 16 items 7/8 — FINAL COMMITMENT EDGE: reprice the approved
-        # candidate at the freshest quote. Spread expansion or adverse mid
-        # drift since decision time must not turn an approved edge negative;
-        # a latency buffer keeps marginal setups out.
+        # candidate at the freshest quote. Round 17 item 2 — when the market
+        # moved MATERIALLY since the decision, a subtractive adjustment is
+        # not enough: regenerate the full forecast (fresh features → fresh
+        # probability → fresh move/costs/geometry). Small moves keep the
+        # lightweight adjustment as a latency optimization.
         decision_spread = float(getattr(fc, "expected_spread_cost_pips", 0) or 0)
         adverse_pips = ((cur_mid - ref) / pip if decision["direction"] == "BUY"
                         else (ref - cur_mid) / pip)
-        final_net_edge = (float(decision["net_edge_pips"])
-                          - max(0.0, sp - decision_spread)
-                          - max(0.0, adverse_pips))
+        spread_delta = max(0.0, sp - decision_spread)
+        reforecast = None
+        if (drift > REQUOTE_DRIFT_FRAC * fc.stop_pips
+                or spread_delta > REQUOTE_SPREAD_DELTA_PIPS):
+            feats2 = snapshot(self.state)
+            cand2 = decision.get("setup")
+            fc2 = edge2 = None
+            if feats2 is not None and cand2:
+                pred2 = scalp_model.predict(self.model_key(), feats2)
+                fc2 = make_forecast(feats2, cand2, self.state, self.cfg,
+                                    model_p=pred2["p"],
+                                    commission_pips=self._commission_pips())
+                edge2 = edge.evaluate(fc2)
+                reforecast = {"net_edge_pips": edge2["net_edge_pips"],
+                              "ok": edge2["ok"],
+                              "reason": edge2.get("reason"),
+                              "model_source": pred2["source"],
+                              "trigger": {"drift_pips": round(drift, 3),
+                                          "spread_delta_pips":
+                                              round(spread_delta, 3)}}
+            if edge2 is None or not edge2["ok"]:
+                self.state.record_reject()
+                _bg(lambda s={"verdict": "rejected",
+                              "reject_stage": "pre_submit_reforecast",
+                              "reforecast": reforecast
+                              or {"reason": "no fresh feature snapshot"}}:
+                    db.scalp_decisions.update_one(
+                        {"decision_id": decision["decision_id"]},
+                        {"$set": s}), "decision_update")
+                return
+            fc = fc2                       # fresh geometry drives SL/TP too
+            final_net_edge = float(edge2["net_edge_pips"])
+        else:
+            final_net_edge = (float(decision["net_edge_pips"])
+                              - spread_delta
+                              - max(0.0, adverse_pips))
         if final_net_edge < edge.MIN_NET_EDGE_PIPS + LATENCY_EDGE_BUFFER_PIPS:
             self.state.record_reject()
             _bg(lambda s={"verdict": "rejected",
                           "reject_stage": "pre_submit_edge_revalidation",
                           "final_net_edge_pips": round(final_net_edge, 3),
-                          "spread_delta_pips": round(max(0.0, sp - decision_spread), 3),
+                          "reforecast": reforecast,
+                          "spread_delta_pips": round(spread_delta, 3),
                           "adverse_drift_pips": round(max(0.0, adverse_pips), 3)}:
                 db.scalp_decisions.update_one(
                     {"decision_id": decision["decision_id"]}, {"$set": s}),
@@ -924,10 +1173,6 @@ class ScalpRunner:
                 {"decision_id": decision["decision_id"]}, {"$set": s}),
                 "decision_update")
             return
-        if decision["direction"] == "BUY":
-            sl, tp = entry - fc.stop_pips * pip, entry + fc.target_pips * pip
-        else:
-            sl, tp = entry + fc.stop_pips * pip, entry - fc.target_pips * pip
         from execution import for_account as engine_for_account
         account = self.account
         if not account:
@@ -1028,20 +1273,29 @@ class ScalpRunner:
                 "decision_update")
             return
         risk_res = {**risk_res, "lot": final_lot}
-        # round 16 item 4 — EXPOSURE PREFLIGHT: broker-side reality may be
-        # ahead of the persistent risk state during ack delays. Re-count the
-        # DB's open scalp positions; if the DB knows more open trades than
-        # the in-memory account risk tracks, state is behind → fail closed
-        # and force a re-restore before any new commitment.
+        # round 16 item 4 / round 17 item 4 — THREE-WAY EXPOSURE PREFLIGHT:
+        # DB (including PENDING/unacked submissions), in-memory account risk
+        # and the broker's own reported position count must agree before any
+        # new commitment. DB ahead of risk state → fail closed + re-restore;
+        # DB claiming more ticketed scalps than the broker reports holding
+        # AT ALL → ghost positions, fail closed + re-restore.
         db_open = 0
         unacked = 0
         async for otr in db.trades.find(
                 {"account_id": self.account_id, "scope": "scalp_fast",
-                 "status": "open"}, {"mt5_ticket": 1}):
+                 "status": {"$in": ["pending", "open"]}}, {"mt5_ticket": 1}):
             db_open += 1
             if not otr.get("mt5_ticket"):
                 unacked += 1
-        if db_open > self.account_risk.open_scalps:
+        broker_pos = (self.account or {}).get("open_positions")
+        try:
+            broker_pos = int(broker_pos)
+        except (TypeError, ValueError):
+            broker_pos = None
+        ticketed = db_open - unacked
+        broker_mismatch = (broker_pos is not None and broker_pos >= 0
+                           and ticketed > broker_pos)
+        if db_open > self.account_risk.open_scalps or broker_mismatch:
             self.state.record_reject()
             _bg(lambda s={"verdict": "rejected",
                           "reject_stage": "pre_submit_exposure",
@@ -1049,8 +1303,8 @@ class ScalpRunner:
                               "db_open_scalps": db_open,
                               "unacked_scalps": unacked,
                               "risk_state_open": self.account_risk.open_scalps,
-                              "broker_open_positions":
-                                  (self.account or {}).get("open_positions")}}:
+                              "broker_open_positions": broker_pos,
+                              "broker_mismatch": broker_mismatch}}:
                 db.scalp_decisions.update_one(
                     {"decision_id": decision["decision_id"]}, {"$set": s}),
                 "decision_update")
@@ -1071,6 +1325,19 @@ class ScalpRunner:
                           "dataset": "attempt_not_submitted_capacity"}}),
                 "decision_update")
             return
+        # round 17 item 11 — broken slot↔trade invariants fail NEW entries
+        # closed for the broker until a clean lifecycle sweep passes.
+        integrity = capacity_integrity_reason(_broker_cap_key(self.broker))
+        if integrity is not None:
+            self.state.record_reject()
+            _bg(lambda r=integrity: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]},
+                {"$set": {"verdict": "rejected",
+                          "reject_stage": "capacity_integrity",
+                          "dataset": "attempt_not_submitted_capacity",
+                          "integrity_reason": r}}),
+                "decision_update")
+            return
         slot = await acquire_broker_submission_slot(
             db, self.broker, self.account_id, decision["decision_id"],
             symbol=self.symbol)
@@ -1083,6 +1350,16 @@ class ScalpRunner:
                           "dataset": "attempt_not_submitted_capacity"}}),
                 "decision_update")
             return
+        # round 17 item 6 — snap all order prices to the instrument tick
+        # grid (broker point when streamed, else config tick size); generic
+        # 5-decimal rounding is wrong off the 5-digit FX grid.
+        spec = ((self.account or {}).get("symbol_specs")
+                or {}).get(self.symbol) or {}
+        tick = float(spec.get("point") or 0) or self.cfg.tick_size
+        if decision["direction"] == "BUY":
+            sl, tp = entry - fc.stop_pips * pip, entry + fc.target_pips * pip
+        else:
+            sl, tp = entry + fc.stop_pips * pip, entry - fc.target_pips * pip
         submit_ms = now_ms()
         _active_submissions += 1
         try:
@@ -1090,16 +1367,22 @@ class ScalpRunner:
                 user_id=self.user_id, account=account,
                 signal={"symbol": self.symbol, "action": decision["direction"],
                         "lot_size": final_lot,
-                        "entry_price": round(entry, 5),
-                        "stop_loss": round(sl, 5), "take_profit": round(tp, 5),
+                        "entry_price": round_to_tick(entry, tick),
+                        "stop_loss": round_to_tick(sl, tick),
+                        "take_profit": round_to_tick(tp, tick),
                         "origin": "auto", "scope": "scalp_fast",
                         "scalp_decision_id": decision["decision_id"],
                         "scalp_lease_epoch": lease_epoch},
                 cfg_account_id=self.account_id)
-        finally:
-            _active_submissions = max(0, _active_submissions - 1)
+        except BaseException:
+            # only a FAILED submission releases here — round 17 main: a
+            # queued order keeps its slot leased until the broker acks it
+            # or the order reaches a terminal submission state.
             _bg(lambda: release_broker_submission_slot(db, slot),
                 "release_submission_slot")
+            raise
+        finally:
+            _active_submissions = max(0, _active_submissions - 1)
         # round 15 items 2/9 — persist the COMMITMENT context: the final
         # pre-submit snapshot the order was actually sized against, plus
         # latency decomposition stamps (EA poll latency lives on the trade
@@ -1128,6 +1411,8 @@ class ScalpRunner:
             "decision_update")
         if trade.get("blocked"):
             self.state.record_reject()
+            _bg(lambda: release_broker_submission_slot(db, slot),
+                "release_submission_slot")
             # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
             # empirical fill-probability model, not just an audit trail.
             _bg(lambda s={"verdict": "rejected", "reject_stage": "broker_blocked",
@@ -1138,6 +1423,13 @@ class ScalpRunner:
                 "decision_update")
             return
         tid = str(trade.get("id") or trade.get("_id") or "")
+        # round 17 main — TRANSFER slot ownership to the pending trade: the
+        # slot stays leased through pending/dispatched until the broker acks
+        # (on_trade_opened) or a terminal state; sweep_submission_slots
+        # renews it meanwhile and recovers it if this worker dies.
+        _bg(lambda: db.trades.update_one(
+            {"_id": _oid(tid)},
+            {"$set": {"submission_slot": dict(slot)}}), "slot_link")
         self.risk_state.record_open()
         self.account_risk.record_open()
         self._persist_risk(db)
@@ -1162,6 +1454,7 @@ class ScalpRunner:
             "decision_id": decision["decision_id"],
             "order_submit_ts_ms": submit_ms,
             "est_cost_usd": round(est_cost_usd, 2),
+            "submission_slot": dict(slot),
         }
         _bg(lambda s={"dataset": "submitted", "trade_id": tid,
                       "order_submit_ts_ms": submit_ms}: db.scalp_decisions.update_one(
@@ -1228,12 +1521,27 @@ class ScalpRunner:
                 "reason": f"scalp_{reason}"},
                 "close_reason": f"scalp_{reason}"}})
 
+    def _release_submission_slot_of(self, info: dict | None, db,
+                                     trade_id: str = ""):
+        """Round 17 main — free the trade's submission slot at broker
+        acknowledgement / terminal state. Token-fenced + idempotent; when
+        db is unavailable the lifecycle sweep releases it instead."""
+        slot = (info or {}).pop("submission_slot", None)
+        if slot and db is not None:
+            _bg(lambda: release_broker_submission_slot(db, slot),
+                "release_submission_slot")
+            if trade_id:
+                _bg(lambda: db.trades.update_one(
+                    {"_id": _oid(trade_id)},
+                    {"$unset": {"submission_slot": ""}}), "slot_unlink")
+
     def on_trade_opened(self, trade_id: str, requested_price: float | None,
                         actual_price: float | None, db=None):
         """Broker fill confirmation (round 3 item 5): feed REAL entry slippage
         back into the state so the cost model learns from live fills."""
         info = self.live_trades.get(trade_id)
         self.last_order_ack_ms = now_ms()
+        self._release_submission_slot_of(info, db, trade_id)
         if info is not None and not info.get("fill_counted"):
             info["fill_counted"] = True
             self.exec_fills += 1
@@ -1272,6 +1580,7 @@ class ScalpRunner:
         info = self.live_trades.pop(trade_id, None)
         if info is None:
             return
+        self._release_submission_slot_of(info, db, trade_id)
         info["close_ack_ms"] = now_ms()
         if exit_price:
             info["ack_exit_price"] = exit_price
@@ -1304,6 +1613,7 @@ class ScalpRunner:
             return
         info = self.live_trades.pop(trade_id, None)
         if info is not None:
+            self._release_submission_slot_of(info, db, trade_id)
             self.risk_state.record_close()
             self.account_risk.record_close()
         else:
@@ -1717,6 +2027,8 @@ class ScalpRunner:
             "health": self.health,
             "block_reasons": sorted(account_block_reasons(self.account_id)),
             "broker_state_stale": broker_state_stale_reason(self.account),
+            "capacity_integrity": capacity_integrity_reason(
+                _broker_cap_key(self.broker)),
             # round 14 item 3 — per-aspect broker-state freshness: a single
             # heartbeat timestamp must not imply everything is current.
             "broker_state": {

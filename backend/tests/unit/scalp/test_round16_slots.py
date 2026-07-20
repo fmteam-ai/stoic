@@ -57,6 +57,13 @@ class FakeSlots:
         await asyncio.sleep(0)
         return sum(1 for d in self.docs.values() if self._match(d, filt))
 
+    async def delete_many(self, filt):
+        await asyncio.sleep(0)
+        keys = [k for k, d in self.docs.items() if self._match(d, filt)]
+        for k in keys:
+            del self.docs[k]
+        return SimpleNamespace(deleted_count=len(keys))
+
 
 def _db():
     db = SimpleNamespace()

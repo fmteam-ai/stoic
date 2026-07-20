@@ -31,7 +31,8 @@ async def dependency_health_check() -> dict:
         return result
     critical = {"users": "email", "accounts": "bridge_token",
                 "trades": "account_id", "scalp_owners": "account_id",
-                "scalp_decisions": "decision_id"}
+                "scalp_decisions": "decision_id",
+                "scalp_submission_slots": "broker_key"}
     missing = []
     for coll, field in critical.items():
         try:
@@ -133,6 +134,11 @@ async def ensure_indexes():
     # whole subsystem fails closed until indexes are healthy.
     try:
         await db.scalp_owners.create_index("account_id", unique=True)
+        # Round 17 item 7 — one document per capacity unit is a SAFETY
+        # guarantee: duplicates would double broker capacity.
+        await db.scalp_submission_slots.create_index(
+            [("broker_key", 1), ("slot_id", 1)], unique=True)
+        await db.trades.create_index("submission_slot.token", sparse=True)
         await db.broker_deals.create_index([("account_id", 1), ("deal_id", 1)],
                                            unique=True)
         await db.broker_deals.create_index([("financial_reconciliation_status", 1),

@@ -318,22 +318,30 @@ async def _scalp_reconcile_loop():
       • protection safety sweep: every 10s (unprotected scalps can't wait)
       • financial pending-deal sweep: every 45s
       • full invariant + durable-state sweep: every 300s"""
-    from scalp.engine import (recover_pending_deals, verify_account_invariants,
+    from scalp.engine import (recover_pending_deals, sweep_submission_slots,
+                              verify_account_invariants,
                               verify_durable_invariants, _runners)
     from protection_guard import repair_unprotected_positions
     PROT = int(os.environ.get("SCALP_PROTECTION_SWEEP_SEC", "10"))
     FIN = int(os.environ.get("SCALP_RECONCILE_INTERVAL_SEC", "45"))
     FULL = int(os.environ.get("SCALP_INVARIANT_SWEEP_SEC", "300"))
+    # Round 17 — submission-slot lifecycle sweep at ~lease/3 so pending
+    # orders keep their leases renewed and terminal/orphan slots free up.
+    SLOT = int(os.environ.get("SCALP_SLOT_SWEEP_SEC", "30"))
     # Round 12 item 8 — independent monotonic deadlines per sweep: exact
     # cadence regardless of interval ratios, no drift when a sweep is slow.
     from time import monotonic
     next_fin = monotonic() + FIN
     next_full = monotonic() + FULL
+    next_slot = monotonic() + SLOT
     while True:
         try:
             await asyncio.sleep(PROT)
             await repair_unprotected_positions(get_db())
             now_m = monotonic()
+            if now_m >= next_slot:
+                next_slot = now_m + SLOT
+                await sweep_submission_slots(get_db())
             if now_m >= next_fin:
                 next_fin = now_m + FIN
                 await recover_pending_deals(get_db())

@@ -195,6 +195,52 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
         "note": ("EA poll latency is on trade docs (_dispatched_at); "
                  "P95/P99 matter more than averages for scalping"),
     }
+    # Round 17 item 10 — distributed submission-capacity operational view.
+    from datetime import datetime, timedelta, timezone
+    from scalp.engine import (MAX_BROKER_CONCURRENT_SUBMISSIONS,
+                              _slot_metrics, capacity_integrity_reason)
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+    active_slots = 0
+    oldest_slot_age_sec = None
+    async for s in db.scalp_submission_slots.find(
+            {"lease_until": {"$gte": now_iso}, "token": {"$ne": None}},
+            {"acquired_at": 1}):
+        active_slots += 1
+        try:
+            age = int((now_dt - datetime.fromisoformat(
+                s["acquired_at"])).total_seconds())
+            if oldest_slot_age_sec is None or age > oldest_slot_age_sec:
+                oldest_slot_age_sec = age
+        except (KeyError, TypeError, ValueError):
+            pass
+    pending_without_slot = await db.trades.count_documents(
+        {"scope": "scalp_fast", "status": "pending",
+         "submission_slot": {"$exists": False}})
+    cap_rejections = []
+    day_ago_ms = int((now_dt - timedelta(hours=24)).timestamp() * 1000)
+    async for g in db.scalp_decisions.aggregate([
+            {"$match": {"ts_ms": {"$gte": day_ago_ms},
+                        "reject_stage": {"$in": [
+                            "submission_capacity",
+                            "submission_capacity_broker",
+                            "capacity_integrity"]}}},
+            {"$group": {"_id": {"account_id": "$account_id",
+                                "symbol": "$symbol"},
+                        "n": {"$sum": 1}}},
+            {"$sort": {"n": -1}}, {"$limit": 20}]):
+        cap_rejections.append({"account_id": g["_id"].get("account_id"),
+                               "symbol": g["_id"].get("symbol"),
+                               "n": int(g["n"])})
+    capacity = {
+        "pool_size_per_broker": MAX_BROKER_CONCURRENT_SUBMISSIONS,
+        "active_leased_slots": active_slots,
+        "oldest_slot_age_sec": oldest_slot_age_sec,
+        "pending_trades_without_slot": pending_without_slot,
+        "integrity": capacity_integrity_reason(),
+        "lifecycle": dict(_slot_metrics),
+        "capacity_rejections_24h": cap_rejections,
+    }
     return {
         "symbol": symbol.upper(), "n": n,
         "window": {
@@ -208,6 +254,7 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
         "expectancy_by_mode": expectancy_by_mode,
         "expectancy_by_regime": expectancy_by_regime,
         "latency": latency,
+        "capacity": capacity,
         "commission_check": (runner.commission_check
                              if runner is not None else None),
         "alpha": {

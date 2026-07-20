@@ -292,6 +292,7 @@ def _stub_db():
                                                         modified_count=1))
         c.find_one = AsyncMock(return_value=None)
         c.count_documents = AsyncMock(return_value=0)
+        c.delete_many = AsyncMock()
     return db
 
 
@@ -1333,7 +1334,8 @@ class TestRound9Hardening:
         mid = (1.08 + 1.08004) / 2.0
         decision = {"decision_id": "d9", "direction": "BUY",
                     "net_edge_pips": 2.0, "sim": {"entry_mid": mid}}
-        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0)
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_spread_cost_pips=0.4)
         fake_engine = MagicMock(execute=AsyncMock())
         db = _stub_db()
 
@@ -1495,7 +1497,8 @@ class TestRound10Hardening:
         decision = {"decision_id": "d10", "direction": "BUY",
                     "net_edge_pips": 2.0, "sim": {"entry_mid": mid}}
         fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
-                             expected_slippage_pips=0.1)
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.4)
         fake_engine = MagicMock(
             execute=AsyncMock(return_value={"id": "t10"}))
         db = _stub_db()
@@ -1997,7 +2000,8 @@ class TestRound14Hardening:
         decision = {"decision_id": "d14", "direction": "BUY",
                     "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
         fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
-                             expected_slippage_pips=0.1)
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.4)
         fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t14"}))
         db = _stub_db()
         db.accounts.find_one = AsyncMock(return_value=None)  # no fresh doc
@@ -2030,7 +2034,8 @@ class TestRound14Hardening:
         decision = {"decision_id": "d14b", "direction": "BUY",
                     "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
         fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
-                             expected_slippage_pips=0.1)
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.4)
         fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
         db = _stub_db()
         # DB reports equity moved 10% since the decision snapshot
@@ -2067,7 +2072,8 @@ class TestRound14Hardening:
         decision = {"decision_id": "d14c", "direction": "BUY",
                     "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
         fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
-                             expected_slippage_pips=0.1)
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.4)
         fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
         db = _stub_db()
 
@@ -2196,7 +2202,8 @@ def _r15_submit(r, db, fake_engine, lot=0.9):
                 "ts_ms": int(time.time() * 1000),
                 "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
     fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
-                         expected_slippage_pips=0.1)
+                         expected_slippage_pips=0.1,
+                         expected_spread_cost_pips=0.4)
 
     async def run():
         with patch("execution.for_account", return_value=fake_engine), \
@@ -2339,13 +2346,14 @@ class TestRound16Presubmit:
         from scalp import edge as edge_mod
         from scalp import engine as eng
         r = _r15_runner("r16-edge")
-        # live spread 0.4p; decision assumed 0.0p spread → penalty 0.4p
+        # live spread 0.4p; decision assumed 0.2p spread → penalty 0.2p
+        # (below the 0.3p requote threshold — lightweight adjustment path)
         decision = {"decision_id": "d16e", "direction": "BUY",
                     "ts_ms": int(time.time() * 1000),
-                    "net_edge_pips": 0.3, "sim": {"entry_mid": 1.08002}}
+                    "net_edge_pips": 0.25, "sim": {"entry_mid": 1.08002}}
         fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
                              expected_slippage_pips=0.1,
-                             expected_spread_cost_pips=0.0)
+                             expected_spread_cost_pips=0.2)
         fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
         db = _stub_db()
 
@@ -2363,9 +2371,9 @@ class TestRound16Presubmit:
         rej = [s for s in sets
                if s.get("reject_stage") == "pre_submit_edge_revalidation"]
         assert rej, sets
-        # 0.3 − 0.4 spread delta = −0.1 < 0.15 + 0.05 buffer
-        assert rej[0]["final_net_edge_pips"] == pytest.approx(-0.1, abs=0.02)
-        assert rej[0]["spread_delta_pips"] == pytest.approx(0.4, abs=0.02)
+        # 0.25 − 0.2 spread delta = 0.05 < 0.15 + 0.05 buffer
+        assert rej[0]["final_net_edge_pips"] == pytest.approx(0.05, abs=0.02)
+        assert rej[0]["spread_delta_pips"] == pytest.approx(0.2, abs=0.02)
         assert (edge_mod.MIN_NET_EDGE_PIPS
                 + eng.LATENCY_EDGE_BUFFER_PIPS) == pytest.approx(0.2)
 
@@ -2398,3 +2406,205 @@ class TestRound16Presubmit:
         snap = [s for s in sets if "final_net_edge_pips" in s
                 and s.get("submission_status") == "submitted"]
         assert snap and snap[0]["final_net_edge_pips"] > 0
+
+
+class TestRound17SlotLifecycle:
+    """Round 17 main — the slot is held from queue insertion until BROKER
+    acknowledgement (or a terminal submission state), never released at
+    queue time."""
+
+    def _submit(self, r, db, fake_engine, lot=0.01):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from scalp import engine as eng
+        decision = {"decision_id": "d17", "direction": "BUY",
+                    "ts_ms": int(time.time() * 1000),
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.4)
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine), \
+                 patch.object(eng, "confirm_account_lease_now",
+                              AsyncMock(return_value=(True, 7))):
+                await r._submit_live(db, decision, fc, {"lot": lot})
+                for _ in range(8):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+
+    def _slot_release_calls(self, db):
+        return [c.args[0] for c
+                in db.scalp_submission_slots.update_one.await_args_list
+                if "token" in c.args[0] and "$lt" not in str(c.args[0])]
+
+    def test_slot_survives_successful_queue_insertion(self):
+        """engine.execute() only QUEUES the order — the slot must stay
+        leased (no token-fenced release call) and transfer to the trade."""
+        r = _r15_runner("r17-hold")
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t17"}))
+        self._submit(r, db, fake_engine)
+        fake_engine.execute.assert_awaited()
+        assert self._slot_release_calls(db) == []          # NOT released
+        info = r.live_trades.get("t17")
+        assert info and info.get("submission_slot", {}).get("token")
+        # ownership persisted onto the pending trade doc
+        linked = [c for c in db.trades.update_one.await_args_list
+                  if "submission_slot" in str(c.args[1])]
+        assert linked
+        r.live_trades.clear()
+
+    def test_broker_ack_releases_the_slot(self):
+        r = _r15_runner("r17-ack")
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t17a"}))
+        self._submit(r, db, fake_engine)
+        token = r.live_trades["t17a"]["submission_slot"]["token"]
+
+        async def ack():
+            r.on_trade_opened("t17a", 1.08004, 1.08005, db=db)
+            for _ in range(8):
+                await asyncio.sleep(0)
+        asyncio.run(ack())
+        rel = self._slot_release_calls(db)
+        assert rel and rel[-1]["token"] == token
+        assert "submission_slot" not in r.live_trades["t17a"]
+        r.live_trades.clear()
+
+    def test_blocked_submission_releases_immediately(self):
+        r = _r15_runner("r17-blocked")
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(
+            return_value={"blocked": True, "reason": "spread veto"}))
+        self._submit(r, db, fake_engine)
+        assert self._slot_release_calls(db)                # terminal → freed
+        assert not r.live_trades
+
+    def test_close_paths_release_defensively(self):
+        r = _r15_runner("r17-close")
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t17c"}))
+        self._submit(r, db, fake_engine)
+
+        async def close():
+            r.on_close_ack("t17c", exit_price=1.08, db=db)
+            for _ in range(8):
+                await asyncio.sleep(0)
+        asyncio.run(close())
+        assert self._slot_release_calls(db)
+        r.live_trades.clear()
+
+    def test_capacity_integrity_violation_fails_entries_closed(self):
+        from scalp import engine as eng
+        r = _r15_runner("r17-integrity")
+        bk = eng._broker_cap_key(r.broker)
+        eng._capacity_violations[bk] = {"reason": "capacity integrity violated: test"}
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        try:
+            self._submit(r, db, fake_engine)
+        finally:
+            eng._capacity_violations.pop(bk, None)
+        fake_engine.execute.assert_not_awaited()
+        sets = [c.args[1]["$set"]
+                for c in db.scalp_decisions.update_one.await_args_list]
+        cap = [s for s in sets if s.get("reject_stage") == "capacity_integrity"]
+        assert cap and cap[0]["dataset"] == "attempt_not_submitted_capacity"
+
+
+class TestRound17Presubmit:
+    def test_stale_quote_rejected(self):
+        """Round 17 item 1 — a quote older than MAX_SUBMIT_QUOTE_AGE_MS
+        refuses the commitment outright."""
+        from types import SimpleNamespace
+        from datetime import datetime, timezone
+        r = ScalpRunner("r17-quote", "u1", "EURUSD")
+        r.equity = 10_000.0
+        r.account = {"_id": "r17-quote", "equity": 10_000.0,
+                     "status": "connected",
+                     "last_heartbeat": datetime.now(timezone.utc).isoformat()}
+        old = int(time.time() * 1000) - 10_000          # 10s-old tick
+        r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=old,
+                                 received_time_ms=old, bid=1.08,
+                                 ask=1.08004))
+        from unittest.mock import patch
+        decision = {"decision_id": "d17q", "direction": "BUY",
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_spread_cost_pips=0.4)
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(5):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        fake_engine.execute.assert_not_awaited()
+        sets = [c.args[1]["$set"]
+                for c in db.scalp_decisions.update_one.await_args_list]
+        rej = [s for s in sets
+               if s.get("reject_stage") == "pre_submit_quote_invalid"]
+        assert rej and rej[0]["quote_age_ms"] >= 10_000
+        assert rej[0]["quote_source"] == "r17-quote:EURUSD"
+
+    def test_material_spread_change_triggers_full_reforecast(self):
+        """Round 17 item 2 — spread expansion beyond the requote threshold
+        regenerates the forecast; with no fresh feature snapshot available
+        the commitment fails closed (pre_submit_reforecast)."""
+        from types import SimpleNamespace
+        r = _r15_runner("r17-requote")
+        from unittest.mock import patch
+        decision = {"decision_id": "d17r", "direction": "BUY",
+                    "ts_ms": int(time.time() * 1000),
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002},
+                    "setup": {"direction": "BUY"}}
+        # decision assumed 0.0p spread; live 0.4p → delta > 0.3p threshold
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1,
+                             expected_spread_cost_pips=0.0)
+        db = _stub_db()
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(5):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        fake_engine.execute.assert_not_awaited()
+        sets = [c.args[1]["$set"]
+                for c in db.scalp_decisions.update_one.await_args_list]
+        assert any(s.get("reject_stage") == "pre_submit_reforecast"
+                   for s in sets)
+
+    def test_margin_audit_refuses_unapproved_instruments(self):
+        """Round 17 item 5 — the standard-lot FX formula never runs for
+        instruments outside the approved scalp universe."""
+        from scalp.engine import margin_audit
+        out = margin_audit({"free_margin": 10_000.0, "leverage": 30},
+                           "XAUUSD", 0.5, 4000.0)
+        assert out["margin_check_passed"] is None
+        assert "not approved" in out["reason"]
+        ok = margin_audit({"free_margin": 10_000.0, "leverage": 30},
+                          "EURUSD", 0.5, 1.08)
+        assert ok["margin_check_passed"] is True
+
+    def test_round_to_tick(self):
+        from scalp.engine import round_to_tick
+        assert round_to_tick(1.080037, 0.00001) == 1.08004
+        assert round_to_tick(4006.7891, 0.01) == 4006.79
+        assert round_to_tick(4006.7891, 0.25) == 4006.75
+        assert round_to_tick(1.08, 0) == 1.08              # no tick → passthrough
+
+    def test_submission_terminal_classification(self):
+        from scalp.engine import _submission_terminal
+        assert _submission_terminal({"status": "pending",
+                                     "mt5_ticket": 12345}) is True
+        assert _submission_terminal({"status": "open"}) is True
+        for s in ("rejected", "failed", "cancelled", "expired", "closed"):
+            assert _submission_terminal({"status": s}) is True
+        assert _submission_terminal({"status": "pending",
+                                     "mt5_ticket": None}) is False

@@ -304,6 +304,22 @@ async def repair_unprotected_positions(db) -> dict:
                          "$inc": {"emergency_close_attempts": 1}})
             continue                      # waiting for the EA to ack
         attempts = int(tr.get("protection_repair_attempts") or 0)
+        # round 17 item 9 — bounded emergency capacity: risk-reducing ops
+        # never wait behind entries (separate pool), but a widespread
+        # incident must not flood the broker either. The short lease
+        # self-expires (~20s) and doubles as queue-rate throttling; an
+        # exhausted pool defers this trade to the next sweep (~10s), with
+        # the account-wide entry halt staying active the whole time.
+        from scalp.engine import (_slot_metrics,
+                                  acquire_broker_submission_slot)
+        em_slot = await acquire_broker_submission_slot(
+            db, str(tr.get("broker") or ""), account_id, pool="emergency")
+        if em_slot is None:
+            _slot_metrics["emergency_throttled"] += 1
+            logger.warning(
+                "emergency pool exhausted for broker %s — trade %s deferred "
+                "to next protection sweep", tr.get("broker"), tid)
+            continue
         if attempts >= MAX_STOP_ATTEMPTS:
             # protection could not be established → flatten the position
             await db.trades.update_one({"_id": tid}, {"$set": {
