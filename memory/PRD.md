@@ -651,3 +651,22 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - P1: Deploy stable shadow/demo to production K8s.
 - P2: Regression model for expected net P&L after costs.
 - P2: Add GBPUSD to scalp universe after EURUSD validation.
+
+## Session 2026-07-20 (cont. 2) — Round 17 Capacity Hardening + Phase 1 Security Audit Fixes
+### Round 17 (12-point user spec, iter-56: 100%)
+- Slots held from queue insertion until BROKER ack/terminal state (ownership on trades.submission_slot; lifecycle sweep every 30s renews pending, releases terminal/orphan, enforces slot↔trade invariants → capacity_integrity fail-closed rejects); pre-submit quote validity gate (age/two-sided/stale-specs); material-change full reforecast (drift>0.25×stop or spread Δ>0.3p); three-way exposure preflight (DB incl. pending + risk + broker count); margin restricted to approved FX; tick-grid price rounding; unique (broker_key,slot_id) index + reduced-pool pruning; post-acquire fairness compensation; bounded emergency pool (cap 12, 20s leases) in protection_guard; /scalp/metrics capacity section; real-Mongo integration suite (7 tests) + unit tests (176 total unit CI).
+
+### Phase 1 security audit fixes (iter-57 verified; origin issue found+fixed)
+- date-fns 3.6.0 + react-day-picker 9.7.0 (calendar.jsx v9) — clean npm resolution, production build passes.
+- CSRF double-submit: csrf_token cookie + X-CSRF-Token header enforced by middleware on cookie-auth mutations (403 code csrf_failed); GET /api/auth/csrf bootstrap; Origin allowlist OPT-IN via CSRF_ENFORCE_ORIGIN (ingress rewrites Origin → cannot be default); frontend interceptors on api + global axios with csrf-retry.
+- Rate limits (security.py, Mongo rate_limits + TTL): login 5 FAILURES/ip+email/10min (cleared on success), 2FA 5 failures/email, register 30/IP/hr (REGISTER_RATE_MAX_PER_HOUR), refresh 30/min/session, cred reveal 3/user/hr, pwreset 20/IP/hr; X-RateLimit-Bypass header (RATE_LIMIT_BYPASS_TOKEN in .env) skips VOLUME limits only for test suites.
+- Refresh rotation/revocation: auth_sessions (jti unique, TTL), jti/sid/fam claims, sha256 hash check, reuse → family revoked, logout revokes, password change/reset + 2FA disable revoke all; /auth/sessions + /auth/sessions/revoke-all; legacy tokens migrate on first refresh.
+- Access tokens 24h→30min; frontend single-flight 401→refresh→retry (verified E2E by deleting access cookie).
+- Financial backfill: no fabricated exit_price=entry; outcome_status financially_unresolved + display_exit_price_estimate + exclude_from_training/financial_metrics.
+- Health: /api/health sanitized (cid correlation), /health/live, /health/ready (503; db+indexes+slot integrity). WS ?token= disabled unless WS_ALLOW_QUERY_TOKEN=true (cookie auth default; backend_test updated).
+- pytest markers unit/integration/http auto-applied by directory (pytest -m unit self-contained, 176 passed); conftest auto-attaches CSRF + bypass headers to `requests`.
+- Frontend: REACT_APP_BACKEND_URL validated at startup; root ErrorBoundary; full suite 2165 passed/0 failed; iter-57 file tests/test_iter57_phase1_hardening.py (10 tests).
+
+### Phase 2 backlog (audit, deferred by user approval)
+- P1: Move background trading loops out of the web process (separate worker + durable ownership); State Tuning Panel; production deploy.
+- P2: Vite migration (drop CRA/CRACO); backend requirements split per service; remove duplicate frontend libs (dayjs/SWR/phosphor); route-level lazy loading + table virtualization; incremental invariant scans; worker health telemetry; signed installer (checksum/Authenticode); asymmetric JWT (RS256/EdDSA); step-up auth for high-risk ops; broker-native EA preflight quote/margin.

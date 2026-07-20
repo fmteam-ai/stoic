@@ -136,11 +136,14 @@ def csrf_check(request: Request) -> str | None:
                            or request.cookies.get("refresh_token"))
     if not has_cookie_auth:
         return None                       # bearer/public callers: CORS-bound
-    # Origin allowlist (when configured) beats a forged same-value pair.
-    allowed = _allowed_origins()
-    origin = (request.headers.get("origin") or "").rstrip("/")
-    if allowed and origin and origin not in allowed:
-        return "origin_not_allowed"
+    # Origin allowlist is OPT-IN (CSRF_ENFORCE_ORIGIN=true): reverse proxies
+    # and ingress layers can rewrite Origin to internal hostnames, so the
+    # double-submit token below remains the primary CSRF defense.
+    if (os.environ.get("CSRF_ENFORCE_ORIGIN", "false").lower() == "true"):
+        allowed = _allowed_origins()
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if allowed and origin and origin not in allowed:
+            return "origin_not_allowed"
     cookie_val = request.cookies.get(CSRF_COOKIE)
     header_val = request.headers.get(CSRF_HEADER)
     if not cookie_val or not header_val:
