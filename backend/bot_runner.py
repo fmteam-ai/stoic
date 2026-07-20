@@ -758,9 +758,13 @@ async def _process_user_account_locked(db, cfg: dict):
         # iter-56 · EOD quiet window — spreads widen drastically in the final
         # minutes before the broker's daily close. Mirrors the EA v1.41
         # client-side guard: no new signal execution 23:40-00:05 broker time.
+        # iter-53(EOD flatten) · also veto entries while positions are being
+        # flattened ahead of the rollover (23:15-23:40 broker time).
         if signal.get("action") in ("BUY", "SELL"):
             from eod_quiet import eod_quiet_block
-            qb = eod_quiet_block(connected[0] if connected else None)
+            from eod_flatten import eod_flatten_block
+            qb = (eod_quiet_block(connected[0] if connected else None)
+                  or eod_flatten_block(connected[0] if connected else None))
             if qb:
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn", reason=qb)

@@ -353,6 +353,21 @@ async def _scalp_reconcile_loop():
             logger.warning("scalp reconcile sweep failed: %s", e)
 
 
+async def _eod_flatten_loop():
+    """iter-53 · EOD flatten — every 60s, close all open intraday auto
+    entries on accounts inside their broker-time flatten window (23:15-23:40
+    broker time) so nothing is held through the daily rollover."""
+    from eod_flatten import sweep_eod_flatten
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await sweep_eod_flatten(get_db())
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("EOD flatten sweep failed: %s", e)
+
+
 async def _stuck_open_sync_loop():
     """iter-94 · Always-on stuck-open trade sync (no opt-in required).
 
@@ -488,6 +503,7 @@ async def on_startup():
         _optimizer_task = asyncio.create_task(_optimizer_loop())
         _nightly_tuner_task = asyncio.create_task(_nightly_tuning_loop())
         _scalp_reconcile_task = asyncio.create_task(_scalp_reconcile_loop())
+        _eod_flatten_task = asyncio.create_task(_eod_flatten_loop())
         logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)

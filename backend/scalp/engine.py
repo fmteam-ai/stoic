@@ -38,6 +38,7 @@ from pathlib import Path
 
 from scalp import edge, gate, kill, permissions, setup
 from scalp import model as scalp_model
+from eod_flatten import eod_flatten_block as _eod_flatten_block
 from scalp.costs import dynamic_spread_limit
 from scalp.features import snapshot
 from scalp.forecast import make as make_forecast
@@ -619,6 +620,10 @@ class ScalpRunner:
         elif (stale_reason := broker_state_stale_reason(self.account)) is not None:
             # round 13 item 8 — readiness requires FRESH broker state
             risk_res = {"ok": False, "lot": 0.0, "reason": stale_reason}
+        elif (eod_reason := _eod_flatten_block(self.account)) is not None:
+            # iter-53 EOD flatten — no new scalps while positions are being
+            # closed ahead of the broker's daily rollover
+            risk_res = {"ok": False, "lot": 0.0, "reason": eod_reason}
         elif (block_reasons := account_block_reasons(self.account_id)):
             # round 13 item 9 — reason-level blocks: every owning subsystem
             # must clear its own reason before entries resume
