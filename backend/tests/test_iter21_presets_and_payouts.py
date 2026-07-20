@@ -77,8 +77,8 @@ def mongo_db():
 
 # ---------- BUILT-IN PRESETS ------------------------------------------------
 
-EXPECTED_ORDER = ["sniper", "scalper", "fast_scalp", "trend_rider",
-                  "breakout", "mean_reversion", "balanced"]
+EXPECTED_ORDER = ["adaptive", "sniper", "scalper", "fast_scalp",
+                  "trend_rider", "breakout", "mean_reversion", "balanced"]
 
 
 class TestBuiltinPresets:
@@ -89,7 +89,7 @@ class TestBuiltinPresets:
         body = r.json()
         assert "presets" in body and "custom" in body
         presets = body["presets"]
-        assert len(presets) == 7
+        assert len(presets) == 8
         keys = [p["key"] for p in presets]
         assert keys == EXPECTED_ORDER
         # Each must have the documented fields

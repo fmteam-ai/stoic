@@ -307,6 +307,20 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # ------------------------------------------------------------------------
     engine = resolve_engine(strategy)
     engine_label = ENGINE_LABELS.get(engine, engine)
+    # Regime-adaptive dispatch — ADAPTIVE routes this evaluation to the
+    # engine matching the LIVE regime (trend → MTF cascade, range → fade,
+    # chop/unknown → stand down) instead of holding for days.
+    regime_dispatch = None
+    if engine == "regime_adaptive":
+        from strategy_engines import dispatch_engine_for_regime
+        _reg_label = (regime or {}).get("regime")
+        _eff, _note = dispatch_engine_for_regime(_reg_label)
+        regime_dispatch = {"regime": _reg_label, "dispatched_engine": _eff,
+                           "note": _note}
+        if _eff:
+            engine = _eff
+            engine_label = (f"ADAPTIVE → "
+                            f"{ENGINE_LABELS.get(_eff, _eff)}")
     mtf_mode = MTF_MODE_BY_ENGINE.get(engine)
     # iter-140 · Promoted shadow-model parameters for this engine (None = defaults)
     eng_params = (engine_params or {}).get(engine) if isinstance(engine_params, dict) else None
@@ -342,6 +356,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
             "noise_filter": entropy,
             "compressed_features": compressed_features,
             "regime_execution_mode": regime_meta,
+            "regime_dispatch": regime_dispatch,
             "meta_label": None,
             "mtf_gate": None,
             "mtf_tiers": mtf_tiers,
@@ -373,6 +388,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         )
     if macro.get("frozen"):
         return _hold(f"Macro freeze in effect: {macro.get('reason') or 'high-impact event window'}")
+    if regime_dispatch and not regime_dispatch["dispatched_engine"]:
+        return _hold(f"ADAPTIVE · Regime Dispatch: {regime_dispatch['note']}")
 
     action = None
     engine_note = ""
@@ -569,6 +586,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "noise_filter": entropy,
         "compressed_features": compressed_features,
         "regime_execution_mode": regime_meta,
+        "regime_dispatch": regime_dispatch,
         "meta_label": None,
         "mtf_gate": None,
         "mtf_tiers": mtf_tiers,

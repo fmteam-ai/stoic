@@ -14,6 +14,7 @@ ENGINE_BY_PRESET = {
     "fast_scalp": "hf_scalp_fast",
     "breakout": "breakout_m15",
     "mean_reversion": "range_fade",
+    "adaptive": "regime_adaptive",
 }
 
 MTF_MODE_BY_ENGINE = {
@@ -59,7 +60,33 @@ ENGINE_LABELS = {
     "hf_scalp_fast": "FAST SCALP · HF Momentum (turbo)",
     "breakout_m15": "BREAKOUT · Donchian-20 M15",
     "range_fade": "MEAN REVERSION · Range Fade",
+    "regime_adaptive": "ADAPTIVE · Regime Dispatch",
 }
+
+# Regime-adaptive dispatch — the ADAPTIVE engine routes each evaluation to
+# the engine built for the CURRENT regime instead of holding for days when
+# a pinned engine's regime never shows up. CHOP/unknown stand down: None.
+REGIME_DISPATCH = {
+    "HIGH_VOL_TREND": ("mtf_relaxed",
+                       "strong trend + elevated vol — riding momentum via "
+                       "the relaxed MTF cascade"),
+    "LOW_VOL_TREND": ("mtf_moderate",
+                      "clean calm trend — moderate MTF cascade"),
+    "RANGE": ("range_fade",
+              "confirmed range — fading session extremes toward VWAP"),
+    "CHOP": (None,
+             "high vol without direction — the alpha-destroying state, "
+             "standing down"),
+}
+
+
+def dispatch_engine_for_regime(regime_label: str | None) -> tuple:
+    """Returns (engine|None, note) for the live regime label."""
+    eng, note = REGIME_DISPATCH.get(
+        str(regime_label or ""),
+        (None, f"regime {regime_label or 'unknown'} — no matching playbook, "
+               f"standing down"))
+    return eng, note
 
 
 def resolve_engine(preset: str | None) -> str:

@@ -160,6 +160,32 @@ PRESETS = {
             "sl_cooldown_minutes": 30,
         },
     },
+    "adaptive": {
+        "label": "Adaptive",
+        "tagline": "Reads the regime, picks the playbook.",
+        "description": (
+            "ENGINE: Regime Dispatch. Classifies the live market regime each evaluation and routes to the matching engine: "
+            "relaxed MTF cascade in high-vol trends, moderate cascade in calm trends, range-fade in confirmed ranges — "
+            "and stands down in chop. No more multi-day holds when the market stops trending."
+        ),
+        "icon": "Compass",
+        "color": "#10F2C5",
+        "config": {
+            "min_confidence_override": 0,
+            "trade_of_day_cap": 2,
+            "max_concurrent_trades": 3,
+            "trailing_enabled": True,
+            "trailing_start_r": 1.5,
+            "trailing_distance_r": 0.7,
+            "partial_close_enabled": True,
+            "partial_close_trigger_r": 1.0,
+            "partial_close_fraction": 0.5,
+            "sl_cooldown_enabled": True,
+            "sl_cooldown_minutes": 45,
+            "pre_news_protect_enabled": True,
+            "anti_tilt_enabled": True,
+        },
+    },
     "balanced": {
         "label": "Balanced (Default)",
         "tagline": "STOIC's house defaults.",
@@ -195,7 +221,7 @@ def get_preset(key: str) -> dict | None:
 
 def list_presets() -> list[dict]:
     """Return presets as a JSON-friendly array, ordered."""
-    order = ["sniper", "scalper", "fast_scalp", "trend_rider", "breakout", "mean_reversion", "balanced"]
+    order = ["adaptive", "sniper", "scalper", "fast_scalp", "trend_rider", "breakout", "mean_reversion", "balanced"]
     out = []
     for k in order:
         if k in PRESETS:

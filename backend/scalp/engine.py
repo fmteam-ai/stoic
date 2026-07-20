@@ -159,9 +159,12 @@ MAX_BROKER_CONCURRENT_SUBMISSIONS = int(os.environ.get(
     "SCALP_MAX_BROKER_CONCURRENT_SUBMISSIONS", "6"))
 SUBMISSION_LEASE_SEC = int(os.environ.get(
     "SCALP_SUBMISSION_LEASE_SEC", "90"))
-# round 16 item 11 — fairness: one account can never monopolize the pool.
+# round 16 item 11 — fairness: one account (or one symbol) can never
+# monopolize the broker pool.
 MAX_ACCOUNT_ACTIVE_SUBMISSIONS = int(os.environ.get(
     "SCALP_MAX_ACCOUNT_ACTIVE_SUBMISSIONS", "2"))
+MAX_SYMBOL_ACTIVE_SUBMISSIONS = int(os.environ.get(
+    "SCALP_MAX_SYMBOL_ACTIVE_SUBMISSIONS", "3"))
 _EPOCH_ISO = "1970-01-01T00:00:00+00:00"
 _slots_ready: set = set()
 
@@ -181,11 +184,12 @@ async def _ensure_submission_slots(db, broker_key: str) -> None:
 
 async def acquire_broker_submission_slot(db, broker: str,
                                          account_id: str = "",
-                                         decision_id: str = "") -> dict | None:
+                                         decision_id: str = "",
+                                         symbol: str = "") -> dict | None:
     """Returns a slot handle {broker_key, slot_id, token} or None when the
-    pool (or the per-account fairness cap) is exhausted. Emergency closes /
-    protection ops never pass through here — they use the EA pending-
-    modification queue and are NEVER throttled by entry capacity."""
+    pool (or a per-account / per-symbol fairness cap) is exhausted.
+    Emergency closes / protection ops never pass through here — they use the
+    EA pending-modification queue and are NEVER throttled by entry capacity."""
     broker_key = _broker_cap_key(broker)
     if broker_key not in _slots_ready:
         await _ensure_submission_slots(db, broker_key)
@@ -198,6 +202,12 @@ async def acquire_broker_submission_slot(db, broker: str,
              "lease_until": {"$gte": now_iso}})
         if isinstance(held, int) and held >= MAX_ACCOUNT_ACTIVE_SUBMISSIONS:
             return None
+    if symbol:
+        held = await db.scalp_submission_slots.count_documents(
+            {"broker_key": broker_key, "symbol": symbol,
+             "lease_until": {"$gte": now_iso}})
+        if isinstance(held, int) and held >= MAX_SYMBOL_ACTIVE_SUBMISSIONS:
+            return None
     token = uuid.uuid4().hex
     lease_until = (now + timedelta(seconds=SUBMISSION_LEASE_SEC)).isoformat()
     for slot_id in range(MAX_BROKER_CONCURRENT_SUBMISSIONS):
@@ -206,6 +216,7 @@ async def acquire_broker_submission_slot(db, broker: str,
              "lease_until": {"$lt": now_iso}},
             {"$set": {"lease_until": lease_until, "token": token,
                       "worker_id": _worker_id, "account_id": account_id,
+                      "symbol": symbol,
                       "decision_id": decision_id, "acquired_at": now_iso}})
         if bool(getattr(res, "modified_count", 0)):
             return {"broker_key": broker_key, "slot_id": slot_id,
@@ -889,7 +900,7 @@ class ScalpRunner:
         final_net_edge = (float(decision["net_edge_pips"])
                           - max(0.0, sp - decision_spread)
                           - max(0.0, adverse_pips))
-        if final_net_edge < MIN_NET_EDGE_PIPS + LATENCY_EDGE_BUFFER_PIPS:
+        if final_net_edge < edge.MIN_NET_EDGE_PIPS + LATENCY_EDGE_BUFFER_PIPS:
             self.state.record_reject()
             _bg(lambda s={"verdict": "rejected",
                           "reject_stage": "pre_submit_edge_revalidation",
@@ -1061,7 +1072,8 @@ class ScalpRunner:
                 "decision_update")
             return
         slot = await acquire_broker_submission_slot(
-            db, self.broker, self.account_id, decision["decision_id"])
+            db, self.broker, self.account_id, decision["decision_id"],
+            symbol=self.symbol)
         if slot is None:
             self.state.record_reject()
             _bg(lambda: db.scalp_decisions.update_one(

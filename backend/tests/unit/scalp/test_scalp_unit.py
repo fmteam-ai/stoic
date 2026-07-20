@@ -285,12 +285,13 @@ def _stub_db():
     for coll in ("scalp_decisions", "scalp_ticks", "scalp_risk_state",
                  "scalp_configs", "trades", "broker_deals", "scalp_owners",
                  "scalp_financial_events", "accounts",
-                 "scalp_submission_caps"):
+                 "scalp_submission_slots"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
         c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
                                                         modified_count=1))
         c.find_one = AsyncMock(return_value=None)
+        c.count_documents = AsyncMock(return_value=0)
     return db
 
 
@@ -2246,7 +2247,7 @@ class TestRound15Hardening:
         attempt_not_submitted_capacity (infrastructure, not strategy)."""
         r = _r15_runner("r15-slot")
         db = _stub_db()
-        db.scalp_submission_caps.update_one = AsyncMock(
+        db.scalp_submission_slots.update_one = AsyncMock(
             return_value=MagicMock(modified_count=0))
         fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
         _r15_submit(r, db, fake_engine)
@@ -2258,13 +2259,18 @@ class TestRound15Hardening:
         assert cap and cap[0]["dataset"] == "attempt_not_submitted_capacity"
 
     def test_slot_acquire_release_roundtrip(self):
+        from scalp import engine as eng
         from scalp.engine import (acquire_broker_submission_slot,
                                   release_broker_submission_slot)
         db = _stub_db()
-        assert asyncio.run(acquire_broker_submission_slot(db, "OnEquity"))
-        asyncio.run(release_broker_submission_slot(db, "OnEquity"))
-        filt = db.scalp_submission_caps.update_one.await_args.args[0]
-        assert filt["_id"] == "broker:onequity"
+        slot = asyncio.run(acquire_broker_submission_slot(db, "OnEquity"))
+        assert slot and slot["broker_key"] == "broker:onequity"
+        assert slot["token"]
+        asyncio.run(release_broker_submission_slot(db, slot))
+        filt = db.scalp_submission_slots.update_one.await_args.args[0]
+        assert filt == {"broker_key": "broker:onequity",
+                        "slot_id": slot["slot_id"], "token": slot["token"]}
+        eng._slots_ready.discard("broker:onequity")
 
     def test_success_records_pre_submit_snapshot_and_latency(self):
         """Items 2/9 — the decision doc gains the commitment context."""

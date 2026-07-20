@@ -689,10 +689,11 @@ function AdaptiveSection() {
                         Bot auto-swaps Strategy Preset each tick based on live regime — no manual switching:
                     </P>
                     <ul className="text-sm text-[#A1A1AA] mt-2 space-y-1 font-mono text-[11px]">
-                        <li>• AGGRESSIVE / TRENDING → <strong className="text-white">trend_rider</strong></li>
+                        <li>• AGGRESSIVE / TRENDING / HIGH_VOL_TREND → <strong className="text-white">trend_rider</strong></li>
                         <li>• DEFENSIVE_SCALP → <strong className="text-white">fast_scalp</strong></li>
+                        <li>• LOW_VOL_TREND → <strong className="text-white">balanced</strong></li>
                         <li>• CAUTIOUS_WAIT / TRANSITIONAL → <strong className="text-white">scalper</strong></li>
-                        <li>• RANGING → <strong className="text-white">mean_reversion</strong></li>
+                        <li>• RANGING / RANGE → <strong className="text-white">mean_reversion</strong></li>
                     </ul>
                 </div>
             </div>

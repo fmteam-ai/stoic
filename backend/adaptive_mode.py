@@ -300,13 +300,17 @@ async def compute_risk_multiplier(user_id: str, account_id: Optional[str] = None
 # Regime-execution-mode → preset key. Values that don't appear here fall
 # through to "balanced" so the bot never ends up preset-less.
 REGIME_TO_PRESET: dict[str, str] = {
-    "AGGRESSIVE":      "trend_rider",
-    "TRENDING":        "trend_rider",
-    "DEFENSIVE_SCALP": "fast_scalp",
-    "CAUTIOUS_WAIT":   "scalper",
-    "TRANSITIONAL":    "scalper",
-    "RANGING":         "mean_reversion",
-    "MEAN_REVERSION":  "mean_reversion",
+    "AGGRESSIVE":       "trend_rider",
+    "TRENDING":         "trend_rider",
+    "DYNAMIC_MOMENTUM": "trend_rider",
+    "HIGH_VOL_TREND":   "trend_rider",
+    "LOW_VOL_TREND":    "balanced",
+    "DEFENSIVE_SCALP":  "fast_scalp",
+    "CAUTIOUS_WAIT":    "scalper",
+    "TRANSITIONAL":     "scalper",
+    "RANGING":          "mean_reversion",
+    "RANGE":            "mean_reversion",
+    "MEAN_REVERSION":   "mean_reversion",
 }
 DEFAULT_AUTO_PRESET = "balanced"
 

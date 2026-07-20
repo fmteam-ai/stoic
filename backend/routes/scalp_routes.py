@@ -162,6 +162,19 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
         "broker_fills": {**_mode_stats(("filled_live",)),
                          "account_type": (acc or {}).get("account_type")},
     }
+    # Round 16 — expectancy sliced by MARKET REGIME at decision time: an
+    # edge that only exists in one regime must never be extrapolated to all.
+    regime_nets: dict = {}
+    for d in docs:
+        reg = (((d.get("gates") or {}).get("permission") or {})
+               .get("regime")) or "UNKNOWN"
+        regime_nets.setdefault(reg, []).append(
+            float((d.get("outcome") or {}).get("net_pips") or 0))
+    expectancy_by_regime = {
+        reg: {"n": len(v),
+              "net_expectancy_pips": round(sum(v) / len(v), 3),
+              "ci95": block_bootstrap_ci(list(reversed(v)))}
+        for reg, v in sorted(regime_nets.items())}
     # Round 15 item 9 — latency decomposition percentiles (rolling window)
     def _pct(vals, p):
         if not vals:
@@ -193,6 +206,7 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
         },
         "lifetime": lifetime,
         "expectancy_by_mode": expectancy_by_mode,
+        "expectancy_by_regime": expectancy_by_regime,
         "latency": latency,
         "commission_check": (runner.commission_check
                              if runner is not None else None),

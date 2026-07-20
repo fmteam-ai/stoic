@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass } from "lucide-react";
 import { toast } from "sonner";
 
 const RISK_DESCRIPTIONS = {
@@ -23,7 +23,7 @@ const RISK_MULTIPLIER = {
 
 // Preset key → lucide-react icon mapping (kept in sync with strategy_presets.py)
 const PRESET_ICONS = {
-    Crosshair, Zap, TrendingUp, Rocket, Activity, Flame, Scale,
+    Crosshair, Zap, TrendingUp, Rocket, Activity, Flame, Scale, Compass,
 };
 
 export default function BotConfig() {
