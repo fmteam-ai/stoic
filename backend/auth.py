@@ -9,8 +9,10 @@ from bson import ObjectId
 from database import get_db
 
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MIN = 60 * 24  # 24h, for trading bot convenience
-REFRESH_TOKEN_EXPIRE_DAYS = 30
+# Short-lived access tokens (financial app) — the frontend silently rotates
+# via /auth/refresh; refresh sessions are durable, rotated and revocable.
+ACCESS_TOKEN_EXPIRE_MIN = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MIN", "30"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 
 
 def hash_password(password: str) -> str:
@@ -38,12 +40,15 @@ def create_access_token(user_id: str, email: str) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(user_id: str, claims: dict | None = None) -> str:
     payload = {
         "sub": user_id,
         "type": "refresh",
         "exp": datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        "iat": datetime.now(timezone.utc),
     }
+    if claims:                      # jti / sid / fam — revocable session
+        payload.update(claims)
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
@@ -60,11 +65,14 @@ def set_auth_cookies(response, access_token: str, refresh_token: str):
         key="refresh_token", value=refresh_token, httponly=True,
         secure=True, samesite="none", max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400, path="/"
     )
+    from security import set_csrf_cookie
+    set_csrf_cookie(response)
 
 
 def clear_auth_cookies(response):
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
+    response.delete_cookie("csrf_token", path="/")
 
 
 async def get_current_user(request: Request) -> dict:

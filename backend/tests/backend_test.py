@@ -543,22 +543,37 @@ class TestWebSocket:
         assert result != "connected_unexpectedly", f"WS accepted unauth connection: {result}"
 
     def test_ws_accepts_with_token_and_emits_connected(self, admin_session):
+        """Query-string tokens are DISABLED by default (they leak through
+        proxy/LB logs); WS auth rides the access_token cookie instead."""
         import asyncio
         import json
         import websockets
 
         token = admin_session.cookies.get("access_token")
         assert token, "admin_session missing access_token cookie"
-        url = f"{self._ws_url()}?token={token}"
+        url = self._ws_url()
 
-        async def run():
-            async with websockets.connect(url, open_timeout=15) as ws:
+        async def run_cookie():
+            async with websockets.connect(
+                    url, open_timeout=15,
+                    additional_headers={"Cookie": f"access_token={token}"}) as ws:
                 raw = await asyncio.wait_for(ws.recv(), timeout=10)
                 return json.loads(raw)
 
-        msg = asyncio.run(run())
+        msg = asyncio.run(run_cookie())
         assert msg.get("type") == "connected"
         assert "user_id" in (msg.get("payload") or {})
+
+        async def run_query_token():
+            try:
+                async with websockets.connect(f"{url}?token={token}",
+                                              open_timeout=15) as ws:
+                    await asyncio.wait_for(ws.recv(), timeout=10)
+                    return "accepted"
+            except Exception:
+                return "rejected"
+
+        assert asyncio.run(run_query_token()) == "rejected"
 
 
 # ---------- Circuit breaker logic (unit-level on the module) ----------

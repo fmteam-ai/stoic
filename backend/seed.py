@@ -139,6 +139,12 @@ async def ensure_indexes():
         await db.scalp_submission_slots.create_index(
             [("broker_key", 1), ("slot_id", 1)], unique=True)
         await db.trades.create_index("submission_slot.token", sparse=True)
+        # Auth hardening: revocable refresh sessions + shared rate limits
+        await db.auth_sessions.create_index("jti", unique=True)
+        await db.auth_sessions.create_index([("user_id", 1), ("revoked", 1)])
+        await db.auth_sessions.create_index("expires_at",
+                                            expireAfterSeconds=0)
+        await db.rate_limits.create_index("expires_at", expireAfterSeconds=0)
         await db.broker_deals.create_index([("account_id", 1), ("deal_id", 1)],
                                            unique=True)
         await db.broker_deals.create_index([("financial_reconciliation_status", 1),

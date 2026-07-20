@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List, Literal
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 from pydantic import BaseModel, Field
 
@@ -424,6 +424,7 @@ class RevealRequest(BaseModel):
 
 @router.post("/{account_id}/credentials/reveal")
 async def reveal_credentials(account_id: str, payload: RevealRequest,
+                             request: Request,
                              user=Depends(get_current_user)):
     """Decrypt and return stored broker passwords for the owner.
 
@@ -439,6 +440,10 @@ async def reveal_credentials(account_id: str, payload: RevealRequest,
         acct_oid = ObjectId(account_id)
     except Exception:
         raise HTTPException(status_code=404, detail="Account not found")
+    from security import rate_limit
+    await rate_limit(db, "cred_reveal", user["id"], 3, 3600,
+                     "Too many credential reveals. Try again later.",
+                     request=request)
     account = await db.accounts.find_one({"_id": acct_oid, "user_id": user["id"]})
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")

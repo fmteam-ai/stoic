@@ -5,7 +5,8 @@ load_dotenv(Path(__file__).parent / ".env")
 import os
 import asyncio
 import logging
-from fastapi import FastAPI, APIRouter, WebSocket, WebSocketDisconnect
+import uuid
+from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
 from bson import ObjectId
@@ -72,6 +73,24 @@ logger = logging.getLogger("trading-bot")
 
 app = FastAPI(title="AI Trading Bot API", version="1.1.0")
 
+
+@app.middleware("http")
+async def csrf_middleware(request, call_next):
+    """CSRF double-submit enforcement for cookie-authenticated mutations
+    (SameSite=None cookies make cross-site sends possible; CORS alone is
+    not a CSRF defense). Bearer/bridge/webhook callers are unaffected."""
+    from fastapi.responses import JSONResponse
+    from security import csrf_check
+    err = csrf_check(request)
+    if err is not None:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": {"code": "csrf_failed", "reason": err,
+                                "message": "Request blocked by CSRF "
+                                           "protection. Refresh and retry."}})
+    return await call_next(request)
+
+
 api_router = APIRouter(prefix="/api")
 
 
@@ -87,7 +106,50 @@ async def health():
         await db.command("ping")
         return {"status": "ok", "db": "connected"}
     except Exception as e:
-        return {"status": "degraded", "error": str(e)}
+        # Never leak connection topology / driver internals publicly.
+        cid = uuid.uuid4().hex[:12]
+        logger.error("health degraded [cid=%s]: %s", cid, e)
+        return {"status": "degraded", "db": "unavailable", "cid": cid}
+
+
+@api_router.get("/health/live")
+async def health_live():
+    return {"status": "ok"}
+
+
+@api_router.get("/health/ready")
+async def health_ready():
+    """Readiness: DB ping + critical unique indexes + submission-slot
+    integrity. Degraded readiness returns 503 so orchestrators stop
+    routing traffic without leaking internals."""
+    from fastapi.responses import JSONResponse
+    checks = {}
+    ok = True
+    db = get_db()
+    try:
+        await db.command("ping")
+        checks["db"] = "ok"
+    except Exception as e:
+        cid = uuid.uuid4().hex[:12]
+        logger.error("readiness db fail [cid=%s]: %s", cid, e)
+        checks["db"] = "unavailable"
+        ok = False
+    if checks["db"] == "ok":
+        try:
+            from seed import dependency_health_check
+            dep = await dependency_health_check()
+            dep_ok = bool(dep.get("deps_ok") and dep.get("db_ok")
+                          and dep.get("indexes_ok"))
+            checks["critical_indexes"] = "ok" if dep_ok else "missing"
+            ok = ok and dep_ok
+        except Exception:
+            checks["critical_indexes"] = "unknown"
+        from scalp.engine import capacity_integrity_reason
+        cap = capacity_integrity_reason()
+        checks["submission_capacity"] = "ok" if cap is None else "violated"
+        ok = ok and cap is None
+    body = {"status": "ok" if ok else "degraded", "checks": checks}
+    return body if ok else JSONResponse(status_code=503, content=body)
 
 
 @api_router.get("/ea-script")
@@ -179,9 +241,12 @@ api_router.include_router(optimizer_router)
 # ---------- WebSocket ----------
 @api_router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
-    """Authenticated WS: reads access_token cookie OR ?token=... query param."""
+    """Authenticated WS via the access_token cookie. Query-string tokens
+    leak through proxy/LB logs and browser history — allowed only when
+    WS_ALLOW_QUERY_TOKEN=true is set explicitly (non-production use)."""
     token = websocket.cookies.get("access_token")
-    if not token:
+    if not token and (os.environ.get("WS_ALLOW_QUERY_TOKEN", "false")
+                      .lower() == "true"):
         token = websocket.query_params.get("token")
     if not token:
         await websocket.close(code=4401)
@@ -469,21 +534,29 @@ async def _stuck_open_sync_loop():
                     still_open_at_broker = True
                 if still_open_at_broker:
                     continue
-                # Best-effort backfill: exit ≈ entry (breakeven placeholder)
-                entry = float(t.get("entry_price") or 0)
+                # Round 18 (audit fix): NEVER fabricate a financial fill.
+                # exit_price stays null; the entry price is stored ONLY as
+                # a display estimate, and the row is excluded from training
+                # and financial metrics until broker deal history resolves
+                # it (deal-history sweep overwrites with exact figures).
                 await db.trades.update_one(
                     {"_id": t["_id"]},
                     {"$set": {
-                        "exit_price": entry,
-                        "pnl": float(t.get("pnl") or 0),
-                        "exit_price_source": "auto_backfill_broker_confirmed_missing",
-                        "exit_price_backfilled_at": datetime.now(timezone.utc).isoformat(),
+                        "outcome_status": "financially_unresolved",
+                        "display_exit_price_estimate":
+                            float(t.get("entry_price") or 0),
+                        "exclude_from_training": True,
+                        "exclude_from_financial_metrics": True,
+                        "pnl_unknown": t.get("pnl") is None,
+                        "exit_price_source": "unresolved_broker_missing",
+                        "exit_unresolved_at": datetime.now(timezone.utc).isoformat(),
                         "ghost_acknowledged": True,
                     }},
                 )
                 backfilled += 1
                 logger.info(
-                    "exit-price backfilled trade=%s ticket=%s user=%s (broker no longer holds)",
+                    "trade=%s ticket=%s user=%s marked financially_unresolved "
+                    "(broker no longer holds; no fabricated exit price)",
                     t.get("_id"), t.get("mt5_ticket"), t.get("user_id"),
                 )
             if backfilled:

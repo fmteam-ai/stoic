@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
 from bson import ObjectId
@@ -29,8 +30,24 @@ from password_reset import (
     RESET_RESEND_COOLDOWN_SECONDS,
 )
 from terms_of_use import TERMS_VERSION
+from security import (
+    rate_limit, client_ip,
+    check_failure_limit, record_failure, clear_failures,
+    create_session, stamp_session_token, consume_and_rotate,
+    revoke_all_user_sessions, revoke_session_by_token_payload,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+async def _issue_session_cookies(db, uid: str, email: str, response,
+                                 request: Request | None = None):
+    """Access token + session-tracked (revocable, rotating) refresh token."""
+    claims = await create_session(db, uid, request)
+    access = create_access_token(uid, email)
+    refresh = create_refresh_token(uid, claims)
+    await stamp_session_token(db, claims["jti"], refresh)
+    set_auth_cookies(response, access, refresh)
 
 
 def _user_to_out(user_doc: dict) -> UserOut:
@@ -49,6 +66,11 @@ def _user_to_out(user_doc: dict) -> UserOut:
 async def register(payload: RegisterRequest, request: Request, response: Response):
     db = get_db()
     email = payload.email.lower()
+    await rate_limit(db, "register", client_ip(request),
+                     int(os.environ.get("REGISTER_RATE_MAX_PER_HOUR", "30")),
+                     3600,
+                     "Too many registrations from this address. Try later.",
+                     request=request)
 
     # Terms of Use must be accepted.
     if not payload.terms_agreed:
@@ -130,11 +152,18 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
 
 
 @router.post("/login")
-async def login(payload: LoginRequest, response: Response):
+async def login(payload: LoginRequest, request: Request, response: Response):
     db = get_db()
     email = payload.email.lower()
+    ip = client_ip(request)
+    # Failed-attempt lockout: 5 wrong passwords per ip+email per 10 min.
+    # Successful logins never count toward the limit.
+    await check_failure_limit(db, "login", f"{ip}:{email}", 5, 600,
+                              "Too many failed login attempts. "
+                              "Try again in a few minutes.")
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
+        await record_failure(db, "login", f"{ip}:{email}", 600)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     # Block suspended/terminated accounts (Terms §8)
@@ -174,30 +203,43 @@ async def login(payload: LoginRequest, response: Response):
         provided = (payload.totp_code or "").strip()
         if not provided:
             raise HTTPException(status_code=401, detail="2FA code required")
+        await check_failure_limit(db, "2fa", email, 5, 600,
+                                  "Too many failed 2FA attempts. "
+                                  "Try again in a few minutes.")
         ok = verify_code(user.get("totp_secret") or "", provided)
         if not ok:
             stored_codes = user.get("recovery_codes") or []
             consumed, remaining = consume_recovery_code(stored_codes, provided)
             if not consumed:
+                await record_failure(db, "2fa", email, 600)
                 raise HTTPException(status_code=401, detail="Invalid 2FA code")
             await db.users.update_one({"_id": user["_id"]}, {"$set": {"recovery_codes": remaining}})
 
     uid = str(user["_id"])
-    access = create_access_token(uid, email)
-    refresh = create_refresh_token(uid)
-    set_auth_cookies(response, access, refresh)
+    await clear_failures(db, "login", f"{ip}:{email}")
+    await clear_failures(db, "2fa", email)
+    await _issue_session_cookies(db, uid, email, response, request)
     return _user_to_out({**user, "_id": uid})
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
+    # Revoke the refresh session server-side — deleting the browser cookie
+    # alone would leave a stolen copy of the token alive until expiry.
+    token = request.cookies.get("refresh_token")
+    if token:
+        try:
+            payload = decode_token(token)
+            await revoke_session_by_token_payload(get_db(), payload, "logout")
+        except Exception:
+            pass
     clear_auth_cookies(response)
     return {"ok": True}
 
 
 # ---------- Email verification / activation ----------
 @router.post("/verify-email")
-async def verify_email(payload: VerifyEmailRequest, response: Response):
+async def verify_email(payload: VerifyEmailRequest, request: Request, response: Response):
     """Activate a user account via the token from the welcome email.
 
     On success, sets auth cookies so the user lands authenticated on the
@@ -238,9 +280,7 @@ async def verify_email(payload: VerifyEmailRequest, response: Response):
     )
 
     uid = str(user["_id"])
-    access = create_access_token(uid, user["email"])
-    refresh = create_refresh_token(uid)
-    set_auth_cookies(response, access, refresh)
+    await _issue_session_cookies(db, uid, user["email"], response, request)
     return {
         "ok": True,
         "user": _user_to_out({**user, "_id": uid, "email_verified": True}),
@@ -305,14 +345,18 @@ async def resend_activation(payload: ResendActivationRequest):
 
 # ---------- Password reset ----------
 @router.post("/forgot-password")
-async def forgot_password(payload: ForgotPasswordRequest):
+async def forgot_password(payload: ForgotPasswordRequest, request: Request):
     """Request a password-reset email. Generic-success response so
-    attackers can't enumerate emails. 60s per-account cooldown."""
+    attackers can't enumerate emails. 60s per-account cooldown + IP limit."""
     generic_ok = {
         "ok": True,
         "message": "If an account exists for that email, a reset link has been sent.",
     }
     db = get_db()
+    await rate_limit(db, "pwreset", client_ip(request),
+                     int(os.environ.get("PWRESET_RATE_MAX_PER_HOUR", "20")),
+                     3600, "Too many reset requests. Try later.",
+                     request=request)
     user = await db.users.find_one({"email": payload.email.lower()})
     if not user:
         return generic_ok
@@ -396,6 +440,7 @@ async def reset_password(payload: ResetPasswordRequest):
             },
         },
     )
+    await revoke_all_user_sessions(db, str(user["_id"]), "password_reset")
     return {"ok": True,
             "message": "Password updated. You can now sign in with your new password.",
             "email": user["email"]}
@@ -417,15 +462,64 @@ async def refresh_token(request: Request, response: Response):
             raise HTTPException(status_code=401, detail="Bad token type")
         uid = payload["sub"]
         db = get_db()
+        await rate_limit(db, "refresh", payload.get("sid") or uid, 30, 60)
         user = await db.users.find_one({"_id": ObjectId(uid)})
         if not user:
             raise HTTPException(status_code=401, detail="User missing")
+        # Rotation + reuse detection; a replayed (already-consumed) token
+        # revokes its whole family. Legacy tokens without a jti migrate
+        # into a tracked session on their first refresh.
+        claims = await consume_and_rotate(db, payload, token, request)
+        if claims is None:
+            claims = await create_session(db, uid, request)
         access = create_access_token(uid, user["email"])
-        new_refresh = create_refresh_token(uid)
+        new_refresh = create_refresh_token(uid, claims)
+        await stamp_session_token(db, claims["jti"], new_refresh)
         set_auth_cookies(response, access, new_refresh)
         return {"ok": True}
+    except HTTPException as e:
+        if e.status_code == 429:
+            raise
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+
+@router.get("/csrf")
+async def csrf_bootstrap(response: Response):
+    """Issues the double-submit CSRF cookie for sessions created before
+    CSRF enforcement (or after a cookie wipe)."""
+    from security import set_csrf_cookie
+    set_csrf_cookie(response)
+    return {"ok": True}
+
+
+@router.get("/sessions")
+async def list_sessions(request: Request, user=Depends(get_current_user)):
+    db = get_db()
+    cur_jti = None
+    tok = request.cookies.get("refresh_token")
+    if tok:
+        try:
+            cur_jti = decode_token(tok).get("jti")
+        except Exception:
+            pass
+    out = []
+    async for s in db.auth_sessions.find(
+            {"user_id": user["id"], "revoked": False, "consumed": False}
+    ).sort("created_at", -1).limit(50):
+        out.append({"session_id": s["session_id"],
+                    "created_at": s.get("created_at"),
+                    "last_used_at": s.get("last_used_at"),
+                    "ip": s.get("ip"), "user_agent": s.get("user_agent"),
+                    "current": s.get("jti") == cur_jti})
+    return {"sessions": out}
+
+
+@router.post("/sessions/revoke-all")
+async def revoke_all(user=Depends(get_current_user)):
+    n = await revoke_all_user_sessions(get_db(), user["id"], "user_requested")
+    return {"ok": True, "revoked": n}
 
 
 # ---------- Profile ----------
@@ -455,6 +549,8 @@ async def change_password(payload: ChangePasswordRequest, user=Depends(get_curre
         {"_id": ObjectId(user["id"])},
         {"$set": {"password_hash": hash_password(payload.new_password)}},
     )
+    # Password change kills every existing session (stolen-cookie defense).
+    await revoke_all_user_sessions(db, user["id"], "password_change")
     return {"ok": True}
 
 
@@ -538,4 +634,6 @@ async def two_fa_disable(payload: TOTPDisableRequest, user=Depends(get_current_u
             "$unset": {"totp_secret": "", "totp_secret_pending": "", "recovery_codes": ""},
         },
     )
+    # 2FA reset is a security-posture change → revoke all other sessions.
+    await revoke_all_user_sessions(db, user["id"], "2fa_reset")
     return {"ok": True}

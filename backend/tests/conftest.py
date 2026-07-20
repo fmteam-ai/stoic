@@ -116,3 +116,65 @@ def _ensure_event_loop():
     except Exception:
         pass
     yield
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-marks by directory so default suites are self-contained:
+        pytest -m unit         → pure unit tests (no DB, no backend)
+        pytest -m integration  → MongoDB-backed tests
+        pytest -m http         → live-backend HTTP tests (everything else)
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parent
+    for item in items:
+        try:
+            rel = Path(str(item.fspath)).resolve().relative_to(root)
+        except ValueError:
+            continue
+        top = rel.parts[0] if rel.parts else ""
+        if top == "unit":
+            item.add_marker(pytest.mark.unit)
+        elif top == "integration":
+            item.add_marker(pytest.mark.integration)
+        else:
+            item.add_marker(pytest.mark.http)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _auto_csrf_header():
+    """The backend enforces double-submit CSRF on cookie-authenticated
+    mutations. Echo the csrf_token cookie into the X-CSRF-Token header on
+    every `requests` call — exactly what the real frontend interceptor
+    does — so the ~2k HTTP tests exercise the real mechanism."""
+    try:
+        import requests
+    except ImportError:
+        yield
+        return
+    original = requests.sessions.Session.request
+
+    _bypass = os.environ.get("RATE_LIMIT_BYPASS_TOKEN")
+
+    def patched(self, method, url, **kwargs):
+        headers = kwargs.get("headers") or {}
+        if _bypass:
+            headers.setdefault("X-RateLimit-Bypass", _bypass)
+        if method.upper() not in ("GET", "HEAD", "OPTIONS"):
+            token = self.cookies.get("csrf_token")
+            if not token:
+                jar = kwargs.get("cookies")
+                if isinstance(jar, dict):
+                    token = jar.get("csrf_token")
+                elif jar is not None:
+                    token = getattr(jar, "get", lambda *_: None)("csrf_token")
+            if token:
+                headers.setdefault("X-CSRF-Token", token)
+        if headers:
+            kwargs["headers"] = headers
+        return original(self, method, url, **kwargs)
+
+    requests.sessions.Session.request = patched
+    try:
+        yield
+    finally:
+        requests.sessions.Session.request = original

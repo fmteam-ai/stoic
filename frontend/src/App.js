@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import "@/App.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
@@ -49,6 +50,7 @@ import ResetPassword from "@/pages/ResetPassword";
 function App() {
     return (
         <div className="App">
+            <ErrorBoundary>
             <BrowserRouter>
                 <AuthProvider>
                     <Routes>
@@ -106,6 +108,7 @@ function App() {
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>
             </BrowserRouter>
+            </ErrorBoundary>
         </div>
     );
 }
