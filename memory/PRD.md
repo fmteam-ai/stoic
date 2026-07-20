@@ -626,3 +626,13 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - server.py: _eod_flatten_loop every 60s at startup.
 - Entry vetoes during window: bot_runner (MTF, combined with eod_quiet SKIP pulse) + scalp engine _maybe_evaluate elif chain.
 - Tests: tests/unit/test_eod_flatten.py 8/8; scalp 149/149 unaffected; testing agent iteration_53 all green.
+
+## Session 2026-07-20 (cont.) — Scalp Round 15 Hardening (iter-54: full suite 2128 passed / 0 failed)
+- MAIN: _submit_live re-runs sizing on the FINAL accepted snapshot — fresh risk_check with fresh equity, submitted lot = min(decision lot, fresh lot), re-run check_account, reject_stage pre_submit_resize on any failure (fresh risk not ok, below min lot, account stop-risk, margin fail).
+- margin_audit(): estimated_required_margin/fresh_free_margin/margin_utilization_after_order/margin_check_passed (None when leverage unknown — recorded, never assumed).
+- Decision docs gain pre_submit_account_snapshot {equity, equity_delta, free_margin, heartbeat_at, final_lot, lease_epoch, margin_audit} + submitted_lot + latency stamps (decision_to_submit_ms, submission_start_ts_ms, db_trade_created_ts_ms, broker_ack_ts_ms, submit_to_ack_ms).
+- Distributed per-broker submission capacity: scalp_submission_caps conditional counter (30s stale reset), MAX_BROKER_CONCURRENT_SUBMISSIONS=6; capacity rejections labelled dataset=attempt_not_submitted_capacity.
+- Stale symbol specs + unprotected position → spec refresh request + emergency FULL_CLOSE (emergency_specs_stale); symbol_specs_status tri-state ok/stale/absent.
+- Metrics: model key from ACCOUNT DOC (make_key broker|type|symbol, restart-proof), lifetime canonical filter + population label, expectancy_by_mode shadow vs broker_fills with separate CIs, latency p50/p95/p99.
+- CI split: scripts/run_unit_tests.sh (Mongo-free, 157 tests) + run_integration_tests.sh (dependency preflight); seed.dependency_health_check() at startup (deps/ping/critical indexes) — caught + fixed missing scalp_decisions.decision_id unique partial index (+account/symbol/ts index).
+- Tests: TestRound15Hardening (7); scalp+flatten 164/164; testing agent iteration_54 zero issues.
