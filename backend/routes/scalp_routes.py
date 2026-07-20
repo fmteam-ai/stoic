@@ -73,11 +73,19 @@ async def decisions(limit: int = 50, symbol: str = None,
 
 
 @router.get("/metrics")
-async def metrics(symbol: str = "EURUSD", user=Depends(get_current_user)):
-    """Step 18 production metrics: alpha / execution / risk / stability."""
+async def metrics(symbol: str = "EURUSD", account_id: str = None,
+                  user=Depends(get_current_user)):
+    """Step 18 production metrics: alpha / execution / risk / stability.
+
+    Round 14 — the response is an explicitly-labelled ROLLING sample (last
+    5000 outcomes) plus lifetime aggregates and a block-bootstrap CI on net
+    expectancy; the model is resolved by the runner's broker/account-type
+    model key when account_id is provided (artifacts are broker-specific)."""
     db = get_db()
     q = {"user_id": user["id"], "symbol": symbol.upper(),
          "outcome.result": {"$in": ["target_first", "stop_first", "timeout"]}}
+    if account_id:
+        q["account_id"] = account_id
     docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(5000)
     n = len(docs)
     if n == 0:
@@ -96,15 +104,53 @@ async def metrics(symbol: str = "EURUSD", user=Depends(get_current_user)):
     gross_win = sum(wins)
     gross_loss = abs(sum(losses))
     resolved_dir = len(tf) + len(sf)
-    model_doc = await db.scalp_models.find_one({"symbol": symbol.upper()})
+    # Round 14 item 5 — model artifacts are broker/account-type specific:
+    # resolve by the runner's model key when an account is specified, never
+    # blindly by symbol (which could show another broker's model).
+    model_doc = None
+    model_scope = "symbol_only"
+    runner = None
+    if account_id:
+        from scalp.engine import _runners
+        runner = _runners.get(f"{account_id}:{symbol.upper()}")
+        if runner is not None:
+            model_doc = await db.scalp_models.find_one(
+                {"model_key": runner.model_key()})
+            model_scope = runner.model_key()
+    if model_doc is None and not account_id:
+        model_doc = await db.scalp_models.find_one({"symbol": symbol.upper()})
     tick_count = await db.scalp_ticks.count_documents({"user_id": user["id"],
                                                        "symbol": symbol.upper()})
+    # Round 14 item 6 — lifetime aggregates alongside the rolling window
+    lifetime = None
+    async for g in db.scalp_decisions.aggregate([
+            {"$match": q},
+            {"$group": {"_id": None, "n": {"$sum": 1},
+                        "net_sum": {"$sum": "$outcome.net_pips"}}}]):
+        lifetime = {"n": int(g["n"]),
+                    "net_expectancy_pips": round(
+                        float(g["net_sum"] or 0) / max(1, int(g["n"])), 3)}
+    # Round 14 item 7 — block-bootstrap CI on net expectancy (time-ordered,
+    # oldest → newest) so a lucky recent window is not read as edge.
+    from scalp.stats import block_bootstrap_ci
+    net_ci95 = block_bootstrap_ci(list(reversed(net)))
     return {
         "symbol": symbol.upper(), "n": n,
+        "window": {
+            "type": "rolling", "max_samples": 5000, "n": n,
+            "from_ts_ms": docs[-1].get("ts_ms"),
+            "to_ts_ms": docs[0].get("ts_ms"),
+            "note": ("rolling sample of the most recent outcomes — see "
+                     "`lifetime` for all-time aggregates"),
+        },
+        "lifetime": lifetime,
+        "commission_check": (runner.commission_check
+                             if runner is not None else None),
         "alpha": {
             "target_before_stop_rate": round(len(tf) / resolved_dir, 3) if resolved_dir else None,
             "gross_expectancy_pips": round(sum(gross) / n, 3),
             "net_expectancy_pips": round(sum(net) / n, 3),
+            "net_expectancy_ci95_pips": net_ci95,
             "stressed_net_expectancy_pips": round(
                 (sum(net) - 0.5 * sum(costs)) / n, 3),
             "avg_winner_pips": round(sum(wins) / len(wins), 2) if wins else None,
@@ -118,8 +164,12 @@ async def metrics(symbol: str = "EURUSD", user=Depends(get_current_user)):
                                          for d in docs) / n, 2),
         },
         "model": ({"oos_auc": model_doc.get("oos_auc"), "n_samples": model_doc.get("n_samples"),
-                   "usable": model_doc.get("usable"), "trained_at": model_doc.get("trained_at")}
-                  if model_doc else None),
+                   "usable": model_doc.get("usable"), "trained_at": model_doc.get("trained_at"),
+                   "model_scope": model_scope}
+                  if model_doc else {"model_scope": model_scope,
+                                     "note": ("no model artifact for this "
+                                              "scope — pass account_id for "
+                                              "broker-specific resolution")}),
         "data": {"tick_batches_recorded": tick_count},
         "verdicts": {
             "shadow_traded": sum(1 for d in docs if d.get("verdict") == "shadow_traded"),

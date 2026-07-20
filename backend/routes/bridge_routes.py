@@ -267,6 +267,15 @@ async def heartbeat(payload: BridgeHeartbeat):
 
     await db.accounts.update_one({"_id": acc["_id"]}, {"$set": set_doc})
 
+    # Round 14 P0 — propagate the fresh snapshot into in-memory scalp
+    # runners so readiness/staleness checks and sizing never depend on the
+    # (possibly old) account doc preloaded by the last tick batch.
+    try:
+        from scalp.engine import update_account_snapshot
+        update_account_snapshot(str(acc["_id"]), set_doc)
+    except Exception:  # noqa: BLE001 — snapshot relay must never break HB
+        logger.exception("scalp account-snapshot propagation failed")
+
     # EA v1.25+: ingest the live positions snapshot. Auto-creates trade
     # records for any open position STOIC doesn't yet track. Skipped on
     # mismatch — we don't want to suck wrong-account positions into the

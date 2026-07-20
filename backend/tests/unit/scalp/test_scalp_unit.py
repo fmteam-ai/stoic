@@ -284,7 +284,7 @@ def _stub_db():
     db = MagicMock()
     for coll in ("scalp_decisions", "scalp_ticks", "scalp_risk_state",
                  "scalp_configs", "trades", "broker_deals", "scalp_owners",
-                 "scalp_financial_events"):
+                 "scalp_financial_events", "accounts"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
         c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
@@ -1480,7 +1480,11 @@ class TestRound10Hardening:
         from unittest.mock import patch
         from scalp import engine as eng
         r = ScalpRunner("acc10c", "u1", "EURUSD")
-        r.account = {"_id": "acc10c", "equity": 10_000.0}
+        from datetime import datetime, timezone
+        r.equity = 10_000.0
+        r.account = {"_id": "acc10c", "equity": 10_000.0,
+                     "status": "connected",
+                     "last_heartbeat": datetime.now(timezone.utc).isoformat()}
         now = int(time.time() * 1000)
         r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=now,
                                  received_time_ms=now, bid=1.08,
@@ -1607,15 +1611,39 @@ class TestRound11Hardening:
         assert acc is None and why == "invalid_id"
         acc, why = asyncio.run(find_account(db, "not-an-objectid"))
         assert acc is None and why == "invalid_id"
-        acc, why = asyncio.run(find_account(db, "0" * 24))
-        assert acc is None and why == "missing"
-        db.accounts.find_one = AsyncMock(
-            side_effect=[None, {"_id": "str-id", "equity": 55.0}])
-        acc, why = asyncio.run(find_account(db, "0" * 24))
-        assert acc is not None and why == "ok"
         db.accounts.find_one = AsyncMock(side_effect=RuntimeError("down"))
         acc, why = asyncio.run(find_account(db, "0" * 24))
         assert acc is None and why == "db_error"
+
+    def test_find_account_without_parser_string_lookup_only(self):
+        """Round 14 — dependency-injected ObjectId parser: with no parser
+        (BSON unavailable) a shaped id gets exactly ONE string lookup."""
+        from protection_guard import find_account
+        db = MagicMock()
+        db.accounts.find_one = AsyncMock(return_value=None)
+        acc, why = asyncio.run(find_account(db, "0" * 24, oid_parser=None))
+        assert acc is None and why == "missing"
+        assert db.accounts.find_one.await_count == 1
+        db.accounts.find_one = AsyncMock(
+            return_value={"_id": "0" * 24, "equity": 5.0})
+        acc, why = asyncio.run(find_account(db, "0" * 24, oid_parser=None))
+        assert acc is not None and why == "ok"
+        assert db.accounts.find_one.await_count == 1
+
+    def test_find_account_with_parser_falls_back_to_raw_string(self):
+        """Round 14 — with a parser available: ObjectId lookup first, raw
+        string fallback second, missing only after both miss."""
+        from protection_guard import find_account
+        db = MagicMock()
+        db.accounts.find_one = AsyncMock(
+            side_effect=[None, {"_id": "str-id", "equity": 55.0}])
+        acc, why = asyncio.run(find_account(db, "0" * 24, oid_parser=str))
+        assert acc is not None and why == "ok"
+        assert db.accounts.find_one.await_count == 2
+        db.accounts.find_one = AsyncMock(side_effect=[None, None])
+        acc, why = asyncio.run(find_account(db, "0" * 24, oid_parser=str))
+        assert acc is None and why == "missing"
+        assert db.accounts.find_one.await_count == 2
 
     def test_daily_metrics_are_separate(self):
         from scalp.risk import RiskState
@@ -1916,3 +1944,230 @@ class TestRound13Hardening:
         assert abs(clock_drift_residual_ms(0.0)) < MAX_CLOCK_DRIFT_MS
         assert abs(clock_drift_residual_ms(-10_800_000 - 8000)) > MAX_CLOCK_DRIFT_MS
         assert abs(clock_drift_residual_ms(600_000)) > MAX_CLOCK_DRIFT_MS
+
+
+# ---------------- round-14 hardening behaviors ----------------
+class TestRound14Hardening:
+    def test_heartbeat_propagates_snapshot_into_runners(self):
+        """P0 — update_account_snapshot pushes fresh heartbeat state into
+        every in-memory runner: staleness checks and equity never rely on
+        the last tick batch's preloaded account doc."""
+        from datetime import datetime, timezone
+        from scalp import engine as eng
+        r = eng.ScalpRunner("r14-snap", "u1", "EURUSD")
+        eng._runners["r14-snap:EURUSD"] = r
+        try:
+            r.account = {"_id": "r14-snap", "equity": 1000.0,
+                         "last_heartbeat": "2020-01-01T00:00:00+00:00"}
+            r.equity = 1000.0
+            assert eng.broker_state_stale_reason(r.account) is not None
+            now_iso = datetime.now(timezone.utc).isoformat()
+            eng.update_account_snapshot("r14-snap", {
+                "equity": 1234.5, "status": "connected",
+                "last_heartbeat": now_iso})
+            assert r.equity == pytest.approx(1234.5)
+            assert r.account["last_heartbeat"] == now_iso
+            assert eng.broker_state_stale_reason(r.account) is None
+            # equity None (mismatch heartbeat) must not clobber runner equity
+            eng.update_account_snapshot("r14-snap", {
+                "equity": None, "status": "disconnected",
+                "last_heartbeat": now_iso})
+            assert r.equity == pytest.approx(1234.5)
+            assert eng.broker_state_stale_reason(r.account) is not None
+        finally:
+            eng._runners.pop("r14-snap:EURUSD", None)
+
+    def test_submit_refreshes_broker_state_and_rejects_stale(self):
+        """Item 1 — immediately before submission the runner refreshes
+        critical account state from the DB and rejects on staleness."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from scalp import engine as eng
+        r = ScalpRunner("r14-pre", "u1", "EURUSD")
+        r.equity = 10_000.0
+        r.account = {"_id": "r14-pre", "equity": 10_000.0,
+                     "status": "connected",
+                     "last_heartbeat": "2020-01-01T00:00:00+00:00"}
+        now = int(time.time() * 1000)
+        r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=now,
+                                 received_time_ms=now, bid=1.08,
+                                 ask=1.08004))
+        decision = {"decision_id": "d14", "direction": "BUY",
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1)
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t14"}))
+        db = _stub_db()
+        db.accounts.find_one = AsyncMock(return_value=None)  # no fresh doc
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine), \
+                 patch.object(eng, "confirm_account_lease_now",
+                              AsyncMock(return_value=(True, 4))):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(5):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        fake_engine.execute.assert_not_awaited()   # stale heartbeat → reject
+        db.accounts.find_one.assert_awaited()       # refresh WAS attempted
+
+    def test_submit_rejects_on_material_equity_move(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from datetime import datetime, timezone
+        from scalp import engine as eng
+        r = ScalpRunner("r14-eq", "u1", "EURUSD")
+        r.equity = 10_000.0
+        r.account = {"_id": "r14-eq", "equity": 10_000.0,
+                     "status": "connected",
+                     "last_heartbeat": datetime.now(timezone.utc).isoformat()}
+        now = int(time.time() * 1000)
+        r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=now,
+                                 received_time_ms=now, bid=1.08,
+                                 ask=1.08004))
+        decision = {"decision_id": "d14b", "direction": "BUY",
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1)
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        db = _stub_db()
+        # DB reports equity moved 10% since the decision snapshot
+        db.accounts.find_one = AsyncMock(return_value={
+            "_id": "r14-eq", "equity": 9_000.0, "status": "connected",
+            "last_heartbeat": datetime.now(timezone.utc).isoformat()})
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine), \
+                 patch.object(eng, "confirm_account_lease_now",
+                              AsyncMock(return_value=(True, 4))):
+                await r._submit_live(db, decision, fc, {"lot": 0.01})
+                for _ in range(5):
+                    await asyncio.sleep(0)
+        asyncio.run(run())
+        fake_engine.execute.assert_not_awaited()
+
+    def test_submission_capacity_guard(self):
+        """Item 10 — bounded concurrent submissions: at capacity the
+        decision is rejected instead of queueing unbounded broker calls."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from datetime import datetime, timezone
+        from scalp import engine as eng
+        r = ScalpRunner("r14-cap", "u1", "EURUSD")
+        r.equity = 10_000.0
+        r.account = {"_id": "r14-cap", "equity": 10_000.0,
+                     "status": "connected",
+                     "last_heartbeat": datetime.now(timezone.utc).isoformat()}
+        now = int(time.time() * 1000)
+        r.state.update(TickEvent(symbol="EURUSD", broker_time_ms=now,
+                                 received_time_ms=now, bid=1.08,
+                                 ask=1.08004))
+        decision = {"decision_id": "d14c", "direction": "BUY",
+                    "net_edge_pips": 2.0, "sim": {"entry_mid": 1.08002}}
+        fc = SimpleNamespace(stop_pips=3.0, target_pips=5.0,
+                             expected_slippage_pips=0.1)
+        fake_engine = MagicMock(execute=AsyncMock(return_value={"id": "t"}))
+        db = _stub_db()
+
+        async def run():
+            with patch("execution.for_account", return_value=fake_engine), \
+                 patch.object(eng, "confirm_account_lease_now",
+                              AsyncMock(return_value=(True, 4))):
+                eng._active_submissions = eng.MAX_CONCURRENT_SUBMISSIONS
+                try:
+                    await r._submit_live(db, decision, fc, {"lot": 0.01})
+                    for _ in range(5):
+                        await asyncio.sleep(0)
+                finally:
+                    eng._active_submissions = 0
+        asyncio.run(run())
+        fake_engine.execute.assert_not_awaited()
+
+    def test_runner_capacity_cap(self):
+        from scalp import engine as eng
+        orig = eng.MAX_RUNNERS_PER_WORKER
+        eng.MAX_RUNNERS_PER_WORKER = len(eng._runners)  # already full
+        try:
+            assert eng.get_runner("r14-over", "u1", "EURUSD") is None
+        finally:
+            eng.MAX_RUNNERS_PER_WORKER = orig
+            eng._runners.pop("r14-over:EURUSD", None)
+
+    def test_stale_symbol_specs_are_not_trusted(self):
+        """Item 9 — specs older than SYMBOL_SPEC_MAX_AGE_SEC are ignored
+        for stop-constraint math."""
+        from datetime import datetime, timedelta, timezone
+        from protection_guard import broker_stop_constraints
+        spec = {"point": 0.00001, "digits": 5,
+                "stops_level_points": 20, "freeze_level_points": 0}
+        fresh_acc = {"symbol_specs": {"EURUSD": spec},
+                     "symbol_specs_updated_at":
+                         datetime.now(timezone.utc).isoformat()}
+        assert broker_stop_constraints(fresh_acc, "EURUSD") is not None
+        stale_acc = {"symbol_specs": {"EURUSD": spec},
+                     "symbol_specs_updated_at":
+                         (datetime.now(timezone.utc)
+                          - timedelta(days=3)).isoformat()}
+        assert broker_stop_constraints(stale_acc, "EURUSD") is None
+
+    def test_block_bootstrap_ci_sanity(self):
+        """Item 7 — CI brackets the sample mean; tiny samples return None."""
+        from scalp.stats import block_bootstrap_ci
+        assert block_bootstrap_ci([1.0] * 10) is None
+        vals = [0.5, -0.3] * 200
+        lo, hi = block_bootstrap_ci(vals, seed=7)
+        mean = sum(vals) / len(vals)
+        assert lo - 1e-6 <= mean <= hi + 1e-6
+        varied = [((i * 37) % 11) - 5.0 for i in range(300)]
+        wide = block_bootstrap_ci(varied, block=10, seed=7)
+        assert wide[0] < wide[1]
+
+    def test_commission_reconciliation_flags_mismatch(self):
+        """Item 8 — observed live per-lot commission far from the
+        configured value is surfaced as a mismatch."""
+        r = ScalpRunner("r14-com", "u1", "EURUSD")
+        r.commission_usd_per_lot_side = 3.0
+        db = _stub_db()
+        docs = [{"lot": 0.10,
+                 "execution_outcome": {"commission_usd": -1.4}}] * 30
+        cur = _AsyncCursor(docs)
+        cur.sort = lambda *a, **k: cur
+        cur.limit = lambda n: cur
+        db.scalp_decisions.find = MagicMock(return_value=cur)
+        asyncio.run(r.reconcile_commission(db))
+        # observed 14 $/lot vs configured 3 $/lot-side → mismatch
+        assert r.commission_check["observed_median_usd_per_lot"] == pytest.approx(14.0)
+        assert r.commission_check["mismatch"] is True
+        # matching configuration → no mismatch
+        r2 = ScalpRunner("r14-com2", "u1", "EURUSD")
+        r2.commission_usd_per_lot_side = 14.0
+        db.scalp_decisions.find = MagicMock(return_value=cur)
+        asyncio.run(r2.reconcile_commission(db))
+        assert r2.commission_check["mismatch"] is False
+
+    def test_suffixed_symbols_behave_end_to_end(self):
+        """Item 4 — pure-unit suffixed-symbol behavior: base mapping,
+        approved registry, pip derivation and runner assignment."""
+        from pip_utils import base_symbol, pip_size
+        from scalp.instruments import approved as appr
+        for raw in ("EURUSD.a", "EURUSDm", "EURUSD.pro", "EURUSD#"):
+            assert base_symbol(raw) == "EURUSD"
+            assert appr(base_symbol(raw)) is not None
+            assert pip_size(raw) == pytest.approx(0.0001)
+        # restored trades route to the runner of their BASE symbol only
+        r = ScalpRunner("r14-sfx", "u1", "EURUSD")
+        db = _stub_db()
+        db.trades.find = MagicMock(return_value=_AsyncCursor([
+            {"_id": "sfx1", "action": "BUY", "entry_price": 1.08,
+             "stop_loss": 1.079, "take_profit": 1.082, "lot_size": 0.05,
+             "symbol": "EURUSD.pro", "scalp_decision_id": ""}]))
+        asyncio.run(r.restore_risk(db))
+        assert "sfx1" in r.live_trades
+
+    def test_decision_records_account_snapshot(self):
+        """Item 2 — every decision doc embeds the account snapshot used."""
+        import inspect
+        from scalp import engine as eng
+        src = inspect.getsource(eng.ScalpRunner._maybe_evaluate)
+        assert '"account_snapshot"' in src
+        assert '"free_margin"' in src and '"heartbeat_at"' in src

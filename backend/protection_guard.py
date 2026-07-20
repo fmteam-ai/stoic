@@ -17,6 +17,7 @@ While any unprotected position exists on an account:
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 
 from pip_utils import pip_value_usd_per_lot_strict  # noqa: F401 (re-export)
@@ -31,6 +32,10 @@ CLOSE_ACK_ESCALATION_SEC = 120  # re-queue FULL_CLOSE if no EA ack by then
 CLOSE_ALERT_ATTEMPTS = 3        # operational alert after this many retries
 REPAIR_TIME_BUDGET_SEC = 8      # per-sweep processing budget (round 12)
 REPAIR_QUEUE_ALERT = 100        # global escalation threshold (round 12)
+# Round 14 item 9 — broker symbol specs older than this are not trusted for
+# stop-constraint math (EA-side clamps remain the broker enforcement).
+SYMBOL_SPEC_MAX_AGE_SEC = int(os.environ.get(
+    "SYMBOL_SPEC_MAX_AGE_SEC", "86400"))
 
 
 def looks_like_object_id(value: str) -> bool:
@@ -61,6 +66,21 @@ def broker_stop_constraints(account: dict | None, symbol: str) -> dict | None:
     spec = specs.get(base_symbol(symbol)) or specs.get(str(symbol).upper())
     if not isinstance(spec, dict):
         return None
+    # round 14 item 9 — stale specs are not trusted: fall back to
+    # constraint-free math (the EA clamps broker-side) and log for refresh.
+    updated = (account or {}).get("symbol_specs_updated_at")
+    if updated:
+        try:
+            age = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat(str(updated))).total_seconds()
+        except ValueError:
+            age = None
+        if age is not None and age > SYMBOL_SPEC_MAX_AGE_SEC:
+            logger.warning(
+                "symbol specs for %s stale (%ds > %ds) — ignoring broker "
+                "stop constraints until the EA refreshes them",
+                symbol, int(age), SYMBOL_SPEC_MAX_AGE_SEC)
+            return None
     point = float(spec.get("point") or 0)
     if point <= 0:
         return None
@@ -70,23 +90,30 @@ def broker_stop_constraints(account: dict | None, symbol: str) -> dict | None:
             float(spec.get("freeze_level_points") or 0) * point}
 
 
-async def find_account(db, account_id: str) -> tuple:
+async def find_account(db, account_id: str, oid_parser="auto") -> tuple:
     """Round 11/12 item 7 — centralized account lookup with an EXPLICIT
-    reason: 'ok', 'invalid_id', 'missing', 'db_error'. Tries ObjectId first
-    (when the id is ObjectId-shaped and BSON is available), then a raw
-    string _id, so a valid account stored under another identifier format
-    is never mistaken for a missing one."""
+    reason: 'ok', 'invalid_id', 'missing', 'db_error'. Tries an ObjectId
+    lookup first (when the id is ObjectId-shaped and a parser is available),
+    then a raw string _id, so a valid account stored under another
+    identifier format is never mistaken for a missing one.
+
+    Round 14 — the ObjectId parser is an INJECTED dependency (oid_parser):
+    'auto' imports bson when installed, None forces string-only lookup, or
+    pass any callable. Behavior no longer depends on which packages happen
+    to be importable in the test environment."""
     if not account_id:
         return None, "invalid_id"
     shaped = looks_like_object_id(account_id)
+    parser = oid_parser
+    if parser == "auto":
+        try:
+            from bson import ObjectId as parser
+        except ImportError:
+            parser = None
     try:
         acc = None
-        if shaped:
-            try:
-                from bson import ObjectId
-                acc = await db.accounts.find_one({"_id": ObjectId(account_id)})
-            except ImportError:
-                acc = None
+        if shaped and parser is not None:
+            acc = await db.accounts.find_one({"_id": parser(account_id)})
         if acc is None:
             acc = await db.accounts.find_one({"_id": account_id})
         if acc is None:

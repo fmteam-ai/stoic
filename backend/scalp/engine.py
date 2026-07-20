@@ -65,6 +65,13 @@ _owner_pid = os.getpid()
 _worker_id = f"{os.uname().nodename}:{_owner_pid}"
 LEASE_TTL_SEC = 30
 RECONCILE_CLAIM_TTL_SEC = 60           # recovery-sweep per-deal claim TTL
+# Round 14 item 10 — order-capacity protection: bound simultaneous broker
+# submissions and runner construction per worker; excess fails closed.
+MAX_CONCURRENT_SUBMISSIONS = int(os.environ.get(
+    "SCALP_MAX_CONCURRENT_SUBMISSIONS", "8"))
+MAX_RUNNERS_PER_WORKER = int(os.environ.get(
+    "SCALP_MAX_RUNNERS_PER_WORKER", "400"))
+_active_submissions = 0
 _lease_cache: dict = {}                # account_id -> (expires_epoch, owned)
 _lease_epoch: dict = {}                # account_id -> fencing token we hold
 # Round 13 item 9 — REASON-LEVEL account blocks: account_id -> set of reason
@@ -106,6 +113,19 @@ def clear_account_block(account_id: str, reason: str) -> None:
 
 def account_block_reasons(account_id: str) -> set:
     return set(_account_blocks.get(account_id) or ())
+
+
+def update_account_snapshot(account_id: str, snapshot: dict) -> None:
+    """Round 14 P0 — every heartbeat propagates the FRESH account snapshot
+    into all in-memory runners for the account. Without this, staleness
+    checks and sizing use whatever account doc the last tick batch preloaded:
+    a runner could false-block on an old last_heartbeat, or size on stale
+    equity, even while heartbeats keep landing in MongoDB."""
+    for r in runners_for_account(account_id):
+        r.account = {**(r.account or {}), **snapshot}
+        eq = snapshot.get("equity")
+        if eq is not None:
+            r.equity = float(eq)
 
 
 def set_protection_block(account_id: str, blocked: bool) -> None:
@@ -456,6 +476,8 @@ class ScalpRunner:
         self._closed_awaiting_financials: dict = {}
         self.exec_attempts = 0
         self.exec_fills = 0
+        self.last_order_ack_ms: int | None = None
+        self.commission_check: dict | None = None
         self._last_financial_event: dict | None = None
         self.account: dict | None = None       # preloaded on ingest (item 5)
         self.equity = 0.0
@@ -667,6 +689,16 @@ class ScalpRunner:
             },
             "verdict": verdict,
             "lot": risk_res.get("lot", 0.0),
+            # round 14 item 2 — the exact account snapshot behind this
+            # decision, so any approved lot size is reproducible later.
+            "account_snapshot": {
+                "equity": self.equity,
+                "free_margin": (self.account or {}).get("free_margin"),
+                "heartbeat_at": (self.account or {}).get("last_heartbeat"),
+                "status": (self.account or {}).get("status"),
+                "symbol_specs_updated_at":
+                    (self.account or {}).get("symbol_specs_updated_at"),
+            },
             "sim": {"entry_mid": entry_mid, "entry_exec": entry_exec,
                     "target_pips": fc.target_pips, "stop_pips": fc.stop_pips},
             "outcome": None,
@@ -749,17 +781,58 @@ class ScalpRunner:
                           "reject_stage": "lease_lost_before_submit"}}),
                 "decision_update")
             return
+        # round 14 item 1 — refresh critical broker financial state from the
+        # DB immediately before commitment: heartbeats may have moved equity
+        # or dropped the connection since the decision snapshot was taken.
+        fresh = await db.accounts.find_one(
+            {"_id": (account or {}).get("_id")},
+            {"equity": 1, "free_margin": 1, "status": 1,
+             "last_heartbeat": 1, "symbol_specs_updated_at": 1})
+        if fresh:
+            self.account = {**(self.account or {}), **fresh}
+            account = self.account
+        stale = broker_state_stale_reason(self.account)
+        eq = (self.account or {}).get("equity")
+        equity_moved = (eq is not None and self.equity > 0
+                        and abs(float(eq) - self.equity) / self.equity > 0.02)
+        if stale or equity_moved:
+            self.state.record_reject()
+            why = stale or (f"equity moved {self.equity:.2f} → "
+                            f"{float(eq):.2f} since decision — re-size")
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "pre_submit_broker_state",
+                          "broker_state_reason": why}: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
+        if eq is not None:
+            self.equity = float(eq)
+        # round 14 item 10 — submission-capacity guard: bounded concurrent
+        # broker submissions per worker; excess rejects (next eval retries).
+        global _active_submissions
+        if _active_submissions >= MAX_CONCURRENT_SUBMISSIONS:
+            self.state.record_reject()
+            _bg(lambda: db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]},
+                {"$set": {"verdict": "rejected",
+                          "reject_stage": "submission_capacity"}}),
+                "decision_update")
+            return
         submit_ms = now_ms()
-        trade = await engine.execute(
-            user_id=self.user_id, account=account,
-            signal={"symbol": self.symbol, "action": decision["direction"],
-                    "lot_size": risk_res["lot"],
-                    "entry_price": round(entry, 5),
-                    "stop_loss": round(sl, 5), "take_profit": round(tp, 5),
-                    "origin": "auto", "scope": "scalp_fast",
-                    "scalp_decision_id": decision["decision_id"],
-                    "scalp_lease_epoch": lease_epoch},
-            cfg_account_id=self.account_id)
+        _active_submissions += 1
+        try:
+            trade = await engine.execute(
+                user_id=self.user_id, account=account,
+                signal={"symbol": self.symbol, "action": decision["direction"],
+                        "lot_size": risk_res["lot"],
+                        "entry_price": round(entry, 5),
+                        "stop_loss": round(sl, 5), "take_profit": round(tp, 5),
+                        "origin": "auto", "scope": "scalp_fast",
+                        "scalp_decision_id": decision["decision_id"],
+                        "scalp_lease_epoch": lease_epoch},
+                cfg_account_id=self.account_id)
+        finally:
+            _active_submissions = max(0, _active_submissions - 1)
         if trade.get("blocked"):
             self.state.record_reject()
             # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
@@ -867,6 +940,7 @@ class ScalpRunner:
         """Broker fill confirmation (round 3 item 5): feed REAL entry slippage
         back into the state so the cost model learns from live fills."""
         info = self.live_trades.get(trade_id)
+        self.last_order_ack_ms = now_ms()
         if info is not None and not info.get("fill_counted"):
             info["fill_counted"] = True
             self.exec_fills += 1
@@ -1268,7 +1342,48 @@ class ScalpRunner:
                             * float(dec.get("lot") or 0), 2)
             self.live_trades[tid] = info
         self.risk_state.open_scalps = open_count
+        try:
+            await self.reconcile_commission(db)
+        except Exception as e:  # noqa: BLE001 — advisory, never blocks restore
+            logger.warning("commission reconciliation failed for %s %s: %s",
+                           self.account_id, self.symbol, e)
         self._risk_restored = True
+
+    async def reconcile_commission(self, db):
+        """Round 14 item 8 — configured commission validated against the
+        OBSERVED median per-lot commission from live broker fills. A
+        mismatch is surfaced in status() and logged CRITICAL — a wrong
+        commission assumption silently inflates scalp expectancy."""
+        per_lot = []
+        cur = db.scalp_decisions.find(
+            {"account_id": self.account_id, "symbol": self.symbol,
+             "dataset": "filled_live",
+             "execution_outcome.commission_usd": {"$nin": [0, None]}},
+            {"lot": 1, "execution_outcome.commission_usd": 1}
+        ).sort("ts_ms", -1).limit(200)
+        async for d in cur:
+            lot = float(d.get("lot") or 0)
+            com = abs(float((d.get("execution_outcome") or {})
+                            .get("commission_usd") or 0))
+            if lot > 0 and com > 0:
+                per_lot.append(com / lot)
+        check = {"configured_usd_per_lot_side": self.commission_usd_per_lot_side,
+                 "observed_deals": len(per_lot),
+                 "observed_median_usd_per_lot": None, "mismatch": False}
+        if per_lot:
+            per_lot.sort()
+            med = per_lot[len(per_lot) // 2]
+            check["observed_median_usd_per_lot"] = round(med, 3)
+            cfgv = self.commission_usd_per_lot_side
+            check["mismatch"] = (abs(med - cfgv) / cfgv > 0.5 if cfgv > 0
+                                 else med > 0.5)
+            if check["mismatch"]:
+                logger.critical(
+                    "scalp commission mismatch %s %s: configured %.2f/lot-side "
+                    "vs observed median %.2f/lot — expectancy math suspect",
+                    self.account_id, self.symbol,
+                    self.commission_usd_per_lot_side, med)
+        self.commission_check = check
 
     # ---------------- tick recording (Step 2, off hot path) ----------------
 
@@ -1302,6 +1417,24 @@ class ScalpRunner:
             "health": self.health,
             "block_reasons": sorted(account_block_reasons(self.account_id)),
             "broker_state_stale": broker_state_stale_reason(self.account),
+            # round 14 item 3 — per-aspect broker-state freshness: a single
+            # heartbeat timestamp must not imply everything is current.
+            "broker_state": {
+                "heartbeat_at": (self.account or {}).get("last_heartbeat"),
+                "heartbeat_age_sec": _iso_age_sec(
+                    (self.account or {}).get("last_heartbeat")),
+                "equity_age_sec": _iso_age_sec(
+                    (self.account or {}).get("last_heartbeat")),
+                "symbol_specs_updated_at":
+                    (self.account or {}).get("symbol_specs_updated_at"),
+                "symbol_specs_age_sec": _iso_age_sec(
+                    (self.account or {}).get("symbol_specs_updated_at")),
+                "spreads_age_sec": _iso_age_sec(
+                    (self.account or {}).get("spreads_updated_at")),
+                "connection_status": (self.account or {}).get("status"),
+                "last_order_ack_ms": self.last_order_ack_ms,
+            },
+            "commission_check": self.commission_check,
             "permissions": permissions.get_cached(self.user_id, self.symbol),
             "counters": self.counters,
             "open_sims": len(self.open_sims),
@@ -1348,6 +1481,13 @@ def _iso_to_ms(iso: str | None) -> int | None:
                    .timestamp() * 1000)
     except (ValueError, TypeError):
         return None
+
+
+def _iso_age_sec(iso: str | None) -> int | None:
+    ms = _iso_to_ms(iso)
+    if ms is None:
+        return None
+    return max(0, int((now_ms() - ms) / 1000))
 
 
 def _bg(factory, desc: str = ""):
@@ -1430,6 +1570,12 @@ def get_runner(account_id: str, user_id: str, symbol: str) -> ScalpRunner | None
     key = f"{account_id}:{symbol.upper()}"
     r = _runners.get(key)
     if r is None:
+        if len(_runners) >= MAX_RUNNERS_PER_WORKER:
+            # round 14 item 10 — fail closed instead of unbounded growth
+            logger.critical(
+                "scalp runner capacity %d reached — refusing new runner %s",
+                MAX_RUNNERS_PER_WORKER, key)
+            return None
         r = ScalpRunner(account_id, user_id, symbol.upper())
         _runners[key] = r
     return r
