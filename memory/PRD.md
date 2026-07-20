@@ -607,3 +607,16 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - CLOCK-DRIFT FIX (user-reported via Scalp page HEALTH HALTED): MT5 tick times are broker-LOCAL (OnEquity UTC+3 → -10.8M ms offset) — kill-switch treated the timezone offset as drift and permanently halted entries. scalp/kill.py clock_drift_residual_ms() snaps offset to nearest 30-min TZ boundary, judges only the residual (>5s halts). Verified live: runner HEALTH OK, open_allowed true, first shadow sample labeled.
 - bot_runner pulse: engine label now prefixes shadow/auto-exec-disabled pulse reasons (iter-126/127 tests deterministic).
 - Tests: TestRound13Hardening (10 unit incl. clock-drift residual), testing agent test_iter51_round13_live.py (12 live), scalp 137/137, FULL suite 2067 passed / 7 skipped / 0 failed.
+
+## Session 2026-07-20 (cont.) — Scalp Round 14 Hardening (iter-52: full suite 2104 passed / 0 failed)
+- P0 snapshot propagation: engine.update_account_snapshot() called from /bridge/heartbeat after accounts.update_one — every heartbeat merges fresh set_doc (equity, status, last_heartbeat, spreads, symbol_specs) into all in-memory runners; equity None never clobbers. Fixes false staleness blocks + stale sizing.
+- Pre-submit broker refresh: _submit_live re-reads equity/free_margin/status/last_heartbeat from DB after lease confirm; rejects (pre_submit_broker_state) on staleness or >2% equity move since decision.
+- Decision docs embed account_snapshot {equity, free_margin, heartbeat_at, status, symbol_specs_updated_at} for lot-size reproducibility.
+- status() broker_state per-aspect freshness: heartbeat/equity/symbol_specs/spreads ages, connection_status, last_order_ack_ms; commission_check surfaced.
+- find_account: injected oid_parser dependency ('auto'/None/callable); test split into BSON-present/absent explicit cases.
+- Suffixed-symbol unit coverage (EURUSD.a/EURUSDm/EURUSD.pro/#): base mapping, approved registry, pip size, restore routing.
+- /scalp/metrics: account_id param → model resolved by runner model_key (broker|type|symbol) with model_scope in response; window labeled rolling (max 5000) + lifetime aggregate; alpha.net_expectancy_ci95_pips via block bootstrap (scalp/stats.py); commission_check included.
+- Commission reconciliation: reconcile_commission() (in restore_risk) computes observed median $/lot from filled_live decisions; >50% divergence → mismatch flag + CRITICAL log.
+- Stale symbol specs (> SYMBOL_SPEC_MAX_AGE_SEC 86400) ignored for stop constraints (EA clamps remain).
+- Capacity controls: MAX_CONCURRENT_SUBMISSIONS=8 guard (reject submission_capacity), MAX_RUNNERS_PER_WORKER=400 cap in get_runner (fails closed).
+- Tests: TestRound14Hardening (10) + 3 find_account tests; testing agent test_iter52_round14_live.py 13/13; scalp 149/149.
