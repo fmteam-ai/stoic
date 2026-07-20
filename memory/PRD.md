@@ -620,3 +620,9 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - Stale symbol specs (> SYMBOL_SPEC_MAX_AGE_SEC 86400) ignored for stop constraints (EA clamps remain).
 - Capacity controls: MAX_CONCURRENT_SUBMISSIONS=8 guard (reject submission_capacity), MAX_RUNNERS_PER_WORKER=400 cap in get_runner (fails closed).
 - Tests: TestRound14Hardening (10) + 3 find_account tests; testing agent test_iter52_round14_live.py 13/13; scalp 149/149.
+
+## Session 2026-07-20 (cont.) — EOD Flatten (iter-53: verified, 0 issues)
+- /app/backend/eod_flatten.py: flatten window 23:15-23:40 BROKER time (per-account broker_utc_offset_sec; ends where EA v1.41 quiet window starts). sweep_eod_flatten queues FULL_CLOSE pending_modification (reason eod_flatten) on every OPEN origin=auto trade of in-window accounts; skips trades with pending mods (idempotent); manual trades never touched; per-account notification; EOD_FLATTEN_ENABLED env kill-switch.
+- server.py: _eod_flatten_loop every 60s at startup.
+- Entry vetoes during window: bot_runner (MTF, combined with eod_quiet SKIP pulse) + scalp engine _maybe_evaluate elif chain.
+- Tests: tests/unit/test_eod_flatten.py 8/8; scalp 149/149 unaffected; testing agent iteration_53 all green.
