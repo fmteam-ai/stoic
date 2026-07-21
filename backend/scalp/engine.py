@@ -2585,6 +2585,7 @@ async def apply_config(db, account: dict, symbol: str, enabled: bool, mode: str,
         {"account_id": str(account["_id"]), "symbol": symbol.upper()},
         {"$set": {"user_id": account["user_id"], "enabled": enabled, "mode": mode,
                   "commission_usd_per_lot_side": r.commission_usd_per_lot_side,
+                  "removed": False,
                   "updated_at": datetime.now(timezone.utc).isoformat()}},
         upsert=True)
     return r

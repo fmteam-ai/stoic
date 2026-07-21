@@ -485,6 +485,10 @@ async def receive_ticks(payload: BridgeTicks):
         runner._hydrated = True
         cfg_doc = await db.scalp_configs.find_one(
             {"account_id": str(account["_id"]), "symbol": base})
+        if cfg_doc and cfg_doc.get("removed"):
+            from scalp.engine import _runners
+            _runners.pop(f"{account['_id']}:{base}", None)
+            return {"status": "ignored", "reason": "runner_removed"}
         if cfg_doc:
             runner.enabled = bool(cfg_doc.get("enabled"))
             runner.mode = cfg_doc.get("mode", "shadow")

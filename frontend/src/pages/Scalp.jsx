@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Zap, RefreshCw, ShieldAlert } from "lucide-react";
+import { Zap, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
 const fmt = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
@@ -93,6 +93,21 @@ export default function Scalp() {
         }
     };
 
+    const removeRunner = async (accId, symbol) => {
+        if (!window.confirm(`Remove ${symbol} runner on ${acctName(accId)} from the Scalp page? Incoming ticks from that terminal will be ignored until you re-enable it.`))
+            return;
+        setSaving(true);
+        try {
+            await api.delete(`/scalp/config?account_id=${accId}&symbol=${symbol}`);
+            toast.success(`Removed ${symbol} runner on ${acctName(accId)}`);
+            load();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const a = metrics?.alpha || {};
     return (
         <AppLayout>
@@ -164,6 +179,13 @@ export default function Scalp() {
                             <Chip ok={r.permissions?.long_enabled || r.permissions?.short_enabled}
                                   label={`REGIME ${r.permissions?.regime || "?"}`}
                                   testid="scalp-runner-regime" />
+                            <button disabled={saving}
+                                    onClick={() => removeRunner(r.account_id, r.symbol)}
+                                    data-testid="scalp-runner-remove-btn"
+                                    title="Remove this runner from the page"
+                                    className="ml-auto flex items-center gap-1 px-2 py-0.5 text-xs border border-[#1F1F1F] text-[#52525B] hover:text-[#FF3B30] hover:border-[#FF3B30]/40">
+                                <X size={12} /> REMOVE
+                            </button>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs text-[#A1A1AA]">
                             <div>Ticks <span className="text-[#E4E4E7] font-mono">{r.counters?.ticks}</span></div>

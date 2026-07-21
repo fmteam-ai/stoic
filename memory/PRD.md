@@ -683,3 +683,9 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - P1: Deploy stable shadow/demo to production K8s
 - P2: Phase 2 Data/Model platform (feature contract, model registry, champion/challenger)
 - P2: Vite migration; event-driven outbox; GBPUSD scalp expansion
+
+## 2026-06 — Scalp runner removal feature
+- DELETE /api/scalp/config?account_id&symbol: removes a runner from Scalp Fast Path (409 if open live scalps). Sets scalp_configs.removed=true tombstone; /bridge/ticks ignores tombstoned runners (reason=runner_removed) so EA streams can't resurrect the card; POST /scalp/config (re-enable) clears the tombstone; /scalp/status hydration skips removed configs.
+- Frontend Scalp.jsx: per-card REMOVE button (data-testid=scalp-runner-remove-btn) with confirm dialog.
+- User action applied: OnEquity Live runner removed per user request (focus on OnEquity demo terminal only). Verified: curl E2E + 214 scalp tests pass + screenshot.
+- Note: Scalp universe intentionally EURUSD-only (instruments.py APPROVED) until positive OOS expectancy; GBPUSD in bot config affects main MTF bot only. User question re: adding GBPUSD to scalp universe left open (options a/b/c presented).

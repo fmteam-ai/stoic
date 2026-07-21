@@ -40,6 +40,31 @@ async def set_config(req: ScalpConfigRequest, user=Depends(get_current_user)):
     return {"ok": True, "status": runner.status()}
 
 
+@router.delete("/config")
+async def remove_config(account_id: str, symbol: str = "EURUSD",
+                        user=Depends(get_current_user)):
+    """Remove a runner from the Scalp page entirely (tombstoned so incoming
+    EA ticks for this account/symbol are ignored until re-enabled)."""
+    db = get_db()
+    account = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"),
+                                          "user_id": user["id"]})
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    sym = (symbol or "EURUSD").upper()
+    from scalp.engine import _runners
+    runner = _runners.get(f"{account_id}:{sym}")
+    if runner is not None and len(runner.live_trades) > 0:
+        raise HTTPException(status_code=409,
+                            detail="Runner has open live scalps — close them before removing")
+    await db.scalp_configs.update_one(
+        {"account_id": account_id, "symbol": sym},
+        {"$set": {"user_id": user["id"], "enabled": False, "mode": "shadow",
+                  "removed": True}},
+        upsert=True)
+    _runners.pop(f"{account_id}:{sym}", None)
+    return {"ok": True, "removed": f"{account_id}:{sym}"}
+
+
 @router.get("/status")
 async def status(account_id: str = None, user=Depends(get_current_user)):
     db = get_db()
@@ -49,6 +74,8 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
     if account_id:
         q["account_id"] = account_id
     async for cfg in db.scalp_configs.find(q):
+        if cfg.get("removed"):
+            continue
         r = get_runner(cfg["account_id"], cfg["user_id"], cfg["symbol"])
         if r is not None and not r.enabled and cfg.get("enabled"):
             r.enabled = True
