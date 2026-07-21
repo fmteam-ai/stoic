@@ -689,3 +689,13 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - Frontend Scalp.jsx: per-card REMOVE button (data-testid=scalp-runner-remove-btn) with confirm dialog.
 - User action applied: OnEquity Live runner removed per user request (focus on OnEquity demo terminal only). Verified: curl E2E + 214 scalp tests pass + screenshot.
 - Note: Scalp universe intentionally EURUSD-only (instruments.py APPROVED) until positive OOS expectancy; GBPUSD in bot config affects main MTF bot only. User question re: adding GBPUSD to scalp universe left open (options a/b/c presented).
+
+## 2026-06 — Review items a/b/c (iter-59, all verified)
+- (a) Feature versioning: scalp/feature_schema.py (FEATURE_SCHEMA_VERSION=1, immutable FEATURE_SCHEMAS); features.py FEATURE_KEYS derives from it; model.vectorize(features, schema_version); retrain() skips mismatched-schema decisions; load_persisted() refuses mismatched artifacts; decision docs + model artifacts stamped with feature_schema_version.
+- (b) EA-native preflight completion: engine._submit_live rejects reject_stage='pre_submit_broker_constraints' when SL/TP points < max(stops_level, freeze_level) or trade_mode forbids direction (MT5 0-4); releases slot on reject. EA v1.49: symbol_specs now include trade_mode (BridgeSymbolSpec.trade_mode Optional → v1.48 compatible). LATEST_EA=1.49 bumped across bot_routes, diagnostic_routes, setup_routes, Accounts.jsx, EaVersionStrip.jsx (+7 version-consistency tests updated).
+- (c) Event sourcing foundation: trade_events.py append-only stream (schema_v=1, 10 lifecycle types, indexes decision_id/trade_id/event_type+ts_ms). Engine emits DecisionCreated/RiskApproved/OrderIntentCreated/BrokerSubmitted/BrokerRejected/PositionOpened/PositionClosed/FinancialApplied; protection_guard emits ProtectionPlaced. GET /api/trades/events?trade_id=|decision_id= (user-scoped, chronological). NOTE: BrokerAccepted reserved in EVENT_TYPES, not yet emitted (MT5 fill=accept).
+- Tests: tests/unit/scalp/test_iter59_feature_schema_events.py (13) + testing agent's tests/test_iter59_review_verification.py (15). Full suite 2215 passed / 7 skipped; 2 pre-existing suite-order flakes (test_iter24 start_stop scoping, test_iter57 login lockout) — pass in isolation. Report: iteration_59.json, zero critical issues.
+
+### Remaining from review (open)
+- P1: Shared execution kernel (scalp + general bot unify submission lifecycle/reconciliation) — recommended after event stream matures.
+- P2: Transactional outbox for events; projections; BrokerAccepted emit when EA splits accept/fill.
