@@ -6,13 +6,9 @@ scalp/model.py trains on exactly FEATURE_KEYS order — change both together.
 import math
 
 from scalp.state import ScalpState
+from scalp.feature_schema import current_keys
 
-FEATURE_KEYS = [
-    "ret_1s", "ret_3s", "ret_5s", "ret_10s", "ret_30s",
-    "accel", "vwap_dist", "vol_short", "vol_long",
-    "tick_rate", "spread_pips", "spread_pctl",
-    "uptick_ratio", "time_since_change_s",
-]
+FEATURE_KEYS = list(current_keys())
 
 
 def _mid_at(ticks, target_ms: int) -> float | None:

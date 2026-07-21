@@ -363,11 +363,14 @@ class BridgePosition(BaseModel):
 
 class BridgeSymbolSpec(BaseModel):
     """EA v1.48+: per-symbol broker stop-placement constraints so the backend
-    can respect precise minimum stop / freeze distances (round 13 item 5)."""
+    can respect precise minimum stop / freeze distances (round 13 item 5).
+    EA v1.49+ adds trade_mode (SYMBOL_TRADE_MODE: 0=disabled 1=long-only
+    2=short-only 3=close-only 4=full) for order-direction preflight."""
     point: float = 0.0
     digits: int = 0
     stops_level_points: float = 0.0
     freeze_level_points: float = 0.0
+    trade_mode: Optional[int] = None
 
 
 class BridgeHeartbeat(BaseModel):

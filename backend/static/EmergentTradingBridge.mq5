@@ -170,16 +170,19 @@
 //|         point size) for the chart symbol, TrackedSymbols and all  |
 //|         open-position symbols, so the backend can respect precise |
 //|         minimum stop distances when placing emergency stops.      |
+//| v1.49 — Symbol specs additionally report SYMBOL_TRADE_MODE so the |
+//|         backend can refuse orders the broker would reject         |
+//|         (disabled / long-only / short-only / close-only symbols). |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.48"
+#property version   "1.49"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.48"
+#define EA_CLIENT_VERSION "1.49"
 
 input string ServerUrl              = "https://algo-trade-135.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -868,11 +871,13 @@ void AppendSymbolSpec(string &json, string sym, bool &first) {
    long digits  = SymbolInfoInteger(sym, SYMBOL_DIGITS);
    long stops   = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
    long freeze  = SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL);
+   long tmode   = SymbolInfoInteger(sym, SYMBOL_TRADE_MODE);
    if (!first) json += ",";
    json += StringFormat(
       "\"%s\":{\"point\":%.8f,\"digits\":%I64d,"
-      "\"stops_level_points\":%I64d,\"freeze_level_points\":%I64d}",
-      sym, point, digits, stops, freeze);
+      "\"stops_level_points\":%I64d,\"freeze_level_points\":%I64d,"
+      "\"trade_mode\":%I64d}",
+      sym, point, digits, stops, freeze, tmode);
    first = false;
 }
 

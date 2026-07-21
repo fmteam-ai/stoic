@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 
 from scalp.features import FEATURE_KEYS
+from scalp.feature_schema import FEATURE_SCHEMA_VERSION, keys_for
 
 logger = logging.getLogger("scalp.model")
 
@@ -108,9 +109,12 @@ def ece(p, y, bins=10):
     return float(err)
 
 
-def vectorize(features: dict) -> list | None:
+def vectorize(features: dict, schema_version: int | None = None) -> list | None:
+    keys = keys_for(schema_version)
+    if keys is None:
+        return None
     try:
-        return [float(features[k]) for k in FEATURE_KEYS]
+        return [float(features[k]) for k in keys]
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -198,11 +202,16 @@ async def retrain(db, symbol: str, broker: str = "any",
         q["account_type"] = account_type
     cur = db.scalp_decisions.find(
         q, {"features": 1, "outcome": 1, "ts_ms": 1, "forecast": 1,
-            "cost_pips": 1}).sort("ts_ms", 1)
+            "cost_pips": 1, "feature_schema_version": 1}).sort("ts_ms", 1)
     docs = await cur.to_list(20_000)
     X, res, net, tgt, stp, cost, ts = [], [], [], [], [], [], []
     for d in docs:
-        v = vectorize(d.get("features") or {})
+        # feature contract: only train on decisions produced under the
+        # CURRENT schema (absent stamp → v1, the original feature set)
+        if int(d.get("feature_schema_version") or 1) != FEATURE_SCHEMA_VERSION:
+            continue
+        v = vectorize(d.get("features") or {},
+                      d.get("feature_schema_version"))
         if v is None:
             continue
         fc = d.get("forecast") or {}
@@ -308,6 +317,7 @@ async def retrain(db, symbol: str, broker: str = "any",
         "timeouts_in_eval": int((res[m_eval_all] == "timeout").sum()),
         "usable": usable,
         "feature_keys": FEATURE_KEYS,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "expires_at": expires,
     }
@@ -379,6 +389,10 @@ def predict_p(model_key: str, features: dict) -> float | None:
 async def load_persisted(db, model_key: str) -> bool:
     doc = await db.scalp_models.find_one({"model_key": model_key, "usable": True})
     if not doc:
+        return False
+    # feature contract: a model trained under a different schema must never
+    # serve predictions against current feature vectors
+    if int(doc.get("feature_schema_version") or 1) != FEATURE_SCHEMA_VERSION:
         return False
     try:
         if datetime.fromisoformat(doc["expires_at"]) < datetime.now(timezone.utc):

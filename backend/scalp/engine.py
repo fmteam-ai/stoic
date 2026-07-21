@@ -41,6 +41,7 @@ from scalp import model as scalp_model
 from eod_flatten import eod_flatten_block as _eod_flatten_block
 from scalp.costs import dynamic_spread_limit
 from scalp.features import snapshot
+from scalp.feature_schema import FEATURE_SCHEMA_VERSION
 from scalp.forecast import make as make_forecast
 from scalp.instruments import approved
 from scalp.risk import (ACCOUNT_LIMITS, DEFAULT_LIMITS, RiskState,
@@ -991,6 +992,7 @@ class ScalpRunner:
             "symbol": self.symbol,
             "broker": self.broker, "account_type": self.account_type,
             "model_key": self.model_key(),
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
             "dataset": "candidate",
             "ts_ms": nm, "signal_ts_ms": signal_ts_ms,
             "feature_snapshot_ts_ms": feats["_now_ms"],
@@ -1034,6 +1036,15 @@ class ScalpRunner:
         }
         _bg(lambda d=dict(doc): db.scalp_decisions.insert_one(dict(d)),
             "decision_insert")
+        self._emit(db, "DecisionCreated", decision_id=decision_id,
+                   payload={"verdict": verdict, "direction": direction,
+                            "net_edge_pips": edge_res["net_edge_pips"],
+                            "mode": self.mode})
+        if verdict == "live_traded":
+            self._emit(db, "RiskApproved", decision_id=decision_id,
+                       payload={"lot": risk_res.get("lot"),
+                                "stop_pips": fc.stop_pips,
+                                "target_pips": fc.target_pips})
         self.last_decision = doc
 
         self.open_sims.append(ShadowSim(
@@ -1046,6 +1057,15 @@ class ScalpRunner:
             self.counters["shadow_trades"] += 1
         if verdict == "live_traded":
             await self._submit_live(db, doc, fc, risk_res)
+
+    def _emit(self, db, event_type: str, decision_id: str | None = None,
+              trade_id: str | None = None, payload: dict | None = None):
+        """Append to the immutable trade_events lifecycle stream (non-blocking)."""
+        from trade_events import build, append
+        ev = build(event_type, user_id=self.user_id, decision_id=decision_id,
+                   trade_id=trade_id, account_id=self.account_id,
+                   symbol=self.symbol, payload=payload)
+        _bg(lambda e=ev: append(db, e), "trade_event")
 
     async def _submit_live(self, db, decision: dict, fc, risk_res):
         """Order via the bridge queue. Account is PRELOADED (item 5); the
@@ -1360,7 +1380,59 @@ class ScalpRunner:
             sl, tp = entry - fc.stop_pips * pip, entry + fc.target_pips * pip
         else:
             sl, tp = entry + fc.stop_pips * pip, entry - fc.target_pips * pip
+        # review item 2 — EA-NATIVE order constraints from the broker's own
+        # symbol snapshot: minimum stop distance (stops level), freeze level
+        # and symbol trade mode. What the broker will refuse anyway must be
+        # refused HERE, before an order intent is created.
+        constraint_reason = None
+        point = float(spec.get("point") or 0) or self.cfg.tick_size
+        min_pts = max(float(spec.get("stops_level_points") or 0),
+                      float(spec.get("freeze_level_points") or 0))
+        if min_pts > 0:
+            sl_pts = abs(entry - sl) / point
+            tp_pts = abs(tp - entry) / point
+            if min(sl_pts, tp_pts) < min_pts:
+                constraint_reason = (
+                    f"stop/target inside broker minimum distance "
+                    f"({min(sl_pts, tp_pts):.0f} < {min_pts:.0f} points)")
+        tm = spec.get("trade_mode")
+        if constraint_reason is None and tm is not None:
+            try:
+                tm = int(tm)
+            except (TypeError, ValueError):
+                tm = None
+            # MT5 SYMBOL_TRADE_MODE: 0=disabled 1=long-only 2=short-only
+            # 3=close-only 4=full
+            if tm is not None and not (
+                    tm == 4
+                    or (tm == 1 and decision["direction"] == "BUY")
+                    or (tm == 2 and decision["direction"] == "SELL")):
+                constraint_reason = (f"broker trade_mode={tm} forbids "
+                                     f"{decision['direction']} on {self.symbol}")
+        if constraint_reason is not None:
+            self.state.record_reject()
+            _bg(lambda: release_broker_submission_slot(db, slot),
+                "release_submission_slot")
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "pre_submit_broker_constraints",
+                          "broker_constraint_reason": constraint_reason,
+                          "broker_constraints": {
+                              "stops_level_points": spec.get("stops_level_points"),
+                              "freeze_level_points": spec.get("freeze_level_points"),
+                              "trade_mode": spec.get("trade_mode")}}:
+                db.scalp_decisions.update_one(
+                    {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
         submit_ms = now_ms()
+        self._emit(db, "OrderIntentCreated",
+                   decision_id=decision["decision_id"],
+                   payload={"lot": final_lot,
+                            "entry": round_to_tick(entry, tick),
+                            "sl": round_to_tick(sl, tick),
+                            "tp": round_to_tick(tp, tick),
+                            "slot_id": slot.get("slot_id"),
+                            "final_net_edge_pips": round(final_net_edge, 3)})
         _active_submissions += 1
         try:
             trade = await engine.execute(
@@ -1411,6 +1483,9 @@ class ScalpRunner:
             "decision_update")
         if trade.get("blocked"):
             self.state.record_reject()
+            self._emit(db, "BrokerRejected",
+                       decision_id=decision["decision_id"],
+                       payload={"reason": trade.get("reason")})
             _bg(lambda: release_broker_submission_slot(db, slot),
                 "release_submission_slot")
             # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
@@ -1430,6 +1505,8 @@ class ScalpRunner:
         _bg(lambda: db.trades.update_one(
             {"_id": _oid(tid)},
             {"$set": {"submission_slot": dict(slot)}}), "slot_link")
+        self._emit(db, "BrokerSubmitted", decision_id=decision["decision_id"],
+                   trade_id=tid, payload={"lot": final_lot})
         self.risk_state.record_open()
         self.account_risk.record_open()
         self._persist_risk(db)
@@ -1542,6 +1619,11 @@ class ScalpRunner:
         info = self.live_trades.get(trade_id)
         self.last_order_ack_ms = now_ms()
         self._release_submission_slot_of(info, db, trade_id)
+        if db is not None:
+            self._emit(db, "PositionOpened", trade_id=trade_id,
+                       decision_id=(info or {}).get("decision_id"),
+                       payload={"requested_price": requested_price,
+                                "actual_price": actual_price})
         if info is not None and not info.get("fill_counted"):
             info["fill_counted"] = True
             self.exec_fills += 1
@@ -1673,6 +1755,17 @@ class ScalpRunner:
                 {"account_id": e["account_id"], "deal_id": e["deal_id"],
                  "event_type": e["event_type"]},
                 {"$setOnInsert": e}, upsert=True), "financial_event")
+            self._emit(db, "PositionClosed", trade_id=trade_id,
+                       decision_id=(info or {}).get("decision_id"),
+                       payload={"net_pnl_usd": round(net_pnl, 2),
+                                "close_reason": close_reason,
+                                "exit_price": exit_price})
+            self._emit(db, "FinancialApplied", trade_id=trade_id,
+                       decision_id=(info or {}).get("decision_id"),
+                       payload={"deal_id": deal_id,
+                                "net_pnl_usd": round(net_pnl, 2),
+                                "commission_usd": commission,
+                                "swap_usd": swap, "source": source})
             if info:
                 outcome = {
                     "requested_entry_price": info.get("requested_entry"),
@@ -1776,6 +1869,14 @@ class ScalpRunner:
                 {"account_id": e["account_id"], "deal_id": e["deal_id"],
                  "event_type": e["event_type"]},
                 {"$setOnInsert": e}, upsert=True), "financial_event")
+            self._emit(db, "FinancialApplied", trade_id=trade_id,
+                       decision_id=(info or {}).get("decision_id"),
+                       payload={"deal_id": deal_id,
+                                "net_pnl_usd": round(net_pnl, 2),
+                                "commission_usd": commission,
+                                "swap_usd": swap,
+                                "partial": True,
+                                "remaining_lots": float(remaining_lots or 0)})
             if info and info.get("decision_id"):
                 rec = {"deal_id": deal_id,
                        "closed_lots": float(closed_lots or 0),

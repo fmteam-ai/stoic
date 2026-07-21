@@ -16,6 +16,29 @@ from risk import get_profile, compute_lot_for_account
 router = APIRouter(prefix="/trades", tags=["trades"])
 
 
+@router.get("/events")
+async def trade_lifecycle_events(trade_id: Optional[str] = None,
+                                 decision_id: Optional[str] = None,
+                                 limit: int = 200,
+                                 user=Depends(get_current_user)):
+    """Chronological immutable lifecycle events for one trade or decision
+    (DecisionCreated → ... → FinancialApplied)."""
+    if not trade_id and not decision_id:
+        raise HTTPException(status_code=422,
+                            detail="trade_id or decision_id is required")
+    db = get_db()
+    q = {"user_id": user["id"]}
+    if trade_id:
+        q["trade_id"] = trade_id
+    if decision_id:
+        q["decision_id"] = decision_id
+    out = []
+    async for ev in db.trade_events.find(q, {"_id": 0}).sort(
+            "ts_ms", 1).limit(min(max(limit, 1), 500)):
+        out.append(ev)
+    return {"events": out, "count": len(out)}
+
+
 @router.post("/reconcile")
 async def reconcile_open_trades(force: bool = False, user=Depends(get_current_user)):
     """Force-close any DB-open trade that the broker no longer reports as open.

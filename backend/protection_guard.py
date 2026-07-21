@@ -256,6 +256,16 @@ async def repair_unprotected_positions(db) -> dict:
                 "protection_state": "RESOLVED",
                 "confirmed_stop_loss": confirmed,
                 "protection_resolved_at": now_iso}})
+            try:
+                from trade_events import build, append
+                await append(db, build(
+                    "ProtectionPlaced", user_id=str(tr.get("user_id") or ""),
+                    trade_id=str(tid), account_id=account_id,
+                    symbol=str(tr.get("symbol") or ""),
+                    source="protection_guard",
+                    payload={"confirmed_stop_loss": confirmed}))
+            except Exception:
+                logger.exception("trade_event ProtectionPlaced append failed")
             resolved += 1
             continue
         accounts_blocked.add(account_id)
