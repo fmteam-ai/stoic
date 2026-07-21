@@ -725,3 +725,17 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 
 ### Backlog (user-approved order)
 1. Worker separation (#11) 2. Transactional outbox (#12) 3. Atomic risk reservation + stress risk (#8) 4. Adaptive exits in safety envelope (#9/Batch C) 5. Shared execution kernel (#10) 6. Order state machine (#7) 7. Security hardening batch (#13: mandatory Origin in prod, 12-char passwords, error-text scrubbing, security headers, CSRF-exempt HMAC review) 8. Model registry (#15) 9. Fault-injection tests (#16) 10. Vite migration (#14)
+
+## 2026-06 — iter-62 + iter-63 (both VERIFIED)
+### iter-62 (self-verified after testing-agent termination; covered again in iter-63 run)
+- Worker separation: 6 loops extracted server.py → background_loops.py; workers/ pkg (base.py Mongo leader lease w/ 45s TTL, trading/reconciliation/tuning entry points via python -m workers.X); BACKGROUND_WORKERS_IN_PROCESS env gate (default true = preview unchanged). test_iter53 source-location test updated.
+- Adaptive exits (Batch C): scalp/adaptive_exits.py (HOLD/TIGHTEN_STOP/EXIT_NOW; p<0.35 collapse exit, regime-flip exit, vol≥2.5× tighten, spread≥2× in-profit tighten, 70%/30% time decay; clamp_tighter envelope never widens, 1-pip market gap); engine._adaptive_manage per-second w/ 10s tighten cooldown, MODIFY_SL via pending_modification + adaptive_actions audit.
+- Demo fill runner: demo_live exempt from 20-fill history cap (history_cap_exempt); OnEquity demo (6a42710e6288bcc0d204cf85, account_type=demo) enabled mode=demo_live to build broker fill history.
+### iter-63 (testing agent green, iteration_63.json, 0 issues)
+- Unit independence: DB round-trips moved to tests/integration/scalp/test_iter63_db_roundtrips.py; guard test tests/unit/test_unit_independence.py bans MotorClient/MongoClient/MONGO_URL under tests/unit; tests/unit = 253 tests in ~2s, DB-free.
+- Provisional risk reservations: scalp/risk_reservations.py (RISK_RESERVED→QUEUED_UNCONFIRMED→SLOT_LINKED→RELEASED; uncertain=True held on slot-link failure; unaccounted_count feeds exposure preflight; sweep_stale 900s in reconcile FIN cadence; releases at broker_ack/reject/closed/exception).
+- Production Origin fail-fast: on_startup raises RuntimeError if APP_ENV=production without CSRF_ENFORCE_ORIGIN=true + explicit CORS_ORIGINS (manually verified).
+- Full suite: 2287 passed / 0 real failures (websocket flake passes in isolation).
+
+### Backlog (updated order)
+1. Transactional outbox (#12) 2. Full order state machine (#7/#3 — after outbox) 3. Shared execution kernel (#10) 4. Security hardening batch (2FA before live trading, 12-char passwords, KMS/vault, error-text scrubbing, security headers, immutable audit events) 5. Model registry (#15) 6. Fault-injection tests (#16) 7. Vite migration (#14) 8. Production deploy config: run workers as separate services + BACKGROUND_WORKERS_IN_PROCESS=false
