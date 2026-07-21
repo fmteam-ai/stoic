@@ -714,3 +714,14 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 - Testing: unit 216 pass (incl. 17 trade_quality + 14 iter60), scalp subset 241 pass, FULL SUITE 2244 passed / 0 failed / 7 skipped. NOTE: independent testing-agent verification was interrupted twice (platform FINAL_INSTRUCTION) — static review confirmed exec_quality/broker_stats structure; full agent verification still outstanding.
 - Kill Switch UI: user requested then SKIPPED (design explored, nothing implemented).
 - Remaining: Batch C (continuous post-entry evaluation) approved but not started.
+
+## 2026-06 — Review P0+P1 batch (iter-61, VERIFIED green)
+- P0 durable slot→trade transfer: slot-link write in _submit_live now AWAITED; matched_count gate; on failure trade marked submission_state='uncertain_slot_link', decision dataset='submitted_uncertain'/reject_stage='slot_link_failed', BrokerSubmitted + open-risk accounting SKIPPED (slot stays leased for sweep recovery). Ordering gate<emit<risk verified.
+- P1 fail-closed exec quality (STRICT policy chosen by default, demo-live fills count): <20 real broker fills → score capped 39 (<40 gate) → live blocked. Constants: MIN_BROKER_FILLS_FOR_LIVE=20, FULL_EMPIRICAL_FILLS=100, INSUFFICIENT_HISTORY_MAX_SCORE=39.
+- P1 broker priors in hot path: _submit_live awaits broker_stats.summary; slippage/ack inputs = blend(local, session-prior, local_n) (full local trust at 20); summary() exposes per-session + totals fills.
+- P1 calibration instrumentation: THRESHOLDS_VERSION=1 stamped in every execution_quality dict; thresholds_snapshot(); GET /api/scalp/exec-calibration (score buckets vs realized outcomes + thresholds) — buckets empty until live-submit decisions exist (expected).
+- _stub_db in test_scalp_unit.py extended with healthy broker-stats prior cursor.
+- Testing: iteration_61.json — 548 targeted tests green, 0 issues, 0 action items; full local suite 2255 passed / 0 failed. (Also closes the interrupted iter-60 verification debt.)
+
+### Backlog (user-approved order)
+1. Worker separation (#11) 2. Transactional outbox (#12) 3. Atomic risk reservation + stress risk (#8) 4. Adaptive exits in safety envelope (#9/Batch C) 5. Shared execution kernel (#10) 6. Order state machine (#7) 7. Security hardening batch (#13: mandatory Origin in prod, 12-char passwords, error-text scrubbing, security headers, CSRF-exempt HMAC review) 8. Model registry (#15) 9. Fault-injection tests (#16) 10. Vite migration (#14)
