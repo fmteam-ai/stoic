@@ -54,11 +54,12 @@ def _avg(doc: dict, s: str, n: str) -> float | None:
 async def summary(db, broker: str) -> dict:
     """Per-session averages + overall totals for one broker."""
     sessions: dict[str, dict] = {}
-    tot = {"submissions": 0, "rejects": 0}
+    tot = {"submissions": 0, "rejects": 0, "fills": 0}
     async for doc in db.scalp_broker_stats.find({"broker_key": _key(broker)}):
         sessions[doc["session"]] = {
             "submissions": int(doc.get("submissions") or 0),
             "rejects": int(doc.get("rejects") or 0),
+            "fills": int(doc.get("entry_slip_n") or 0),
             "avg_entry_slippage_pips": _avg(doc, "entry_slip_sum", "entry_slip_n"),
             "avg_exit_slippage_pips": _avg(doc, "exit_slip_sum", "exit_slip_n"),
             "avg_fill_delay_ms": _avg(doc, "ack_ms_sum", "ack_n"),
@@ -67,6 +68,7 @@ async def summary(db, broker: str) -> dict:
         }
         tot["submissions"] += sessions[doc["session"]]["submissions"]
         tot["rejects"] += sessions[doc["session"]]["rejects"]
+        tot["fills"] += sessions[doc["session"]]["fills"]
     attempts = tot["submissions"] + tot["rejects"]
     return {"broker_key": _key(broker), "sessions": sessions,
             "totals": {**tot,

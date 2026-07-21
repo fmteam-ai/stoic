@@ -40,6 +40,48 @@ async def set_config(req: ScalpConfigRequest, user=Depends(get_current_user)):
     return {"ok": True, "status": runner.status()}
 
 
+@router.get("/exec-calibration")
+async def exec_calibration(user=Depends(get_current_user)):
+    """review item 6 — empirical calibration table: execution-score buckets
+    vs realised outcomes, so gate thresholds can be set from data."""
+    db = get_db()
+    buckets = [(0, 39), (40, 59), (60, 79), (80, 100)]
+    rows = [{"bucket": f"{lo}-{hi}", "n": 0, "live_submitted": 0,
+             "broker_rejected": 0, "history_capped": 0, "labeled": 0,
+             "net_pips_sum": 0.0, "target_first": 0} for lo, hi in buckets]
+    cur = db.scalp_decisions.find(
+        {"user_id": user["id"], "execution_quality.score": {"$exists": True}},
+        {"execution_quality": 1, "dataset": 1, "outcome": 1})
+    async for d in cur:
+        s = int((d.get("execution_quality") or {}).get("score") or 0)
+        row = rows[min(3, max(0, (0 if s < 40 else 1 if s < 60
+                                  else 2 if s < 80 else 3)))]
+        row["n"] += 1
+        ds = d.get("dataset") or ""
+        if ds == "submitted":
+            row["live_submitted"] += 1
+        elif ds == "attempt_failed":
+            row["broker_rejected"] += 1
+        if (d.get("execution_quality") or {}).get("history_capped"):
+            row["history_capped"] += 1
+        out = d.get("outcome") or {}
+        if out.get("result"):
+            row["labeled"] += 1
+            row["net_pips_sum"] += float(out.get("net_pips") or 0)
+            if out.get("result") == "target_first":
+                row["target_first"] += 1
+    for r in rows:
+        r["avg_net_pips"] = (round(r.pop("net_pips_sum") / r["labeled"], 3)
+                             if r["labeled"] else None)
+        r["target_first_rate"] = (round(r["target_first"] / r["labeled"], 3)
+                                  if r["labeled"] else None)
+        att = r["live_submitted"] + r["broker_rejected"]
+        r["reject_rate"] = (round(r["broker_rejected"] / att, 3)
+                            if att else None)
+    from scalp.exec_quality import thresholds_snapshot
+    return {"buckets": rows, "thresholds": thresholds_snapshot()}
+
+
 @router.get("/broker-stats")
 async def broker_stats_summary(broker: str, user=Depends(get_current_user)):
     """Per-session broker execution behaviour learned from real fills."""

@@ -16,8 +16,10 @@ class TestExecutionQuality:
     def test_ideal_conditions_score_100(self):
         eq = execution_quality(spread_pctl=0.0, quote_age_ms=100,
                                avg_slippage_pips=0.05, ack_latency_ms=500,
-                               vol_ratio=1.0, hour_utc=9)
+                               vol_ratio=1.0, hour_utc=9,
+                               broker_fill_count=150)
         assert eq["score"] == 100
+        assert eq["history_capped"] is False
 
     def test_hostile_conditions_score_low(self):
         eq = execution_quality(spread_pctl=1.0, quote_age_ms=2500,
@@ -25,10 +27,17 @@ class TestExecutionQuality:
                                vol_ratio=3.5, hour_utc=22)
         assert eq["score"] <= 5
 
-    def test_none_inputs_neutral(self):
+    def test_none_inputs_neutral_but_history_capped(self):
         eq = execution_quality()
-        assert 45 <= eq["score"] <= 55
+        # neutral half-credit inputs BUT no broker fills → fail-closed cap
+        assert eq["score"] <= 39
+        assert eq["history_capped"] is True
         assert set(eq["breakdown"].keys()) == set(EQ_WEIGHTS.keys())
+
+    def test_none_inputs_neutral_with_history(self):
+        eq = execution_quality(broker_fill_count=150)
+        assert 45 <= eq["score"] <= 55
+        assert eq["history_capped"] is False
 
     def test_gate_min_constant(self):
         assert EXEC_QUALITY_MIN == 40

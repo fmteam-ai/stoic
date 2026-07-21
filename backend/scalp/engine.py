@@ -1239,7 +1239,9 @@ class ScalpRunner:
         # refinement 2 — the min net edge ADAPTS to conditions within
         # [0.15p, 0.60p]: never looser than the historical floor.
         from scalp.exec_quality import (EXEC_QUALITY_MIN, adaptive_min_edge,
-                                        execution_quality)
+                                        blend, execution_quality,
+                                        session_name)
+        from scalp import broker_stats
         _sp_hist = sorted(self.state.spreads)
         _sp_pctl = (sum(1 for s in _sp_hist if s <= sp) / len(_sp_hist)
                     if _sp_hist else None)
@@ -1250,14 +1252,24 @@ class ScalpRunner:
                           / float(_feats_eq["vol_long"]))
         _ack_avg = (sum(self.ack_ms_recent) / len(self.ack_ms_recent)
                     if self.ack_ms_recent else None)
+        # review item 5 — persisted broker/session priors survive restarts;
+        # local telemetry is blended in as it accumulates.
+        _prior = await broker_stats.summary(db, self.broker)
+        _sess = ((_prior.get("sessions") or {})
+                 .get(session_name(datetime.now(timezone.utc).hour)) or {})
+        _slip_local = (self.state.slippage_ewma_pips
+                       if self.state.fills_seen else None)
         eq = execution_quality(
             spread_pctl=_sp_pctl,
             quote_age_ms=now_ms() - t.received_time_ms,
-            avg_slippage_pips=(self.state.slippage_ewma_pips
-                               if self.state.fills_seen else None),
-            ack_latency_ms=_ack_avg,
+            avg_slippage_pips=blend(_slip_local,
+                                    _sess.get("avg_entry_slippage_pips"),
+                                    self.state.fills_seen),
+            ack_latency_ms=blend(_ack_avg, _sess.get("avg_fill_delay_ms"),
+                                 len(self.ack_ms_recent)),
             vol_ratio=_vol_ratio,
-            hour_utc=datetime.now(timezone.utc).hour)
+            hour_utc=datetime.now(timezone.utc).hour,
+            broker_fill_count=(_prior.get("totals") or {}).get("fills") or 0)
         ame = adaptive_min_edge(exec_score=eq["score"], vol_ratio=_vol_ratio,
                                 spread_pctl=_sp_pctl,
                                 loss_streak=self.risk_state.consecutive_losses)
@@ -1605,17 +1617,38 @@ class ScalpRunner:
                 "decision_update")
             return
         tid = str(trade.get("id") or trade.get("_id") or "")
-        # round 17 main — TRANSFER slot ownership to the pending trade: the
-        # slot stays leased through pending/dispatched until the broker acks
-        # (on_trade_opened) or a terminal state; sweep_submission_slots
-        # renews it meanwhile and recovers it if this worker dies.
-        _bg(lambda: db.trades.update_one(
-            {"_id": _oid(tid)},
-            {"$set": {"submission_slot": dict(slot)}}), "slot_link")
+        # round 17 main + review P0 — TRANSFER slot ownership DURABLY. This
+        # write is safety-critical: it is awaited, and until it persists we
+        # do NOT emit BrokerSubmitted, count open risk, or treat the
+        # submission as healthy. On failure the trade is marked uncertain
+        # and reconciliation determines the broker outcome; the slot stays
+        # leased so sweep_submission_slots can recover it.
+        _linked = False
+        try:
+            _link_res = await db.trades.update_one(
+                {"_id": _oid(tid)},
+                {"$set": {"submission_slot": dict(slot)}})
+            _linked = _link_res.matched_count == 1
+        except Exception:
+            logger.exception("slot_link write failed trade=%s", tid)
+        if not _linked:
+            logger.error("slot link NOT persisted trade=%s slot=%s — "
+                         "marking submission uncertain", tid,
+                         slot.get("slot_id"))
+            _bg(lambda: db.trades.update_one(
+                {"_id": _oid(tid)},
+                {"$set": {"submission_state": "uncertain_slot_link"}}),
+                "uncertain_mark")
+            _bg(lambda s={"dataset": "submitted_uncertain", "trade_id": tid,
+                          "reject_stage": "slot_link_failed",
+                          "order_submit_ts_ms": submit_ms}:
+                db.scalp_decisions.update_one(
+                    {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
         self._emit(db, "BrokerSubmitted", decision_id=decision["decision_id"],
                    trade_id=tid, payload={"lot": final_lot})
         # refinement 5 — broker learning: real submission + session spread
-        from scalp import broker_stats
         _bg(lambda b=self.broker, s=sp: broker_stats.record(
             db, b, submissions=1, spread_pips=s), "broker_stats")
         self.risk_state.record_open()

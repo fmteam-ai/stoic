@@ -293,6 +293,20 @@ def _stub_db():
         c.find_one = AsyncMock(return_value=None)
         c.count_documents = AsyncMock(return_value=0)
         c.delete_many = AsyncMock()
+    # iter-61: broker with plenty of healthy execution history so the
+    # fail-closed history cap / exec-quality gate don't mask the stages
+    # under test (each session bucket present, favourable averages)
+    def _prior_cursor(*_a, **_k):
+        async def gen():
+            for sess in ("asia", "london", "overlap", "newyork", "late"):
+                yield {"session": sess, "submissions": 60, "rejects": 1,
+                       "entry_slip_n": 40, "entry_slip_sum": 2.0,
+                       "ack_ms_sum": 40 * 600.0, "ack_n": 40,
+                       "spread_sum": 16.0, "spread_n": 40}
+        return gen()
+    db.scalp_broker_stats.find = MagicMock(side_effect=_prior_cursor)
+    db.scalp_broker_stats.update_one = AsyncMock(
+        return_value=MagicMock(matched_count=1))
     return db
 
 

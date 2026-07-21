@@ -14,11 +14,52 @@ EXEC_QUALITY_MIN = 40          # gate: live submissions below this are skipped
 EDGE_FLOOR_PIPS = 0.15         # never looser than the historical constant
 EDGE_CEIL_PIPS = 0.60
 
+# review item 4 — FAIL-CLOSED history policy (strict): with fewer than
+# MIN_BROKER_FILLS_FOR_LIVE real fills for this broker, the execution score
+# is capped BELOW the gate so live trades are blocked until the bot has
+# real execution evidence (demo-live fills count). 20-100 fills → blended
+# conservative prior (see blend()); >100 → empirical.
+MIN_BROKER_FILLS_FOR_LIVE = 20
+FULL_EMPIRICAL_FILLS = 100
+INSUFFICIENT_HISTORY_MAX_SCORE = 39
+
+# review item 6 — every decision stores the thresholds version so the gate
+# can later be calibrated empirically against realised outcomes.
+THRESHOLDS_VERSION = 1
+
 # additive weights — sum to 100
 EQ_WEIGHTS = {
     "spread": 22, "quote_age": 20, "slippage": 20,
     "latency": 14, "volatility": 14, "session": 10,
 }
+
+
+def thresholds_snapshot() -> dict:
+    return {
+        "version": THRESHOLDS_VERSION,
+        "exec_quality_min": EXEC_QUALITY_MIN,
+        "edge_floor_pips": EDGE_FLOOR_PIPS,
+        "edge_ceil_pips": EDGE_CEIL_PIPS,
+        "min_broker_fills_for_live": MIN_BROKER_FILLS_FOR_LIVE,
+        "full_empirical_fills": FULL_EMPIRICAL_FILLS,
+        "quote_age_full_ms": 500, "quote_age_zero_ms": 2500,
+        "weights": dict(EQ_WEIGHTS),
+    }
+
+
+def blend(local: float | None, prior: float | None,
+          local_n: int) -> float | None:
+    """review item 5 — weighted blend of fresh local telemetry with the
+    persisted broker/session prior; weighting favours recent live data as
+    local samples accumulate (full local trust at 20 samples)."""
+    if local is None and prior is None:
+        return None
+    if local is None:
+        return prior
+    if prior is None:
+        return local
+    w = min(1.0, max(0, int(local_n)) / 20.0)
+    return w * float(local) + (1 - w) * float(prior)
 
 
 def _clamp(v, lo, hi):
@@ -43,8 +84,12 @@ def execution_quality(*, spread_pctl: float | None = None,
                       avg_slippage_pips: float | None = None,
                       ack_latency_ms: float | None = None,
                       vol_ratio: float | None = None,
-                      hour_utc: int | None = None) -> dict:
-    """0-100 additive score; None inputs get neutral half-credit."""
+                      hour_utc: int | None = None,
+                      broker_fill_count: int | None = None) -> dict:
+    """0-100 additive score; None inputs get neutral half-credit, BUT with
+    insufficient real broker fills the final score is capped below the live
+    gate (fail-closed — half-credit neutrality alone must never pass a live
+    trade with no execution evidence)."""
     b: dict[str, float] = {}
     b["spread"] = (EQ_WEIGHTS["spread"] * 0.5 if spread_pctl is None else
                    (1.0 - _clamp(float(spread_pctl), 0, 1))
@@ -82,8 +127,14 @@ def execution_quality(*, spread_pctl: float | None = None,
             "late": 0.3, "asia": 0.4}[s]
     breakdown = {k: round(v, 1) for k, v in b.items()}
     score = int(round(_clamp(sum(b.values()), 0, 100)))
+    fills = int(broker_fill_count or 0)
+    history_capped = fills < MIN_BROKER_FILLS_FOR_LIVE
+    if history_capped:
+        score = min(score, INSUFFICIENT_HISTORY_MAX_SCORE)
     return {"score": score, "breakdown": breakdown,
-            "gate_min": EXEC_QUALITY_MIN, "version": 1}
+            "broker_fill_count": fills, "history_capped": history_capped,
+            "gate_min": EXEC_QUALITY_MIN,
+            "thresholds_version": THRESHOLDS_VERSION, "version": 1}
 
 
 def adaptive_min_edge(*, exec_score: float | None = None,
