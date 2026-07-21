@@ -98,13 +98,13 @@ class TestPerAccountBotConfig:
         assert cfg["max_lot_size"] == 0.05
         assert cfg["risk_level"] == "low"
 
-    def test_max_lot_size_clamped_to_zero_minimum(self, admin_session, primary_account):
+    def test_max_lot_size_negative_rejected(self, admin_session, primary_account):
         acc_id = primary_account["id"]
         r = admin_session.put(f"{API}/bot/config",
                               params={"account_id": acc_id},
                               json={"max_lot_size": -0.5}, timeout=10)
-        assert r.status_code == 200
-        assert r.json()["max_lot_size"] == 0.0
+        # Audit C1: invalid values are rejected at the boundary, not clamped.
+        assert r.status_code == 422
 
     def test_default_config_independent_from_account(self, admin_session, primary_account):
         # Override sets risk=low; default remains untouched.

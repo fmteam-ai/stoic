@@ -111,7 +111,10 @@ async def admin_list_users(status: str = "", q: str = "",
             query = {"$or": [{"status": "active"},
                              {"status": {"$exists": False}}]}
     if q:
-        query["email"] = {"$regex": q.strip(), "$options": "i"}
+        # SEC hardening — anchor + escape the user-supplied term so it can't
+        # be used as an unbounded regex (ReDoS) even from the admin surface.
+        import re
+        query["email"] = {"$regex": re.escape(q.strip()), "$options": "i"}
     cursor = db.users.find(query).sort("created_at", -1).limit(min(max(limit, 1), 500))
     docs = await cursor.to_list(length=limit)
     out = []

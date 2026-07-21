@@ -51,9 +51,21 @@ async def dependency_health_check() -> dict:
 
 
 async def seed_admin():
-    db = get_db()
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@trading.bot").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    is_prod = os.environ.get("APP_ENV", "").lower() in ("production", "prod")
+    # SEC-001 — never ship a known-weak admin in production, and never force
+    # an admin password back to the env value once the account exists (that
+    # made password changes impossible across restarts).
+    if is_prod:
+        if not os.environ.get("ADMIN_PASSWORD") or admin_password == "admin123":
+            raise RuntimeError(
+                "APP_ENV=production requires a strong ADMIN_PASSWORD "
+                "(the default 'admin123' is refused).")
+        if len(admin_password) < 12:
+            raise RuntimeError(
+                "ADMIN_PASSWORD must be at least 12 characters in production.")
+    db = get_db()
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({
@@ -63,11 +75,9 @@ async def seed_admin():
             "role": "admin",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_password(admin_password)}},
-        )
+        log.info("seeded admin account %s", admin_email)
+    # Do NOT overwrite an existing admin hash — the admin can change their
+    # password and it must survive restarts.
 
     # Default bot config for admin (account_id=None marks the user-default profile)
     admin = await db.users.find_one({"email": admin_email})

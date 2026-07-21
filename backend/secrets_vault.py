@@ -40,10 +40,18 @@ def _derive_key_from_master(material: str) -> bytes:
 
 
 def _aesgcm() -> AESGCM:
+    # SEC-002 — the broker-credential vault MUST have its own key so a leaked
+    # JWT_SECRET can never both forge auth tokens AND decrypt broker
+    # passwords. Production refuses to fall back; dev derives a deterministic
+    # key from JWT_SECRET only so the bot boots locally.
     master = os.environ.get("KEY_VAULT_MASTER")
     if not master:
-        # Generate a deterministic fallback derived from JWT_SECRET so the bot
-        # boots in dev. PRODUCTION DEPLOYMENTS MUST SET KEY_VAULT_MASTER explicitly.
+        is_prod = os.environ.get("APP_ENV", "").lower() in ("production", "prod")
+        if is_prod:
+            raise RuntimeError(
+                "KEY_VAULT_MASTER is required in production (must be distinct "
+                "from JWT_SECRET) — refusing to encrypt broker credentials "
+                "under the auth-signing secret.")
         master = os.environ.get("JWT_SECRET", "dev-fallback-master")
     return AESGCM(_derive_key_from_master(master))
 

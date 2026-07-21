@@ -117,17 +117,15 @@ def test_bot_config_accepts_profit_target_fields(session):
     )
 
 
-def test_profit_target_action_validates_to_lock_or_stop(session):
-    """Bogus action falls back to 'lock' (defensive default)."""
+def test_profit_target_action_rejects_invalid(session):
+    """Audit C1: a bogus action is rejected at the boundary (422), not
+    silently coerced into the DB."""
     r = session.put(
         f"{BASE_URL}/api/bot/config",
         json={"daily_profit_target_r": 1, "daily_profit_target_action": "TURBO_LOCK"},
         timeout=15,
     )
-    assert r.status_code == 200
-    g = session.get(f"{BASE_URL}/api/bot/risk-gauge", timeout=15).json()
-    default = next((it for it in g["items"] if it["account_id"] is None), None)
-    assert default["profit_target"]["mode"] == "lock"
+    assert r.status_code == 422
     session.put(
         f"{BASE_URL}/api/bot/config",
         json={"daily_profit_target_r": 0}, timeout=15,

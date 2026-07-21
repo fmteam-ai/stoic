@@ -122,14 +122,12 @@ class TestProfitTarget:
         assert pt.get("mode") == "stop"
         assert pt.get("target_amount", 0) >= 0
 
-    def test_invalid_action_coerces_to_lock(self, session):
+    def test_invalid_action_rejected(self, session):
         put = session.put(f"{BASE_URL}/api/bot/config",
                           json={"daily_profit_target_r": 2.0,
                                 "daily_profit_target_action": "TURBO_LOCK"}, timeout=10)
-        assert put.status_code in (200, 204), put.text[:300]
-        g = session.get(f"{BASE_URL}/api/bot/risk-gauge", timeout=10).json()
-        default = next((it for it in g["items"] if it.get("account_id") is None), None)
-        assert default["profit_target"]["mode"] == "lock"
+        # Audit C1: rejected at the boundary, not coerced.
+        assert put.status_code == 422, put.text[:300]
 
     def test_disable_when_r_is_zero(self, session):
         put = session.put(f"{BASE_URL}/api/bot/config",

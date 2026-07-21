@@ -74,7 +74,9 @@ def _seed_healthy_account(aid: str):
     _mongo().accounts.update_one(
         {"_id": ObjectId(aid)},
         {"$set": {
+            "status": "connected",
             "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            "ea_version": "1.40",
             "available_symbols": ["XAUUSD", "EURUSD", "BTCUSD"],
             "balance": 10000.0,
             "equity": 10000.0,

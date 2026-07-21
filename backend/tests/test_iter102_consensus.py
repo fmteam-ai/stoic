@@ -100,5 +100,5 @@ class TestWiring:
     def test_config_defaults(self):
         src = open(os.path.join(BACKEND, "models.py")).read()
         assert 'consensus_gate_mode: str = "enforce"' in src
-        assert "consensus_threshold: int = 55" in src
+        assert "consensus_threshold: int = Field(default=55" in src
         assert DEFAULT_THRESHOLD == 55

@@ -76,6 +76,13 @@ def test_bot_start_clears_stale_panic_flags():
     }, timeout=TIMEOUT)
     aid = r.json()["id"]
 
+    # Activation readiness (audit E10) now requires a connected EA — make the
+    # account look healthy so this test can exercise panic-flag clearing.
+    db.accounts.update_one({"_id": ObjectId(aid)}, {"$set": {
+        "status": "connected", "ea_version": "1.40", "equity": 10000.0,
+        "balance": 10000.0,
+        "last_heartbeat": datetime.now(timezone.utc).isoformat()}})
+
     cfg_id = ObjectId()
     db.bot_configs.insert_one({
         "_id": cfg_id,

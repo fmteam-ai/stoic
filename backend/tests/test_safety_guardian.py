@@ -15,6 +15,25 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
+class _AsyncCursor:
+    """Mimics a Motor cursor that supports both `async for` and to_list."""
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def __aiter__(self):
+        async def gen():
+            for d in self._docs:
+                yield d
+        return gen()
+
+    async def to_list(self, length=None):
+        return list(self._docs)
+
+
+def _agg_cursor(docs):
+    return _AsyncCursor(docs)
+
+
 def _live_acct(equity=10000.0, balance=10000.0, free_margin=8000.0):
     return {"_id": "acct_1", "mode": "live", "broker": "MT5",
             "equity": equity, "balance": balance, "free_margin": free_margin}
@@ -33,10 +52,9 @@ def _good_signal(lot=0.05):
 
 def _empty_db():
     fake_db = MagicMock()
-    # No open trades, no closed trades today
-    fake_db.trades.find = MagicMock(return_value=MagicMock(
-        to_list=AsyncMock(return_value=[]),
-    ))
+    # No open trades (async-for cursor), no realized PnL today (aggregate).
+    fake_db.trades.find = MagicMock(return_value=_AsyncCursor([]))
+    fake_db.trades.aggregate = MagicMock(return_value=_AsyncCursor([]))
     # No FRED cache → macro gate fails-open (regime="no_macro_data")
     fake_db.fred_cache.find_one = AsyncMock(return_value=None)
     return fake_db
@@ -125,12 +143,11 @@ async def test_live_account_daily_loss_cap_refuses():
     """Already lost 7% of balance today → refuse another trade (cap 6%)."""
     from safety_guardian import audit_pre_trade
     fake_db = MagicMock()
-    # Closed trades today with -700 USD on $10k balance = -7%
-    fake_db.trades.find = MagicMock(return_value=MagicMock(
-        to_list=AsyncMock(return_value=[
-            {"pnl": -700.0},
-        ]),
-    ))
+    # Realized -700 USD today via the aggregation path; no open trades.
+    fake_db.trades.aggregate = MagicMock(return_value=_AsyncCursor(
+        [{"_id": None, "pnl": -700.0}]))
+    fake_db.trades.find = MagicMock(return_value=_AsyncCursor([]))
+    fake_db.fred_cache.find_one = AsyncMock(return_value=None)
     result = await audit_pre_trade(
         db=fake_db, account=_live_acct(),
         signal=_good_signal(lot=0.05),
@@ -145,14 +162,12 @@ async def test_live_account_aggregate_risk_cap_refuses(monkeypatch):
     """Open trades already chew 9% of equity, new trade would push past 9% cap."""
     from safety_guardian import audit_pre_trade
     fake_db = MagicMock()
-
-    # Simulate the two `find` calls inside the guardian (today_closed and open_trades).
-    # Pattern: first call → empty (no closed today), second call → big open trades.
-    closed_mock = MagicMock(to_list=AsyncMock(return_value=[]))
-    open_mock = MagicMock(to_list=AsyncMock(return_value=[
-        {"symbol": "XAUUSD", "lot_size": 1.0, "entry_price": 3950.0, "stop_loss": 3960.0},
+    # No realized PnL today (aggregate empty); big open trades chew equity.
+    fake_db.trades.aggregate = MagicMock(return_value=_AsyncCursor([]))
+    fake_db.trades.find = MagicMock(return_value=_AsyncCursor([
+        {"symbol": "XAUUSD", "lot_size": 1.0, "entry_price": 3950.0,
+         "stop_loss": 3960.0},
     ]))
-    fake_db.trades.find = MagicMock(side_effect=[closed_mock, open_mock])
     result = await audit_pre_trade(
         db=fake_db, account=_live_acct(),
         signal=_good_signal(lot=0.05),
@@ -191,6 +206,7 @@ async def test_mt5_engine_calls_guardian_and_blocks_on_failure(monkeypatch):
                 "evaluated_at": "2026-01-01T00:00:00+00:00",
                 "context": {}}
     monkeypatch.setattr("execution.audit_pre_trade", fake_audit)
+    monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
 
     engine = MT5BridgeEngine()
     result = await engine.execute(
@@ -224,6 +240,7 @@ async def test_mt5_engine_stamps_safety_audit_on_good_trade(monkeypatch):
     async def passing_audit(**kw):  # noqa: ARG001
         return fake_audit
     monkeypatch.setattr("execution.audit_pre_trade", passing_audit)
+    monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
 
     engine = MT5BridgeEngine()
     result = await engine.execute(
