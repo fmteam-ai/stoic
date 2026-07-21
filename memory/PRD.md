@@ -699,3 +699,18 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 ### Remaining from review (open)
 - P1: Shared execution kernel (scalp + general bot unify submission lifecycle/reconciliation) — recommended after event stream matures.
 - P2: Transactional outbox for events; projections; BrokerAccepted emit when EA splits accept/fill.
+
+## 2026-06 — Phase-1 value-driven trading + scalp refinements A/B (iter-60)
+- Phase 1 (approved: both paths, 0.25-1.3% sizing, quality observe-first, EV gate active):
+  trade_quality.py (compute_ev $/pips, quality_score 0-100 additive w/ WEIGHTS sum 100, scalp_size_multiplier downscale-only);
+  bot_runner.py 'Phase-1 · VALUE-DRIVEN GATE' (~1849): ev+quality stored on signals, negative-EV auto trades skipped (ev_gate_block, pulse, fail-open);
+  scalp engine: doc.ev/doc.quality/doc.decision_meta + live-lot downscale; adaptive_sizing bounds 0.25/1.30; Scalp.jsx EV($)+Quality columns; Signals.jsx ev/quality strip.
+- Refinements batch A+B (approved: exec-quality gate ACTIVE <40, adaptive edge [0.15,0.60]):
+  scalp/exec_quality.py (execution_quality 0-100, adaptive_min_edge w/ components, session_name);
+  scalp/broker_stats.py ($inc aggregates per broker+session; GET /api/scalp/broker-stats?broker=);
+  engine hooks: exec-quality+adaptive-edge gates after pre_submit_edge_revalidation (reject stages pre_submit_execution_quality / pre_submit_adaptive_edge), broker_stats.record at submit/reject/fill/close, ack_ms_recent deque, state.vols deque;
+  model.py version_of() + _to_runtime provenance; decision docs stamped model_version.
+- INCIDENT: search_replace corruption duplicated apply_config inside recover_pending_deals in scalp/engine.py — cleaned (single apply_config remains), exec-quality block re-applied, compile + full suite verified.
+- Testing: unit 216 pass (incl. 17 trade_quality + 14 iter60), scalp subset 241 pass, FULL SUITE 2244 passed / 0 failed / 7 skipped. NOTE: independent testing-agent verification was interrupted twice (platform FINAL_INSTRUCTION) — static review confirmed exec_quality/broker_stats structure; full agent verification still outstanding.
+- Kill Switch UI: user requested then SKIPPED (design explored, nothing implemented).
+- Remaining: Batch C (continuous post-entry evaluation) approved but not started.
