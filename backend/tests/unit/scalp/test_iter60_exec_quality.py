@@ -79,32 +79,8 @@ class TestSessions:
 
 
 class TestBrokerStats:
-    @pytest.mark.asyncio
-    async def test_record_and_summary_roundtrip(self):
-        import os
-        from dotenv import load_dotenv
-        load_dotenv("/app/backend/.env")
-        from motor.motor_asyncio import AsyncIOMotorClient
-        from scalp.broker_stats import record, summary
-        cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
-        db = cli[os.environ["DB_NAME"]]
-        broker = "TEST_iter60_broker"
-        try:
-            await record(db, broker, submissions=2, entry_slip_pips=0.2,
-                         ack_ms=1200, spread_pips=0.4)
-            await record(db, broker, rejects=1, entry_slip_pips=0.4)
-            out = await summary(db, broker)
-            assert out["totals"]["submissions"] == 2
-            assert out["totals"]["rejects"] == 1
-            assert out["totals"]["reject_rate"] == pytest.approx(1 / 3, abs=0.01)
-            sess = list(out["sessions"].values())[0]
-            assert sess["avg_entry_slippage_pips"] == pytest.approx(0.3, abs=0.01)
-            assert sess["avg_fill_delay_ms"] == 1200
-            assert sess["avg_spread_pips"] == 0.4
-        finally:
-            await db.scalp_broker_stats.delete_many({"broker_key": broker})
-            cli.close()
-
+    # DB round-trip test moved to tests/integration/scalp/
+    # test_iter63_db_roundtrips.py (review item 1 — unit independence)
     @pytest.mark.asyncio
     async def test_empty_record_noop(self):
         from scalp.broker_stats import record

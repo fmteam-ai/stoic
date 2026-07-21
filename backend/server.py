@@ -342,6 +342,15 @@ from background_loops import (_auto_heal_loop, _eod_flatten_loop,
 @app.on_event("startup")
 async def on_startup():
     global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
+    # review item 5 — production hard-fails without an explicit trusted
+    # Origin allowlist: CSRF_ENFORCE_ORIGIN=true + concrete CORS_ORIGINS.
+    if os.environ.get("APP_ENV", "").lower() == "production":
+        from security import _allowed_origins
+        if (os.environ.get("CSRF_ENFORCE_ORIGIN", "false").lower() != "true"
+                or not _allowed_origins()):
+            raise RuntimeError(
+                "APP_ENV=production requires CSRF_ENFORCE_ORIGIN=true and an "
+                "explicit CORS_ORIGINS allowlist (not empty, not '*').")
     try:
         await ensure_indexes()
         await seed_admin()

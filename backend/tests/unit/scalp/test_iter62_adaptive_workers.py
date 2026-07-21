@@ -122,26 +122,5 @@ class TestWorkerSeparation:
             src = open(f"/app/backend/workers/{mod}.py").read()
             assert 'main(' in src
 
-    @pytest.mark.asyncio
-    async def test_leader_lease_excludes_second_holder(self):
-        import os
-        from dotenv import load_dotenv
-        load_dotenv("/app/backend/.env")
-        from motor.motor_asyncio import AsyncIOMotorClient
-        import workers.base as wb
-        cli = AsyncIOMotorClient(os.environ["MONGO_URL"])
-        db = cli[os.environ["DB_NAME"]]
-        name = "test_iter62_lease"
-        try:
-            await db.worker_leases.delete_one({"_id": name})
-            assert await wb._try_acquire(db, name) is True
-            original = wb.HOLDER
-            wb.HOLDER = "other-holder"
-            try:
-                assert await wb._try_acquire(db, name) is False
-            finally:
-                wb.HOLDER = original
-            assert await wb._try_acquire(db, name) is True   # renewal OK
-        finally:
-            await db.worker_leases.delete_one({"_id": name})
-            cli.close()
+    # leader-lease DB test moved to tests/integration/scalp/
+    # test_iter63_db_roundtrips.py (review item 1 — unit independence)

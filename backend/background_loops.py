@@ -94,6 +94,9 @@ async def _scalp_reconcile_loop():
             if now_m >= next_fin:
                 next_fin = now_m + FIN
                 await recover_pending_deals(get_db())
+                # review item 2 — resolve stale provisional risk reservations
+                from scalp.risk_reservations import sweep_stale
+                await sweep_stale(get_db())
             if now_m >= next_full:
                 next_full = now_m + FULL
                 try:

@@ -1,0 +1,99 @@
+"""review item 2 · Provisional risk reservations.
+
+A reservation is written BEFORE an order is queued and held until the broker
+outcome is certain, so replacement orders can never consume the same account
+risk while a submission is in-flight or uncertain:
+
+    RISK_RESERVED → QUEUED_UNCONFIRMED → SLOT_LINKED → RELEASED
+                                (uncertain=True keeps it held for
+                                 reconciliation to resolve)
+
+Release reasons: broker_reject | broker_ack | closed | reconciled | expired.
+"""
+import logging
+import uuid
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
+
+ACTIVE_STATES = ("RISK_RESERVED", "QUEUED_UNCONFIRMED", "SLOT_LINKED")
+STALE_TTL_SEC = 900
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def reserve(db, *, account_id: str, user_id: str, decision_id: str,
+                  risk_usd: float, lot: float) -> dict:
+    doc = {"reservation_id": uuid.uuid4().hex, "account_id": account_id,
+           "user_id": user_id, "decision_id": decision_id,
+           "risk_usd": round(float(risk_usd or 0), 2), "lot": float(lot or 0),
+           "state": "RISK_RESERVED", "uncertain": False, "trade_id": None,
+           "created_at": _now(), "updated_at": _now(),
+           "transitions": [{"state": "RISK_RESERVED", "at": _now()}]}
+    await db.risk_reservations.insert_one(dict(doc))
+    return doc
+
+
+async def transition(db, reservation_id: str, state: str, **extra) -> None:
+    upd = {"state": state, "updated_at": _now(), **extra}
+    await db.risk_reservations.update_one(
+        {"reservation_id": reservation_id},
+        {"$set": upd,
+         "$push": {"transitions": {"state": state, "at": _now(),
+                                   **{k: v for k, v in extra.items()
+                                      if k != "transitions"}}}})
+
+
+async def release_for_trade(db, trade_id: str, reason: str) -> None:
+    await db.risk_reservations.update_many(
+        {"trade_id": trade_id, "state": {"$in": list(ACTIVE_STATES)}},
+        {"$set": {"state": "RELEASED", "release_reason": reason,
+                  "updated_at": _now()},
+         "$push": {"transitions": {"state": "RELEASED", "at": _now(),
+                                   "reason": reason}}})
+
+
+async def unaccounted_count(db, account_id: str) -> int:
+    """Active reservations INVISIBLE to the db.trades exposure count:
+    uncertain submissions and reservations without a queued trade yet."""
+    return await db.risk_reservations.count_documents(
+        {"account_id": account_id, "state": {"$in": list(ACTIVE_STATES)},
+         "$or": [{"uncertain": True}, {"trade_id": None}]})
+
+
+async def sweep_stale(db, older_than_sec: int = STALE_TTL_SEC) -> dict:
+    """Reconciliation: resolve reservations stuck active beyond the TTL."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=older_than_sec)).isoformat()
+    released = kept = 0
+    async for r in db.risk_reservations.find(
+            {"state": {"$in": list(ACTIVE_STATES)},
+             "updated_at": {"$lt": cutoff}}):
+        reason = None
+        if not r.get("trade_id"):
+            reason = "expired"
+        else:
+            from bson import ObjectId
+            try:
+                tr = await db.trades.find_one(
+                    {"_id": ObjectId(r["trade_id"])}, {"status": 1})
+            except Exception:
+                tr = None
+            status = (tr or {}).get("status")
+            if tr is None or status in ("closed", "failed", "cancelled"):
+                reason = "reconciled"
+            elif status == "open":
+                reason = "broker_ack"          # position counted elsewhere
+        if reason:
+            await transition(db, r["reservation_id"], "RELEASED",
+                             release_reason=reason)
+            released += 1
+        else:
+            kept += 1                          # pending → still uncertain
+    if released:
+        logger.info("risk_reservations sweep: released=%d kept=%d",
+                    released, kept)
+    return {"released": released, "kept": kept}

@@ -285,11 +285,12 @@ def _stub_db():
     for coll in ("scalp_decisions", "scalp_ticks", "scalp_risk_state",
                  "scalp_configs", "trades", "broker_deals", "scalp_owners",
                  "scalp_financial_events", "accounts",
-                 "scalp_submission_slots"):
+                 "scalp_submission_slots", "risk_reservations"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
         c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
                                                         modified_count=1))
+        c.update_many = AsyncMock()
         c.find_one = AsyncMock(return_value=None)
         c.count_documents = AsyncMock(return_value=0)
         c.delete_many = AsyncMock()

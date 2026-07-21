@@ -38,6 +38,7 @@ from pathlib import Path
 
 from scalp import edge, gate, kill, permissions, setup
 from scalp import adaptive_exits
+from scalp import risk_reservations
 from scalp import model as scalp_model
 from eod_flatten import eod_flatten_block as _eod_flatten_block
 from scalp.costs import dynamic_spread_limit
@@ -1425,6 +1426,11 @@ class ScalpRunner:
             db_open += 1
             if not otr.get("mt5_ticket"):
                 unacked += 1
+        # review item 2 — uncertain/unqueued provisional reservations are
+        # invisible to db.trades: count them as held exposure too.
+        from scalp import risk_reservations
+        reserved_unaccounted = await risk_reservations.unaccounted_count(
+            db, self.account_id)
         broker_pos = (self.account or {}).get("open_positions")
         try:
             broker_pos = int(broker_pos)
@@ -1433,13 +1439,15 @@ class ScalpRunner:
         ticketed = db_open - unacked
         broker_mismatch = (broker_pos is not None and broker_pos >= 0
                            and ticketed > broker_pos)
-        if db_open > self.account_risk.open_scalps or broker_mismatch:
+        if (db_open + reserved_unaccounted > self.account_risk.open_scalps
+                or broker_mismatch):
             self.state.record_reject()
             _bg(lambda s={"verdict": "rejected",
                           "reject_stage": "pre_submit_exposure",
                           "exposure_preflight": {
                               "db_open_scalps": db_open,
                               "unacked_scalps": unacked,
+                              "reserved_unaccounted": reserved_unaccounted,
                               "risk_state_open": self.account_risk.open_scalps,
                               "broker_open_positions": broker_pos,
                               "broker_mismatch": broker_mismatch}}:
@@ -1543,6 +1551,15 @@ class ScalpRunner:
                 "decision_update")
             return
         submit_ms = now_ms()
+        # review item 2 — PROVISIONAL RISK RESERVATION written before the
+        # order is queued; held until the broker outcome is certain so a
+        # replacement order can't consume the same account risk meanwhile.
+        from pip_utils import pip_value_usd_per_lot_strict as _pv_strict
+        _resv = await risk_reservations.reserve(
+            db, account_id=self.account_id, user_id=self.user_id,
+            decision_id=decision["decision_id"],
+            risk_usd=fc.stop_pips * _pv_strict(self.symbol) * final_lot,
+            lot=final_lot)
         self._emit(db, "OrderIntentCreated",
                    decision_id=decision["decision_id"],
                    payload={"lot": final_lot,
@@ -1570,6 +1587,9 @@ class ScalpRunner:
             # or the order reaches a terminal submission state.
             _bg(lambda: release_broker_submission_slot(db, slot),
                 "release_submission_slot")
+            _bg(lambda r=_resv["reservation_id"]: risk_reservations.transition(
+                db, r, "RELEASED", release_reason="broker_reject"),
+                "resv_release")
             raise
         finally:
             _active_submissions = max(0, _active_submissions - 1)
@@ -1607,6 +1627,9 @@ class ScalpRunner:
             from scalp import broker_stats
             _bg(lambda b=self.broker: broker_stats.record(db, b, rejects=1),
                 "broker_stats")
+            _bg(lambda r=_resv["reservation_id"]: risk_reservations.transition(
+                db, r, "RELEASED", release_reason="broker_reject"),
+                "resv_release")
             _bg(lambda: release_broker_submission_slot(db, slot),
                 "release_submission_slot")
             # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
@@ -1619,6 +1642,9 @@ class ScalpRunner:
                 "decision_update")
             return
         tid = str(trade.get("id") or trade.get("_id") or "")
+        _bg(lambda r=_resv["reservation_id"], t=tid:
+            risk_reservations.transition(db, r, "QUEUED_UNCONFIRMED",
+                                         trade_id=t), "resv_queued")
         # round 17 main + review P0 — TRANSFER slot ownership DURABLY. This
         # write is safety-critical: it is awaited, and until it persists we
         # do NOT emit BrokerSubmitted, count open risk, or treat the
@@ -1637,6 +1663,12 @@ class ScalpRunner:
             logger.error("slot link NOT persisted trade=%s slot=%s — "
                          "marking submission uncertain", tid,
                          slot.get("slot_id"))
+            # review item 2 — the reservation stays HELD (uncertain) until
+            # reconciliation determines the broker outcome.
+            _bg(lambda r=_resv["reservation_id"], t=tid:
+                risk_reservations.transition(db, r, "QUEUED_UNCONFIRMED",
+                                             trade_id=t, uncertain=True),
+                "resv_uncertain")
             _bg(lambda: db.trades.update_one(
                 {"_id": _oid(tid)},
                 {"$set": {"submission_state": "uncertain_slot_link"}}),
@@ -1650,6 +1682,8 @@ class ScalpRunner:
             return
         self._emit(db, "BrokerSubmitted", decision_id=decision["decision_id"],
                    trade_id=tid, payload={"lot": final_lot})
+        _bg(lambda r=_resv["reservation_id"]: risk_reservations.transition(
+            db, r, "SLOT_LINKED"), "resv_linked")
         # refinement 5 — broker learning: real submission + session spread
         _bg(lambda b=self.broker, s=sp: broker_stats.record(
             db, b, submissions=1, spread_pips=s), "broker_stats")
@@ -1836,6 +1870,9 @@ class ScalpRunner:
         self.last_order_ack_ms = now_ms()
         self._release_submission_slot_of(info, db, trade_id)
         if db is not None:
+            _bg(lambda t=trade_id: risk_reservations.release_for_trade(
+                db, t, "broker_ack"), "resv_release")
+        if db is not None:
             self._emit(db, "PositionOpened", trade_id=trade_id,
                        decision_id=(info or {}).get("decision_id"),
                        payload={"requested_price": requested_price,
@@ -1987,6 +2024,8 @@ class ScalpRunner:
                        payload={"net_pnl_usd": round(net_pnl, 2),
                                 "close_reason": close_reason,
                                 "exit_price": exit_price})
+            _bg(lambda t=trade_id: risk_reservations.release_for_trade(
+                db, t, "closed"), "resv_release")
             self._emit(db, "FinancialApplied", trade_id=trade_id,
                        decision_id=(info or {}).get("decision_id"),
                        payload={"deal_id": deal_id,
