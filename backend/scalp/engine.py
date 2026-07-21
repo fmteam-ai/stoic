@@ -38,6 +38,8 @@ from pathlib import Path
 
 from scalp import edge, gate, kill, permissions, setup
 from scalp import adaptive_exits
+from scalp import order_state
+from scalp import outbox
 from scalp import risk_reservations
 from scalp import model as scalp_model
 from eod_flatten import eod_flatten_block as _eod_flatten_block
@@ -1122,6 +1124,22 @@ class ScalpRunner:
                    symbol=self.symbol, payload=payload)
         _bg(lambda e=ev: append(db, e), "trade_event")
 
+    async def _emit_durable(self, db, event_type: str,
+                            decision_id: str | None = None,
+                            trade_id: str | None = None,
+                            key: str | None = None,
+                            payload: dict | None = None):
+        """Phase A — critical lifecycle events go through the transactional
+        outbox: AWAITED idempotent insert (deterministic key), immediate
+        best-effort publish, reconcile-loop relay as the guarantee."""
+        from trade_events import build
+        ev = build(event_type, user_id=self.user_id, decision_id=decision_id,
+                   trade_id=trade_id, account_id=self.account_id,
+                   symbol=self.symbol, payload=payload)
+        await outbox.enqueue(db, outbox.TOPIC_TRADE_EVENT,
+                             key or f"te:{event_type}:{trade_id or decision_id}",
+                             ev)
+
     async def _submit_live(self, db, decision: dict, fc, risk_res):
         """Order via the bridge queue. Account is PRELOADED (item 5); the
         freshest in-memory quote is rechecked for spread + drift (item 7);
@@ -1655,6 +1673,9 @@ class ScalpRunner:
         # before anything else happens to this submission.
         await _resv_transition(db, _resv["reservation_id"],
                                "QUEUED_UNCONFIRMED", trade_id=tid)
+        # Phase A — formal order state machine entry (idempotent, guarded)
+        await order_state.apply(db, tid, order_state.QUEUED, f"q:{tid}",
+                                meta={"decision_id": decision["decision_id"]})
         # round 17 main + review P0 — TRANSFER slot ownership DURABLY. This
         # write is safety-critical: it is awaited, and until it persists we
         # do NOT emit BrokerSubmitted, count open risk, or treat the
@@ -1678,6 +1699,9 @@ class ScalpRunner:
             await _resv_transition(db, _resv["reservation_id"],
                                    "QUEUED_UNCONFIRMED", trade_id=tid,
                                    uncertain=True)
+            await order_state.apply(db, tid, order_state.UNCERTAIN,
+                                    f"unc:{tid}",
+                                    meta={"reason": "slot_link_failed"})
             _bg(lambda: db.trades.update_one(
                 {"_id": _oid(tid)},
                 {"$set": {"submission_state": "uncertain_slot_link"}}),
@@ -1689,8 +1713,11 @@ class ScalpRunner:
                     {"decision_id": decision["decision_id"]}, {"$set": s}),
                 "decision_update")
             return
-        self._emit(db, "BrokerSubmitted", decision_id=decision["decision_id"],
-                   trade_id=tid, payload={"lot": final_lot})
+        # Phase A — durable event via transactional outbox (awaited)
+        await self._emit_durable(db, "BrokerSubmitted",
+                                 decision_id=decision["decision_id"],
+                                 trade_id=tid, key=f"te:BrokerSubmitted:{tid}",
+                                 payload={"lot": final_lot})
         # round 18 review item 1 — safety-critical transition: AWAITED
         await _resv_transition(db, _resv["reservation_id"], "SLOT_LINKED")
         # refinement 5 — broker learning: real submission + session spread
@@ -1968,6 +1995,10 @@ class ScalpRunner:
             info["close_persisted"] = True
             if res.matched_count == 0:
                 info["close_persist_note"] = "trade_not_open_in_db"
+        if res.matched_count == 1:
+            await order_state.apply(db, trade_id, order_state.CLOSE_REQUESTED,
+                                    f"closereq:{trade_id}",
+                                    meta={"reason": reason})
 
     def _release_submission_slot_of(self, info: dict | None, db,
                                      trade_id: str = ""):
@@ -1982,6 +2013,28 @@ class ScalpRunner:
                 _bg(lambda: db.trades.update_one(
                     {"_id": _oid(trade_id)},
                     {"$unset": {"submission_slot": ""}}), "slot_unlink")
+
+    def adopt_open_trade(self, tr: dict):
+        """Phase A recovery — a broker fill arrived for a trade this runner
+        doesn't know (crash between submit and fill, restore raced the
+        insert). Adopt it so exit monitoring and financials keep working;
+        the invariant sweep reconciles the risk projections."""
+        tid = str(tr.get("_id") or "")
+        if not tid or tid in self.live_trades:
+            return
+        self.live_trades[tid] = {
+            "state": "QUEUED", "adopted": True,
+            "queued_ms": now_ms(), "opened_ms": now_ms(),
+            "direction": tr.get("action"),
+            "lot": float(tr.get("lot_size") or 0),
+            "entry_px": tr.get("entry_price"),
+            "stop_px": tr.get("stop_loss"),
+            "target_px": tr.get("take_profit"),
+            "decision_id": tr.get("scalp_decision_id", ""),
+            "est_cost_usd": 0.0,
+        }
+        logger.warning("adopted unknown scalp trade %s (%s %s)", tid,
+                       self.symbol, tr.get("action"))
 
     def on_trade_opened(self, trade_id: str, requested_price: float | None,
                         actual_price: float | None, db=None):
@@ -2146,19 +2199,11 @@ class ScalpRunner:
                 {"account_id": e["account_id"], "deal_id": e["deal_id"],
                  "event_type": e["event_type"]},
                 {"$setOnInsert": e}, upsert=True), "financial_event")
-            self._emit(db, "PositionClosed", trade_id=trade_id,
-                       decision_id=(info or {}).get("decision_id"),
-                       payload={"net_pnl_usd": round(net_pnl, 2),
-                                "close_reason": close_reason,
-                                "exit_price": exit_price})
+            # Phase A — PositionClosed / FinancialApplied are emitted
+            # DURABLY by apply_deal_financials (transactional outbox),
+            # which is this method's only caller with db.
             _bg(lambda t=trade_id: risk_reservations.release_for_trade(
                 db, t, "closed"), "resv_release")
-            self._emit(db, "FinancialApplied", trade_id=trade_id,
-                       decision_id=(info or {}).get("decision_id"),
-                       payload={"deal_id": deal_id,
-                                "net_pnl_usd": round(net_pnl, 2),
-                                "commission_usd": commission,
-                                "swap_usd": swap, "source": source})
             if info:
                 outcome = {
                     "requested_entry_price": info.get("requested_entry"),
@@ -2262,14 +2307,8 @@ class ScalpRunner:
                 {"account_id": e["account_id"], "deal_id": e["deal_id"],
                  "event_type": e["event_type"]},
                 {"$setOnInsert": e}, upsert=True), "financial_event")
-            self._emit(db, "FinancialApplied", trade_id=trade_id,
-                       decision_id=(info or {}).get("decision_id"),
-                       payload={"deal_id": deal_id,
-                                "net_pnl_usd": round(net_pnl, 2),
-                                "commission_usd": commission,
-                                "swap_usd": swap,
-                                "partial": True,
-                                "remaining_lots": float(remaining_lots or 0)})
+            # Phase A — FinancialApplied (partial) is emitted DURABLY by
+            # apply_deal_financials via the transactional outbox.
             if info and info.get("decision_id"):
                 rec = {"deal_id": deal_id,
                        "closed_lots": float(closed_lots or 0),
@@ -2410,7 +2449,7 @@ class ScalpRunner:
         open_count = 0
         async for tr in db.trades.find(
                 {"account_id": self.account_id, "scope": "scalp_fast",
-                 "status": "open"}):
+                 "status": {"$in": ["open", "pending"]}}):
             if base_symbol(tr.get("symbol") or "") != self.symbol:
                 continue
             open_count += 1
@@ -2418,8 +2457,18 @@ class ScalpRunner:
             if tid in self.live_trades:
                 continue
             pend = tr.get("pending_modification") or {}
+            # Phase A recovery — status=pending means the broker never
+            # confirmed: restore as QUEUED so the fill ack (or the queue
+            # timeout failsafe) drives the lifecycle after a restart.
+            if tr.get("status") == "pending":
+                _st = "QUEUED"
+            elif pend.get("type") == "FULL_CLOSE":
+                _st = "CLOSE_REQUESTED"
+            else:
+                _st = "OPEN"
             info = {
-                "state": "CLOSE_REQUESTED" if pend.get("type") == "FULL_CLOSE" else "OPEN",
+                "state": _st,
+                "queued_ms": _iso_to_ms(tr.get("created_at")) or now_ms(),
                 "opened_ms": _iso_to_ms(tr.get("opened_at")) or now_ms(),
                 "direction": tr.get("action"),
                 "lot": float(tr.get("lot_size") or 0),
@@ -2811,6 +2860,33 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
             ev_key,
             {"$set": {"status": "applied", "risk_applied": True,
                       "applied_at": _applied_now.isoformat(), **_lat}})
+        # Phase A — durable lifecycle events via the transactional outbox
+        # (awaited, deterministic keys → exactly-once in trade_events) and
+        # the formal order-state transition to FINANCIALLY_RECONCILED.
+        _tid = str(trade["_id"])
+        _dec = trade.get("scalp_decision_id")
+        _net = round(float(profit or 0) + float(commission or 0)
+                     + float(swap or 0), 2)
+        if not partial:
+            await r._emit_durable(
+                db, "PositionClosed", decision_id=_dec, trade_id=_tid,
+                key=f"te:PositionClosed:{_tid}",
+                payload={"net_pnl_usd": _net,
+                         "close_reason": trade.get("close_reason"),
+                         "exit_price": float(price) if price else None})
+        await r._emit_durable(
+            db, "FinancialApplied", decision_id=_dec, trade_id=_tid,
+            key=f"te:FinancialApplied:{deal_id}:"
+                f"{'partial' if partial else 'full'}",
+            payload={"deal_id": str(deal_id), "net_pnl_usd": _net,
+                     "commission_usd": float(commission or 0),
+                     "swap_usd": float(swap or 0), "partial": bool(partial),
+                     "source": "broker_deal"})
+        if not partial:
+            await order_state.apply(db, _tid,
+                                    order_state.FINANCIALLY_RECONCILED,
+                                    f"finrec:{deal_id}",
+                                    meta={"deal_id": str(deal_id)})
     except Exception as e:  # noqa: BLE001
         return {"applied": False, "reason": f"apply_failed: {e}"}
     return {"applied": True, "reason": None}

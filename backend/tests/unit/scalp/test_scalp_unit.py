@@ -285,7 +285,8 @@ def _stub_db():
     for coll in ("scalp_decisions", "scalp_ticks", "scalp_risk_state",
                  "scalp_configs", "trades", "broker_deals", "scalp_owners",
                  "scalp_financial_events", "accounts",
-                 "scalp_submission_slots", "risk_reservations"):
+                 "scalp_submission_slots", "risk_reservations",
+                 "outbox", "trade_events"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
         c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
@@ -294,6 +295,17 @@ def _stub_db():
         c.find_one = AsyncMock(return_value=None)
         c.count_documents = AsyncMock(return_value=0)
         c.delete_many = AsyncMock()
+        c.create_index = AsyncMock()
+
+    # Phase A — outbox immediate-publish path iterates find().sort().limit()
+    def _empty_cursor(*_a, **_k):
+        async def gen():
+            return
+            yield  # pragma: no cover
+        cur = MagicMock()
+        cur.sort.return_value.limit.return_value = gen()
+        return cur
+    db.outbox.find = MagicMock(side_effect=_empty_cursor)
     # iter-61: broker with plenty of healthy execution history so the
     # fail-closed history cap / exec-quality gate don't mask the stages
     # under test (each session bucket present, favourable averages)

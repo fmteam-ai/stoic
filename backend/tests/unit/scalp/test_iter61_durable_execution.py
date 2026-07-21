@@ -73,7 +73,7 @@ class TestDurableSlotLink:
         assert "slot_link_failed" in src
         # BrokerSubmitted emit must come AFTER the durable link check
         gate = src.index("_linked = _link_res.matched_count == 1")
-        emit = src.index('self._emit(db, "BrokerSubmitted"')
+        emit = src.index('self._emit_durable(db, "BrokerSubmitted"')
         risk = src.index("self.risk_state.record_open()")
         assert gate < emit < risk
 

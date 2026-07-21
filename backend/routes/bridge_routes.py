@@ -612,6 +612,12 @@ async def poll_trades(payload: PollRequest):
             await db.scalp_owners.update_one(
                 {"account_id": str(acc["_id"])},
                 {"$max": {"max_order_epoch": ep}}, upsert=False)
+        if t.get("scope") == "scalp_fast":
+            # Phase A — formal lifecycle: the EA has claimed this order
+            from scalp import order_state
+            await order_state.apply(db, str(t["_id"]),
+                                    order_state.EA_CLAIMED,
+                                    f"claim:{str(t['_id'])}")
         out.append({
             "trade_id": str(t["_id"]),
             "symbol": t["symbol"],
@@ -990,10 +996,14 @@ async def report_trade(payload: BridgeTradeReport):
     if trade.get("scope") == "scalp_fast":
         try:
             from scalp.engine import runners_for_account
+            from scalp import order_state
             for r in runners_for_account(str(acc["_id"])):
                 if r.symbol != (trade.get("symbol") or "").upper():
                     continue
                 if payload.status == "open" and payload.entry_price is not None:
+                    # Phase A recovery — adopt fills for unknown trades
+                    if payload.trade_id not in r.live_trades:
+                        r.adopt_open_trade(trade)
                     r.on_trade_opened(payload.trade_id,
                                       float(trade.get("entry_price") or 0) or None,
                                       float(payload.entry_price), db=db)
@@ -1002,11 +1012,22 @@ async def report_trade(payload: BridgeTradeReport):
                     from scalp import risk_reservations
                     await risk_reservations.release_for_trade(
                         db, payload.trade_id, "broker_ack")
+                    # Phase A — formal lifecycle (MT5 fill ack carries the
+                    # protective SL/TP with the order): ACCEPTED then OPEN
+                    await order_state.apply(db, payload.trade_id,
+                                            order_state.BROKER_ACCEPTED,
+                                            f"ack:{payload.trade_id}")
+                    await order_state.apply(db, payload.trade_id,
+                                            order_state.OPEN,
+                                            f"open:{payload.trade_id}")
                 elif payload.status == "closed":
                     r.on_close_ack(payload.trade_id,
                                    exit_price=(float(payload.exit_price)
                                                if payload.exit_price else None),
                                    db=db)
+                    await order_state.apply(db, payload.trade_id,
+                                            order_state.CLOSED,
+                                            f"closed:{payload.trade_id}")
         except Exception:
             pass
     if slippage_force_close:

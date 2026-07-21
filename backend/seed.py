@@ -168,6 +168,9 @@ async def ensure_indexes():
         # safety guarantee (one active reservation per decision / trade).
         from scalp.risk_reservations import ensure_reservation_indexes
         await ensure_reservation_indexes(db)
+        # Phase A — transactional-outbox durability for critical events
+        from scalp.outbox import ensure_outbox_indexes
+        await ensure_outbox_indexes(db)
         from scalp.engine import set_service_block
         set_service_block(None)
     except Exception as e:  # noqa: BLE001

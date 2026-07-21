@@ -97,6 +97,10 @@ async def _scalp_reconcile_loop():
                 # review item 2 — resolve stale provisional risk reservations
                 from scalp.risk_reservations import sweep_stale
                 await sweep_stale(get_db())
+                # Phase A — transactional-outbox relay: publish any critical
+                # events a crash left pending (producers awaited the insert).
+                from scalp.outbox import relay_once
+                await relay_once(get_db())
             if now_m >= next_full:
                 next_full = now_m + FULL
                 try:
