@@ -32,13 +32,54 @@ def clamp_tighter(direction: str, current_sl: float, proposed: float,
     return new if new < current_sl else None
 
 
+def position_p_target(*, direction: str, entry_px: float, mid: float,
+                      stop_px: float, target_px: float, pip_size: float,
+                      p_model: float | None = None, elapsed_ms: int = 0,
+                      max_holding_ms: int = 0,
+                      vol_short_pips: float | None = None,
+                      spread_pips: float | None = None,
+                      mfe_frac: float | None = None,
+                      mae_frac: float | None = None) -> float:
+    """Round 18 review item 7 — P(THIS target is reached before THIS stop
+    within the REMAINING holding horizon) for an EXISTING position.
+
+    A fresh-entry model score is NOT that probability. Composite:
+    · driftless double-barrier base:  dist_stop / (dist_stop + dist_target)
+    · drift tilt from the calibrated model p (entry-style directional edge)
+    · time-capacity discount: expected reachable range from remaining time ×
+      short-horizon volatility vs the remaining distance to target (+ spread)
+    · MAE/MFE penalty: deep adverse excursion with no favorable progress
+    """
+    sign = 1.0 if direction == "BUY" else -1.0
+    dist_t = sign * (target_px - mid) / pip_size    # pips still to travel
+    dist_s = sign * (mid - stop_px) / pip_size      # pips of room to stop
+    if dist_t <= 0:
+        return 0.98                                 # at/through target
+    if dist_s <= 0:
+        return 0.02                                 # at/through stop
+    p = dist_s / (dist_s + dist_t)
+    if p_model is not None:
+        p += 0.6 * (p_model - 0.5)
+    if max_holding_ms and vol_short_pips:
+        remaining_min = max(0.0, (max_holding_ms - elapsed_ms) / 60_000.0)
+        reach = max(float(vol_short_pips), 0.1) * (remaining_min ** 0.5)
+        need = dist_t + (spread_pips or 0.0)
+        p *= max(0.3, min(1.0, reach / need))
+    if mae_frac is not None and mae_frac >= 0.7 and (mfe_frac or 0.0) < 0.2:
+        p *= 0.8
+    return round(min(0.98, max(0.02, p)), 4)
+
+
 def evaluate(*, direction: str, entry_px: float, mid: float, stop_px: float,
              target_px: float, pip_size: float, elapsed_ms: int,
              max_holding_ms: int, p_target: float | None = None,
              regime_opposes: bool = False, vol_ratio: float | None = None,
              spread_pips: float | None = None,
              spread_limit: float | None = None) -> dict:
-    """Deterministic per-second decision for one open scalp."""
+    """Deterministic per-second decision for one open scalp.
+
+    p_target MUST be the position-conditioned probability from
+    position_p_target() — never a fresh-entry model score."""
     sign = 1.0 if direction == "BUY" else -1.0
     target_dist = abs(target_px - entry_px) or pip_size
     progress = sign * (mid - entry_px) / target_dist   # 1.0 = at target

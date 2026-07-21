@@ -86,7 +86,9 @@ class TestEngineIntegration:
         assert "def _adaptive_manage(" in src
         assert "adaptive_exits.clamp_tighter" in src
         assert "MODIFY_SL" in src
-        assert 'info.get("adaptive_stop_px")' in src
+        # round 18 review item 2 — pending vs broker-confirmed stop state
+        assert 'info.get("confirmed_stop_px")' in src
+        assert "pending_stop_px" in src
 
 
 class TestDemoHistoryExemption:

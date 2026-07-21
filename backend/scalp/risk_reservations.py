@@ -9,10 +9,14 @@ risk while a submission is in-flight or uncertain:
                                  reconciliation to resolve)
 
 Release reasons: broker_reject | broker_ack | closed | reconciled | expired.
+
+Round 18 review — timestamps are NATIVE BSON datetimes, every document keeps
+an `active` flag, and DB-level unique constraints (ensure_reservation_indexes)
+enforce one active reservation per decision and per linked trade.
 """
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +24,27 @@ ACTIVE_STATES = ("RISK_RESERVED", "QUEUED_UNCONFIRMED", "SLOT_LINKED")
 STALE_TTL_SEC = 900
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now() -> datetime:
+    """Native BSON datetime (review item 8) — range queries stay type-safe."""
+    return datetime.now(timezone.utc)
+
+
+async def ensure_reservation_indexes(db) -> None:
+    """review item 8 — DB-enforced reservation constraints:
+    unique reservation_id, one ACTIVE reservation per decision, one ACTIVE
+    reservation per linked trade, plus the sweep/monitor compound index."""
+    c = db.risk_reservations
+    await c.create_index("reservation_id", unique=True)
+    await c.create_index("decision_id", unique=True,
+                         partialFilterExpression={"active": True},
+                         name="uniq_active_decision")
+    await c.create_index("trade_id", unique=True,
+                         partialFilterExpression={
+                             "active": True,
+                             "trade_id": {"$type": "string"}},
+                         name="uniq_active_trade")
+    await c.create_index([("account_id", 1), ("state", 1),
+                          ("updated_at", -1)])
 
 
 async def reserve(db, *, account_id: str, user_id: str, decision_id: str,
@@ -29,7 +52,8 @@ async def reserve(db, *, account_id: str, user_id: str, decision_id: str,
     doc = {"reservation_id": uuid.uuid4().hex, "account_id": account_id,
            "user_id": user_id, "decision_id": decision_id,
            "risk_usd": round(float(risk_usd or 0), 2), "lot": float(lot or 0),
-           "state": "RISK_RESERVED", "uncertain": False, "trade_id": None,
+           "state": "RISK_RESERVED", "active": True,
+           "uncertain": False, "trade_id": None,
            "created_at": _now(), "updated_at": _now(),
            "transitions": [{"state": "RISK_RESERVED", "at": _now()}]}
     await db.risk_reservations.insert_one(dict(doc))
@@ -37,7 +61,8 @@ async def reserve(db, *, account_id: str, user_id: str, decision_id: str,
 
 
 async def transition(db, reservation_id: str, state: str, **extra) -> None:
-    upd = {"state": state, "updated_at": _now(), **extra}
+    upd = {"state": state, "active": state in ACTIVE_STATES,
+           "updated_at": _now(), **extra}
     await db.risk_reservations.update_one(
         {"reservation_id": reservation_id},
         {"$set": upd,
@@ -49,8 +74,8 @@ async def transition(db, reservation_id: str, state: str, **extra) -> None:
 async def release_for_trade(db, trade_id: str, reason: str) -> None:
     await db.risk_reservations.update_many(
         {"trade_id": trade_id, "state": {"$in": list(ACTIVE_STATES)}},
-        {"$set": {"state": "RELEASED", "release_reason": reason,
-                  "updated_at": _now()},
+        {"$set": {"state": "RELEASED", "active": False,
+                  "release_reason": reason, "updated_at": _now()},
          "$push": {"transitions": {"state": "RELEASED", "at": _now(),
                                    "reason": reason}}})
 
@@ -65,9 +90,7 @@ async def unaccounted_count(db, account_id: str) -> int:
 
 async def sweep_stale(db, older_than_sec: int = STALE_TTL_SEC) -> dict:
     """Reconciliation: resolve reservations stuck active beyond the TTL."""
-    from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc)
-              - timedelta(seconds=older_than_sec)).isoformat()
+    cutoff = _now() - timedelta(seconds=older_than_sec)
     released = kept = 0
     async for r in db.risk_reservations.find(
             {"state": {"$in": list(ACTIVE_STATES)},

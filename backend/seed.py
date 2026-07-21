@@ -164,6 +164,10 @@ async def ensure_indexes():
         await db.scalp_financial_events.create_index([("account_id", 1), ("at", -1)])
         await db.scalp_financial_events.create_index(
             [("account_id", 1), ("deal_id", 1), ("event_type", 1)], unique=True)
+        # Round 18 review item 8 — reservation uniqueness constraints are a
+        # safety guarantee (one active reservation per decision / trade).
+        from scalp.risk_reservations import ensure_reservation_indexes
+        await ensure_reservation_indexes(db)
         from scalp.engine import set_service_block
         set_service_block(None)
     except Exception as e:  # noqa: BLE001

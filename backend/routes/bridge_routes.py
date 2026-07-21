@@ -803,6 +803,19 @@ async def modification_ack(payload: BridgeModificationAck):
         pass
 
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    # Scalp fast path (round 18 review item 2): a MODIFY_SL ack promotes the
+    # runner's PENDING stop to the CONFIRMED stop — until this ack the bot
+    # must keep behaving as if the original stop is live at the broker.
+    if trade.get("scope") == "scalp_fast" and payload.type == "MODIFY_SL":
+        try:
+            from scalp.engine import runners_for_account
+            for r in runners_for_account(str(acc["_id"])):
+                if r.symbol != (trade.get("symbol") or "").upper():
+                    continue
+                r.on_stop_modified(payload.trade_id, payload.new_sl,
+                                   bool(payload.success), db=db)
+        except Exception:
+            pass
     await ws_manager.broadcast(acc["user_id"], "trade_updated", {
         "trade_id": payload.trade_id,
         **update,
@@ -984,6 +997,11 @@ async def report_trade(payload: BridgeTradeReport):
                     r.on_trade_opened(payload.trade_id,
                                       float(trade.get("entry_price") or 0) or None,
                                       float(payload.entry_price), db=db)
+                    # round 18 review item 1 — reservation release is
+                    # safety-relevant state: awaited, not fire-and-forget.
+                    from scalp import risk_reservations
+                    await risk_reservations.release_for_trade(
+                        db, payload.trade_id, "broker_ack")
                 elif payload.status == "closed":
                     r.on_close_ack(payload.trade_id,
                                    exit_price=(float(payload.exit_price)
