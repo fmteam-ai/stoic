@@ -670,3 +670,16 @@ User-submitted quantitative review, all items implemented (testing_agent iter-45
 ### Phase 2 backlog (audit, deferred by user approval)
 - P1: Move background trading loops out of the web process (separate worker + durable ownership); State Tuning Panel; production deploy.
 - P2: Vite migration (drop CRA/CRACO); backend requirements split per service; remove duplicate frontend libs (dayjs/SWR/phosphor); route-level lazy loading + table virtualization; incremental invariant scans; worker health telemetry; signed installer (checksum/Authenticode); asymmetric JWT (RS256/EdDSA); step-up auth for high-risk ops; broker-native EA preflight quote/margin.
+
+## Session 2026-06 (fork) — Test Suite Green + Vault Re-key
+- Root cause of remaining decrypt failures: 8 legacy secret blobs (accounts.creds.investor/master, notifications.telegram_bot_token, crypto_accounts.creds.*) were encrypted under the old JWT_SECRET-derived key before KEY_VAULT_MASTER existed.
+- Fix: /app/backend/migrations/rekey_vault.py (idempotent one-time re-key, executed: 8 migrated, 0 failed).
+- Full backend suite: 2189 passed / 0 failed / 7 skipped (incl. 15 new iter-58 verification tests by testing agent). Report: /app/test_reports/iteration_58.json — zero issues, zero action items.
+- Verified: creds reveal 200, telegram test 200, strict BotConfigUpdate 422s, login lockout 429 (not bypassable), health endpoints sanitized, refresh rotation, CSRF double-submit (Origin allowlist opt-in via CSRF_ENFORCE_ORIGIN — browser path confirmed via curl).
+
+### Next priorities (carried)
+- P1: Separate background workers out of server.py (python -m workers.trading / workers.reconciliation)
+- P1: State Tuning Panel (UI for Monte Carlo drift, TP caps, counter-trend thresholds)
+- P1: Deploy stable shadow/demo to production K8s
+- P2: Phase 2 Data/Model platform (feature contract, model registry, champion/challenger)
+- P2: Vite migration; event-driven outbox; GBPUSD scalp expansion
