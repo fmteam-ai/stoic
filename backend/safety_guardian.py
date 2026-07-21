@@ -134,6 +134,17 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
                      value=f"lot={lot} entry={entry} sl={sl}"))
     sl_pips = price_to_pips(sym, abs(entry - sl))
     pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"))
+    # FAIL CLOSED (audit E8): an unknown pip value would silently understate
+    # risk — refuse the trade instead of guessing.
+    if not pip_usd or pip_usd <= 0 or not sl_pips or sl_pips <= 0:
+        audit.append(_fail("instrument_spec_known",
+                           "Pip value / stop distance could not be resolved "
+                           "for this instrument — refusing trade",
+                           f"pip_usd={pip_usd} sl_pips={sl_pips}"))
+        return {"ok": False, "blocked_by": "instrument_spec_known",
+                "audit": audit,
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "context": context}
     risk_usd = sl_pips * pip_usd * lot
     max_risk_usd = equity * (MAX_RISK_PCT_PER_TRADE / 100.0)
     if risk_usd > max_risk_usd:
@@ -162,13 +173,17 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     audit.append(_ok("lot_vs_equity_sanity",
                      value=f"${lot_value_proxy:.0f} <= ${max_lot_value:.0f}"))
 
-    # 6. Daily loss cap (realized today)
+    # 6. Daily loss cap (realized today) — DB-side aggregation (audit E7):
+    # never silently truncated by a fixed to_list cap.
     day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    today_closed = await db.trades.find({
-        "user_id": user_id, "status": "closed", "origin": "auto",
-        "account_id": cfg_account_id, "closed_at": {"$gte": day_start},
-    }).to_list(length=200) if cfg_account_id else []
-    realized_today = sum(float(t.get("pnl") or 0) for t in today_closed)
+    realized_today = 0.0
+    if cfg_account_id:
+        async for g in db.trades.aggregate([
+                {"$match": {"user_id": user_id, "status": "closed",
+                            "origin": "auto", "account_id": cfg_account_id,
+                            "closed_at": {"$gte": day_start}}},
+                {"$group": {"_id": None, "pnl": {"$sum": "$pnl"}}}]):
+            realized_today = float(g.get("pnl") or 0)
     max_daily_loss = -(balance * (MAX_DAILY_LOSS_PCT / 100.0))
     if realized_today < max_daily_loss:
         audit.append(_fail("daily_loss_cap",
@@ -180,13 +195,17 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     audit.append(_ok("daily_loss_cap",
                      value=f"${realized_today:.2f} (cap ${max_daily_loss:.2f})"))
 
-    # 7. Total open risk (sum of remaining SL risk on all open trades + this trade)
+    # 7. Total open risk (sum of remaining SL risk on all open trades + this
+    # trade) — uncapped cursor scan (audit E7): no silent truncation.
     open_q = {"user_id": user_id, "status": "open"}
     if cfg_account_id:
         open_q["account_id"] = cfg_account_id
-    open_trades = await db.trades.find(open_q).to_list(length=100)
     open_risk_usd = 0.0
-    for t in open_trades:
+    open_count = 0
+    async for t in db.trades.find(
+            open_q, {"lot_size": 1, "entry_price": 1, "stop_loss": 1,
+                     "symbol": 1}):
+        open_count += 1
         try:
             t_lot = float(t.get("lot_size") or 0)
             t_entry = float(t.get("entry_price") or 0)
@@ -203,12 +222,12 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     if aggregate_risk > max_total_risk:
         audit.append(_fail("total_open_risk_cap",
                            f"Aggregate risk ${aggregate_risk:.2f} > cap ${max_total_risk:.2f} "
-                           f"({MAX_TOTAL_OPEN_RISK_PCT}% of equity, {len(open_trades)} open + new)",
+                           f"({MAX_TOTAL_OPEN_RISK_PCT}% of equity, {open_count} open + new)",
                            aggregate_risk))
         return {"ok": False, "blocked_by": "total_open_risk_cap", "audit": audit,
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "context": {**context, "aggregate_risk": aggregate_risk,
-                            "open_count": len(open_trades)}}
+                            "open_count": open_count}}
     audit.append(_ok("total_open_risk_cap",
                      value=f"${aggregate_risk:.2f} <= ${max_total_risk:.2f}"))
 
@@ -234,7 +253,7 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
             "evaluated_at": datetime.now(timezone.utc).isoformat(),
             "context": {**context, "risk_usd": risk_usd,
                         "aggregate_risk": aggregate_risk,
-                        "open_count": len(open_trades)}}
+                        "open_count": open_count}}
 
 
 def get_guardian_config() -> dict:

@@ -570,7 +570,8 @@ async def poll_trades(payload: PollRequest):
                     {"_dispatched_at": {"$lt": cutoff}},
                 ],
             },
-            {"$set": {"_dispatched_at": datetime.now(timezone.utc).isoformat()},
+            {"$set": {"_dispatched_at": datetime.now(timezone.utc).isoformat(),
+                      "submission_state": "sent_to_terminal"},
              "$inc": {"_dispatch_count": 1}},
         )
         if not t:
@@ -841,9 +842,34 @@ async def report_trade(payload: BridgeTradeReport):
     if not trade or trade["account_id"] != str(acc["_id"]):
         raise HTTPException(status_code=404, detail="Trade not found")
 
-    update = {"status": payload.status}
+    # Idempotency guard (audit E2): a redispatched trade_id that the EA
+    # ALREADY executed must never mint a second broker position. A second
+    # OPEN report with a DIFFERENT ticket means a duplicate broker order —
+    # flag for reconciliation instead of silently overwriting the mapping.
+    if (payload.status == "open" and payload.mt5_ticket is not None
+            and trade.get("mt5_ticket")
+            and int(trade["mt5_ticket"]) != int(payload.mt5_ticket)):
+        logger.critical(
+            "DUPLICATE broker order detected trade=%s existing_ticket=%s "
+            "new_ticket=%s account=%s — flagged requires_reconciliation",
+            payload.trade_id, trade.get("mt5_ticket"), payload.mt5_ticket,
+            str(acc["_id"]))
+        await db.trades.update_one(
+            {"_id": trade["_id"]},
+            {"$set": {"duplicate_broker_tickets": sorted({
+                          int(trade["mt5_ticket"]), int(payload.mt5_ticket)}),
+                      "submission_state": "unknown_requires_reconciliation",
+                      "requires_reconciliation": True}})
+        return {"ok": True, "duplicate": True,
+                "existing_ticket": trade.get("mt5_ticket")}
+
+    update = {"status": payload.status,
+              "submission_state": ("broker_accepted"
+                                   if payload.status == "open"
+                                   else f"broker_{payload.status}")}
     if payload.mt5_ticket is not None:
         update["mt5_ticket"] = payload.mt5_ticket
+        update["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
 
     # Slippage veto — on first OPEN report, compare actual fill vs intended entry
     slippage_force_close = False

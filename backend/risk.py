@@ -18,7 +18,7 @@ PROFILES = {
                 "min_confidence": 65, "max_concurrent": 2, "leverage_cap": 30,  "kelly_cap": 0.50},
     "high":    {"label": "High",    "risk_pct": 2.5, "sl_atr_mult": 1.2, "tp_atr_mult": 3.0,
                 "min_confidence": 55, "max_concurrent": 4, "leverage_cap": 100, "kelly_cap": 0.75},
-    "extreme": {"label": "Extreme", "risk_pct": 5.0, "sl_atr_mult": 1.0, "tp_atr_mult": 4.0,
+    "extreme": {"label": "Extreme", "risk_pct": 2.0, "sl_atr_mult": 1.0, "tp_atr_mult": 4.0,
                 "min_confidence": 45, "max_concurrent": 6, "leverage_cap": 500, "kelly_cap": 0.50},
 }
 # quant review H4: full Kelly (1.00) on uncalibrated confidence is pathological

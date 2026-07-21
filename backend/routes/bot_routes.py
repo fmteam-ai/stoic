@@ -652,6 +652,7 @@ async def update_config(payload: BotConfigUpdate,
                         account_id: Optional[str] = None,
                         user=Depends(get_current_user)):
     db = get_db()
+    owns = None
     if account_id:
         owns = await db.accounts.find_one(
             {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
@@ -661,6 +662,13 @@ async def update_config(payload: BotConfigUpdate,
     # PATCH semantics — only fields explicitly sent by the client are written.
     # Lets the UI / API do partial updates without nuking other settings.
     update = payload.model_dump(exclude_unset=True)
+    if update.get("active") is True and owns is not None:
+        problems = await _activation_readiness(db, owns)
+        if problems:
+            raise HTTPException(status_code=409, detail={
+                "code": "activation_not_ready",
+                "message": "Live activation blocked — fix these first:",
+                "problems": problems})
 
     # Field-specific coercions
     if "symbols" in update:
@@ -735,15 +743,52 @@ async def reset_account_config(account_id: str, user=Depends(get_current_user)):
     return {"deleted": res.deleted_count > 0}
 
 
+async def _activation_readiness(db, account) -> list:
+    """Audit E10 — live activation prerequisites. Returns blocking problems;
+    empty list = ready. Paper accounts are always ready."""
+    if not account or (account.get("mode") or "live").lower() == "paper":
+        return []
+    problems = []
+    if (account.get("status") or "").lower() not in ("connected", "ok"):
+        problems.append(f"Broker account is not connected "
+                        f"(status: {account.get('status') or 'unknown'})")
+    hb = account.get("last_heartbeat")
+    if not hb:
+        problems.append("EA has never sent a heartbeat — attach the STOIC EA "
+                        "to a chart and enable AutoTrading")
+    else:
+        try:
+            age = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat(str(hb))).total_seconds()
+            if age > 120:
+                problems.append(f"EA heartbeat is stale ({int(age)}s old) — "
+                                f"check the terminal is running with "
+                                f"AutoTrading enabled")
+        except (TypeError, ValueError):
+            pass
+    if not account.get("ea_version"):
+        problems.append("EA version unknown — update to the latest STOIC EA")
+    if not (account.get("equity") or account.get("balance")):
+        problems.append("Account equity is unknown — cannot size trades safely")
+    return problems
+
+
 @router.post("/start")
 async def start_bot(account_id: Optional[str] = None, user=Depends(get_current_user)):
     db = get_db()
+    owns = None
     if account_id:
         owns = await db.accounts.find_one(
             {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
         )
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
+        problems = await _activation_readiness(db, owns)
+        if problems:
+            raise HTTPException(status_code=409, detail={
+                "code": "activation_not_ready",
+                "message": "Live activation blocked — fix these first:",
+                "problems": problems})
     await _get_or_create_config(db, user["id"], account_id)
     # CRITICAL: re-enabling a bot must clear the panic/circuit-breaker trip
     # markers, otherwise the UI keeps showing "PANIC LOCK" forever even

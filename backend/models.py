@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Literal, Dict
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 RiskLevel = Literal["low", "medium", "high", "extreme"]
 SignalAction = Literal["BUY", "SELL", "HOLD"]
@@ -122,23 +122,25 @@ class AccountOut(BaseModel):
 
 # ---------- Bot config ----------
 class BotConfigUpdate(BaseModel):
-    risk_level: RiskLevel = "medium"
-    symbols: List[str] = ["XAUUSD", "BTCUSD"]
+    # Conservative first-live defaults (audit C2/C3): low risk, one symbol,
+    # one concurrent trade, spread filter ON. Users opt UP explicitly.
+    risk_level: RiskLevel = "low"
+    symbols: List[str] = ["XAUUSD"]
     active: bool = False
-    max_concurrent_trades: int = 3
+    max_concurrent_trades: int = Field(default=1, ge=1, le=10)
     auto_execute: bool = True
     # Profit Protection Suite
     breakeven_enabled: bool = True            # move SL to entry after +1R
-    breakeven_trigger_r: float = 1.0          # R-multiple at which SL flips to break-even
+    breakeven_trigger_r: float = Field(default=1.0, ge=0.1, le=10.0)
     partial_close_enabled: bool = True        # take 50% off at TP1
-    partial_close_trigger_r: float = 1.0      # R-multiple at which 50% closes (defaults to 1R)
-    partial_close_fraction: float = 0.5       # fraction of lot to close at TP1
+    partial_close_trigger_r: float = Field(default=1.0, ge=0.1, le=10.0)
+    partial_close_fraction: float = Field(default=0.5, gt=0.0, lt=1.0)
     trailing_enabled: bool = True             # trail SL after partial close
-    trailing_start_r: float = 1.5             # activate trailing after this R-multiple
-    trailing_distance_r: float = 0.7          # distance SL trails behind price (in R)
-    daily_drawdown_pct: float = 3.0           # auto-stop bot if today's P&L drops below -3%
+    trailing_start_r: float = Field(default=1.5, ge=0.1, le=20.0)
+    trailing_distance_r: float = Field(default=0.7, gt=0.0, le=10.0)
+    daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
     daily_drawdown_enabled: bool = True
-    weekly_drawdown_pct: float = 7.0          # auto-stop bot if rolling 7-day P&L drops below -7%
+    weekly_drawdown_pct: float = Field(default=7.0, gt=0.0, le=40.0)
     weekly_drawdown_enabled: bool = True
     # Daily profit target (iter-65) — upside mirror of the drawdown breaker.
     # When today's realised P&L reaches `daily_profit_target_r * R_$`, the bot
@@ -146,10 +148,11 @@ class BotConfigUpdate(BaseModel):
     # equity minus locked amount, so the locked $ can't be lost), or pauses
     # the bot until 00:00 UTC next day (`stop` mode). Resets daily at 00:00 UTC.
     # `0` / `null` = disabled.
-    daily_profit_target_r: float = 0.0
-    daily_profit_target_action: str = "lock"  # "lock" | "stop"
-    # Spread Filter — block auto-execution when current MT5 spread > threshold
-    spread_filter_enabled: bool = False
+    daily_profit_target_r: float = Field(default=0.0, ge=0.0, le=20.0)
+    daily_profit_target_action: Literal["lock", "stop"] = "lock"
+    # Spread Filter — ON by default (audit C3): spread is a first-order
+    # execution cost; thresholds are per-symbol and broker-tunable.
+    spread_filter_enabled: bool = True
     max_spread_pips: Dict[str, float] = Field(
         default_factory=lambda: {"XAUUSD": 50.0, "BTCUSD": 100.0}
     )
@@ -169,7 +172,7 @@ class BotConfigUpdate(BaseModel):
     forecast_gate_mode: str = "advisory"
     # Master Agent consensus (iter-63): off | advisory | enforce
     consensus_gate_mode: str = "enforce"
-    consensus_threshold: int = 55
+    consensus_threshold: int = Field(default=55, ge=0, le=100)
     # Probabilistic forecast layer (iter-64): off | advisory | enforce
     prob_forecast_mode: str = "advisory"
     # Bayesian decision gate (iter-65): off | advisory | enforce
@@ -187,15 +190,15 @@ class BotConfigUpdate(BaseModel):
     meta_strategy_enabled: bool = False
     # Uncertainty estimation (iter-110): skip low-confidence trades.
     uncertainty_gate_mode: str = "enforce"   # off | advisory | enforce
-    min_calibrated_confidence: int = 60
+    min_calibrated_confidence: int = Field(default=60, ge=1, le=99)
     # Adaptive Position Sizing (iter-111) — risk% per trade scales with
     # confidence, volatility, recent accuracy, liquidity and drawdown.
     adaptive_sizing_enabled: bool = True
-    adaptive_risk_floor_pct: float = 0.1
-    adaptive_risk_cap_pct: float = 2.0
+    adaptive_risk_floor_pct: float = Field(default=0.1, gt=0.0, le=5.0)
+    adaptive_risk_cap_pct: float = Field(default=2.0, gt=0.0, le=5.0)
     # Monte Carlo trade simulation (iter-112): enter only on positive EV.
     monte_carlo_mode: str = "enforce"        # off | advisory | enforce
-    monte_carlo_paths: int = 10000
+    monte_carlo_paths: int = Field(default=10000, ge=100, le=100000)
     # Advanced Risk Engine (iter-114): dynamic leverage, event-exposure caps,
     # daily/weekly/monthly drawdown ladder, abnormal-market halt, CVaR budget.
     risk_engine_enabled: bool = True
@@ -237,7 +240,7 @@ class BotConfigUpdate(BaseModel):
     min_confidence_override: int = 0
     # Per-account lot-size cap. 0 = uncapped (use signal's computed lot size).
     # Hard ceiling — even if AI computes a larger lot, this clamps it.
-    max_lot_size: float = 0.0
+    max_lot_size: float = Field(default=0.0, ge=0.0, le=100.0)
     # iter-39 — Paper Shadow Mode: when active=False but paper_shadow_mode=True,
     # the bot_runner still generates signals (origin="shadow") but never executes.
     # Lets users A/B-test their config for weeks without risking capital.
@@ -277,6 +280,15 @@ class BotConfigUpdate(BaseModel):
     # Let Winners Run: at TP1 move SL to break-even WITHOUT banking 50% —
     # full size continues toward TP2/TP3. Raises the average win.
     let_winners_run: bool = False
+
+    @model_validator(mode="after")
+    def validate_relationships(self):
+        if self.adaptive_risk_floor_pct > self.adaptive_risk_cap_pct:
+            raise ValueError("adaptive risk floor cannot exceed cap")
+        if (self.trailing_enabled and self.breakeven_enabled
+                and self.trailing_start_r < self.breakeven_trigger_r):
+            raise ValueError("trailing should start at or after breakeven")
+        return self
 
 
 class BotConfigOut(BotConfigUpdate):

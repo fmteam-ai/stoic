@@ -5,6 +5,7 @@ Live MT5 accounts hand the trade to the bridge queue for the EA to fulfil.
 Future broker engines (Binance/CCXT) plug in here without touching call sites.
 """
 import logging
+import os
 from datetime import datetime, timezone
 from abc import ABC, abstractmethod
 
@@ -42,23 +43,89 @@ class MT5BridgeEngine(ExecutionEngine):
             )
             return {"blocked": "market_closed", **closure}
 
-        # Atomic last-line-of-defense cap check. bot_runner.py reads `inflight`
-        # ONCE per loop iteration — hot reloads can spawn duplicate loops that
-        # all see stale counts. Re-counting right before insert closes the race.
+        # FRESH ACCOUNT STATE (audit E1) — the account object was loaded at
+        # the top of the bot loop; equity/margin/connection can change before
+        # execution. Re-read the critical fields and fail closed on staleness.
+        # (The scalp fast path performs its own, stricter refresh.)
+        if (signal.get("scope") != "scalp_fast"
+                and (account.get("mode") or "live").lower() != "paper"):
+            fresh = await db.accounts.find_one(
+                {"_id": account["_id"]},
+                {"equity": 1, "balance": 1, "free_margin": 1, "status": 1,
+                 "last_heartbeat": 1, "open_positions": 1,
+                 "account_type": 1, "leverage": 1})
+            if fresh is None:
+                return {"blocked": "account_missing"}
+            if (fresh.get("status") or "").lower() not in ("connected", "ok", ""):
+                return {"blocked": "account_disconnected",
+                        "account_status": fresh.get("status")}
+            hb = fresh.get("last_heartbeat")
+            if hb:
+                try:
+                    age = (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(str(hb))).total_seconds()
+                    if age > float(os.environ.get(
+                            "EXEC_MAX_HEARTBEAT_AGE_SEC", "120")):
+                        return {"blocked": "stale_heartbeat",
+                                "heartbeat_age_sec": int(age)}
+                except (TypeError, ValueError):
+                    pass
+            if not (fresh.get("equity") or fresh.get("balance")):
+                return {"blocked": "equity_unknown"}
+            account = {**account, **fresh}
+
+            # FINAL QUOTE PREFLIGHT (audit E9) — cancel when price moved so
+            # far since signal generation that the approved geometry no
+            # longer holds (entry deviation > 50% of stop distance, or the
+            # market already traded through the stop).
+            try:
+                q = await get_quote(signal["symbol"])
+                px = float((q or {}).get("price") or 0)
+            except Exception:
+                px = 0.0
+            entry0 = float(signal.get("entry_price") or 0)
+            sl0 = float(signal.get("stop_loss") or 0)
+            if px > 0 and entry0 > 0 and sl0 > 0:
+                stop_dist = abs(entry0 - sl0)
+                deviation = abs(px - entry0)
+                through_stop = ((signal.get("action") == "BUY" and px <= sl0)
+                                or (signal.get("action") == "SELL" and px >= sl0))
+                if through_stop or (stop_dist > 0
+                                    and deviation > 0.5 * stop_dist):
+                    logger.warning(
+                        "MT5 execute blocked by quote preflight user=%s sym=%s "
+                        "entry=%.5f live=%.5f dev=%.5f stop_dist=%.5f",
+                        user_id, signal.get("symbol"), entry0, px,
+                        deviation, stop_dist)
+                    return {"blocked": "entry_deviation",
+                            "live_price": px, "signal_entry": entry0,
+                            "deviation": round(deviation, 5),
+                            "stop_distance": round(stop_dist, 5)}
+
+        # Atomic last-line-of-defense cap check (audit E4 — consistent
+        # semantics with the runner): the config cap limits AUTOMATED trades;
+        # a separate hard total-positions cap bounds the whole account.
         if max_concurrent > 0:
-            cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
+            cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]},
+                     "origin": "auto"}
             if cfg_account_id:
                 cap_q["account_id"] = cfg_account_id
             live_inflight = await db.trades.count_documents(cap_q)
-            if live_inflight >= max_concurrent:
+            total_q = {k: v for k, v in cap_q.items() if k != "origin"}
+            total_inflight = await db.trades.count_documents(total_q)
+            max_total = max_concurrent + int(os.environ.get(
+                "EXEC_TOTAL_POSITIONS_BUFFER", "2"))
+            if live_inflight >= max_concurrent or total_inflight >= max_total:
                 logger.warning(
-                    "execute blocked by max_concurrent cap user=%s acct=%s sym=%s "
-                    "inflight=%d cap=%d",
-                    user_id, cfg_account_id or "default",
-                    signal.get("symbol"), live_inflight, max_concurrent,
+                    "execute blocked by concurrency cap user=%s acct=%s sym=%s "
+                    "auto=%d/%d total=%d/%d",
+                    user_id, cfg_account_id or "default", signal.get("symbol"),
+                    live_inflight, max_concurrent, total_inflight, max_total,
                 )
                 return {"blocked": "max_concurrent_cap",
-                        "inflight": live_inflight, "cap": max_concurrent}
+                        "inflight": live_inflight, "cap": max_concurrent,
+                        "total_inflight": total_inflight,
+                        "total_cap": max_total}
 
         # SAFETY GUARDIAN — server-side hard floors for live accounts. CANNOT be
         # disabled by user config. Refuses any trade that would breach equity,

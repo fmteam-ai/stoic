@@ -1823,12 +1823,24 @@ async def _process_user_account_locked(db, cfg: dict):
                 if _eq > 0 and _pips > 0 and _pip_std > 0:
                     _max_risk_lot = (_eq * _cap_pct / 100.0) / (_pips * _pip_std)
                     if effective_lot > _max_risk_lot:
+                        # FAIL CLOSED (audit E6): floor to the broker step; if
+                        # even the minimum 0.01 lot exceeds the risk budget,
+                        # skip the trade instead of rounding UP into oversize.
+                        _floored = int(_max_risk_lot * 100) / 100.0
+                        if _floored < 0.01:
+                            logger.warning(
+                                "Trade skipped acct=%s sym=%s: broker minimum "
+                                "0.01 lot exceeds risk budget (%.2f%% of $%.0f "
+                                "at SL %.1f pips → max %.4f lots)",
+                                cfg_account_id or "default", sym, _cap_pct,
+                                _eq, _pips, _max_risk_lot)
+                            return
                         logger.info(
                             "Std-contract risk clamp acct=%s sym=%s: %.2f → %.2f "
                             "lots (budget %.2f%% of $%.0f, SL %.1f pips)",
                             cfg_account_id or "default", sym, effective_lot,
-                            _max_risk_lot, _cap_pct, _eq, _pips)
-                        effective_lot = max(round(_max_risk_lot, 2), 0.01)
+                            _floored, _cap_pct, _eq, _pips)
+                        effective_lot = _floored
                         sizing_method = sizing_method + "+std_risk_clamp"
         except Exception as e:  # noqa: BLE001
             logger.debug("std risk clamp skipped: %s", e)
@@ -1846,6 +1858,12 @@ async def _process_user_account_locked(db, cfg: dict):
                 "entry_price": signal["entry_price"],
                 "stop_loss": signal["stop_loss"],
                 "take_profit": signal["take_profit"],
+                "tp1": signal.get("tp1"),
+                "tp2": signal.get("tp2"),
+                "tp3": signal.get("tp3"),
+                "sl_pips": signal.get("sl_pips"),
+                "tp_pips": signal.get("tp_pips"),
+                "risk_pct_cap": signal.get("risk_pct_cap"),
                 "origin": "auto",
                 "scope": signal.get("scope"),
                 "trend_ride": signal.get("trend_ride"),
