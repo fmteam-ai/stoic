@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from scalp import edge, gate, kill, permissions, setup
+from scalp import adaptive_exits
 from scalp import model as scalp_model
 from eod_flatten import eod_flatten_block as _eod_flatten_block
 from scalp.costs import dynamic_spread_limit
@@ -1269,7 +1270,8 @@ class ScalpRunner:
                                  len(self.ack_ms_recent)),
             vol_ratio=_vol_ratio,
             hour_utc=datetime.now(timezone.utc).hour,
-            broker_fill_count=(_prior.get("totals") or {}).get("fills") or 0)
+            broker_fill_count=(_prior.get("totals") or {}).get("fills") or 0,
+            history_cap_exempt=(self.mode == "demo_live"))
         ame = adaptive_min_edge(exec_score=eq["score"], vol_ratio=_vol_ratio,
                                 spread_pctl=_sp_pctl,
                                 loss_streak=self.risk_state.consecutive_losses)
@@ -1732,6 +1734,76 @@ class ScalpRunner:
                         lt.bid if info.get("direction") == "BUY" else lt.ask)
                 _bg(lambda t=tid, rs=reason: self._request_close(db, t, rs),
                     "request_close")
+                continue
+            # Batch C — adaptive per-second re-scoring (fixed safety envelope)
+            self._adaptive_manage(db, tid, info, nm, sp)
+
+    def _adaptive_manage(self, db, tid: str, info: dict, nm: int, sp: float):
+        """Per-second re-scoring of one open scalp. Tighten-only envelope:
+        never widens the stop, never touches lots, exits only reduce risk."""
+        if nm < info.get("adaptive_next_ms", 0):
+            return
+        info["adaptive_next_ms"] = nm + adaptive_exits.EVAL_INTERVAL_MS
+        lt = self.state.last_tick
+        if lt is None:
+            return
+        mid = (lt.bid + lt.ask) / 2.0
+        feats = snapshot(self.state)
+        p = None
+        vol_ratio = None
+        if feats:
+            p = scalp_model.predict_p(self.model_key(), feats)
+            if feats.get("vol_long"):
+                vol_ratio = (float(feats.get("vol_short") or 0)
+                             / float(feats["vol_long"]))
+        perms = permissions.get_cached(self.user_id, self.symbol)
+        d = info.get("direction", "BUY")
+        regime_opposes = bool(
+            (d == "BUY" and not perms.get("long_enabled")
+             and perms.get("short_enabled"))
+            or (d == "SELL" and not perms.get("short_enabled")
+                and perms.get("long_enabled")))
+        act = adaptive_exits.evaluate(
+            direction=d, entry_px=info["entry_px"], mid=mid,
+            stop_px=info.get("adaptive_stop_px") or info["stop_px"],
+            target_px=info["target_px"], pip_size=self.cfg.pip_size,
+            elapsed_ms=nm - info["opened_ms"],
+            max_holding_ms=self.risk_state.limits.max_holding_ms,
+            p_target=p, regime_opposes=regime_opposes, vol_ratio=vol_ratio,
+            spread_pips=sp, spread_limit=self.cfg.max_spread_pips)
+        if act["action"] == "EXIT_NOW":
+            info["state"] = "CLOSE_REQUESTED"
+            info["close_requested_ms"] = nm
+            info["exit_reference_bid"] = lt.bid
+            info["exit_reference_ask"] = lt.ask
+            info["requested_exit_price"] = lt.bid if d == "BUY" else lt.ask
+            info["adaptive_exit"] = act
+            _bg(lambda t=tid, rs=act["reason"]: self._request_close(db, t, rs),
+                "request_close")
+            return
+        if act["action"] == "TIGHTEN_STOP":
+            if nm < info.get("adaptive_tighten_next_ms", 0):
+                return
+            cur_sl = info.get("adaptive_stop_px") or info["stop_px"]
+            new_sl = adaptive_exits.clamp_tighter(
+                d, cur_sl, act["proposed_stop_px"], mid, self.cfg.pip_size)
+            if new_sl is None:                      # envelope: only tighter
+                return
+            info["adaptive_tighten_next_ms"] = (
+                nm + adaptive_exits.TIGHTEN_COOLDOWN_MS)
+            info["adaptive_stop_px"] = new_sl
+            _bg(lambda t=tid, s=new_sl, rs=act["reason"]:
+                db.trades.update_one(
+                    {"_id": _oid(t), "status": "open"},
+                    {"$set": {"pending_modification": {
+                        "type": "MODIFY_SL", "new_sl": round(s, 5),
+                        "requested_at": datetime.now(
+                            timezone.utc).isoformat(),
+                        "reason": rs}},
+                     "$push": {"adaptive_actions": {
+                         "ts_ms": nm, "action": "TIGHTEN_STOP",
+                         "reason": rs, "new_sl": round(s, 5)}}}),
+                "adaptive_tighten")
 
     async def _request_close(self, db, trade_id: str, reason: str):
         await db.trades.update_one(

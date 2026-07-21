@@ -85,7 +85,8 @@ def execution_quality(*, spread_pctl: float | None = None,
                       ack_latency_ms: float | None = None,
                       vol_ratio: float | None = None,
                       hour_utc: int | None = None,
-                      broker_fill_count: int | None = None) -> dict:
+                      broker_fill_count: int | None = None,
+                      history_cap_exempt: bool = False) -> dict:
     """0-100 additive score; None inputs get neutral half-credit, BUT with
     insufficient real broker fills the final score is capped below the live
     gate (fail-closed — half-credit neutrality alone must never pass a live
@@ -128,7 +129,9 @@ def execution_quality(*, spread_pctl: float | None = None,
     breakdown = {k: round(v, 1) for k, v in b.items()}
     score = int(round(_clamp(sum(b.values()), 0, 100)))
     fills = int(broker_fill_count or 0)
-    history_capped = fills < MIN_BROKER_FILLS_FOR_LIVE
+    # demo-live is exempt: risk-free fills are HOW the history gets built
+    history_capped = (not history_cap_exempt
+                      and fills < MIN_BROKER_FILLS_FOR_LIVE)
     if history_capped:
         score = min(score, INSUFFICIENT_HISTORY_MAX_SCORE)
     return {"score": score, "breakdown": breakdown,

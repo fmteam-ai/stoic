@@ -73,12 +73,13 @@ def test_scalp_status_current_time_outside_window(admin_session):
 
 # --- Startup wiring compile-time proofs -------------------------------
 def test_server_registers_eod_flatten_task():
+    # iter-62: the loop body moved to background_loops.py (worker separation)
     src = open("/app/backend/server.py").read()
-    assert "async def _eod_flatten_loop" in src
     assert "_eod_flatten_task = asyncio.create_task(_eod_flatten_loop())" \
         in src
-    # sweep import inside the loop
-    assert "from eod_flatten import sweep_eod_flatten" in src
+    loops = open("/app/backend/background_loops.py").read()
+    assert "async def _eod_flatten_loop" in loops
+    assert "from eod_flatten import sweep_eod_flatten" in loops
 
 
 def test_bot_runner_has_combined_veto():
