@@ -40,6 +40,13 @@ async def set_config(req: ScalpConfigRequest, user=Depends(get_current_user)):
     return {"ok": True, "status": runner.status()}
 
 
+@router.get("/broker-stats")
+async def broker_stats_summary(broker: str, user=Depends(get_current_user)):
+    """Per-session broker execution behaviour learned from real fills."""
+    from scalp.broker_stats import summary
+    return await summary(get_db(), broker)
+
+
 @router.delete("/config")
 async def remove_config(account_id: str, symbol: str = "EURUSD",
                         user=Depends(get_current_user)):

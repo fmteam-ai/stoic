@@ -809,6 +809,7 @@ class ScalpRunner:
         self.live_trades: dict = {}            # trade_id -> {state: OPEN|CLOSE_REQUESTED,...}
         self._hydrated = False
         self._risk_restored = False            # NO entries until restored (item 9)
+        self.ack_ms_recent: deque = deque(maxlen=20)   # broker fill-delay history
         self._last_eval_ms = 0
         self._tick_buffer: list = []
         self._last_flush_ms = now_ms()
@@ -993,6 +994,7 @@ class ScalpRunner:
             "broker": self.broker, "account_type": self.account_type,
             "model_key": self.model_key(),
             "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "model_version": scalp_model.version_of(self.model_key()),
             "dataset": "candidate",
             "ts_ms": nm, "signal_ts_ms": signal_ts_ms,
             "feature_snapshot_ts_ms": feats["_now_ms"],
@@ -1057,6 +1059,21 @@ class ScalpRunner:
                 hour_utc=datetime.now(timezone.utc).hour)
             doc["ev"] = _ev
             doc["quality"] = _q
+            # refinement 6 — consolidated decision metadata for optimisation
+            self.state.vols.append(float(feats.get("vol_short") or 0))
+            _vs = sorted(self.state.vols)
+            _v_now = float(feats.get("vol_short") or 0)
+            doc["decision_meta"] = {
+                "ev_usd": _ev.get("ev_usd"), "ev_pips": _ev.get("ev_pips"),
+                "quality_score": _q["score"],
+                "regime": perms.get("regime"),
+                "liquidity": round(min(1.0, float(feats.get("tick_rate")
+                                                  or 0) / 1.5), 3),
+                "spread_pctl": feats.get("spread_pctl"),
+                "volatility_pctl": (round(sum(1 for x in _vs if x <= _v_now)
+                                          / len(_vs), 3) if _vs else None),
+                "version": 1,
+            }
             if (verdict == "live_traded" and risk_res.get("ok")
                     and risk_res.get("lot")):
                 _mult = scalp_size_multiplier(_q["score"])
@@ -1212,6 +1229,57 @@ class ScalpRunner:
                           "reforecast": reforecast,
                           "spread_delta_pips": round(spread_delta, 3),
                           "adverse_drift_pips": round(max(0.0, adverse_pips), 3)}:
+                db.scalp_decisions.update_one(
+                    {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
+        # refinement 1 — EXECUTION QUALITY (0-100) immediately before
+        # submission from observable conditions; poor conditions GATE the
+        # trade even when expected value is positive (user decision).
+        # refinement 2 — the min net edge ADAPTS to conditions within
+        # [0.15p, 0.60p]: never looser than the historical floor.
+        from scalp.exec_quality import (EXEC_QUALITY_MIN, adaptive_min_edge,
+                                        execution_quality)
+        _sp_hist = sorted(self.state.spreads)
+        _sp_pctl = (sum(1 for s in _sp_hist if s <= sp) / len(_sp_hist)
+                    if _sp_hist else None)
+        _feats_eq = snapshot(self.state)
+        _vol_ratio = None
+        if _feats_eq and _feats_eq.get("vol_long"):
+            _vol_ratio = (float(_feats_eq.get("vol_short") or 0)
+                          / float(_feats_eq["vol_long"]))
+        _ack_avg = (sum(self.ack_ms_recent) / len(self.ack_ms_recent)
+                    if self.ack_ms_recent else None)
+        eq = execution_quality(
+            spread_pctl=_sp_pctl,
+            quote_age_ms=now_ms() - t.received_time_ms,
+            avg_slippage_pips=(self.state.slippage_ewma_pips
+                               if self.state.fills_seen else None),
+            ack_latency_ms=_ack_avg,
+            vol_ratio=_vol_ratio,
+            hour_utc=datetime.now(timezone.utc).hour)
+        ame = adaptive_min_edge(exec_score=eq["score"], vol_ratio=_vol_ratio,
+                                spread_pctl=_sp_pctl,
+                                loss_streak=self.risk_state.consecutive_losses)
+        _bg(lambda s={"execution_quality": eq, "adaptive_min_edge": ame}:
+            db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]}, {"$set": s}),
+            "decision_update")
+        if eq["score"] < EXEC_QUALITY_MIN:
+            self.state.record_reject()
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "pre_submit_execution_quality",
+                          "execution_quality": eq}:
+                db.scalp_decisions.update_one(
+                    {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
+        if final_net_edge < ame["min_edge_pips"] + LATENCY_EDGE_BUFFER_PIPS:
+            self.state.record_reject()
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "pre_submit_adaptive_edge",
+                          "final_net_edge_pips": round(final_net_edge, 3),
+                          "adaptive_min_edge": ame}:
                 db.scalp_decisions.update_one(
                     {"decision_id": decision["decision_id"]}, {"$set": s}),
                 "decision_update")
@@ -1522,6 +1590,9 @@ class ScalpRunner:
             self._emit(db, "BrokerRejected",
                        decision_id=decision["decision_id"],
                        payload={"reason": trade.get("reason")})
+            from scalp import broker_stats
+            _bg(lambda b=self.broker: broker_stats.record(db, b, rejects=1),
+                "broker_stats")
             _bg(lambda: release_broker_submission_slot(db, slot),
                 "release_submission_slot")
             # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
@@ -1543,6 +1614,10 @@ class ScalpRunner:
             {"$set": {"submission_slot": dict(slot)}}), "slot_link")
         self._emit(db, "BrokerSubmitted", decision_id=decision["decision_id"],
                    trade_id=tid, payload={"lot": final_lot})
+        # refinement 5 — broker learning: real submission + session spread
+        from scalp import broker_stats
+        _bg(lambda b=self.broker, s=sp: broker_stats.record(
+            db, b, submissions=1, spread_pips=s), "broker_stats")
         self.risk_state.record_open()
         self.account_risk.record_open()
         self._persist_risk(db)
@@ -1675,6 +1750,13 @@ class ScalpRunner:
             if db is not None and info:
                 ack_ms = self.last_order_ack_ms
                 sub_ms = info.get("order_submit_ts_ms")
+                if sub_ms:
+                    self.ack_ms_recent.append(max(0, ack_ms - int(sub_ms)))
+                from scalp import broker_stats
+                _bg(lambda b=self.broker, sl=signed,
+                    a=(max(0, ack_ms - int(sub_ms)) if sub_ms else None):
+                    broker_stats.record(db, b, entry_slip_pips=sl, ack_ms=a),
+                    "broker_stats")
                 _bg(lambda: db.scalp_decisions.update_one(
                     {"decision_id": info.get("decision_id", "")},
                     {"$set": {"requested_entry": requested_price,
@@ -1773,6 +1855,10 @@ class ScalpRunner:
             adverse = ((req_exit - exit_price) if d == "BUY"
                        else (exit_price - req_exit)) / self.cfg.pip_size
             exit_slip = round(adverse, 2)
+        if db is not None and exit_slip is not None:
+            from scalp import broker_stats
+            _bg(lambda b=self.broker, s=exit_slip: broker_stats.record(
+                db, b, exit_slip_pips=s), "broker_stats")
         if db is not None:
             self._persist_risk(db)
             # round 8 item 3 — immutable financial-event ledger (replayable

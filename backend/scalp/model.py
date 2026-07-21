@@ -348,7 +348,21 @@ def _to_runtime(artifact: dict) -> dict:
             "sd": np.array(artifact["sd"]),
             "platt_a": artifact["platt_a"], "platt_b": artifact["platt_b"],
             "expires_at": artifact["expires_at"], "oos_auc": artifact["oos_auc"],
+            "trained_at": artifact.get("trained_at"),
+            "feature_schema_version": artifact.get("feature_schema_version", 1),
             "ts": time.time()}
+
+
+def version_of(model_key: str) -> dict | None:
+    """Model + calibration provenance for decision stamping (refinement 4).
+    The Platt calibrator is trained WITH the model (Option C invariant), so
+    trained_at identifies both."""
+    rt = _active.get(model_key)
+    if not rt:
+        return None
+    return {"trained_at": rt.get("trained_at"),
+            "feature_schema_version": rt.get("feature_schema_version", 1),
+            "calibration": "platt", "oos_auc": rt.get("oos_auc")}
 
 
 def predict(model_key: str, features: dict) -> dict:

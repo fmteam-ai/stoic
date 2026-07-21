@@ -32,6 +32,7 @@ class ScalpState:
         # (broker_ms, bid, ask, mid)
         self.ticks: deque = deque(maxlen=3000)
         self.spreads: deque = deque(maxlen=900)     # pips, session proxy
+        self.vols: deque = deque(maxlen=600)        # vol_short history (pctl)
         self.last_tick: TickEvent | None = None
         self.last_price_change_ms: int = 0
         self.vwap_ewma: float = 0.0                 # tick-volume-less mid EWMA
