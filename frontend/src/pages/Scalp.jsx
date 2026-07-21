@@ -228,6 +228,8 @@ export default function Scalp() {
                             <th className="text-right p-2">Edge (p)</th>
                             <th className="text-right p-2">p(target)</th>
                             <th className="text-right p-2">Cost (p)</th>
+                            <th className="text-right p-2">EV ($)</th>
+                            <th className="text-right p-2">Quality</th>
                             <th className="text-left p-2">Outcome</th>
                             <th className="text-right p-2">Net (p)</th>
                             <th className="text-left p-2">Reject reason</th>
@@ -243,6 +245,15 @@ export default function Scalp() {
                                 <td className="p-2 text-right font-mono">{fmt(d.net_edge_pips, 2)}</td>
                                 <td className="p-2 text-right font-mono">{fmt(d.forecast?.p_target_before_stop, 2)}</td>
                                 <td className="p-2 text-right font-mono">{fmt(d.cost_pips, 2)}</td>
+                                <td className={`p-2 text-right font-mono ${(d.ev?.ev_usd || 0) > 0 ? "text-[#00FF41]" : (d.ev?.ev_usd || 0) < 0 ? "text-[#FF3B30]" : ""}`}
+                                    title={d.ev ? `move ${fmt(d.ev.expected_move_pips, 2)}p − cost ${fmt(d.ev.cost_pips, 2)}p` : ""}>
+                                    {d.ev?.ev_usd != null ? `$${fmt(d.ev.ev_usd, 2)}` : "—"}
+                                </td>
+                                <td className="p-2 text-right font-mono"
+                                    title={d.quality ? Object.entries(d.quality.breakdown || {}).map(([k, v]) => `${k} +${v}`).join("  ") : ""}
+                                    data-testid={`scalp-decision-quality-${d.id}`}>
+                                    {d.quality ? `${d.quality.score}/100` : "—"}
+                                </td>
                                 <td className="p-2">{d.outcome?.result || "pending"}</td>
                                 <td className={`p-2 text-right font-mono ${(d.outcome?.net_pips || 0) > 0 ? "text-[#00FF41]" : (d.outcome?.net_pips || 0) < 0 ? "text-[#FF3B30]" : ""}`}>
                                     {fmt(d.outcome?.net_pips, 1)}
@@ -257,7 +268,7 @@ export default function Scalp() {
                             </tr>
                         ))}
                         {decisions.length === 0 && (
-                            <tr><td colSpan={9} className="p-4 text-center text-[#52525B]">No decisions yet</td></tr>
+                            <tr><td colSpan={11} className="p-4 text-center text-[#52525B]">No decisions yet</td></tr>
                         )}
                     </tbody>
                 </table>

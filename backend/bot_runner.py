@@ -1845,6 +1845,75 @@ async def _process_user_account_locked(db, cfg: dict):
         except Exception as e:  # noqa: BLE001
             logger.debug("std risk clamp skipped: %s", e)
 
+        # Phase-1 · VALUE-DRIVEN GATE: every autonomous trade carries a $
+        # Expected Value (calibrated p_win × geometry − costs) and a 0-100
+        # Trade Quality Score (observe-only until calibrated). Negative-EV
+        # trades are skipped — value-driven, not confidence-driven.
+        try:
+            from trade_quality import compute_ev, quality_score, MIN_EV_USD
+            from pip_utils import price_to_pips as _p2p_ev
+            _cal_ev = signal.get("calibrated_p_win") or {}
+            _p_ev = _cal_ev.get("p_win")
+            _p_basis = "calibrated"
+            if _p_ev is None:
+                _p_ev = float(signal.get("confidence") or 50) / 100.0
+                _p_basis = "raw_confidence"
+            _p_ev = float(_p_ev)
+            _sl_pips_ev = _p2p_ev(sym, abs(float(signal["entry_price"])
+                                           - float(signal["stop_loss"])))
+            _tp_px = signal.get("tp1") or signal.get("take_profit")
+            _tp_pips_ev = (_p2p_ev(sym, abs(float(_tp_px)
+                                            - float(signal["entry_price"])))
+                           if _tp_px else 0.0)
+            _spread_ev = (target_account.get("current_spreads") or {}).get(sym)
+            _cost_ev = float(_spread_ev) if _spread_ev is not None else 0.0
+            ev_info = compute_ev(_p_ev, _tp_pips_ev, _sl_pips_ev, _cost_ev,
+                                 float(sized.get("pip_usd_per_lot") or 0) or None,
+                                 effective_lot)
+            ev_info["p_basis"] = _p_basis
+            _mtf_g = signal.get("mtf_gate") or {}
+            _trend_ev = (1.0 if _mtf_g.get("aligned") is True
+                         else 0.0 if _mtf_g.get("aligned") is False else None)
+            _asz_comp = ((signal.get("adaptive_sizing") or {})
+                         .get("components") or {})
+            _spread_cap_ev = (max_spread_pips.get(sym)
+                              if isinstance(max_spread_pips, dict) else None)
+            q_info = quality_score(
+                ev_pips=ev_info["ev_pips"], cost_pips=_cost_ev, p_win=_p_ev,
+                trend_alignment=_trend_ev,
+                liquidity=_asz_comp.get("liquidity"),
+                spread_ratio=(float(_spread_ev) / float(_spread_cap_ev)
+                              if _spread_ev is not None and _spread_cap_ev
+                              else None),
+                volatility_ratio=(2.4 - float(_asz_comp["volatility"]) * 1.2
+                                  if _asz_comp.get("volatility") is not None
+                                  else None),
+                hour_utc=datetime.now(timezone.utc).hour)
+            signal["ev"] = ev_info
+            signal["quality"] = q_info
+            await db.signals.update_one(
+                {"_id": result.inserted_id},
+                {"$set": {"ev": ev_info, "quality": q_info}})
+            if (_tp_pips_ev > 0 and ev_info.get("ev_usd") is not None
+                    and ev_info["ev_usd"] <= MIN_EV_USD):
+                logger.info("EV gate skip user=%s sym=%s ev=$%.2f p=%.2f (%s)",
+                            user_id, sym, ev_info["ev_usd"], _p_ev, _p_basis)
+                await db.signals.update_one(
+                    {"_id": result.inserted_id},
+                    {"$set": {"ev_gate_block": True, "tradeable": False}})
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP",
+                    level="warn",
+                    reason=(f"EV gate: expected value ${ev_info['ev_usd']:.2f}"
+                            f" ≤ ${MIN_EV_USD:.2f} — p_win "
+                            f"{_p_ev * 100:.0f}% ({_p_basis}), net edge "
+                            f"{ev_info['ev_pips']:.1f}p after "
+                            f"{_cost_ev:.1f}p costs"),
+                    signal=signal)
+                await inc_intel_counter(user_id, "ev_gate_block")
+                continue
+        except Exception as e:  # noqa: BLE001
+            logger.warning("EV/quality scoring failed (fail-open): %s", e)
+
         engine = engine_for_account(target_account)
         from versioning import version_stamp
         trade_doc = await engine.execute(

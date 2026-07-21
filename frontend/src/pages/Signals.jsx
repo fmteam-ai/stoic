@@ -443,6 +443,24 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
 
             <ConfBar value={s.confidence || 0} threshold={s.min_confidence_required || 65} />
 
+            {(s.ev || s.quality) && (
+                <div className="flex items-center gap-3 font-mono text-[11px] pt-1" data-testid={`signal-ev-quality-${s.id}`}>
+                    {s.ev && (
+                        <span className={s.ev.ev_usd > 0 ? "text-[#00FF41]" : s.ev.ev_usd < 0 ? "text-[#FF3B30]" : "text-[#A1A1AA]"}
+                              title={`p_win ${(s.ev.p_win * 100).toFixed(0)}% (${s.ev.p_basis || "—"}) · move ${s.ev.expected_move_pips}p − costs ${s.ev.cost_pips}p = ${s.ev.ev_pips}p net`}>
+                            EV {s.ev.ev_usd != null ? `$${Number(s.ev.ev_usd).toFixed(2)}` : `${s.ev.ev_pips}p`}
+                        </span>
+                    )}
+                    {s.quality && (
+                        <span className={`px-1.5 py-0.5 border ${s.quality.score >= 80 ? "border-[#00FF41]/40 text-[#00FF41]" : s.quality.score >= 55 ? "border-[#FFB000]/40 text-[#FFB000]" : "border-[#FF3B30]/40 text-[#FF3B30]"}`}
+                              title={Object.entries(s.quality.breakdown || {}).map(([k, v]) => `${k} +${v}`).join("  ")}>
+                            QUALITY {s.quality.score}/100
+                        </span>
+                    )}
+                    {s.ev_gate_block && <span className="text-[#FF3B30]">EV GATE · SKIPPED</span>}
+                </div>
+            )}
+
             <VetoCascade s={s} />
 
             <HoldReasonBanner s={s} />

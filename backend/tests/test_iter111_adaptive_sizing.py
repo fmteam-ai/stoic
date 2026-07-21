@@ -58,17 +58,17 @@ def test_drawdown_throttle():
 
 
 def test_combine_examples_from_spec():
-    # Confidence 98 · everything favourable → ~2% on 1% base (capped)
+    # Confidence 98 · everything favourable → capped at the Phase-1 1.3% cap
     strong = combine({"confidence": 1.8, "volatility": 1.1, "accuracy": 1.15,
                       "liquidity": 1.05, "drawdown": 1.0}, base_risk_pct=1.0)
-    assert strong["risk_pct"] == 2.0          # hits the 2% cap
-    # Confidence 60 · HIGH risk · cold streak → ~0.25%
+    assert strong["risk_pct"] == 1.3          # hits the 1.3% cap (user bound)
+    # Confidence 60 · HIGH risk · cold streak → floored at 0.25%
     weak = combine({"confidence": 0.29, "volatility": 1.0, "accuracy": 0.75,
                     "liquidity": 0.9, "drawdown": 1.0}, base_risk_pct=1.3)
-    assert 0.2 <= weak["risk_pct"] <= 0.3
+    assert 0.25 <= weak["risk_pct"] <= 0.3
     # Floor holds
     tiny = combine({"confidence": 0.1, "drawdown": 0.4}, base_risk_pct=1.0)
-    assert tiny["risk_pct"] == 0.1
+    assert tiny["risk_pct"] == 0.25
 
 
 def test_combine_clamps_multiplier():

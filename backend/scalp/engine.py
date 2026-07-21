@@ -1034,6 +1034,42 @@ class ScalpRunner:
                     "target_pips": fc.target_pips, "stop_pips": fc.stop_pips},
             "outcome": None,
         }
+        # Phase-1 · $ EV + Trade Quality Score (observe-only) + quality-scaled
+        # sizing (downscale-only: the scalp risk budget stays the ceiling).
+        try:
+            from trade_quality import (compute_ev, quality_score,
+                                       scalp_size_multiplier)
+            _ev = compute_ev(fc.p_target_before_stop, fc.target_pips,
+                             fc.stop_pips, float(edge_res["cost_pips"] or 0),
+                             pip_val, risk_res.get("lot") or 0.0)
+            _q = quality_score(
+                ev_pips=_ev["ev_pips"], cost_pips=_ev["cost_pips"],
+                p_win=_ev["p_win"],
+                trend_alignment=(min(1.0, abs(float(
+                    perms.get("ema_slope_pips") or 0)))
+                    if perm_ok else 0.0),
+                liquidity=min(1.0, float(feats.get("tick_rate") or 0) / 1.5),
+                spread_ratio=(float(feats["spread_pips"]) / spread_limit
+                              if spread_limit else None),
+                volatility_ratio=(float(feats.get("vol_short") or 0)
+                                  / float(feats["vol_long"])
+                                  if feats.get("vol_long") else None),
+                hour_utc=datetime.now(timezone.utc).hour)
+            doc["ev"] = _ev
+            doc["quality"] = _q
+            if (verdict == "live_traded" and risk_res.get("ok")
+                    and risk_res.get("lot")):
+                _mult = scalp_size_multiplier(_q["score"])
+                if _mult < 1.0:
+                    _scaled = int((risk_res["lot"] * _mult)
+                                  / self.cfg.lot_step) * self.cfg.lot_step
+                    _scaled = max(self.cfg.min_lot, round(_scaled, 2))
+                    if _scaled < risk_res["lot"]:
+                        risk_res = {**risk_res, "lot": _scaled,
+                                    "quality_size_mult": _mult}
+                        doc["lot"] = _scaled
+        except Exception:
+            logger.exception("trade quality scoring failed (observe-only)")
         _bg(lambda d=dict(doc): db.scalp_decisions.insert_one(dict(d)),
             "decision_insert")
         self._emit(db, "DecisionCreated", decision_id=decision_id,

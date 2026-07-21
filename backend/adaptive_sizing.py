@@ -18,7 +18,9 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 MULT_MIN, MULT_MAX = 0.10, 2.00
-DEFAULT_FLOOR_PCT, DEFAULT_CAP_PCT = 0.10, 2.00
+# Phase-1 value-driven sizing bounds (user decision): poor trades get less
+# capital, excellent trades more — clamped to [0.25%, 1.3%] per trade.
+DEFAULT_FLOOR_PCT, DEFAULT_CAP_PCT = 0.25, 1.30
 ACCURACY_WINDOW = 20
 DD_LOOKBACK_DAYS = 30
 
