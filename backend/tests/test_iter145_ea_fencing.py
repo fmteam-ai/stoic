@@ -67,6 +67,10 @@ class TestEaCommandFence:
 
     def test_all_acks_echo_intent_and_mark_done(self):
         src = _ea()
+        # signatures accept the fence params (compile-checked by user in F7)
+        assert "void ApplyFullClose(string trade_id, long ticket, string intent = \"\", long seq = 0)" in src
+        assert "void ApplyModifySL(string trade_id, long ticket, double new_sl,\n                   string intent = \"\", long seq = 0)" in src
+        assert "void ApplyPartialClose(string trade_id, long ticket, double new_vol,\n                       string intent = \"\", long seq = 0)" in src
         for fn, nxt in (("void ApplyFullClose(", "void ClosePosition("),
                         ("void ApplyModifySL(", "void ApplyPartialClose(")):
             body = _fn(src, fn, nxt)
@@ -155,6 +159,31 @@ class TestBackendConsumesV150:
                   'update["open_ack_position_sl"]',
                   'update["journal_replayed_at"]'):
             assert k in src, k
+
+
+class TestBrokerPreflight:
+    """Phase 2 — broker-native OrderCheck() before every OrderSend."""
+
+    def test_ordercheck_runs_before_ordersend_and_journal(self):
+        body = _fn(_ea(), "void ExecuteTrade(", "// ----- v1.40: FULL_CLOSE")
+        i_chk = body.index("OrderCheck(req, chk)")
+        i_journal = body.index('JSet("T", trade_id, JR_ORDER_SENT)')
+        i_send = body.index("bool ok = OrderSend(req, res)")
+        assert i_chk < i_journal < i_send
+        assert "MqlTradeCheckResult chk" in body
+        assert "preflight_failed:retcode=%d" in body
+        # rejection never reaches the broker and journals FAILED
+        seg = body[i_chk:i_chk + 900]
+        assert 'JSet("T", trade_id, JR_FAILED)' in seg
+        assert "return;" in seg
+        # broker comment is sanitised so the JSON body stays valid
+        assert 'StringReplace(chk_comment, "\\"", "\'")' in body
+
+    def test_backend_records_preflight_rejection(self):
+        src = _src("/app/backend/routes/bridge_routes.py")
+        assert 'update["preflight_rejected"] = True' in src
+        assert 'update["preflight_error"]' in src
+        assert '"broker_preflight_reject"' in src
 
 
 class TestLiveActivationGate:

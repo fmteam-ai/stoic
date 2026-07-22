@@ -1051,6 +1051,18 @@ async def report_trade(payload: BridgeTradeReport):
               "submission_state": ("broker_accepted"
                                    if payload.status == "open"
                                    else f"broker_{payload.status}")}
+    # EA v1.50 — broker-native OrderCheck preflight rejection: structured
+    # telemetry so failed preflights are visible and countable.
+    if payload.status == "failed" and (payload.error or "").startswith(
+            "preflight_failed"):
+        update["preflight_rejected"] = True
+        update["preflight_error"] = payload.error
+        logger.warning("broker preflight rejected trade=%s account=%s: %s",
+                       payload.trade_id, str(acc["_id"]), payload.error)
+        try:
+            await inc_intel_counter(acc["user_id"], "broker_preflight_reject")
+        except Exception:
+            pass
     if payload.mt5_ticket is not None:
         update["mt5_ticket"] = payload.mt5_ticket
         update["acknowledged_at"] = datetime.now(timezone.utc).isoformat()

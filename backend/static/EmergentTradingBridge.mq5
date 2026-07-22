@@ -189,6 +189,10 @@
 //|             confirmed_position_sl (live POSITION_SL).             |
 //|         (d) Partial-close acks report the ACTUAL remaining broker |
 //|             volume, not just the intended one.                    |
+//|         (e) Broker-native OrderCheck() preflight before every     |
+//|             OrderSend — margin / volume limits / stop levels /    |
+//|             fill policy validated by MT5; failures report a       |
+//|             structured preflight_failed rejection.                |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
 #property version   "1.50"
@@ -1368,6 +1372,25 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    req.tp    = adj_tp;
    req.type  = (action == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
+   // v1.50 — broker-native preflight: MT5 itself validates margin, volume
+   // limits, stop/freeze levels and fill policy BEFORE submission. A failed
+   // check reports a structured rejection and never touches the broker.
+   MqlTradeCheckResult chk;
+   ZeroMemory(chk);
+   if (!OrderCheck(req, chk)) {
+      JSet("T", trade_id, JR_FAILED);
+      string chk_comment = chk.comment;
+      StringReplace(chk_comment, "\"", "'");   // keep the JSON body valid
+      string perr = StringFormat("preflight_failed:retcode=%d:%s",
+                                 chk.retcode, chk_comment);
+      SendOpenReport(trade_id, 0, "failed", 0, req.price, perr,
+                     sl, adj_sl, 0, false);
+      Print("STOIC v1.50: OrderCheck preflight REJECTED ", broker_symbol,
+            " retcode=", chk.retcode, " comment=", chk.comment,
+            " margin=", chk.margin, " free=", chk.margin_free);
+      return;
+   }
+
    JSet("T", trade_id, JR_ORDER_SENT);   // v1.50 — journal BEFORE OrderSend
    bool ok = OrderSend(req, res);
 
@@ -1535,7 +1558,8 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
 }
 
 // ----- v1.10: Partial close — close (current_vol - new_vol) lots -----
-void ApplyPartialClose(string trade_id, long ticket, double new_vol) {
+void ApplyPartialClose(string trade_id, long ticket, double new_vol,
+                       string intent = "", long seq = 0) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) return;
    string symbol = PositionGetString(POSITION_SYMBOL);
