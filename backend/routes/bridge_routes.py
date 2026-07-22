@@ -758,6 +758,9 @@ async def poll_trades(payload: PollRequest):
             "new_sl": m.get("new_sl"),
             "new_tp": m.get("new_tp"),
             "new_volume": m.get("new_volume"),
+            # audit r4 P0 · EA v1.50 command fence: immutable intent + seq
+            "intent_id": m.get("intent_id"),
+            "seq": m.get("seq"),
         })
 
     resp = {"trades": out, "modifications": modifications}
@@ -847,6 +850,11 @@ class BridgeModificationAck(BaseModel):
     new_volume: float | None = None
     error: str | None = None
     intent_id: str | None = None   # EA v1.49+ echoes the command's intent
+    requested_sl: float | None = None            # EA v1.50 — SL as commanded
+    applied_sl: float | None = None              # EA v1.50 — SL post clamp
+    confirmed_position_sl: float | None = None   # EA v1.50 — live POSITION_SL
+    remaining_volume: float | None = None        # EA v1.50 — actual broker vol
+    replay: bool | None = None                   # EA v1.50 — fence re-ack
 
 
 @router.post("/modification-ack")
@@ -884,23 +892,37 @@ async def modification_ack(payload: BridgeModificationAck):
         new_sl=(payload.new_sl if payload.type == "MODIFY_SL" else None),
         error=payload.error))
     if payload.success:
-        if payload.type == "MODIFY_SL" and payload.new_sl is not None:
-            update["stop_loss"] = float(payload.new_sl)
+        # EA v1.50 — prefer the broker-CONFIRMED position SL over the intent
+        actual_sl = payload.confirmed_position_sl or payload.new_sl
+        if payload.type == "MODIFY_SL" and actual_sl is not None:
+            update["stop_loss"] = float(actual_sl)
+            update["confirmed_stop_loss"] = float(actual_sl)
+            if payload.requested_sl is not None:
+                update["last_requested_sl"] = float(payload.requested_sl)
+            if payload.applied_sl is not None:
+                update["last_applied_sl"] = float(payload.applied_sl)
             if not trade.get("breakeven_set"):
                 # Mark BE only when SL moved to/past entry
                 entry = float(trade.get("entry_price") or 0)
                 action = trade.get("action")
-                hit_be = (action == "BUY" and payload.new_sl >= entry) or \
-                         (action == "SELL" and payload.new_sl <= entry)
+                hit_be = (action == "BUY" and actual_sl >= entry) or \
+                         (action == "SELL" and actual_sl <= entry)
                 if hit_be:
                     update["breakeven_set"] = True
-                    pending_notifs.append(("breakeven", float(payload.new_sl), 1.0))
+                    pending_notifs.append(("breakeven", float(actual_sl), 1.0))
             else:
                 update["trail_active"] = True
-                pending_notifs.append(("trail", float(payload.new_sl), None))
-        elif payload.type == "PARTIAL_CLOSE" and payload.new_volume is not None:
+                pending_notifs.append(("trail", float(actual_sl), None))
+        elif payload.type == "PARTIAL_CLOSE" and (
+                payload.remaining_volume is not None
+                or payload.new_volume is not None):
             from_lot = float(trade.get("lot_size") or 0)
-            to_lot = float(payload.new_volume)
+            # EA v1.50 — the ACTUAL remaining broker volume wins over intent
+            to_lot = float(payload.remaining_volume
+                           if payload.remaining_volume
+                           else payload.new_volume)
+            if payload.remaining_volume is not None:
+                update["remaining_volume"] = float(payload.remaining_volume)
             update["lot_size"] = to_lot
             update["partial_closed"] = True
             update["partial_closed_at"] = datetime.now(timezone.utc).isoformat()
@@ -947,7 +969,9 @@ async def modification_ack(payload: BridgeModificationAck):
                 if r.symbol != (trade.get("symbol") or "").upper():
                     continue
                 if payload.type == "MODIFY_SL":
-                    r.on_stop_modified(payload.trade_id, payload.new_sl,
+                    r.on_stop_modified(payload.trade_id,
+                                       (payload.confirmed_position_sl
+                                        or payload.new_sl),
                                        bool(payload.success), db=db)
                 else:
                     # Phase B — adaptive partial acknowledged; the combo
@@ -1030,6 +1054,18 @@ async def report_trade(payload: BridgeTradeReport):
     if payload.mt5_ticket is not None:
         update["mt5_ticket"] = payload.mt5_ticket
         update["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
+    # EA v1.50 — actual-SL audit trail on the open ack (requested vs
+    # broker-clamped vs live POSITION_SL). Protection lifecycle still
+    # certifies via the heartbeat snapshot; these are the ack-time facts.
+    if payload.status == "open":
+        if payload.requested_sl is not None and payload.requested_sl > 0:
+            update["requested_sl"] = float(payload.requested_sl)
+        if payload.applied_sl is not None and payload.applied_sl > 0:
+            update["applied_sl"] = float(payload.applied_sl)
+        if payload.confirmed_position_sl:
+            update["open_ack_position_sl"] = float(payload.confirmed_position_sl)
+        if payload.replay:
+            update["journal_replayed_at"] = datetime.now(timezone.utc).isoformat()
 
     # Slippage veto — on first OPEN report, compare actual fill vs intended entry
     slippage_force_close = False

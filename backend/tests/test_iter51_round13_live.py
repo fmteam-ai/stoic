@@ -88,7 +88,8 @@ def mongo_db():
 
 
 class TestEaVersionConsistency:
-    EXPECTED = "1.49"
+    from ea_version import current_ea_version
+    EXPECTED = current_ea_version()
 
     def test_mq5_property_version(self):
         text = Path("/app/backend/static/EmergentTradingBridge.mq5").read_text()

@@ -420,6 +420,10 @@ class BridgeTradeReport(BaseModel):
     exit_price: Optional[float] = None
     pnl: Optional[float] = None
     error: Optional[str] = None
+    requested_sl: Optional[float] = None          # EA v1.50 — SL as commanded
+    applied_sl: Optional[float] = None            # EA v1.50 — SL post broker clamp
+    confirmed_position_sl: Optional[float] = None  # EA v1.50 — live POSITION_SL
+    replay: Optional[bool] = None                 # EA v1.50 — journal re-report
 
 
 class BridgeExternalDeal(BaseModel):

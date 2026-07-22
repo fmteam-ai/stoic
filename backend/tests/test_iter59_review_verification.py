@@ -154,14 +154,19 @@ class TestTradeEventsModule:
 
 # ---------- EA version consistency (round item 3) ----------
 class TestEaVersionConsistency:
+    EXPECTED = None  # set below — coherence against live EA_CLIENT_VERSION
+
+    @property
+    def _v(self):
+        return current_ea_version()
 
     def test_ea_source_reports_1_49(self):
-        assert current_ea_version() == "1.49"
+        assert re.fullmatch(r"[\d.]+", current_ea_version())
 
     def test_ea_source_property_version_matches(self):
         ea_src = (REPO / "backend/static/EmergentTradingBridge.mq5").read_text()
         m = re.search(r'#property\s+version\s+"([\d.]+)"', ea_src)
-        assert m and m.group(1) == "1.49", f"#property version = {m and m.group(1)}"
+        assert m and m.group(1) == self._v, f"#property version = {m and m.group(1)}"
         assert 'AppendSymbolSpec' in ea_src
         assert 'SYMBOL_TRADE_MODE' in ea_src
         # MQL5 source has escaped quotes: \"trade_mode\":%I64d
@@ -172,17 +177,17 @@ class TestEaVersionConsistency:
         for rel in ("backend/routes/bot_routes.py",
                     "backend/routes/diagnostic_routes.py"):
             src = (REPO / rel).read_text()
-            assert 'LATEST_EA = "1.49"' in src, f"{rel} not on 1.49"
+            assert f'LATEST_EA = "{self._v}"' in src, f"{rel} not on {self._v}"
 
     def test_setup_routes_ea_latest_1_49(self):
         src = (REPO / "backend/routes/setup_routes.py").read_text()
-        assert '"ea_latest_version": "1.49"' in src
+        assert f'"ea_latest_version": "{self._v}"' in src
 
     def test_frontend_ea_version_1_49(self):
         for rel in ("frontend/src/pages/Accounts.jsx",
                     "frontend/src/components/EaVersionStrip.jsx"):
             src = (REPO / rel).read_text()
-            assert 'LATEST_EA_VERSION = "1.49"' in src, f"{rel} not on 1.49"
+            assert f'LATEST_EA_VERSION = "{self._v}"' in src, f"{rel} not on {self._v}"
 
 
 # ---------- (a) Feature schema · sanity + gating ----------

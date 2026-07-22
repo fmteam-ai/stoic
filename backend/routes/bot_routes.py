@@ -11,6 +11,10 @@ from route_utils import parse_object_id
 from risk import get_profile, compute_lot_for_account
 from intelligence_counters import get_window_24h as intel_window_24h
 from strategy_presets import list_presets, get_preset
+
+# audit r4 P0 · minimum EA version with command fencing + intent journaling —
+# live activation is blocked below this (paper accounts unaffected).
+FENCING_MIN_EA = "1.50"
 from user_presets import (
     list_user_presets, create_user_preset, delete_user_preset, get_user_preset,
 )
@@ -768,6 +772,13 @@ async def _activation_readiness(db, account) -> list:
             pass
     if not account.get("ea_version"):
         problems.append("EA version unknown — update to the latest STOIC EA")
+    elif str(account.get("ea_version")) < FENCING_MIN_EA:
+        # audit r4 P0 · live capital requires the fencing-capable EA:
+        # command intent/seq dedupe + durable new-order intent journal.
+        problems.append(
+            f"EA v{account.get('ea_version')} lacks command fencing and "
+            f"intent journaling — update to v{FENCING_MIN_EA}+ before "
+            f"live activation")
     if not (account.get("equity") or account.get("balance")):
         problems.append("Account equity is unknown — cannot size trades safely")
     return problems
@@ -1096,7 +1107,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.49"
+    LATEST_EA = "1.50"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:

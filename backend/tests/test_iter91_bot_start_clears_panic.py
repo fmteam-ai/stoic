@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import requests
 from bson import ObjectId
 from pymongo import MongoClient
+from ea_version import current_ea_version
 
 _BACKEND_DIR = "/app/backend"
 if _BACKEND_DIR not in sys.path:
@@ -79,7 +80,8 @@ def test_bot_start_clears_stale_panic_flags():
     # Activation readiness (audit E10) now requires a connected EA — make the
     # account look healthy so this test can exercise panic-flag clearing.
     db.accounts.update_one({"_id": ObjectId(aid)}, {"$set": {
-        "status": "connected", "ea_version": "1.40", "equity": 10000.0,
+        "status": "connected", "ea_version": current_ea_version(),
+        "equity": 10000.0,
         "balance": 10000.0,
         "last_heartbeat": datetime.now(timezone.utc).isoformat()}})
 

@@ -173,16 +173,32 @@
 //| v1.49 — Symbol specs additionally report SYMBOL_TRADE_MODE so the |
 //|         backend can refuse orders the broker would reject         |
 //|         (disabled / long-only / short-only / close-only symbols). |
+//| v1.50 — Execution-integrity hardening (audit r4):                 |
+//|         (a) Command fence: modifications carry intent_id + seq;   |
+//|             executed intents persist in Global Variables so a     |
+//|             duplicate/older command is skipped (with a replay     |
+//|             re-ack) and every ack echoes its intent_id.           |
+//|         (b) Durable new-order intent journal: RECEIVED →          |
+//|             ORDER_SENT → BROKER_TICKET_ASSIGNED → ACK_SENT per    |
+//|             trade_id; a redispatched trade_id re-reports the      |
+//|             previous result and can NEVER OrderSend twice.        |
+//|             Orders carry the trade_id as position comment for     |
+//|             crash-window recovery.                                |
+//|         (c) Actual-SL reporting: open reports + MODIFY_SL acks    |
+//|             return requested_sl / applied_sl (post-clamp) /       |
+//|             confirmed_position_sl (live POSITION_SL).             |
+//|         (d) Partial-close acks report the ACTUAL remaining broker |
+//|             volume, not just the intended one.                    |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.49"
+#property version   "1.50"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.49"
+#define EA_CLIENT_VERSION "1.50"
 
 input string ServerUrl              = "https://algo-trade-135.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -333,6 +349,8 @@ int OnInit() {
    EffectiveToken = ResolveBridgeToken();
    // EA v1.43: subscribe to the broker's order book (no-op if unsupported).
    if (DomEnabled) _dom_subscribed = MarketBookAdd(_Symbol);
+   // EA v1.50: prune intent-journal Global Variables idle for 7+ days.
+   SweepJournal();
    Print("STOIC Bridge EA v", EA_CLIENT_VERSION, " started. Polling: ", ServerUrl);
    SendHeartbeat();
    return INIT_SUCCEEDED;
@@ -376,6 +394,63 @@ bool IsEodQuietWindow() {
       _last_quiet_log = TimeCurrent();
    }
    return quiet;
+}
+
+//+------------------------------------------------------------------+
+//| v1.50 — Durable intent journal + command fence.                   |
+//| Terminal Global Variables persist across EA/terminal restarts:    |
+//|   STOIC.I.<intent_id>  executed command instances (fence)         |
+//|   STOIC.S.<trade_id>   newest executed command seq per trade      |
+//|   STOIC.T.<trade_id>   new-order journal state                    |
+//|   STOIC.K.<trade_id>   broker ticket  ·  STOIC.P.<trade_id> fill  |
+//| Journal states: RECEIVED → ORDER_SENT → BROKER_TICKET_ASSIGNED →  |
+//| ACK_SENT (or FAILED). A redispatched trade_id re-reports the      |
+//| previous result — it can NEVER submit a second broker order.      |
+//+------------------------------------------------------------------+
+#define JR_RECEIVED      1
+#define JR_ORDER_SENT    2
+#define JR_TICKET        3
+#define JR_ACK_SENT      4
+#define JR_FAILED        5
+
+string JKey(string kind, string id) { return "STOIC." + kind + "." + id; }
+
+double JGet(string kind, string id) {
+   string k = JKey(kind, id);
+   return GlobalVariableCheck(k) ? GlobalVariableGet(k) : 0;
+}
+
+void JSet(string kind, string id, double v) { GlobalVariableSet(JKey(kind, id), v); }
+
+bool IntentDone(string intent) {
+   return StringLen(intent) > 0 && GlobalVariableCheck(JKey("I", intent));
+}
+
+void MarkIntentDone(string intent, long seq, string trade_id) {
+   if (StringLen(intent) > 0)
+      GlobalVariableSet(JKey("I", intent), (double)TimeCurrent());
+   if (seq > 0 && seq > (long)JGet("S", trade_id))
+      JSet("S", trade_id, (double)seq);
+}
+
+// Drop journal entries idle for 7+ days (MT5 auto-expires GVs at 4 weeks).
+void SweepJournal() {
+   datetime cutoff = TimeCurrent() - 7 * 86400;
+   for (int i = GlobalVariablesTotal() - 1; i >= 0; i--) {
+      string name = GlobalVariableName(i);
+      if (StringFind(name, "STOIC.") != 0) continue;
+      if (GlobalVariableTime(name) < cutoff) GlobalVariableDel(name);
+   }
+}
+
+// Crash-window recovery: orders carry trade_id as the position comment.
+long FindPositionByComment(string trade_id) {
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      ulong tk = PositionGetTicket(i);
+      if (tk == 0) continue;
+      if (PositionGetString(POSITION_COMMENT) == trade_id) return (long)tk;
+   }
+   return 0;
 }
 
 void OnTimer() {
@@ -1099,23 +1174,40 @@ void ParseModificationsBlock(string resp) {
       int t_end = StringFind(section, "\"", t_start);
       string trade_id = StringSubstr(section, t_start, t_end - t_start);
 
-      string mod_type = ExtractString(section, "\"type\":\"", t_end);
-      long ticket = (long)ExtractDouble(section, "\"mt5_ticket\":", t_end);
-      double new_sl = ExtractDouble(section, "\"new_sl\":", t_end);
-      double new_vol = ExtractDouble(section, "\"new_volume\":", t_end);
-
       int brace_pos = StringFind(section, "}", t_end);
+      // v1.50 — extract keys ONLY inside this object so a null intent_id
+      // here can never pick up the next object's quoted value.
+      int obj_len = (brace_pos > t_end) ? brace_pos - t_end
+                                        : StringLen(section) - t_end;
+      string obj = StringSubstr(section, t_end, obj_len);
 
-      if (mod_type == "MODIFY_SL" && ticket > 0 && new_sl > 0) {
-         ApplyModifySL(trade_id, ticket, new_sl);
+      string mod_type = ExtractString(obj, "\"type\":\"", 0);
+      long   ticket   = (long)ExtractDouble(obj, "\"mt5_ticket\":", 0);
+      double new_sl   = ExtractDouble(obj, "\"new_sl\":", 0);
+      double new_vol  = ExtractDouble(obj, "\"new_volume\":", 0);
+      string intent   = ExtractString(obj, "\"intent_id\":\"", 0);
+      long   seq      = (long)ExtractDouble(obj, "\"seq\":", 0);
+
+      if (StringLen(intent) > 0 && IntentDone(intent)) {
+         // v1.50 fence — already executed: re-ack (replay) so a still-
+         // pending queue entry clears, but NEVER execute twice.
+         string rebody = StringFormat(
+            "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"%s\",\"success\":true,\"replay\":true,\"intent_id\":\"%s\",\"error\":\"intent_already_executed\"}",
+            EffectiveToken, trade_id, mod_type, intent);
+         HttpPost(ServerUrl + "/api/bridge/modification-ack", rebody);
+      } else if (seq > 0 && seq <= (long)JGet("S", trade_id)) {
+         // v1.50 fence — older than the newest executed command: skip.
+         Print("STOIC v1.50: skipped stale command seq=", seq, " trade=",
+               trade_id, " newest=", (long)JGet("S", trade_id));
+      } else if (mod_type == "MODIFY_SL" && ticket > 0 && new_sl > 0) {
+         ApplyModifySL(trade_id, ticket, new_sl, intent, seq);
       } else if (mod_type == "PARTIAL_CLOSE" && ticket > 0 && new_vol > 0) {
-         ApplyPartialClose(trade_id, ticket, new_vol);
-         // Combo: Tier-1 move also carries new_sl
-         if (new_sl > 0) ApplyModifySL(trade_id, ticket, new_sl);
+         ApplyPartialClose(trade_id, ticket, new_vol, intent, seq);
+         // Combo: Tier-1 move also carries new_sl (acked via the PC intent)
+         if (new_sl > 0) ApplyModifySL(trade_id, ticket, new_sl, "", 0);
       } else if (mod_type == "FULL_CLOSE" && ticket > 0) {
          // v1.40 — slippage veto / auto-deleverage / reconciler force-close.
-         // Previous builds ignored this type entirely (stuck-queue bug).
-         ApplyFullClose(trade_id, ticket);
+         ApplyFullClose(trade_id, ticket, intent, seq);
       }
 
       idx = brace_pos + 1;
@@ -1180,18 +1272,78 @@ void ClampStops(string sym, int side, double &sl, double &tp, int extra_mult) {
    tp = (tp > 0) ? NormalizeDouble(tp, digits) : 0;
 }
 
+// v1.50 — one JSON emitter for every open-order report (normal + replay).
+void SendOpenReport(string trade_id, ulong ticket, string status,
+                    double entry, double req_price, string err,
+                    double req_sl, double app_sl, double conf_sl,
+                    bool replay) {
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":%I64u,"
+      "\"status\":\"%s\",\"entry_price\":%.5f,\"requested_price\":%.5f,"
+      "\"requested_sl\":%.5f,\"applied_sl\":%.5f,\"confirmed_position_sl\":%.5f,"
+      "\"replay\":%s,\"error\":\"%s\"}",
+      EffectiveToken, trade_id, ticket, status, entry, req_price,
+      req_sl, app_sl, conf_sl, (replay ? "true" : "false"), err);
+   HttpPost(ServerUrl + "/api/bridge/report", body);
+}
+
+// v1.50 — re-report a journaled result on redispatch (ack was lost).
+void ReportOpenFromJournal(string trade_id) {
+   ulong  ticket = (ulong)JGet("K", trade_id);
+   double price  = JGet("P", trade_id);
+   double conf_sl = 0;
+   if (ticket > 0 && PositionSelectByTicket(ticket))
+      conf_sl = PositionGetDouble(POSITION_SL);
+   SendOpenReport(trade_id, ticket, "open", price, 0, "", 0, 0, conf_sl, true);
+   JSet("T", trade_id, JR_ACK_SENT);
+   Print("STOIC v1.50: journal replay report trade=", trade_id,
+         " ticket=", ticket);
+}
+
 void ExecuteTrade(string trade_id, string symbol, string action, double lot, double sl, double tp) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
+
+   // v1.50 — durable intent journal: a redispatched trade_id returns the
+   // PREVIOUS result; a second OrderSend for the same trade_id is impossible.
+   double jstate = JGet("T", trade_id);
+   if (jstate >= JR_TICKET && jstate != JR_FAILED) {
+      ReportOpenFromJournal(trade_id);
+      return;
+   }
+   if (jstate == JR_FAILED) {
+      SendOpenReport(trade_id, 0, "failed", 0, 0, "journal_failed_replay",
+                     0, 0, 0, true);
+      return;
+   }
+   if (jstate == JR_ORDER_SENT) {
+      // Crash window: order was sent but the result never journaled.
+      // Recover via the trade_id position comment; NEVER resend blindly.
+      long found = FindPositionByComment(trade_id);
+      if (found > 0 && PositionSelectByTicket((ulong)found)) {
+         JSet("K", trade_id, (double)found);
+         JSet("P", trade_id, PositionGetDouble(POSITION_PRICE_OPEN));
+         JSet("T", trade_id, JR_TICKET);
+         ReportOpenFromJournal(trade_id);
+         return;
+      }
+      JSet("T", trade_id, JR_FAILED);
+      SendOpenReport(trade_id, 0, "failed", 0, 0, "order_sent_unconfirmed",
+                     0, 0, 0, true);
+      Print("STOIC v1.50: ORDER_SENT unconfirmed, refused resend trade=",
+            trade_id);
+      return;
+   }
+   JSet("T", trade_id, JR_RECEIVED);
+
    MqlTradeRequest req; MqlTradeResult res;
    ZeroMemory(req); ZeroMemory(res);
 
    // v1.29 — Resolve the broker's actual symbol name (handles .x/.raw/pro/etc.)
    string broker_symbol = ResolveBrokerSymbol(symbol);
    if (broker_symbol == "") {
-      string body = StringFormat(
-         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":0,\"status\":\"failed\",\"entry_price\":0.0,\"error\":\"symbol_not_found:%s\"}",
-         EffectiveToken, trade_id, symbol);
-      HttpPost(ServerUrl + "/api/bridge/report", body);
+      JSet("T", trade_id, JR_FAILED);
+      SendOpenReport(trade_id, 0, "failed", 0, 0,
+                     "symbol_not_found:" + symbol, 0, 0, 0, false);
       Print("[v1.29] ExecuteTrade aborted — broker has no symbol matching '", symbol, "' (tried bare + 18 suffixes)");
       return;
    }
@@ -1201,6 +1353,7 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    req.volume       = NormalizeDouble(lot, 2);
    req.deviation    = Slippage;
    req.magic        = MagicNumber;
+   req.comment      = trade_id;   // v1.50 — crash-window recovery key
    req.type_filling = PickFillingMode(broker_symbol);
 
    double price = (action == "BUY") ? SymbolInfoDouble(broker_symbol, SYMBOL_ASK)
@@ -1215,6 +1368,7 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    req.tp    = adj_tp;
    req.type  = (action == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
+   JSet("T", trade_id, JR_ORDER_SENT);   // v1.50 — journal BEFORE OrderSend
    bool ok = OrderSend(req, res);
 
    // v1.38 — if the broker still says INVALID_STOPS (price moved between
@@ -1233,15 +1387,26 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
       ok = OrderSend(req, res);
    }
 
-   string status = (ok && res.retcode == TRADE_RETCODE_DONE) ? "open" : "failed";
-   string err = (status == "open") ? "" : "retcode=" + IntegerToString(res.retcode);
+   bool opened = (ok && res.retcode == TRADE_RETCODE_DONE);
+   string status = opened ? "open" : "failed";
+   string err = opened ? "" : "retcode=" + IntegerToString(res.retcode);
 
-   // v1.40 — include the price we ASKED for so the server can measure true
-   // broker slippage (fill vs request) instead of signal-to-fill drift.
-   string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":%I64u,\"status\":\"%s\",\"entry_price\":%.5f,\"requested_price\":%.5f,\"error\":\"%s\"}",
-      EffectiveToken, trade_id, res.order, status, res.price, req.price, err);
-   HttpPost(ServerUrl + "/api/bridge/report", body);
+   // v1.50 — journal the result, then ack with the ACTUAL broker stop:
+   // requested_sl (as commanded), applied_sl (post-clamp), and the live
+   // POSITION_SL the broker actually holds.
+   double conf_sl = 0;
+   if (opened) {
+      JSet("K", trade_id, (double)res.order);
+      JSet("P", trade_id, res.price);
+      JSet("T", trade_id, JR_TICKET);
+      if (PositionSelectByTicket(res.order))
+         conf_sl = PositionGetDouble(POSITION_SL);
+   } else {
+      JSet("T", trade_id, JR_FAILED);
+   }
+   SendOpenReport(trade_id, res.order, status, res.price, req.price, err,
+                  sl, adj_sl, conf_sl, false);
+   if (opened) JSet("T", trade_id, JR_ACK_SENT);
 }
 
 // ----- v1.40: FULL_CLOSE — close the entire position by ticket -----
@@ -1249,14 +1414,15 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
 // auto-deleverage and reconciler force-closes. Acks via modification-ack;
 // the resulting broker "out" deal lands through OnTradeTransaction /
 // external-deal with the exact realized P&L.
-void ApplyFullClose(string trade_id, long ticket) {
+void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq = 0) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) {
       // Position already gone on the broker — ack success so the queue clears.
       string gone = StringFormat(
-         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":true,\"error\":\"already_closed\"}",
-         EffectiveToken, trade_id);
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":true,\"intent_id\":\"%s\",\"error\":\"already_closed\"}",
+         EffectiveToken, trade_id, intent);
       HttpPost(ServerUrl + "/api/bridge/modification-ack", gone);
+      MarkIntentDone(intent, seq, trade_id);
       return;
    }
    string symbol = PositionGetString(POSITION_SYMBOL);
@@ -1283,9 +1449,10 @@ void ApplyFullClose(string trade_id, long ticket) {
    bool success = (ok && res.retcode == TRADE_RETCODE_DONE);
    string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
    string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":%s,\"error\":\"%s\"}",
-      EffectiveToken, trade_id, (success ? "true" : "false"), err);
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":%s,\"intent_id\":\"%s\",\"error\":\"%s\"}",
+      EffectiveToken, trade_id, (success ? "true" : "false"), intent, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: FULL_CLOSE executed ticket=", ticket, " (", vol, " lots)");
 }
 
@@ -1321,7 +1488,8 @@ void ClosePosition(string trade_id, long ticket) {
 }
 
 // ----- v1.10: SL/TP modify -----
-void ApplyModifySL(string trade_id, long ticket, double new_sl) {
+void ApplyModifySL(string trade_id, long ticket, double new_sl,
+                   string intent = "", long seq = 0) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) return;
    string symbol = PositionGetString(POSITION_SYMBOL);
@@ -1346,11 +1514,24 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl) {
    bool success = (ok && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_DONE_PARTIAL));
    string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
 
+   // v1.50 — ack the ACTUAL broker stop, not the requested one:
+   // requested_sl (as commanded), applied_sl (post-clamp), and the live
+   // POSITION_SL after the modify.
+   double confirmed_sl = 0;
+   if (PositionSelectByTicket(ticket))
+      confirmed_sl = PositionGetDouble(POSITION_SL);
+   double ack_sl = (success && confirmed_sl > 0) ? confirmed_sl : adj_sl;
+
    string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"MODIFY_SL\",\"success\":%s,\"new_sl\":%.5f,\"error\":\"%s\"}",
-      EffectiveToken, trade_id, (success ? "true" : "false"), new_sl, err);
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"MODIFY_SL\",\"success\":%s,"
+      "\"new_sl\":%.5f,\"requested_sl\":%.5f,\"applied_sl\":%.5f,"
+      "\"confirmed_position_sl\":%.5f,\"intent_id\":\"%s\",\"error\":\"%s\"}",
+      EffectiveToken, trade_id, (success ? "true" : "false"),
+      ack_sl, new_sl, adj_sl, confirmed_sl, intent, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
-   if (success) Print("STOIC: SL modified ticket=", ticket, " new_sl=", new_sl);
+   MarkIntentDone(intent, seq, trade_id);
+   if (success) Print("STOIC: SL modified ticket=", ticket, " requested=",
+                      new_sl, " applied=", adj_sl, " confirmed=", confirmed_sl);
 }
 
 // ----- v1.10: Partial close — close (current_vol - new_vol) lots -----
@@ -1386,9 +1567,19 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol) {
    bool success = (ok && res.retcode == TRADE_RETCODE_DONE);
    string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
 
+   // v1.50 — report the ACTUAL remaining broker volume, not just intent.
+   double remaining = 0;
+   if (PositionSelectByTicket(ticket))
+      remaining = PositionGetDouble(POSITION_VOLUME);
+
    string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":%s,\"new_volume\":%.2f,\"error\":\"%s\"}",
-      EffectiveToken, trade_id, (success ? "true" : "false"), new_vol, err);
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":%s,"
+      "\"new_volume\":%.2f,\"remaining_volume\":%.2f,\"intent_id\":\"%s\",\"error\":\"%s\"}",
+      EffectiveToken, trade_id, (success ? "true" : "false"),
+      new_vol, remaining, intent, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
-   if (success) Print("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", new_vol);
+   MarkIntentDone(intent, seq, trade_id);
+   if (success) Print("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", remaining);
+}
+("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", new_vol);
 }
