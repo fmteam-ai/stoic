@@ -34,9 +34,13 @@ class TestReservationLifecycle:
     @pytest.mark.asyncio
     async def test_transition_appends_audit(self):
         db = _db()
-        await rr.transition(db, "rid", "SLOT_LINKED")
+        db.risk_reservations.update_one = AsyncMock(
+            return_value=MagicMock(modified_count=1))
+        assert await rr.transition(db, "rid", "SLOT_LINKED") == "applied"
         args = db.risk_reservations.update_one.await_args.args
-        assert args[0] == {"reservation_id": "rid"}
+        # audit P1 · guarded: id + allowed-prev filter + idempotency key
+        assert args[0]["reservation_id"] == "rid"
+        assert args[0]["state"]["$in"] == ["RISK_RESERVED", "QUEUED_UNCONFIRMED"]
         assert args[1]["$set"]["state"] == "SLOT_LINKED"
         assert args[1]["$push"]["transitions"]["state"] == "SLOT_LINKED"
 

@@ -65,6 +65,7 @@ MAX_DRIFT_BEFORE_SUBMIT_FRAC = 0.5     # of stop distance, ABSOLUTE drift
 MAX_BATCH_TRANSPORT_AGE_MS = 3000      # sent_at → arrival; older batches can't trade
 AUDIT_BACKLOG_HALT = 500               # pending persist tasks that halt NEW entries
 FAILED_ATTEMPT_COST_PIPS = 0.1         # opportunity/ops cost of a rejected order
+PROTECTION_GRACE_MS = 90_000           # audit P0 · fill must confirm its broker SL
 MIN_FILL_ATTEMPTS_FOR_GATE = 20        # below this the fill-prob prior dominates
 
 # Runner ownership is PROCESS-LOCAL (round 5 item 10): enforcement is a
@@ -1932,6 +1933,25 @@ class ScalpRunner:
                 continue
             if st != "OPEN":
                 continue
+            # audit P0 · strict FILLED_UNPROTECTED timeout (engine-side,
+            # heartbeat-independent): past the deadline, verify the DB
+            # lifecycle; still unprotected → emergency close.
+            if (not info.get("protection_confirmed")
+                    and info.get("protection_deadline_ms")
+                    and nm >= info["protection_deadline_ms"]
+                    and nm - info.get("protection_check_ms", 0) >= 5000):
+                info["protection_check_ms"] = nm
+                doc = await db.trades.find_one(
+                    {"_id": _oid(tid)}, {"lifecycle_state": 1})
+                lc = (doc or {}).get("lifecycle_state")
+                if lc in ("FILLED_UNPROTECTED", "PROTECTION_REQUESTED",
+                          "BROKER_ACCEPTED"):
+                    self._mark_close_requested(info, nm, "unprotected_timeout")
+                    await self._request_close(db, tid, "unprotected_timeout")
+                    continue
+                # PROTECTED/OPEN/terminal — or a legacy doc without a
+                # lifecycle (not machine-managed): stop re-checking.
+                info["protection_confirmed"] = True
             reason = None
             if nm - info["opened_ms"] >= self.risk_state.limits.max_holding_ms:
                 reason = "max_holding_time"
@@ -2265,6 +2285,11 @@ class ScalpRunner:
             info["state"] = "OPEN"
             info["broker_ack_ms"] = self.last_order_ack_ms
             info["opened_ms"] = self.last_order_ack_ms
+            # audit P0 · strict protection deadline: independent of
+            # heartbeats — the tick loop emergency-closes any fill whose
+            # broker stop is still unconfirmed past this deadline.
+            info["protection_deadline_ms"] = (
+                self.last_order_ack_ms + PROTECTION_GRACE_MS)
         await self._release_submission_slot_of(info, db, trade_id)
         if db is not None:
             await risk_reservations.release_for_trade(

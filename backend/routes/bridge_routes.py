@@ -322,7 +322,13 @@ async def heartbeat(payload: BridgeHeartbeat):
                 # gets one re-arm (MODIFY_SL), then a forced close.
                 lc = existing.get("lifecycle_state")
                 if (existing.get("status") == "open"
-                        and lc in ("FILLED_UNPROTECTED", "PROTECTION_REQUESTED")):
+                        and lc in ("FILLED_UNPROTECTED",
+                                   "PROTECTION_REQUESTED",
+                                   # audit P0 · legacy/recovery verification
+                                   # path: a trade stuck at BROKER_ACCEPTED
+                                   # is certified by the SAME broker-SL
+                                   # check instead of a lifecycle shortcut
+                                   "BROKER_ACCEPTED")):
                     from scalp import order_state as _os
                     tid_s = str(existing["_id"])
                     broker_sl = float(p.sl or 0)
@@ -339,6 +345,11 @@ async def heartbeat(payload: BridgeHeartbeat):
                                       "protection.state": "PROTECTED",
                                       "protection.confirmed_at": now_iso,
                                       "protection.confirmed_sl": broker_sl}})
+                    elif requested_sl > 0 and lc == "BROKER_ACCEPTED":
+                        # legacy recovery: normalize into the protection
+                        # chain; the next heartbeat re-arms or confirms
+                        await _os.apply(db, tid_s, _os.FILLED_UNPROTECTED,
+                                        f"filled:{tid_s}")
                     elif requested_sl > 0 and lc == "FILLED_UNPROTECTED":
                         st = await _os.apply(db, tid_s,
                                              _os.PROTECTION_REQUESTED,

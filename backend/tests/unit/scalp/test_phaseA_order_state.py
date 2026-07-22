@@ -22,7 +22,10 @@ class TestStateMachineRules:
         assert set(osm.ALLOWED_PREV) == set(osm.STATES)
 
     def test_happy_path_allowed(self):
-        path = [osm.QUEUED, osm.EA_CLAIMED, osm.BROKER_ACCEPTED, osm.OPEN,
+        # audit P0 round 2 — OPEN strictly requires PROTECTED
+        path = [osm.QUEUED, osm.EA_CLAIMED, osm.BROKER_ACCEPTED,
+                osm.FILLED_UNPROTECTED, osm.PROTECTION_REQUESTED,
+                osm.PROTECTED, osm.OPEN,
                 osm.CLOSE_REQUESTED, osm.CLOSED, osm.FINANCIALLY_RECONCILED]
         for cur, new in zip(path, path[1:]):
             assert osm.can_transition(cur, new), f"{cur} -> {new}"

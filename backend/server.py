@@ -366,11 +366,18 @@ async def on_startup():
         from seed import dependency_health_check
         await dependency_health_check()
         logger.info("Startup: indexes ensured, admin seeded.")
-        # review item 11 — set BACKGROUND_WORKERS_IN_PROCESS=false when the
-        # dedicated workers (python -m workers.*) run externally, so API
-        # restarts never interrupt trading loops.
-        if os.environ.get("BACKGROUND_WORKERS_IN_PROCESS",
-                          "true").lower() == "false":
+        # audit P0 · worker mode must be an EXPLICIT choice. Unset in a
+        # multi-replica production API would silently double-run trading
+        # loops, so the default is now OFF with a critical warning.
+        worker_mode = os.environ.get("BACKGROUND_WORKERS_IN_PROCESS")
+        if worker_mode is None:
+            logger.critical(
+                "BACKGROUND_WORKERS_IN_PROCESS is NOT SET — embedded "
+                "background loops are DISABLED (fail-safe default). Set it "
+                "to 'true' for single-process mode or run the dedicated "
+                "workers (python -m workers.*) with it set to 'false'.")
+            return
+        if worker_mode.lower() != "true":
             logger.info("Background loops NOT started in-process "
                         "(external workers mode).")
             return

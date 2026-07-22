@@ -54,7 +54,7 @@ ALLOWED_PREV = {
     FILLED_UNPROTECTED: (QUEUED, EA_CLAIMED, BROKER_ACCEPTED, UNCERTAIN),
     PROTECTION_REQUESTED: (FILLED_UNPROTECTED,),
     PROTECTED: (BROKER_ACCEPTED, FILLED_UNPROTECTED, PROTECTION_REQUESTED),
-    OPEN: (BROKER_ACCEPTED, PROTECTED),
+    OPEN: (PROTECTED,),  # audit P0 · OPEN strictly requires confirmed protection
     CLOSE_REQUESTED: (QUEUED, EA_CLAIMED, BROKER_ACCEPTED, FILLED_UNPROTECTED,
                       PROTECTION_REQUESTED, PROTECTED, OPEN, UNCERTAIN),
     CLOSED: (QUEUED, EA_CLAIMED, BROKER_ACCEPTED, FILLED_UNPROTECTED,
@@ -103,7 +103,16 @@ async def apply(db, trade_id: str, to_state: str, idem_key: str,
          **state_guard},
         {"$set": {"lifecycle_state": to_state, "lifecycle_at": now},
          "$push": {"lifecycle": {"state": to_state, "at": now,
-                                 "key": idem_key, **(meta or {})}},
+                                 "key": idem_key, **(meta or {})},
+                   # audit P1 · SAME-DOCUMENT embedded outbox: the lifecycle
+                   # transition and its event become durable in ONE atomic
+                   # write (single-doc atomicity — no replica-set txn
+                   # needed); the outbox relay drains + publishes them.
+                   "outbox_events": {
+                       "event_id": f"lc:{trade_id}:{idem_key}",
+                       "event_type": f"Lifecycle{to_state.title().replace('_', '')}",
+                       "state": to_state, "at": now,
+                       "meta": meta or {}, "published": False}},
          "$addToSet": {"lifecycle_keys": idem_key}})
     if res.modified_count == 1:
         return "applied"

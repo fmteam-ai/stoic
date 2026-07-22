@@ -56,6 +56,41 @@ async def _publish(db, doc: dict) -> bool:
     return False
 
 
+async def relay_embedded(db, limit: int = 100) -> dict:
+    """audit P1 · drain the SAME-DOCUMENT embedded outbox (trade docs carry
+    their lifecycle events atomically in `outbox_events`): publish each
+    unpublished event into trade_events (idempotent upsert on event_id),
+    then flag it published via arrayFilters."""
+    published = 0
+    async for tr in (db.trades
+                     .find({"outbox_events": {"$elemMatch": {"published": False}}},
+                           {"outbox_events": 1, "user_id": 1, "account_id": 1,
+                            "symbol": 1})
+                     .limit(limit)):
+        for ev in (tr.get("outbox_events") or []):
+            if ev.get("published"):
+                continue
+            await db.trade_events.update_one(
+                {"event_id": ev["event_id"]},
+                {"$setOnInsert": {
+                    "event_id": ev["event_id"],
+                    "event_type": ev.get("event_type"),
+                    "trade_id": str(tr["_id"]),
+                    "user_id": tr.get("user_id"),
+                    "account_id": tr.get("account_id"),
+                    "symbol": tr.get("symbol"),
+                    "state": ev.get("state"), "at": ev.get("at"),
+                    "meta": ev.get("meta") or {},
+                    "source": "embedded_outbox"}},
+                upsert=True)
+            await db.trades.update_one(
+                {"_id": tr["_id"]},
+                {"$set": {"outbox_events.$[e].published": True}},
+                array_filters=[{"e.event_id": ev["event_id"]}])
+            published += 1
+    return {"published": published}
+
+
 async def relay_once(db, limit: int = 200, only_key: str | None = None) -> dict:
     """Publish pending outbox rows; failures stay pending with attempts++."""
     q: dict = {"state": "pending"}
@@ -80,4 +115,10 @@ async def relay_once(db, limit: int = 200, only_key: str | None = None) -> dict:
                 {"$inc": {"attempts": 1},
                  "$set": {"last_attempt_at": _now()}})
             failed += 1
+    if only_key is None:
+        try:
+            emb = await relay_embedded(db)
+            published += emb["published"]
+        except Exception:  # noqa: BLE001
+            logger.exception("embedded outbox relay failed")
     return {"published": published, "failed": failed}

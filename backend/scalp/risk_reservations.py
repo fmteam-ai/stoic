@@ -21,6 +21,14 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 ACTIVE_STATES = ("RISK_RESERVED", "QUEUED_UNCONFIRMED", "SLOT_LINKED")
+TERMINAL_STATES = ("RELEASED",)
+# audit P1 · guarded transition graph — state -> allowed predecessors.
+# RELEASED is terminal: once released a reservation can NEVER re-activate.
+ALLOWED_PREV = {
+    "QUEUED_UNCONFIRMED": ("RISK_RESERVED",),
+    "SLOT_LINKED": ("RISK_RESERVED", "QUEUED_UNCONFIRMED"),
+    "RELEASED": ACTIVE_STATES,
+}
 STALE_TTL_SEC = 900
 
 
@@ -60,15 +68,43 @@ async def reserve(db, *, account_id: str, user_id: str, decision_id: str,
     return doc
 
 
-async def transition(db, reservation_id: str, state: str, **extra) -> None:
+async def transition(db, reservation_id: str, state: str,
+                     idem_key: str | None = None, **extra) -> str:
+    """audit P1 · guarded, fenced, idempotent reservation transition.
+
+    Enforces: valid predecessor states, terminal-state protection (a
+    RELEASED reservation can never re-activate), optional idempotency key,
+    and matched-row verification. Returns applied|duplicate|invalid|missing.
+    """
+    prevs = ALLOWED_PREV.get(state)
+    if prevs is None:
+        raise ValueError(f"unknown reservation state: {state}")
+    key = idem_key or f"{state}:{extra.get('release_reason') or ''}"
+    q = {"reservation_id": reservation_id,
+         "state": {"$in": list(prevs)},
+         "transition_keys": {"$ne": key}}
     upd = {"state": state, "active": state in ACTIVE_STATES,
            "updated_at": _now(), **extra}
-    await db.risk_reservations.update_one(
-        {"reservation_id": reservation_id},
+    res = await db.risk_reservations.update_one(
+        q,
         {"$set": upd,
+         "$addToSet": {"transition_keys": key},
          "$push": {"transitions": {"state": state, "at": _now(),
                                    **{k: v for k, v in extra.items()
                                       if k != "transitions"}}}})
+    if res.modified_count == 1:
+        return "applied"
+    doc = await db.risk_reservations.find_one(
+        {"reservation_id": reservation_id},
+        {"state": 1, "transition_keys": 1})
+    if doc is None:
+        logger.warning("reservation transition: missing rid=%s", reservation_id)
+        return "missing"
+    if doc.get("state") == state or key in (doc.get("transition_keys") or []):
+        return "duplicate"
+    logger.warning("reservation transition REFUSED %s -> %s rid=%s",
+                   doc.get("state"), state, reservation_id)
+    return "invalid"
 
 
 async def release_for_trade(db, trade_id: str, reason: str) -> None:

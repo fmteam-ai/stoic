@@ -28,10 +28,10 @@ class TestProtectionLifecycleStates:            # P0-1
         assert os_.ALLOWED_PREV[os_.PROTECTION_REQUESTED] == (os_.FILLED_UNPROTECTED,)
         assert os_.FILLED_UNPROTECTED in os_.ALLOWED_PREV[os_.PROTECTED]
         assert os_.PROTECTION_REQUESTED in os_.ALLOWED_PREV[os_.PROTECTED]
-        # OPEN only from BROKER_ACCEPTED (legacy) or PROTECTED — a fill is
-        # NOT open until protection is confirmed on the new path
-        assert set(os_.ALLOWED_PREV[os_.OPEN]) == {os_.BROKER_ACCEPTED, os_.PROTECTED}
+        # OPEN strictly requires confirmed protection (audit P0 round 2)
+        assert os_.ALLOWED_PREV[os_.OPEN] == (os_.PROTECTED,)
         assert os_.FILLED_UNPROTECTED not in os_.ALLOWED_PREV[os_.OPEN]
+        assert os_.BROKER_ACCEPTED not in os_.ALLOWED_PREV[os_.OPEN]
 
     def test_close_reachable_from_every_protection_state(self):
         for s in (os_.FILLED_UNPROTECTED, os_.PROTECTION_REQUESTED, os_.PROTECTED):

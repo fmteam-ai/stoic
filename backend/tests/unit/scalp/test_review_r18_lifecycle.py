@@ -183,12 +183,20 @@ class TestReservationDocHardening:                # item 8
     @pytest.mark.asyncio
     async def test_release_clears_active(self):
         db = _db()
-        await rr.transition(db, "rid", "RELEASED", release_reason="closed")
+        ok = MagicMock(modified_count=1)
+        db.risk_reservations.update_one = AsyncMock(return_value=ok)
+        assert await rr.transition(db, "rid", "RELEASED",
+                                   release_reason="closed") == "applied"
         upd = db.risk_reservations.update_one.await_args.args[1]["$set"]
         assert upd["active"] is False
-        await rr.transition(db, "rid", "SLOT_LINKED")
+        assert await rr.transition(db, "rid", "SLOT_LINKED") == "applied"
         upd = db.risk_reservations.update_one.await_args.args[1]["$set"]
         assert upd["active"] is True
+        # audit P1 · guard contract: transitions filter on allowed prevs
+        # and idempotency keys
+        q = db.risk_reservations.update_one.await_args.args[0]
+        assert q["state"]["$in"] == ["RISK_RESERVED", "QUEUED_UNCONFIRMED"]
+        assert "$ne" in q["transition_keys"]
         await rr.release_for_trade(db, "t1", "closed")
         upd = db.risk_reservations.update_many.await_args.args[1]["$set"]
         assert upd["active"] is False
