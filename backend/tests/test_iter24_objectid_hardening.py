@@ -3,6 +3,12 @@
 Verifies that all migrated endpoints in bot/nl/signal/affiliate routes now
 return 404 (not 500) when supplied with malformed ObjectId path/query params.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import requests
 import pytest
@@ -93,10 +99,10 @@ def test_no_unwrapped_object_id_calls_in_user_input_paths():
     files must be either inside a try/except OR not on user-supplied input."""
     import re
     files = [
-        "/app/backend/routes/bot_routes.py",
-        "/app/backend/routes/nl_routes.py",
-        "/app/backend/routes/signal_routes.py",
-        "/app/backend/routes/affiliate_routes.py",
+        _os.path.join(_BACKEND_DIR, "routes/bot_routes.py"),
+        _os.path.join(_BACKEND_DIR, "routes/nl_routes.py"),
+        _os.path.join(_BACKEND_DIR, "routes/signal_routes.py"),
+        _os.path.join(_BACKEND_DIR, "routes/affiliate_routes.py"),
     ]
     pattern = re.compile(r"\bObjectId\(")
     for f in files:

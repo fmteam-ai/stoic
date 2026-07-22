@@ -19,7 +19,7 @@ export default function ResetPassword() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError(""); setCode("");
-        if (pwd.length < 6) { setError("Password must be at least 6 characters."); return; }
+        if (pwd.length < 8) { setError("Password must be at least 8 characters."); return; }
         if (pwd !== confirm) { setError("Passwords do not match."); return; }
         setSubmitting(true);
         try {
@@ -93,7 +93,7 @@ export default function ResetPassword() {
 
                 <div className="font-mono text-[11px] text-[#FFD700] tracking-widest mb-3">// CHOOSE A NEW PASSWORD</div>
                 <h2 className="font-display font-bold text-3xl tracking-tight mb-2">Reset password</h2>
-                <p className="text-sm text-[#A1A1AA] mb-8">Pick a password you'll remember — at least 6 characters.</p>
+                <p className="text-sm text-[#A1A1AA] mb-8">Pick a password you'll remember — at least 8 characters.</p>
 
                 <form onSubmit={handleSubmit} className="space-y-4" data-testid="reset-password-form">
                     <div>
@@ -101,12 +101,12 @@ export default function ResetPassword() {
                         <div className="relative">
                             <Lock className="w-4 h-4 text-[#52525B] absolute left-3 top-1/2 -translate-y-1/2" />
                             <input
-                                type="password" required minLength={6}
+                                type="password" required minLength={8}
                                 value={pwd}
                                 onChange={e => setPwd(e.target.value)}
                                 data-testid="reset-password-input"
                                 className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] outline-none px-10 py-3 text-sm transition-colors duration-150"
-                                placeholder="At least 6 characters"
+                                placeholder="At least 8 characters"
                                 autoFocus
                             />
                         </div>
@@ -116,7 +116,7 @@ export default function ResetPassword() {
                         <div className="relative">
                             <Lock className="w-4 h-4 text-[#52525B] absolute left-3 top-1/2 -translate-y-1/2" />
                             <input
-                                type="password" required minLength={6}
+                                type="password" required minLength={8}
                                 value={confirm}
                                 onChange={e => setConfirm(e.target.value)}
                                 data-testid="reset-password-confirm-input"

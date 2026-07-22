@@ -10,6 +10,12 @@ Tests the live /api/crypto/* HTTP surface (no real exchange calls):
   - regression: /api/trades, /api/accounts, /api/research/proposals,
     /api/trades/{id}/explain still work
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import pytest
 import requests
@@ -18,7 +24,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
     # fallback: read frontend/.env
     try:
-        with open("/app/frontend/.env") as f:
+        with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
             for line in f:
                 if line.startswith("REACT_APP_BACKEND_URL="):
                     BASE_URL = line.split("=", 1)[1].strip().rstrip("/")

@@ -10,6 +10,9 @@ from ai_signals import analyze_symbol
 from route_utils import parse_object_id
 from routes.bot_routes import _config_filter
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/signals", tags=["signals"])
 
 
@@ -258,7 +261,8 @@ async def generate_all(account_id: Optional[str] = None,
             sig["_id"] = r.inserted_id
             results.append(_serialize(sig))
         except Exception as e:
-            results.append({"symbol": sym, "error": str(e)})
+            logger.warning("signal generation failed for %s: %s", sym, e)
+            results.append({"symbol": sym, "error": "signal_failed"})
     return {"generated": results, "account_id": account_id}
 
 

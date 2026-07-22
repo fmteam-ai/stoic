@@ -1,10 +1,16 @@
 """iter-108 · Stacked ML Ensemble tests."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import math
 import random
 import shutil
 import sys
 
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, _BACKEND_DIR)
 
 from ml_ensemble import (  # noqa: E402
     featurize, train_sync, blend, ml_gate, _transformer_member,

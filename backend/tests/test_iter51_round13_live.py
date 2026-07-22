@@ -20,6 +20,12 @@ backend, do NOT touch /api/panic, and do NOT create/close broker trades.
 """
 
 from __future__ import annotations
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 
 import asyncio
 import os
@@ -32,12 +38,12 @@ import pytest
 import requests
 
 # So we can import scalp.engine directly for the block-registry spot-check.
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, _BACKEND_DIR)
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
     # Frontend .env is the source of truth for the external URL.
-    fe_env = Path("/app/frontend/.env").read_text()
+    fe_env = Path(_os.path.join(_REPO_DIR, "frontend", ".env")).read_text()
     m = re.search(r"REACT_APP_BACKEND_URL=(\S+)", fe_env)
     if m:
         BASE_URL = m.group(1).rstrip("/")
@@ -45,7 +51,7 @@ if not BASE_URL:
 MONGO_URL = os.environ.get("MONGO_URL")
 DB_NAME = os.environ.get("DB_NAME")
 if not MONGO_URL or not DB_NAME:
-    be_env = Path("/app/backend/.env").read_text()
+    be_env = Path(_os.path.join(_BACKEND_DIR, ".env")).read_text()
     for line in be_env.splitlines():
         if line.startswith("MONGO_URL=") and not MONGO_URL:
             MONGO_URL = line.split("=", 1)[1].strip().strip('"')
@@ -92,28 +98,28 @@ class TestEaVersionConsistency:
     EXPECTED = current_ea_version()
 
     def test_mq5_property_version(self):
-        text = Path("/app/backend/static/EmergentTradingBridge.mq5").read_text()
+        text = Path(_os.path.join(_BACKEND_DIR, "static/EmergentTradingBridge.mq5")).read_text()
         assert f'#property version   "{self.EXPECTED}"' in text
         assert f'#define EA_CLIENT_VERSION "{self.EXPECTED}"' in text
 
     def test_bot_routes_latest_ea(self):
-        text = Path("/app/backend/routes/bot_routes.py").read_text()
+        text = Path(_os.path.join(_BACKEND_DIR, "routes/bot_routes.py")).read_text()
         assert f'LATEST_EA = "{self.EXPECTED}"' in text
 
     def test_diagnostic_routes_latest_ea(self):
-        text = Path("/app/backend/routes/diagnostic_routes.py").read_text()
+        text = Path(_os.path.join(_BACKEND_DIR, "routes/diagnostic_routes.py")).read_text()
         assert f'LATEST_EA = "{self.EXPECTED}"' in text
 
     def test_setup_routes_ea_latest_version(self):
-        text = Path("/app/backend/routes/setup_routes.py").read_text()
+        text = Path(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py")).read_text()
         assert f'"ea_latest_version": "{self.EXPECTED}"' in text
 
     def test_frontend_accounts_latest(self):
-        text = Path("/app/frontend/src/pages/Accounts.jsx").read_text()
+        text = Path(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read_text()
         assert f'LATEST_EA_VERSION = "{self.EXPECTED}"' in text
 
     def test_frontend_ea_version_strip_latest(self):
-        text = Path("/app/frontend/src/components/EaVersionStrip.jsx").read_text()
+        text = Path(_os.path.join(_REPO_DIR, "frontend", "src/components/EaVersionStrip.jsx")).read_text()
         assert f'LATEST_EA_VERSION = "{self.EXPECTED}"' in text
 
 

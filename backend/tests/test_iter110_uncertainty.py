@@ -1,7 +1,13 @@
 """iter-110 · Uncertainty Estimation tests."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import sys
 
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, _BACKEND_DIR)
 
 from uncertainty import estimate_uncertainty, uncertainty_gate  # noqa: E402
 

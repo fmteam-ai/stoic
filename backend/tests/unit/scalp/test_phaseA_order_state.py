@@ -1,5 +1,11 @@
 """Phase A — execution-engine completion: explicit order state machine,
 full idempotency, transactional outbox, crash recovery. MongoDB-free."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import inspect
 
 import pytest
@@ -155,7 +161,7 @@ class TestPhaseAWiring:
         assert '_st = "QUEUED"' in src
 
     def test_bridge_lifecycle_sites(self):
-        src = open("/app/backend/routes/bridge_routes.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")).read()
         assert "order_state.EA_CLAIMED" in src         # poll-trades dispatch
         assert "order_state.BROKER_ACCEPTED" in src    # fill ack
         # P0-1 · protection-aware lifecycle: fill → FILLED_UNPROTECTED;
@@ -168,11 +174,11 @@ class TestPhaseAWiring:
         assert "adopt_open_trade(trade)" in src
 
     def test_relay_wired_into_reconcile_loop(self):
-        src = open("/app/backend/background_loops.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "background_loops.py")).read()
         assert "from scalp.outbox import relay_once" in src
 
     def test_seed_ensures_outbox_indexes(self):
-        src = open("/app/backend/seed.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "seed.py")).read()
         assert "ensure_outbox_indexes" in src
 
     def test_critical_financial_events_not_double_emitted(self):

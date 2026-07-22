@@ -1,4 +1,10 @@
 """iter-52 · Friday Flat guard — weekend gap protection."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import sys
 from datetime import datetime, timezone
@@ -86,7 +92,7 @@ class TestWiring:
         assert '"friday_flat_at": {"$exists": False}' in src
 
     def test_frontend_ui(self):
-        fe = open("/app/frontend/src/pages/BotConfig.jssx".replace("jssx", "jsx")).read()
+        fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/BotConfig.jssx").replace("jssx", "jsx")).read()
         assert "friday_flat_enabled" in fe
         assert "friday-flat-mode" in fe
         assert "friday_flat_minutes_before" in fe

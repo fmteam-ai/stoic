@@ -4,6 +4,12 @@ Pure-function tests covering: Tauro `.fx`, OnEquity `.e`, IC Markets `.raw`,
 FBS `.std`, RoboForex bare, FXTM `pro`, mixed-suffix brokers, and edge
 cases (empty list, all garbage, single match)."""
 from __future__ import annotations
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 
 from broker_symbol_detector import infer_broker_suffix, _split_base_suffix
 
@@ -160,7 +166,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 def _db_creds():
     mongo_url = "mongodb://localhost:27017"
     db_name = "test_database"
-    with open("/app/backend/.env") as f:
+    with open(_os.path.join(_BACKEND_DIR, ".env")) as f:
         for line in f:
             if line.startswith("MONGO_URL="):
                 mongo_url = line.split("=", 1)[1].strip().strip('"').strip("'")
@@ -224,7 +230,7 @@ def test_heartbeat_persists_auto_suffix():
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
             # POST a heartbeat with .fx-style symbols
-            with open("/app/frontend/.env") as f:
+            with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
                 for line in f:
                     if line.startswith("REACT_APP_BACKEND_URL"):
                         api = line.split("=", 1)[1].strip().strip('"').rstrip("/")

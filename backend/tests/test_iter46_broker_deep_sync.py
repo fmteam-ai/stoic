@@ -1,5 +1,11 @@
 """iter-46 · On-demand deep broker sync (EA v1.39) — restore & synchronize
 STOIC's records with the broker terminal at any time."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import sys
 
@@ -65,7 +71,7 @@ class TestEaV139:
 
     def test_frontend_version_matches(self):
         from ea_version import current_ea_version
-        fe = open("/app/frontend/src/pages/Accounts.jsx").read()
+        fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read()
         assert f'const LATEST_EA_VERSION = "{current_ea_version()}"' in fe
         assert "request-sync" in fe
         assert "broker_sync_complete" in fe

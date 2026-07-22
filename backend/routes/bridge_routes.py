@@ -1076,7 +1076,11 @@ async def report_trade(payload: BridgeTradeReport):
     # flag for reconciliation instead of silently overwriting the mapping.
     if (payload.status == "open" and payload.mt5_ticket is not None
             and trade.get("mt5_ticket")
-            and int(trade["mt5_ticket"]) != int(payload.mt5_ticket)):
+            and int(trade["mt5_ticket"]) != int(payload.mt5_ticket)
+            # EA v1.52 — mt5_ticket now carries the POSITION id; a replay of
+            # a pre-1.52 trade (order ticket stored) is NOT a duplicate when
+            # the order_ticket still matches.
+            and int(payload.order_ticket or 0) != int(trade["mt5_ticket"])):
         logger.critical(
             "DUPLICATE broker order detected trade=%s existing_ticket=%s "
             "new_ticket=%s account=%s — flagged requires_reconciliation",
@@ -1122,6 +1126,35 @@ async def report_trade(payload: BridgeTradeReport):
             update["open_ack_position_sl"] = float(payload.confirmed_position_sl)
         if payload.replay:
             update["journal_replayed_at"] = datetime.now(timezone.utc).isoformat()
+        # EA v1.52 — order ticket != position ticket: store all three real
+        # broker identifiers so lifecycle/protection/reconciliation always
+        # target the right object.
+        if payload.order_ticket:
+            update["order_ticket"] = int(payload.order_ticket)
+        if payload.deal_ticket:
+            update["deal_ticket"] = int(payload.deal_ticket)
+        if payload.position_id:
+            update["position_id"] = int(payload.position_id)
+        # EA v1.52 — partial fill on open: the REAL position is smaller than
+        # requested. Adopt the actual filled volume so risk math, partial
+        # closes and P&L reconciliation track the true broker exposure.
+        if payload.filled_volume and payload.filled_volume > 0:
+            requested_lot = float(trade.get("lot_size") or 0)
+            filled = float(payload.filled_volume)
+            if requested_lot > 0 and filled < requested_lot - 1e-9:
+                update["partial_fill"] = True
+                if not trade.get("original_lot_size"):
+                    update["original_lot_size"] = requested_lot
+                update["lot_size"] = filled
+                logger.warning(
+                    "PARTIAL FILL on open trade=%s requested=%.4f "
+                    "filled=%.4f account=%s", payload.trade_id,
+                    requested_lot, filled, str(acc["_id"]))
+                try:
+                    await inc_intel_counter(acc["user_id"],
+                                            "partial_fill_open")
+                except Exception:
+                    pass
 
     # Slippage veto — on first OPEN report, compare actual fill vs intended entry
     slippage_force_close = False

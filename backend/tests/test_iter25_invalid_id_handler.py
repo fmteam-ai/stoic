@@ -5,6 +5,12 @@ global handler catches the resulting `bson.errors.InvalidId` and returns a
 clean 404 (instead of a 500). Prevents the iter22 P2.2 class of bug from
 re-emerging when new routes are added.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import requests
 import pytest
@@ -19,7 +25,7 @@ API = f"{BASE_URL}/api"
 def test_invalid_id_handler_is_registered():
     """server.app must have an exception handler for InvalidId returning 404."""
     import sys
-    sys.path.insert(0, "/app/backend")
+    sys.path.insert(0, _BACKEND_DIR)
     from server import app
     handlers = app.exception_handlers
     assert InvalidId in handlers, "InvalidId handler not registered on app"

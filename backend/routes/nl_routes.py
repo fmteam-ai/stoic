@@ -20,6 +20,9 @@ from strategy_code_generator import generate_code
 from strategy_optimizer import optimize as optimize_strategy
 from route_utils import parse_object_id
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/nl", tags=["nl-commander"])
 
 
@@ -256,7 +259,9 @@ async def _execute_actions(user_id: str, actions: list) -> list:
                 r = {"skipped": True, "reason": f"unknown action {a_type}"}
             receipts.append({"type": a_type, "target": target, "result": r})
         except Exception as e:
-            receipts.append({"type": a_type, "target": target, "error": str(e)})
+            logger.warning("nl action %s failed: %s", a_type, e)
+            receipts.append({"type": a_type, "target": target,
+                             "error": "action_failed"})
     return receipts
 
 

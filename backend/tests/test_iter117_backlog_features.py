@@ -8,6 +8,12 @@ Covers:
   - DELETE /api/partners/brokers admin only, non-admin 403
   - POST /api/partners/brokers/{id}/click increments clicks + returns url
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import time
 import uuid
@@ -41,7 +47,7 @@ def user_sess():
     assert r.status_code in (200, 201), f"register: {r.status_code} {r.text}"
     # Flip verified (load MONGO/DB from backend .env)
     from pathlib import Path
-    envfile = Path("/app/backend/.env").read_text()
+    envfile = Path(_os.path.join(_BACKEND_DIR, ".env")).read_text()
     envs = {}
     for line in envfile.splitlines():
         if "=" in line and not line.startswith("#"):

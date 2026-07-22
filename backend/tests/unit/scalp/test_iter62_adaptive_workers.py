@@ -1,5 +1,11 @@
 """Iter-62 — adaptive exits (safety envelope), worker separation, demo
 history-cap exemption."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import inspect
 
 import pytest
@@ -109,7 +115,7 @@ class TestDemoHistoryExemption:
 
 class TestWorkerSeparation:
     def test_server_gates_inprocess_loops(self):
-        src = open("/app/backend/server.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
         assert "BACKGROUND_WORKERS_IN_PROCESS" in src
         assert "from background_loops import" in src
 
@@ -124,7 +130,7 @@ class TestWorkerSeparation:
         import workers.base as wb
         assert callable(wb.run_worker) and callable(wb.main)
         for mod in ("trading", "reconciliation", "tuning"):
-            src = open(f"/app/backend/workers/{mod}.py").read()
+            src = open(_os.path.join(_BACKEND_DIR, f"workers/{mod}.py")).read()
             assert 'main(' in src
 
     # leader-lease DB test moved to tests/integration/scalp/

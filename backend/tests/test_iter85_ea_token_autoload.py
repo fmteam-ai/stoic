@@ -14,18 +14,24 @@ to lock in:
   · /api/setup/claim-pairing advertises the latest version.
 """
 from __future__ import annotations
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 
 import os
 import re
 import requests
 
-EA_PATH = "/app/backend/static/EmergentTradingBridge.mq5"
+EA_PATH = _os.path.join(_BACKEND_DIR, "static/EmergentTradingBridge.mq5")
 from ea_version import current_ea_version
 EXPECTED_VERSION = current_ea_version()
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
-    with open("/app/frontend/.env") as f:
+    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
         for line in f:
             if line.startswith("REACT_APP_BACKEND_URL"):
                 BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
@@ -158,6 +164,6 @@ def test_claim_pairing_advertises_v136():
     """The installer reads `ea_latest_version` from the claim response and
     cache-busts its EA download with it — keep this in sync."""
     # Quick smoke: just check the constant in the route source.
-    with open("/app/backend/routes/setup_routes.py") as f:
+    with open(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py")) as f:
         src = f.read()
     assert f'"ea_latest_version": "{EXPECTED_VERSION}"' in src

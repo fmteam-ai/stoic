@@ -977,7 +977,8 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(
             status_code=500,
-            detail={"code": "execution_error", "message": str(e)},
+            detail={"code": "execution_error",
+                    "message": "Order execution failed — see server logs."},
         )
 
     if "blocked" in result:

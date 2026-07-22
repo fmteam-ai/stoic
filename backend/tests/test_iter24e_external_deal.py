@@ -8,12 +8,18 @@ must:
   - Auto-create a fully-closed trade when deal_entry='out' on an unknown ticket
   - Compute realised P&L as profit + commission + swap
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import pathlib
 import pytest
 import requests
 
-_FRONT_ENV = pathlib.Path("/app/frontend/.env")
+_FRONT_ENV = pathlib.Path(_os.path.join(_REPO_DIR, "frontend", ".env"))
 
 
 def _read_frontend_backend_url() -> str:
@@ -44,7 +50,7 @@ def admin_session():
 @pytest.fixture(scope="module")
 def mongo_db():
     import os as _os, pymongo
-    env_path = pathlib.Path("/app/backend/.env")
+    env_path = pathlib.Path(_os.path.join(_BACKEND_DIR, ".env"))
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             if line.startswith("MONGO_URL="):

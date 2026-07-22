@@ -8,6 +8,12 @@ Verifies all backend endpoints requested in the review:
   5) POST /api/bridge/dom valid + invalid token
   6) GET /api/ea-script (or /api/bridge/download-ea) serves v1.43 EA
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import re
 
@@ -18,7 +24,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
     # Fallback: read directly from /app/frontend/.env (test env may not export)
     try:
-        with open("/app/frontend/.env") as f:
+        with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
             for ln in f:
                 if ln.startswith("REACT_APP_BACKEND_URL="):
                     BASE_URL = ln.split("=", 1)[1].strip().strip('"').rstrip("/")

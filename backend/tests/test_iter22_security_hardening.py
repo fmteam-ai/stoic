@@ -7,6 +7,12 @@ Covers:
   P2.1 — broker_deals.insert catches ONLY DuplicateKeyError, surfaces others
   P2.2 — invalid ObjectId paths return 404 instead of 500
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import uuid
 import pytest
@@ -121,7 +127,7 @@ def test_cors_allows_whitelisted_origin():
 # in HTTP). Verify the source actually uses DuplicateKeyError, not bare Exception.
 
 def test_broker_deals_catches_duplicate_key_error_only():
-    with open("/app/backend/routes/bridge_routes.py") as f:
+    with open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")) as f:
         src = f.read()
     # Find the broker_deals.insert_one block
     idx = src.find("broker_deals.insert_one")
@@ -136,7 +142,7 @@ def test_broker_deals_catches_duplicate_key_error_only():
 def test_slippage_veto_path_does_not_namerror():
     """Compile-time check: report_trade no longer references undefined now_iso."""
     import ast
-    with open("/app/backend/routes/bridge_routes.py") as f:
+    with open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")) as f:
         tree = ast.parse(f.read())
     # Find the report_trade function
     func = None

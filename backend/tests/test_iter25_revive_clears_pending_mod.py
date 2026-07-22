@@ -5,6 +5,12 @@ pending_modification=FULL_CLOSE) and then revived must come back with NO
 pending modification — otherwise the EA's next /poll-trades would
 immediately close it again.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import pathlib
 import pytest
@@ -12,7 +18,7 @@ import requests
 from datetime import datetime, timezone
 from bson import ObjectId
 
-_FRONT_ENV = pathlib.Path("/app/frontend/.env")
+_FRONT_ENV = pathlib.Path(_os.path.join(_REPO_DIR, "frontend", ".env"))
 
 
 def _read_frontend_backend_url() -> str:
@@ -47,7 +53,7 @@ def _strip(v: str) -> str:
 @pytest.fixture(scope="module")
 def mongo_db():
     import os as _os, pymongo
-    env_path = pathlib.Path("/app/backend/.env")
+    env_path = pathlib.Path(_os.path.join(_BACKEND_DIR, ".env"))
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             if line.startswith("MONGO_URL="):

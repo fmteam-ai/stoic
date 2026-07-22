@@ -10,6 +10,12 @@
 
 Pure unit tests — no MongoDB.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import inspect
 import asyncio
 
@@ -42,7 +48,7 @@ class TestAwaitedReservationTransitions:          # item 1
 
     def test_bridge_report_awaits_broker_ack_release(self):
         # P0-2 · release moved INSIDE the awaited on_trade_opened
-        src = open("/app/backend/routes/bridge_routes.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")).read()
         assert "await r.on_trade_opened(" in src
         esrc = _engine_src()
         assert "await risk_reservations.release_for_trade(" in esrc
@@ -60,7 +66,7 @@ class TestPendingVsConfirmedStop:                 # item 2
     def test_ack_hook_exists(self):
         src = _engine_src()
         assert "def on_stop_modified(" in src
-        bridge = open("/app/backend/routes/bridge_routes.py").read()
+        bridge = open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")).read()
         assert "on_stop_modified(" in bridge
 
     def test_on_stop_modified_confirms_and_rejects(self):
@@ -227,5 +233,5 @@ class TestReservationDocHardening:                # item 8
                                     ("updated_at", -1)]
 
     def test_seed_wires_reservation_indexes(self):
-        src = open("/app/backend/seed.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "seed.py")).read()
         assert "ensure_reservation_indexes" in src

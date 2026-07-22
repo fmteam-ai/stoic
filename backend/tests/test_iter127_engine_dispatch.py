@@ -15,6 +15,12 @@ Verifies:
   - HTTP: /api/bot/mtf-confluence?symbol=XAUUSD still 200 (strict by default).
   - HTTP: /api/bot/health-score returns 200 (regression from iter-41 fix).
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import sys
 import asyncio
@@ -22,7 +28,7 @@ import asyncio
 import pytest
 import requests
 
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, _BACKEND_DIR)
 
 from strategy_engines import (  # noqa: E402
     ENGINE_BY_PRESET, ENGINE_LABELS, MTF_MODE_BY_ENGINE,

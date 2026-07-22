@@ -1,11 +1,17 @@
 """Iter-63 — DB round-trip tests moved OUT of tests/unit (review item 1):
 unit tests must run without MongoDB; these need the real database."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 
 import pytest
 from dotenv import load_dotenv
 
-load_dotenv("/app/backend/.env")
+load_dotenv(_os.path.join(_BACKEND_DIR, ".env"))
 
 pytestmark = pytest.mark.integration
 

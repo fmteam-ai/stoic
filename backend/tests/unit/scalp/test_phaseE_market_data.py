@@ -1,5 +1,11 @@
 """Phase E — Market Data Layer: tick validation, gap detection, session
 quality metrics, feed-health integration. MongoDB-free."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import inspect
 
 import pytest
@@ -110,7 +116,7 @@ class TestPhaseEWiring:
             src.index("self.state.update(t, trusted=trusted)")
 
     def test_quality_feeds_kill_switch(self):
-        ksrc = open("/app/backend/scalp/kill.py").read()
+        ksrc = open(_os.path.join(_BACKEND_DIR, "scalp/kill.py")).read()
         assert "data_quality" in ksrc
         assert "market data quality poor" in ksrc
         src = self._src()

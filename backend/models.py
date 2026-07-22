@@ -10,7 +10,7 @@ TradeStatus = Literal["pending", "open", "closed", "cancelled", "failed"]
 # ---------- Auth ----------
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=8)
     name: Optional[str] = None
     terms_agreed: bool = False
     terms_version: Optional[str] = None
@@ -30,7 +30,7 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=10, max_length=120)
-    new_password: str = Field(min_length=6)
+    new_password: str = Field(min_length=8)
 
 
 class LoginRequest(BaseModel):
@@ -45,7 +45,7 @@ class ProfileUpdateRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
-    new_password: str = Field(min_length=6)
+    new_password: str = Field(min_length=8)
 
 
 class TOTPVerifyRequest(BaseModel):
@@ -424,6 +424,11 @@ class BridgeTradeReport(BaseModel):
     applied_sl: Optional[float] = None            # EA v1.50 — SL post broker clamp
     confirmed_position_sl: Optional[float] = None  # EA v1.50 — live POSITION_SL
     replay: Optional[bool] = None                 # EA v1.50 — journal re-report
+    order_ticket: Optional[int] = None            # EA v1.52 — broker ORDER ticket
+    deal_ticket: Optional[int] = None             # EA v1.52 — executed DEAL ticket
+    position_id: Optional[int] = None             # EA v1.52 — POSITION identifier
+    filled_volume: Optional[float] = None         # EA v1.52 — actual filled lots
+    partial_fill: Optional[bool] = None           # EA v1.52 — DONE_PARTIAL open
 
 
 class BridgeExternalDeal(BaseModel):

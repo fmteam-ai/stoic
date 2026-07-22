@@ -1,6 +1,12 @@
 """Phase G — trace observability: one trace id (the decision_id) from tick
 to analytics, with stages, merged timeline and a deterministic narrative.
 Unit portion is MongoDB-free."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import pytest
 
 import trade_trace as tt
@@ -98,9 +104,9 @@ class TestNarrative:
 
 class TestWiring:
     def test_route_registered(self):
-        src = open("/app/backend/server.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
         assert "trace_router" in src
-        rsrc = open("/app/backend/routes/trace_routes.py").read()
+        rsrc = open(_os.path.join(_BACKEND_DIR, "routes/trace_routes.py")).read()
         assert "assemble_trace" in rsrc
         assert "404" in rsrc                       # ownership → not found
 

@@ -1,6 +1,12 @@
 """iter-144 · Architectural hardening Batch 2 (audit r3):
 1. legacy lifecycle quarantine  2. unified reservation release
 3. EA command sequence fencing  4. startup failure → readiness abort."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import asyncio
 import inspect
 
@@ -26,7 +32,7 @@ class _Cursor:
 
 
 def _bridge_src():
-    return open("/app/backend/routes/bridge_routes.py").read()
+    return open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")).read()
 
 
 def _engine_src():
@@ -35,7 +41,7 @@ def _engine_src():
 
 
 def _server_src():
-    return open("/app/backend/server.py").read()
+    return open(_os.path.join(_BACKEND_DIR, "server.py")).read()
 
 
 # ---------------------------------------------------------------- item 1

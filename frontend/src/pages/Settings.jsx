@@ -59,7 +59,7 @@ export default function Settings() {
     const changePassword = async (e) => {
         e.preventDefault();
         setPwSaving(true); setPwMsg(""); setPwErr("");
-        if (pwNew.length < 6) { setPwErr("New password must be at least 6 characters."); setPwSaving(false); return; }
+        if (pwNew.length < 8) { setPwErr("New password must be at least 8 characters."); setPwSaving(false); return; }
         if (pwNew !== pwConfirm) { setPwErr("New password and confirmation don't match."); setPwSaving(false); return; }
         try {
             await api.post("/auth/change-password", { current_password: pwCurrent, new_password: pwNew });
@@ -177,7 +177,7 @@ export default function Settings() {
                     </div>
                     <form onSubmit={changePassword} className="p-5 space-y-4">
                         <PwInput label="CURRENT PASSWORD" value={pwCurrent} onChange={setPwCurrent} testid="pw-current" />
-                        <PwInput label="NEW PASSWORD" value={pwNew} onChange={setPwNew} testid="pw-new" hint="Minimum 6 characters." />
+                        <PwInput label="NEW PASSWORD" value={pwNew} onChange={setPwNew} testid="pw-new" hint="Minimum 8 characters." />
                         <PwInput label="CONFIRM NEW PASSWORD" value={pwConfirm} onChange={setPwConfirm} testid="pw-confirm" />
 
                         {pwErr && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-3 py-2 text-xs text-[#FF3B30] font-mono" data-testid="pw-error">{pwErr}</div>}

@@ -3,8 +3,14 @@ success-only intent consumption, journaled replay outcomes, fenced
 close_requested path, superseded/terminal/retryable acks, volume steps,
 stop tolerance, OrderCheck on retry."""
 
-EA = "/app/backend/static/EmergentTradingBridge.mq5"
-BR = "/app/backend/routes/bridge_routes.py"
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
+EA = _os.path.join(_BACKEND_DIR, "static/EmergentTradingBridge.mq5")
+BR = _os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")
 
 
 def _ea():
@@ -26,7 +32,9 @@ def _fn(src, name, nxt):
 class TestSuccessOnlyIntentConsumption:                       # audit r5 item 1
     def test_modify_sl_marks_only_on_success(self):
         body = _fn(_ea(), "void ApplyModifySL(", "void ApplyPartialClose(")
-        assert "if (success) MarkIntentDone(intent, seq, trade_id);" in body
+        # v1.52 — intent consumption additionally requires the live position
+        # to SHOW the stop (accepted != confirmed)
+        assert "if (success && stop_confirmed) MarkIntentDone(intent, seq, trade_id);" in body
         assert body.count("MarkIntentDone(") == 1
 
     def test_partial_close_marks_only_on_success(self):
@@ -174,7 +182,7 @@ class TestOrderCheckOnRetry:                                  # item 10
 class TestBackendAckModelRound5:
     def test_new_fields(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from routes.bridge_routes import BridgeModificationAck
         f = BridgeModificationAck.model_fields
         for k in ("superseded", "received_seq", "latest_seq",

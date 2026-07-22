@@ -1,5 +1,11 @@
 """Phase F — worker architecture: protection / analytics / model services
 separated, DB-only task modules. Unit portion is MongoDB-free."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import inspect
 
 import pytest
@@ -12,12 +18,12 @@ class TestServiceSeparation:
         for name, loop in (("protection", "_protection_guard_loop"),
                            ("analytics", "_analytics_loop"),
                            ("model", "_model_maintenance_loop")):
-            src = open(f"/app/backend/workers/{name}.py").read()
+            src = open(_os.path.join(_BACKEND_DIR, f"workers/{name}.py")).read()
             assert loop in src
             assert "workers.base import main" in src
 
     def test_loops_defined_in_background_loops(self):
-        src = open("/app/backend/background_loops.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "background_loops.py")).read()
         for loop in ("_protection_guard_loop", "_analytics_loop",
                      "_model_maintenance_loop"):
             assert f"async def {loop}(" in src
@@ -30,7 +36,7 @@ class TestServiceSeparation:
         assert "repair_unprotected_positions" in prot
 
     def test_server_runs_all_in_process(self):
-        src = open("/app/backend/server.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
         for loop in ("_protection_guard_loop", "_analytics_loop",
                      "_model_maintenance_loop"):
             assert f"asyncio.create_task({loop}())" in src
@@ -38,7 +44,7 @@ class TestServiceSeparation:
         assert "_protection_task, _analytics_task, _model_maint_task" in src
 
     def test_architecture_documented(self):
-        doc = open("/app/backend/workers/README.md").read()
+        doc = open(_os.path.join(_BACKEND_DIR, "workers/README.md")).read()
         for svc in ("Protection worker", "Analytics worker", "Model worker",
                     "Broker Gateway", "BACKGROUND_WORKERS_IN_PROCESS"):
             assert svc in doc
@@ -46,12 +52,12 @@ class TestServiceSeparation:
 
 class TestTaskModulesAreDbOnly:
     def test_analytics_has_no_runner_access(self):
-        src = open("/app/backend/analytics_tasks.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "analytics_tasks.py")).read()
         assert "_runners" not in src
         assert "from scalp.engine" not in src
 
     def test_model_tasks_have_no_runner_access(self):
-        src = open("/app/backend/model_tasks.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "model_tasks.py")).read()
         assert "_runners" not in src
         assert "from scalp.engine" not in src
 

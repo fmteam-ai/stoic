@@ -3,6 +3,12 @@
 Covers: health, auth, market data, bot config, signals (AI), accounts,
 trade flow, bridge endpoints, EA download.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import time
 import uuid
@@ -2086,12 +2092,12 @@ class TestApplyPaymentIdempotency:
         import asyncio
         import sys
         from pathlib import Path
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         # Load backend .env so MONGO_URL/DB_NAME are available to the
         # imported service modules (we are not running inside uvicorn here).
         try:
             from dotenv import load_dotenv
-            load_dotenv(Path("/app/backend/.env"))
+            load_dotenv(Path(_os.path.join(_BACKEND_DIR, ".env")))
         except Exception:
             pass
         from subscription_service import apply_successful_payment  # noqa
@@ -2149,7 +2155,7 @@ class TestMtfGate:
 
     def _setup(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from mtf_check import multi_timeframe_gate
         return multi_timeframe_gate
 
@@ -2226,7 +2232,7 @@ class TestAutoTune:
 
     def test_compute_threshold_picks_lowest_qualifying_bucket(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from auto_tune import _compute_threshold
         # Bucket 60: 6 trades, 4 wins → 66.7% wr (qualifies)
         # Bucket 70: 6 trades, 5 wins → 83% wr (qualifies)
@@ -2245,7 +2251,7 @@ class TestAutoTune:
 
     def test_compute_threshold_falls_back_to_profile(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from auto_tune import _compute_threshold
         # Only 2 trades total — below MIN_SAMPLES
         rows = [{"confidence": 75, "pnl": 5}, {"confidence": 80, "pnl": 10}]
@@ -2359,7 +2365,7 @@ class TestAffiliateSubGate:
         try:
             from dotenv import load_dotenv
             from pathlib import Path
-            load_dotenv(Path("/app/backend/.env"))
+            load_dotenv(Path(_os.path.join(_BACKEND_DIR, ".env")))
         except Exception:
             pass
 
@@ -2452,7 +2458,7 @@ class TestIntelligenceCounters:
         try:
             from dotenv import load_dotenv
             from pathlib import Path
-            load_dotenv(Path("/app/backend/.env"))
+            load_dotenv(Path(_os.path.join(_BACKEND_DIR, ".env")))
         except Exception:
             pass
 
@@ -2469,7 +2475,7 @@ class TestIntelligenceCounters:
     def test_increment_and_read(self):
         self._load_env()
         import asyncio, sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         # Use a fresh client (not the cached module-level one — earlier tests
         # may have closed it and we want isolation from the running app DB).
         from motor.motor_asyncio import AsyncIOMotorClient
@@ -2506,7 +2512,7 @@ class TestSlippageVeto:
         try:
             from dotenv import load_dotenv
             from pathlib import Path
-            load_dotenv(Path("/app/backend/.env"))
+            load_dotenv(Path(_os.path.join(_BACKEND_DIR, ".env")))
         except Exception:
             pass
 
@@ -2724,7 +2730,7 @@ class TestSLImminentWatcher:
         try:
             from dotenv import load_dotenv
             from pathlib import Path
-            load_dotenv(Path("/app/backend/.env"))
+            load_dotenv(Path(_os.path.join(_BACKEND_DIR, ".env")))
         except Exception:
             pass
 
@@ -2732,7 +2738,7 @@ class TestSLImminentWatcher:
         """If we have only 1 sample (or no measurable velocity), no alert."""
         self._load_env()
         import asyncio, sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         import database as _db_mod
         _db_mod._client = None; _db_mod._db = None
         from database import get_db
@@ -2756,7 +2762,7 @@ class TestSLImminentWatcher:
         """Inject 3 ticks 10s apart with $1 jumps → velocity = 0.1 price/sec."""
         self._load_env()
         import asyncio, sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         import database as _db_mod
         _db_mod._client = None; _db_mod._db = None
         from database import get_db
@@ -2784,7 +2790,7 @@ class TestSLImminentWatcher:
         and report fired>=1."""
         self._load_env()
         import asyncio, sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         import database as _db_mod
         _db_mod._client = None; _db_mod._db = None
         from database import get_db
@@ -2866,7 +2872,7 @@ class TestSLImminentWatcher:
         position — broker should be closing it; we don't fire."""
         self._load_env()
         import asyncio, sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         import database as _db_mod
         _db_mod._client = None; _db_mod._db = None
         from database import get_db
@@ -2920,7 +2926,7 @@ class TestKalmanFilter:
 
     def test_smooths_noisy_around_constant_signal(self):
         import sys, random
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from kalman import kalman_smooth, kalman_features
         random.seed(42)
         true_price = 2400.0
@@ -2937,7 +2943,7 @@ class TestKalmanFilter:
 
     def test_velocity_tracks_uptrend(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from kalman import kalman_smooth
         prices = [100.0 + i * 0.5 for i in range(50)]  # +0.5/step
         out = kalman_smooth(prices)
@@ -2946,7 +2952,7 @@ class TestKalmanFilter:
 
     def test_handles_empty_and_single(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from kalman import kalman_smooth
         assert kalman_smooth([]) == []
         out = kalman_smooth([100.0])
@@ -2959,7 +2965,7 @@ class TestCOTFetcher:
 
     def test_summary_math(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from macro.cot import _summarise, _percentile_rank
         row = {
             "m_money_positions_long_all": "120000",
@@ -2981,7 +2987,7 @@ class TestTipsFetcher:
 
     def test_xml_parse_extracts_ten_year(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from macro.tips import _parse_xml
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"
@@ -3021,7 +3027,7 @@ class TestBacktester:
     def test_buy_fills_at_next_bar_open_then_tp(self):
         import sys
         from datetime import datetime, timezone, timedelta
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from backtester.engine import Engine, EngineConfig, OrderEvent
         t0 = datetime(2026, 6, 1, tzinfo=timezone.utc)
         bars = [
@@ -3047,7 +3053,7 @@ class TestBacktester:
     def test_macro_pit_delay_hides_event_until_absorbed(self):
         import sys
         from datetime import datetime, timezone, timedelta
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from backtester.engine import Engine, EngineConfig, MacroEvent
         eng = Engine(EngineConfig(macro_absorption_ms=1500))
         macro_ts = datetime(2026, 6, 1, 12, 30, 0, tzinfo=timezone.utc)
@@ -3072,7 +3078,7 @@ class TestBacktester:
     def test_backward_adjusted_stitch(self):
         import sys
         from datetime import datetime, timezone, timedelta
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from backtester.engine import backward_adjusted_stitch, BarEvent
         t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
         old = [BarEvent(ts=t0 + timedelta(days=i), symbol="GC", open=100, high=100,
@@ -3092,13 +3098,13 @@ class TestLearnedMeta:
         try:
             from dotenv import load_dotenv
             from pathlib import Path
-            load_dotenv(Path("/app/backend/.env"))
+            load_dotenv(Path(_os.path.join(_BACKEND_DIR, ".env")))
         except Exception:
             pass
 
     def test_features_extracted_correctly(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from learned_meta import _features_from_signal
         sig = {
             "action": "BUY", "confidence": 70.0, "entry_price": 4000.0,
@@ -3121,7 +3127,7 @@ class TestLearnedMeta:
 
     def test_hold_signal_returns_none(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from learned_meta import _features_from_signal
         sig = {"action": "HOLD", "confidence": 30.0, "entry_price": 100.0}
         assert _features_from_signal(sig) is None
@@ -3129,7 +3135,7 @@ class TestLearnedMeta:
     def test_train_with_synthetic_data_learns_separable(self):
         """Synthetic linearly-separable dataset → AUC > 0.85."""
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from learned_meta import _train_logreg
         import numpy as np
         rng = np.random.default_rng(0)
@@ -3152,7 +3158,7 @@ class TestLearnedMeta:
     def test_retrain_with_insufficient_data_skips(self):
         self._load_env()
         import asyncio, sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         import database as _db_mod
         _db_mod._client = None; _db_mod._db = None
         from learned_meta import retrain, MIN_SAMPLES
@@ -3188,7 +3194,7 @@ class TestConfluenceFilter:
 
     def _common(self):
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_DIR)
         from confluence import confluence_check
         return confluence_check
 

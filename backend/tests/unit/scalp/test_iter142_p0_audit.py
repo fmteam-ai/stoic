@@ -1,5 +1,11 @@
 """iter-142 · P0 audit fixes — protection-aware lifecycle, awaited
 safety-critical writes, durable close intent, candle pipeline instrumentation."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import asyncio
 import inspect
 import re
@@ -10,7 +16,7 @@ from scalp import order_state as os_
 
 
 def _bridge_src():
-    return open("/app/backend/routes/bridge_routes.py").read()
+    return open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")).read()
 
 
 def _engine_src():
@@ -142,7 +148,7 @@ class TestCandleInstrumentation:                # P0-4
         assert "dropped_bars" in src
 
     def test_freshness_api_exposes_candles(self):
-        src = open("/app/backend/routes/data_freshness_routes.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "routes/data_freshness_routes.py")).read()
         assert '"candles"' in src
         assert "candle_feed_health" in src
         assert '"candles":  20 * 60' in src

@@ -1,8 +1,14 @@
 """iter-107 · Economic Calendar Intelligence tests."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import sys
 import time
 
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, _BACKEND_DIR)
 
 from calendar_intel import (  # noqa: E402
     classify_event, context_multipliers, calendar_entry_policy,

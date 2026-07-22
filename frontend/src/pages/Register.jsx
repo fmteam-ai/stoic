@@ -23,7 +23,7 @@ export default function Register() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError("");
-        if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
+        if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
         if (!termsAgreed) { setError("You must accept the Terms of Use to continue."); return; }
         setLoading(true);
         try {
@@ -166,10 +166,10 @@ export default function Register() {
                     <div>
                         <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">PASSWORD</label>
                         <input
-                            type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6}
+                            type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={8}
                             data-testid="register-password-input"
                             className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#00FF41] outline-none px-3 py-3 text-sm transition-colors duration-150"
-                            placeholder="At least 6 characters"
+                            placeholder="At least 8 characters"
                         />
                     </div>
 

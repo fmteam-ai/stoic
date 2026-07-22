@@ -216,16 +216,40 @@
 //|             lot below the broker minimum reports a terminal       |
 //|             volume_below_broker_min failure instead of a raw      |
 //|             broker rejection.                                     |
+//| v1.52 — Execution-truth audit (P0):                               |
+//|         (a) Partial fills on NEW orders: DONE_PARTIAL is a REAL   |
+//|             position — the open flow now verifies the actual      |
+//|             broker deal + resulting position for both full and    |
+//|             partial fills and reports filled_volume/partial_fill. |
+//|             A failed retcode with a live position (requote edge)  |
+//|             is recovered, never reported failed.                  |
+//|         (b) Order ticket != position ticket: order_ticket,        |
+//|             deal_ticket and position identifier are resolved      |
+//|             (DEAL_POSITION_ID), stored separately and reported.   |
+//|             mt5_ticket now carries the POSITION identifier.       |
+//|         (c) Netting-aware recovery: crash-window replay searches  |
+//|             order/deal history by magic + trade_id comment +      |
+//|             symbol + side + volume + execution window (comment    |
+//|             scan alone misses netting merges).                    |
+//|         (d) Exact 64-bit ticket journaling: tickets split into    |
+//|             two 32-bit halves (GV doubles are exact <= 2^53 but   |
+//|             split storage removes the risk class entirely).       |
+//|         (e) MODIFY_SL: 'request accepted' and 'stop confirmed'    |
+//|             are separate states — the intent is consumed ONLY     |
+//|             after the live position shows the stop.               |
+//|         (f) PARTIAL_CLOSE success is judged from the ACTUAL       |
+//|             remaining volume within the broker volume step, not   |
+//|             from the retcode.                                     |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.51"
+#property version   "1.52"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.51"
+#define EA_CLIENT_VERSION "1.52"
 
 input string ServerUrl              = "https://stoic-trading.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -463,6 +487,51 @@ void MarkIntentDone(string intent, long seq, string trade_id,
       JSet("S", trade_id, (double)seq);
 }
 
+// v1.52 — EXACT 64-bit ticket journaling. Global Variables store doubles,
+// so tickets are split into two 32-bit halves (STOIC.<kind>H / <kind>L).
+// Legacy single-double entries from pre-1.52 journals keep reading.
+void JSetTicket(string kind, string id, ulong ticket) {
+   JSet(kind + "H", id, (double)(ticket >> 32));
+   JSet(kind + "L", id, (double)(ticket & 0xFFFFFFFF));
+}
+
+ulong JGetTicket(string kind, string id) {
+   ulong hi = (ulong)JGet(kind + "H", id);
+   ulong lo = (ulong)JGet(kind + "L", id);
+   if (hi > 0 || lo > 0) return (hi << 32) | lo;
+   double legacy = JGet(kind, id);
+   return (legacy > 0 ? (ulong)legacy : 0);
+}
+
+// v1.52 — authoritative deal → position link. An MT5 ORDER ticket is not
+// the POSITION ticket (netting merges fills); DEAL_POSITION_ID is truth.
+ulong PositionIdFromDeal(ulong deal_ticket) {
+   if (deal_ticket == 0) return 0;
+   if (!HistoryDealSelect(deal_ticket)) {
+      HistorySelect(TimeCurrent() - 86400, TimeCurrent() + 60);
+      if (!HistoryDealSelect(deal_ticket)) return 0;
+   }
+   return (ulong)HistoryDealGetInteger(deal_ticket, DEAL_POSITION_ID);
+}
+
+// v1.52 — select the live position for a position IDENTIFIER. Hedging:
+// ticket == identifier. Netting: fills merge into one symbol position —
+// scan identifiers, then fall back to the symbol's netted position.
+bool SelectPositionById(ulong position_id, string symbol) {
+   if (position_id > 0 && PositionSelectByTicket(position_id)) return true;
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      ulong tk = PositionGetTicket(i);
+      if (tk == 0) continue;
+      if ((ulong)PositionGetInteger(POSITION_IDENTIFIER) == position_id)
+         return true;
+   }
+   bool netting = ((ENUM_ACCOUNT_MARGIN_MODE)
+                   AccountInfoInteger(ACCOUNT_MARGIN_MODE)
+                   != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
+   if (netting && symbol != "" && PositionSelect(symbol)) return true;
+   return false;
+}
+
 // Drop journal entries idle for 7+ days (MT5 auto-expires GVs at 4 weeks).
 void SweepJournal() {
    datetime cutoff = TimeCurrent() - 7 * 86400;
@@ -479,6 +548,35 @@ long FindPositionByComment(string trade_id) {
       ulong tk = PositionGetTicket(i);
       if (tk == 0) continue;
       if (PositionGetString(POSITION_COMMENT) == trade_id) return (long)tk;
+   }
+   return 0;
+}
+
+// v1.52 — netting-aware trade → position resolution. Comment scan first
+// (hedging fast path), then order/deal HISTORY by magic + trade_id comment
+// + symbol + side + volume inside the execution window; returns the deal's
+// POSITION_ID (0 if unresolvable).
+ulong FindPositionForTrade(string trade_id, string symbol, string action,
+                           double lot) {
+   long by_comment = FindPositionByComment(trade_id);
+   if (by_comment > 0 && PositionSelectByTicket((ulong)by_comment))
+      return (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+   if (!HistorySelect(TimeCurrent() - 7200, TimeCurrent() + 60)) return 0;
+   long want_type = (action == "BUY") ? DEAL_TYPE_BUY : DEAL_TYPE_SELL;
+   for (int i = HistoryDealsTotal() - 1; i >= 0; i--) {
+      ulong dtk = HistoryDealGetTicket(i);
+      if (dtk == 0) continue;
+      if (HistoryDealGetInteger(dtk, DEAL_MAGIC) != MagicNumber) continue;
+      long entry = HistoryDealGetInteger(dtk, DEAL_ENTRY);
+      if (entry != DEAL_ENTRY_IN && entry != DEAL_ENTRY_INOUT) continue;
+      bool comment_hit = (StringFind(
+         HistoryDealGetString(dtk, DEAL_COMMENT), trade_id) >= 0);
+      bool profile_hit = (symbol != ""
+         && HistoryDealGetString(dtk, DEAL_SYMBOL) == symbol
+         && HistoryDealGetInteger(dtk, DEAL_TYPE) == want_type
+         && MathAbs(HistoryDealGetDouble(dtk, DEAL_VOLUME) - lot) < 1e-8);
+      if (comment_hit || profile_hit)
+         return (ulong)HistoryDealGetInteger(dtk, DEAL_POSITION_ID);
    }
    return 0;
 }
@@ -1356,27 +1454,41 @@ void ClampStops(string sym, int side, double &sl, double &tp, int extra_mult) {
 void SendOpenReport(string trade_id, ulong ticket, string status,
                     double entry, double req_price, string err,
                     double req_sl, double app_sl, double conf_sl,
-                    bool replay) {
+                    bool replay,
+                    ulong order_tk = 0, ulong deal_tk = 0,
+                    ulong pos_id = 0, double filled = 0,
+                    bool partial = false) {
+   // v1.52 — mt5_ticket carries the POSITION identifier; order_ticket /
+   // deal_ticket / position_id are reported separately (order != position,
+   // especially on netting accounts).
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"mt5_ticket\":%I64u,"
       "\"status\":\"%s\",\"entry_price\":%.5f,\"requested_price\":%.5f,"
       "\"requested_sl\":%.5f,\"applied_sl\":%.5f,\"confirmed_position_sl\":%.5f,"
+      "\"order_ticket\":%I64u,\"deal_ticket\":%I64u,\"position_id\":%I64u,"
+      "\"filled_volume\":%.4f,\"partial_fill\":%s,"
       "\"replay\":%s,\"error\":\"%s\"}",
       EffectiveToken, trade_id, ticket, status, entry, req_price,
-      req_sl, app_sl, conf_sl, (replay ? "true" : "false"), err);
+      req_sl, app_sl, conf_sl, order_tk, deal_tk, pos_id, filled,
+      (partial ? "true" : "false"), (replay ? "true" : "false"), err);
    HttpPost(ServerUrl + "/api/bridge/report", body);
 }
 
 // v1.50 — re-report a journaled result on redispatch (ack was lost).
 void ReportOpenFromJournal(string trade_id) {
-   ulong  ticket = (ulong)JGet("K", trade_id);
-   double price  = JGet("P", trade_id);
+   ulong  order_tk = JGetTicket("K", trade_id);
+   ulong  deal_tk  = JGetTicket("D", trade_id);
+   ulong  pos_id   = JGetTicket("Q", trade_id);
+   double price    = JGet("P", trade_id);
+   double filled   = JGet("V", trade_id);
+   ulong  ticket   = (pos_id > 0 ? pos_id : order_tk);
    double conf_sl = 0;
-   if (ticket > 0 && PositionSelectByTicket(ticket))
+   if (ticket > 0 && SelectPositionById(ticket, ""))
       conf_sl = PositionGetDouble(POSITION_SL);
-   SendOpenReport(trade_id, ticket, "open", price, 0, "", 0, 0, conf_sl, true);
+   SendOpenReport(trade_id, ticket, "open", price, 0, "", 0, 0, conf_sl, true,
+                  order_tk, deal_tk, pos_id, filled, false);
    JSet("T", trade_id, JR_ACK_SENT);
-   Print("STOIC v1.50: journal replay report trade=", trade_id,
+   Print("STOIC v1.52: journal replay report trade=", trade_id,
          " ticket=", ticket);
 }
 
@@ -1415,11 +1527,15 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    }
    if (jstate == JR_ORDER_SENT) {
       // Crash window: order was sent but the result never journaled.
-      // Recover via the trade_id position comment; NEVER resend blindly.
-      long found = FindPositionByComment(trade_id);
-      if (found > 0 && PositionSelectByTicket((ulong)found)) {
-         JSet("K", trade_id, (double)found);
+      // v1.52 — netting-aware recovery: comment scan, then order/deal
+      // HISTORY by magic + comment + symbol + side + volume + time window.
+      // NEVER resend blindly.
+      string rec_symbol = ResolveBrokerSymbol(symbol);
+      ulong rec_pos = FindPositionForTrade(trade_id, rec_symbol, action, lot);
+      if (rec_pos > 0 && SelectPositionById(rec_pos, rec_symbol)) {
+         JSetTicket("Q", trade_id, rec_pos);
          JSet("P", trade_id, PositionGetDouble(POSITION_PRICE_OPEN));
+         JSet("V", trade_id, PositionGetDouble(POSITION_VOLUME));
          JSet("T", trade_id, JR_TICKET);
          ReportOpenFromJournal(trade_id);
          return;
@@ -1536,25 +1652,48 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
       ok = OrderSend(req, res);
    }
 
-   bool opened = (ok && res.retcode == TRADE_RETCODE_DONE);
+   // v1.52 — verify the ACTUAL broker outcome, never the retcode alone.
+   // DONE_PARTIAL means a REAL position exists for the filled part; a
+   // failed retcode may still have executed (requote/timeout edges) — the
+   // deal → position resolution below is the final authority.
+   bool accepted = (ok && (res.retcode == TRADE_RETCODE_DONE
+                        || res.retcode == TRADE_RETCODE_DONE_PARTIAL));
+   bool partial  = (ok && res.retcode == TRADE_RETCODE_DONE_PARTIAL);
+   ulong deal_tk = res.deal;
+   ulong pos_id  = PositionIdFromDeal(deal_tk);
+   if (pos_id == 0)
+      pos_id = FindPositionForTrade(trade_id, broker_symbol, action,
+                                    req.volume);
+   bool opened = (accepted || pos_id > 0);
+   double filled = (res.volume > 0 ? res.volume : req.volume);
+   if (opened && pos_id > 0 && SelectPositionById(pos_id, broker_symbol))
+      filled = PositionGetDouble(POSITION_VOLUME);
    string status = opened ? "open" : "failed";
-   string err = opened ? "" : "retcode=" + IntegerToString(res.retcode);
+   string err = opened ? (partial ? "partial_fill" : "")
+                       : "retcode=" + IntegerToString(res.retcode);
 
-   // v1.50 — journal the result, then ack with the ACTUAL broker stop:
-   // requested_sl (as commanded), applied_sl (post-clamp), and the live
-   // POSITION_SL the broker actually holds.
+   // v1.52 — journal EXACT 64-bit order / deal / position tickets, then
+   // ack with the ACTUAL broker stop and the ACTUAL filled volume.
    double conf_sl = 0;
    if (opened) {
-      JSet("K", trade_id, (double)res.order);
+      JSetTicket("K", trade_id, res.order);
+      JSetTicket("D", trade_id, deal_tk);
+      JSetTicket("Q", trade_id, pos_id);
       JSet("P", trade_id, res.price);
+      JSet("V", trade_id, filled);
       JSet("T", trade_id, JR_TICKET);
-      if (PositionSelectByTicket(res.order))
+      if (pos_id > 0 && SelectPositionById(pos_id, broker_symbol))
          conf_sl = PositionGetDouble(POSITION_SL);
+      if (partial)
+         Print("STOIC v1.52: PARTIAL FILL trade=", trade_id, " requested=",
+               req.volume, " filled=", filled, " pos_id=", pos_id);
    } else {
       JSet("T", trade_id, JR_FAILED);
    }
-   SendOpenReport(trade_id, res.order, status, res.price, req.price, err,
-                  sl, adj_sl, conf_sl, false);
+   ulong report_ticket = (pos_id > 0 ? pos_id : res.order);
+   SendOpenReport(trade_id, report_ticket, status, res.price, req.price, err,
+                  sl, adj_sl, conf_sl, false,
+                  res.order, deal_tk, pos_id, filled, partial);
    if (opened) JSet("T", trade_id, JR_ACK_SENT);
 }
 
@@ -1754,11 +1893,14 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
       ack_sl, new_sl, adj_sl, confirmed_sl,
       (stop_confirmed ? "true" : "false"), intent, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
-   // v1.50 — only a broker-confirmed success consumes the intent;
-   // failures stay retryable (or go terminal via AckMissingPosition).
-   if (success) MarkIntentDone(intent, seq, trade_id);
+   // v1.52 — 'request accepted' and 'stop confirmed' are SEPARATE states:
+   // the intent is consumed ONLY once the live position shows the stop
+   // (tick tolerance). Accepted-but-unconfirmed stays retryable — the
+   // server re-dispatches until the broker position proves the stop.
+   if (success && stop_confirmed) MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: SL modified ticket=", ticket, " requested=",
-                      new_sl, " applied=", adj_sl, " confirmed=", confirmed_sl);
+                      new_sl, " applied=", adj_sl, " confirmed=", confirmed_sl,
+                      " stop_confirmed=", stop_confirmed);
 }
 
 // ----- v1.10: Partial close — close (current_vol - new_vol) lots -----
@@ -1820,13 +1962,22 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
    }
 
    bool ok = OrderSend(req, res);
-   bool success = (ok && res.retcode == TRADE_RETCODE_DONE);
-   string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
+   bool accepted = (ok && (res.retcode == TRADE_RETCODE_DONE
+                        || res.retcode == TRADE_RETCODE_DONE_PARTIAL));
 
-   // v1.50 — report the ACTUAL remaining broker volume, not just intent.
+   // v1.52 — success is judged from the ACTUAL remaining broker volume,
+   // not the retcode: |remaining − requested| within the broker volume
+   // step. A failed retcode whose remaining already matches (a previous
+   // attempt landed) IS success; an accepted retcode that left the wrong
+   // volume is NOT.
    double remaining = 0;
    if (PositionSelectByTicket(ticket))
       remaining = PositionGetDouble(POSITION_VOLUME);
+   double step_tol = (step > 0 ? step : 0.01) + 1e-9;
+   bool success = (remaining > 0 && MathAbs(remaining - new_vol) <= step_tol);
+   string err = success ? "" :
+      (accepted ? "volume_mismatch_after_partial_close"
+                : "retcode=" + IntegerToString(res.retcode));
 
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":%s,"

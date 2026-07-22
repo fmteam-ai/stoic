@@ -7,13 +7,19 @@ Verifies:
     to the right CCXT class)
   * Passphrase required for OKX/KuCoin enforced at the route layer
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
-    with open("/app/frontend/.env") as f:
+    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
         for line in f:
             if line.startswith("REACT_APP_BACKEND_URL="):
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
@@ -149,6 +155,9 @@ def test_create_kraken_account_routes_to_kraken(session):
     )
     assert r.status_code == 422
     body = r.json()
-    # Error message must mention Kraken (proves dispatch worked) — not "Binance"
-    assert "Kraken" in body.get("detail", ""), body
-    assert "Binance" not in body.get("detail", ""), body
+    # Error message must mention Kraken (proves dispatch worked) — not "Binance".
+    # iter-148: detail is a stable-code dict {"code", "message"} now.
+    detail = body.get("detail", "")
+    msg = detail.get("message", "") if isinstance(detail, dict) else str(detail)
+    assert "Kraken" in msg, body
+    assert "Binance" not in msg, body

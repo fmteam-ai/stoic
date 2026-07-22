@@ -19,9 +19,12 @@ from auth import get_current_user
 from database import get_db
 from trade_reconciler import reconcile_user
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/diagnostic", tags=["diagnostic"])
 
-LATEST_EA = "1.51"
+LATEST_EA = "1.52"
 HEARTBEAT_FRESH_SEC = 300
 
 # Retcode → human explanation
@@ -542,6 +545,7 @@ async def auto_fix(payload: dict, user=Depends(get_current_user)):
         try:
             results[c] = await fn(db, uid)
         except Exception as e:
-            results[c] = {"error": str(e)}
+            logger.warning("auto-fix %s failed: %s", c, e)
+            results[c] = {"error": "autofix_failed"}
     return {"applied_at": datetime.now(timezone.utc).isoformat(),
             "results": results}

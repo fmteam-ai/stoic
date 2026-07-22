@@ -5,6 +5,12 @@ Current UTC is outside every account's flatten window, so sweep-loop is
 verified only via the presence of the task registration in server.py
 (compile-time check) — DO NOT invoke sweep_eod_flatten on live db here.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import re
 import subprocess
@@ -74,16 +80,16 @@ def test_scalp_status_current_time_outside_window(admin_session):
 # --- Startup wiring compile-time proofs -------------------------------
 def test_server_registers_eod_flatten_task():
     # iter-62: the loop body moved to background_loops.py (worker separation)
-    src = open("/app/backend/server.py").read()
+    src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
     assert "_eod_flatten_task = asyncio.create_task(_eod_flatten_loop())" \
         in src
-    loops = open("/app/backend/background_loops.py").read()
+    loops = open(_os.path.join(_BACKEND_DIR, "background_loops.py")).read()
     assert "async def _eod_flatten_loop" in loops
     assert "from eod_flatten import sweep_eod_flatten" in loops
 
 
 def test_bot_runner_has_combined_veto():
-    src = open("/app/backend/bot_runner.py").read()
+    src = open(_os.path.join(_BACKEND_DIR, "bot_runner.py")).read()
     assert "from eod_flatten import eod_flatten_block" in src
     # both quiet and flatten blocks chained
     assert re.search(r"eod_quiet_block\([^)]*\)\s*\n\s*or\s+eod_flatten_block",
@@ -91,7 +97,7 @@ def test_bot_runner_has_combined_veto():
 
 
 def test_scalp_engine_imports_and_chains_flatten_block():
-    src = open("/app/backend/scalp/engine.py").read()
+    src = open(_os.path.join(_BACKEND_DIR, "scalp/engine.py")).read()
     assert "from eod_flatten import eod_flatten_block as _eod_flatten_block" \
         in src
     assert "_eod_flatten_block(self.account)" in src

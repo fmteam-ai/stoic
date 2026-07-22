@@ -5,13 +5,19 @@ the user's actual account + risk profile + max_lot_size. Powers the
 "Position Sizing Preview" panel on the BotConfig page so users can dial
 in a sensible cap before risking real money.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import pathlib
 import pytest
 import requests
 
 
-_FRONT_ENV = pathlib.Path("/app/frontend/.env")
+_FRONT_ENV = pathlib.Path(_os.path.join(_REPO_DIR, "frontend", ".env"))
 
 
 def _read_frontend_backend_url() -> str:

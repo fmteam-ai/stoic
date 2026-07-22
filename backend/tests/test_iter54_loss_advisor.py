@@ -1,5 +1,11 @@
 """iter-54 · Auto Loss Review — aggregate loss analysis with shadow-tested
 counter-measures (loss_advisor.py)."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import sys
 
@@ -102,7 +108,7 @@ class TestWiring:
         assert '@router.post("/reviews/run")' in src
 
     def test_frontend_section(self):
-        fe = open("/app/frontend/src/pages/LossLab.jsx").read()
+        fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/LossLab.jsx")).read()
         assert "run-loss-review" in fe and "loss-review-card" in fe
 
     def test_auto_learning_wired(self):

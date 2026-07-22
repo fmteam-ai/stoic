@@ -138,7 +138,8 @@ async def create_crypto_account(payload: BinanceAccountCreate, user=Depends(get_
     except Exception as e:  # noqa: BLE001
         raise HTTPException(
             status_code=422,
-            detail=f"Could not verify keys against {meta['label']}: {str(e)[:200]}",
+            detail={"code": "exchange_key_verify_failed",
+                    "message": f"Could not verify keys against {meta['label']}."},
         )
 
     doc = {
@@ -184,7 +185,10 @@ async def crypto_balance(account_id: str, user=Depends(get_current_user)):
         async with CCXTClient(acc) as client:
             bal = await client.fetch_balance()
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Exchange error: {str(e)[:200]}")
+        logger.warning("exchange balance error: %s", e)
+        raise HTTPException(status_code=502, detail={
+            "code": "exchange_error",
+            "message": "Exchange unavailable — try again shortly."})
     total = bal.get("total") or {}
     free = bal.get("free") or {}
     used = bal.get("used") or {}
@@ -212,7 +216,10 @@ async def crypto_ticker(account_id: str, symbol: str = "BTC/USDT",
         async with CCXTClient(acc) as client:
             t = await client.fetch_ticker(ccxt_sym)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Exchange error: {str(e)[:200]}")
+        logger.warning("exchange ticker error: %s", e)
+        raise HTTPException(status_code=502, detail={
+            "code": "exchange_error",
+            "message": "Exchange unavailable — try again shortly."})
     return {
         "symbol": ccxt_sym,
         "bid": t.get("bid"),
@@ -266,7 +273,8 @@ async def crypto_verify(account_id: str, user=Depends(get_current_user)):
         usdt = float((bal.get("total") or {}).get("USDT") or 0)
     except Exception as e:  # noqa: BLE001
         ok = False
-        msg = str(e)[:200]
+        logger.warning("exchange connect check failed: %s", e)
+        msg = "connection_failed"
         usdt = 0.0
     return {"ok": ok, "message": msg, "usdt_total": usdt,
             "testnet": acc.get("testnet", True)}

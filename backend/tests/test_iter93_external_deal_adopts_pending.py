@@ -18,6 +18,12 @@ a 12-min window and adopts it — attaching the ticket, flipping status
 and preserving the original SL/TP.
 """
 from __future__ import annotations
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 
 import asyncio
 import os
@@ -25,7 +31,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-_BACKEND_DIR = "/app/backend"
+_BACKEND_DIR = _BACKEND_DIR
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 with open(f"{_BACKEND_DIR}/.env") as _f:

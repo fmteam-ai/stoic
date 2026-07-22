@@ -1,10 +1,16 @@
 """iter-145 · Audit r4 Phase 1 — EA v1.50 execution integrity:
 EA command fencing, durable new-order intent journal, actual-SL /
 remaining-volume reporting, live-activation EA version gate."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import asyncio
 from datetime import datetime, timezone
 
-EA = "/app/backend/static/EmergentTradingBridge.mq5"
+EA = _os.path.join(_BACKEND_DIR, "static/EmergentTradingBridge.mq5")
 
 
 def _ea():
@@ -33,11 +39,11 @@ class TestEaVersionBump:
         src = _ea()
         assert f'#property version   "{v}"' in src
         assert f'#define EA_CLIENT_VERSION "{v}"' in src
-        assert f'LATEST_EA = "{v}"' in _src("/app/backend/routes/bot_routes.py")
-        assert f'LATEST_EA = "{v}"' in _src("/app/backend/routes/diagnostic_routes.py")
-        assert f'"ea_latest_version": "{v}"' in _src("/app/backend/routes/setup_routes.py")
-        assert f'LATEST_EA_VERSION = "{v}"' in _src("/app/frontend/src/pages/Accounts.jsx")
-        assert f'LATEST_EA_VERSION = "{v}"' in _src("/app/frontend/src/components/EaVersionStrip.jsx")
+        assert f'LATEST_EA = "{v}"' in _src(_os.path.join(_BACKEND_DIR, "routes/bot_routes.py"))
+        assert f'LATEST_EA = "{v}"' in _src(_os.path.join(_BACKEND_DIR, "routes/diagnostic_routes.py"))
+        assert f'"ea_latest_version": "{v}"' in _src(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py"))
+        assert f'LATEST_EA_VERSION = "{v}"' in _src(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx"))
+        assert f'LATEST_EA_VERSION = "{v}"' in _src(_os.path.join(_REPO_DIR, "frontend", "src/components/EaVersionStrip.jsx"))
 
 
 def _strip_mql(src):
@@ -151,7 +157,9 @@ class TestEaIntentJournal:
 
     def test_crash_window_recovery_via_comment(self):
         body = self._exec_body()
-        assert "FindPositionByComment(trade_id)" in body
+        # v1.52 — recovery upgraded to the netting-aware history search
+        # (comment scan is its first step inside FindPositionForTrade)
+        assert "FindPositionForTrade(trade_id, rec_symbol, action, lot)" in body
         assert "order_sent_unconfirmed" in body
         assert "req.comment      = trade_id;" in body
 
@@ -184,7 +192,7 @@ class TestEaActualSlAndVolume:
 
 class TestBackendConsumesV150:
     def test_poll_modifications_carry_intent_and_seq(self):
-        src = _src("/app/backend/routes/bridge_routes.py")
+        src = _src(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py"))
         i = src.index("modifications.append({")
         seg = src[i:i + 600]
         assert '"intent_id": m.get("intent_id")' in seg
@@ -205,13 +213,13 @@ class TestBackendConsumesV150:
             assert k in f, k
 
     def test_ack_prefers_broker_confirmed_values(self):
-        src = _src("/app/backend/routes/bridge_routes.py")
+        src = _src(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py"))
         assert "actual_sl = payload.confirmed_position_sl or payload.new_sl" in src
         assert 'update["confirmed_stop_loss"] = float(actual_sl)' in src
         assert "payload.remaining_volume" in src
 
     def test_report_stores_sl_audit_trail(self):
-        src = _src("/app/backend/routes/bridge_routes.py")
+        src = _src(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py"))
         for k in ('update["requested_sl"]', 'update["applied_sl"]',
                   'update["open_ack_position_sl"]',
                   'update["journal_replayed_at"]'):
@@ -237,7 +245,7 @@ class TestBrokerPreflight:
         assert 'StringReplace(chk_comment, "\\"", "\'")' in body
 
     def test_backend_records_preflight_rejection(self):
-        src = _src("/app/backend/routes/bridge_routes.py")
+        src = _src(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py"))
         assert 'update["preflight_rejected"] = True' in src
         assert 'update["preflight_error"]' in src
         assert '"broker_preflight_reject"' in src

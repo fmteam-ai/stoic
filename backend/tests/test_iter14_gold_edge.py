@@ -9,6 +9,12 @@ Covers:
 
 Cleanup: a module-level autouse fixture removes any qa_iter14_* test data.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import sys
 import uuid
@@ -20,10 +26,10 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 
 # Make backend importable (its modules live at /app/backend/...)
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, _BACKEND_DIR)
 # Load backend .env so in-process calls (database.get_db, learned_meta, etc.)
 # see MONGO_URL / DB_NAME exactly as the running server does.
-load_dotenv("/app/backend/.env", override=False)
+load_dotenv(_os.path.join(_BACKEND_DIR, ".env"), override=False)
 
 
 def _reset_motor():

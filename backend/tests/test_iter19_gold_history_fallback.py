@@ -4,12 +4,18 @@ Locks in the fix that recovers the bot from CoinGecko 429 rate limits by
 adding Yahoo Finance (GC=F) as the primary source and MongoDB persistence
 as last-resort fallback.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, _BACKEND_DIR)
 
 
 def _arun(coro):

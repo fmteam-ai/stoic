@@ -3,6 +3,12 @@
 Spreads widen drastically across liquidity providers in the final minutes
 before the daily close. No open/modify/close from 23:40 to 00:05 broker time.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import sys
 from datetime import datetime, timezone
@@ -118,5 +124,5 @@ class TestBackendWiring:
         assert f'LATEST_EA = "{v}"' in open(os.path.join(BACKEND, "routes", "bot_routes.py")).read()
         assert f'LATEST_EA = "{v}"' in open(os.path.join(BACKEND, "routes", "diagnostic_routes.py")).read()
         assert f'"ea_latest_version": "{v}"' in open(os.path.join(BACKEND, "routes", "setup_routes.py")).read()
-        assert f'LATEST_EA_VERSION = "{v}"' in open("/app/frontend/src/pages/Accounts.jsx").read()
-        assert f'LATEST_EA_VERSION = "{v}"' in open("/app/frontend/src/components/EaVersionStrip.jsx").read()
+        assert f'LATEST_EA_VERSION = "{v}"' in open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read()
+        assert f'LATEST_EA_VERSION = "{v}"' in open(_os.path.join(_REPO_DIR, "frontend", "src/components/EaVersionStrip.jsx")).read()

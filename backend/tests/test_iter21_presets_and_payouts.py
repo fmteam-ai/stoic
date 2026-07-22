@@ -7,6 +7,12 @@ end-to-end test, which requires a synthetic `affiliate_payout_requests` doc
 to be seeded directly into MongoDB (the only way to exercise the process
 endpoint without manually accumulating $50 of commissions first).
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import time
 import uuid
@@ -17,7 +23,7 @@ from bson import ObjectId
 
 def _read_env():
     try:
-        with open("/app/frontend/.env") as f:
+        with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
             for line in f:
                 if line.startswith("REACT_APP_BACKEND_URL="):
                     return line.split("=", 1)[1].strip().strip('"')

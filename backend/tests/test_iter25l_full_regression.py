@@ -15,6 +15,12 @@ for full coverage. Here we cover:
     omits the field.
   • WebSocket /ws accepts an authenticated connect.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import asyncio
 import json
 import os
@@ -215,7 +221,7 @@ def test_heartbeat_positions_derives_open_tickets(admin_session):
         from pymongo import MongoClient
         from bson import ObjectId
         from dotenv import dotenv_values
-        env = dotenv_values("/app/backend/.env")
+        env = dotenv_values(_os.path.join(_BACKEND_DIR, ".env"))
         mc = MongoClient(env.get("MONGO_URL", "mongodb://localhost:27017"))
         db = mc[env.get("DB_NAME", "ai_trading_bot")]
         try:

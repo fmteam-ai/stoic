@@ -1,6 +1,12 @@
 """Phase B — Trade Management Engine: dynamic TP, continuous EV, intelligent
 partials, volatility trailing, liquidity locks. Strictly risk-reducing.
 MongoDB-free unit tests."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import inspect
 
 import pytest
@@ -140,12 +146,12 @@ class TestPhaseBWiring:
         assert "new_volume < self.cfg.min_lot or new_volume >= lot" in src
 
     def test_bridge_routes_partial_ack_hook(self):
-        src = open("/app/backend/routes/bridge_routes.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")).read()
         assert 'payload.type in ("MODIFY_SL", "PARTIAL_CLOSE")' in src
         assert "on_partial_ack(" in src
 
     def test_trade_manager_excludes_scalp_scope(self):
-        src = open("/app/backend/trade_manager.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "trade_manager.py")).read()
         assert 'trade.get("scope") == "scalp_fast"' in src
 
     def test_evaluate_priority_order(self):

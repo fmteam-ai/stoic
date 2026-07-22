@@ -1,6 +1,12 @@
 """iter-143 · Audit round 2 — pre-live hardening:
 OPEN⊂PROTECTED, guarded reservations, strict unprotected timeout,
 atomic embedded outbox, explicit worker mode."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import asyncio
 import inspect
 
@@ -25,7 +31,7 @@ class TestOpenRequiresProtected:                # item 1
         # legacy BROKER_ACCEPTED docs certify through the broker-SL check
         # (→ PROTECTED → OPEN), never via a lifecycle shortcut
         assert os_.BROKER_ACCEPTED in os_.ALLOWED_PREV[os_.PROTECTED]
-        src = open("/app/backend/routes/bridge_routes.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "routes/bridge_routes.py")).read()
         assert '"BROKER_ACCEPTED")' in src   # heartbeat certification list
 
     def test_cannot_skip_protection(self):
@@ -115,11 +121,11 @@ class TestAtomicEmbeddedOutbox:                 # item 4
 
 class TestExplicitWorkerMode:                   # item 5
     def test_default_is_off_with_critical_log(self):
-        src = open("/app/backend/server.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
         assert 'os.environ.get("BACKGROUND_WORKERS_IN_PROCESS")' in src
         assert "fail-safe default" in src
         assert '"true").lower() == "false"' not in src
 
     def test_preview_env_sets_mode_explicitly(self):
-        env = open("/app/backend/.env").read()
+        env = open(_os.path.join(_BACKEND_DIR, ".env")).read()
         assert "BACKGROUND_WORKERS_IN_PROCESS=true" in env

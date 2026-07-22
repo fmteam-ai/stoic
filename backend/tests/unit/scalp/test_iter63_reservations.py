@@ -1,5 +1,11 @@
 """Iter-63 — provisional risk reservations + production Origin fail-fast.
 Pure unit tests (MagicMock db only)."""
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import inspect
 
 import pytest
@@ -96,13 +102,13 @@ class TestEngineWiring:
         assert "db_open + reserved_unaccounted > self.account_risk.open_scalps" in src
 
     def test_reconcile_loop_sweeps_reservations(self):
-        src = open("/app/backend/background_loops.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "background_loops.py")).read()
         assert "from scalp.risk_reservations import sweep_stale" in src
 
 
 class TestProductionOriginFailFast:
     def test_startup_guard_present(self):
-        src = open("/app/backend/server.py").read()
+        src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
         assert 'os.environ.get("APP_ENV", "").lower() == "production"' in src
         assert "CSRF_ENFORCE_ORIGIN" in src
         assert "RuntimeError" in src

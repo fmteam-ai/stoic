@@ -9,6 +9,12 @@ Root causes fixed:
    counted favorable fills too — 100% of historical vetoes were false
    positives on profitable trades.
 """
+import os as _os  # iter-148 — repo-relative paths (release-audit P0)
+_TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+while _os.path.basename(_TESTS_DIR) != "tests":
+    _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
+_BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
+_REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import os
 import sys
 
@@ -86,7 +92,7 @@ class TestEaV140:
         assert f'LATEST_EA = "{v}"' in _src("routes/bot_routes.py")
         assert f'LATEST_EA = "{v}"' in _src("routes/diagnostic_routes.py")
         assert f'"ea_latest_version": "{v}"' in _src("routes/setup_routes.py")
-        fe = open("/app/frontend/src/pages/Accounts.jsx").read()
+        fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read()
         assert f'LATEST_EA_VERSION = "{v}"' in fe
 
     def test_full_close_consumed(self):
@@ -131,5 +137,5 @@ class TestBackfillTimestamps:
         assert ea.count('\\"backfill\\":true') == 2
 
     def test_history_mode_applies_status_filter(self):
-        fe = open("/app/frontend/src/pages/Trades.jsx").read()
+        fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Trades.jsx")).read()
         assert "historySummary && filter && !CLIENT_ONLY_FILTERS.includes(filter) && t.status !== filter" in fe

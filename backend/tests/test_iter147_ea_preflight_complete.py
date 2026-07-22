@@ -18,9 +18,13 @@ def _body(src, start, end=None):
 
 
 def test_version_151():
+    # version keeps moving (1.52+); assert consistency, not a fixed number
+    from ea_version import current_ea_version
+    v = current_ea_version()
+    assert v >= "1.51"
     src = _src(EA_PATH)
-    assert '#property version   "1.51"' in src
-    assert '#define EA_CLIENT_VERSION "1.51"' in src
+    assert f'#property version   "{v}"' in src
+    assert f'#define EA_CLIENT_VERSION "{v}"' in src
 
 
 def test_shared_preflight_helper_exists():
@@ -75,7 +79,8 @@ def test_min_fencing_version_unchanged():
     # existing v1.50 EAs must keep working — only LATEST advertises 1.51
     br = _src(os.path.join(BACKEND, "routes", "bot_routes.py"))
     assert 'FENCING_MIN_EA = "1.50"' in br
-    assert 'LATEST_EA = "1.51"' in br
+    from ea_version import current_ea_version
+    assert f'LATEST_EA = "{current_ea_version()}"' in br
 
 
 def test_execution_health_endpoint_exists():
