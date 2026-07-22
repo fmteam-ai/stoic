@@ -160,6 +160,7 @@ SESSION_TREND_MIN_RANGE_PCT_CRYPTO = 0.9
 EXHAUSTION_RANGE_PCT = 1.5
 EXHAUSTION_RANGE_PCT_CRYPTO = 3.0
 EXHAUSTION_POS_BAND = 15.0                  # % of day range near the extreme
+EXHAUSTION_TYPICAL_MULT = 1.3               # iter-141 · arm at 1.3× typical day
 TREND_RIDE_RANGE_PCT = 1.0
 TREND_RIDE_RANGE_PCT_CRYPTO = 2.5
 
@@ -207,7 +208,14 @@ def exhaustion_chase_gate(action: str, feats: dict, symbol: str) -> str | None:
 
     Mirror of the knife filter: that one blocks FADING extremes, this one
     blocks CHASING them (selling the day low after a -2% slide → stopped on
-    the mean-reversion bounce)."""
+    the mean-reversion bounce).
+
+    iter-141 · volatility-adaptive arming: in a regime where 2%+ days are
+    normal (gold, Jul 2026), a fixed 1.5% threshold armed the gate all day
+    and vetoed every with-trend entry (617 vetoes, 0 trades in 3 days).
+    "Spent" is now relative: the gate arms at 1.3× the median range of the
+    prior complete days (when ≥3 days of history exist), floored at the
+    fixed threshold so calm regimes keep the original protection."""
     if action not in ("BUY", "SELL") or not feats:
         return None
     rng, pos = _rng_pos(feats)
@@ -215,16 +223,22 @@ def exhaustion_chase_gate(action: str, feats: dict, symbol: str) -> str | None:
         return None
     thr = (EXHAUSTION_RANGE_PCT_CRYPTO if _is_crypto(symbol)
            else EXHAUSTION_RANGE_PCT)
+    typical = float(feats.get("typical_day_range_pct") or 0)
+    adaptive_note = ""
+    if typical > 0:
+        thr = max(thr, EXHAUSTION_TYPICAL_MULT * typical)
+        adaptive_note = (f" (adaptive: ≥{thr:.2f}% = "
+                         f"{EXHAUSTION_TYPICAL_MULT}× typical {typical:.2f}%)")
     if rng < thr:
         return None
     if action == "SELL" and pos <= EXHAUSTION_POS_BAND:
         return (f"Exhaustion gate: {rng:.2f}% down-day already elapsed and price "
                 f"at {pos:.0f}% of the range (day-low zone) — selling a spent "
-                f"move risks the bounce. Vetoed.")
+                f"move risks the bounce{adaptive_note}. Vetoed.")
     if action == "BUY" and pos >= 100 - EXHAUSTION_POS_BAND:
         return (f"Exhaustion gate: {rng:.2f}% up-day already elapsed and price "
                 f"at {pos:.0f}% of the range (day-high zone) — buying a spent "
-                f"move risks the pullback. Vetoed.")
+                f"move risks the pullback{adaptive_note}. Vetoed.")
     return None
 
 

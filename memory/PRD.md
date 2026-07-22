@@ -859,3 +859,15 @@ ROOT CAUSES FOUND:
 4. Remaining rejections are HONEST ECONOMICS: FLAT regime (strategy trades trends only) + net edge ≈ −1p vs +0.15p threshold; 15 shadow samples too small to judge (UI now says so).
 UI (Scalp.jsx): regime chip colored w/ detail tooltip + inline UNKNOWN reason; news diagnostics panel (provider/status/last update/next high impact + countdown/blackout ±min · UTC); quote-age tiers (<500 excellent/<1s acceptable/<2s caution/reject) + TICK STREAM OFFLINE banner w/ EA v1.48 hint; decisions table: STAGE column (rejectStage from reject_stage field or first failing gate) + click-to-expand pipeline trace (Signal→Regime/News→Forecast→EV→Risk→Quality→Execution Gate→Broker with ✓/✕ + details) + quality breakdown chips; LOW SAMPLE caveat when shadow n<100.
 Tests: tests/unit/scalp/test_iter140_permissions_news.py (6 new). Full suite 2457 passed (1 unrelated login rate-limit flake, passes isolated). Screenshot-verified live: REGIME FLAT, news panel OK w/ next event countdown, pipeline trace rendering.
+
+## Iter-141 (2026-07-22) — "No trades since Jul 16" investigation + calibrated loosening — DONE
+INVESTIGATION (full report delivered in chat):
+- Bot healthy: EAs heartbeating, configs active, ~450 signals/day, median confidence 73 — but 1,673 evaluations since Jul 16 evening, 100% rejected (Jul 20-22: 1,472 evals, 0 trades).
+- Jul 17 (Fri): total platform outage — zero signals/decisions/events all day (environment down, not a bot bug).
+- Blockers: exhaustion_chase_gate 617 (fixed 1.5% arming threshold too tight for gold's 2.1%+ median days; BUY signals arrive at median 92% of day range), monte_carlo_gate 556 (net EV NEVER positive since Jul 20: median −0.07R, max −0.00R; 21 near-misses within 0.02R; cost = spread 0.35 × 1.5 slippage buffer), liquidity gate 166 SELLs, anti_tilt 117. Gate stack added Jul 7-15 (iters 112-135); executions collapsed 41/day (Jul 13) → 2-4 (Jul 15-16) → 0.
+CALIBRATED LOOSENING (user choice):
+1. intraday_features.py: new `typical_day_range_pct` = median daily range of complete prior days (needs ≥3 days, from the 800-bar M15 window ≈ 8 days).
+2. payoff_guard.exhaustion_chase_gate: arms at max(1.5% fixed floor, EXHAUSTION_TYPICAL_MULT 1.3 × typical) — calm regimes keep old protection, high-vol regimes stop auto-vetoing every with-trend entry. Veto msg includes adaptive context. Live check: threshold now 2.08% vs typical 1.6%; today's genuine 2.13% outlier still vetoed (correct).
+3. monte_carlo.py: MC_EV_TOLERANCE_R = 0.02 — mc_gate enforces only below −0.02R net (cost model error bars); counter-trend +0.10R rule unchanged. Updated test_iter134 contract test.
+4. bot_runner session_feats snapshot now includes typical_day_range_pct.
+Tests: tests/test_iter141_calibrated_loosening.py (10 new); 300 passed on gate/monte/payoff/feature subset + 394 unit. Expect selective re-entry of trades; monitor trade_decisions stage mix over next sessions.

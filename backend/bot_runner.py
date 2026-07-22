@@ -849,8 +849,8 @@ async def _process_user_account_locked(db, cfg: dict):
             _feats = compute_intraday_features((cdoc or {}).get("bars") or [])
             if _feats:
                 signal["session_feats"] = {k: _feats.get(k) for k in (
-                    "day_range_pct", "range_pos_pct", "ema20_slope_pct_2h",
-                    "swing_structure")}
+                    "day_range_pct", "typical_day_range_pct", "range_pos_pct",
+                    "ema20_slope_pct_2h", "swing_structure")}
                 if cfg.get("session_trend_gate_enabled", True):
                     stg = session_trend_gate(signal["action"], _feats, _base)
                     if stg:

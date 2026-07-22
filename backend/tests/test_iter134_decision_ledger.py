@@ -83,11 +83,23 @@ class TestSizingInvariants:
 
 class TestCostAwareEV:
     def test_gate_uses_net_ev(self):
-        # gross EV barely positive, costs push it negative → veto
+        # gross EV barely positive, costs push it clearly negative → veto
+        mc = {"paths": 10000, "p_tp_first": 0.44, "p_sl_first": 0.56,
+              "rr": 1.25, "ev_r": 0.02, "cost_r": 0.07, "ev_r_net": -0.05}
+        msg = mc_gate(mc)
+        assert msg and "costs" in msg and "-0.05R net" in msg.replace("−", "-")
+
+    def test_marginal_negative_within_tolerance_passes(self):
+        # iter-141 · cost model is an estimate: −0.015R is inside the
+        # −0.02R tolerance band → no veto
         mc = {"paths": 10000, "p_tp_first": 0.46, "p_sl_first": 0.54,
               "rr": 1.25, "ev_r": 0.035, "cost_r": 0.05, "ev_r_net": -0.015}
-        msg = mc_gate(mc)
-        assert msg and "costs" in msg and "-0.01R net" in msg.replace("−", "-")
+        assert mc_gate(mc) is None
+
+    def test_just_beyond_tolerance_vetoes(self):
+        mc = {"paths": 10000, "p_tp_first": 0.46, "p_sl_first": 0.54,
+              "rr": 1.25, "ev_r": 0.03, "cost_r": 0.055, "ev_r_net": -0.025}
+        assert mc_gate(mc) is not None
 
     def test_gate_passes_when_net_positive(self):
         mc = {"paths": 10000, "p_tp_first": 0.55, "p_sl_first": 0.45,

@@ -27,6 +27,10 @@ DRIFT_CAP_SIGMA = 0.5         # |excess drift| capped at 0.5σ per bar
 DRIFT_MIN_SIG = 1.0           # inject only when |recent mean| ≥ 1 std error
 STRONG_TREND_SIG = 2.0        # counter-trend gate arms at 2 std errors
 CT_MIN_EV_R = 0.10            # fading a strong trend needs ≥ +0.10R net EV
+MC_EV_TOLERANCE_R = 0.02      # iter-141 · enforce only below −0.02R net (cost
+                              # model is an estimate; ≤2 cents/R inside its
+                              # error bars — Jul 20-22: EV never > 0, 21
+                              # near-misses within 0.02R, zero trades)
 
 
 def calibrate(bars):
@@ -149,7 +153,7 @@ def typical_cost(symbol: str, entry: float) -> float:
 
 
 def mc_gate(mc: dict | None) -> str | None:
-    """Enter only if the simulated expected value NET OF COSTS is positive.
+    """Enter only if the simulated EV net of costs clears −MC_EV_TOLERANCE_R.
     Symmetric counter-trend rule (iter-135): fading a strong recent trend
     (≥2σ drift) demands a strictly positive EV margin — the same rigor that
     blocks chasing negative-EV breakouts blocks fading directional days."""
@@ -163,7 +167,7 @@ def mc_gate(mc: dict | None) -> str | None:
                 f"({mc['drift_sig']:.1f}σ recent drift) requires ≥ "
                 f"+{CT_MIN_EV_R:.2f}R net EV — simulation shows "
                 f"{ev_net:+.2f}R net. Trade vetoed.")
-    if ev_net <= 0:
+    if ev_net < -MC_EV_TOLERANCE_R:
         cost_note = (f" − {mc['cost_r']:.2f}R costs" if mc.get("cost_r") else "")
         trend_note = ""
         if mc.get("trend") in ("up", "down"):
@@ -172,6 +176,7 @@ def mc_gate(mc: dict | None) -> str | None:
         return (f"Monte Carlo gate: {mc['paths']:,} simulated paths — "
                 f"TP first {mc['p_tp_first']:.0%} vs SL first "
                 f"{mc['p_sl_first']:.0%} (R:R {mc['rr']}) → expected value "
-                f"{mc['ev_r']:+.2f}R{cost_note} = {ev_net:+.2f}R net."
+                f"{mc['ev_r']:+.2f}R{cost_note} = {ev_net:+.2f}R net "
+                f"(tolerance −{MC_EV_TOLERANCE_R:.2f}R)."
                 f"{trend_note} Negative EV, trade vetoed.")
     return None

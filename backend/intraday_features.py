@@ -119,6 +119,23 @@ def compute_intraday_features(bars: list) -> dict | None:
         if dh > dl:
             range_pos_pct = round((last - dl) / (dh - dl) * 100, 1)
 
+    # iter-141 · typical (median) daily range of COMPLETE prior days — lets
+    # gates scale with the current volatility regime instead of fixed %.
+    typical_day_range_pct = None
+    prior = {}
+    for b in bars:
+        d = datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d")
+        if d != today:
+            e = prior.setdefault(d, [float(b["h"]), float(b["l"])])
+            e[0] = max(e[0], float(b["h"]))
+            e[1] = min(e[1], float(b["l"]))
+    ranges = sorted((h - l) / l * 100 for h, l in prior.values() if l > 0)
+    if len(ranges) >= 3:
+        mid = len(ranges) // 2
+        med = (ranges[mid] if len(ranges) % 2
+               else (ranges[mid - 1] + ranges[mid]) / 2)
+        typical_day_range_pct = round(med, 2)
+
     return {
         "timeframe": "M15",
         "last_price": round(last, 2),
@@ -134,6 +151,7 @@ def compute_intraday_features(bars: list) -> dict | None:
         "swing_structure": structure,
         "atr15": round(atr15, 3),
         "day_range_pct": day_range_pct,
+        "typical_day_range_pct": typical_day_range_pct,
         "session_high": session_high,
         "session_low": session_low,
         "range_pos_pct": range_pos_pct,
