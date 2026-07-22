@@ -1201,6 +1201,8 @@ async def execution_health(user=Depends(get_current_user)):
         "partial_fills_open": await db.trades.count_documents(
             {"user_id": user["id"], "status": "open",
              "partial_fill": True}),
+        "partial_fill_events_24h": await db.trade_events.count_documents(
+            {"event_type": "PartialFillAdopted", "at": {"$gte": day_ago}}),
     }
 
     import time as _time

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import "@/App.css";
 import { AuthProvider } from "@/context/AuthContext";
@@ -93,6 +93,7 @@ function App() {
                         <Route path="/safety-blocks" element={<ProtectedRoute><SafetyBlocks /></ProtectedRoute>} />
                         <Route path="/symbols" element={<ProtectedRoute><Symbols /></ProtectedRoute>} />
                         <Route path="/commander" element={<ProtectedRoute><RiskCommander /></ProtectedRoute>} />
+                        <Route path="/risk-commander" element={<Navigate to="/commander" replace />} />
                         <Route path="/subscription" element={<ProtectedRoute><Subscription /></ProtectedRoute>} />
                         <Route path="/subscription/success" element={<ProtectedRoute><SubscriptionSuccess /></ProtectedRoute>} />
                         <Route path="/branding" element={<ProtectedRoute><BrandingGallery /></ProtectedRoute>} />
@@ -108,6 +109,7 @@ function App() {
                         <Route path="/portfolio" element={<ProtectedRoute><Portfolio /></ProtectedRoute>} />
                         <Route path="/execution" element={<ProtectedRoute><Execution /></ProtectedRoute>} />
                         <Route path="/research" element={<ProtectedRoute><Research /></ProtectedRoute>} />
+                        <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>
