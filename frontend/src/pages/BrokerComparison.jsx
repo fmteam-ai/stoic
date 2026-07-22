@@ -18,7 +18,7 @@ const METRICS = [
     ["EXECUTION QUALITY", "FAILED ORDERS", b => b.execution.fail_rate_pct, (v, b) => v == null ? "—" : `${v}% (${b.execution.failed_orders})`, "low", "Orders rejected or failed at the broker vs total attempts"],
     ["PROFITABILITY", "NET P&L", b => b.pnl.net_pnl, v => fmtUsd(v, 0), "high", "Realized bot P&L on this broker in the window"],
     ["PROFITABILITY", "WIN RATE", b => b.pnl.win_rate, (v, b) => v == null ? "—" : `${v}% (${b.pnl.wins}W/${b.pnl.losses}L)`, "high", "Closed winning trades / all closed trades"],
-    ["PROFITABILITY", "PROFIT FACTOR", b => b.pnl.profit_factor, v => v == null ? "—" : v.toFixed(2), "high", "Gross wins ÷ gross losses. Above 1.0 = profitable"],
+    ["PROFITABILITY", "PROFIT FACTOR", b => b.pnl.profit_factor, v => v == null ? "—" : v >= 99 ? "∞" : v.toFixed(2), "high", "Gross wins ÷ gross losses. Above 1.0 = profitable"],
     ["PROFITABILITY", "AVG WIN / LOSS", b => b.pnl.avg_win, (v, b) => (v == null && b.pnl.avg_loss == null) ? "—" : `${v == null ? "—" : `$${v.toFixed(0)}`} / ${b.pnl.avg_loss == null ? "—" : `$${Math.abs(b.pnl.avg_loss).toFixed(0)}`}`, null, "Average winning trade vs average losing trade"],
     ["ACCOUNTS", "ACCOUNTS", b => b.accounts.count, (v, b) => `${v} (${b.accounts.connected} online)`, null, "Accounts you hold with this broker and how many are connected"],
     ["ACCOUNTS", "COMBINED EQUITY", b => b.accounts.equity, v => `$${(v ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, null, "Total equity across this broker's accounts"],
