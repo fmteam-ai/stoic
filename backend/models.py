@@ -429,6 +429,7 @@ class BridgeTradeReport(BaseModel):
     position_id: Optional[int] = None             # EA v1.52 — POSITION identifier
     filled_volume: Optional[float] = None         # EA v1.52 — actual filled lots
     partial_fill: Optional[bool] = None           # EA v1.52 — DONE_PARTIAL open
+    position_volume: Optional[float] = None       # EA v1.53 — netted symbol position after fill
 
 
 class BridgeExternalDeal(BaseModel):

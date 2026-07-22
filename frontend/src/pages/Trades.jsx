@@ -835,6 +835,7 @@ export default function Trades() {
                                                 {t.breakeven_set && <span title="SL moved to break-even" className="font-mono text-[9px] tracking-widest text-[#FFD700] border border-[#FFD700]/40 bg-[#FFD700]/10 px-1" data-testid={`badge-be-${t.id}`}>BE</span>}
                                                 {t.trail_active && <span title="Trailing stop active" className="font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1" data-testid={`badge-trail-${t.id}`}>TRAIL</span>}
                                                 {t.status === "open" && ["FILLED_UNPROTECTED", "PROTECTION_REQUESTED"].includes(t.lifecycle_state) && <span title="Broker has NOT confirmed the stop-loss yet" className="font-mono text-[9px] tracking-widest text-[#FF3B30] border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-1 animate-pulse" data-testid={`badge-unprot-${t.id}`}>UNPROT</span>}
+                                                {t.partial_fill && <span title={`Partial fill: requested ${t.original_lot_size ?? "?"} → filled ${t.lot_size} lots`} className="font-mono text-[9px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-1" data-testid={`badge-pf-${t.id}`}>PF {t.original_lot_size ?? "?"}→{t.lot_size}</span>}
                                                 {t.pending_modification && <span title={`Pending: ${t.pending_modification.type}`} className="font-mono text-[9px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-1 animate-pulse" data-testid={`badge-pending-${t.id}`}>SYNC</span>}
                                             </div>
                                         </td>
@@ -842,7 +843,13 @@ export default function Trades() {
                                             {accountLabelById[t.account_id] || (t.account_id ? `…${t.account_id.slice(-6)}` : "—")}
                                         </td>
                                         <td className="px-3 py-2 font-mono text-[#A1A1AA] text-xs whitespace-nowrap" data-testid={`trade-ticket-${t.id}`}
-                                            title={t.slippage_pips != null ? `Realized slippage: ${t.slippage_pips} pips` : undefined}>
+                                            title={[
+                                                t.order_ticket ? `Order #${t.order_ticket}` : null,
+                                                t.deal_ticket ? `Deal #${t.deal_ticket}` : null,
+                                                t.position_id ? `Position #${t.position_id}` : null,
+                                                t.position_volume != null ? `Netted position: ${t.position_volume} lots` : null,
+                                                t.slippage_pips != null ? `Realized slippage: ${t.slippage_pips} pips` : null,
+                                            ].filter(Boolean).join(" · ") || undefined}>
                                             {t.mt5_ticket ? `#${t.mt5_ticket}` : "—"}
                                         </td>
                                         <td className={`px-3 py-2 font-mono ${t.action === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{t.action}</td>

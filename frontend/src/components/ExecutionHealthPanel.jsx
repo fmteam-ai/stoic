@@ -52,6 +52,14 @@ export function ExecutionHealthPanel({ data }) {
                     value={`${prot.unprotected ?? 0} pending SL · ${prot.no_stop ?? 0} no stop`} />
             </div>
 
+            {data.unresolved_submissions > 0 && (
+                <div className="px-4 pb-3" data-testid="exec-unresolved-banner">
+                    <div className="border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-3 py-2 font-mono text-[10px] tracking-widest text-[#FF3B30]">
+                        {data.unresolved_submissions} BROKER-ACCEPTED ORDER(S) AWAITING POSITION RESOLUTION — reservation held, EA re-resolving
+                    </div>
+                </div>
+            )}
+
             {lifecycle.length > 0 && (
                 <div className="px-4 pb-3 flex flex-wrap gap-2" data-testid="exec-lifecycle-row">
                     {lifecycle.map(([state, n]) => (

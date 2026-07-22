@@ -1,0 +1,35 @@
+{
+  "summary": "iter-71 — EA v1.53 + backend P0 fixes verification (backend-only, per request). All 3 P0 execution-truth flaws in EA v1.52 → fixed in v1.53 and independently verified at source, HTTP, and MongoDB layers. Full requested test suite passes: iter148_p0_exec_truth (14) + iter148_p0_live_e2e (5) + iter149_netting_truth (11) = 30/30. Note: request said 12 tests for iter149 but the file actually contains 11 (grep-verified via `^def test_|^async def test_`). Additionally wrote and ran a new E2E test (test_iter71_p0_e2e_flow.py) covering the exact (a)/(b)/(c) lifecycle: (a) accepted_unresolved → {ok:true, unresolved:true}, trade stays pending, submission_state='broker_accepted_unresolved', order_ticket=111222333 stored, mt5_ticket NOT stored (0 rejected by the truthy guard on line 1138); (b) real fill open with filled_volume=0.30 vs requested 1.00 → status=open, lot_size adopted to 0.30, original_lot_size=1.00 preserved, partial_fill=true, position_volume=1.50 stored, PartialFillAdopted event written to trade_events; (c) replay of accepted_unresolved AFTER open → {ok:true, ignored:'already_open'}, trade stays open with lot_size=0.30. Cleaned all inserted docs in a finally block — zero leaked accounts (0 docs without 'label' field), zero iter71 trades left in DB. Source-level P0 verification (independent grep + view): (P0-1) MQ5 line 1762 `bool opened = (pos_id > 0);`, line 1786 `SendOpenReport(trade_id, pos_id, ...)` — never `res.order` as position; lines 1749-1754 accepted&&pos_id==0 branch sends 'accepted_unresolved' + JR_ACCEPTED (#define at line 479); lines 1725-1730 3x retry loop (Sleep 300) for broker history lag; lines 1557-1574 JR_ACCEPTED redispatch handler re-runs resolution via PositionIdFromDeal/FindPositionForTrade/SelectPositionById — NO OrderSend call inside that branch (verified by inspection). (P0-2) OrderFilledVolume defined at line 535; ExecuteTrade line 1735 `double filled = OrderFilledVolume(res.order);`; old `filled = PositionGetDouble(POSITION_VOLUME)` is gone from the ExecuteTrade block — POSITION_VOLUME line 1739 assigns to pos_volume (broker exposure) separately. (P0-3) Line 1743 `bool partial = (filled > 0 && filled + half_step < req.volume);` with half_step = vol_step/2 tolerance; old retcode-only partial gone. Structural integrity: braces/brackets balance = 0, parens depth = 0 (matches iter148 fast-suite structural check). EA version consistency: 1.53 in EA #property (258), EA_CLIENT_VERSION (265), bot_routes.LATEST_EA (1238), diagnostic_routes.LATEST_EA (27), setup_routes.ea_latest_version (202), Accounts.jsx LATEST_EA_VERSION (11), EaVersionStrip.jsx LATEST_EA_VERSION (8); FENCING_MIN_EA stays '1.50'. Frontend code inspection: Trades.jsx line 838 PF badge with data-testid=`badge-pf-${t.id}` shows requested→filled; lines 847-850 ticket tooltip includes Order/Deal/Position ids + `Netted position: ${t.position_volume} lots`; ExecutionHealthPanel.jsx lines 55-58 renders `exec-unresolved-banner` when `unresolved_submissions > 0`. Frontend supervisor status RUNNING with only benign webpack dev-server deprecation warnings — compiles clean. Backend running, MongoDB running.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter148_p0_exec_truth.py",
+    "/app/backend/tests/test_iter148_p0_live_e2e.py",
+    "/app/backend/tests/test_iter149_netting_truth.py",
+    "/app/backend/tests/test_iter71_p0_e2e_flow.py",
+    "/app/test_reports/pytest/iter71_p0_e2e.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "P0-1 fix is architecturally correct: `opened = (pos_id > 0)` (line 1762) makes position resolution the ONLY path to reporting an open trade — no more masquerading of order ticket as position id.",
+    "The JR_ACCEPTED redispatch handler (lines 1557-1574) is the essential safety half of P0-1: on redispatch we re-resolve the position from history/comment scan, and if still unresolved we re-emit 'accepted_unresolved' — no OrderSend under any branch. Confirmed by inspection.",
+    "Backend accepted_unresolved handler (bridge_routes.py 1098-1120) correctly (a) returns 'already_open'/'already_closed' when replayed after resolution (line 1104), (b) never persists mt5_ticket=0 (falsy guard on line 1138 applies), (c) stores order_ticket/deal_ticket for later reconciliation.",
+    "OrderFilledVolume (mq5:535) is the correct P0-2 fix — sums DEAL_VOLUME over deals where DEAL_ORDER == our order ticket, so under netting the trade's fill is attributed by DEALS not by the aggregated position volume. Position volume is reported separately as position_volume (line 1739 → SendOpenReport signature).",
+    "P0-3 half-step tolerance (`filled + half_step < req.volume`, line 1743) is the right way to compare against the broker's volume step — avoids false partial-fill flags from floating-point rounding when broker fills exactly the requested volume.",
+    "Nit (unchanged from iter69): PartialFillAdopted audit event is written (verified live), but the corresponding closing/reconciliation flow still doesn't cross-reference this event by event_id when computing realised risk. Consider surfacing it in /api/bot/execution-health or a dedicated risk-audit endpoint so the desk can filter partially-filled trades quickly.",
+    "Nit: iter149 test file has 11 tests (not the 12 stated in the request). Not a defect — just a bookkeeping detail. All 11 pass."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter71_p0_e2e_flow.py (new · 2 E2E tests exercising the accepted_unresolved → open → replay lifecycle end-to-end; cleans up all inserted docs in finally)"
+  ],
+  "success_rate": {
+    "backend": "100% (30/30 iter148+iter149 + 2/2 new iter71 E2E = 32/32)",
+    "frontend": "not tested (per request; supervisor RUNNING, compiles clean)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (httpOnly cookie).",
+  "seed_data_creation": "test_iter71_p0_e2e_flow.py inserts ONE marker trade (_iter71_marker=True) reusing an existing bridge-tokened account, POSTs three /api/bridge/report payloads, then delete_many trades + delete_many trade_events in a finally block. Post-run verification: 0 iter71 trades, 0 accounts missing 'label'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_iter71_p0_e2e_flow.py is portable regression coverage for the accepted_unresolved → open → replay P0-1 lifecycle. It reuses any pre-existing bridge-tokened account (no account creation), so it is safe to run repeatedly and never leaks account docs. When the EA is next bumped past 1.53, only iter149.test_version_153 and the LATEST_EA_VERSION strings need updating; every other assertion here is behaviour-oriented.",
+  "rca_of_the_issue": "N/A — no defects. All three P0 execution-truth fixes (opened=pos_id>0, OrderFilledVolume for netting attribution, deal-volume-based partial flag) verified at MQL5 source, HTTP endpoint, and MongoDB persistence layers."
+}

@@ -240,16 +240,29 @@
 //|         (f) PARTIAL_CLOSE success is judged from the ACTUAL       |
 //|             remaining volume within the broker volume step, not   |
 //|             from the retcode.                                     |
+//| v1.53 — Netting truth + unresolved-accept lifecycle (P0):          |
+//|         (a) An accepted order WITHOUT a resolved position          |
+//|             identifier is never reported open: it acks             |
+//|             'accepted_unresolved' (trade stays pending, risk       |
+//|             reservation stays active) and journals JR_ACCEPTED;    |
+//|             redispatch re-runs resolution, never resends.          |
+//|         (b) filled_volume for the trade = Σ DEAL_VOLUME of the     |
+//|             deals belonging to OUR order (OrderFilledVolume) —     |
+//|             POSITION_VOLUME on netting is the whole symbol         |
+//|             position and is reported separately as                 |
+//|             position_volume (broker exposure, not attribution).    |
+//|         (c) partial_fill truth = deal volume vs requested within   |
+//|             half a volume step; DONE_PARTIAL is diagnostic only.   |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.52"
+#property version   "1.53"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.52"
+#define EA_CLIENT_VERSION "1.53"
 
 input string ServerUrl              = "https://stoic-trading.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -463,6 +476,7 @@ bool IsEodQuietWindow() {
 #define JR_TICKET        3
 #define JR_ACK_SENT      4
 #define JR_FAILED        5
+#define JR_ACCEPTED      6   // v1.53 — broker accepted, position unresolved
 
 string JKey(string kind, string id) { return "STOIC." + kind + "." + id; }
 
@@ -512,6 +526,25 @@ ulong PositionIdFromDeal(ulong deal_ticket) {
       if (!HistoryDealSelect(deal_ticket)) return 0;
    }
    return (ulong)HistoryDealGetInteger(deal_ticket, DEAL_POSITION_ID);
+}
+
+// v1.53 — a trade's TRUE fill = sum of DEAL_VOLUME over the deals that
+// belong to OUR order. POSITION_VOLUME on a netting account is the whole
+// symbol position (pre-existing lots included) and must never be
+// attributed to this trade.
+double OrderFilledVolume(ulong order_ticket) {
+   if (order_ticket == 0) return 0;
+   double total = 0;
+   if (HistorySelect(TimeCurrent() - 86400, TimeCurrent() + 60)) {
+      for (int i = HistoryDealsTotal() - 1; i >= 0; i--) {
+         ulong dtk = HistoryDealGetTicket(i);
+         if (dtk == 0) continue;
+         if ((ulong)HistoryDealGetInteger(dtk, DEAL_ORDER) != order_ticket)
+            continue;
+         total += HistoryDealGetDouble(dtk, DEAL_VOLUME);
+      }
+   }
+   return total;
 }
 
 // v1.52 — select the live position for a position IDENTIFIER. Hedging:
@@ -1457,7 +1490,7 @@ void SendOpenReport(string trade_id, ulong ticket, string status,
                     bool replay,
                     ulong order_tk = 0, ulong deal_tk = 0,
                     ulong pos_id = 0, double filled = 0,
-                    bool partial = false) {
+                    bool partial = false, double pos_volume = 0) {
    // v1.52 — mt5_ticket carries the POSITION identifier; order_ticket /
    // deal_ticket / position_id are reported separately (order != position,
    // especially on netting accounts).
@@ -1466,11 +1499,12 @@ void SendOpenReport(string trade_id, ulong ticket, string status,
       "\"status\":\"%s\",\"entry_price\":%.5f,\"requested_price\":%.5f,"
       "\"requested_sl\":%.5f,\"applied_sl\":%.5f,\"confirmed_position_sl\":%.5f,"
       "\"order_ticket\":%I64u,\"deal_ticket\":%I64u,\"position_id\":%I64u,"
-      "\"filled_volume\":%.4f,\"partial_fill\":%s,"
+      "\"filled_volume\":%.4f,\"partial_fill\":%s,\"position_volume\":%.4f,"
       "\"replay\":%s,\"error\":\"%s\"}",
       EffectiveToken, trade_id, ticket, status, entry, req_price,
       req_sl, app_sl, conf_sl, order_tk, deal_tk, pos_id, filled,
-      (partial ? "true" : "false"), (replay ? "true" : "false"), err);
+      (partial ? "true" : "false"), pos_volume,
+      (replay ? "true" : "false"), err);
    HttpPost(ServerUrl + "/api/bridge/report", body);
 }
 
@@ -1482,11 +1516,13 @@ void ReportOpenFromJournal(string trade_id) {
    double price    = JGet("P", trade_id);
    double filled   = JGet("V", trade_id);
    ulong  ticket   = (pos_id > 0 ? pos_id : order_tk);
-   double conf_sl = 0;
-   if (ticket > 0 && SelectPositionById(ticket, ""))
+   double conf_sl = 0, pos_volume = 0;
+   if (ticket > 0 && SelectPositionById(ticket, "")) {
       conf_sl = PositionGetDouble(POSITION_SL);
+      pos_volume = PositionGetDouble(POSITION_VOLUME);
+   }
    SendOpenReport(trade_id, ticket, "open", price, 0, "", 0, 0, conf_sl, true,
-                  order_tk, deal_tk, pos_id, filled, false);
+                  order_tk, deal_tk, pos_id, filled, false, pos_volume);
    JSet("T", trade_id, JR_ACK_SENT);
    Print("STOIC v1.52: journal replay report trade=", trade_id,
          " ticket=", ticket);
@@ -1516,7 +1552,28 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    // v1.50 — durable intent journal: a redispatched trade_id returns the
    // PREVIOUS result; a second OrderSend for the same trade_id is impossible.
    double jstate = JGet("T", trade_id);
-   if (jstate >= JR_TICKET && jstate != JR_FAILED) {
+   // v1.53 — BROKER_ACCEPTED_UNRESOLVED redispatch: re-run position
+   // resolution; NEVER resend the order.
+   if (jstate == JR_ACCEPTED) {
+      string rsym = ResolveBrokerSymbol(symbol);
+      ulong pid = PositionIdFromDeal(JGetTicket("D", trade_id));
+      if (pid == 0)
+         pid = FindPositionForTrade(trade_id, rsym, action, lot);
+      if (pid > 0 && SelectPositionById(pid, rsym)) {
+         JSetTicket("Q", trade_id, pid);
+         JSet("P", trade_id, PositionGetDouble(POSITION_PRICE_OPEN));
+         JSet("V", trade_id, OrderFilledVolume(JGetTicket("K", trade_id)));
+         JSet("T", trade_id, JR_TICKET);
+         ReportOpenFromJournal(trade_id);
+         return;
+      }
+      SendOpenReport(trade_id, 0, "pending", 0, 0, "accepted_unresolved",
+                     0, 0, 0, true, JGetTicket("K", trade_id),
+                     JGetTicket("D", trade_id), 0, 0, false, 0);
+      return;
+   }
+   if (jstate >= JR_TICKET && jstate != JR_FAILED
+       && jstate != JR_ACCEPTED) {
       ReportOpenFromJournal(trade_id);
       return;
    }
@@ -1658,22 +1715,57 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    // deal → position resolution below is the final authority.
    bool accepted = (ok && (res.retcode == TRADE_RETCODE_DONE
                         || res.retcode == TRADE_RETCODE_DONE_PARTIAL));
-   bool partial  = (ok && res.retcode == TRADE_RETCODE_DONE_PARTIAL);
    ulong deal_tk = res.deal;
    ulong pos_id  = PositionIdFromDeal(deal_tk);
    if (pos_id == 0)
       pos_id = FindPositionForTrade(trade_id, broker_symbol, action,
                                     req.volume);
-   bool opened = (accepted || pos_id > 0);
-   double filled = (res.volume > 0 ? res.volume : req.volume);
-   if (opened && pos_id > 0 && SelectPositionById(pos_id, broker_symbol))
-      filled = PositionGetDouble(POSITION_VOLUME);
+   // v1.53 — brokers can lag writing the deal to history; retry briefly
+   // before declaring the accepted order unresolved.
+   for (int rtry = 0; rtry < 3 && accepted && pos_id == 0; rtry++) {
+      Sleep(300);
+      pos_id = PositionIdFromDeal(deal_tk);
+      if (pos_id == 0)
+         pos_id = FindPositionForTrade(trade_id, broker_symbol, action,
+                                       req.volume);
+   }
+
+   // v1.53 — the trade's TRUE fill comes from its own DEALS, never from
+   // POSITION_VOLUME (netting: total symbol position != this trade's fill).
+   double filled = OrderFilledVolume(res.order);
+   if (filled <= 0 && res.volume > 0) filled = res.volume;
+   double pos_volume = 0;
+   if (pos_id > 0 && SelectPositionById(pos_id, broker_symbol))
+      pos_volume = PositionGetDouble(POSITION_VOLUME);
+   // v1.53 — partial-fill truth = deal volume vs requested within half a
+   // volume step; DONE_PARTIAL is diagnostic only.
+   double half_step = (vol_step > 0 ? vol_step : 0.01) / 2.0;
+   bool partial = (filled > 0 && filled + half_step < req.volume);
+
+   // v1.53 — BROKER_ACCEPTED_UNRESOLVED: an accepted order without a
+   // resolved position identifier must NEVER be reported open (an order
+   // ticket is not a position ticket). The trade stays pending — the risk
+   // reservation stays active — and redispatch re-runs resolution.
+   if (accepted && pos_id == 0) {
+      JSetTicket("K", trade_id, res.order);
+      JSetTicket("D", trade_id, deal_tk);
+      JSet("T", trade_id, JR_ACCEPTED);
+      SendOpenReport(trade_id, 0, "pending", res.price, req.price,
+                     "accepted_unresolved", sl, adj_sl, 0, false,
+                     res.order, deal_tk, 0, filled, partial, 0);
+      Print("STOIC v1.53: accepted but UNRESOLVED trade=", trade_id,
+            " order=", res.order, " deal=", deal_tk,
+            " — kept pending for re-resolution");
+      return;
+   }
+
+   bool opened = (pos_id > 0);
    string status = opened ? "open" : "failed";
    string err = opened ? (partial ? "partial_fill" : "")
                        : "retcode=" + IntegerToString(res.retcode);
 
-   // v1.52 — journal EXACT 64-bit order / deal / position tickets, then
-   // ack with the ACTUAL broker stop and the ACTUAL filled volume.
+   // journal EXACT 64-bit order / deal / position tickets, then ack with
+   // the ACTUAL broker stop, per-trade fill and netted position volume.
    double conf_sl = 0;
    if (opened) {
       JSetTicket("K", trade_id, res.order);
@@ -1682,18 +1774,18 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
       JSet("P", trade_id, res.price);
       JSet("V", trade_id, filled);
       JSet("T", trade_id, JR_TICKET);
-      if (pos_id > 0 && SelectPositionById(pos_id, broker_symbol))
+      if (SelectPositionById(pos_id, broker_symbol))
          conf_sl = PositionGetDouble(POSITION_SL);
       if (partial)
-         Print("STOIC v1.52: PARTIAL FILL trade=", trade_id, " requested=",
-               req.volume, " filled=", filled, " pos_id=", pos_id);
+         Print("STOIC v1.53: PARTIAL FILL trade=", trade_id, " requested=",
+               req.volume, " filled=", filled, " pos_volume=", pos_volume,
+               " pos_id=", pos_id);
    } else {
       JSet("T", trade_id, JR_FAILED);
    }
-   ulong report_ticket = (pos_id > 0 ? pos_id : res.order);
-   SendOpenReport(trade_id, report_ticket, status, res.price, req.price, err,
+   SendOpenReport(trade_id, pos_id, status, res.price, req.price, err,
                   sl, adj_sl, conf_sl, false,
-                  res.order, deal_tk, pos_id, filled, partial);
+                  res.order, deal_tk, pos_id, filled, partial, pos_volume);
    if (opened) JSet("T", trade_id, JR_ACK_SENT);
 }
 

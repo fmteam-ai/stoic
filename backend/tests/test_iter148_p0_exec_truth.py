@@ -26,10 +26,16 @@ def _body(src, start, end=None):
 
 # ---------------------------------------------------------------- version
 def test_version_152_everywhere():
+    # version keeps moving (1.53+); assert consistency, not a fixed number
+    import sys
+    sys.path.insert(0, _TESTS_DIR)
+    from ea_version import current_ea_version
+    v = current_ea_version()
+    assert v >= "1.52"
     src = _src(EA_PATH)
-    assert '#property version   "1.52"' in src
-    assert '#define EA_CLIENT_VERSION "1.52"' in src
-    assert 'LATEST_EA = "1.52"' in _src(
+    assert f'#property version   "{v}"' in src
+    assert f'#define EA_CLIENT_VERSION "{v}"' in src
+    assert f'LATEST_EA = "{v}"' in _src(
         _os.path.join(_BACKEND_DIR, "routes", "bot_routes.py"))
     # existing v1.50 EAs must keep trading — the fencing floor is unchanged
     assert 'FENCING_MIN_EA = "1.50"' in _src(
@@ -44,8 +50,11 @@ def test_open_accepts_done_partial_and_verifies_position():
         "DONE_PARTIAL must count as a real (partial) open"
     assert "PositionIdFromDeal(deal_tk)" in et
     assert "FindPositionForTrade(trade_id, broker_symbol" in et
-    # the failed-retcode-with-live-position edge recovers instead of failing
-    assert "bool opened = (accepted || pos_id > 0);" in et
+    # v1.53 — OPEN strictly requires a RESOLVED position identifier;
+    # accepted-but-unresolved stays pending (accepted_unresolved ack)
+    assert "bool opened = (pos_id > 0);" in et
+    assert "accepted_unresolved" in et
+    assert "bool opened = (accepted || pos_id > 0);" not in et
     # old retcode-only success check must be gone
     assert "bool opened = (ok && res.retcode == TRADE_RETCODE_DONE);" not in et
 

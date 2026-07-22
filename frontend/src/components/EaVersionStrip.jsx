@@ -5,7 +5,7 @@ import { Cpu, ShieldAlert, ShieldCheck, AlertTriangle } from "lucide-react";
 // Fallback for the latest EA build expected in production. The component
 // also reads the live value from /api/bot/health-score so this constant
 // only matters if that endpoint is unreachable. iter-76: 1.34.
-export const LATEST_EA_VERSION = "1.52";
+export const LATEST_EA_VERSION = "1.53";
 
 // Lightweight semver compare — handles dotted numeric strings only (1.25, 1.26).
 // Returns -1 if a<b, 0 if equal, 1 if a>b. Non-numeric segments return 0.

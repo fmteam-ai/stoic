@@ -1024,6 +1024,10 @@ async def execution_health(user=Depends(get_current_user)):
                            "lease_until": lease_until,
                            "alive": lease_until >= now_iso})
 
+    unresolved = await db.trades.count_documents(
+        {"user_id": user["id"], "status": "pending",
+         "submission_state": "broker_accepted_unresolved"})
+
     slots_total = await db.scalp_submission_slots.count_documents({})
     slots_active = await db.scalp_submission_slots.count_documents(
         {"lease_until": {"$gte": now_iso}, "token": {"$ne": None}})
@@ -1095,6 +1099,7 @@ async def execution_health(user=Depends(get_current_user)):
             "lifecycle": lifecycle,
             "protection": protection,
             "stuck_pending": stuck[:10],
+            "unresolved_submissions": unresolved,
             "costs": costs}
 
 
@@ -1230,7 +1235,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.52"
+    LATEST_EA = "1.53"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:

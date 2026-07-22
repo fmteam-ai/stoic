@@ -1074,7 +1074,7 @@ async def report_trade(payload: BridgeTradeReport):
     # ALREADY executed must never mint a second broker position. A second
     # OPEN report with a DIFFERENT ticket means a duplicate broker order —
     # flag for reconciliation instead of silently overwriting the mapping.
-    if (payload.status == "open" and payload.mt5_ticket is not None
+    if (payload.status == "open" and payload.mt5_ticket
             and trade.get("mt5_ticket")
             and int(trade["mt5_ticket"]) != int(payload.mt5_ticket)
             # EA v1.52 — mt5_ticket now carries the POSITION id; a replay of
@@ -1095,6 +1095,30 @@ async def report_trade(payload: BridgeTradeReport):
         return {"ok": True, "duplicate": True,
                 "existing_ticket": trade.get("mt5_ticket")}
 
+    # EA v1.53 — BROKER_ACCEPTED_UNRESOLVED: the broker accepted the order
+    # but the position identifier is not yet resolvable. The trade stays
+    # pending (risk reservation stays active) and redispatch re-runs
+    # resolution on the EA. A replay must never regress an open/closed trade.
+    if (payload.status == "pending"
+            and (payload.error or "") == "accepted_unresolved"):
+        if trade.get("status") in ("open", "closed"):
+            return {"ok": True, "ignored": f"already_{trade['status']}"}
+        upd = {"submission_state": "broker_accepted_unresolved"}
+        if payload.order_ticket:
+            upd["order_ticket"] = int(payload.order_ticket)
+        if payload.deal_ticket:
+            upd["deal_ticket"] = int(payload.deal_ticket)
+        await db.trades.update_one({"_id": trade["_id"]}, {"$set": upd})
+        logger.warning("broker ACCEPTED but position UNRESOLVED trade=%s "
+                       "order=%s deal=%s account=%s", payload.trade_id,
+                       payload.order_ticket, payload.deal_ticket,
+                       str(acc["_id"]))
+        try:
+            await inc_intel_counter(acc["user_id"], "accepted_unresolved")
+        except Exception:
+            pass
+        return {"ok": True, "unresolved": True}
+
     update = {"status": payload.status,
               "submission_state": ("broker_accepted"
                                    if payload.status == "open"
@@ -1111,7 +1135,7 @@ async def report_trade(payload: BridgeTradeReport):
             await inc_intel_counter(acc["user_id"], "broker_preflight_reject")
         except Exception:
             pass
-    if payload.mt5_ticket is not None:
+    if payload.mt5_ticket:
         update["mt5_ticket"] = payload.mt5_ticket
         update["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
     # EA v1.50 — actual-SL audit trail on the open ack (requested vs
@@ -1135,6 +1159,10 @@ async def report_trade(payload: BridgeTradeReport):
             update["deal_ticket"] = int(payload.deal_ticket)
         if payload.position_id:
             update["position_id"] = int(payload.position_id)
+        if payload.position_volume and payload.position_volume > 0:
+            # netted symbol position AFTER the fill — broker exposure only,
+            # never used for per-trade attribution (that is filled_volume)
+            update["position_volume"] = float(payload.position_volume)
         # EA v1.52 — partial fill on open: the REAL position is smaller than
         # requested. Adopt the actual filled volume so risk math, partial
         # closes and P&L reconciliation track the true broker exposure.
