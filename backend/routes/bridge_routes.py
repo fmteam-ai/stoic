@@ -851,7 +851,10 @@ class BridgeModificationAck(BaseModel):
 
 @router.post("/modification-ack")
 async def modification_ack(payload: BridgeModificationAck):
-    """EA acknowledges it applied a pending_modification on its end."""
+    """EA acknowledges it applied a pending_modification on its end.
+    Note: a fail-ack (success=false) with a matching intent_id still
+    consumes the intent (pushed to executed_intents) so the same
+    command can never be retried under the same intent."""
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
     trade = await db.trades.find_one({"_id": ObjectId(payload.trade_id)})
