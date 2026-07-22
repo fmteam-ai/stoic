@@ -38,9 +38,11 @@ from pathlib import Path
 
 from scalp import edge, gate, kill, permissions, setup
 from scalp import adaptive_exits
+from scalp import decision_quality
 from scalp import order_state
 from scalp import outbox
 from scalp import risk_reservations
+from scalp import strategy_select
 from scalp import model as scalp_model
 from eod_flatten import eod_flatten_block as _eod_flatten_block
 from scalp.costs import dynamic_spread_limit
@@ -860,6 +862,7 @@ class ScalpRunner:
             self._tick_buffer.append({"tm": t.broker_time_ms, "b": t.bid, "a": t.ask})
         self.health = kill.evaluate(self.state, self.cfg)
         permissions.maybe_refresh(db, self.user_id, self.symbol, self.cfg)
+        strategy_select.maybe_refresh(db, self.symbol, self.model_key())
         self._maybe_flush_ticks(db)
         # Delayed-batch guard (round 3): old broker ticks arriving NOW must
         # not look fresh. New entries require BOTH recent transport AND a
@@ -901,9 +904,14 @@ class ScalpRunner:
         if feats is None:
             return
         perms = permissions.get_cached(self.user_id, self.symbol)
-        cand = setup.detect(feats, self.state)
+        # Phase C — meta strategy selector: preset parameters for the ONE
+        # pullback setup, chosen per regime from realised performance
+        _sel = strategy_select.get_cached(self.symbol,
+                                          perms.get("regime") or "UNKNOWN")
+        cand = setup.detect(feats, self.state, params=_sel["params"])
         if cand is None:
             return
+        cand["preset"] = _sel["preset"]
         direction = cand["direction"]
         # item 3 (round 3) — ONE active setup event per symbol: any live sim
         # (either direction) suppresses new labels against the same path
@@ -1006,6 +1014,7 @@ class ScalpRunner:
             "direction": direction, "mode": self.mode,
             "features": {k: v for k, v in feats.items() if not k.startswith("_")},
             "setup": cand, "forecast": fc.to_dict(),
+            "setup_preset": cand.get("preset"),
             "model_source": pred["source"],
             "model_fallback_reason": pred["fallback_reason"],
             "net_edge_pips": edge_res["net_edge_pips"],
@@ -1294,6 +1303,7 @@ class ScalpRunner:
         ame = adaptive_min_edge(exec_score=eq["score"], vol_ratio=_vol_ratio,
                                 spread_pctl=_sp_pctl,
                                 loss_streak=self.risk_state.consecutive_losses)
+        _exec_q_score = eq["score"]     # Phase C — survives later eq reuse
         _bg(lambda s={"execution_quality": eq, "adaptive_min_edge": ame}:
             db.scalp_decisions.update_one(
                 {"decision_id": decision["decision_id"]}, {"$set": s}),
@@ -1430,6 +1440,46 @@ class ScalpRunner:
                 "decision_update")
             return
         risk_res = {**risk_res, "lot": final_lot}
+        # Phase C — ONE combined verdict: Prediction + Execution + EV +
+        # Regime + Risk. Runs AFTER the hard risk gates (their reject
+        # stages stay authoritative); BLOCKED stops the live submission.
+        _perms = permissions.get_cached(self.user_id, self.symbol)
+        _rd = _perms.get("regime_detail") or {}
+        _limit_usd = max(self.equity
+                         * self.risk_state.limits.max_daily_loss_pct / 100.0,
+                         0.01)
+        _headroom = 1.0 - (self.risk_state.daily_loss_usd / _limit_usd)
+        _ev_p = (decision.get("ev") or {}).get("ev_pips")
+        if _ev_p is None:
+            _ev_p = decision.get("net_edge_pips")
+        _aligned = (_perms.get("long_enabled")
+                    if decision["direction"] == "BUY"
+                    else _perms.get("short_enabled"))
+        dq = decision_quality.combine(
+            p_win=float((decision.get("forecast") or {})
+                        .get("p_target_before_stop") or 0.5),
+            model_source=decision.get("model_source") or "model",
+            ev_pips=_ev_p,
+            cost_pips=float(decision.get("cost_pips") or 0.1),
+            exec_score=_exec_q_score,
+            regime=_perms.get("regime") or "UNKNOWN",
+            regime_confidence=float(_rd.get("confidence") or 0.5),
+            direction_aligned=bool(_aligned),
+            h1_agrees=bool(_rd.get("h1_agrees")),
+            risk_headroom_frac=_headroom,
+            loss_streak=self.risk_state.consecutive_losses)
+        _bg(lambda s={"decision_quality": dq}: db.scalp_decisions.update_one(
+            {"decision_id": decision["decision_id"]}, {"$set": s}),
+            "decision_update")
+        if not dq["live_allowed"]:
+            self.state.record_reject()
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "combined_decision_quality",
+                          "decision_quality": dq}:
+                db.scalp_decisions.update_one(
+                    {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
         # round 16 item 4 / round 17 item 4 — THREE-WAY EXPOSURE PREFLIGHT:
         # DB (including PENDING/unacked submissions), in-memory account risk
         # and the broker's own reported position count must agree before any

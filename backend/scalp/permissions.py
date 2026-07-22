@@ -54,8 +54,9 @@ async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
         perms["reasons"].append(f"news status unknown ({type(e).__name__}) — fail closed")
         return perms
 
-    # 5-minute-context directional regime from accumulated M15 candles
+    # Phase C — deterministic regime classifier with H1 MTF confirmation
     try:
+        from scalp import regime as regime_mod
         doc = await db.intraday_candles.find_one(
             {"user_id": user_id, "symbol": symbol, "timeframe": "M15"},
             {"bars": {"$slice": -24}})
@@ -63,31 +64,22 @@ async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
         if len(bars) < 12:
             perms["reasons"].append("insufficient M15 context")
             return perms
-        closes = [float(b["c"]) for b in bars]
-        ema = closes[0]
-        k = 2 / (10 + 1)
-        emas = []
-        for c in closes:
-            ema += k * (c - ema)
-            emas.append(ema)
-        pip = cfg.pip_size
-        slope_pips = (emas[-1] - emas[-4]) / pip     # last ~45 min of EMA drift
-        rng = (max(closes[-8:]) - min(closes[-8:])) / pip
-        vol_shock = rng > 60                          # >60 pips in 2h on EURUSD
-        if vol_shock:
+        rd = regime_mod.classify(bars, cfg.pip_size)
+        perms["regime_detail"] = rd
+        perms["ema_slope_pips"] = rd.get("ema_slope_pips")
+        if rd["regime"] == "VOLATILITY_SHOCK":
             perms["regime"] = "VOLATILITY_SHOCK"
             perms["reasons"].append("volatility shock — extreme conditions")
             return perms
-        if slope_pips >= 2.0:
+        if rd["regime"] == "TREND_UP":
             perms["regime"] = "TRENDING_UP"
             perms["long_enabled"] = True
-        elif slope_pips <= -2.0:
+        elif rd["regime"] == "TREND_DOWN":
             perms["regime"] = "TRENDING_DOWN"
             perms["short_enabled"] = True
         else:
             perms["regime"] = "FLAT"
             perms["reasons"].append("no directional regime")
-        perms["ema_slope_pips"] = round(slope_pips, 2)
     except Exception as e:  # noqa: BLE001
         perms["reasons"].append(f"regime unavailable ({type(e).__name__}) — fail closed")
     return perms
