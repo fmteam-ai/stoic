@@ -20,9 +20,10 @@ via PowerShell auto-installer, and full broker-terminal data integrity
 - Production domain: stoicaibot.com.
 
 ## Current EA version
-**v1.42** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
+**v1.51** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
 `routes/setup_routes.py` (`ea_latest_version`), `frontend/src/pages/Accounts.jsx`,
 `frontend/src/components/EaVersionStrip.jsx`, EA `#property version` + `EA_CLIENT_VERSION`.
+`FENCING_MIN_EA = "1.50"` (live activation floor) deliberately stays at 1.50 so running EAs keep working.
 Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere`,
 `tests/test_iter85_ea_token_autoload.py` (EXPECTED_VERSION).
 
@@ -541,7 +542,7 @@ UNRESOLVED (client-side, verified by troubleshoot agent):
 - Post-stop cleanup: bumped remaining EA version constants (diagnostic_routes.py, bot_routes.py, setup_routes.py) to 1.47 — all version tests pass. Final suite state: only 2 failures remain (test_iter126 mtf_confluence_cascade_shape, test_iter127 mtf_confluence_endpoint_ok) and both are LIVE-DATA dependent: they require fresh M15 candles which cannot arrive while the user's terminals are offline. Not code defects.
 
 ## Session 2026-07-16 (cont.) — RESOLVED: split-brain preview URL + fix verified
-- THE missing piece: user's browser AND EAs were pointed at the OLD pod (https://risk-managed-trading-4.preview.emergentagent.com) from the previous job — none of this session's fixes were visible to them. Current app = https://algo-trade-135.preview.emergentagent.com (REACT_APP_BACKEND_URL). User migrated: OnEquity demo + Tauro now connected here with EA v1.47, heartbeating.
+- THE missing piece: user's browser AND EAs were pointed at the OLD pod (https://stoic-trading.preview.emergentagent.com) from the previous job — none of this session's fixes were visible to them. Current app = https://stoic-trading.preview.emergentagent.com (REACT_APP_BACKEND_URL). User migrated: OnEquity demo + Tauro now connected here with EA v1.47, heartbeating.
 - Confirmed live: BTCUSD candles restored via v1.47 multi-symbol feed (src BTCUSD.fx from Tauro), EURUSD# candles landing in EURUSD doc.
 - testing_agent iteration_44: 10/10 PASS — suffixed-symbol scalp pipeline verified end-to-end (new permanent test file /app/backend/tests/test_iter44_suffixed_symbol_scalp.py).
 - EA .mq5 default TickStreamEnabled changed false → true (MT5 resets inputs on version load; this kept silently disabling the stream).
@@ -898,3 +899,12 @@ NEXT-CYCLE BACKLOG (audit round 2): EA-native OrderCheck, shared execution kerne
 - Tests: `tests/unit/scalp/test_iter144_batch2.py` (20 unit), `tests/test_iter144_batch2_http.py` (12 HTTP/motor e2e via testing agent, iteration_68.json — 32/32 green). Full backend suite 2523 passed (2 shared-DB ordering flakes pass in isolation). Stale tests updated: test_iter63_reservations, test_review_r18_lifecycle, test_scalp_unit `_stub_db` (+find_one_and_update, +risk_reservations.find async gen).
 - REMAINING from audit r3: item 5 — broker-native OrderCheck preflight (approved, NOT started; needs EA version bump).
 - STILL PENDING P0: Step-Up TOTP 2FA before live trading (pyotp + 8 recovery codes; use integration_expert playbook first).
+
+## Iter-147 (2026-07-22) — EA v1.51 OrderCheck completion + Execution Health visibility (P1 pair, user-picked)
+1. **EA v1.51 — OrderCheck preflight on EVERY OrderSend path**: shared `PreflightOk(req, perr)` helper (OrderCheck → structured `preflight_failed:retcode=N:comment`); wired BEFORE OrderSend in ApplyFullClose (acks retryable), ClosePosition (silent return, server re-dispatches), ApplyModifySL + ApplyPartialClose (ack success=false, intent stays retryable — MarkIntentDone never called on preflight failure). ExecuteTrade keeps its inline check + retry-pass check.
+2. **Broker volume normalization in ExecuteTrade**: lot snapped to SYMBOL_VOLUME_STEP, clamped to VOLUME_MAX, terminal `volume_below_broker_min` reject below VOLUME_MIN (replaces blind NormalizeDouble(lot,2)). Runs BEFORE preflight.
+3. Version bump 1.50→1.51 everywhere; `FENCING_MIN_EA` stays "1.50" (existing EAs unaffected). Stale test test_iter145 v150_everywhere now derives version from `ea_version.current_ea_version()`.
+4. **GET /api/bot/execution-health** (bot_routes.py): outbox backlog (pending/failed/oldest age), `worker_leases` + `scalp_owners` account leases (epoch, alive), `scalp_submission_slots` active/total, open/pending trade lifecycle-state distribution (lifecycle_state → submission_state fallback), protection split (protected / unprotected / no_stop), stuck-pending dispatches >3min, expected-vs-realized costs (avg |slippage_pips| last 60 closed auto trades vs `monte_carlo.typical_cost` in pips).
+5. **UI**: `ExecutionHealthPanel.jsx` on Bot Health page (testids execution-health-panel, exec-outbox-pending, exec-lc-*, exec-cost-*); Trades page adds TICKET column (`trade-ticket-{id}`, tooltip = realized slippage), lifecycle badge in STATUS cell (`lifecycle-{id}`, LIFECYCLE_STYLE map), UNPROT pulse badge for open trades in FILLED_UNPROTECTED/PROTECTION_REQUESTED.
+- Tests: tests/test_iter147_ea_preflight_complete.py (7). Full regression 2588 passed; only 4 failures in test_iter52_round14_live.py = LIVE-EA-dependent (terminal offline in env, not regressions).
+- Verified: curl execution-health with real data (XAUUSD realized 0.41p vs expected ≤5.25p, OnEquity lease epoch 274), screenshots of both pages.

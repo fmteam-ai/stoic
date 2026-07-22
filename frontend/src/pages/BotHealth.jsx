@@ -8,6 +8,7 @@ import {
     Brain, Clock, FlaskConical, BarChart3, Stethoscope, Zap, Wand2, HeartPulse,
     Wrench, Loader2,
 } from "lucide-react";
+import { ExecutionHealthPanel } from "../components/ExecutionHealthPanel";
 
 const SEV_STYLE = {
     excellent:{ fg:"text-[#00FF41]", bd:"border-[#00FF41]/30", bg:"bg-[#00FF41]/5" },
@@ -474,7 +475,7 @@ export default function BotHealth() {
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
-            const [hs, diag, pulse, sess, pats, adj, blocks, ahSet, ahLog] = await Promise.all([
+            const [hs, diag, pulse, sess, pats, adj, blocks, ahSet, ahLog, execH] = await Promise.all([
                 api.get("/bot/health-score"),
                 api.get("/diagnostic/run"),
                 api.get("/bot/pulse"),
@@ -484,12 +485,14 @@ export default function BotHealth() {
                 api.get("/safety-blocks/stats").catch(() => ({ data: null })),
                 api.get("/auto-heal/settings").catch(() => ({ data: { enabled: false } })),
                 api.get("/auto-heal/log").catch(() => ({ data: { items: [] } })),
+                api.get("/bot/execution-health").catch(() => ({ data: null })),
             ]);
             setData({
                 healthScore: hs.data, diagnostic: diag.data, pulse: pulse.data,
                 sessions: sess.data, patterns: pats.data, adjustments: adj.data,
                 blocks: blocks.data,
                 autoHeal: { settings: ahSet.data, log: ahLog.data?.items || [] },
+                execHealth: execH.data,
             });
             setLast(new Date());
         } catch (e) {
@@ -534,6 +537,8 @@ export default function BotHealth() {
                 <HeadlineScore data={data.healthScore} />
 
                 <AutoHealPanel data={data.autoHeal} onChange={load} />
+
+                <ExecutionHealthPanel data={data.execHealth} />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <DiagnosticPanel diag={data.diagnostic} onReload={load} />

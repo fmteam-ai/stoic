@@ -25,14 +25,19 @@ def _fn(src, name, nxt):
 
 class TestEaVersionBump:
     def test_v150_everywhere(self):
+        # iter-147 bumped LATEST to 1.51 — derive the current version so this
+        # test keeps asserting version-consistency, not a hardcoded number.
+        from ea_version import current_ea_version
+        v = current_ea_version()
+        assert v >= "1.50"
         src = _ea()
-        assert '#property version   "1.50"' in src
-        assert '#define EA_CLIENT_VERSION "1.50"' in src
-        assert 'LATEST_EA = "1.50"' in _src("/app/backend/routes/bot_routes.py")
-        assert 'LATEST_EA = "1.50"' in _src("/app/backend/routes/diagnostic_routes.py")
-        assert '"ea_latest_version": "1.50"' in _src("/app/backend/routes/setup_routes.py")
-        assert 'LATEST_EA_VERSION = "1.50"' in _src("/app/frontend/src/pages/Accounts.jsx")
-        assert 'LATEST_EA_VERSION = "1.50"' in _src("/app/frontend/src/components/EaVersionStrip.jsx")
+        assert f'#property version   "{v}"' in src
+        assert f'#define EA_CLIENT_VERSION "{v}"' in src
+        assert f'LATEST_EA = "{v}"' in _src("/app/backend/routes/bot_routes.py")
+        assert f'LATEST_EA = "{v}"' in _src("/app/backend/routes/diagnostic_routes.py")
+        assert f'"ea_latest_version": "{v}"' in _src("/app/backend/routes/setup_routes.py")
+        assert f'LATEST_EA_VERSION = "{v}"' in _src("/app/frontend/src/pages/Accounts.jsx")
+        assert f'LATEST_EA_VERSION = "{v}"' in _src("/app/frontend/src/components/EaVersionStrip.jsx")
 
 
 def _strip_mql(src):

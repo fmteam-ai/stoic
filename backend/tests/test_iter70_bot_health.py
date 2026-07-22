@@ -19,7 +19,7 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 
 
-BASE_URL = "https://algo-trade-135.preview.emergentagent.com"
+BASE_URL = "https://stoic-trading.preview.emergentagent.com"
 if "REACT_APP_BACKEND_URL" not in os.environ:
     try:
         with open("/app/frontend/.env") as f:

@@ -22,7 +22,7 @@ from bot_doctor import (
 )
 
 
-BASE_URL = "https://algo-trade-135.preview.emergentagent.com"
+BASE_URL = "https://stoic-trading.preview.emergentagent.com"
 try:
     with open("/app/frontend/.env") as f:
         for line in f:

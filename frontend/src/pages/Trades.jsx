@@ -15,6 +15,22 @@ const STATUS_STYLE = {
     failed: "border-[#FF3B30]/40 text-[#FF3B30]",
 };
 
+// iter-147 — execution lifecycle badge colors (order_state.py states +
+// legacy submission_state stamps). Unknown states fall back to gray.
+const LIFECYCLE_STYLE = {
+    QUEUED: "border-[#FFB000]/40 text-[#FFB000]",
+    EA_CLAIMED: "border-[#FFB000]/40 text-[#FFB000]",
+    SENT_TO_TERMINAL: "border-[#FFB000]/40 text-[#FFB000]",
+    BROKER_ACCEPTED: "border-[#0099FF]/40 text-[#0099FF]",
+    FILLED_UNPROTECTED: "border-[#FF3B30]/40 text-[#FF3B30]",
+    PROTECTION_REQUESTED: "border-[#FFB000]/40 text-[#FFB000]",
+    PROTECTED: "border-[#00FF41]/40 text-[#00FF41]",
+    OPEN: "border-[#00FF41]/40 text-[#00FF41]",
+    CLOSE_REQUESTED: "border-[#FFB000]/40 text-[#FFB000]",
+    UNCERTAIN: "border-[#FF3B30]/40 text-[#FF3B30]",
+    UNKNOWN_REQUIRES_RECONCILIATION: "border-[#FF3B30]/40 text-[#FF3B30]",
+};
+
 // "winning" and "lost" are UI-only refinements over "closed" — the backend
 // route doesn't understand them, so we translate to status=closed and narrow
 // client-side by parseFloat(pnl) sign.
@@ -804,7 +820,7 @@ export default function Trades() {
                         <table className="w-full text-sm" data-testid="trades-table">
                             <thead>
                                 <tr className="border-b border-[#1F1F1F]">
-                                    {["SYMBOL", "ACCOUNT", "SIDE", "LOTS", "ENTRY", "CURRENT", "SL", "TP", "EXIT", "LIVE P&L", "P&L", "OPENED", "CLOSED", "STATUS", ""].map(h => (
+                                    {["SYMBOL", "ACCOUNT", "TICKET", "SIDE", "LOTS", "ENTRY", "CURRENT", "SL", "TP", "EXIT", "LIVE P&L", "P&L", "OPENED", "CLOSED", "STATUS", ""].map(h => (
                                         <th key={h} className="px-3 py-2 text-left font-mono text-[10px] text-[#52525B] tracking-widest whitespace-nowrap">{h}</th>
                                     ))}
                                 </tr>
@@ -818,11 +834,16 @@ export default function Trades() {
                                                 {t.partial_closed && <span title="Partial close at TP1 executed" className="font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1" data-testid={`badge-pc-${t.id}`}>PC</span>}
                                                 {t.breakeven_set && <span title="SL moved to break-even" className="font-mono text-[9px] tracking-widest text-[#FFD700] border border-[#FFD700]/40 bg-[#FFD700]/10 px-1" data-testid={`badge-be-${t.id}`}>BE</span>}
                                                 {t.trail_active && <span title="Trailing stop active" className="font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1" data-testid={`badge-trail-${t.id}`}>TRAIL</span>}
+                                                {t.status === "open" && ["FILLED_UNPROTECTED", "PROTECTION_REQUESTED"].includes(t.lifecycle_state) && <span title="Broker has NOT confirmed the stop-loss yet" className="font-mono text-[9px] tracking-widest text-[#FF3B30] border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-1 animate-pulse" data-testid={`badge-unprot-${t.id}`}>UNPROT</span>}
                                                 {t.pending_modification && <span title={`Pending: ${t.pending_modification.type}`} className="font-mono text-[9px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-1 animate-pulse" data-testid={`badge-pending-${t.id}`}>SYNC</span>}
                                             </div>
                                         </td>
                                         <td className="px-3 py-2 font-mono text-[#A1A1AA] text-xs whitespace-nowrap" data-testid={`trade-account-${t.id}`}>
                                             {accountLabelById[t.account_id] || (t.account_id ? `…${t.account_id.slice(-6)}` : "—")}
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-[#A1A1AA] text-xs whitespace-nowrap" data-testid={`trade-ticket-${t.id}`}
+                                            title={t.slippage_pips != null ? `Realized slippage: ${t.slippage_pips} pips` : undefined}>
+                                            {t.mt5_ticket ? `#${t.mt5_ticket}` : "—"}
                                         </td>
                                         <td className={`px-3 py-2 font-mono ${t.action === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{t.action}</td>
                                         <td className="px-3 py-2 font-mono">{t.lot_size}</td>
@@ -886,6 +907,16 @@ export default function Trades() {
                                                 <span className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border inline-block ${STATUS_STYLE[t.status] || "border-[#1F1F1F]"}`}>
                                                     {t.status?.toUpperCase()}
                                                 </span>
+                                                {t.status !== "closed" && (t.lifecycle_state || t.submission_state) && (() => {
+                                                    const lc = String(t.lifecycle_state || t.submission_state).toUpperCase();
+                                                    return (
+                                                        <span title={`Execution lifecycle: ${lc}`}
+                                                            data-testid={`lifecycle-${t.id}`}
+                                                            className={`font-mono text-[9px] tracking-widest px-1.5 py-0.5 border ${LIFECYCLE_STYLE[lc] || "border-[#52525B]/40 text-[#A1A1AA]"}`}>
+                                                            {lc.replaceAll("_", " ")}
+                                                        </span>
+                                                    );
+                                                })()}
                                                 {t.status === "closed" && t.close_reason && CLOSE_REASON_BADGE[t.close_reason] && (
                                                     <span title={`Closed by: ${t.close_reason}`}
                                                         data-testid={`close-reason-${t.id}`}

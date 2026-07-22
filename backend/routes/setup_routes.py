@@ -199,7 +199,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.50",
+        "ea_latest_version": "1.51",
     }
 
 

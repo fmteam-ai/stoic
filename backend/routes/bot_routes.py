@@ -975,6 +975,129 @@ async def delete_my_preset(preset_id: str, user=Depends(get_current_user)):
     return {"deleted": True, "id": preset_id}
 
 
+@router.get("/execution-health")
+async def execution_health(user=Depends(get_current_user)):
+    """Iter-147 · execution-plumbing visibility: outbox backlog, worker
+    leases, submission slots, open-trade lifecycle/protection states and
+    expected-vs-realized execution costs."""
+    from monte_carlo import typical_cost
+    from pip_utils import base_symbol as _base, price_to_pips
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    pending = await db.outbox.count_documents({"state": "pending"})
+    failed = await db.outbox.count_documents({"state": "failed"})
+    oldest_age = None
+    if pending:
+        oldest = await db.outbox.find_one({"state": "pending"},
+                                          sort=[("created_at", 1)])
+        try:
+            ts = datetime.fromisoformat(str(oldest["created_at"]))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            oldest_age = max(0, int((now - ts).total_seconds()))
+        except Exception:
+            pass
+
+    workers = []
+    async for w in db.worker_leases.find({}):
+        exp = str(w.get("expires_at") or "")
+        workers.append({"name": str(w.get("_id")), "holder": w.get("holder"),
+                        "expires_at": exp, "alive": exp >= now_iso})
+
+    account_names = {}
+    async for a in db.accounts.find({"user_id": user["id"]},
+                                    {"account_name": 1, "broker": 1}):
+        account_names[str(a["_id"])] = (a.get("account_name")
+                                        or a.get("broker")
+                                        or str(a["_id"])[-6:])
+    owners = []
+    if account_names:
+        async for o in db.scalp_owners.find(
+                {"account_id": {"$in": list(account_names)}}):
+            lease_until = str(o.get("lease_until") or "")
+            owners.append({"account_id": o.get("account_id"),
+                           "account": account_names.get(o.get("account_id")),
+                           "worker_id": o.get("worker_id"),
+                           "lease_epoch": int(o.get("lease_epoch") or 0),
+                           "lease_until": lease_until,
+                           "alive": lease_until >= now_iso})
+
+    slots_total = await db.scalp_submission_slots.count_documents({})
+    slots_active = await db.scalp_submission_slots.count_documents(
+        {"lease_until": {"$gte": now_iso}, "token": {"$ne": None}})
+
+    lifecycle: dict = {}
+    protection = {"protected": 0, "unprotected": 0, "no_stop": 0}
+    stuck = []
+    async for t in db.trades.find(
+            {"user_id": user["id"], "status": {"$in": ["open", "pending"]}},
+            {"symbol": 1, "status": 1, "stop_loss": 1, "account_id": 1,
+             "lifecycle_state": 1, "submission_state": 1,
+             "_dispatched_at": 1}).limit(300):
+        state = (t.get("lifecycle_state") or t.get("submission_state")
+                 or ("OPEN" if t.get("status") == "open" else "QUEUED"))
+        state = str(state).upper()
+        lifecycle[state] = lifecycle.get(state, 0) + 1
+        if t.get("status") == "open":
+            if not t.get("stop_loss"):
+                protection["no_stop"] += 1
+            elif str(t.get("lifecycle_state") or "") in (
+                    "FILLED_UNPROTECTED", "PROTECTION_REQUESTED"):
+                protection["unprotected"] += 1
+            else:
+                protection["protected"] += 1
+        if t.get("status") == "pending" and t.get("_dispatched_at"):
+            try:
+                dts = datetime.fromisoformat(str(t["_dispatched_at"]))
+                if dts.tzinfo is None:
+                    dts = dts.replace(tzinfo=timezone.utc)
+                age = (now - dts).total_seconds()
+                if age > 180:
+                    stuck.append({"trade_id": str(t["_id"]),
+                                  "symbol": t.get("symbol"),
+                                  "age_sec": int(age), "state": state,
+                                  "account": account_names.get(
+                                      t.get("account_id"))})
+            except Exception:
+                pass
+
+    cost_rows: dict = {}
+    async for t in db.trades.find(
+            {"user_id": user["id"], "status": "closed", "origin": "auto",
+             "slippage_pips": {"$exists": True, "$ne": None}},
+            {"symbol": 1, "base_symbol": 1, "slippage_pips": 1,
+             "entry_price": 1}).sort("closed_at", -1).limit(60):
+        sym = t.get("base_symbol") or _base(t.get("symbol"))
+        row = cost_rows.setdefault(sym, {"n": 0, "slip": 0.0, "exp": None})
+        row["n"] += 1
+        row["slip"] += abs(float(t.get("slippage_pips") or 0))
+        if row["exp"] is None and t.get("entry_price"):
+            try:
+                row["exp"] = round(price_to_pips(
+                    sym, typical_cost(sym, float(t["entry_price"]))), 2)
+            except Exception:
+                pass
+    costs = [{"symbol": s, "trades": r["n"],
+              "avg_realized_slippage_pips": round(r["slip"] / r["n"], 2),
+              "expected_cost_pips": r["exp"]}
+             for s, r in sorted(cost_rows.items())]
+
+    return {"generated_at": now_iso,
+            "outbox": {"pending": pending, "failed": failed,
+                       "oldest_pending_age_sec": oldest_age},
+            "workers": workers,
+            "account_leases": owners,
+            "submission_slots": {"total": slots_total,
+                                 "active": slots_active,
+                                 "free": max(0, slots_total - slots_active)},
+            "lifecycle": lifecycle,
+            "protection": protection,
+            "stuck_pending": stuck[:10],
+            "costs": costs}
+
+
 @router.get("/health-score")
 async def bot_health_score(user=Depends(get_current_user)):
     """Single 0-100 score summarising "is the bot actually working right now?".
@@ -1107,7 +1230,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.50"
+    LATEST_EA = "1.51"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:

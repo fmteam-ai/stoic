@@ -6,10 +6,10 @@
 //| 1. Copy this file to: <MT5 Data Folder>/MQL5/Experts/             |
 //| 2. In MT5: Tools > Options > Expert Advisors                     |
 //|       - Tick: "Allow WebRequest for listed URL"                  |
-//|       - Add your server URL (e.g. https://algo-trade-135.preview.emergentagent.com)
+//|       - Add your server URL (e.g. https://stoic-trading.preview.emergentagent.com)
 //| 3. Compile in MetaEditor (F7) and attach to ANY chart            |
 //| 4. Inputs:                                                       |
-//|       ServerUrl   = https://algo-trade-135.preview.emergentagent.com   |
+//|       ServerUrl   = https://stoic-trading.preview.emergentagent.com   |
 //|       BridgeToken = (paste from the dashboard > Accounts)         |
 //|       PollSeconds = 5                                             |
 //|                                                                  |
@@ -202,18 +202,32 @@
 //|         (g) close_requested path fenced: deterministic close      |
 //|             intent, result journal, and 'closed' only reported    |
 //|             when the broker position is VERIFIED absent.          |
+//| v1.51 — OrderCheck preflight COMPLETED on every OrderSend path:   |
+//|         (a) ApplyFullClose / ClosePosition / ApplyModifySL /      |
+//|             ApplyPartialClose now run the same broker-native      |
+//|             OrderCheck() preflight as ExecuteTrade (shared        |
+//|             PreflightOk helper) — margin, volume limits,          |
+//|             stop/freeze levels and fill policy validated by MT5   |
+//|             itself before any request reaches the broker.         |
+//|             Failed preflights ack structured preflight_failed     |
+//|             errors (retryable) without consuming intents.         |
+//|         (b) ExecuteTrade normalises the lot against the BROKER's  |
+//|             SYMBOL_VOLUME_MIN / MAX / STEP before preflight — a   |
+//|             lot below the broker minimum reports a terminal       |
+//|             volume_below_broker_min failure instead of a raw      |
+//|             broker rejection.                                     |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.50"
+#property version   "1.51"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.50"
+#define EA_CLIENT_VERSION "1.51"
 
-input string ServerUrl              = "https://algo-trade-135.preview.emergentagent.com";
+input string ServerUrl              = "https://stoic-trading.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
 input string TrackedSymbols         = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
 input int    PollSeconds            = 5;
@@ -1366,6 +1380,24 @@ void ReportOpenFromJournal(string trade_id) {
          " ticket=", ticket);
 }
 
+// v1.51 — shared broker-native preflight for the close/modify paths: MT5
+// itself validates margin, volume limits, stop/freeze levels and fill
+// policy BEFORE the request reaches the broker. On failure perr carries a
+// structured preflight_failed error for the ack payload.
+bool PreflightOk(MqlTradeRequest &req, string &perr) {
+   MqlTradeCheckResult chk;
+   ZeroMemory(chk);
+   if (OrderCheck(req, chk)) return true;
+   string c = chk.comment;
+   StringReplace(c, "\"", "'");   // keep the ack JSON body valid
+   perr = StringFormat("preflight_failed:retcode=%d:%s", chk.retcode, c);
+   Print("STOIC v1.51: OrderCheck preflight REJECTED ", req.symbol,
+         " action=", (int)req.action, " retcode=", chk.retcode,
+         " comment=", chk.comment, " margin=", chk.margin,
+         " free=", chk.margin_free);
+   return false;
+}
+
 void ExecuteTrade(string trade_id, string symbol, string action, double lot, double sl, double tp) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
 
@@ -1414,9 +1446,28 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
       return;
    }
 
+   // v1.51 — normalise the lot against the BROKER's volume constraints
+   // (min / max / step); a lot below the broker minimum is terminal.
+   double vol_step = SymbolInfoDouble(broker_symbol, SYMBOL_VOLUME_STEP);
+   double vol_min  = SymbolInfoDouble(broker_symbol, SYMBOL_VOLUME_MIN);
+   double vol_max  = SymbolInfoDouble(broker_symbol, SYMBOL_VOLUME_MAX);
+   double norm_lot = lot;
+   if (vol_step > 0) norm_lot = MathFloor(norm_lot / vol_step + 0.5) * vol_step;
+   if (vol_max > 0 && norm_lot > vol_max) norm_lot = vol_max;
+   norm_lot = NormalizeDouble(norm_lot, 8);
+   if (norm_lot < vol_min || norm_lot <= 0) {
+      JSet("T", trade_id, JR_FAILED);
+      SendOpenReport(trade_id, 0, "failed", 0, 0,
+                     StringFormat("volume_below_broker_min:%.4f<%.4f",
+                                  norm_lot, vol_min), 0, 0, 0, false);
+      Print("STOIC v1.51: lot ", lot, " below broker minimum ", vol_min,
+            " on ", broker_symbol, " — terminal reject");
+      return;
+   }
+
    req.action       = TRADE_ACTION_DEAL;
    req.symbol       = broker_symbol;
-   req.volume       = NormalizeDouble(lot, 2);
+   req.volume       = norm_lot;
    req.deviation    = Slippage;
    req.magic        = MagicNumber;
    req.comment      = trade_id;   // v1.50 — crash-window recovery key
@@ -1543,6 +1594,16 @@ void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq =
       req.type  = ORDER_TYPE_BUY;
       req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
    }
+   // v1.51 — broker-native preflight; a failed check acks retryable so
+   // the server re-dispatches instead of burning a broker request.
+   string perr = "";
+   if (!PreflightOk(req, perr)) {
+      string pf = StringFormat(
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":false,\"retryable\":true,\"intent_id\":\"%s\",\"error\":\"%s\"}",
+         EffectiveToken, trade_id, intent, perr);
+      HttpPost(ServerUrl + "/api/bridge/modification-ack", pf);
+      return;
+   }
    bool ok = OrderSend(req, res);
    // v1.50 — the FINAL truth is the broker position, not the retcode:
    // DONE_PARTIAL (or any failure) with volume remaining is NOT a full
@@ -1603,6 +1664,13 @@ void ClosePosition(string trade_id, long ticket) {
       req.type  = ORDER_TYPE_BUY;
       req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
    }
+   // v1.51 — broker-native preflight; on failure just return — the server
+   // keeps re-dispatching close_requested until the position is verified gone.
+   string perr = "";
+   if (!PreflightOk(req, perr)) {
+      Print("STOIC v1.51: close preflight failed trade=", trade_id, " ", perr);
+      return;
+   }
    bool ok = OrderSend(req, res);
    // v1.50 — report closed ONLY when the broker position is verified gone.
    if (PositionSelectByTicket(ticket)) {
@@ -1646,6 +1714,21 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
    ClampStops(symbol, side, adj_sl, tp_ignore, 1);
    req.sl       = adj_sl;
    req.tp       = current_tp;
+
+   // v1.51 — broker-native preflight (stop/freeze levels re-validated by
+   // MT5); a failed check acks success=false so the intent stays retryable.
+   string perr = "";
+   if (!PreflightOk(req, perr)) {
+      string pf = StringFormat(
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"MODIFY_SL\",\"success\":false,"
+         "\"new_sl\":%.5f,\"requested_sl\":%.5f,\"applied_sl\":%.5f,"
+         "\"confirmed_position_sl\":%.5f,\"stop_confirmed\":false,"
+         "\"intent_id\":\"%s\",\"error\":\"%s\"}",
+         EffectiveToken, trade_id, adj_sl, new_sl, adj_sl,
+         PositionGetDouble(POSITION_SL), intent, perr);
+      HttpPost(ServerUrl + "/api/bridge/modification-ack", pf);
+      return;
+   }
 
    bool ok = OrderSend(req, res);
    bool success = (ok && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_DONE_PARTIAL));
@@ -1723,6 +1806,17 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
    } else {
       req.type  = ORDER_TYPE_BUY;
       req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   }
+
+   // v1.51 — broker-native preflight (volume + margin re-validated by
+   // MT5); a failed check acks success=false so the intent stays retryable.
+   string perr = "";
+   if (!PreflightOk(req, perr)) {
+      string pf = StringFormat(
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":false,\"intent_id\":\"%s\",\"error\":\"%s\"}",
+         EffectiveToken, trade_id, intent, perr);
+      HttpPost(ServerUrl + "/api/bridge/modification-ack", pf);
+      return;
    }
 
    bool ok = OrderSend(req, res);

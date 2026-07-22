@@ -14,7 +14,7 @@ from rl_policy import (  # noqa: E402
 )
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://algo-trade-135.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading.preview.emergentagent.com").rstrip("/")
 
 
 def trade(pnl, sym="XAUUSD", action="SELL", sid="s1", i=0):

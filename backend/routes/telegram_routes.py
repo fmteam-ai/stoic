@@ -334,7 +334,7 @@ async def telegram_webhook(secret: str, request: Request):
 # ---------- Activation endpoints (JWT-protected) ----------
 
 class WebhookEnableRequest(BaseModel):
-    base_url: str  # e.g. https://algo-trade-135.preview.emergentagent.com
+    base_url: str  # e.g. https://stoic-trading.preview.emergentagent.com
 
 
 @router.post("/webhook/enable")

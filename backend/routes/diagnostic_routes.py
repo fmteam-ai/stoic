@@ -21,7 +21,7 @@ from trade_reconciler import reconcile_user
 
 router = APIRouter(prefix="/diagnostic", tags=["diagnostic"])
 
-LATEST_EA = "1.50"
+LATEST_EA = "1.51"
 HEARTBEAT_FRESH_SEC = 300
 
 # Retcode → human explanation

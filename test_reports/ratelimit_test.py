@@ -1,6 +1,6 @@
 """Quick test: Co-Pilot rate limit - 31st rapid chat in 5min should 429."""
 import os, requests
-BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://algo-trade-135.preview.emergentagent.com").rstrip("/")
+BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading.preview.emergentagent.com").rstrip("/")
 
 s = requests.Session()
 # Use a fresh user so we don't interfere with admin sessions
