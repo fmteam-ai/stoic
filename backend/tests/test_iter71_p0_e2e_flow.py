@@ -14,7 +14,8 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
-load_dotenv(Path("/app/backend/.env"))
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(_BACKEND_DIR / ".env")
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 
