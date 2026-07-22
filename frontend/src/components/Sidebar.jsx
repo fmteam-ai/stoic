@@ -9,7 +9,7 @@ import {
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers,
-    FileText, ShieldAlert, DatabaseBackup, Trophy, Scale,
+    FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -65,6 +65,7 @@ const SECTIONS = [
             { to: "/portfolio", label: "Portfolio Risk", icon: Shield, testid: "nav-portfolio" },
             { to: "/safety-blocks", label: "Safety Blocks", icon: ShieldCheck, testid: "nav-safety-blocks" },
             { to: "/execution", label: "Execution Intel", icon: Zap, testid: "nav-execution" },
+            { to: "/enterprise-api", label: "Enterprise API", icon: KeyRound, testid: "nav-enterprise-api" },
             { to: "/symbols", label: "Symbols", icon: CurrencyCircleDollar, testid: "nav-symbols" },
         ],
     },

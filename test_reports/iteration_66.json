@@ -1,0 +1,30 @@
+{
+  "summary": "Phase H Part C — Enterprise API (iter-139) end-to-end tested. Backend: 17/17 pytest cases green covering mgmt CRUD (create returns full key once, list hides key_hash/full key, revoke → 404 on double revoke, invalid scope 400, empty name 422, 10-active-key cap enforced), public v1 (missing/malformed/revoked key → 401, scope enforcement 403 vs 200, /me/accounts/trades/portfolio shapes, no bridge_token/creds/password leak in accounts, trades pagination + limit clamp at 500, status filter), usage tracking (total_requests + last_used_at increment), and per-key sliding-window rate limiter (5 req/min → 6th → 429). Frontend: sidebar nav-enterprise-api navigates to /enterprise-api which renders api-keys-table + api-docs-card; NEW API KEY opens create-key-form with all 3 scope checkboxes + key-name-input + key-rate-input; submit shows key-reveal-modal with revealed-api-key starting stoic_live_ and copy-api-key button; on close the key appears in table as ACTIVE with prefix only (no full-key leak); revoke button with window.confirm dialog revokes and row flips to REVOKED; revoked key returns 401 from /api/v1/me (verified via in-page fetch).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_iter139_enterprise_api.py",
+    "/app/test_reports/pytest/iter139_enterprise_api.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Good: full key never persisted (only sha256 hash + display prefix), hmac.compare_digest used for hash comparison, list response strictly excludes key_hash — verified in tests.",
+    "Good: authenticate_api_key looks up by short prefix first (indexable) then compares hash — O(1) friendly and constant-time on the compare.",
+    "Rate limit is documented as best-effort in-memory single-process (dict _rate_windows) — behind multiple workers it will under-enforce. Acceptable per problem statement, but worth adding a comment/README note for production deploys. Current test hits limit deterministically because uvicorn runs single-process.",
+    "authenticate_api_key does a write (last_used_at + $inc total_requests) on every request; consider batching or fire-and-forget if per-key QPS grows — for now fine.",
+    "v1_portfolio imports accounts_overview inline (avoids circular import) and passes a minimal {'id': user_id} dict — works because that route only reads user['id'], but a tighter contract (a helper accepting user_id: str) would be more explicit.",
+    "Scope check is 'scope in key.scopes' — correct; consider a light-weight scope-set precompute if scopes list grows.",
+    "Frontend: NEW API KEY button toggles setShowForm — if clicked twice quickly it hides the form. Not a bug per se but consider setShowForm(true) + a separate close affordance for clearer state.",
+    "Frontend: revoked keys currently stay in the table forever — nice for audit, but list length is capped at 100 server-side (to_list(length=100)); once a user churns >100 keys older ones will silently drop from the UI. Consider server-side filter ?include_revoked=false or paginate."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter139_enterprise_api.py (new)"
+  ],
+  "success_rate": { "backend": "100% (17/17)", "frontend": "100%" },
+  "test_credentials": "admin@trading.bot / admin123 (cookie session; POSTs require X-CSRF-Token echoed from csrf_token cookie)",
+  "seed_data_creation": "Test suite created and revoked 16 TEST_-prefixed keys (all revoked in teardown). Admin ends with 0 ACTIVE / 19 total (all REVOKED, includes prior 'CI test key' + 'trades key' + the UI-flow 'TEST_playwright_ui_key' key). Cleanup verified: GET /api/api-keys shows Active=0.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Enterprise API (Phase H Part C) is fully green. Reusable regression file: /app/backend/tests/test_iter139_enterprise_api.py. Notes: (1) backend needs both cookie auth AND X-CSRF-Token header (read csrf_token cookie after login and echo). (2) Rate limiter is per-process in-memory — if you scale uvicorn workers it becomes best-effort. (3) Admin has 19 REVOKED keys accumulated across iterations; the mgmt list has no pagination so >100 keys will get truncated by the 100-item to_list cap — flagged as a future concern, not a bug. (4) Frontend route MUST NOT start with /api (ingress). (5) All required data-testids present and stable: nav-enterprise-api, enterprise-api-page, api-keys-table, api-docs-card, new-key-button, create-key-form, key-name-input, key-rate-input, scope-read-accounts/trades/portfolio, create-key-submit, key-reveal-modal, revealed-api-key, copy-api-key, close-reveal-modal, key-row-<prefix>, revoke-key-<prefix>.",
+  "rca_of_the_issue": "N/A — no issues found."
+}

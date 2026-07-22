@@ -62,6 +62,7 @@ from routes.data_freshness_routes import router as data_freshness_router
 from routes.shadow_routes import router as shadow_router
 from routes.quant_routes import router as quant_router
 from routes.scalp_routes import router as scalp_router
+from routes.enterprise_routes import mgmt_router as api_keys_router, public_router as enterprise_v1_router
 from routes.postmortem_routes import router as postmortem_router
 from routes.auto_heal_routes import router as auto_heal_router
 from routes.preferences_routes import router as preferences_router
@@ -238,6 +239,8 @@ api_router.include_router(auto_heal_router)
 api_router.include_router(preferences_router)
 api_router.include_router(insights_router)
 api_router.include_router(optimizer_router)
+api_router.include_router(api_keys_router)
+api_router.include_router(enterprise_v1_router)
 
 
 # ---------- WebSocket ----------
