@@ -45,6 +45,12 @@ STATES = (QUEUED, EA_CLAIMED, BROKER_ACCEPTED, FILLED_UNPROTECTED,
           CLOSED, FINANCIALLY_RECONCILED, REJECTED, UNCERTAIN)
 TERMINAL = (FINANCIALLY_RECONCILED, REJECTED)
 
+# audit r3 P0 · trades created before this instant may lack lifecycle_state
+# legitimately (pre-state-machine records) and keep permissive recovery entry.
+# Stateless docs created AFTER it are malformed and get quarantined instead.
+# ISO-string comparison — trade timestamps are stored as isoformat strings.
+LEGACY_EPOCH = "2026-07-22T00:00:00+00:00"
+
 # state -> tuple of states it may be entered FROM (empty = entry state)
 ALLOWED_PREV = {
     QUEUED: (),

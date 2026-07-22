@@ -46,11 +46,26 @@ class TestReservationLifecycle:
 
     @pytest.mark.asyncio
     async def test_release_for_trade_targets_active_only(self):
+        # audit r3 · release now routes each reservation through the
+        # guarded transition() instead of a raw update_many
         db = _db()
+        docs = [{"reservation_id": "r1"}]
+
+        def _find(*_a, **_k):
+            async def gen():
+                for d in docs:
+                    yield d
+            return gen()
+        db.risk_reservations.find = MagicMock(side_effect=_find)
+        db.risk_reservations.update_one = AsyncMock(
+            return_value=MagicMock(modified_count=1))
         await rr.release_for_trade(db, "t1", "broker_ack")
-        q = db.risk_reservations.update_many.await_args.args[0]
+        q = db.risk_reservations.find.call_args.args[0]
         assert q["trade_id"] == "t1"
         assert set(q["state"]["$in"]) == set(rr.ACTIVE_STATES)
+        uq = db.risk_reservations.update_one.await_args.args[0]
+        assert uq["reservation_id"] == "r1"
+        assert set(uq["state"]["$in"]) == set(rr.ACTIVE_STATES)
 
     def test_states(self):
         assert rr.ACTIVE_STATES == ("RISK_RESERVED", "QUEUED_UNCONFIRMED",

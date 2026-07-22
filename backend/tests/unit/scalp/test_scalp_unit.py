@@ -296,6 +296,9 @@ def _stub_db():
         c.count_documents = AsyncMock(return_value=0)
         c.delete_many = AsyncMock()
         c.create_index = AsyncMock()
+        # audit r3 · command fence stamps via find_one_and_update
+        c.find_one_and_update = AsyncMock(return_value={
+            "pending_modification": {"intent_id": "i1", "seq": 1}})
 
     # Phase A — outbox immediate-publish path iterates find().sort().limit()
     def _empty_cursor(*_a, **_k):
@@ -306,6 +309,13 @@ def _stub_db():
         cur.sort.return_value.limit.return_value = gen()
         return cur
     db.outbox.find = MagicMock(side_effect=_empty_cursor)
+    # audit r3 · unified release path iterates find() directly
+    def _empty_agen(*_a, **_k):
+        async def gen():
+            return
+            yield  # pragma: no cover
+        return gen()
+    db.risk_reservations.find = MagicMock(side_effect=_empty_agen)
     # iter-61: broker with plenty of healthy execution history so the
     # fail-closed history cap / exec-quality gate don't mask the stages
     # under test (each session bucket present, favourable averages)

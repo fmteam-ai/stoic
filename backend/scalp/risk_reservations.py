@@ -108,12 +108,13 @@ async def transition(db, reservation_id: str, state: str,
 
 
 async def release_for_trade(db, trade_id: str, reason: str) -> None:
-    await db.risk_reservations.update_many(
-        {"trade_id": trade_id, "state": {"$in": list(ACTIVE_STATES)}},
-        {"$set": {"state": "RELEASED", "active": False,
-                  "release_reason": reason, "updated_at": _now()},
-         "$push": {"transitions": {"state": "RELEASED", "at": _now(),
-                                   "reason": reason}}})
+    """audit r3 P0 · unified release path: every release goes through the
+    guarded transition() (state guard + idempotency + terminal RELEASED)."""
+    async for r in db.risk_reservations.find(
+            {"trade_id": trade_id, "state": {"$in": list(ACTIVE_STATES)}},
+            {"reservation_id": 1}):
+        await transition(db, r["reservation_id"], "RELEASED",
+                         release_reason=reason)
 
 
 async def unaccounted_count(db, account_id: str) -> int:

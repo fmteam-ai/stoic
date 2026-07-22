@@ -197,9 +197,16 @@ class TestReservationDocHardening:                # item 8
         q = db.risk_reservations.update_one.await_args.args[0]
         assert q["state"]["$in"] == ["RISK_RESERVED", "QUEUED_UNCONFIRMED"]
         assert "$ne" in q["transition_keys"]
+        # audit r3 · release_for_trade goes through guarded transition()
+        def _find(*_a, **_k):
+            async def gen():
+                yield {"reservation_id": "rid"}
+            return gen()
+        db.risk_reservations.find = MagicMock(side_effect=_find)
         await rr.release_for_trade(db, "t1", "closed")
-        upd = db.risk_reservations.update_many.await_args.args[1]["$set"]
+        upd = db.risk_reservations.update_one.await_args.args[1]["$set"]
         assert upd["active"] is False
+        assert upd["state"] == "RELEASED"
 
     @pytest.mark.asyncio
     async def test_index_contract(self):

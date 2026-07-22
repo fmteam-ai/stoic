@@ -44,8 +44,12 @@ async def stamp_pending_modification(db, filter_q: dict, mod: dict,
 def is_stale_ack(trade: dict, ack_intent_id: str | None) -> bool:
     """True when the ack references an intent that is NOT the current
     pending command — a delayed/replayed ack that must be ignored.
-    Acks without an intent_id (pre-v1.49 EAs) pass through unfenced."""
+    Also true for an intent already executed (replay after the pending
+    command was cleared). Acks without an intent_id (pre-v1.49 EAs)
+    pass through unfenced."""
     if not ack_intent_id:
         return False
+    if ack_intent_id in (trade.get("executed_intents") or []):
+        return True
     current = (trade.get("pending_modification") or {}).get("intent_id")
     return current is not None and ack_intent_id != current

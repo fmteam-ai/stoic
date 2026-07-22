@@ -926,7 +926,13 @@ async def modification_ack(payload: BridgeModificationAck):
         # apply_protection_ack (round 11 item 9)
         pass
 
-    await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    upd_ops: dict = {"$set": update}
+    if payload.intent_id:
+        # audit r3 P0 · remember executed intents (last 50) so a replayed
+        # ack after pending_modification is cleared can never re-apply
+        upd_ops["$push"] = {"executed_intents": {
+            "$each": [payload.intent_id], "$slice": -50}}
+    await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, upd_ops)
     # Scalp fast path (round 18 review item 2): a MODIFY_SL ack promotes the
     # runner's PENDING stop to the CONFIRMED stop — until this ack the bot
     # must keep behaving as if the original stop is live at the broker.

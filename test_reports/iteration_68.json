@@ -1,0 +1,30 @@
+{
+  "summary": "iter-144 · Architectural Hardening Batch 2 (audit r3) — LIVE HTTP + motor-DB verification. All 32 tests green (12 new HTTP/e2e in test_iter144_batch2_http.py + 20 pre-existing unit tests in test_iter144_batch2.py). Every review item verified end-to-end against the running process at REACT_APP_BACKEND_URL: (1) modification-ack fencing works exactly as spec'd — stale intent returns {status:'stale_intent_ignored'} and leaves stop_loss untouched; current intent applies new_sl, clears pending_modification, and pushes intent into executed_intents; replaying the same ack (pending now cleared) is rejected via executed_intents membership; legacy EA acks without intent_id pass through unfenced and update stop_loss normally. (2) Lifecycle quarantine on live motor DB — stateless doc with created_at='2026-07-23...' returns 'quarantined' and sets lifecycle_quarantined=true + reason='unverified stateless record; refused CLOSED'; legacy doc with created_at='2026-01-01...' returns 'applied' (pre-LEGACY_EPOCH); brand-new stateless doc entering QUEUED returns 'applied' with lifecycle_version=1. (3) Unified reservation release — release_for_trade on a SLOT_LINKED reservation transitions to RELEASED (active=false, release_reason=closed, transition_keys contains 'RELEASED:closed'); calling again is a strict no-op (transitions[] length + transition_keys unchanged). (4) GET /api/health/ready returns 200, status='ok', and 'startup' key is ABSENT from checks (startup succeeded — {db, critical_indexes, submission_capacity}). (5) Regression smoke — admin login 200 (email echoed), bridge/heartbeat with valid token 200, invalid token 401, bridge/poll-trades 200. Test-seeded rows use marker='iter144_batch2_http' and are cleaned up per-test (finally: delete_one) + module-scope autouse fixture (delete_many on marker).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_iter144_batch2_http.py",
+    "/app/backend/tests/unit/scalp/test_iter144_batch2.py",
+    "/app/test_reports/pytest/iter144_batch2_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Good: command_fence.stamp_pending_modification uses a single 2-stage aggregation pipeline — stage 1 does $inc-equivalent {'$add':[{'$ifNull':['$command_seq',0]},1]} on command_seq; stage 2 references '$command_seq' in the new pending_modification.seq. Both commit atomically so the counter and the command that references it can never diverge — no torn write possible.",
+    "Good: is_stale_ack() correctly treats an ack whose intent is in executed_intents as stale even AFTER pending_modification is cleared. Combined with the $slice:-50 push (bounded window) this makes the replay-after-clear attack cheap to defend without unbounded growth.",
+    "Good: order_state.apply() quarantine branch is a SEPARATE update_one guarded by lifecycle_state:None — so the quarantine flag is only ever stamped on a genuinely stateless doc, not on one that raced to a valid state between the failing update and the diagnostic read. Race-safe.",
+    "Good: risk_reservations.release_for_trade now iterates active reservations and calls transition() per row — the transition_keys $ne guard in the query means a second release is naturally idempotent (verified: transitions[] length and keys array both unchanged on replay).",
+    "Good: server._startup_error wiring is minimal and correct — captured in the on_startup except block, exposed only via /health/ready's checks.startup as failed:<ExcName>, and re-raised in APP_ENV=production so the process exits instead of serving degraded traffic.",
+    "Nit: /api/bridge/modification-ack has a subtle behaviour when success=False + intent_id matches (not tested here because request only covers success paths) — apply_protection_ack still fires and the intent is still $push'd into executed_intents. That is correct (a fail-ack still consumes the intent so the EA can't retry the same command), but worth documenting explicitly in the docstring.",
+    "Nit: is_stale_ack's O(n) scan of executed_intents is fine at 50 entries, but if the $slice window ever grows this becomes per-ack CPU. Not a bug today; flag if the retention window ever changes."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter144_batch2_http.py (new — 12 HTTP/motor e2e tests)"
+  ],
+  "success_rate": { "backend": "100% (32/32: 12 HTTP + 20 unit)", "frontend": "n/a — backend-only per request" },
+  "test_credentials": "admin@trading.bot / admin123 (cookie session, X-CSRF-Token echoed). Bridge endpoints authenticate via bridge_token in JSON body — first admin-owned account's bridge_token.",
+  "seed_data_creation": "Test doc marker='iter144_batch2_http'. Per-test: db.trades.insert_one(ObjectId trade) with pending_modification.intent_id + status='open' + scope!='scalp_fast' + account_id=str(admin_account._id); db.risk_reservations.insert_one({reservation_id, trade_id:'RTEST1', state:'SLOT_LINKED', ...}). All cleaned up in-test (finally block) and at module teardown (delete_many({marker})).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable regression: /app/backend/tests/test_iter144_batch2_http.py (12 tests). Uses motor directly for seed/verify + requests for HTTP. sys.path.insert /app/backend and dotenv.load_dotenv /app/backend/.env at module top so scalp.order_state / risk_reservations import cleanly and MONGO_URL/DB_NAME are resolved. Each async block spins its own new_event_loop() to avoid clashing with pytest-asyncio (STRICT mode). If new fence-related state transitions are added (e.g., partial-close intents), extend TestModificationAckFencing with a parallel-intent stale test.",
+  "rca_of_the_issue": "N/A — no issues. All 4 hardening items function correctly at the live HTTP + DB level."
+}
