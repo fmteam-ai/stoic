@@ -192,6 +192,110 @@ async def accounts_equity_curve(days: int = 30, user=Depends(get_current_user)):
     }
 
 
+@router.get("/broker-comparison")
+async def broker_comparison(days: int = 30, user=Depends(get_current_user)):
+    """iter-138 · Phase H-B — side-by-side broker comparison.
+
+    Groups the user's accounts + bot trades by broker and computes:
+      execution quality  — avg/worst |slippage|, median fill latency, fail rate
+      profitability      — net P&L, win rate, profit factor, avg win/loss
+      accounts           — count, combined equity, connected count
+    Bot trades only (origin=auto) so brokers are compared on identical signals.
+    """
+    days = max(1, min(days, 365))
+    db = get_db()
+    since = _iso_days_ago(days)
+    from datetime import timedelta
+    hb_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+
+    accounts = await db.accounts.find({"user_id": user["id"]}).to_list(length=100)
+    acct_broker = {str(a["_id"]): (a.get("broker") or "").strip() or
+                   ("Paper" if a.get("mode") == "paper" else "Unknown")
+                   for a in accounts}
+
+    trades = await db.trades.find(
+        {"user_id": user["id"], "origin": "auto",
+         "$or": [{"closed_at": {"$gte": since}},
+                 {"opened_at": {"$gte": since}},
+                 {"_dispatched_at": {"$gte": since}}]},
+        {"account_id": 1, "broker": 1, "status": 1, "pnl": 1, "closed_at": 1,
+         "slippage_pips": 1, "requested_price": 1, "_dispatched_at": 1,
+         "live_at": 1, "opened_at": 1, "symbol": 1},
+    ).to_list(length=50000)
+
+    def _broker_of(t):
+        b = (t.get("broker") or "").strip()
+        return b or acct_broker.get(t.get("account_id") or "", "Unknown")
+
+    def _latency_s(t):
+        # Dispatch latency: trade creation → EA order pickup (_dispatched_at).
+        try:
+            d0 = datetime.fromisoformat(t["opened_at"])
+            d1 = datetime.fromisoformat(t["_dispatched_at"])
+            s = (d1 - d0).total_seconds()
+            return s if 0 <= s <= 120 else None
+        except Exception:
+            return None
+
+    buckets = {}
+    for t in trades:
+        buckets.setdefault(_broker_of(t), []).append(t)
+
+    brokers = []
+    for name in sorted(buckets.keys() | {b for b in acct_broker.values()}):
+        rows = buckets.get(name, [])
+        closed = [t for t in rows if t.get("status") == "closed"]
+        failed = [t for t in rows if t.get("status") == "failed"]
+        filled = [t for t in rows if t.get("live_at") or t.get("status") == "closed"]
+        # True slippage requires EA v1.40+ requested_price — legacy
+        # signal-vs-fill deltas are latency drift, never slippage (PRD rule).
+        slips = [abs(float(t["slippage_pips"])) for t in closed
+                 if t.get("slippage_pips") is not None and t.get("requested_price")]
+        lats = sorted(s for s in (_latency_s(t) for t in rows
+                                  if t.get("_dispatched_at") and t.get("opened_at"))
+                      if s is not None)
+        wins = [float(t["pnl"]) for t in closed if (t.get("pnl") or 0) > 0]
+        losses = [float(t["pnl"]) for t in closed if (t.get("pnl") or 0) < 0]
+        gross_win, gross_loss = sum(wins), abs(sum(losses))
+        net = sum(float(t.get("pnl") or 0) for t in closed)
+        attempts = len(filled) + len(failed)
+
+        b_accounts = [a for a in accounts if acct_broker[str(a["_id"])] == name]
+        brokers.append({
+            "broker": name,
+            "execution": {
+                "avg_slippage_pips": round(sum(slips) / len(slips), 2) if slips else None,
+                "worst_slippage_pips": round(max(slips), 2) if slips else None,
+                "slippage_samples": len(slips),
+                "median_fill_latency_s": round(lats[len(lats) // 2], 1) if lats else None,
+                "latency_samples": len(lats),
+                "latency_kind": "dispatch",
+                "failed_orders": len(failed),
+                "fail_rate_pct": round(100 * len(failed) / attempts, 1) if attempts else None,
+            },
+            "pnl": {
+                "trades": len(closed),
+                "wins": len(wins), "losses": len(losses),
+                "win_rate": round(100 * len(wins) / len(closed), 1) if closed else None,
+                "net_pnl": round(net, 2),
+                "profit_factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else (None if not wins else 99.0),
+                "avg_win": round(gross_win / len(wins), 2) if wins else None,
+                "avg_loss": round(-gross_loss / len(losses), 2) if losses else None,
+            },
+            "accounts": {
+                "count": len(b_accounts),
+                "equity": round(sum(float(a.get("equity") or 0) for a in b_accounts), 2),
+                "connected": sum(1 for a in b_accounts if a.get("mode") == "paper"
+                                 or (a.get("last_heartbeat") or "") >= hb_cutoff),
+            },
+        })
+    # Brokers with neither accounts nor trades add noise — drop empty shells.
+    brokers = [b for b in brokers
+               if b["accounts"]["count"] > 0 or b["pnl"]["trades"] > 0
+               or b["execution"]["failed_orders"] > 0]
+    return {"days": days, "brokers": brokers}
+
+
 @router.patch("/{account_id}")
 async def update_account(account_id: str, payload: AccountUpdate,
                          user=Depends(get_current_user)):

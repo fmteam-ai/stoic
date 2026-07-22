@@ -33,6 +33,7 @@ import Research from "@/pages/Research";
 import Crypto from "@/pages/Crypto";
 import ShadowPerformance from "@/pages/ShadowPerformance";
 import Scoreboard from "@/pages/Scoreboard";
+import BrokerComparison from "@/pages/BrokerComparison";
 import Scalp from "@/pages/Scalp";
 import LossLab from "@/pages/LossLab";
 import BotHealth from "@/pages/BotHealth";
@@ -82,6 +83,7 @@ function App() {
                         <Route path="/crypto" element={<ProtectedRoute><Crypto /></ProtectedRoute>} />
                         <Route path="/shadow-performance" element={<ProtectedRoute><ShadowPerformance /></ProtectedRoute>} />
                         <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
+                        <Route path="/brokers" element={<ProtectedRoute><BrokerComparison /></ProtectedRoute>} />
                         <Route path="/scalp" element={<ProtectedRoute><Scalp /></ProtectedRoute>} />
                         <Route path="/trades" element={<ProtectedRoute><Trades /></ProtectedRoute>} />
                         <Route path="/loss-lab" element={<ProtectedRoute><LossLab /></ProtectedRoute>} />
