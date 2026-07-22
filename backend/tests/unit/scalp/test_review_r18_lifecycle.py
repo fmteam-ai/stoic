@@ -11,6 +11,7 @@
 Pure unit tests — no MongoDB.
 """
 import inspect
+import asyncio
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -40,9 +41,12 @@ class TestAwaitedReservationTransitions:          # item 1
         assert 'await risk_reservations.release_for_trade(\n                db, str(trade["_id"]), "closed")' in src
 
     def test_bridge_report_awaits_broker_ack_release(self):
+        # P0-2 · release moved INSIDE the awaited on_trade_opened
         src = open("/app/backend/routes/bridge_routes.py").read()
-        assert "await risk_reservations.release_for_trade(" in src
-        assert '"broker_ack"' in src
+        assert "await r.on_trade_opened(" in src
+        esrc = _engine_src()
+        assert "await risk_reservations.release_for_trade(" in esrc
+        assert '"broker_ack"' in esrc
 
 
 class TestPendingVsConfirmedStop:                 # item 2
@@ -96,7 +100,7 @@ class TestOrderLifecycle:                         # item 4
         r.live_trades = {"t1": {"state": "QUEUED", "queued_ms": 1,
                                 "opened_ms": 1, "direction": "BUY"}}
         r.exec_fills = 0
-        r.on_trade_opened("t1", None, None, db=None)
+        asyncio.run(r.on_trade_opened("t1", None, None, db=None))
         info = r.live_trades["t1"]
         assert info["state"] == "OPEN"
         assert info["broker_ack_ms"] == info["opened_ms"]  # clock from fill
@@ -107,7 +111,8 @@ class TestDurableCloseIntent:                     # item 5
         src = _engine_src()
         assert "close_persisted" in src
         assert "close_reason_pending" in src
-        assert "request_close_retry" in src
+        # P0-2 · retry is now awaited inline instead of a _bg lambda
+        assert "await self._request_close(db, tid, rs)" in src
         assert "def _mark_close_requested(" in src
 
 

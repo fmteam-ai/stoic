@@ -361,11 +361,11 @@ class TestEngineBehaviors:
         r.state = _mk_state(st_path)
         r.health = kill.evaluate(r.state, CFG)
         db = _stub_db()
-        r._monitor_live_exits(db, r.state.last_tick)
+        asyncio.run(r._monitor_live_exits(db, r.state.last_tick))
         assert "t1" in r.live_trades              # NOT popped
         assert r.live_trades["t1"]["state"] == "CLOSE_REQUESTED"
         # broker confirms → now it leaves the book and cost budget grows
-        r.on_trade_closed("t1", -12.0)
+        asyncio.run(r.on_trade_closed("t1", -12.0))
         assert "t1" not in r.live_trades
         assert r.risk_state.daily_loss_usd == pytest.approx(12.0)
         assert r.risk_state.daily_cost_usd == pytest.approx(1.0)  # est cost used
@@ -428,7 +428,7 @@ class TestRound3Hardening:
                                "decision_id": "d9", "opened_ms": 0,
                                "est_cost_usd": 0}
         before = r.state.fills_seen
-        r.on_trade_opened("t9", requested_price=1.08000, actual_price=1.08004)
+        asyncio.run(r.on_trade_opened("t9", requested_price=1.08000, actual_price=1.08004))
         assert r.state.fills_seen == before + 1
         assert r.live_trades["t9"]["entry_slippage_pips"] == pytest.approx(0.4)
         assert r.state.slippage_ewma_pips > 0
@@ -478,8 +478,8 @@ class TestRound5FinancialReconciliation:
     def test_signed_broker_semantics_positive_swap_credit(self):
         """net = profit + commission + swap (SIGNED) — never abs()."""
         r = self._open_runner("r5b")
-        r.on_trade_closed("t1", pnl=10.0, commission=-0.5, swap=0.2,
-                          exit_price=1.0805, deal_id="D1", source="broker_deal")
+        asyncio.run(r.on_trade_closed("t1", pnl=10.0, commission=-0.5, swap=0.2,
+                          exit_price=1.0805, deal_id="D1", source="broker_deal"))
         # net = 10 - 0.5 + 0.2 = 9.7 profit → no daily loss
         assert r.risk_state.daily_loss_usd == 0.0
         # execution cost counts only the NEGATIVE components
@@ -488,8 +488,8 @@ class TestRound5FinancialReconciliation:
 
     def test_signed_loss_with_commission(self):
         r = self._open_runner("r5c")
-        r.on_trade_closed("t1", pnl=-8.0, commission=-0.7, swap=-0.3,
-                          deal_id="D2", source="broker_deal")
+        asyncio.run(r.on_trade_closed("t1", pnl=-8.0, commission=-0.7, swap=-0.3,
+                          deal_id="D2", source="broker_deal"))
         assert r.risk_state.daily_loss_usd == pytest.approx(9.0)  # -8-0.7-0.3
         assert r.risk_state.daily_cost_usd == pytest.approx(1.0)
         assert r.risk_state.consecutive_losses == 1
@@ -497,8 +497,8 @@ class TestRound5FinancialReconciliation:
     def test_duplicate_deal_id_never_double_counts(self):
         r = self._open_runner("r5d")
         for _ in range(3):
-            r.on_trade_closed("t1", pnl=-5.0, commission=-0.5, swap=0.0,
-                              deal_id="D3", source="broker_deal")
+            asyncio.run(r.on_trade_closed("t1", pnl=-5.0, commission=-0.5, swap=0.0,
+                              deal_id="D3", source="broker_deal"))
         assert r.risk_state.daily_loss_usd == pytest.approx(5.5)
         assert r.risk_state.daily_cost_usd == pytest.approx(0.5)
         assert r.risk_state.open_scalps == 0
@@ -506,7 +506,7 @@ class TestRound5FinancialReconciliation:
     def test_close_ack_applies_no_financials(self):
         """/bridge/report is operational only: slot freed, budgets untouched."""
         r = self._open_runner("r5e")
-        r.on_close_ack("t1", exit_price=1.0795)
+        asyncio.run(r.on_close_ack("t1", exit_price=1.0795))
         assert "t1" not in r.live_trades
         assert r.risk_state.open_scalps == 0
         assert r.risk_state.daily_loss_usd == 0.0
@@ -515,16 +515,16 @@ class TestRound5FinancialReconciliation:
 
     def test_ack_then_external_deal_exactly_once(self):
         r = self._open_runner("r5f")
-        r.on_close_ack("t1", exit_price=1.0795)
-        r.on_trade_closed("t1", pnl=-6.0, commission=-0.4, swap=0.0,
-                          exit_price=1.0795, deal_id="D4", source="broker_deal")
+        asyncio.run(r.on_close_ack("t1", exit_price=1.0795))
+        asyncio.run(r.on_trade_closed("t1", pnl=-6.0, commission=-0.4, swap=0.0,
+                          exit_price=1.0795, deal_id="D4", source="broker_deal"))
         # financials once, position count not double-decremented
         assert r.risk_state.daily_loss_usd == pytest.approx(6.4)
         assert r.risk_state.open_scalps == 0
         assert "t1" not in r._closed_awaiting_financials
         # a second report-path call after financials is a no-op
-        r.on_close_ack("t1")
-        r.on_trade_closed("t1", pnl=-6.0, deal_id="D4b", source="broker_deal")
+        asyncio.run(r.on_close_ack("t1"))
+        asyncio.run(r.on_trade_closed("t1", pnl=-6.0, deal_id="D4b", source="broker_deal"))
         assert r.risk_state.daily_loss_usd == pytest.approx(6.4)
 
     def test_exit_slippage_attribution_in_canonical_record(self):
@@ -536,7 +536,7 @@ class TestRound5FinancialReconciliation:
         db = _stub_db()
 
         async def run():
-            r.on_trade_closed("t1", pnl=-3.0, commission=-0.4, swap=0.1,
+            await r.on_trade_closed("t1", pnl=-3.0, commission=-0.4, swap=0.1,
                               exit_price=1.07996, deal_id="D5",
                               source="broker_deal", db=db)
             for _ in range(5):
@@ -565,7 +565,7 @@ class TestRound5FinancialReconciliation:
         db = _stub_db()
 
         async def run():
-            r.on_trade_closed("t1", pnl=-10.0, commission=-0.5, swap=0.0,
+            await r.on_trade_closed("t1", pnl=-10.0, commission=-0.5, swap=0.0,
                               exit_price=1.07895, deal_id="D6",
                               source="broker_deal", db=db)
             for _ in range(5):
@@ -589,8 +589,8 @@ class TestRound5AccountRisk:
         r1.live_trades["t1"] = {"state": "OPEN", "opened_ms": 0,
                                 "direction": "BUY", "est_cost_usd": 0.0}
         # loss exceeding 0.5% of 1000 equity account-wide
-        r1.on_trade_closed("t1", pnl=-6.0, commission=0.0, swap=0.0,
-                           deal_id="DA", source="broker_deal")
+        asyncio.run(r1.on_trade_closed("t1", pnl=-6.0, commission=0.0, swap=0.0,
+                           deal_id="DA", source="broker_deal"))
         # ANY other runner on the same account is now blocked
         r2 = ScalpRunner("acct-wide-1", "u2-any", "EURUSD")
         res = check_account(r2.account_risk, 1000.0)
@@ -663,8 +663,8 @@ class TestRound5RestoreAndDurability:
         r.live_trades["tf"] = {"state": "OPEN", "direction": "BUY",
                                "decision_id": "d", "opened_ms": 0,
                                "est_cost_usd": 0}
-        r.on_trade_opened("tf", requested_price=1.08, actual_price=1.08001)
-        r.on_trade_opened("tf", requested_price=1.08, actual_price=1.08001)
+        asyncio.run(r.on_trade_opened("tf", requested_price=1.08, actual_price=1.08001))
+        asyncio.run(r.on_trade_opened("tf", requested_price=1.08, actual_price=1.08001))
         assert r.exec_fills == 3
 
 
@@ -717,9 +717,9 @@ class TestRound6PartialAndDurability:
 
     def test_partial_close_applies_financials_keeps_position(self):
         r = self._runner_with_open("r6a")
-        r.on_partial_close("t1", closed_lots=0.05, remaining_lots=0.05,
+        asyncio.run(r.on_partial_close("t1", closed_lots=0.05, remaining_lots=0.05,
                            pnl=-2.0, commission=-0.2, swap=0.0,
-                           exit_price=1.0795, deal_id="P1")
+                           exit_price=1.0795, deal_id="P1"))
         assert "t1" in r.live_trades                      # position STAYS open
         assert r.live_trades["t1"]["lot"] == pytest.approx(0.05)
         assert r.risk_state.open_scalps == 1              # no record_close
@@ -732,16 +732,16 @@ class TestRound6PartialAndDurability:
     def test_partial_close_idempotent_per_deal(self):
         r = self._runner_with_open("r6b")
         for _ in range(3):
-            r.on_partial_close("t1", 0.05, 0.05, pnl=-2.0, commission=-0.2,
-                               deal_id="P2")
+            asyncio.run(r.on_partial_close("t1", 0.05, 0.05, pnl=-2.0, commission=-0.2,
+                               deal_id="P2"))
         assert r.risk_state.daily_loss_usd == pytest.approx(2.2)
 
     def test_swap_credit_does_not_reset_loss_streak(self):
         """Round 6 item 9 — a financing credit can't mask a losing scalp."""
         r = self._runner_with_open("r6c")
         r.risk_state.consecutive_losses = 2
-        r.on_trade_closed("t1", pnl=-1.0, commission=-0.2, swap=1.5,
-                          deal_id="S1", source="broker_deal")
+        asyncio.run(r.on_trade_closed("t1", pnl=-1.0, commission=-0.2, swap=1.5,
+                          deal_id="S1", source="broker_deal"))
         # net = +0.3 → NO daily loss...
         assert r.risk_state.daily_loss_usd == 0.0
         # ...but trading P&L = -1.2 → the streak still grows
@@ -753,7 +753,7 @@ class TestRound6PartialAndDurability:
         db = _stub_db()
 
         async def run():
-            r.on_trade_closed("t1", pnl=-90.0, commission=-0.5, swap=0.0,
+            await r.on_trade_closed("t1", pnl=-90.0, commission=-0.5, swap=0.0,
                               exit_price=1.0700, deal_id="S2",
                               close_reason="stop_loss",
                               source="broker_deal", db=db)
@@ -791,7 +791,7 @@ class TestRound6PartialAndDurability:
         db = _stub_db()
 
         async def run():
-            r.on_trade_closed("t1", pnl=-1.0, commission=-0.1, swap=0.0,
+            await r.on_trade_closed("t1", pnl=-1.0, commission=-0.1, swap=0.0,
                               deal_id="DUR1", source="broker_deal", db=db)
             for _ in range(5):
                 await asyncio.sleep(0)
@@ -811,7 +811,7 @@ class TestRound6PartialAndDurability:
         asyncio.run(r2.restore_risk(db2))
         assert "DUR1" in r2._applied_deal_ids
         before = r2.risk_state.daily_loss_usd
-        r2.on_trade_closed("tX", pnl=-9.0, deal_id="DUR1", source="broker_deal")
+        asyncio.run(r2.on_trade_closed("tX", pnl=-9.0, deal_id="DUR1", source="broker_deal"))
         assert r2.risk_state.daily_loss_usd == before      # replay is a no-op
 
     def test_restore_rebuilds_account_stop_risk_and_open_count(self):
@@ -1252,7 +1252,7 @@ class TestRound8InvariantsAndFencing:
                                "entry_px": 1.0800, "stop_px": 1.0785,
                                "decision_id": "d", "est_cost_usd": 0.5}
         r.account_risk.add_stop_risk("t1", 999.0)   # stale/wrong value
-        r.on_partial_close("t1", 0.06, 0.04, pnl=1.0, deal_id="EX1")
+        asyncio.run(r.on_partial_close("t1", 0.06, 0.04, pnl=1.0, deal_id="EX1"))
         # 0.04 lots × 15 pips × $10 = $6.00 exactly
         assert r.account_risk.stop_risk_by_trade["t1"] == pytest.approx(6.0)
 
@@ -1265,7 +1265,7 @@ class TestRound8InvariantsAndFencing:
         db = _stub_db()
 
         async def run():
-            r.on_trade_closed("t1", pnl=-2.0, commission=-0.3, swap=0.0,
+            await r.on_trade_closed("t1", pnl=-2.0, commission=-0.3, swap=0.0,
                               deal_id="L1", source="broker_deal", db=db)
             for _ in range(5):
                 await asyncio.sleep(0)
@@ -2490,7 +2490,7 @@ class TestRound17SlotLifecycle:
         token = r.live_trades["t17a"]["submission_slot"]["token"]
 
         async def ack():
-            r.on_trade_opened("t17a", 1.08004, 1.08005, db=db)
+            await r.on_trade_opened("t17a", 1.08004, 1.08005, db=db)
             for _ in range(8):
                 await asyncio.sleep(0)
         asyncio.run(ack())
@@ -2515,7 +2515,7 @@ class TestRound17SlotLifecycle:
         self._submit(r, db, fake_engine)
 
         async def close():
-            r.on_close_ack("t17c", exit_price=1.08, db=db)
+            await r.on_close_ack("t17c", exit_price=1.08, db=db)
             for _ in range(8):
                 await asyncio.sleep(0)
         asyncio.run(close())

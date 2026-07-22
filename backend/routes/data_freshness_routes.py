@@ -30,6 +30,7 @@ THRESHOLDS = {
     "news":     30 * 60,       # news is freshness-sensitive
     "calendar": 6 * 3600,      # event calendar polled hourly
     "ea":       60,            # heartbeats every 5s; >60s = disconnected
+    "candles":  20 * 60,       # M15 stream pushes every ~5min; >20min = stale
     "agents":   24 * 3600,     # only stale if bot is genuinely idle
 }
 
@@ -109,11 +110,35 @@ async def data_freshness(user=Depends(get_current_user)):
     except Exception:
         agent_ts = None
 
+    # 6. P0-4 · Candle feed — per-symbol pipeline health (bridge /candles)
+    candles = {}
+    try:
+        async for c in db.candle_feed_health.find({"user_id": user["id"]}):
+            age, iso = _age(c.get("last_received_at"))
+            candles[f"{c.get('symbol')}_{c.get('timeframe')}"] = {
+                "symbol": c.get("symbol"),
+                "timeframe": c.get("timeframe"),
+                "source_symbol": c.get("source_symbol"),
+                "last_received_at": iso,
+                "age_seconds": None if age == float("inf") else round(age),
+                "bar_lag_s": c.get("bar_lag_s"),
+                "valid_bars": c.get("valid_bars"),
+                "dropped_bars": c.get("dropped_bars"),
+                "payloads_received": c.get("payloads_received"),
+                "payloads_rejected": c.get("payloads_rejected", 0),
+                "last_write_ok": c.get("last_write_ok"),
+                "last_error": c.get("last_error"),
+                "stale": age > THRESHOLDS["candles"],
+            }
+    except Exception:
+        pass
+
     return {
         "fred":     _entry("fred",     fred_ts),
         "news":     _entry("news",     news_ts),
         "calendar": _entry("calendar", cal_ts),
         "ea":       ea_entry,
         "agents":   _entry("agents",   agent_ts),
+        "candles":  candles,
         "evaluated_at": now_iso,
     }

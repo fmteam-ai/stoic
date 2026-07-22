@@ -155,7 +155,12 @@ class TestPhaseAWiring:
         src = open("/app/backend/routes/bridge_routes.py").read()
         assert "order_state.EA_CLAIMED" in src         # poll-trades dispatch
         assert "order_state.BROKER_ACCEPTED" in src    # fill ack
-        assert "order_state.OPEN" in src
+        # P0-1 · protection-aware lifecycle: fill → FILLED_UNPROTECTED;
+        # heartbeat SL confirmation drives PROTECTED → OPEN
+        assert "order_state.FILLED_UNPROTECTED" in src
+        assert "_os.PROTECTED" in src
+        assert "_os.OPEN" in src
+        assert "_os.PROTECTION_REQUESTED" in src
         assert "order_state.CLOSED" in src
         assert "adopt_open_trade(trade)" in src
 

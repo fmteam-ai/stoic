@@ -876,7 +876,7 @@ class ScalpRunner:
             self.state.update(t, trusted=trusted)
             self.counters["ticks"] += 1
             self._advance_sims(db, t)
-            self._monitor_live_exits(db, t)
+            await self._monitor_live_exits(db, t)
             self._tick_buffer.append({"tm": t.broker_time_ms, "b": t.bid, "a": t.ask})
         self._dq_snapshot = self.data_quality.snapshot()
         self.health = kill.evaluate(self.state, self.cfg,
@@ -1668,8 +1668,8 @@ class ScalpRunner:
                                      f"{decision['direction']} on {self.symbol}")
         if constraint_reason is not None:
             self.state.record_reject()
-            _bg(lambda: release_broker_submission_slot(db, slot),
-                "release_submission_slot")
+            # P0-2 · slot release is AWAITED (capacity is shared safety state)
+            await release_broker_submission_slot(db, slot)
             _bg(lambda s={"verdict": "rejected",
                           "reject_stage": "pre_submit_broker_constraints",
                           "broker_constraint_reason": constraint_reason,
@@ -1695,8 +1695,7 @@ class ScalpRunner:
         except Exception:
             # review item 8 — the DB refused (e.g. duplicate ACTIVE
             # reservation for this decision): fail closed, free the slot.
-            _bg(lambda: release_broker_submission_slot(db, slot),
-                "release_submission_slot")
+            await release_broker_submission_slot(db, slot)
             self.state.record_reject()
             raise
         self._emit(db, "OrderIntentCreated",
@@ -1724,8 +1723,10 @@ class ScalpRunner:
             # only a FAILED submission releases here — round 17 main: a
             # queued order keeps its slot leased until the broker acks it
             # or the order reaches a terminal submission state.
-            _bg(lambda: release_broker_submission_slot(db, slot),
-                "release_submission_slot")
+            try:
+                await release_broker_submission_slot(db, slot)
+            except Exception:
+                logger.exception("slot release failed after submit error")
             # round 18 review item 1 — safety-critical transition: AWAITED
             await _resv_transition(db, _resv["reservation_id"], "RELEASED",
                                    release_reason="broker_reject")
@@ -1769,8 +1770,7 @@ class ScalpRunner:
             # round 18 review item 1 — safety-critical transition: AWAITED
             await _resv_transition(db, _resv["reservation_id"], "RELEASED",
                                    release_reason="broker_reject")
-            _bg(lambda: release_broker_submission_slot(db, slot),
-                "release_submission_slot")
+            await release_broker_submission_slot(db, slot)
             # round 5 item 8 — rejected attempts are OUTCOMES: they feed the
             # empirical fill-probability model, not just an audit trail.
             _bg(lambda s={"verdict": "rejected", "reject_stage": "broker_blocked",
@@ -1815,16 +1815,15 @@ class ScalpRunner:
             await order_state.apply(db, tid, order_state.UNCERTAIN,
                                     f"unc:{tid}",
                                     meta={"reason": "slot_link_failed"})
-            _bg(lambda: db.trades.update_one(
+            # P0-2 · uncertainty markers are safety state: AWAITED
+            await db.trades.update_one(
                 {"_id": _oid(tid)},
-                {"$set": {"submission_state": "uncertain_slot_link"}}),
-                "uncertain_mark")
-            _bg(lambda s={"dataset": "submitted_uncertain", "trade_id": tid,
+                {"$set": {"submission_state": "uncertain_slot_link"}})
+            await db.scalp_decisions.update_one(
+                {"decision_id": decision["decision_id"]},
+                {"$set": {"dataset": "submitted_uncertain", "trade_id": tid,
                           "reject_stage": "slot_link_failed",
-                          "order_submit_ts_ms": submit_ms}:
-                db.scalp_decisions.update_one(
-                    {"decision_id": decision["decision_id"]}, {"$set": s}),
-                "decision_update")
+                          "order_submit_ts_ms": submit_ms}})
             return
         # Phase A — durable event via transactional outbox (awaited)
         await self._emit_durable(db, "BrokerSubmitted",
@@ -1902,14 +1901,16 @@ class ScalpRunner:
         info["close_attempt_ms"] = nm
         info["close_reason_pending"] = reason
 
-    def _monitor_live_exits(self, db, t: TickEvent):
+    async def _monitor_live_exits(self, db, t: TickEvent):
         """Item 14 — positions stay monitored through CLOSE_REQUESTED until
-        the broker confirms the close via /bridge/report."""
+        the broker confirms the close via /bridge/report.
+        P0-2 · close requests are AWAITED (durable before the tick returns);
+        the 3s retry loop remains as the crash-recovery backstop."""
         if not self.live_trades:
             return
         nm = now_ms()
         sp = self.state.spread_pips() or 0.0
-        for tid, info in self.live_trades.items():
+        for tid, info in list(self.live_trades.items()):
             st = info.get("state")
             if st == "QUEUED":
                 # review item 4 failsafe — a queued order the broker never
@@ -1918,8 +1919,7 @@ class ScalpRunner:
                 if nm - info.get("queued_ms", info["opened_ms"]) \
                         >= self.risk_state.limits.max_holding_ms:
                     self._mark_close_requested(info, nm, "queued_timeout")
-                    _bg(lambda t=tid: self._request_close(
-                        db, t, "queued_timeout"), "request_close")
+                    await self._request_close(db, tid, "queued_timeout")
                 continue
             if st == "CLOSE_REQUESTED":
                 # review item 5 — the close INTENT must become durable: the
@@ -1928,8 +1928,7 @@ class ScalpRunner:
                         and nm - info.get("close_attempt_ms", 0) >= 3000):
                     info["close_attempt_ms"] = nm
                     rs = info.get("close_reason_pending") or "close_retry"
-                    _bg(lambda t=tid, r=rs: self._request_close(db, t, r),
-                        "request_close_retry")
+                    await self._request_close(db, tid, rs)
                 continue
             if st != "OPEN":
                 continue
@@ -1950,13 +1949,12 @@ class ScalpRunner:
                     info["exit_reference_ask"] = lt.ask
                     info["requested_exit_price"] = (
                         lt.bid if info.get("direction") == "BUY" else lt.ask)
-                _bg(lambda t=tid, rs=reason: self._request_close(db, t, rs),
-                    "request_close")
+                await self._request_close(db, tid, reason)
                 continue
             # Batch C — adaptive per-second re-scoring (fixed safety envelope)
-            self._adaptive_manage(db, tid, info, nm, sp)
+            await self._adaptive_manage(db, tid, info, nm, sp)
 
-    def _adaptive_manage(self, db, tid: str, info: dict, nm: int, sp: float):
+    async def _adaptive_manage(self, db, tid: str, info: dict, nm: int, sp: float):
         """Per-second re-scoring of one open scalp. Tighten-only envelope:
         never widens the stop, never touches lots, exits only reduce risk.
         Round 18 review item 2 — the CONFIRMED stop (broker-acknowledged) is
@@ -2029,8 +2027,7 @@ class ScalpRunner:
             info["exit_reference_ask"] = lt.ask
             info["requested_exit_price"] = lt.bid if d == "BUY" else lt.ask
             info["adaptive_exit"] = act
-            _bg(lambda t=tid, rs=act["reason"]: self._request_close(db, t, rs),
-                "request_close")
+            await self._request_close(db, tid, act["reason"])
             return
         if act["action"] == "TIGHTEN_TP":
             # Phase B — dynamic (virtual) TP: only ever CLOSER, never beyond
@@ -2092,17 +2089,16 @@ class ScalpRunner:
                     info["pending_stop_ms"] = nm
             info["adaptive_partial_done"] = True
             info["pending_partial_ms"] = nm
-            _bg(lambda t=tid, m=dict(mod):
-                db.trades.update_one(
-                    {"_id": _oid(t), "status": "open",
-                     "pending_modification": None},
-                    {"$set": {"pending_modification": m},
-                     "$push": {"adaptive_actions": {
-                         "ts_ms": nm, "action": "PARTIAL_CLOSE",
-                         "reason": m["reason"],
-                         "new_volume": m["new_volume"],
-                         "new_sl": m.get("new_sl")}}}),
-                "adaptive_partial")
+            # P0-2 · position-modification command: awaited, not fire-and-forget
+            await db.trades.update_one(
+                {"_id": _oid(tid), "status": "open",
+                 "pending_modification": None},
+                {"$set": {"pending_modification": dict(mod)},
+                 "$push": {"adaptive_actions": {
+                     "ts_ms": nm, "action": "PARTIAL_CLOSE",
+                     "reason": mod["reason"],
+                     "new_volume": mod["new_volume"],
+                     "new_sl": mod.get("new_sl")}}})
             return
         if act["action"] == "TIGHTEN_STOP":
             if nm < info.get("adaptive_tighten_next_ms", 0):
@@ -2138,21 +2134,20 @@ class ScalpRunner:
             info["pending_stop_px"] = new_sl
             info["pending_stop_ms"] = nm
             info["pending_stop_request_id"] = req_id
-            _bg(lambda t=tid, s=new_sl, rs=act["reason"], rq=req_id:
-                db.trades.update_one(
-                    {"_id": _oid(t), "status": "open",
-                     "pending_modification": None},
-                    {"$set": {"pending_modification": {
-                        "type": "MODIFY_SL", "new_sl": s,
-                        "request_id": rq,
-                        "requested_at": datetime.now(
-                            timezone.utc).isoformat(),
-                        "reason": rs}},
-                     "$push": {"adaptive_actions": {
-                         "ts_ms": nm, "action": "TIGHTEN_STOP",
-                         "reason": rs, "new_sl": s,
-                         "request_id": rq}}}),
-                "adaptive_tighten")
+            # P0-2 · stop-tighten command: awaited, not fire-and-forget
+            await db.trades.update_one(
+                {"_id": _oid(tid), "status": "open",
+                 "pending_modification": None},
+                {"$set": {"pending_modification": {
+                    "type": "MODIFY_SL", "new_sl": new_sl,
+                    "request_id": req_id,
+                    "requested_at": datetime.now(
+                        timezone.utc).isoformat(),
+                    "reason": act["reason"]}},
+                 "$push": {"adaptive_actions": {
+                     "ts_ms": nm, "action": "TIGHTEN_STOP",
+                     "reason": act["reason"], "new_sl": new_sl,
+                     "request_id": req_id}}})
 
     def on_stop_modified(self, trade_id: str, new_sl: float | None,
                          success: bool, db=None):
@@ -2217,19 +2212,23 @@ class ScalpRunner:
                                     f"closereq:{trade_id}",
                                     meta={"reason": reason})
 
-    def _release_submission_slot_of(self, info: dict | None, db,
-                                     trade_id: str = ""):
+    async def _release_submission_slot_of(self, info: dict | None, db,
+                                          trade_id: str = ""):
         """Round 17 main — free the trade's submission slot at broker
-        acknowledgement / terminal state. Token-fenced + idempotent; when
-        db is unavailable the lifecycle sweep releases it instead."""
+        acknowledgement / terminal state. Token-fenced + idempotent.
+        P0-2 · AWAITED: slot capacity is safety-critical shared state; the
+        lifecycle sweep remains the backstop when the write fails."""
         slot = (info or {}).pop("submission_slot", None)
         if slot and db is not None:
-            _bg(lambda: release_broker_submission_slot(db, slot),
-                "release_submission_slot")
-            if trade_id:
-                _bg(lambda: db.trades.update_one(
-                    {"_id": _oid(trade_id)},
-                    {"$unset": {"submission_slot": ""}}), "slot_unlink")
+            try:
+                await release_broker_submission_slot(db, slot)
+                if trade_id:
+                    await db.trades.update_one(
+                        {"_id": _oid(trade_id)},
+                        {"$unset": {"submission_slot": ""}})
+            except Exception:
+                logger.exception("slot release failed trade=%s — sweep "
+                                 "will recover it", trade_id)
 
     def adopt_open_trade(self, tr: dict):
         """Phase A recovery — a broker fill arrived for a trade this runner
@@ -2253,10 +2252,11 @@ class ScalpRunner:
         logger.warning("adopted unknown scalp trade %s (%s %s)", tid,
                        self.symbol, tr.get("action"))
 
-    def on_trade_opened(self, trade_id: str, requested_price: float | None,
-                        actual_price: float | None, db=None):
+    async def on_trade_opened(self, trade_id: str, requested_price: float | None,
+                              actual_price: float | None, db=None):
         """Broker fill confirmation (round 3 item 5): feed REAL entry slippage
-        back into the state so the cost model learns from live fills."""
+        back into the state so the cost model learns from live fills.
+        P0-2 · slot + reservation releases are AWAITED."""
         info = self.live_trades.get(trade_id)
         self.last_order_ack_ms = now_ms()
         # round 18 review item 4 — the broker fill ack is the lifecycle
@@ -2265,10 +2265,10 @@ class ScalpRunner:
             info["state"] = "OPEN"
             info["broker_ack_ms"] = self.last_order_ack_ms
             info["opened_ms"] = self.last_order_ack_ms
-        self._release_submission_slot_of(info, db, trade_id)
+        await self._release_submission_slot_of(info, db, trade_id)
         if db is not None:
-            _bg(lambda t=trade_id: risk_reservations.release_for_trade(
-                db, t, "broker_ack"), "resv_release")
+            await risk_reservations.release_for_trade(
+                db, trade_id, "broker_ack")
         if db is not None:
             self._emit(db, "PositionOpened", trade_id=trade_id,
                        decision_id=(info or {}).get("decision_id"),
@@ -2308,8 +2308,8 @@ class ScalpRunner:
                                                    if sub_ms else None)}}),
                     "entry_fill")
 
-    def on_close_ack(self, trade_id: str, exit_price: float | None = None,
-                     db=None):
+    async def on_close_ack(self, trade_id: str, exit_price: float | None = None,
+                           db=None):
         """Operational close acknowledgement (/bridge/report). Frees the
         position slot and stops exit monitoring — but applies NO financials.
         /bridge/external-deal is the authoritative reconciliation source
@@ -2319,7 +2319,7 @@ class ScalpRunner:
         info = self.live_trades.pop(trade_id, None)
         if info is None:
             return
-        self._release_submission_slot_of(info, db, trade_id)
+        await self._release_submission_slot_of(info, db, trade_id)
         info["close_ack_ms"] = now_ms()
         if exit_price:
             info["ack_exit_price"] = exit_price
@@ -2333,12 +2333,12 @@ class ScalpRunner:
         if db is not None:
             self._persist_risk(db)
 
-    def on_trade_closed(self, trade_id: str, pnl: float,
-                        commission: float = 0.0, swap: float = 0.0,
-                        exit_price: float | None = None,
-                        deal_id: str | None = None,
-                        close_reason: str | None = None,
-                        source: str = "report", db=None):
+    async def on_trade_closed(self, trade_id: str, pnl: float,
+                              commission: float = 0.0, swap: float = 0.0,
+                              exit_price: float | None = None,
+                              deal_id: str | None = None,
+                              close_reason: str | None = None,
+                              source: str = "report", db=None):
         """Authoritative financial reconciliation (round 5 items 1/2) —
         normally fed by /bridge/external-deal with SIGNED broker figures.
         Idempotent per deal_id AND per trade_id: financials apply exactly
@@ -2352,7 +2352,7 @@ class ScalpRunner:
             return
         info = self.live_trades.pop(trade_id, None)
         if info is not None:
-            self._release_submission_slot_of(info, db, trade_id)
+            await self._release_submission_slot_of(info, db, trade_id)
             self.risk_state.record_close()
             self.account_risk.record_close()
         else:
@@ -2412,15 +2412,12 @@ class ScalpRunner:
                   "risk_applied": True, "lease_epoch": _lease_epoch.get(self.account_id, 0),
                   "at": datetime.now(timezone.utc).isoformat()}
             self._last_financial_event = ev
-            _bg(lambda e=ev: db.scalp_financial_events.update_one(
-                {"account_id": e["account_id"], "deal_id": e["deal_id"],
-                 "event_type": e["event_type"]},
-                {"$setOnInsert": e}, upsert=True), "financial_event")
+            await self._persist_financial_event(db, ev, trade_id)
             # Phase A — PositionClosed / FinancialApplied are emitted
             # DURABLY by apply_deal_financials (transactional outbox),
             # which is this method's only caller with db.
-            _bg(lambda t=trade_id: risk_reservations.release_for_trade(
-                db, t, "closed"), "resv_release")
+            # P0-2 · terminal reservation release: AWAITED
+            await risk_reservations.release_for_trade(db, trade_id, "closed")
             if info:
                 outcome = {
                     "requested_entry_price": info.get("requested_entry"),
@@ -2452,7 +2449,23 @@ class ScalpRunner:
                               "live_cost_usd": o["execution_cost_usd_used"]}}),
                     "live_close")
 
-    def on_partial_close(self, trade_id: str, closed_lots: float,
+    async def _persist_financial_event(self, db, ev: dict, trade_id: str):
+        """P0-2 · immutable financial event — awaited idempotent upsert with
+        the _bg dead-letter path only as failure fallback."""
+        try:
+            await db.scalp_financial_events.update_one(
+                {"account_id": ev["account_id"], "deal_id": ev["deal_id"],
+                 "event_type": ev["event_type"]},
+                {"$setOnInsert": ev}, upsert=True)
+        except Exception:
+            logger.exception("financial event write failed trade=%s — "
+                             "dead-letter retry", trade_id)
+            _bg(lambda e=ev: db.scalp_financial_events.update_one(
+                {"account_id": e["account_id"], "deal_id": e["deal_id"],
+                 "event_type": e["event_type"]},
+                {"$setOnInsert": e}, upsert=True), "financial_event")
+
+    async def on_partial_close(self, trade_id: str, closed_lots: float,
                          remaining_lots: float, pnl: float,
                          commission: float = 0.0, swap: float = 0.0,
                          exit_price: float | None = None,
@@ -2520,10 +2533,7 @@ class ScalpRunner:
                   "lease_epoch": _lease_epoch.get(self.account_id, 0),
                   "at": datetime.now(timezone.utc).isoformat()}
             self._last_financial_event = ev
-            _bg(lambda e=ev: db.scalp_financial_events.update_one(
-                {"account_id": e["account_id"], "deal_id": e["deal_id"],
-                 "event_type": e["event_type"]},
-                {"$setOnInsert": e}, upsert=True), "financial_event")
+            await self._persist_financial_event(db, ev, trade_id)
             # Phase A — FinancialApplied (partial) is emitted DURABLY by
             # apply_deal_financials via the transactional outbox.
             if info and info.get("decision_id"):
@@ -3037,7 +3047,7 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
         pass
     try:
         if partial:
-            r.on_partial_close(
+            await r.on_partial_close(
                 trade_id=str(trade["_id"]), closed_lots=float(lots or 0),
                 remaining_lots=(float(remaining_lots)
                                 if remaining_lots is not None
@@ -3047,7 +3057,7 @@ async def apply_broker_deal(db, account_id: str, trade: dict, *, deal_id,
                 exit_price=float(price) if price else None,
                 deal_id=str(deal_id), db=db)
         else:
-            r.on_trade_closed(
+            await r.on_trade_closed(
                 trade_id=str(trade["_id"]), pnl=float(profit or 0),
                 commission=float(commission or 0), swap=float(swap or 0),
                 exit_price=float(price) if price else None,

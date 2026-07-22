@@ -62,7 +62,10 @@ class TestEngineWiring:
         assert '"QUEUED_UNCONFIRMED"' in src
         assert '"SLOT_LINKED"' in src
         assert "uncertain=True" in src
-        assert 'release_for_trade(\n                db, t, "broker_ack")' in src
+        # P0-2 · broker-ack reservation release is awaited inside
+        # on_trade_opened (no longer a fire-and-forget lambda)
+        assert 'await risk_reservations.release_for_trade(' in src
+        assert '"broker_ack"' in src
         # reservation must exist BEFORE the order intent / queue
         assert src.index("await risk_reservations.reserve(") \
             < src.index('self._emit(db, "OrderIntentCreated"')

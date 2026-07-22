@@ -1,0 +1,30 @@
+{
+  "summary": "iter-142 · P0 audit fixes verified end-to-end. All 20 P0 tests pass (5 new HTTP tests + 15 pre-existing pytest cases) plus the full 438-test regression sweep across tests/unit + iter134 + iter112 (all green). Verified: (P0-1) protection-aware lifecycle — new states FILLED_UNPROTECTED, PROTECTION_REQUESTED, PROTECTED exist; ALLOWED_PREV[OPEN] == {BROKER_ACCEPTED, PROTECTED} — FILLED_UNPROTECTED cannot jump straight to OPEN; PROTECTION_REQUESTED only from FILLED_UNPROTECTED; CLOSE_REQUESTED reachable from every protection state; bridge_routes.py fill path applies FILLED_UNPROTECTED (never OPEN — that's the heartbeat's job via _os.PROTECTED → _os.OPEN + confirmed_stop_loss + protection.confirmed_at); heartbeat missing-SL path emits MODIFY_SL (reason=protection_rearm) and after age_s>90 escalates to FULL_CLOSE (reason=unprotected_position). (P0-2) All engine lifecycle methods (on_trade_opened / on_close_ack / on_trade_closed / on_partial_close / _monitor_live_exits / _adaptive_manage / _release_submission_slot_of) are asyncio.iscoroutinefunction; no _bg() wraps _request_close, release_broker_submission_slot or release_for_trade in scalp/engine.py. (P0-3) 3 _mark_close_requested sites and 4 awaited _request_close calls in engine.py — durable close intent persisted then awaited. (P0-4) GET /api/data-freshness returns a 'candles' object with per-symbol entries carrying age_seconds/bar_lag_s/valid_bars/dropped_bars/payloads_received/last_write_ok/stale; live symbols XAUUSD_M15 / BTCUSD_M15 / EURUSD_M15 / GBPUSD_M15 all present and fresh (<1200s). POST /api/bridge/candles with all-invalid bars returns 422 AND increments payloads_rejected + sets last_write_ok=false; with valid bars returns {status:'ok', stored:N} and updates last_received_at + bar_lag_s. Invalid bridge_token returns 401.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_iter142_p0_audit_http.py",
+    "/app/backend/tests/unit/scalp/test_iter142_p0_audit.py",
+    "/app/test_reports/pytest/iter142_p0_audit.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Good: ALLOWED_PREV[OPEN] correctly narrowed to (BROKER_ACCEPTED, PROTECTED) — the FILLED_UNPROTECTED → OPEN shortcut is gone, so a fill that never confirms its stop can never enter OPEN even if legacy code paths call apply(). apply() itself refuses the invalid transition and logs a warning — good defence in depth.",
+    "Good: heartbeat wiring reads the AUTHORITATIVE broker-side SL from the position snapshot (p.sl), applies PROTECTED + OPEN atomically per-trade, and mints an idempotency key from the trade id so a duplicate heartbeat is a no-op.",
+    "Good: escalation ladder is bounded and observable — FILLED_UNPROTECTED → 1 MODIFY_SL re-arm → FULL_CLOSE at age_s>90; both stamp protection.state and reason so it's visible on the trade doc / audit array.",
+    "Good: /api/bridge/candles instrumentation is comprehensive — even the reject path (all-invalid bars → 422) writes the health row with dropped_bars, last_error, last_write_ok=false and $inc payloads_received+payloads_rejected before raising. No stage is silently swallowed.",
+    "Nit: /api/bridge/candles uses `finally:` to write the health row on both success and pre-raise paths — but the initial `except: write_ok=False; raise` will still hit the finally, then `raise`. That's correct today; just worth a code comment because the flow control isn't obvious at first read.",
+    "Nit: the `finally:` block computes bar_lag_s from bars[-1]['t'] but that variable was rebound to the merged history on line ~530 (up to 800 bars). Currently harmless (sorted, so [-1] is still the newest), but if the merge order ever changes bar_lag_s would silently regress. A `last_bar_ts = max(int(b['t']) for b in bars)` would be more defensive.",
+    "Nit: TEST HTTP file — the /api/admin/candle-feed-health/purge cleanup endpoint doesn't exist yet; the test uses best-effort try/except so TESTUSD rows linger in candle_feed_health / intraday_candles for admin. Not a bug, but if a helper endpoint gets added the fixture will start cleaning automatically."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter142_p0_audit_http.py (new — 5 HTTP integration tests)"
+  ],
+  "success_rate": { "backend": "100% (20/20 P0 audit + 438/438 regression)", "frontend": "n/a — backend-only per request" },
+  "test_credentials": "admin@trading.bot / admin123 (cookie session; csrf_token cookie echoed as X-CSRF-Token). Bridge endpoints authenticate via bridge_token in JSON body.",
+  "seed_data_creation": "Test suite writes to candle_feed_health & intraday_candles for symbol='TESTUSD' (base symbol) on admin's first account. Best-effort cleanup via /api/admin/candle-feed-health/purge (endpoint does not currently exist — rows persist harmlessly; they'll simply appear stale in the 'candles' section for admin and are never touched by real feeds).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable regression: /app/backend/tests/test_iter142_p0_audit_http.py (HTTP e2e for data-freshness + bridge/candles) and /app/backend/tests/unit/scalp/test_iter142_p0_audit.py (source + state-machine unit). Bridge candles POST uses bridge_token from the FIRST admin-owned account (prefers paper/demo if labelled). Bridge endpoints do NOT require cookie auth — only bridge_token in body. If /api/admin/candle-feed-health/purge is added later, HTTP tests will auto-clean the TESTUSD rows.",
+  "rca_of_the_issue": "N/A — no issues; all P0 audit fixes correctly implemented and verified live."
+}

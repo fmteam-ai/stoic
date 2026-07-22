@@ -316,6 +316,67 @@ async def heartbeat(payload: BridgeHeartbeat):
                             "live_at": now_iso,
                         }},
                     )
+                # P0-1 · protection verification: the broker position
+                # snapshot carries the ACTUAL live SL. A filled trade is
+                # only OPEN once that SL is confirmed; a missing SL first
+                # gets one re-arm (MODIFY_SL), then a forced close.
+                lc = existing.get("lifecycle_state")
+                if (existing.get("status") == "open"
+                        and lc in ("FILLED_UNPROTECTED", "PROTECTION_REQUESTED")):
+                    from scalp import order_state as _os
+                    tid_s = str(existing["_id"])
+                    broker_sl = float(p.sl or 0)
+                    requested_sl = float(existing.get("stop_loss") or 0)
+                    prot = existing.get("protection") or {}
+                    if broker_sl > 0:
+                        await _os.apply(db, tid_s, _os.PROTECTED,
+                                        f"prot:{tid_s}",
+                                        meta={"sl": broker_sl})
+                        await _os.apply(db, tid_s, _os.OPEN, f"open:{tid_s}")
+                        await db.trades.update_one(
+                            {"_id": existing["_id"]},
+                            {"$set": {"confirmed_stop_loss": broker_sl,
+                                      "protection.state": "PROTECTED",
+                                      "protection.confirmed_at": now_iso,
+                                      "protection.confirmed_sl": broker_sl}})
+                    elif requested_sl > 0 and lc == "FILLED_UNPROTECTED":
+                        st = await _os.apply(db, tid_s,
+                                             _os.PROTECTION_REQUESTED,
+                                             f"protreq:{tid_s}")
+                        if st == "applied":
+                            await db.trades.update_one(
+                                {"_id": existing["_id"],
+                                 "pending_modification": None},
+                                {"$set": {"pending_modification": {
+                                    "type": "MODIFY_SL",
+                                    "new_sl": requested_sl,
+                                    "requested_at": now_iso,
+                                    "reason": "protection_rearm"},
+                                    "protection.state": "REARM_REQUESTED",
+                                    "protection.requested_at": now_iso}})
+                    elif requested_sl > 0 and lc == "PROTECTION_REQUESTED":
+                        req_at = prot.get("requested_at") or prot.get("filled_at")
+                        try:
+                            age_s = (datetime.now(timezone.utc)
+                                     - datetime.fromisoformat(str(req_at))
+                                     ).total_seconds() if req_at else 0
+                        except ValueError:
+                            age_s = 0
+                        if age_s > 90:
+                            res_esc = await db.trades.update_one(
+                                {"_id": existing["_id"],
+                                 "pending_modification": None},
+                                {"$set": {"pending_modification": {
+                                    "type": "FULL_CLOSE",
+                                    "requested_at": now_iso,
+                                    "reason": "unprotected_position"},
+                                    "close_reason": "unprotected_position",
+                                    "protection.state": "CLOSE_ESCALATED"}})
+                            if res_esc.modified_count == 1:
+                                await _os.apply(
+                                    db, tid_s, _os.CLOSE_REQUESTED,
+                                    f"closereq:{tid_s}",
+                                    meta={"reason": "unprotected_position"})
                 # AUTO-REVIVE: STOIC has the ticket but marked it closed
                 # without an exit price — yet the broker still has the
                 # position open. Premature close (panic + reconcile race).
@@ -426,19 +487,37 @@ class BridgeCandles(BaseModel):
 
 @router.post("/candles")
 async def receive_candles(payload: BridgeCandles):
-    """EA v1.42 — M15 candle feed for the Market Structure agent."""
+    """EA v1.42 — M15 candle feed for the Market Structure agent.
+
+    P0-4 · every stage instrumented into `candle_feed_health` (per
+    user/symbol/timeframe): receipt, symbol normalization, bar validation,
+    merge and Mongo write — so a stale feed is diagnosable stage by stage.
+    """
     db = get_db()
     account = await _account_by_token(payload.bridge_token)
     base = base_symbol(payload.symbol)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    health_key = {"user_id": account["user_id"], "symbol": base,
+                  "timeframe": payload.timeframe}
     bars = []
+    dropped = 0
     for b in (payload.bars or [])[-200:]:
         try:
             bars.append({"t": int(b["t"]), "o": float(b["o"]), "h": float(b["h"]),
                          "l": float(b["l"]), "c": float(b["c"]),
                          "v": float(b.get("v") or 0)})
         except (KeyError, TypeError, ValueError):
+            dropped += 1
             continue
     if not bars:
+        await db.candle_feed_health.update_one(health_key, {"$set": {
+            "last_received_at": now_iso, "source_symbol": payload.symbol,
+            "account_id": str(account["_id"]),
+            "bars_in_payload": len(payload.bars or []),
+            "valid_bars": 0, "dropped_bars": dropped,
+            "last_error": "all bars invalid", "last_write_ok": False,
+        }, "$inc": {"payloads_received": 1, "payloads_rejected": 1}},
+            upsert=True)
         raise HTTPException(status_code=422, detail="No valid bars")
     # iter-125 · Accumulate history server-side (EA only sends ~96 bars):
     # merge by timestamp, keep the newest 800 (8+ days of M15 → real 4H data).
@@ -449,13 +528,31 @@ async def receive_candles(payload: BridgeCandles):
         merged = {int(b["t"]): b for b in existing["bars"]}
         merged.update({int(b["t"]): b for b in bars})
         bars = [merged[t] for t in sorted(merged)][-800:]
-    await db.intraday_candles.update_one(
-        {"user_id": account["user_id"], "symbol": base,
-         "timeframe": payload.timeframe},
-        {"$set": {"bars": bars, "source_symbol": payload.symbol,
-                  "account_id": str(account["_id"]),
-                  "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True)
+    write_ok = True
+    try:
+        await db.intraday_candles.update_one(
+            {"user_id": account["user_id"], "symbol": base,
+             "timeframe": payload.timeframe},
+            {"$set": {"bars": bars, "source_symbol": payload.symbol,
+                      "account_id": str(account["_id"]),
+                      "updated_at": now_iso}},
+            upsert=True)
+    except Exception:
+        write_ok = False
+        raise
+    finally:
+        last_bar_ts = int(bars[-1]["t"]) if bars else None
+        bar_lag_s = (max(0, int(datetime.now(timezone.utc).timestamp())
+                         - last_bar_ts) if last_bar_ts else None)
+        await db.candle_feed_health.update_one(health_key, {"$set": {
+            "last_received_at": now_iso, "source_symbol": payload.symbol,
+            "account_id": str(account["_id"]),
+            "bars_in_payload": len(payload.bars or []),
+            "valid_bars": len(bars), "dropped_bars": dropped,
+            "last_bar_ts": last_bar_ts, "bar_lag_s": bar_lag_s,
+            "stored_total": len(bars), "last_write_ok": write_ok,
+            "last_error": None,
+        }, "$inc": {"payloads_received": 1}}, upsert=True)
     return {"status": "ok", "stored": len(bars)}
 
 
@@ -1014,24 +1111,31 @@ async def report_trade(payload: BridgeTradeReport):
                     # Phase A recovery — adopt fills for unknown trades
                     if payload.trade_id not in r.live_trades:
                         r.adopt_open_trade(trade)
-                    r.on_trade_opened(payload.trade_id,
+                    await r.on_trade_opened(payload.trade_id,
                                       float(trade.get("entry_price") or 0) or None,
                                       float(payload.entry_price), db=db)
-                    # round 18 review item 1 — reservation release is
-                    # safety-relevant state: awaited, not fire-and-forget.
-                    from scalp import risk_reservations
-                    await risk_reservations.release_for_trade(
-                        db, payload.trade_id, "broker_ack")
-                    # Phase A — formal lifecycle (MT5 fill ack carries the
-                    # protective SL/TP with the order): ACCEPTED then OPEN
+                    # round 18 review item 1 — reservation release now
+                    # happens INSIDE on_trade_opened (awaited, idempotent).
+                    # P0-1 · protection-aware lifecycle: the fill ack alone
+                    # does NOT prove the stop is live. BROKER_ACCEPTED →
+                    # FILLED_UNPROTECTED here; the next heartbeat position
+                    # snapshot (which carries the broker's actual SL) flips
+                    # it to PROTECTED → OPEN, or triggers a re-arm/close.
                     await order_state.apply(db, payload.trade_id,
                                             order_state.BROKER_ACCEPTED,
                                             f"ack:{payload.trade_id}")
                     await order_state.apply(db, payload.trade_id,
-                                            order_state.OPEN,
-                                            f"open:{payload.trade_id}")
+                                            order_state.FILLED_UNPROTECTED,
+                                            f"filled:{payload.trade_id}")
+                    await db.trades.update_one(
+                        {"_id": ObjectId(payload.trade_id)},
+                        {"$set": {"protection": {
+                            "state": "AWAITING_CONFIRM",
+                            "filled_at": datetime.now(timezone.utc).isoformat(),
+                            "requested_sl": float(trade.get("stop_loss") or 0),
+                        }}})
                 elif payload.status == "closed":
-                    r.on_close_ack(payload.trade_id,
+                    await r.on_close_ack(payload.trade_id,
                                    exit_price=(float(payload.exit_price)
                                                if payload.exit_price else None),
                                    db=db)
