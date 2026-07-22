@@ -186,7 +186,8 @@ async def _connected_accounts(db, user_id: str) -> list:
     - PAPER accounts are always "connected" (virtual)
     - LIVE accounts must have an EA heartbeat in the last 5 minutes
     """
-    cursor = db.accounts.find({"user_id": user_id})
+    cursor = db.accounts.find({"user_id": user_id,
+                               "trading_enabled": {"$ne": False}})
     accs = await cursor.to_list(length=50)
     fresh = []
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
@@ -282,8 +283,18 @@ async def _process_user_account_locked(db, cfg: dict):
         all_accounts = await db.accounts.find(
             {"user_id": user_id, "_id": ObjectId(cfg_account_id)}
         ).to_list(length=1)
+        # iter-137 · Multi-account manager: per-account trading kill-switch.
+        if all_accounts and all_accounts[0].get("trading_enabled") is False:
+            await _record_pulse(db, cfg,
+                action="BLOCKED", level="block",
+                reason=("Trading is DISABLED on this account (Accounts page "
+                        "toggle) — flip it back on to resume."),
+            )
+            return
     else:
-        all_accounts = await db.accounts.find({"user_id": user_id}).to_list(length=50)
+        all_accounts = await db.accounts.find(
+            {"user_id": user_id, "trading_enabled": {"$ne": False}}
+        ).to_list(length=50)
         if all_accounts:
             # Filter out accounts that have their OWN active/inactive override config —
             # those are managed by their dedicated cfg pass (independent bot).

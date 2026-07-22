@@ -32,6 +32,18 @@ class ImportPositionsRequest(BaseModel):
     positions: List[ImportPosition]
 
 
+class AccountUpdate(BaseModel):
+    """iter-137 · Multi-account management — editable metadata."""
+    label: str | None = None
+    group: str | None = None
+    trading_enabled: bool | None = None
+
+
+def _iso_days_ago(days: int) -> str:
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
 def _serialize(doc: dict) -> dict:
     doc["id"] = str(doc.pop("_id"))
     creds = doc.pop("creds", {}) or {}
@@ -53,6 +65,157 @@ async def account_limits(user=Depends(get_current_user)):
     """Return the user's broker/account-slot usage and the current global caps."""
     db = get_db()
     return await get_broker_breakdown(db, user["id"])
+
+
+@router.get("/overview")
+async def accounts_overview(user=Depends(get_current_user)):
+    """iter-137 · Aggregate multi-account portfolio view.
+
+    Totals (balance/equity/floating), per-account realized P&L windows
+    (today / 7d / 30d, from closed trades), connection + trading state,
+    and the distinct group labels in use.
+    """
+    db = get_db()
+    accounts = await db.accounts.find({"user_id": user["id"]}).sort("created_at", -1).to_list(length=100)
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    hb_cutoff = (now - timedelta(minutes=5)).isoformat()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    d7 = _iso_days_ago(7)
+    d30 = _iso_days_ago(30)
+
+    # One query for all closed trades in the last 30 days, bucketed in python.
+    trades = await db.trades.find(
+        {"user_id": user["id"], "status": "closed", "closed_at": {"$gte": d30}},
+        {"account_id": 1, "pnl": 1, "closed_at": 1},
+    ).to_list(length=20000)
+    pnl = {}  # account_id -> {today, d7, d30}
+    for t in trades:
+        aid = t.get("account_id") or ""
+        p = float(t.get("pnl") or 0)
+        ca = t.get("closed_at") or ""
+        b = pnl.setdefault(aid, {"today": 0.0, "d7": 0.0, "d30": 0.0})
+        b["d30"] += p
+        if ca >= d7:
+            b["d7"] += p
+        if ca >= today_start:
+            b["today"] += p
+
+    out_accounts, groups = [], set()
+    tot = {"balance": 0.0, "equity": 0.0, "connected": 0, "trading_enabled": 0,
+           "pnl_today": 0.0, "pnl_7d": 0.0, "pnl_30d": 0.0, "open_positions": 0}
+    for a in accounts:
+        aid = str(a["_id"])
+        connected = (a.get("mode") == "paper") or bool(
+            a.get("last_heartbeat") and a["last_heartbeat"] >= hb_cutoff)
+        enabled = a.get("trading_enabled") is not False
+        grp = (a.get("group") or "").strip()
+        if grp:
+            groups.add(grp)
+        b = pnl.get(aid, {"today": 0.0, "d7": 0.0, "d30": 0.0})
+        bal, eq = float(a.get("balance") or 0), float(a.get("equity") or 0)
+        out_accounts.append({
+            "id": aid, "label": a.get("label"), "broker": a.get("broker"),
+            "account_number": a.get("account_number"), "mode": a.get("mode"),
+            "group": grp or None, "trading_enabled": enabled, "connected": connected,
+            "balance": a.get("balance"), "equity": a.get("equity"),
+            "open_positions": a.get("open_positions") or 0,
+            "last_heartbeat": a.get("last_heartbeat"),
+            "pnl_today": round(b["today"], 2), "pnl_7d": round(b["d7"], 2),
+            "pnl_30d": round(b["d30"], 2),
+        })
+        tot["balance"] += bal
+        tot["equity"] += eq
+        tot["connected"] += 1 if connected else 0
+        tot["trading_enabled"] += 1 if enabled else 0
+        tot["open_positions"] += a.get("open_positions") or 0
+        tot["pnl_today"] += b["today"]
+        tot["pnl_7d"] += b["d7"]
+        tot["pnl_30d"] += b["d30"]
+    for k in ("balance", "equity", "pnl_today", "pnl_7d", "pnl_30d"):
+        tot[k] = round(tot[k], 2)
+    tot["floating"] = round(tot["equity"] - tot["balance"], 2)
+    tot["accounts"] = len(accounts)
+    return {"totals": tot, "accounts": out_accounts, "groups": sorted(groups)}
+
+
+@router.get("/equity-curve")
+async def accounts_equity_curve(days: int = 30, user=Depends(get_current_user)):
+    """iter-137 · Combined cumulative realized P&L series across all accounts.
+
+    Daily buckets from closed-trade P&L; each point carries the combined
+    running total plus a running total per account (key `a_<id>`).
+    """
+    days = max(1, min(days, 365))
+    db = get_db()
+    accounts = await db.accounts.find(
+        {"user_id": user["id"]}, {"label": 1}).to_list(length=100)
+    since = _iso_days_ago(days)
+    trades = await db.trades.find(
+        {"user_id": user["id"], "status": "closed", "closed_at": {"$gte": since}},
+        {"account_id": 1, "pnl": 1, "closed_at": 1},
+    ).to_list(length=50000)
+
+    from datetime import timedelta
+    daily = {}  # date -> {account_id -> pnl}
+    for t in trades:
+        d = (t.get("closed_at") or "")[:10]
+        if not d:
+            continue
+        daily.setdefault(d, {})
+        aid = t.get("account_id") or "unknown"
+        daily[d][aid] = daily[d].get(aid, 0.0) + float(t.get("pnl") or 0)
+
+    acct_ids = [str(a["_id"]) for a in accounts]
+    running = {aid: 0.0 for aid in acct_ids}
+    total_running = 0.0
+    series = []
+    start = (datetime.now(timezone.utc) - timedelta(days=days - 1)).date()
+    today = datetime.now(timezone.utc).date()
+    day = start
+    while day <= today:
+        key = day.isoformat()
+        buckets = daily.get(key, {})
+        for aid, p in buckets.items():
+            if aid in running:
+                running[aid] += p
+                total_running += p
+        point = {"date": key, "total": round(total_running, 2)}
+        for aid in acct_ids:
+            point[f"a_{aid}"] = round(running[aid], 2)
+        series.append(point)
+        day += timedelta(days=1)
+    return {
+        "days": days,
+        "accounts": [{"id": str(a["_id"]), "label": a.get("label")} for a in accounts],
+        "series": series,
+    }
+
+
+@router.patch("/{account_id}")
+async def update_account(account_id: str, payload: AccountUpdate,
+                         user=Depends(get_current_user)):
+    """iter-137 · Update account metadata: label, group, trading_enabled."""
+    updates = {}
+    if payload.label is not None:
+        if not payload.label.strip():
+            raise HTTPException(status_code=400, detail="Label cannot be empty")
+        updates["label"] = payload.label.strip()
+    if payload.group is not None:
+        updates["group"] = payload.group.strip()
+    if payload.trading_enabled is not None:
+        updates["trading_enabled"] = payload.trading_enabled
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    db = get_db()
+    result = await db.accounts.update_one(
+        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
+        {"$set": updates},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Account not found")
+    doc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")})
+    return _serialize(doc)
 
 
 @router.get("/broker-presets")

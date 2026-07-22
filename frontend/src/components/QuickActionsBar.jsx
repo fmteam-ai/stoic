@@ -3,6 +3,7 @@ import api from "@/lib/api";
 import { Power, Zap, TrendingUp, TrendingDown, AlertOctagon } from "lucide-react";
 import { toast } from "sonner";
 import { formatApiError } from "@/lib/api";
+import { AccountSwitcher } from "@/components/AccountSwitcher";
 
 /* Sticky Quick Actions bar — appears top-right on every authed page. Shows:
  *   • Bot ON/OFF toggle (mirrors active state across all configs)
@@ -71,6 +72,9 @@ export function QuickActionsBar() {
         <>
             <div className="fixed top-8 right-3 z-40 flex items-center gap-1.5 sm:gap-2 bg-[#0A0A0A]/95 backdrop-blur-md border border-[#1F1F1F] shadow-xl px-2 py-1.5"
                  data-testid="quick-actions-bar">
+
+                {/* Multi-account switcher (iter-137) */}
+                <AccountSwitcher />
 
                 {/* Today's P&L — bot vs manual */}
                 <div className="hidden md:flex flex-col items-end px-2"

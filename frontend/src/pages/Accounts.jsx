@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import PartnerBrokerCard from "@/components/PartnerBrokerCard";
+import MultiAccountOverview from "@/components/MultiAccountOverview";
 
 // Bump together with backend `LATEST_EA` in bot_routes.py / diagnostic_routes.py.
 // Used in the download URL so the filename changes per release (e.g.
@@ -290,6 +291,24 @@ export default function Accounts() {
         }
     };
 
+    // iter-137 · Multi-account management — patch metadata (group / trading toggle)
+    const [overviewKey, setOverviewKey] = useState(0);
+    const patchAccount = async (id, payload, okMsg) => {
+        try {
+            await api.patch(`/accounts/${id}`, payload);
+            if (okMsg) toast.success(okMsg);
+            await load();
+            setOverviewKey(k => k + 1);
+        } catch (e) { toast.error(formatApiError(e)); }
+    };
+    const editGroup = (a) => {
+        const g = window.prompt(
+            "Group label for this account (e.g. AGGRESSIVE, PROP, FAMILY).\nLeave empty to remove the group.",
+            a.group || "");
+        if (g === null) return;
+        patchAccount(a.id, { group: g }, g.trim() ? `Group set: ${g.trim()}` : "Group removed");
+    };
+
     return (
         <AppLayout>
             <PageHeader
@@ -314,6 +333,9 @@ export default function Accounts() {
             <div className="p-4 md:p-8 space-y-4" data-testid="accounts-page">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
+
+                {/* Multi-account portfolio overview (iter-137) */}
+                <MultiAccountOverview refreshKey={overviewKey} />
 
                 {/* Bridge instructions */}
                 <MT5ConnectionGuide />
@@ -455,13 +477,37 @@ export default function Accounts() {
                                     )}
                                     <div className="flex items-start justify-between gap-3 flex-wrap">
                                         <div className="space-y-1">
-                                            <div className="flex items-center gap-3">
+                                            <div className="flex items-center gap-3 flex-wrap">
                                                 <div className="font-display font-bold text-lg">{a.label}</div>
                                                 <span className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border ${
                                                     live ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#1F1F1F] text-[#A1A1AA]"
                                                 }`}>
                                                     {live ? <><PlugsConnected className="w-3 h-3 inline mr-1" /> CONNECTED</> : "● DISCONNECTED"}
                                                 </span>
+                                                <button
+                                                    onClick={() => patchAccount(a.id, { trading_enabled: a.trading_enabled === false },
+                                                        a.trading_enabled === false ? `Trading enabled on ${a.label}` : `Trading disabled on ${a.label}`)}
+                                                    data-testid={`trading-toggle-${a.account_number}`}
+                                                    title={a.trading_enabled === false
+                                                        ? "Trading is OFF — the bot skips this account. Click to enable."
+                                                        : "Trading is ON — click to exclude this account from all bot trading."}
+                                                    className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border transition-colors ${
+                                                        a.trading_enabled === false
+                                                            ? "border-[#FF3B30]/40 text-[#FF3B30] bg-[#FF3B30]/10 hover:bg-[#FF3B30]/20"
+                                                            : "border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10"
+                                                    }`}>
+                                                    {a.trading_enabled === false ? "⏻ TRADING OFF" : "⏻ TRADING ON"}
+                                                </button>
+                                                <button onClick={() => editGroup(a)}
+                                                    data-testid={`group-badge-${a.account_number}`}
+                                                    title="Group accounts for portfolio organisation (click to edit)"
+                                                    className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border transition-colors ${
+                                                        a.group
+                                                            ? "border-[#00BFFF]/40 text-[#00BFFF] hover:bg-[#00BFFF]/10"
+                                                            : "border-[#1F1F1F] text-[#52525B] hover:border-[#333333] hover:text-[#A1A1AA]"
+                                                    }`}>
+                                                    {a.group ? `◈ ${a.group.toUpperCase()}` : "+ GROUP"}
+                                                </button>
                                             </div>
                                             <div className="font-mono text-xs text-[#A1A1AA]">{a.broker} · {a.server} · #{a.account_number}</div>
                                             <div className="font-mono text-[10px] text-[#52525B] tracking-widest">TYPE · {a.account_type?.toUpperCase()} · {a.base_currency}</div>
