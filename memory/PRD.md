@@ -806,3 +806,14 @@ Audit: timestamp consistency (clock drift residual, delayed-batch guard, transpo
 - Tests: `tests/unit/scalp/test_phaseE_market_data.py` (17 incl. kill integration with stub state/cfg). Scalp suites 371 ✓. Full regression 2402 passed, same 7 live-EA-offline env failures. NOTE: editing engine.py while integration API tests run causes transient hot-reload 500s — rerun before judging.
 - NEXT: Phase F — Worker architecture (workers/ already split: trading/reconciliation/tuning + BACKGROUND_WORKERS_IN_PROCESS flag; remaining: protection/market-data/analytics/model separation — audit first). Then G (trace-ID observability), H (institutional). TOTP 2FA still queued.
 
+
+## Phase F — Worker Architecture COMPLETE (2026-06)
+Audit: trading/reconciliation/tuning workers + leader-lease base + BACKGROUND_WORKERS_IN_PROCESS already existed. Delivered the remaining separations:
+- **Protection worker** (`workers/protection.py` → `_protection_guard_loop`, 10s): unprotected-position repair EXTRACTED from `_scalp_reconcile_loop` (which now only reconciles slots/deals/invariants/outbox).
+- **Analytics worker** (`workers/analytics.py` → `_analytics_loop`, 300s → `analytics_tasks.run_daily_aggregates`): DB-only per-(symbol,model_key) daily stats into `scalp_daily_stats` (decisions, live_traded, rejected, win_rate, net_pips, avg decision-quality) + daily reject-stage mix doc. Live-verified (3 rows aggregated).
+- **Model worker** (`workers/model.py` → `_model_maintenance_loop`, 6h → `model_tasks.run_model_maintenance`): scheduled full retrain per model key (≥200 resolved), audit rows in `scalp_model_audit`. API keeps inline event-driven retrains; worker guarantees cadence + registry trail.
+- server.py starts all three in-process (default mode) + cancels on shutdown. `workers/README.md` = full service map incl. rationale: **Broker Gateway + Market Data + scalp kernel stay colocated with the API** (EA pushes over HTTP; sub-second loop shares memory with ingest) — documented as BY DESIGN.
+- Task modules are strictly DB-only (no `_runners`/engine imports) so they work cross-process — enforced by tests.
+- Tests: `tests/unit/scalp/test_phaseF_workers.py` (9). Scalp suites 380 ✓. Full regression 2411 passed, same 7 live-EA-offline env failures. Zero regressions.
+- NEXT: Phase G — Observability: end-to-end Trace ID per trade (tick→features→model→risk→OMS→broker→reconciliation→analytics; decision_id already threads most of it — audit trade_events + add trace endpoint "why did this trade happen"). Then H (institutional). TOTP 2FA still queued.
+

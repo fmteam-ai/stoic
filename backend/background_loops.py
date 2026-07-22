@@ -62,15 +62,58 @@ async def _auto_heal_loop():
             logger.warning("auto-heal sweep failed: %s", e)
 
 
+async def _protection_guard_loop():
+    """Phase F — dedicated protection service: an unprotected position
+    cannot wait on any other sweep's schedule."""
+    from protection_guard import repair_unprotected_positions
+    PROT = int(os.environ.get("SCALP_PROTECTION_SWEEP_SEC", "10"))
+    while True:
+        try:
+            await asyncio.sleep(PROT)
+            await repair_unprotected_positions(get_db())
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("protection guard sweep failed")
+
+
+async def _analytics_loop():
+    """Phase F — analytics service: DB-only daily aggregation."""
+    from analytics_tasks import run_daily_aggregates
+    INTERVAL = int(os.environ.get("ANALYTICS_INTERVAL_SEC", "300"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            await run_daily_aggregates(get_db())
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("analytics aggregation failed")
+
+
+async def _model_maintenance_loop():
+    """Phase F — model service: scheduled retrains + registry audit."""
+    from model_tasks import run_model_maintenance
+    INTERVAL = int(os.environ.get("MODEL_MAINT_INTERVAL_SEC", "21600"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            await run_model_maintenance(get_db())
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("model maintenance failed")
+
+
 async def _scalp_reconcile_loop():
     """Round 9 cadences — one scheduler, three sweep frequencies:
-      • protection safety sweep: every 10s (unprotected scalps can't wait)
       • financial pending-deal sweep: every 45s
-      • full invariant + durable-state sweep: every 300s"""
+      • full invariant + durable-state sweep: every 300s
+    (Phase F: the protection safety sweep moved to _protection_guard_loop —
+    its own service — so this loop only reconciles.)"""
     from scalp.engine import (recover_pending_deals, sweep_submission_slots,
                               verify_account_invariants,
                               verify_durable_invariants, _runners)
-    from protection_guard import repair_unprotected_positions
     PROT = int(os.environ.get("SCALP_PROTECTION_SWEEP_SEC", "10"))
     FIN = int(os.environ.get("SCALP_RECONCILE_INTERVAL_SEC", "45"))
     FULL = int(os.environ.get("SCALP_INVARIANT_SWEEP_SEC", "300"))
@@ -86,7 +129,6 @@ async def _scalp_reconcile_loop():
     while True:
         try:
             await asyncio.sleep(PROT)
-            await repair_unprotected_positions(get_db())
             now_m = monotonic()
             if now_m >= next_slot:
                 next_slot = now_m + SLOT
