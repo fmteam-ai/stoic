@@ -46,9 +46,12 @@ class TestAdaptiveRules:
         assert act["action"] == "EXIT_NOW"
         assert act["reason"] == "adaptive_p_collapse"
 
-    def test_p_collapse_ignored_when_near_target(self):
+    def test_p_collapse_near_target_becomes_ev_exit(self):
+        # Phase B: near target with collapsed p the EV of holding is deeply
+        # negative (risk 7 pips to gain 1 at p=0.2) → lock the gain.
         act = self._base(p_target=0.20, mid=1.0854)   # 80% progress
-        assert act["action"] == "HOLD"
+        assert act["action"] == "EXIT_NOW"
+        assert act["reason"] == "adaptive_ev_negative"
 
     def test_regime_flip_exits(self):
         act = self._base(regime_opposes=True, mid=1.0850)

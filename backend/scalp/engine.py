@@ -1881,12 +1881,15 @@ class ScalpRunner:
             or (d == "SELL" and not perms.get("short_enabled")
                 and perms.get("long_enabled")))
         cur_sl = info.get("confirmed_stop_px") or info["stop_px"]
+        # Phase B — dynamic TP: the broker keeps the ORIGINAL target; an
+        # adaptively tightened target is virtual and realised engine-side.
+        cur_tp = info.get("adjusted_target_px") or info["target_px"]
         # review item 7 — position-conditioned probability: P(THIS target
         # before THIS stop within the REMAINING horizon). The fresh-entry
         # model score only supplies the drift tilt.
         p_pos = adaptive_exits.position_p_target(
             direction=d, entry_px=info["entry_px"], mid=mid,
-            stop_px=cur_sl, target_px=info["target_px"],
+            stop_px=cur_sl, target_px=cur_tp,
             pip_size=self.cfg.pip_size, p_model=p_model,
             elapsed_ms=nm - info["opened_ms"],
             max_holding_ms=self.risk_state.limits.max_holding_ms,
@@ -1895,11 +1898,16 @@ class ScalpRunner:
         act = adaptive_exits.evaluate(
             direction=d, entry_px=info["entry_px"], mid=mid,
             stop_px=cur_sl,
-            target_px=info["target_px"], pip_size=self.cfg.pip_size,
+            target_px=cur_tp, pip_size=self.cfg.pip_size,
             elapsed_ms=nm - info["opened_ms"],
             max_holding_ms=self.risk_state.limits.max_holding_ms,
             p_target=p_pos, regime_opposes=regime_opposes, vol_ratio=vol_ratio,
-            spread_pips=sp, spread_limit=self.cfg.max_spread_pips)
+            spread_pips=sp, spread_limit=self.cfg.max_spread_pips,
+            vol_short_pips=vol_short,
+            spread_pctl=(float(feats.get("spread_pctl"))
+                         if feats and feats.get("spread_pctl") is not None
+                         else None),
+            partial_done=bool(info.get("adaptive_partial_done")))
         if act["action"] == "EXIT_NOW":
             act["p_model"] = p_model
             act["p_position"] = p_pos
@@ -1911,8 +1919,84 @@ class ScalpRunner:
             _bg(lambda t=tid, rs=act["reason"]: self._request_close(db, t, rs),
                 "request_close")
             return
+        if act["action"] == "TIGHTEN_TP":
+            # Phase B — dynamic (virtual) TP: only ever CLOSER, never beyond
+            # the original target; realised engine-side via adaptive_tp_hit.
+            if nm < info.get("adaptive_tp_next_ms", 0):
+                return
+            new_tp = float(act["proposed_target_px"])
+            if (d == "BUY" and new_tp >= cur_tp) or \
+                    (d == "SELL" and new_tp <= cur_tp):
+                return                              # envelope: only closer
+            spec = ((self.account or {}).get("symbol_specs")
+                    or {}).get(self.symbol) or {}
+            tick = float(spec.get("point") or 0) or self.cfg.tick_size
+            new_tp = round_to_tick(new_tp, tick)
+            info["adaptive_tp_next_ms"] = (
+                nm + adaptive_exits.TP_ADJUST_COOLDOWN_MS)
+            info["adjusted_target_px"] = new_tp
+            _bg(lambda t=tid, s=new_tp, rs=act["reason"]:
+                db.trades.update_one(
+                    {"_id": _oid(t), "status": "open"},
+                    {"$set": {"adaptive_adjusted_tp": s},
+                     "$push": {"adaptive_actions": {
+                         "ts_ms": nm, "action": "TIGHTEN_TP",
+                         "reason": rs, "new_tp": s}}}),
+                "adaptive_tp")
+            return
+        if act["action"] == "PARTIAL_CLOSE":
+            # Phase B — intelligent partial: bank a fraction at a solid gain
+            # when the remaining edge has weakened. One per trade; strictly
+            # exposure-REDUCING; the single pending_modification slot must
+            # be free (no in-flight SL/partial request).
+            if info.get("pending_stop_px") is not None:
+                return
+            if nm - info.get("pending_partial_ms", 0) < 30_000 \
+                    and info.get("pending_partial_ms"):
+                return
+            lot = float(info.get("lot") or 0)
+            step = self.cfg.lot_step
+            keep = lot * (1.0 - float(act.get("fraction") or 0.5))
+            new_volume = max(0.0, round(int(keep / step + 1e-9) * step, 2))
+            if new_volume < self.cfg.min_lot or new_volume >= lot:
+                return                              # can't split this lot
+            # combo: lock breakeven with the same EA modification when the
+            # envelope allows it (strictly tighter + market gap respected)
+            be_sl = adaptive_exits.clamp_tighter(
+                d, cur_sl, info["entry_px"], mid, self.cfg.pip_size)
+            spec = ((self.account or {}).get("symbol_specs")
+                    or {}).get(self.symbol) or {}
+            tick = float(spec.get("point") or 0) or self.cfg.tick_size
+            mod = {"type": "PARTIAL_CLOSE", "new_volume": new_volume,
+                   "requested_at": datetime.now(timezone.utc).isoformat(),
+                   "reason": act["reason"]}
+            if be_sl is not None:
+                be_sl = round_to_tick(be_sl, tick)
+                if (d == "BUY" and be_sl > cur_sl) or \
+                        (d == "SELL" and be_sl < cur_sl):
+                    mod["new_sl"] = be_sl
+                    info["pending_stop_px"] = be_sl
+                    info["pending_stop_ms"] = nm
+            info["adaptive_partial_done"] = True
+            info["pending_partial_ms"] = nm
+            _bg(lambda t=tid, m=dict(mod):
+                db.trades.update_one(
+                    {"_id": _oid(t), "status": "open",
+                     "pending_modification": None},
+                    {"$set": {"pending_modification": m},
+                     "$push": {"adaptive_actions": {
+                         "ts_ms": nm, "action": "PARTIAL_CLOSE",
+                         "reason": m["reason"],
+                         "new_volume": m["new_volume"],
+                         "new_sl": m.get("new_sl")}}}),
+                "adaptive_partial")
+            return
         if act["action"] == "TIGHTEN_STOP":
             if nm < info.get("adaptive_tighten_next_ms", 0):
+                return
+            # Phase B — one EA modification in flight at a time
+            if info.get("pending_partial_ms") \
+                    and nm - info["pending_partial_ms"] < 30_000:
                 return
             # review item 2 — one in-flight stop modification at a time; an
             # unacknowledged request expires after 30s and may be retried.
@@ -1943,7 +2027,8 @@ class ScalpRunner:
             info["pending_stop_request_id"] = req_id
             _bg(lambda t=tid, s=new_sl, rs=act["reason"], rq=req_id:
                 db.trades.update_one(
-                    {"_id": _oid(t), "status": "open"},
+                    {"_id": _oid(t), "status": "open",
+                     "pending_modification": None},
                     {"$set": {"pending_modification": {
                         "type": "MODIFY_SL", "new_sl": s,
                         "request_id": rq,
@@ -1979,6 +2064,25 @@ class ScalpRunner:
                        decision_id=info.get("decision_id"),
                        payload={"requested_sl": requested,
                                 "request_id": req_id})
+
+    def on_partial_ack(self, trade_id: str, new_volume: float | None,
+                       success: bool, new_sl: float | None = None, db=None):
+        """Phase B — EA acknowledgement of an adaptive PARTIAL_CLOSE.
+        Financials arrive separately via /bridge/external-deal; this only
+        updates the tracked volume / confirmed stop and frees the mod slot."""
+        info = self.live_trades.get(trade_id)
+        if info is None:
+            return
+        info.pop("pending_partial_ms", None)
+        pending_sl = info.pop("pending_stop_px", None)
+        info.pop("pending_stop_ms", None)
+        if success:
+            if new_volume is not None:
+                info["lot"] = float(new_volume)
+            if pending_sl is not None and new_sl is not None:
+                info["confirmed_stop_px"] = float(new_sl)
+        else:
+            info["adaptive_partial_done"] = False   # broker refused → retry
 
     async def _request_close(self, db, trade_id: str, reason: str):
         res = await db.trades.update_one(
@@ -2477,6 +2581,8 @@ class ScalpRunner:
                 "actual_entry": tr.get("entry_price"),
                 "entry_slippage_pips": tr.get("slippage_pips"),
                 "stop_px": tr.get("stop_loss"), "target_px": tr.get("take_profit"),
+                "adjusted_target_px": tr.get("adaptive_adjusted_tp"),
+                "adaptive_partial_done": bool(tr.get("partial_closed")),
                 "decision_id": tr.get("scalp_decision_id", ""),
                 "est_cost_usd": 0.0,
             }

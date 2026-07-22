@@ -87,6 +87,11 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     current_lot = float(trade.get("lot_size") or 0)
     if entry <= 0 or original_lot <= 0:
         return
+    # Phase B — scalp fast-path trades are managed EXCLUSIVELY by the scalp
+    # engine's adaptive layer (per-second EV/trailing/partials); the tiered
+    # TP manager must never contend for their pending_modification slot.
+    if trade.get("scope") == "scalp_fast":
+        return
     if trade.get("pending_modification"):
         return  # waiting for EA to apply previous modification
 

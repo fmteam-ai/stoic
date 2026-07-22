@@ -812,14 +812,24 @@ async def modification_ack(payload: BridgeModificationAck):
     # Scalp fast path (round 18 review item 2): a MODIFY_SL ack promotes the
     # runner's PENDING stop to the CONFIRMED stop — until this ack the bot
     # must keep behaving as if the original stop is live at the broker.
-    if trade.get("scope") == "scalp_fast" and payload.type == "MODIFY_SL":
+    if trade.get("scope") == "scalp_fast" \
+            and payload.type in ("MODIFY_SL", "PARTIAL_CLOSE"):
         try:
             from scalp.engine import runners_for_account
             for r in runners_for_account(str(acc["_id"])):
                 if r.symbol != (trade.get("symbol") or "").upper():
                     continue
-                r.on_stop_modified(payload.trade_id, payload.new_sl,
-                                   bool(payload.success), db=db)
+                if payload.type == "MODIFY_SL":
+                    r.on_stop_modified(payload.trade_id, payload.new_sl,
+                                       bool(payload.success), db=db)
+                else:
+                    # Phase B — adaptive partial acknowledged; the combo
+                    # new_sl (if any) rode on the pending modification doc
+                    r.on_partial_ack(
+                        payload.trade_id, payload.new_volume,
+                        bool(payload.success),
+                        new_sl=(trade.get("pending_modification")
+                                or {}).get("new_sl"), db=db)
         except Exception:
             pass
     await ws_manager.broadcast(acc["user_id"], "trade_updated", {

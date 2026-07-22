@@ -763,3 +763,16 @@ User provided phased roadmap (A execution engine → B trade management → C AI
 - Tests: `tests/unit/scalp/test_phaseA_order_state.py` (18) + `tests/integration/scalp/test_phaseA_lifecycle_db.py` (3, real DB incl. crash-sim relay); `_stub_db` extended (outbox/trade_events); FULL suite 2329 passed / 0 failed. Outbox + reservation indexes live-verified.
 - NEXT PHASE: **B — Trade Management Engine** (adaptive exits exist; add dynamic TP adjustment, continuous EV recalc, intelligent partial exits, volatility-aware trailing, liquidity-aware exits, time-based edge-decay exits, regime-change exits — strictly risk-reducing envelope). Then C–H per roadmap. TOTP 2FA still queued (playbook fetched).
 
+
+## Phase B — Trade Management Engine COMPLETE (2026-06)
+Strictly risk-reducing envelope (never widens stops / never extends TP / never adds exposure). All in `scalp/adaptive_exits.py` (pure) + `engine._adaptive_manage` wiring:
+- **Continuous EV recalculation**: `hold_ev_r()` per second; EXIT `adaptive_ev_negative` when hold-EV < −0.15R while position green ≥0.15R (barrier-consistent p ⇒ EV≈0, so only drift/time/MAE tilts trigger). NOTE behavior change: old "hold near target on collapsed p" now exits via EV (iter62 test updated).
+- **Dynamic TP**: `TIGHTEN_TP` (p<0.45, past 50% holding, progress<0.8) keeps 50% of remaining distance — virtual, engine-side (broker keeps original TP); realised by `adaptive_tp_hit` exit at progress≥1. Persisted `adaptive_adjusted_tp` on trade doc + restored on restart. Only ever closer; tick-gridded; 30s cooldown.
+- **Intelligent partials**: `PARTIAL_CLOSE` (once/trade) at ≥+0.7R when p<0.5 or vol_ratio≥2 → EA pending_modification {PARTIAL_CLOSE, new_volume lot-step-floored, combo new_sl=BE if envelope allows}; ack via `on_partial_ack` (new bridge hook for PARTIAL_CLOSE type). Broker refusal re-arms.
+- **Volatility trailing**: `adaptive_vol_trail` at ≥+0.5R, distance 1.5× 1-min vol, clamp_tighter enforced.
+- **Liquidity-aware**: `adaptive_liquidity_lock` — spread_pctl≥0.9 in profit ≥0.3R → breakeven lock (spread-shock 3× full exit already in monitor).
+- **Contention control**: single pending_modification slot honored — all adaptive writes filter `pending_modification: None`; partial/stop pending flags with 30s TTL; `trade_manager` now SKIPS scope scalp_fast entirely (was managing all mt5 trades incl. scalp).
+- Priority: EXIT (tp_hit > p_collapse > regime_flip > ev_negative) > PARTIAL > stress stop tightens > liquidity lock > vol trail > TIGHTEN_TP > HOLD. Time-decay & regime-flip exits pre-existing.
+- Tests: `tests/unit/scalp/test_phaseB_trade_mgmt.py` (21). Suite: 2344 passed; 7 failures are LIVE-EA-OFFLINE environmental (heartbeat stale 293s, M15 stream missing) — not regressions.
+- NEXT: Phase C — AI decision quality (EV engine pre-entry, trade quality score, regime classifier, meta strategy selector, MTF confirm, correlation awareness, broker-learning feedback — much exists: exec_quality, broker_stats, edge.py; audit then fill gaps).
+
