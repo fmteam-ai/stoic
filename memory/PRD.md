@@ -841,3 +841,12 @@ User choices: build A (multi-account) before B (broker comparison), API + UI tog
 - Tested: iteration_65.json — 16/16 backend pytest (tests/test_iter138_broker_comparison.py) + frontend 100%, no issues.
 - Live insight from real data: OnEquity best slippage (0.02 pips) + only profitable broker (+$109, PF 1.05); VTMarkets fastest dispatch (1.6s) + 0% failures.
 - Next: Phase H Part C (Enterprise APIs); pending P0: Step-Up TOTP 2FA.
+
+## Iter-139 (2026-07-22) — Phase H Part C · Enterprise APIs (API keys + /v1 + UI) — DONE
+- routes/enterprise_routes.py (registered in server.py): mgmt_router /api/api-keys (cookie+CSRF auth): GET list / POST create (returns full key ONCE) / POST {id}/revoke. Cap 10 active keys/user. public_router /api/v1 (X-API-Key header): /v1/me (introspection), /v1/accounts (scope read:accounts, NO bridge_token/creds), /v1/trades (read:trades; filters status/symbol/account_id/from_date/to_date, limit≤500, offset, total), /v1/portfolio (read:portfolio, reuses accounts_overview).
+- Security (per integration_expert playbook): key `stoic_live_<token_urlsafe(32)>`, sha256 hash + 19-char display prefix stored (irretrievable model), hmac.compare_digest, per-key in-memory sliding-window rate limit (60s, default 120/min, 429), last_used_at + total_requests tracking, revoked→401.
+- Frontend: /enterprise-api page (EnterpriseApi.jsx) — create form (name, scope checkbox cards, rate limit), one-time key reveal modal w/ copy, keys table (prefix, scopes, rate, last used, requests, ACTIVE/REVOKED, revoke), curl quick-start docs card. Sidebar INFRASTRUCTURE → "Enterprise API" (nav-enterprise-api).
+- GOTCHA: frontend routes MUST NOT start with /api — ingress routes /api* to backend port 8001 (original /api-access 404'd; renamed to /enterprise-api).
+- Tested: iteration_66.json — 17/17 backend pytest (tests/test_iter139_enterprise_api.py incl. 429 rate limit, 10-key cap, secret-leak checks) + frontend flows 100%. Revoked test keys purged from DB after run.
+- Future notes (non-bugs): rate limiter is per-process best-effort; mgmt list caps at 100 keys (no pagination).
+- PHASE H COMPLETE (A multi-account, B broker comparison, C enterprise APIs). Pending P0: Step-Up TOTP 2FA.
