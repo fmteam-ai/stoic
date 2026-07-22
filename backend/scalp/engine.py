@@ -39,6 +39,7 @@ from pathlib import Path
 from scalp import edge, gate, kill, permissions, setup
 from scalp import adaptive_exits
 from scalp import decision_quality
+from scalp import market_data
 from scalp import order_state
 from scalp import outbox
 from scalp import risk_reservations
@@ -811,6 +812,8 @@ class ScalpRunner:
         self.broker = ""
         self.account_type = ""
         self.health = {"status": "OK", "open_allowed": False, "reasons": []}
+        self.data_quality = market_data.DataQualityMonitor()   # Phase E
+        self._dq_snapshot: dict | None = None
         self.open_sims: list[ShadowSim] = []
         self.live_trades: dict = {}            # trade_id -> {state: QUEUED|OPEN|CLOSE_REQUESTED,...}
         self._hydrated = False
@@ -848,19 +851,36 @@ class ScalpRunner:
             try:
                 tm = int(raw["tm"])
                 if last_tm is not None and tm <= last_tm:
+                    self.data_quality.record_out_of_order()
                     continue                    # duplicate / out-of-order / old batch
+                # Phase E — validate the quote BEFORE it can touch state,
+                # features or decisions; suspects are kept but counted.
+                _v = market_data.validate_tick(
+                    raw["b"], raw["a"],
+                    last_mid=(self.state.last_tick.bid
+                              + self.state.last_tick.ask) / 2.0
+                    if self.state.last_tick else None)
+                if not _v["ok"]:
+                    self.data_quality.record_invalid(_v["reason"])
+                    continue
                 last_tm = tm
                 t = TickEvent(symbol=self.symbol, broker_time_ms=tm,
                               received_time_ms=recv,
                               bid=float(raw["b"]), ask=float(raw["a"]))
             except (KeyError, TypeError, ValueError):
+                self.data_quality.record_invalid("unparseable")
                 continue
+            self.data_quality.record_tick(
+                tm, (t.ask - t.bid) / self.cfg.pip_size,
+                suspect=_v["suspect"])
             self.state.update(t, trusted=trusted)
             self.counters["ticks"] += 1
             self._advance_sims(db, t)
             self._monitor_live_exits(db, t)
             self._tick_buffer.append({"tm": t.broker_time_ms, "b": t.bid, "a": t.ask})
-        self.health = kill.evaluate(self.state, self.cfg)
+        self._dq_snapshot = self.data_quality.snapshot()
+        self.health = kill.evaluate(self.state, self.cfg,
+                                    data_quality=self._dq_snapshot)
         permissions.maybe_refresh(db, self.user_id, self.symbol, self.cfg)
         strategy_select.maybe_refresh(db, self.symbol, self.model_key())
         self._maybe_flush_ticks(db)
@@ -880,7 +900,9 @@ class ScalpRunner:
                 "batch_fresh": batch_fresh,
                 "transport_age_ms": transport_age,
                 "trusted": trusted,
-                "broker_age_ms": broker_age}
+                "broker_age_ms": broker_age,
+                "data_quality": ((self._dq_snapshot or {}).get("rating"),
+                                 (self._dq_snapshot or {}).get("score"))}
 
     # ---------------- decision pipeline ----------------
 
@@ -2766,6 +2788,8 @@ class ScalpRunner:
             "model_key": self.model_key(),
             "risk_restored": self._risk_restored,
             "health": self.health,
+            # Phase E — rolling session data-quality metrics for this feed
+            "data_quality": self._dq_snapshot,
             "block_reasons": sorted(account_block_reasons(self.account_id)),
             "broker_state_stale": broker_state_stale_reason(self.account),
             "capacity_integrity": capacity_integrity_reason(

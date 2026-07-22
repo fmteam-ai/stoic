@@ -21,7 +21,7 @@ def clock_drift_residual_ms(offset_ms: float) -> float:
     return float(offset_ms - round(offset_ms / TZ_SNAP_MS) * TZ_SNAP_MS)
 
 
-def evaluate(state, cfg) -> dict:
+def evaluate(state, cfg, data_quality: dict | None = None) -> dict:
     reasons = []
     if state.last_tick is None:
         reasons.append("no market data")
@@ -32,6 +32,11 @@ def evaluate(state, cfg) -> dict:
             reasons.append("quote stale")
         if abs(clock_drift_residual_ms(state.clock_drift_ms)) > MAX_CLOCK_DRIFT_MS:
             reasons.append("clock drift excessive")
+    # Phase E — the session data-quality score gates NEW entries: a POOR
+    # feed (invalid ticks, gaps, spread anomalies) cannot be traded on.
+    if data_quality is not None and data_quality.get("rating") == "POOR":
+        reasons.append("market data quality poor "
+                       f"(score {data_quality.get('score')})")
     if state.reject_rate() > MAX_REJECT_RATE:
         reasons.append("order rejection rate elevated")
     if (state.fills_seen >= 5

@@ -795,3 +795,14 @@ Audit: main system ALREADY had `portfolio/` (sectors, VaR, drawdown, correlation
 - Tests: `tests/unit/scalp/test_phaseD_portfolio_risk.py` (20; pip math: 1.0 lot = $10/pip majors). Scalp suites 354 ✓. Full regression 2378 passed; 7 env failures (live-EA offline) + 7 transient preview-URL connect timeouts (module passes 11/11 in isolation). Live-verified: /portfolio/snapshot returns the new fields.
 - NEXT: Phase E — Market Data Layer (tick validation, missing-tick detection, session quality metrics, feed health, spread anomalies, timestamp consistency). Some exists: state.py dedupe/ordering, spread pctl, health monitor — audit first. Then F/G/H. TOTP 2FA still queued.
 
+
+## Phase E — Market Data Layer COMPLETE (2026-06)
+Audit: timestamp consistency (clock drift residual, delayed-batch guard, transport age), tick dedupe/ordering watermark, p97 spread kill-check, quote staleness ALREADY existed. Gaps delivered in `scalp/market_data.py`:
+- **Tick validation** `validate_tick()`: hard-drop non_positive/inverted/absurd_spread (>5% of price)/unparseable; price jumps >2% tick-to-tick are KEPT but flagged suspect (flash moves must not be dropped) — runs in `ingest()` BEFORE state/features can see the quote.
+- **Missing-tick detection**: inter-tick broker-time gaps; >10s = gap alert; >30min = session break (not counted). max_gap/median_gap tracked.
+- **Session quality metrics** `DataQualityMonitor` (rolling 2000 ticks): accepted/invalid/suspect/out-of-order counts, gap events, median+p95 spread, spread anomaly ratio (>3× median) → composite score 0-100, rating GOOD≥80/DEGRADED≥60/POOR<60.
+- **Feed health integration**: `kill.evaluate(state, cfg, data_quality=...)` — POOR rating → HALTED (new entries blocked, closing always allowed). Rating+score returned from ingest; full snapshot in runner `status()` as `data_quality`.
+- Multi-feed comparison: N/A (single EA feed) — documented as unsupported.
+- Tests: `tests/unit/scalp/test_phaseE_market_data.py` (17 incl. kill integration with stub state/cfg). Scalp suites 371 ✓. Full regression 2402 passed, same 7 live-EA-offline env failures. NOTE: editing engine.py while integration API tests run causes transient hot-reload 500s — rerun before judging.
+- NEXT: Phase F — Worker architecture (workers/ already split: trading/reconciliation/tuning + BACKGROUND_WORKERS_IN_PROCESS flag; remaining: protection/market-data/analytics/model separation — audit first). Then G (trace-ID observability), H (institutional). TOTP 2FA still queued.
+
