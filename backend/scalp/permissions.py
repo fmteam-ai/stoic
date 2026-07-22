@@ -22,39 +22,13 @@ def _key(user_id: str, symbol: str) -> str:
 
 async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
     perms = {"long_enabled": False, "short_enabled": False, "reasons": [],
-             "regime": "UNKNOWN", "computed_at": datetime.now(timezone.utc).isoformat()}
+             "regime": "UNKNOWN", "regime_reason": None,
+             "computed_at": datetime.now(timezone.utc).isoformat()}
 
-    # session window (UTC)
-    hour = datetime.now(timezone.utc).hour
-    if not (cfg.session_start_utc <= hour < cfg.session_end_utc):
-        perms["reasons"].append("outside allowed sessions")
-        return perms
-
-    # scheduled-news guard — fail closed on error (news status unknown)
-    try:
-        from economic_calendar import upcoming_for
-        events = await upcoming_for(symbol) or []
-        now = datetime.now(timezone.utc)
-        for ev in events:
-            if str(ev.get("impact", "")).lower() != "high":
-                continue
-            ts = ev.get("time") or ev.get("timestamp")
-            try:
-                evt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                # item 20 — a HIGH-impact event we cannot time is UNKNOWN
-                # risk for a scalper: fail closed instead of skipping it.
-                perms["reasons"].append("news event timestamp invalid — fail closed")
-                return perms
-            mins = (evt - now).total_seconds() / 60.0
-            if -cfg.news_blackout_minutes <= mins <= cfg.news_blackout_minutes:
-                perms["reasons"].append(f"news blackout: {ev.get('title') or ev.get('name')}")
-                return perms
-    except Exception as e:  # noqa: BLE001
-        perms["reasons"].append(f"news status unknown ({type(e).__name__}) — fail closed")
-        return perms
-
-    # Phase C — deterministic regime classifier with H1 MTF confirmation
+    # Phase C — regime is classified FIRST and ALWAYS so the UI shows the
+    # actual market state even when a later gate blocks trading (the old
+    # ordering left regime=UNKNOWN whenever session/news returned early).
+    regime_ok = False
     try:
         from scalp import regime as regime_mod
         doc = await db.intraday_candles.find_one(
@@ -62,26 +36,100 @@ async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
             {"bars": {"$slice": -24}})
         bars = (doc or {}).get("bars") or []
         if len(bars) < 12:
-            perms["reasons"].append("insufficient M15 context")
-            return perms
-        rd = regime_mod.classify(bars, cfg.pip_size)
-        perms["regime_detail"] = rd
-        perms["ema_slope_pips"] = rd.get("ema_slope_pips")
-        if rd["regime"] == "VOLATILITY_SHOCK":
-            perms["regime"] = "VOLATILITY_SHOCK"
-            perms["reasons"].append("volatility shock — extreme conditions")
-            return perms
-        if rd["regime"] == "TREND_UP":
-            perms["regime"] = "TRENDING_UP"
-            perms["long_enabled"] = True
-        elif rd["regime"] == "TREND_DOWN":
-            perms["regime"] = "TRENDING_DOWN"
-            perms["short_enabled"] = True
+            perms["regime_reason"] = (
+                f"insufficient M15 history ({len(bars)}/12 bars) — "
+                "EA streams candles every 5 min; wait for warm-up")
         else:
-            perms["regime"] = "FLAT"
-            perms["reasons"].append("no directional regime")
+            rd = regime_mod.classify(bars, cfg.pip_size)
+            perms["regime_detail"] = rd
+            perms["ema_slope_pips"] = rd.get("ema_slope_pips")
+            regime_ok = True
+            if rd["regime"] == "VOLATILITY_SHOCK":
+                perms["regime"] = "VOLATILITY_SHOCK"
+            elif rd["regime"] == "TREND_UP":
+                perms["regime"] = "TRENDING_UP"
+            elif rd["regime"] == "TREND_DOWN":
+                perms["regime"] = "TRENDING_DOWN"
+            else:
+                perms["regime"] = "FLAT"
     except Exception as e:  # noqa: BLE001
-        perms["reasons"].append(f"regime unavailable ({type(e).__name__}) — fail closed")
+        perms["regime_reason"] = f"classifier error ({type(e).__name__})"
+
+    # session window (UTC)
+    hour = datetime.now(timezone.utc).hour
+    if not (cfg.session_start_utc <= hour < cfg.session_end_utc):
+        perms["reasons"].append(
+            f"outside allowed sessions ({cfg.session_start_utc:02d}-"
+            f"{cfg.session_end_utc:02d} UTC)")
+        return perms
+
+    # scheduled-news guard — fail closed on error (news status unknown).
+    # Events carry epoch `when_ts` + ISO `when` (economic_calendar contract);
+    # the old code read non-existent `time`/`timestamp` keys, so EVERY
+    # high-impact event within 24h tripped "timestamp invalid — fail closed".
+    news_diag = {"provider": None, "status": "UNKNOWN", "events_24h": 0,
+                 "next_high_impact": None,
+                 "blackout_minutes": cfg.news_blackout_minutes}
+    try:
+        from economic_calendar import upcoming_for, feed_status
+        events = await upcoming_for(symbol) or []
+        news_diag.update(feed_status())
+        news_diag["events_24h"] = len(events)
+        # Provider fully down with an empty cache = we are blind to scheduled
+        # news → fail CLOSED (a silent [] here used to fail open).
+        if news_diag.get("status") == "DOWN":
+            perms["reasons"].append("news feed unavailable — fail closed")
+            perms["news"] = news_diag
+            return perms
+        now = datetime.now(timezone.utc)
+        for ev in events:
+            if str(ev.get("impact", "")).lower() != "high":
+                continue
+            ts = ev.get("when_ts")
+            if ts is not None:
+                evt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+            else:
+                try:
+                    evt = datetime.fromisoformat(
+                        str(ev.get("when")).replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    # item 20 — a HIGH-impact event we cannot time is UNKNOWN
+                    # risk for a scalper: fail closed instead of skipping it.
+                    perms["reasons"].append(
+                        "news event timestamp invalid — fail closed")
+                    perms["news"] = news_diag
+                    return perms
+            mins = (evt - now).total_seconds() / 60.0
+            if news_diag["next_high_impact"] is None and mins >= 0:
+                news_diag["next_high_impact"] = {
+                    "title": ev.get("title"), "country": ev.get("country"),
+                    "when": evt.isoformat(), "minutes_away": round(mins, 1)}
+            if -cfg.news_blackout_minutes <= mins <= cfg.news_blackout_minutes:
+                perms["reasons"].append(
+                    f"news blackout: {ev.get('title') or ev.get('name')}")
+                perms["news"] = news_diag
+                return perms
+        perms["news"] = news_diag
+    except Exception as e:  # noqa: BLE001
+        news_diag["status"] = "DOWN"
+        perms["news"] = news_diag
+        perms["reasons"].append(
+            f"news status unknown ({type(e).__name__}) — fail closed")
+        return perms
+
+    # direction enablement from the (already computed) regime
+    if not regime_ok:
+        perms["reasons"].append(
+            perms["regime_reason"] or "regime unavailable — fail closed")
+        return perms
+    if perms["regime"] == "VOLATILITY_SHOCK":
+        perms["reasons"].append("volatility shock — extreme conditions")
+    elif perms["regime"] == "TRENDING_UP":
+        perms["long_enabled"] = True
+    elif perms["regime"] == "TRENDING_DOWN":
+        perms["short_enabled"] = True
+    else:
+        perms["reasons"].append("no directional regime")
     return perms
 
 
@@ -91,6 +139,9 @@ def get_cached(user_id: str, symbol: str) -> dict:
     if ent is None or time.time() - ent["ts"] > STALE_SEC:
         return {"long_enabled": False, "short_enabled": False,
                 "regime": "UNKNOWN",
+                "regime_reason": ("permissions not refreshed recently — the "
+                                  "refresh runs on incoming ticks, so this "
+                                  "usually means the tick stream is offline"),
                 "reasons": ["control-plane permissions stale — fail closed"]}
     return ent["perms"]
 

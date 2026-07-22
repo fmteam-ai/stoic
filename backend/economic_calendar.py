@@ -39,7 +39,7 @@ SYMBOL_CURRENCIES = {
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
 
 # In-memory cache
-_cache = {"events": None, "expires_at": 0}
+_cache = {"events": None, "expires_at": 0, "fetched_at": 0, "last_error": None}
 _lock = asyncio.Lock()
 
 
@@ -130,12 +130,33 @@ async def get_events() -> list:
             evts = await _fetch_events()
             _cache["events"] = evts
             _cache["expires_at"] = time.time() + 3600  # 1h
+            _cache["fetched_at"] = time.time()
+            _cache["last_error"] = None
             return evts
-        except Exception:
+        except Exception as e:
             # Failure backoff (e.g. HTTP 429 rate limit): keep stale events and
             # stop hammering the feed for 10 min so the limit can reset.
             _cache["expires_at"] = time.time() + 600
+            _cache["last_error"] = f"{type(e).__name__}: {e}"
             return _cache["events"] or []
+
+
+def feed_status() -> dict:
+    """Diagnostics for UIs: provider health of the calendar feed."""
+    now = time.time()
+    fetched = _cache.get("fetched_at") or 0
+    return {
+        "provider": "ForexFactory (weekly XML)",
+        "last_fetch_at": (datetime.fromtimestamp(fetched, tz=timezone.utc).isoformat()
+                          if fetched else None),
+        "last_fetch_age_min": round((now - fetched) / 60.0, 1) if fetched else None,
+        "cached_events": len(_cache.get("events") or []),
+        "last_error": _cache.get("last_error"),
+        "status": ("OK" if _cache.get("events") and not _cache.get("last_error")
+                   else "DEGRADED" if _cache.get("events")
+                   else "DOWN"),
+        "timezone": "UTC (feed times parsed verbatim, iter-131)",
+    }
 
 
 def relevant_events_for(symbol: str, events: list) -> list:

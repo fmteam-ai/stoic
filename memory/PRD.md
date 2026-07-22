@@ -850,3 +850,12 @@ User choices: build A (multi-account) before B (broker comparison), API + UI tog
 - Tested: iteration_66.json — 17/17 backend pytest (tests/test_iter139_enterprise_api.py incl. 429 rate limit, 10-key cap, secret-leak checks) + frontend flows 100%. Revoked test keys purged from DB after run.
 - Future notes (non-bugs): rate limiter is per-process best-effort; mgmt list caps at 100 keys (no pagination).
 - PHASE H COMPLETE (A multi-account, B broker comparison, C enterprise APIs). Pending P0: Step-Up TOTP 2FA.
+
+## Iter-140 (2026-07-22) — Scalp Fast Path: "no trades" investigation + explainability suite — DONE
+ROOT CAUSES FOUND:
+1. NEWS FAIL-CLOSED BUG (scalp/permissions.py): guard read non-existent `ev["time"]/["timestamp"]` — calendar events carry `when` (ISO) + `when_ts` (epoch). Every high-impact event within 24h → "news event timestamp invalid — fail closed". FIXED (uses when_ts, fallback when; genuinely unparseable still fails closed).
+2. REGIME UNKNOWN: regime was classified AFTER session/news gates, so the news bug's early-return left regime=UNKNOWN. FIXED: regime always classified FIRST; explicit regime_reason when UNKNOWN (insufficient M15 bars n/12, classifier error, or stale-cache "tick stream offline" hint in get_cached).
+3. FAIL-OPEN GAP: calendar feed fully DOWN (0 cached events) silently passed the news guard. FIXED: "news feed unavailable — fail closed". economic_calendar.py: added fetched_at/last_error tracking + feed_status() (provider/status OK|DEGRADED|DOWN/last fetch/cached events).
+4. Remaining rejections are HONEST ECONOMICS: FLAT regime (strategy trades trends only) + net edge ≈ −1p vs +0.15p threshold; 15 shadow samples too small to judge (UI now says so).
+UI (Scalp.jsx): regime chip colored w/ detail tooltip + inline UNKNOWN reason; news diagnostics panel (provider/status/last update/next high impact + countdown/blackout ±min · UTC); quote-age tiers (<500 excellent/<1s acceptable/<2s caution/reject) + TICK STREAM OFFLINE banner w/ EA v1.48 hint; decisions table: STAGE column (rejectStage from reject_stage field or first failing gate) + click-to-expand pipeline trace (Signal→Regime/News→Forecast→EV→Risk→Quality→Execution Gate→Broker with ✓/✕ + details) + quality breakdown chips; LOW SAMPLE caveat when shadow n<100.
+Tests: tests/unit/scalp/test_iter140_permissions_news.py (6 new). Full suite 2457 passed (1 unrelated login rate-limit flake, passes isolated). Screenshot-verified live: REGIME FLAT, news panel OK w/ next event countdown, pipeline trace rendering.

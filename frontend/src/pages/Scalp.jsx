@@ -1,10 +1,76 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Fragment } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Zap, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
 const fmt = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
+
+// iter-140 · Quote-age tiers: <500 excellent · <1000 acceptable · <2000 caution · beyond reject
+const quoteAge = (ms) => {
+    if (ms == null || ms >= 86400000) return { label: "—", color: "#52525B", tier: "OFFLINE" };
+    if (ms < 500) return { label: `${ms}ms`, color: "#00FF41", tier: "EXCELLENT" };
+    if (ms < 1000) return { label: `${ms}ms`, color: "#A1A1AA", tier: "ACCEPTABLE" };
+    if (ms < 2000) return { label: `${ms}ms`, color: "#FFB000", tier: "CAUTION" };
+    return { label: `${ms}ms`, color: "#FF3B30", tier: "REJECT" };
+};
+
+const REGIME_COLORS = {
+    TRENDING_UP: "#00FF41", TRENDING_DOWN: "#00FF41", FLAT: "#A1A1AA",
+    RANGE: "#A1A1AA", VOLATILITY_SHOCK: "#FFB000", UNKNOWN: "#FF3B30",
+};
+
+const STAGE_LABELS = {
+    pre_submit_quote_invalid: "Execution Gate · quote", pre_submit_drift: "Execution Gate · drift",
+    pre_submit_spread: "Execution Gate · spread", pre_submit_reforecast: "Forecast Revalidation",
+    pre_submit_edge_revalidation: "EV Revalidation", pre_submit_execution_quality: "Execution Quality",
+    pre_submit_adaptive_edge: "Adaptive Edge", low_fill_probability_ev: "Fill Probability EV",
+    lease_lost_before_submit: "Submission Lease", pre_submit_broker_state: "Broker State",
+    pre_submit_risk_unknown: "Risk Engine", pre_submit_resize: "Risk Engine · resize",
+    combined_decision_quality: "Decision Quality", pre_submit_exposure: "Exposure Cap",
+    portfolio_risk: "Portfolio Risk", submission_capacity: "Capacity",
+    capacity_integrity: "Capacity Integrity", submission_capacity_broker: "Broker Capacity",
+    pre_submit_broker_constraints: "Broker Constraints",
+};
+
+// Which subsystem stopped a rejected candidate.
+function rejectStage(d) {
+    if (d.reject_stage) return STAGE_LABELS[d.reject_stage] || d.reject_stage;
+    const g = d.gates || {};
+    if (g.permission && g.permission.ok === false) {
+        const rs = (g.permission.reasons || []).join(" ");
+        if (/news/i.test(rs)) return "News Filter";
+        if (/session/i.test(rs)) return "Session Window";
+        return "Regime Filter";
+    }
+    if (g.edge && g.edge.ok === false) return "Expected Value";
+    if (g.risk && g.risk.ok === false) return "Risk Engine";
+    if (g.final && g.final.ok === false) {
+        const failed = Object.entries(g.final.checks || {}).filter(([, v]) => !v).map(([k]) => k);
+        return `Execution Gate${failed.length ? ` · ${failed.join(",")}` : ""}`;
+    }
+    return "—";
+}
+
+// Ordered pipeline ladder for one decision: [{name, status: pass|fail|info, detail}]
+function pipelineStages(d) {
+    const g = d.gates || {};
+    const stages = [{ name: "Signal", status: "pass", detail: d.setup ? `${d.setup.preset || "setup"} · impulse ${fmt(d.setup.impulse_pips, 1)}p` : "candidate" }];
+    if (g.permission) {
+        const rs = (g.permission.reasons || []).join(", ");
+        stages.push({ name: `Regime/News (${g.permission.regime || "?"})`, status: g.permission.ok ? "pass" : "fail", detail: rs || "permitted" });
+    }
+    if (d.forecast) stages.push({ name: "Forecast", status: "pass", detail: `p(target) ${fmt(d.forecast.p_target_before_stop, 2)} · move +${fmt(d.forecast.expected_favorable_move_pips, 2)}p / −${fmt(d.forecast.expected_adverse_move_pips, 2)}p` });
+    if (g.edge) stages.push({ name: "Expected Value", status: g.edge.ok ? "pass" : "fail", detail: g.edge.reason || `net edge ${fmt(g.edge.net_edge_pips, 2)}p vs cost ${fmt(g.edge.cost_pips, 2)}p` });
+    if (g.risk) stages.push({ name: "Risk Engine", status: g.risk.ok ? "pass" : "fail", detail: g.risk.reason || `lot ${fmt(g.risk.lot, 2)} · risk $${fmt(g.risk.actual_risk_usd, 2)}` });
+    if (d.quality) stages.push({ name: "Quality Score", status: d.quality.gate_enabled ? (d.quality.score >= d.quality.gate_min ? "pass" : "fail") : "info", detail: `${d.quality.score}/100${d.quality.gate_enabled ? ` (min ${d.quality.gate_min})` : " · advisory"}` });
+    if (g.final) {
+        const failed = Object.entries(g.final.checks || {}).filter(([, v]) => !v).map(([k]) => k);
+        stages.push({ name: "Execution Gate", status: g.final.ok ? "pass" : "fail", detail: failed.length ? `failed: ${failed.join(", ")}` : "all checks pass" });
+    }
+    stages.push({ name: "Broker", status: d.verdict === "rejected" ? "skip" : "pass", detail: d.submission_status || (d.verdict === "rejected" ? "not submitted" : d.verdict) });
+    return stages;
+}
 
 function Chip({ ok, label, testid }) {
     return (
@@ -32,6 +98,7 @@ export default function Scalp() {
     const [runners, setRunners] = useState([]);
     const [metrics, setMetrics] = useState(null);
     const [decisions, setDecisions] = useState([]);
+    const [expanded, setExpanded] = useState(null);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
 
@@ -176,9 +243,22 @@ export default function Scalp() {
                                   testid="scalp-runner-enabled" />
                             <Chip ok={r.health?.status === "OK"} label={`HEALTH ${r.health?.status}`}
                                   testid="scalp-runner-health" />
-                            <Chip ok={r.permissions?.long_enabled || r.permissions?.short_enabled}
-                                  label={`REGIME ${r.permissions?.regime || "?"}`}
-                                  testid="scalp-runner-regime" />
+                            {(() => {
+                                const reg = r.permissions?.regime || "?";
+                                const c = REGIME_COLORS[reg] || "#FF3B30";
+                                return (
+                                    <span data-testid="scalp-runner-regime"
+                                          title={r.permissions?.regime_detail
+                                              ? `slope ${r.permissions.regime_detail.ema_slope_pips}p · range ${r.permissions.regime_detail.range_pips}p · ER ${r.permissions.regime_detail.efficiency_ratio} · conf ${r.permissions.regime_detail.confidence}`
+                                              : (r.permissions?.regime_reason || "")}
+                                          className="px-2 py-0.5 text-xs border"
+                                          style={{ color: c, borderColor: `${c}66` }}>
+                                        REGIME {reg}
+                                        {reg === "UNKNOWN" && r.permissions?.regime_reason
+                                            ? ` · ${r.permissions.regime_reason}` : ""}
+                                    </span>
+                                );
+                            })()}
                             <button disabled={saving}
                                     onClick={() => removeRunner(r.account_id, r.symbol)}
                                     data-testid="scalp-runner-remove-btn"
@@ -193,11 +273,61 @@ export default function Scalp() {
                             <div>Shadow <span className="text-[#E4E4E7] font-mono">{r.counters?.shadow_trades}</span></div>
                             <div>Live <span className="text-[#E4E4E7] font-mono">{r.counters?.live_trades}</span></div>
                             <div>Spread <span className="text-[#E4E4E7] font-mono">{fmt(r.spread_pips, 2)}p</span></div>
-                            <div>Quote age <span className="text-[#E4E4E7] font-mono">{(r.quote_age_ms == null || r.quote_age_ms >= 86400000) ? "—" : `${r.quote_age_ms}ms`}</span></div>
+                            {(() => {
+                                const qa = quoteAge(r.quote_age_ms);
+                                return (
+                                    <div title={`Tiers: <500ms excellent · <1s acceptable · <2s caution · beyond reject`}>
+                                        Quote age <span className="font-mono" style={{ color: qa.color }}>{qa.label}</span>
+                                        <span className="ml-1 text-[9px] tracking-widest" style={{ color: qa.color }}>{qa.tier !== "OFFLINE" ? qa.tier : ""}</span>
+                                    </div>
+                                );
+                            })()}
                         </div>
+                        {quoteAge(r.quote_age_ms).tier === "OFFLINE" && (
+                            <div className="text-xs text-[#FFB000] mt-2 border border-[#FFB000]/30 bg-[#FFB000]/5 px-2 py-1.5"
+                                 data-testid="scalp-tick-offline">
+                                TICK STREAM OFFLINE — no ticks arriving from this terminal. Check that MT5 is running
+                                with EA v1.48+ attached and <span className="font-mono">TickStreamEnabled=true, TickStreamSymbol={r.symbol}</span>.
+                                Regime &amp; permissions cannot refresh without ticks.
+                            </div>
+                        )}
                         {(r.health?.reasons?.length > 0 || r.permissions?.reasons?.length > 0) && (
                             <div className="text-xs text-[#FF9F0A] mt-2" data-testid="scalp-runner-reasons">
                                 {[...(r.health?.reasons || []), ...(r.permissions?.reasons || [])].join(" · ")}
+                            </div>
+                        )}
+                        {r.permissions?.news && (
+                            <div className="mt-3 border border-[#1F1F1F] bg-[#050505] p-2.5 grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px] text-[#A1A1AA]"
+                                 data-testid="scalp-news-diagnostics">
+                                <div>
+                                    <div className="text-[9px] uppercase tracking-widest text-[#52525B]">News provider</div>
+                                    <div className="font-mono text-[#E4E4E7]">{r.permissions.news.provider || "—"}</div>
+                                </div>
+                                <div>
+                                    <div className="text-[9px] uppercase tracking-widest text-[#52525B]">Status</div>
+                                    <span className="font-mono" style={{ color: r.permissions.news.status === "OK" ? "#00FF41" : r.permissions.news.status === "DEGRADED" ? "#FFB000" : "#FF3B30" }}>
+                                        {r.permissions.news.status}
+                                    </span>
+                                </div>
+                                <div>
+                                    <div className="text-[9px] uppercase tracking-widest text-[#52525B]">Last update</div>
+                                    <div className="font-mono text-[#E4E4E7]">
+                                        {r.permissions.news.last_fetch_age_min != null ? `${r.permissions.news.last_fetch_age_min}min ago` : "—"}
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="text-[9px] uppercase tracking-widest text-[#52525B]">Next high impact</div>
+                                    <div className="font-mono text-[#E4E4E7] truncate"
+                                         title={r.permissions.news.next_high_impact?.title || ""}>
+                                        {r.permissions.news.next_high_impact
+                                            ? `${r.permissions.news.next_high_impact.title} · ${Math.round(r.permissions.news.next_high_impact.minutes_away)}min`
+                                            : "none in 24h"}
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="text-[9px] uppercase tracking-widest text-[#52525B]">Blackout · TZ</div>
+                                    <div className="font-mono text-[#E4E4E7]">±{r.permissions.news.blackout_minutes}min · UTC</div>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -206,6 +336,13 @@ export default function Scalp() {
 
             {/* Metrics */}
             <h2 className="text-sm text-[#A1A1AA] uppercase tracking-widest mb-2">Shadow Performance (labeled outcomes)</h2>
+            {metrics?.n != null && metrics.n < 100 && (
+                <div className="text-xs text-[#FFB000] border border-[#FFB000]/30 bg-[#FFB000]/5 px-3 py-2 mb-2"
+                     data-testid="scalp-low-sample-note">
+                    LOW SAMPLE — {metrics.n} labeled outcome{metrics.n === 1 ? "" : "s"}. Statistics below are not yet
+                    meaningful; withhold judgement until ≥100 (ideally several hundred) samples accumulate.
+                </div>
+            )}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-6">
                 <Metric label="Samples" value={metrics?.n} testid="scalp-metric-n" />
                 <Metric label="Target-first %" value={a.target_before_stop_rate != null ? `${(a.target_before_stop_rate * 100).toFixed(1)}%` : "—"} testid="scalp-metric-tbs" />
@@ -217,7 +354,7 @@ export default function Scalp() {
             </div>
 
             {/* Decisions */}
-            <h2 className="text-sm text-[#A1A1AA] uppercase tracking-widest mb-2">Recent Decisions</h2>
+            <h2 className="text-sm text-[#A1A1AA] uppercase tracking-widest mb-2">Recent Decisions <span className="text-[#52525B] normal-case tracking-normal">· click a row for the full pipeline trace</span></h2>
             <div className="border border-[#1F1F1F] bg-[#0A0A0A] overflow-x-auto" data-testid="scalp-decisions-table">
                 <table className="w-full text-xs">
                     <thead>
@@ -225,6 +362,7 @@ export default function Scalp() {
                             <th className="text-left p-2">Time</th>
                             <th className="text-left p-2">Dir</th>
                             <th className="text-left p-2">Verdict</th>
+                            <th className="text-left p-2">Stage</th>
                             <th className="text-right p-2">Edge (p)</th>
                             <th className="text-right p-2">p(target)</th>
                             <th className="text-right p-2">Cost (p)</th>
@@ -237,11 +375,16 @@ export default function Scalp() {
                     </thead>
                     <tbody>
                         {decisions.map((d) => (
-                            <tr key={d.id} className="border-b border-[#141414] text-[#A1A1AA]"
+                            <Fragment key={d.id}>
+                            <tr className="border-b border-[#141414] text-[#A1A1AA] cursor-pointer hover:bg-[#0D0D0D]"
+                                onClick={() => setExpanded(expanded === d.id ? null : d.id)}
                                 data-testid={`scalp-decision-row-${d.id}`}>
                                 <td className="p-2 font-mono">{new Date(d.ts_ms).toLocaleTimeString()}</td>
                                 <td className={`p-2 font-mono ${d.direction === "BUY" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{d.direction}</td>
                                 <td className="p-2">{d.verdict}</td>
+                                <td className="p-2 text-[#FFB000]" data-testid={`scalp-decision-stage-${d.id}`}>
+                                    {d.verdict === "rejected" ? rejectStage(d) : "—"}
+                                </td>
                                 <td className="p-2 text-right font-mono">{fmt(d.net_edge_pips, 2)}</td>
                                 <td className="p-2 text-right font-mono">{fmt(d.forecast?.p_target_before_stop, 2)}</td>
                                 <td className="p-2 text-right font-mono">{fmt(d.cost_pips, 2)}</td>
@@ -266,9 +409,45 @@ export default function Scalp() {
                                         : "—"}
                                 </td>
                             </tr>
+                            {expanded === d.id && (
+                                <tr className="border-b border-[#141414] bg-[#050505]"
+                                    data-testid={`scalp-decision-pipeline-${d.id}`}>
+                                    <td colSpan={12} className="p-3">
+                                        <div className="flex flex-wrap items-stretch gap-1.5">
+                                            {pipelineStages(d).map((s, i, arr) => (
+                                                <Fragment key={s.name}>
+                                                    <div className={`px-2.5 py-1.5 border min-w-[130px] ${
+                                                        s.status === "pass" ? "border-[#00FF41]/30"
+                                                        : s.status === "fail" ? "border-[#FF3B30]/50 bg-[#FF3B30]/5"
+                                                        : "border-[#1F1F1F]"}`}>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className={s.status === "pass" ? "text-[#00FF41]" : s.status === "fail" ? "text-[#FF3B30]" : "text-[#52525B]"}>
+                                                                {s.status === "pass" ? "✓" : s.status === "fail" ? "✕" : "—"}
+                                                            </span>
+                                                            <span className="text-[10px] uppercase tracking-wider text-[#A1A1AA]">{s.name}</span>
+                                                        </div>
+                                                        <div className="text-[10px] text-[#52525B] mt-0.5 max-w-[220px]">{s.detail}</div>
+                                                    </div>
+                                                    {i < arr.length - 1 && <span className="self-center text-[#333]">→</span>}
+                                                </Fragment>
+                                            ))}
+                                        </div>
+                                        {d.quality?.breakdown && (
+                                            <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-[#A1A1AA]"
+                                                 data-testid={`scalp-quality-breakdown-${d.id}`}>
+                                                <span className="uppercase tracking-widest text-[#52525B]">Quality {d.quality.score}/100 =</span>
+                                                {Object.entries(d.quality.breakdown).map(([k, v]) => (
+                                                    <span key={k} className="font-mono">{k} <span className={v > 0 ? "text-[#00FF41]" : "text-[#52525B]"}>+{v}</span></span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </td>
+                                </tr>
+                            )}
+                            </Fragment>
                         ))}
                         {decisions.length === 0 && (
-                            <tr><td colSpan={11} className="p-4 text-center text-[#52525B]">No decisions yet</td></tr>
+                            <tr><td colSpan={12} className="p-4 text-center text-[#52525B]">No decisions yet</td></tr>
                         )}
                     </tbody>
                 </table>
