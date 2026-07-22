@@ -1605,5 +1605,3 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
    MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", remaining);
 }
-("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", new_vol);
-}

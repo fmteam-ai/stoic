@@ -35,6 +35,58 @@ class TestEaVersionBump:
         assert 'LATEST_EA_VERSION = "1.50"' in _src("/app/frontend/src/components/EaVersionStrip.jsx")
 
 
+def _strip_mql(src):
+    """Remove string/char literals and comments so structure can be checked."""
+    out, i, n = [], 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == '"':
+            i += 1
+            while i < n and src[i] != '"':
+                i += 2 if src[i] == '\\' else 1
+            i += 1
+        elif c == "'":
+            i += 1
+            while i < n and src[i] != "'":
+                i += 2 if src[i] == '\\' else 1
+            i += 1
+        elif src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i)
+            i = n if j < 0 else j + 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+class TestEaStructuralSanity:
+    """Compile-blocking corruption guards (edit fragments, stray braces)."""
+
+    def test_braces_balance_outside_strings(self):
+        s = _strip_mql(_ea())
+        assert s.count("{") == s.count("}"), \
+            f"brace imbalance: {s.count('{')} open vs {s.count('}')} close"
+
+    def test_no_orphan_expression_lines_at_global_scope(self):
+        # a GLOBAL-scope line beginning with '(' is always an edit fragment
+        depth = 0
+        for ln_no, line in enumerate(_strip_mql(_ea()).splitlines(), 1):
+            if depth == 0:
+                assert not line.lstrip().startswith("("), \
+                    f"orphan fragment at global scope, stripped line {ln_no}: {line!r}"
+            depth += line.count("{") - line.count("}")
+
+    def test_file_ends_at_function_close(self):
+        tail = _ea().rstrip()
+        assert tail.endswith("}")
+        # the final function must be self-balanced — nothing dangling after
+        last_fn = _strip_mql(tail[tail.rindex("void ApplyPartialClose("):])
+        assert last_fn.count("{") == last_fn.count("}")
+
+
 class TestEaCommandFence:
     def test_journal_primitives(self):
         src = _ea()
