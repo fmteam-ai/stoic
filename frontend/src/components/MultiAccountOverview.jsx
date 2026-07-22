@@ -99,7 +99,7 @@ export default function MultiAccountOverview({ refreshKey = 0 }) {
                         </button>
                     </div>
                     <div className="h-48">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <ResponsiveContainer width="100%" height="100%" minHeight={180} minWidth={200}>
                             <LineChart data={curve.series} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                                 <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#52525B", fontFamily: "monospace" }}
                                     tickFormatter={(d) => d.slice(5)} minTickGap={30} axisLine={{ stroke: "#1F1F1F" }} tickLine={false} />
