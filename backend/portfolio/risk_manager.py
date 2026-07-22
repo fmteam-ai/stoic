@@ -19,6 +19,7 @@ from collections import defaultdict
 from portfolio.sectors import sector_for
 from portfolio.var import calculate_var
 from portfolio.drawdown import update_and_get as get_drawdown
+import portfolio_risk as _pr
 
 logger = logging.getLogger("portfolio.risk-manager")
 
@@ -266,6 +267,17 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
         "drawdown": dd,
         "sectors": sectors,
         "var": var,
+        # Phase D — currency-leg exposure + deterministic stress scenarios
+        # (gap-multiplied worst single-leg shock) from portfolio_risk
+        "currency_exposure": _pr.currency_exposure(open_positions),
+        "stress": {**_pr.stress_loss_usd(open_positions,
+                                         _pr.DEFAULTS["gap_mult"]),
+                   "cap_usd": round(equity * _pr.DEFAULTS["stress_pct"]
+                                    / 100.0, 2)},
+        "position_correlations": _pr.correlation_matrix([
+            {"symbol": p.get("symbol"), "action": p.get("action"),
+             "lot": p.get("lot_size"), "entry_price": p.get("entry_price"),
+             "stop_loss": p.get("stop_loss")} for p in open_positions]),
         "combined_risk_bucket": {
             "symbols": sorted(set(bucket_symbols)),
             "notional_pct_equity": round(bucket_pct, 3),

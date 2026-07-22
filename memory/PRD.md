@@ -785,3 +785,13 @@ Audit found pre-entry EV (`trade_quality.compute_ev`), quality score + downscale
 - Tests: `tests/unit/scalp/test_phaseC_decision_quality.py` (22). Scalp suites 334 ✓. Full regression 2365 passed; same 7 live-EA-offline environmental failures as baseline (heartbeat/M15 stream) — zero regressions.
 - NEXT: Phase D — Portfolio Risk (correlation matrix, exposure limits incl. currency, vol-adjusted allocation, stress scenarios, cross-strategy coordination). Then E (market data), F (workers), G (trace-ID observability), H (institutional). TOTP 2FA still queued.
 
+
+## Phase D — Portfolio Risk COMPLETE (2026-06)
+Audit: main system ALREADY had `portfolio/` (sectors, VaR, drawdown, correlation-Kelly, sector caps, auto-deleverage, `/api/portfolio/snapshot` + `/deleverage`). Gaps delivered (integrated, not duplicated):
+- **`portfolio_risk.py`** (new, pure core): currency-leg decomposition (`legs`, FX/metals/indices/crypto), deterministic correlation priors (`pair_correlation`: shared-quote +0.65, USD-side-flip −0.65, group 0.85), **position** correlation (× direction signs — long EURUSD ≡ short USDCHF), stop-risk USD per position, `currency_exposure` (net signed risk-USD per leg), `stress_loss_usd` (worst single-leg adverse shock × gap_mult 2.0), `vol_size_multiplier` (downscale-only, floor 0.5), `evaluate()` (cluster 1.5% / ccy 2.0% / stress 5.0% of equity caps).
+- **Scalp cross-strategy gate**: pre-submit (after exposure preflight) queries ALL open trades on the account (every scope) → `portfolio_risk.evaluate` → reject stage `portfolio_risk` with full metrics; then **volatility-adjusted allocation** shrinks final_lot (median of state.vols baseline ≥20 samples, `vol_size_mult` recorded on risk_res). NOTE: `feats`/`eq` are NOT in _submit_live scope — use `decision["features"]` (learned via test failure).
+- **Main snapshot extended**: `build_snapshot` now returns `currency_exposure`, `stress` (with cap_usd) and `position_correlations` alongside sectors/VaR/drawdown.
+- Auth note: API uses COOKIE sessions (login returns user JSON, no bearer token) — curl with `-c/-b` cookie jar.
+- Tests: `tests/unit/scalp/test_phaseD_portfolio_risk.py` (20; pip math: 1.0 lot = $10/pip majors). Scalp suites 354 ✓. Full regression 2378 passed; 7 env failures (live-EA offline) + 7 transient preview-URL connect timeouts (module passes 11/11 in isolation). Live-verified: /portfolio/snapshot returns the new fields.
+- NEXT: Phase E — Market Data Layer (tick validation, missing-tick detection, session quality metrics, feed health, spread anomalies, timestamp consistency). Some exists: state.py dedupe/ordering, spread pctl, health monitor — audit first. Then F/G/H. TOTP 2FA still queued.
+

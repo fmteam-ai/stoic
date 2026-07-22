@@ -1525,6 +1525,47 @@ class ScalpRunner:
             _bg(lambda: _restore_account_state(db, self.account_id,
                                                force=True), "restore")
             return
+        # Phase D — PORTFOLIO-level gate across ALL open positions on the
+        # account (every scope → cross-strategy coordination): correlated
+        # cluster budget, currency-leg exposure caps, stress scenarios.
+        import portfolio_risk
+        _t_now = self.state.last_tick
+        _entry_est = ((_t_now.bid + _t_now.ask) / 2.0) if _t_now else 0.0
+        _sign = 1.0 if decision["direction"] == "BUY" else -1.0
+        _cand = {"symbol": self.symbol, "action": decision["direction"],
+                 "lot": final_lot,
+                 "entry_price": _entry_est,
+                 "stop_loss": _entry_est - _sign * fc.stop_pips
+                 * self.cfg.pip_size}
+        _open_pos = await portfolio_risk.open_positions(db, self.account_id)
+        pf = portfolio_risk.evaluate(_open_pos, _cand, self.equity)
+        if not pf["ok"]:
+            self.state.record_reject()
+            _bg(lambda s={"verdict": "rejected",
+                          "reject_stage": "portfolio_risk",
+                          "portfolio": {k: pf[k] for k in
+                                        ("blocks", "cluster_risk_usd",
+                                         "currency_exposure", "stress",
+                                         "open_positions")}}:
+                db.scalp_decisions.update_one(
+                    {"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            return
+        # Phase D — volatility-adjusted allocation (DOWNSCALE-ONLY): when
+        # the symbol runs hotter than its own baseline, the new lot shrinks.
+        _vols_hist = sorted(self.state.vols)
+        _vol_base = (_vols_hist[len(_vols_hist) // 2]
+                     if len(_vols_hist) >= 20 else None)
+        _vmult = portfolio_risk.vol_size_multiplier(
+            (decision.get("features") or {}).get("vol_short"), _vol_base)
+        if _vmult < 1.0:
+            _vlot = int((final_lot * _vmult) / self.cfg.lot_step) \
+                * self.cfg.lot_step
+            _vlot = max(self.cfg.min_lot, round(_vlot, 2))
+            if _vlot < final_lot:
+                final_lot = _vlot
+                risk_res = {**risk_res, "lot": final_lot,
+                            "vol_size_mult": _vmult}
         # round 14 item 10 — worker-local guard; round 15 item 3 adds the
         # DISTRIBUTED per-broker slot below. Round 15 item 4: capacity
         # rejections carry their own dataset label so infrastructure
