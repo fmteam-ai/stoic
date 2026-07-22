@@ -54,6 +54,7 @@ from routes.safety_blocks_routes import router as safety_blocks_router
 from routes.macro_routes import router as macro_router
 from routes.strategies_routes import router as strategies_router
 from routes.portfolio_routes import router as portfolio_router
+from routes.trace_routes import router as trace_router
 from routes.execution_intel_routes import router as execution_intel_router
 from routes.research_routes import router as research_router
 from routes.crypto_routes import router as crypto_router
@@ -224,6 +225,7 @@ api_router.include_router(safety_blocks_router)
 api_router.include_router(macro_router)
 api_router.include_router(strategies_router)
 api_router.include_router(portfolio_router)
+api_router.include_router(trace_router)
 api_router.include_router(execution_intel_router)
 api_router.include_router(research_router)
 api_router.include_router(crypto_router)

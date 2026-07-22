@@ -22,6 +22,7 @@ EVENT_TYPES = (
     "BrokerSubmitted", "BrokerAccepted", "BrokerRejected",
     "PositionOpened", "ProtectionPlaced", "PositionClosed",
     "FinancialApplied",
+    "StopModifyConfirmed", "StopModifyRejected",   # round 18 item 2
 )
 
 _indexed = False

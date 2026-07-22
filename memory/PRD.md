@@ -817,3 +817,11 @@ Audit: trading/reconciliation/tuning workers + leader-lease base + BACKGROUND_WO
 - Tests: `tests/unit/scalp/test_phaseF_workers.py` (9). Scalp suites 380 ✓. Full regression 2411 passed, same 7 live-EA-offline env failures. Zero regressions.
 - NEXT: Phase G — Observability: end-to-end Trace ID per trade (tick→features→model→risk→OMS→broker→reconciliation→analytics; decision_id already threads most of it — audit trade_events + add trace endpoint "why did this trade happen"). Then H (institutional). TOTP 2FA still queued.
 
+
+## Phase G — Trace Observability COMPLETE (2026-06)
+- **Trace ID = decision_id** (already stamped on decisions, reservations, trade docs via scalp_decision_id, trade_events, financial ledger). `trade_trace.py` (NOT trace.py — stdlib shadow!) assembles the single view: 8 stages (tick→features→model→risk→oms→broker→reconciliation→analytics), merged chronological timeline (decision verdict, reservation transitions, order lifecycle, adaptive actions, broker events, deals) and a deterministic **narrative** answering "why did this trade happen?" (setup+preset+spread, model p%, net edge/EV, 5-pillar quality score, risk lot + vol downscale, fill/stop/target, close reason + P&L; rejected decisions explain their stage and stop).
+- **Endpoint**: GET `/api/trace/{trace_id}` (decision_id OR trade_id), ownership-guarded (404 on other users; admin sees all). NOTE: `get_current_user` returns `user["id"]` not `_id` (fixed 500).
+- **Bug fixed during audit**: round-18 `StopModifyConfirmed/Rejected` events were missing from `trade_events.EVENT_TYPES` → build() raised and they were silently dropped. Added to registry.
+- Tests: unit `test_phaseG_trace.py` (8) + integration `test_phaseG_trace_db.py` (real-DB assembly by decision_id AND trade_id). Scalp suites 388 ✓. Full regression **2426 passed / 0 failed** (live EA back online — even env tests green). Live-verified endpoint on a real decision.
+- NEXT: Phase H — Institutional (multi-account mgmt, portfolio AI, broker comparison, strategy marketplace, white-label, enterprise APIs) — LARGE; needs user scoping. TOTP 2FA still queued. UI candidates: trace viewer panel, verdict panel, portfolio panel, feed-quality card, daily stats card.
+
