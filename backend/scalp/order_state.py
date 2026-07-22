@@ -89,19 +89,37 @@ async def apply(db, trade_id: str, to_state: str, idem_key: str,
                 meta: dict | None = None) -> str:
     """Idempotent, guarded transition. Returns one of:
     'applied' | 'duplicate' (idem key already used) |
-    'invalid' (transition not allowed from current state) | 'missing'."""
+    'invalid' (transition not allowed from current state) | 'missing' |
+    'quarantined' (audit r3 · unverified stateless record).
+
+    Stateless docs (no lifecycle_state) get permissive entry ONLY when
+    verified legacy: lifecycle_version already stamped, legacy_trade marker,
+    or created before the state machine rollout (LEGACY_EPOCH). New
+    malformed records are quarantined instead of silently adopted."""
     if to_state not in ALLOWED_PREV:
         raise ValueError(f"unknown order state {to_state}")
     now = datetime.now(timezone.utc)
     prevs = list(ALLOWED_PREV[to_state])
-    state_guard = {"$or": [{"lifecycle_state": {"$exists": False}},
-                           {"lifecycle_state": None}]}
+    entry_state = not prevs   # QUEUED — the only legitimate NEW-trade entry
+    legacy_ok = {"$or": [{"lifecycle_version": {"$gte": 1}},
+                         {"legacy_trade": True},
+                         {"created_at": {"$lt": LEGACY_EPOCH}},
+                         {"opened_at": {"$lt": LEGACY_EPOCH}}]}
+    stateless = {"$or": [{"lifecycle_state": {"$exists": False}},
+                         {"lifecycle_state": None}]}
+    state_guard: dict = {"$or": [
+        # stateless entry: any new doc may start at QUEUED; deeper states
+        # only for VERIFIED legacy records
+        ({"$and": [stateless]} if entry_state
+         else {"$and": [stateless, legacy_ok]}),
+    ]}
     if prevs:
         state_guard["$or"].append({"lifecycle_state": {"$in": prevs}})
     res = await db.trades.update_one(
         {"_id": _oid(trade_id), "lifecycle_keys": {"$ne": idem_key},
          **state_guard},
-        {"$set": {"lifecycle_state": to_state, "lifecycle_at": now},
+        {"$set": {"lifecycle_state": to_state, "lifecycle_at": now,
+                  "lifecycle_version": 1},
          "$push": {"lifecycle": {"state": to_state, "at": now,
                                  "key": idem_key, **(meta or {})},
                    # audit P1 · SAME-DOCUMENT embedded outbox: the lifecycle
@@ -117,11 +135,24 @@ async def apply(db, trade_id: str, to_state: str, idem_key: str,
     if res.modified_count == 1:
         return "applied"
     doc = await db.trades.find_one(
-        {"_id": _oid(trade_id)}, {"lifecycle_state": 1, "lifecycle_keys": 1})
+        {"_id": _oid(trade_id)},
+        {"lifecycle_state": 1, "lifecycle_keys": 1, "lifecycle_version": 1,
+         "legacy_trade": 1, "created_at": 1, "opened_at": 1})
     if doc is None:
         return "missing"
     if idem_key in (doc.get("lifecycle_keys") or []):
         return "duplicate"
+    if doc.get("lifecycle_state") is None and not entry_state:
+        # stateless AND failed the legacy verification → quarantine
+        await db.trades.update_one(
+            {"_id": _oid(trade_id), "lifecycle_state": None},
+            {"$set": {"lifecycle_quarantined": True,
+                      "lifecycle_quarantine_reason":
+                          f"unverified stateless record; refused {to_state}",
+                      "lifecycle_quarantined_at": now}})
+        logger.error("order_state: QUARANTINED stateless trade=%s "
+                     "(refused %s — not verified legacy)", trade_id, to_state)
+        return "quarantined"
     logger.warning("order_state: invalid transition %s -> %s trade=%s",
                    doc.get("lifecycle_state"), to_state, trade_id)
     return "invalid"

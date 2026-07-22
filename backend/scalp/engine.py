@@ -2109,16 +2109,21 @@ class ScalpRunner:
                     info["pending_stop_ms"] = nm
             info["adaptive_partial_done"] = True
             info["pending_partial_ms"] = nm
-            # P0-2 · position-modification command: awaited, not fire-and-forget
-            await db.trades.update_one(
-                {"_id": _oid(tid), "status": "open",
-                 "pending_modification": None},
-                {"$set": {"pending_modification": dict(mod)},
-                 "$push": {"adaptive_actions": {
-                     "ts_ms": nm, "action": "PARTIAL_CLOSE",
-                     "reason": mod["reason"],
-                     "new_volume": mod["new_volume"],
-                     "new_sl": mod.get("new_sl")}}})
+            # P0-2 · awaited; audit r3 P0 · fenced with intent_id + seq
+            from command_fence import stamp_pending_modification
+            stamped = await stamp_pending_modification(
+                db, {"_id": _oid(tid), "status": "open",
+                     "pending_modification": None},
+                dict(mod))
+            if stamped is not None:
+                await db.trades.update_one(
+                    {"_id": _oid(tid)},
+                    {"$push": {"adaptive_actions": {
+                        "ts_ms": nm, "action": "PARTIAL_CLOSE",
+                        "reason": mod["reason"],
+                        "new_volume": mod["new_volume"],
+                        "new_sl": mod.get("new_sl"),
+                        "intent_id": stamped.get("intent_id")}}})
             return
         if act["action"] == "TIGHTEN_STOP":
             if nm < info.get("adaptive_tighten_next_ms", 0):
@@ -2154,20 +2159,21 @@ class ScalpRunner:
             info["pending_stop_px"] = new_sl
             info["pending_stop_ms"] = nm
             info["pending_stop_request_id"] = req_id
-            # P0-2 · stop-tighten command: awaited, not fire-and-forget
-            await db.trades.update_one(
-                {"_id": _oid(tid), "status": "open",
-                 "pending_modification": None},
-                {"$set": {"pending_modification": {
-                    "type": "MODIFY_SL", "new_sl": new_sl,
-                    "request_id": req_id,
-                    "requested_at": datetime.now(
-                        timezone.utc).isoformat(),
-                    "reason": act["reason"]}},
-                 "$push": {"adaptive_actions": {
-                     "ts_ms": nm, "action": "TIGHTEN_STOP",
-                     "reason": act["reason"], "new_sl": new_sl,
-                     "request_id": req_id}}})
+            # P0-2 · awaited; audit r3 P0 · fenced with intent_id + seq
+            from command_fence import stamp_pending_modification
+            stamped = await stamp_pending_modification(
+                db, {"_id": _oid(tid), "status": "open",
+                     "pending_modification": None},
+                {"type": "MODIFY_SL", "new_sl": new_sl,
+                 "request_id": req_id, "reason": act["reason"]})
+            if stamped is not None:
+                await db.trades.update_one(
+                    {"_id": _oid(tid)},
+                    {"$push": {"adaptive_actions": {
+                        "ts_ms": nm, "action": "TIGHTEN_STOP",
+                        "reason": act["reason"], "new_sl": new_sl,
+                        "request_id": req_id,
+                        "intent_id": stamped.get("intent_id")}}})
 
     def on_stop_modified(self, trade_id: str, new_sl: float | None,
                          success: bool, db=None):
@@ -2213,21 +2219,20 @@ class ScalpRunner:
             info["adaptive_partial_done"] = False   # broker refused → retry
 
     async def _request_close(self, db, trade_id: str, reason: str):
-        res = await db.trades.update_one(
-            {"_id": _oid(trade_id), "status": "open"},
-            {"$set": {"pending_modification": {
-                "type": "FULL_CLOSE",
-                "requested_at": datetime.now(timezone.utc).isoformat(),
-                "reason": f"scalp_{reason}"},
-                "close_reason": f"scalp_{reason}"}})
+        # audit r3 P0 · close command carries an immutable intent + seq
+        from command_fence import stamp_pending_modification
+        stamped = await stamp_pending_modification(
+            db, {"_id": _oid(trade_id), "status": "open"},
+            {"type": "FULL_CLOSE", "reason": f"scalp_{reason}"},
+            extra_set={"close_reason": f"scalp_{reason}"})
         # review item 5 — the close intent is DURABLE only once this write
         # returns; until then the exit monitor keeps retrying it.
         info = self.live_trades.get(trade_id)
         if info is not None:
             info["close_persisted"] = True
-            if res.matched_count == 0:
+            if stamped is None:
                 info["close_persist_note"] = "trade_not_open_in_db"
-        if res.matched_count == 1:
+        if stamped is not None:
             await order_state.apply(db, trade_id, order_state.CLOSE_REQUESTED,
                                     f"closereq:{trade_id}",
                                     meta={"reason": reason})

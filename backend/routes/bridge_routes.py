@@ -355,16 +355,16 @@ async def heartbeat(payload: BridgeHeartbeat):
                                              _os.PROTECTION_REQUESTED,
                                              f"protreq:{tid_s}")
                         if st == "applied":
-                            await db.trades.update_one(
+                            from command_fence import stamp_pending_modification
+                            await stamp_pending_modification(
+                                db,
                                 {"_id": existing["_id"],
                                  "pending_modification": None},
-                                {"$set": {"pending_modification": {
-                                    "type": "MODIFY_SL",
-                                    "new_sl": requested_sl,
-                                    "requested_at": now_iso,
-                                    "reason": "protection_rearm"},
+                                {"type": "MODIFY_SL", "new_sl": requested_sl,
+                                 "reason": "protection_rearm"},
+                                extra_set={
                                     "protection.state": "REARM_REQUESTED",
-                                    "protection.requested_at": now_iso}})
+                                    "protection.requested_at": now_iso})
                     elif requested_sl > 0 and lc == "PROTECTION_REQUESTED":
                         req_at = prot.get("requested_at") or prot.get("filled_at")
                         try:
@@ -374,16 +374,17 @@ async def heartbeat(payload: BridgeHeartbeat):
                         except ValueError:
                             age_s = 0
                         if age_s > 90:
-                            res_esc = await db.trades.update_one(
+                            from command_fence import stamp_pending_modification
+                            stamped = await stamp_pending_modification(
+                                db,
                                 {"_id": existing["_id"],
                                  "pending_modification": None},
-                                {"$set": {"pending_modification": {
-                                    "type": "FULL_CLOSE",
-                                    "requested_at": now_iso,
-                                    "reason": "unprotected_position"},
+                                {"type": "FULL_CLOSE",
+                                 "reason": "unprotected_position"},
+                                extra_set={
                                     "close_reason": "unprotected_position",
-                                    "protection.state": "CLOSE_ESCALATED"}})
-                            if res_esc.modified_count == 1:
+                                    "protection.state": "CLOSE_ESCALATED"})
+                            if stamped is not None:
                                 await _os.apply(
                                     db, tid_s, _os.CLOSE_REQUESTED,
                                     f"closereq:{tid_s}",
@@ -845,6 +846,7 @@ class BridgeModificationAck(BaseModel):
     new_sl: float | None = None
     new_volume: float | None = None
     error: str | None = None
+    intent_id: str | None = None   # EA v1.49+ echoes the command's intent
 
 
 @router.post("/modification-ack")
@@ -855,6 +857,14 @@ async def modification_ack(payload: BridgeModificationAck):
     trade = await db.trades.find_one({"_id": ObjectId(payload.trade_id)})
     if not trade or trade["account_id"] != str(acc["_id"]):
         raise HTTPException(status_code=404, detail="Trade not found")
+
+    # audit r3 P0 · sequence fence: a delayed/replayed ack for a SUPERSEDED
+    # command must never clear the current one or apply an older stop.
+    from command_fence import is_stale_ack
+    if is_stale_ack(trade, payload.intent_id):
+        logger.warning("stale modification-ack ignored trade=%s intent=%s",
+                       payload.trade_id, payload.intent_id)
+        return {"status": "stale_intent_ignored"}
 
     # Notifications to fire AFTER the EA confirms — collected here, dispatched
     # only on the success path so the user never gets a Telegram for an action

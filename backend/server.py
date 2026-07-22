@@ -101,6 +101,9 @@ async def root():
     return {"service": "ai-trading-bot", "status": "ok"}
 
 
+_startup_error: str | None = None
+
+
 @api_router.get("/health")
 async def health():
     db = get_db()
@@ -127,6 +130,11 @@ async def health_ready():
     from fastapi.responses import JSONResponse
     checks = {}
     ok = True
+    # audit r3 P0 · critical startup failures (indexes, dependency health)
+    # fail readiness so orchestrators never route to a degraded replica.
+    if _startup_error is not None:
+        checks["startup"] = f"failed:{_startup_error}"
+        ok = False
     db = get_db()
     try:
         await db.command("ping")
@@ -398,6 +406,12 @@ async def on_startup():
         logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
+        # audit r3 P0 · a failed startup must not serve silently: readiness
+        # reports it (503) and production terminates outright.
+        global _startup_error
+        _startup_error = f"{type(e).__name__}"
+        if os.environ.get("APP_ENV", "").lower() == "production":
+            raise
 
 
 @app.on_event("shutdown")
