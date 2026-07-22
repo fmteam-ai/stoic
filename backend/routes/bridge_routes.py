@@ -1150,6 +1150,24 @@ async def report_trade(payload: BridgeTradeReport):
                     "PARTIAL FILL on open trade=%s requested=%.4f "
                     "filled=%.4f account=%s", payload.trade_id,
                     requested_lot, filled, str(acc["_id"]))
+                # audit ledger: the risk desk must be able to see the
+                # partial-fill adoption retroactively.
+                try:
+                    await db.trade_events.insert_one({
+                        "event_id": f"pf:{payload.trade_id}:"
+                                    f"{payload.deal_ticket or 0}",
+                        "event_type": "PartialFillAdopted",
+                        "trade_id": payload.trade_id,
+                        "account_id": str(acc["_id"]),
+                        "requested_lots": requested_lot,
+                        "filled_lots": filled,
+                        "order_ticket": payload.order_ticket,
+                        "deal_ticket": payload.deal_ticket,
+                        "position_id": payload.position_id,
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception:
+                    pass
                 try:
                     await inc_intel_counter(acc["user_id"],
                                             "partial_fill_open")

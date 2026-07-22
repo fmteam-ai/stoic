@@ -5,12 +5,16 @@ verifies mutation, and confirms the duplicate-ticket guard tolerates order_ticke
 import os, sys, asyncio, time
 import requests
 from bson import ObjectId
-sys.path.insert(0, os.environ.get("BACKEND_DIR", "/app/backend"))
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_BACKEND_DIR = os.path.dirname(_TESTS_DIR)
+_REPO_DIR = os.path.dirname(_BACKEND_DIR)
+sys.path.insert(0, os.environ.get("BACKEND_DIR", _BACKEND_DIR))
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.environ.get("BACKEND_DIR", "/app/backend"), ".env"))
+load_dotenv(os.path.join(os.environ.get("BACKEND_DIR", _BACKEND_DIR), ".env"))
 from motor.motor_asyncio import AsyncIOMotorClient
 
-BASE = os.environ.get("REACT_APP_BACKEND_URL") or open("/app/frontend/.env").read().split("=", 1)[1].strip()
+BASE = os.environ.get("REACT_APP_BACKEND_URL") or open(
+    os.path.join(_REPO_DIR, "frontend", ".env")).read().split("=", 1)[1].strip()
 MARK = "iter148_p0_live"
 
 

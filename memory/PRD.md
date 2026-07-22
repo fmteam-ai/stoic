@@ -20,7 +20,7 @@ via PowerShell auto-installer, and full broker-terminal data integrity
 - Production domain: stoicaibot.com.
 
 ## Current EA version
-**v1.51** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
+**v1.52** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
 `routes/setup_routes.py` (`ea_latest_version`), `frontend/src/pages/Accounts.jsx`,
 `frontend/src/components/EaVersionStrip.jsx`, EA `#property version` + `EA_CLIENT_VERSION`.
 `FENCING_MIN_EA = "1.50"` (live activation floor) deliberately stays at 1.50 so running EAs keep working.
@@ -908,3 +908,18 @@ NEXT-CYCLE BACKLOG (audit round 2): EA-native OrderCheck, shared execution kerne
 5. **UI**: `ExecutionHealthPanel.jsx` on Bot Health page (testids execution-health-panel, exec-outbox-pending, exec-lc-*, exec-cost-*); Trades page adds TICKET column (`trade-ticket-{id}`, tooltip = realized slippage), lifecycle badge in STATUS cell (`lifecycle-{id}`, LIFECYCLE_STYLE map), UNPROT pulse badge for open trades in FILLED_UNPROTECTED/PROTECTION_REQUESTED.
 - Tests: tests/test_iter147_ea_preflight_complete.py (7). Full regression 2588 passed; only 4 failures in test_iter52_round14_live.py = LIVE-EA-dependent (terminal offline in env, not regressions).
 - Verified: curl execution-health with real data (XAUUSD realized 0.41p vs expected ≤5.25p, OnEquity lease epoch 274), screenshots of both pages.
+
+
+## Iter-148 (2026-07-22) — P0 execution-truth audit round 2 (user-provided, all fixed) → EA v1.52
+1. **Partial fills on NEW orders**: ExecuteTrade accepts DONE_PARTIAL; outcome verified from the ACTUAL broker deal→position (`PositionIdFromDeal` via DEAL_POSITION_ID, fallback `FindPositionForTrade`); `opened = accepted || pos_id > 0` (a failed retcode with a live position recovers, never reported failed); reports `filled_volume` + `partial_fill`.
+2. **Order vs position ticket**: journal stores order ("K"), deal ("D"), position id ("Q") separately; mt5_ticket in the open report = POSITION identifier; `SelectPositionById` handles hedging (identifier scan) + netting (margin-mode-gated symbol fallback).
+3. **Ticket precision**: `JSetTicket`/`JGetTicket` split 64-bit tickets into two 32-bit GV doubles (exact); legacy single-double journals still read.
+4. **Netting recovery**: ORDER_SENT crash recovery searches deal HISTORY by magic + trade_id comment + symbol + side + volume in a 2h window.
+5. **MODIFY_SL**: intent consumed ONLY on `success && stop_confirmed` (accepted ≠ confirmed).
+6. **PARTIAL_CLOSE**: success = |remaining − requested| ≤ volume-step tolerance (retcode ignored as truth); structured `volume_mismatch_after_partial_close`.
+7. **Backend**: BridgeTradeReport carries order_ticket/deal_ticket/position_id/filled_volume/partial_fill; /bridge/report stores them, adopts filled lot_size (original_lot_size preserved, `partial_fill_open` counter, `PartialFillAdopted` trade_events audit doc); duplicate guard tolerates the order→position mt5_ticket transition.
+8. **Test portability (release audit P0)**: ALL 98 test files converted to repo-relative paths (`_BACKEND_DIR`/`_REPO_DIR` header walking up to `tests/`); guard test `test_no_hardcoded_app_paths_in_test_code` prevents regressions; suite passes from any CWD. GOTCHA: header must go AFTER `from __future__` imports; f-string paths need manual `f"..."` placement.
+9. **Security**: new-password minimum 6→8 (models.py ×3 + Register/ResetPassword/Settings frontend; existing accounts/logins unaffected — admin123 still works); raw `str(e)` removed from client responses in account/crypto/diagnostic/market/nl/signal routes (stable codes + server logs; deliberate ValueError validation text kept in bot/quant/shadow routes).
+10. `.env.example` created for backend + frontend (keys only). NOTE: /app/frontend/yarn.lock EXISTS — the user's archive export omitted it.
+- Tests: test_iter148_p0_exec_truth.py (14) + testing-agent's test_iter148_p0_live_e2e.py (5, live HTTP+motor). Full regression **2606 passed / 0 failed**. Testing agent iteration_69.json: 100% pass, zero issues.
+- NOT DONE (out of environment scope, told user): MetaEditor .ex5 compile (needs Windows MT5), Dockerfiles/CI manifests (Emergent platform-managed), Vault/KMS, step-up MFA re-prompt for live activation (login TOTP ALREADY EXISTS — test_iter12_settings_2fa passes; only the step-up re-prompt remains).
