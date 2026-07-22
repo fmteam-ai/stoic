@@ -1564,13 +1564,16 @@ class TestNLCommander:
                                timeout=120)
         assert r.status_code == 200, r.text
         body = r.json()
-        # Expect summary + receipts or actions
-        actions = body.get("actions") or []
+        # iter-151 — CLOSE_ALL is live-sensitive: the AI now returns a
+        # reviewable PROPOSAL (requires_confirmation) instead of executing.
+        actions = (body.get("actions") or []) + (body.get("pending_actions") or [])
         receipts = body.get("receipts") or []
         all_action_types = ([a.get("type") for a in actions] +
                             [r.get("action") or r.get("type") for r in receipts])
         assert any("CLOSE_ALL" in (str(x) or "") for x in all_action_types), \
             f"Expected CLOSE_ALL_TRADES action, got: {body}"
+        assert body.get("requires_confirmation") is True, \
+            f"CLOSE_ALL must come back as a proposal, got: {body}"
 
     def test_conditional_trigger_creation_and_delete(self, admin_session):
         r = admin_session.post(f"{API}/nl/command", json={

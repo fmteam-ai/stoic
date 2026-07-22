@@ -975,6 +975,78 @@ async def delete_my_preset(preset_id: str, user=Depends(get_current_user)):
     return {"deleted": True, "id": preset_id}
 
 
+@router.get("/safety-status")
+async def safety_status(user=Depends(get_current_user)):
+    """Iter-151 · single Trading-Safety truth for the dashboard banner:
+    live mode, unprotected fills, unresolved submissions, stale feeds,
+    tripped breakers and worst daily-drawdown usage."""
+    db = get_db()
+    now = datetime.now(timezone.utc)
+
+    def _age(ts):
+        try:
+            d = datetime.fromisoformat(str(ts))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            return (now - d).total_seconds()
+        except Exception:
+            return None
+
+    live_accounts, stale_feeds = [], []
+    async for a in db.accounts.find(
+            {"user_id": user["id"], "status": {"$ne": "deleted"}},
+            {"label": 1, "mode": 1, "trading_enabled": 1,
+             "last_heartbeat": 1, "dormant": 1}):
+        if a.get("dormant") or a.get("trading_enabled") is False:
+            continue
+        if str(a.get("mode") or "").lower() == "live":
+            live_accounts.append(a.get("label"))
+        age = _age(a.get("last_heartbeat"))
+        if age is None or age > 300:
+            stale_feeds.append({"label": a.get("label"),
+                                "age_sec": int(age) if age else None})
+
+    unprotected = await db.trades.count_documents({
+        "user_id": user["id"], "status": "open",
+        "$or": [{"stop_loss": {"$in": [None, 0]}},
+                {"lifecycle_state": {"$in": ["FILLED_UNPROTECTED",
+                                             "PROTECTION_REQUESTED"]}}]})
+    unresolved = await db.trades.count_documents({
+        "user_id": user["id"], "status": "pending",
+        "submission_state": "broker_accepted_unresolved"})
+
+    tripped = []
+    async for c in db.bot_configs.find(
+            {"user_id": user["id"], "tripped_at": {"$ne": None}},
+            {"tripped_reason": 1, "tripped_kind": 1}):
+        tripped.append({"reason": c.get("tripped_reason"),
+                        "kind": c.get("tripped_kind")})
+
+    daily_worst = 0.0
+    try:
+        gauge = await get_risk_gauge(user=user)
+        for g in gauge.get("items", []):
+            daily_worst = max(daily_worst, float(
+                (g.get("daily") or {}).get("consumed_pct") or 0))
+    except Exception:
+        pass
+
+    level = "safe"
+    if stale_feeds or daily_worst >= 70 or tripped:
+        level = "warn"
+    if unprotected > 0 or unresolved > 0 or (tripped and live_accounts):
+        level = "critical"
+
+    return {"generated_at": now.isoformat(),
+            "level": level,
+            "live_accounts": live_accounts,
+            "unprotected_open": unprotected,
+            "unresolved_submissions": unresolved,
+            "stale_feeds": stale_feeds,
+            "tripped": tripped,
+            "daily_worst_consumed_pct": round(daily_worst, 1)}
+
+
 @router.get("/execution-health")
 async def execution_health(user=Depends(get_current_user)):
     """Iter-147 · execution-plumbing visibility: outbox backlog, worker
@@ -1088,7 +1160,74 @@ async def execution_health(user=Depends(get_current_user)):
               "expected_cost_pips": r["exp"]}
              for s, r in sorted(cost_rows.items())]
 
+    # dispatch → broker-open latency percentiles (last 100 auto trades)
+    lat = []
+    async for t in db.trades.find(
+            {"user_id": user["id"], "origin": "auto",
+             "_dispatched_at": {"$exists": True}, "opened_at": {"$ne": None}},
+            {"_dispatched_at": 1, "opened_at": 1}
+            ).sort("opened_at", -1).limit(100):
+        try:
+            d = datetime.fromisoformat(str(t["_dispatched_at"]))
+            o = t["opened_at"]
+            if not isinstance(o, datetime):
+                o = datetime.fromisoformat(str(o))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            if o.tzinfo is None:
+                o = o.replace(tzinfo=timezone.utc)
+            s = (o - d).total_seconds()
+            if 0 <= s < 3600:
+                lat.append(s)
+        except Exception:
+            pass
+    lat.sort()
+
+    def _pct(p):
+        return (round(lat[min(len(lat) - 1, int(p * len(lat)))], 2)
+                if lat else None)
+
+    latency = {"n": len(lat), "p50_sec": _pct(0.50),
+               "p95_sec": _pct(0.95), "p99_sec": _pct(0.99)}
+
+    day_ago = (now - timedelta(days=1)).isoformat()
+    counters = {
+        "rejects_24h": await db.trades.count_documents(
+            {"user_id": user["id"], "status": "failed",
+             "_dispatched_at": {"$gte": day_ago}}),
+        "replays_24h": await db.trades.count_documents(
+            {"user_id": user["id"],
+             "journal_replayed_at": {"$gte": day_ago}}),
+        "partial_fills_open": await db.trades.count_documents(
+            {"user_id": user["id"], "status": "open",
+             "partial_fill": True}),
+    }
+
+    import time as _time
+    t0 = _time.perf_counter()
+    await db.command("ping")
+    heartbeats = []
+    async for a in db.accounts.find(
+            {"user_id": user["id"], "trading_enabled": {"$ne": False},
+             "dormant": {"$ne": True}, "status": {"$ne": "deleted"}},
+            {"label": 1, "last_heartbeat": 1}):
+        hb_age = None
+        try:
+            d = datetime.fromisoformat(str(a.get("last_heartbeat")))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            hb_age = int((now - d).total_seconds())
+        except Exception:
+            pass
+        heartbeats.append({"label": a.get("label"), "age_sec": hb_age,
+                           "fresh": hb_age is not None and hb_age < 300})
+    infra = {"mongo_latency_ms": round((_time.perf_counter() - t0) * 1000, 1),
+             "heartbeats": heartbeats}
+
     return {"generated_at": now_iso,
+            "latency": latency,
+            "counters": counters,
+            "infra": infra,
             "outbox": {"pending": pending, "failed": failed,
                        "oldest_pending_age_sec": oldest_age},
             "workers": workers,

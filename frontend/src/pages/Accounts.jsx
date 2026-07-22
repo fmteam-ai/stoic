@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
+import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import PartnerBrokerCard from "@/components/PartnerBrokerCard";
 import MultiAccountOverview from "@/components/MultiAccountOverview";
@@ -681,6 +682,8 @@ export default function Accounts() {
                                             <QuickInstallPanel accountId={a.id} accountLabel={a.label} />
                                         </div>
                                     )}
+
+                                    <AccountCertification accountId={a.id} />
                                 </div>
                             );
                         })}

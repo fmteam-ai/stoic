@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { Link } from "react-router-dom";
 import { CheckCircle2, Circle, Sparkles, X } from "lucide-react";
+import { LATEST_EA_VERSION } from "@/components/EaVersionStrip";
 
 const DISMISS_KEY = "stoic_onboarding_dismissed";
 
@@ -34,7 +35,7 @@ async function computeSteps() {
         },
         {
             key: "ea",
-            label: "Install the STOIC EA (v1.29+)",
+            label: `Install the STOIC EA (v${LATEST_EA_VERSION}+)`,
             hint: "Download EmergentTradingBridge.mq5, compile in MetaEditor (F7), attach to a chart.",
             done: hasConnectedEa,
             to: "/accounts",

@@ -37,6 +37,20 @@ export default function RiskCommander() {
     const [err, setErr] = useState("");
     const [history, setHistory] = useState([]); // {id, role:user|ai, content, receipts?}
 
+    const approveProposal = async (msgId, actions) => {
+        try {
+            const { data } = await api.post("/nl/command/confirm", { actions });
+            setHistory(h => h.map(m => m.id === msgId ? { ...m, resolved: "approved" } : m)
+                .concat([newMsg({ role: "ai", content: data.summary, receipts: data.receipts })]));
+            toast.success("Proposal approved", { description: data.summary });
+        } catch (e) {
+            setErr(formatApiError(e));
+        }
+    };
+    const rejectProposal = (msgId) => {
+        setHistory(h => h.map(m => m.id === msgId ? { ...m, resolved: "rejected" } : m));
+    };
+
     // Monotonic counter for chat-row keys. Avoids index-as-key (stale after edits/deletes).
     const msgIdRef = useRef(0);
     const newMsg = (m) => ({ id: ++msgIdRef.current, ...m });
@@ -81,6 +95,13 @@ export default function RiskCommander() {
                 const { data } = await api.post("/nl/command", { prompt });
                 if (data.clarification_needed) {
                     setHistory(h => [...h, newMsg({ role: "ai", content: data.clarification_needed, isQuestion: true })]);
+                } else if (data.requires_confirmation) {
+                    setHistory(h => [...h, newMsg({
+                        role: "ai",
+                        content: data.summary,
+                        pendingActions: data.pending_actions,
+                        sensitiveTypes: data.sensitive_types,
+                    })]);
                 } else {
                     setHistory(h => [...h, newMsg({
                         role: "ai",
@@ -251,6 +272,37 @@ export default function RiskCommander() {
                                     }`}>
                                         {m.content}
                                     </div>
+                                    {m.pendingActions?.length > 0 && (
+                                        <div className="mt-2 border border-[#FFB000]/40 bg-[#FFB000]/5 p-2 space-y-2" data-testid={`proposal-${i}`}>
+                                            <div className="font-mono text-[10px] tracking-widest text-[#FFB000]">
+                                                PROPOSAL · {m.sensitiveTypes?.join(" · ")} — needs your approval
+                                            </div>
+                                            {m.pendingActions.map((a, j) => (
+                                                <div key={j} className="font-mono text-[10px] text-[#A1A1AA]">
+                                                    {a.type}{a.params ? ` · ${JSON.stringify(a.params)}` : ""}
+                                                </div>
+                                            ))}
+                                            {!m.resolved && (
+                                                <div className="flex gap-2">
+                                                    <button data-testid={`proposal-approve-${i}`}
+                                                        onClick={() => approveProposal(m.id, m.pendingActions)}
+                                                        className="font-mono text-[10px] tracking-widest px-3 py-1 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10">
+                                                        APPROVE &amp; EXECUTE
+                                                    </button>
+                                                    <button data-testid={`proposal-reject-${i}`}
+                                                        onClick={() => rejectProposal(m.id)}
+                                                        className="font-mono text-[10px] tracking-widest px-3 py-1 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10">
+                                                        REJECT
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {m.resolved && (
+                                                <div className={`font-mono text-[10px] tracking-widest ${m.resolved === "approved" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
+                                                    {m.resolved === "approved" ? "APPROVED — EXECUTED" : "REJECTED"}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                     {m.receipts?.length > 0 && (
                                         <div className="mt-2 space-y-1" data-testid={`receipts-${i}`}>
                                             {m.receipts.map((r, j) => (

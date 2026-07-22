@@ -1007,3 +1007,74 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
             "Watch the Trades page to see fill + close — it should close via TP within seconds in liquid markets."
         ),
     }
+
+
+@router.get("/certification")
+async def accounts_certification(user=Depends(get_current_user)):
+    """Iter-151 · per-account go-live certification checklist, computed from
+    the EA's own reported state (heartbeats, specs, clock, history sync)."""
+    from routes.diagnostic_routes import LATEST_EA
+    db = get_db()
+    now = datetime.now(timezone.utc)
+
+    def _age(ts):
+        try:
+            d = datetime.fromisoformat(str(ts))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            return (now - d).total_seconds()
+        except Exception:
+            return None
+
+    out = []
+    async for a in db.accounts.find({"user_id": user["id"],
+                                     "status": {"$ne": "deleted"}}):
+        hb_age = _age(a.get("last_heartbeat"))
+        specs = a.get("symbol_specs") or {}
+        specs_age = _age(a.get("symbol_specs_updated_at"))
+        spreads_age = _age(a.get("spreads_updated_at"))
+        sync_age = _age(a.get("last_full_sync_at"))
+        v = a.get("ea_version")
+        acct_type = str(a.get("account_type") or "").lower()
+        checks = [
+            {"key": "ea_version", "label": "EA version",
+             "value": v or "—", "ok": bool(v) and v == LATEST_EA,
+             "hint": f"latest is {LATEST_EA}"},
+            {"key": "bridge_paired", "label": "Bridge paired",
+             "value": "yes" if a.get("bridge_token") else "no",
+             "ok": bool(a.get("bridge_token"))},
+            {"key": "heartbeat", "label": "EA heartbeat",
+             "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
+             "ok": hb_age is not None and hb_age < 300},
+            {"key": "account_type", "label": "Account type",
+             "value": acct_type or "unknown",
+             "ok": acct_type in ("hedging", "netting")},
+            {"key": "symbol_specs", "label": "Symbol / stop-level specs",
+             "value": f"{len(specs)} symbols",
+             "ok": len(specs) > 0 and specs_age is not None
+                   and specs_age < 86400},
+            {"key": "spread_feed", "label": "Tick / spread feed",
+             "value": (f"{int(spreads_age)}s ago"
+                       if spreads_age is not None else "never"),
+             "ok": spreads_age is not None and spreads_age < 600},
+            {"key": "clock_sync", "label": "Broker clock offset",
+             "value": (f"{a.get('broker_utc_offset_sec')}s"
+                       if a.get("broker_utc_offset_sec") is not None
+                       else "unknown"),
+             "ok": a.get("broker_utc_offset_sec") is not None},
+            {"key": "history_sync", "label": "History synchronization",
+             "value": (f"{int(sync_age / 3600)}h ago"
+                       if sync_age is not None else "never"),
+             "ok": sync_age is not None and sync_age < 86400},
+            {"key": "identity", "label": "Terminal identity",
+             "value": ("mismatch" if a.get("broker_account_mismatch")
+                       else "verified"),
+             "ok": not a.get("broker_account_mismatch")},
+        ]
+        passed = sum(1 for c in checks if c["ok"])
+        out.append({"account_id": str(a["_id"]), "label": a.get("label"),
+                    "mode": a.get("mode"),
+                    "checks": checks, "passed": passed,
+                    "total": len(checks),
+                    "certified": passed == len(checks)})
+    return {"items": out, "generated_at": now.isoformat()}

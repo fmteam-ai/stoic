@@ -27,6 +27,9 @@ export function ExecutionHealthPanel({ data }) {
     const leases = data.account_leases || [];
     const stuck = data.stuck_pending || [];
     const costs = data.costs || [];
+    const latency = data.latency || {};
+    const counters = data.counters || {};
+    const infra = data.infra || {};
 
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="execution-health-panel">
@@ -59,6 +62,29 @@ export function ExecutionHealthPanel({ data }) {
                     </div>
                 </div>
             )}
+
+            <div className="px-4 pb-3 flex flex-wrap gap-2" data-testid="exec-sre-row">
+                <span className="font-mono text-[10px] tracking-widest px-2 py-1 border border-[#1F1F1F] text-[#A1A1AA]" data-testid="exec-latency">
+                    LATENCY p50 <span className="text-white">{latency.p50_sec ?? "—"}s</span> · p95 <span className="text-white">{latency.p95_sec ?? "—"}s</span> · p99 <span className="text-white">{latency.p99_sec ?? "—"}s</span> ({latency.n ?? 0})
+                </span>
+                <span className={`font-mono text-[10px] tracking-widest px-2 py-1 border ${counters.rejects_24h > 0 ? "border-[#FFB000]/40 text-[#FFB000]" : "border-[#1F1F1F] text-[#A1A1AA]"}`} data-testid="exec-rejects">
+                    REJECTS 24H <span className="text-white">{counters.rejects_24h ?? 0}</span>
+                </span>
+                <span className="font-mono text-[10px] tracking-widest px-2 py-1 border border-[#1F1F1F] text-[#A1A1AA]" data-testid="exec-replays">
+                    REPLAYS 24H <span className="text-white">{counters.replays_24h ?? 0}</span>
+                </span>
+                <span className={`font-mono text-[10px] tracking-widest px-2 py-1 border ${counters.partial_fills_open > 0 ? "border-[#FFB000]/40 text-[#FFB000]" : "border-[#1F1F1F] text-[#A1A1AA]"}`} data-testid="exec-partials">
+                    PARTIAL FILLS OPEN <span className="text-white">{counters.partial_fills_open ?? 0}</span>
+                </span>
+                <span className="font-mono text-[10px] tracking-widest px-2 py-1 border border-[#1F1F1F] text-[#A1A1AA]" data-testid="exec-mongo">
+                    MONGO <span className="text-white">{infra.mongo_latency_ms ?? "—"}ms</span>
+                </span>
+                {(infra.heartbeats || []).map(h => (
+                    <span key={h.label} className={`font-mono text-[10px] tracking-widest px-2 py-1 border ${h.fresh ? "border-[#00FF41]/30 text-[#00FF41]" : "border-[#FF3B30]/40 text-[#FF3B30]"}`} data-testid={`exec-hb-${h.label}`}>
+                        EA {h.label} <span>{h.age_sec != null ? `${h.age_sec}s` : "never"}</span>
+                    </span>
+                ))}
+            </div>
 
             {lifecycle.length > 0 && (
                 <div className="px-4 pb-3 flex flex-wrap gap-2" data-testid="exec-lifecycle-row">

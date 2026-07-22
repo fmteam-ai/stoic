@@ -178,6 +178,29 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
 
 
 # ------------------- Risk Commander (NL Circuit Breakers) ------------------
+# iter-151 — live-sensitive NL actions require explicit operator approval
+SENSITIVE_NL_ACTIONS = {"SET_RISK_LEVEL", "ENABLE_BOTS", "CLOSE_ALL_TRADES"}
+KNOWN_NL_ACTIONS = {"DISABLE_BOTS", "ENABLE_BOTS", "MOVE_STOPS_BREAKEVEN",
+                    "CLOSE_ALL_TRADES", "SET_RISK_LEVEL", "PANIC_LOCK",
+                    "SET_CONDITIONAL_TRIGGER"}
+
+
+@router.post("/command/confirm")
+async def nl_command_confirm(payload: dict, user=Depends(get_current_user)):
+    """Iter-151 · execute a previously proposed action set after the
+    operator explicitly approved it in the Risk Commander UI."""
+    actions = payload.get("actions") or []
+    if not actions:
+        raise HTTPException(status_code=400, detail="actions required")
+    for a in actions:
+        if str(a.get("type") or "").upper() not in KNOWN_NL_ACTIONS:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown action type {a.get('type')}")
+    receipts = await _execute_actions(user["id"], actions)
+    return {"summary": f"Approved — executed {len(receipts)} action(s).",
+            "receipts": receipts, "actions": actions, "confirmed": True}
+
+
 @router.post("/command")
 async def nl_command(payload: dict, user=Depends(get_current_user)):
     prompt = (payload.get("prompt") or "").strip()
@@ -189,7 +212,10 @@ async def nl_command(payload: dict, user=Depends(get_current_user)):
     try:
         parsed = await interpret_command(prompt)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"AI interpret failed: {e}")
+        logger.warning("nl interpret failed: %s", e)
+        raise HTTPException(status_code=502, detail={
+            "code": "ai_interpret_failed",
+            "message": "The AI could not interpret that command — try rephrasing."})
 
     if parsed.get("clarification_needed"):
         return {"clarification_needed": parsed["clarification_needed"], "prompt": prompt}
@@ -199,6 +225,20 @@ async def nl_command(payload: dict, user=Depends(get_current_user)):
     actions = parsed.get("actions") or []
     if not actions:
         raise HTTPException(status_code=400, detail="No actions produced from prompt")
+
+    # iter-151 — AI → PROPOSAL → operator approval for live-sensitive
+    # actions (risk raises, re-enabling bots, mass closes). Safety-reducing
+    # actions (disable, panic, breakeven) still execute immediately.
+    sensitive = [a for a in actions
+                 if str(a.get("type") or "").upper() in SENSITIVE_NL_ACTIONS]
+    if sensitive and not payload.get("confirm"):
+        return {"requires_confirmation": True,
+                "summary": ("These action(s) change live trading behaviour "
+                            "and need your explicit approval."),
+                "pending_actions": actions,
+                "sensitive_types": sorted({str(a.get("type")).upper()
+                                           for a in sensitive}),
+                "prompt": prompt}
 
     receipts = await _execute_actions(user["id"], actions)
     summary = parsed.get("summary") or "Commands executed."

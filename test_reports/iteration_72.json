@@ -1,0 +1,43 @@
+{
+  "summary": "iter-72 — Full both-side verification of the ops observability + safety batch (safety-status banner, per-account certification, execution-health SRE additions, Risk-Commander AI→proposal→operator-approval gate, netting/hedging scenario suite, deployment artifacts). Backend: pytest test_iter150_netting_hedging.py (9) + test_iter151_ops_observability.py (8) = 17/17 PASSED. Live HTTP smoke against the preview URL confirms real payloads: /api/bot/safety-status → 200 {level:warn, live_accounts:4, unprotected_open:0, unresolved_submissions:0, stale_feeds:3, tripped:[], daily_worst_consumed_pct:5.1}; /api/accounts/certification → 200 with 6 items each carrying all 9 required checks (ea_version, bridge_paired, heartbeat, account_type, symbol_specs, spread_feed, clock_sync, history_sync, identity) + certified/passed/total/mode; /api/bot/execution-health → 200 with new latency{n,p50_sec,p95_sec,p99_sec}, counters{rejects_24h,replays_24h,partial_fills_open}, infra{mongo_latency_ms:0.9, heartbeats:5 entries}, unresolved_submissions=0, plus all previous 9 sections. Risk-Commander live LLM proposal gate WORKS: POST /api/nl/command with 'close all my open trades' (with CSRF header) → 200 {requires_confirmation:true, pending_actions:[{type:'CLOSE_ALL_TRADES', target:'all', params:{}}], sensitive_types:['CLOSE_ALL_TRADES'], summary,prompt} — NEVER executes; confirm with empty body → 400 'actions required'; confirm with {type:'DELETE_EVERYTHING'} → 400 'unknown action type DELETE_EVERYTHING'. No live CLOSE_ALL was executed. Frontend: admin login → SIGN IN → skip trailer → Dashboard renders trading-safety-banner with data-level='warn' and all 6 pills visible (safety-live, safety-unprotected, safety-unresolved, safety-stale, safety-tripped, safety-daily); Accounts page renders 12 certification-{accountId} cards with GO-LIVE CERTIFICATION check grids; Bot Health page renders execution-health-panel with exec-sre-row + exec-latency/exec-rejects/exec-replays/exec-partials/exec-mongo chips (EA heartbeat chips use testid exec-hb-{label}, not exec-heartbeat- as I initially searched — matches source code); Risk Commander page renders correctly (header, chat area, input, example command chips, COMMAND/STRATEGY toggle) — see NOTE below on route path. Trades page still has TICKET column header. No console errors on any of the 4 pages (initial 401s are only pre-login /auth/me polls which is expected). Deployment artifacts all exist: Dockerfile.backend, Dockerfile.frontend, docker-compose.yml, .github/workflows/ci.yml, scripts/check_ea_structure.py (exits 0), backend/.env.example, frontend/.env.example, frontend/yarn.lock.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "notes_route_discrepancy": {
+    "issue": "The review request states the Risk Commander page is at ROUTE '/risk-commander' but the actual App.js Route (line 95) uses path='/commander'. Direct URL navigation to /risk-commander renders a blank page (no route match — no 404 handler either); navigation via the sidebar nav link works because the link resolves to '/commander'. This is a documentation / URL-path expectation mismatch, not a component bug — RiskCommander.jsx renders correctly at its real path.",
+    "severity": "low",
+    "suggested_fix_options": [
+      "(preferred) Add a second Route: <Route path='/risk-commander' element={<Navigate to='/commander' replace />} /> so bookmarked/documented URLs redirect.",
+      "OR change the canonical route to '/risk-commander' and update the sidebar link accordingly.",
+      "OR add a global NotFound fallback so the URL never renders as a blank body."
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter150_netting_hedging.py",
+    "/app/backend/tests/test_iter151_ops_observability.py",
+    "/app/test_reports/pytest/iter72_iter150_151.xml"
+  ],
+  "action_items": [
+    "Optional: reconcile the Risk-Commander route path — either add a redirect from /risk-commander → /commander, or rename the route. Currently deep-linking to /risk-commander shows a blank body with no 404 handler.",
+    "Optional (nit, unchanged from iter-71): surface PartialFillAdopted event count in execution-health so the desk can filter partially-filled trades quickly."
+  ],
+  "critical_code_review_comments": [
+    "Risk Commander proposal gate is well-designed at the backend: nl_routes.py SENSITIVE_NL_ACTIONS = {SET_RISK_LEVEL, ENABLE_BOTS, CLOSE_ALL_TRADES} → the gate returns requires_confirmation before _execute_actions is called, and /command/confirm re-validates action.type against the same set (400 for anything unknown, 400 for empty). Verified live with a real LLM prompt.",
+    "safety-status endpoint correctly reflects the offline-EA reality: level=warn (not critical) because unprotected_open=0 and tripped=[]; stale_feeds carries three account labels with age_sec ~1050s so the UI banner has actionable content.",
+    "execution-health latency block returns n=0/None percentiles when no fills observed in the window — client renders gracefully (the exec-latency chip stays present with a dash, not missing).",
+    "certification response shape is consistent across all 6 accounts (each has passed/total/certified/mode + 9 checks). Frontend renders one card per account with data-testid='certification-{accountId}'.",
+    "MINOR — URL/route discrepancy documented in notes_route_discrepancy. Consider adding a NotFound route to catch typos so blank bodies never render.",
+    "MINOR — The direct-navigation blank-body pattern implies the SPA has no wildcard 404 fallback. Recommend adding <Route path='*' element={<NotFound/>} />."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (17/17 iter150+iter151 + all live HTTP smoke)", "frontend": "100% of testids from the request found on the actual pages; 1 route path mismatch (/risk-commander vs /commander) documented as low-severity"},
+  "test_credentials": "admin@trading.bot / admin123 (httpOnly cookie + CSRF double-submit header X-CSRF-Token = value of csrf_token cookie)",
+  "seed_data_creation": "test_iter150_netting_hedging.py inserts and deletes marker='iter150' trades and trade_events against the seeded bridge-tokened account in a finally block. Zero leaked docs post-run; no accounts created/modified.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The route path discrepancy is the only new finding. Everything else in the review-request works exactly as described. For future frontend testing of RiskCommander, use path='/commander' or click the sidebar link (both work). The Risk-Commander proposal-gate test is portable — use CSRF header from cookies for POST /api/nl/command and expect requires_confirmation:true + pending_actions containing CLOSE_ALL_TRADES. Do NOT confirm the actions against live accounts.",
+  "rca_of_the_issue": "N/A — no defects. One documentation nit: request says '/risk-commander', code says '/commander'."
+}
