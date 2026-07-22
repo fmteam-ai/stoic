@@ -541,7 +541,7 @@ async def receive_candles(payload: BridgeCandles):
         write_ok = False
         raise
     finally:
-        last_bar_ts = int(bars[-1]["t"]) if bars else None
+        last_bar_ts = (max(int(b["t"]) for b in bars) if bars else None)
         bar_lag_s = (max(0, int(datetime.now(timezone.utc).timestamp())
                          - last_bar_ts) if last_bar_ts else None)
         await db.candle_feed_health.update_one(health_key, {"$set": {
