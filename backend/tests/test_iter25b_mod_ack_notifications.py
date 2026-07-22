@@ -111,12 +111,18 @@ class TestModificationAckTelegram:
             }, timeout=10)
             assert r.status_code == 200, r.text
             doc = mongo_db.trades.find_one({"_id": tid})
-            assert doc.get("pending_modification") is None
+            # EA v1.50 — the combo SL is now a SEPARATE fenced follow-up
+            # command: the PC ack enqueues MODIFY_SL with its own intent.
+            followup = doc.get("pending_modification")
+            assert followup and followup["type"] == "MODIFY_SL"
+            assert followup["new_sl"] == 4000.0
+            assert followup["reason"] == "tier1_combo_followup"
+            assert followup.get("intent_id") and followup.get("seq")
             assert doc.get("lot_size") == 0.5
             assert doc.get("partial_closed") is True
             assert doc.get("tp1_closed") is True
-            assert doc.get("breakeven_set") is True  # because new_sl carried
-            assert doc.get("stop_loss") == 4000.0
+            # breakeven_set/stop_loss now flip on the follow-up MODIFY_SL ack
+            assert doc.get("breakeven_set") is not True
             assert doc.get("partial_closed_at")
         finally:
             mongo_db.trades.delete_one({"_id": tid})

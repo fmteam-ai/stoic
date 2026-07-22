@@ -192,7 +192,16 @@
 //|         (e) Broker-native OrderCheck() preflight before every     |
 //|             OrderSend — margin / volume limits / stop levels /    |
 //|             fill policy validated by MT5; failures report a       |
-//|             structured preflight_failed rejection.                |
+//|             structured preflight_failed rejection. The retry      |
+//|             pass re-runs OrderCheck under the same guarantees.    |
+//|         (f) Exact-once acks: intents are consumed ONLY on broker- |
+//|             confirmed success (or explicit terminal states);      |
+//|             replays return the JOURNALED outcome + live facts;    |
+//|             stale sequences ack superseded; missing positions     |
+//|             ack terminal/retryable from broker history.           |
+//|         (g) close_requested path fenced: deterministic close      |
+//|             intent, result journal, and 'closed' only reported    |
+//|             when the broker position is VERIFIED absent.          |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
 #property version   "1.50"
@@ -430,9 +439,12 @@ bool IntentDone(string intent) {
    return StringLen(intent) > 0 && GlobalVariableCheck(JKey("I", intent));
 }
 
-void MarkIntentDone(string intent, long seq, string trade_id) {
+void MarkIntentDone(string intent, long seq, string trade_id,
+                    double outcome = 1) {
+   // outcome journal: 1 = broker-confirmed success, 2 = terminal failure.
+   // Failed-but-retryable commands are NEVER marked — they stay retryable.
    if (StringLen(intent) > 0)
-      GlobalVariableSet(JKey("I", intent), (double)TimeCurrent());
+      GlobalVariableSet(JKey("I", intent), outcome);
    if (seq > 0 && seq > (long)JGet("S", trade_id))
       JSet("S", trade_id, (double)seq);
 }
@@ -455,6 +467,34 @@ long FindPositionByComment(string trade_id) {
       if (PositionGetString(POSITION_COMMENT) == trade_id) return (long)tk;
    }
    return 0;
+}
+
+// v1.50 — was this position genuinely closed (an OUT deal exists)?
+bool PositionClosedInHistory(long ticket) {
+   if (!HistorySelectByPosition((ulong)ticket)) return false;
+   for (int i = HistoryDealsTotal() - 1; i >= 0; i--) {
+      ulong d = HistoryDealGetTicket(i);
+      if (d == 0) continue;
+      if ((ENUM_DEAL_ENTRY)HistoryDealGetInteger(d, DEAL_ENTRY) == DEAL_ENTRY_OUT)
+         return true;
+   }
+   return false;
+}
+
+// v1.50 — missing-position ack: TERMINAL when broker history proves the
+// position closed (server clears the command), RETRYABLE otherwise (a
+// temporary sync gap — server keeps the command pending).
+void AckMissingPosition(string trade_id, string mod_type, long ticket,
+                        string intent) {
+   bool closed = PositionClosedInHistory(ticket);
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"%s\",\"success\":false,%s\"intent_id\":\"%s\",\"error\":\"%s\"}",
+      EffectiveToken, trade_id, mod_type,
+      (closed ? "\"terminal\":true," : "\"retryable\":true,"),
+      intent,
+      (closed ? "position_not_found" : "position_temporarily_unavailable"));
+   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   if (closed) MarkIntentDone(intent, 0, trade_id, 2);   // terminal — never retried
 }
 
 void OnTimer() {
@@ -1193,22 +1233,44 @@ void ParseModificationsBlock(string resp) {
       long   seq      = (long)ExtractDouble(obj, "\"seq\":", 0);
 
       if (StringLen(intent) > 0 && IntentDone(intent)) {
-         // v1.50 fence — already executed: re-ack (replay) so a still-
-         // pending queue entry clears, but NEVER execute twice.
+         // v1.50 fence — already executed: replay the JOURNALED outcome
+         // (never a generic success) plus live position facts. NEVER
+         // execute twice.
+         double outc = GlobalVariableGet(JKey("I", intent));
+         bool osucc = (outc != 2);
+         string extra = "";
+         if (ticket > 0 && PositionSelectByTicket(ticket)) {
+            if (mod_type == "MODIFY_SL")
+               extra = StringFormat("\"confirmed_position_sl\":%.5f,",
+                                    PositionGetDouble(POSITION_SL));
+            else if (mod_type == "PARTIAL_CLOSE")
+               extra = StringFormat("\"remaining_volume\":%.2f,",
+                                    PositionGetDouble(POSITION_VOLUME));
+         }
          string rebody = StringFormat(
-            "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"%s\",\"success\":true,\"replay\":true,\"intent_id\":\"%s\",\"error\":\"intent_already_executed\"}",
-            EffectiveToken, trade_id, mod_type, intent);
+            "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"%s\",\"success\":%s,%s%s\"replay\":true,\"intent_id\":\"%s\",\"error\":\"intent_already_executed\"}",
+            EffectiveToken, trade_id, mod_type,
+            (osucc ? "true" : "false"),
+            (osucc ? "" : "\"terminal\":true,"), extra, intent);
          HttpPost(ServerUrl + "/api/bridge/modification-ack", rebody);
       } else if (seq > 0 && seq <= (long)JGet("S", trade_id)) {
-         // v1.50 fence — older than the newest executed command: skip.
-         Print("STOIC v1.50: skipped stale command seq=", seq, " trade=",
+         // v1.50 fence — superseded by a newer executed command: send a
+         // structured TERMINAL ack so the server clears the queue entry
+         // without ever treating it as executed.
+         string sbody = StringFormat(
+            "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"%s\",\"success\":false,\"superseded\":true,\"intent_id\":\"%s\",\"received_seq\":%I64d,\"latest_seq\":%I64d,\"error\":\"stale_sequence\"}",
+            EffectiveToken, trade_id, mod_type, intent, seq,
+            (long)JGet("S", trade_id));
+         HttpPost(ServerUrl + "/api/bridge/modification-ack", sbody);
+         Print("STOIC v1.50: superseded stale command seq=", seq, " trade=",
                trade_id, " newest=", (long)JGet("S", trade_id));
       } else if (mod_type == "MODIFY_SL" && ticket > 0 && new_sl > 0) {
          ApplyModifySL(trade_id, ticket, new_sl, intent, seq);
       } else if (mod_type == "PARTIAL_CLOSE" && ticket > 0 && new_vol > 0) {
+         // v1.50 — combo (PC + SL) is no longer chained here: the server
+         // enqueues a SEPARATE fenced MODIFY_SL after the PC ack succeeds,
+         // so each durable command has its own intent + seq.
          ApplyPartialClose(trade_id, ticket, new_vol, intent, seq);
-         // Combo: Tier-1 move also carries new_sl (acked via the PC intent)
-         if (new_sl > 0) ApplyModifySL(trade_id, ticket, new_sl, "", 0);
       } else if (mod_type == "FULL_CLOSE" && ticket > 0) {
          // v1.40 — slippage veto / auto-deleverage / reconciler force-close.
          ApplyFullClose(trade_id, ticket, intent, seq);
@@ -1407,6 +1469,19 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
       req.sl = adj_sl;
       req.tp = adj_tp;
       ZeroMemory(res);
+      // v1.50 — the retry runs under the SAME broker-native preflight
+      // guarantees as the first attempt.
+      ZeroMemory(chk);
+      if (!OrderCheck(req, chk)) {
+         JSet("T", trade_id, JR_FAILED);
+         string chk_comment2 = chk.comment;
+         StringReplace(chk_comment2, "\"", "'");
+         SendOpenReport(trade_id, 0, "failed", 0, req.price,
+                        StringFormat("preflight_failed_retry:retcode=%d:%s",
+                                     chk.retcode, chk_comment2),
+                        sl, adj_sl, 0, false);
+         return;
+      }
       ok = OrderSend(req, res);
    }
 
@@ -1469,21 +1544,47 @@ void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq =
       req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
    }
    bool ok = OrderSend(req, res);
-   bool success = (ok && res.retcode == TRADE_RETCODE_DONE);
-   string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
+   // v1.50 — the FINAL truth is the broker position, not the retcode:
+   // DONE_PARTIAL (or any failure) with volume remaining is NOT a full
+   // close — ack retryable so the server re-dispatches the remainder.
+   bool absent = !PositionSelectByTicket(ticket);
+   bool success = absent;
+   string err = "";
+   if (!success) {
+      if (ok && res.retcode == TRADE_RETCODE_DONE_PARTIAL)
+         err = "partial_close_remaining";
+      else
+         err = "retcode=" + IntegerToString(res.retcode);
+   }
    string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":%s,\"intent_id\":\"%s\",\"error\":\"%s\"}",
-      EffectiveToken, trade_id, (success ? "true" : "false"), intent, err);
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":%s,%s\"intent_id\":\"%s\",\"error\":\"%s\"}",
+      EffectiveToken, trade_id, (success ? "true" : "false"),
+      (success ? "" : "\"retryable\":true,"), intent, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
-   MarkIntentDone(intent, seq, trade_id);
+   if (success) MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: FULL_CLOSE executed ticket=", ticket, " (", vol, " lots)");
 }
 
+// v1.50 — server 'close_requested' path, now FENCED through the same
+// journal protocol: a deterministic close intent per trade prevents a
+// second OrderSend across redispatches, the result is journaled for
+// replay, and 'closed' is only reported once the broker position is
+// VERIFIED absent (never from the retcode alone).
 void ClosePosition(string trade_id, long ticket) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
-   if (!PositionSelectByTicket(ticket)) return;
+   string intent = "close-" + trade_id;
+   if (IntentDone(intent)) {
+      // executed before but the report was lost — replay journaled result
+      string rbody = StringFormat(
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"status\":\"closed\",\"exit_price\":%.5f,\"pnl\":%.2f,\"replay\":true}",
+         EffectiveToken, trade_id, JGet("X", trade_id), JGet("L", trade_id));
+      HttpPost(ServerUrl + "/api/bridge/report", rbody);
+      return;
+   }
+   if (!PositionSelectByTicket(ticket)) return;   // heartbeat/ghost reconciler owns absent-position truth
    string symbol = PositionGetString(POSITION_SYMBOL);
    double vol    = PositionGetDouble(POSITION_VOLUME);
+   double pnl    = PositionGetDouble(POSITION_PROFIT);   // capture BEFORE close
    ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
    MqlTradeRequest req; MqlTradeResult res;
@@ -1503,7 +1604,16 @@ void ClosePosition(string trade_id, long ticket) {
       req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
    }
    bool ok = OrderSend(req, res);
-   double pnl = PositionGetDouble(POSITION_PROFIT);
+   // v1.50 — report closed ONLY when the broker position is verified gone.
+   if (PositionSelectByTicket(ticket)) {
+      Print("STOIC v1.50: close attempt did not remove position ticket=",
+            ticket, " ok=", ok, " retcode=", res.retcode,
+            " — server will re-dispatch");
+      return;
+   }
+   JSet("X", trade_id, res.price);
+   JSet("L", trade_id, pnl);
+   MarkIntentDone(intent, 0, trade_id);
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"status\":\"closed\",\"exit_price\":%.5f,\"pnl\":%.2f}",
       EffectiveToken, trade_id, res.price, pnl);
@@ -1514,7 +1624,11 @@ void ClosePosition(string trade_id, long ticket) {
 void ApplyModifySL(string trade_id, long ticket, double new_sl,
                    string intent = "", long seq = 0) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
-   if (!PositionSelectByTicket(ticket)) return;
+   if (!PositionSelectByTicket(ticket)) {
+      // v1.50 — terminal vs retryable, decided from broker history
+      AckMissingPosition(trade_id, "MODIFY_SL", ticket, intent);
+      return;
+   }
    string symbol = PositionGetString(POSITION_SYMBOL);
    double current_tp = PositionGetDouble(POSITION_TP);
 
@@ -1537,22 +1651,29 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
    bool success = (ok && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_DONE_PARTIAL));
    string err = success ? "" : "retcode=" + IntegerToString(res.retcode);
 
-   // v1.50 — ack the ACTUAL broker stop, not the requested one:
-   // requested_sl (as commanded), applied_sl (post-clamp), and the live
-   // POSITION_SL after the modify.
+   // v1.50 — ack the ACTUAL broker stop, not the requested one, and
+   // verify the position now SHOWS the expected stop (tick tolerance) —
+   // broker-accepted-request is not the same as stop-in-place.
    double confirmed_sl = 0;
    if (PositionSelectByTicket(ticket))
       confirmed_sl = PositionGetDouble(POSITION_SL);
+   double tick_sz = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   bool stop_confirmed = (confirmed_sl > 0 &&
+                          MathAbs(confirmed_sl - adj_sl) <= tick_sz + 1e-10);
    double ack_sl = (success && confirmed_sl > 0) ? confirmed_sl : adj_sl;
 
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"MODIFY_SL\",\"success\":%s,"
       "\"new_sl\":%.5f,\"requested_sl\":%.5f,\"applied_sl\":%.5f,"
-      "\"confirmed_position_sl\":%.5f,\"intent_id\":\"%s\",\"error\":\"%s\"}",
+      "\"confirmed_position_sl\":%.5f,\"stop_confirmed\":%s,"
+      "\"intent_id\":\"%s\",\"error\":\"%s\"}",
       EffectiveToken, trade_id, (success ? "true" : "false"),
-      ack_sl, new_sl, adj_sl, confirmed_sl, intent, err);
+      ack_sl, new_sl, adj_sl, confirmed_sl,
+      (stop_confirmed ? "true" : "false"), intent, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
-   MarkIntentDone(intent, seq, trade_id);
+   // v1.50 — only a broker-confirmed success consumes the intent;
+   // failures stay retryable (or go terminal via AckMissingPosition).
+   if (success) MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: SL modified ticket=", ticket, " requested=",
                       new_sl, " applied=", adj_sl, " confirmed=", confirmed_sl);
 }
@@ -1561,12 +1682,29 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
 void ApplyPartialClose(string trade_id, long ticket, double new_vol,
                        string intent = "", long seq = 0) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
-   if (!PositionSelectByTicket(ticket)) return;
+   if (!PositionSelectByTicket(ticket)) {
+      // v1.50 — terminal vs retryable, decided from broker history
+      AckMissingPosition(trade_id, "PARTIAL_CLOSE", ticket, intent);
+      return;
+   }
    string symbol = PositionGetString(POSITION_SYMBOL);
    double current_vol = PositionGetDouble(POSITION_VOLUME);
    double close_vol = current_vol - new_vol;
-   if (close_vol < 0.01) return;
-   close_vol = NormalizeDouble(close_vol, 2);
+   // v1.50 — normalise against the BROKER's volume constraints, not a
+   // hardcoded 2-decimal lot step.
+   double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   double minv = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   if (step > 0) close_vol = MathFloor(close_vol / step + 0.5) * step;
+   close_vol = NormalizeDouble(close_vol, 8);
+   if (close_vol < minv || close_vol <= 0) {
+      // nothing executable at this broker's volume rules — terminal
+      string tiny = StringFormat(
+         "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":false,\"terminal\":true,\"intent_id\":\"%s\",\"error\":\"close_volume_below_min\"}",
+         EffectiveToken, trade_id, intent);
+      HttpPost(ServerUrl + "/api/bridge/modification-ack", tiny);
+      MarkIntentDone(intent, seq, trade_id, 2);
+      return;
+   }
 
    ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
@@ -1602,6 +1740,7 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
       EffectiveToken, trade_id, (success ? "true" : "false"),
       new_vol, remaining, intent, err);
    HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
-   MarkIntentDone(intent, seq, trade_id);
+   // v1.50 — only broker-confirmed success consumes the intent
+   if (success) MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", remaining);
 }

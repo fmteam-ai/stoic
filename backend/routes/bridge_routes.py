@@ -855,6 +855,12 @@ class BridgeModificationAck(BaseModel):
     confirmed_position_sl: float | None = None   # EA v1.50 — live POSITION_SL
     remaining_volume: float | None = None        # EA v1.50 — actual broker vol
     replay: bool | None = None                   # EA v1.50 — fence re-ack
+    superseded: bool | None = None               # EA v1.50 — stale-seq terminal
+    received_seq: int | None = None
+    latest_seq: int | None = None
+    terminal: bool | None = None                 # EA v1.50 — never retry
+    retryable: bool | None = None                # EA v1.50 — keep pending
+    stop_confirmed: bool | None = None           # EA v1.50 — SL verified in place
 
 
 @router.post("/modification-ack")
@@ -877,10 +883,33 @@ async def modification_ack(payload: BridgeModificationAck):
                        payload.trade_id, payload.intent_id)
         return {"status": "stale_intent_ignored"}
 
+    # EA v1.50 — superseded (stale-sequence) TERMINAL ack: clear the queue
+    # entry it refers to WITHOUT ever treating the command as executed.
+    if payload.superseded:
+        q: dict = {"_id": ObjectId(payload.trade_id)}
+        if payload.intent_id:
+            q["pending_modification.intent_id"] = payload.intent_id
+        await db.trades.update_one(q, {"$set": {"pending_modification": None}})
+        logger.info("superseded command cleared trade=%s intent=%s "
+                    "received_seq=%s latest_seq=%s", payload.trade_id,
+                    payload.intent_id, payload.received_seq, payload.latest_seq)
+        return {"status": "superseded_cleared"}
+
+    # EA v1.50 — retryable failure (e.g. position temporarily unavailable):
+    # KEEP the pending command so the next poll retries it.
+    if payload.retryable and not payload.success:
+        await db.trades.update_one(
+            {"_id": ObjectId(payload.trade_id),
+             "pending_modification": {"$ne": None}},
+            {"$inc": {"pending_modification.retry_count": 1},
+             "$set": {"pending_modification.last_error": payload.error}})
+        return {"status": "retry_pending"}
+
     # Notifications to fire AFTER the EA confirms — collected here, dispatched
     # only on the success path so the user never gets a Telegram for an action
     # the broker never actually applied.
     pending_notifs: list = []
+    combo_new_sl = None   # EA v1.50 — Tier-1 follow-up MODIFY_SL (if any)
 
     update = {"pending_modification": None}
     # Round 11 item 9 — protection-ack policy lives in a dependency-free
@@ -897,6 +926,9 @@ async def modification_ack(payload: BridgeModificationAck):
         if payload.type == "MODIFY_SL" and actual_sl is not None:
             update["stop_loss"] = float(actual_sl)
             update["confirmed_stop_loss"] = float(actual_sl)
+            if payload.stop_confirmed is not None:
+                # broker ACCEPTED vs position now SHOWS the expected stop
+                update["stop_confirmed"] = bool(payload.stop_confirmed)
             if payload.requested_sl is not None:
                 update["last_requested_sl"] = float(payload.requested_sl)
             if payload.applied_sl is not None:
@@ -929,9 +961,11 @@ async def modification_ack(payload: BridgeModificationAck):
             # If this PC also carried a new_sl (Tier-1 combo move), apply it
             mod = trade.get("pending_modification") or {}
             mod_new_sl = mod.get("new_sl")
-            if mod_new_sl is not None:
-                update["stop_loss"] = float(mod_new_sl)
-                update["breakeven_set"] = True
+            # v1.50 — the Tier-1 combo SL is NO LONGER applied here from
+            # intent: the EA executes only the partial close; a SEPARATE
+            # fenced MODIFY_SL follow-up is enqueued below so the stop move
+            # carries its own intent + seq and its own broker confirmation.
+            combo_new_sl = mod_new_sl
             # Mark tier progression + compute R for the alert
             if not trade.get("tp1_closed"):
                 update["tp1_closed"] = True
@@ -942,14 +976,15 @@ async def modification_ack(payload: BridgeModificationAck):
             else:
                 r_mult = 3.0
             pending_notifs.append(("partial_close", from_lot, to_lot, r_mult))
-            if mod_new_sl is not None:
-                pending_notifs.append(("breakeven", float(mod_new_sl), 1.0))
         elif payload.type == "FULL_CLOSE":
             update["tp3_closed"] = True
     else:
         # error + emergency-state transitions already applied above via
         # apply_protection_ack (round 11 item 9)
-        pass
+        if payload.terminal:
+            # EA v1.50 — terminal failure (e.g. position_not_found): the
+            # command is consumed; record why so it is auditable.
+            update["mod_terminal_error"] = payload.error
 
     upd_ops: dict = {"$set": update}
     if payload.intent_id:
@@ -958,6 +993,15 @@ async def modification_ack(payload: BridgeModificationAck):
         upd_ops["$push"] = {"executed_intents": {
             "$each": [payload.intent_id], "$slice": -50}}
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, upd_ops)
+    # EA v1.50 — enqueue the Tier-1 combo stop move as its OWN durable,
+    # fenced command now that the partial close is broker-confirmed.
+    if combo_new_sl is not None:
+        from command_fence import stamp_pending_modification
+        await stamp_pending_modification(
+            db, {"_id": ObjectId(payload.trade_id), "status": "open",
+                 "pending_modification": None},
+            {"type": "MODIFY_SL", "new_sl": float(combo_new_sl),
+             "reason": "tier1_combo_followup"})
     # Scalp fast path (round 18 review item 2): a MODIFY_SL ack promotes the
     # runner's PENDING stop to the CONFIRMED stop — until this ack the bot
     # must keep behaving as if the original stop is live at the broker.
