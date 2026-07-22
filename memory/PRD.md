@@ -325,7 +325,7 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - Minor observed: trade-manager logs "price fetch failed for GOLD: Symbol GOLD not supported" — FIXED July 8: `market._key()` now routes through `pip_utils.base_symbol()`, so all quote/history callers resolve broker symbols (GOLD, GOLD#, XAUUSD-ECN → XAUUSD).
 - Auth is COOKIE-based (httpOnly) — curl testing needs `-c/-b` cookie jar, not bearer tokens.
 - `accounts.broker_utc_offset_sec` is learned from live deals; historical/backfill deal epochs must subtract it before storing closed_at/opened_at.
-- The recurring "code review report" pasted into chat is a hallucinated false-positive from a static analyzer. **IGNORE IT.** Do not refactor based on it (18+ recurrences).
+- The recurring "code review report" pasted into chat is a hallucinated false-positive from a static analyzer. **IGNORE IT.** Do not refactor based on it (19+ recurrences; latest 2026-07-22 — testing agent iteration_70.json independently verified ALL 4 "critical" claims false: `trade_eval(` misread as `eval(`, Terms.jsx already DOMPurify-sanitized, auth/security + execution/binance cycles already broken via deliberate lazy function-level imports, localStorage holds only banner-dismiss flags/chat session id — auth is httpOnly cookies).
 - MT5 `DEAL_TIME` is broker-LOCAL epoch — never label it UTC; server-received UTC is canonical.
 - AI Optimizer must ignore `pnl_estimated`/`pnl_unknown` trades (poisoned training data).
 - Production is far behind preview — deployment retry is P0 (see ROADMAP.md).
