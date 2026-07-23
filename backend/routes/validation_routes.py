@@ -51,8 +51,8 @@ class EvidenceIn(BaseModel):
     evidence_ref: str | None = Field(default=None, max_length=500)
 
 
-def _now_iso():
-    return datetime.now(timezone.utc).isoformat()
+def _now_utc():
+    return datetime.now(timezone.utc)
 
 
 async def _latest_evidence(db):
@@ -107,7 +107,7 @@ async def record_evidence(scenario: str, payload: EvidenceIn,
     doc = {"scenario": scenario, "account_mode": payload.account_mode,
            "status": payload.status, "notes": payload.notes,
            "evidence_ref": payload.evidence_ref,
-           "recorded_by": actor, "recorded_at": _now_iso()}
+           "recorded_by": actor, "recorded_at": _now_utc()}
     res = await db.validation_evidence.insert_one(doc)
     return {"ok": True, "id": str(res.inserted_id)}
 
@@ -116,7 +116,7 @@ async def _stage_doc(db):
     doc = await db.platform_state.find_one({"_id": "deployment_stage"})
     if not doc:
         doc = {"_id": "deployment_stage", "stage": STAGES[0],
-               "entered_at": _now_iso(), "history": []}
+               "entered_at": _now_utc(), "history": []}
         await db.platform_state.insert_one(doc)
     return doc
 
@@ -200,11 +200,11 @@ async def promote_stage(payload: StageChangeIn, request: Request):
         return JSONResponse(status_code=422, content={
             "detail": "forced promotion requires a reason"})
     entry = {"from": doc["stage"], "to": next_stage, "by": actor,
-             "at": _now_iso(), "forced": bool(failed),
+             "at": _now_utc(), "forced": bool(failed),
              "reason": payload.reason}
     await db.platform_state.update_one(
         {"_id": "deployment_stage"},
-        {"$set": {"stage": next_stage, "entered_at": _now_iso()},
+        {"$set": {"stage": next_stage, "entered_at": _now_utc()},
          "$push": {"history": entry}})
     return {"ok": True, "stage": next_stage, "forced": bool(failed)}
 
@@ -225,10 +225,10 @@ async def demote_stage(payload: StageChangeIn, request: Request):
                             content={"detail": "already at the first stage"})
     prev_stage = STAGES[idx - 1]
     entry = {"from": doc["stage"], "to": prev_stage, "by": actor,
-             "at": _now_iso(), "forced": False, "reason": payload.reason}
+             "at": _now_utc(), "forced": False, "reason": payload.reason}
     await db.platform_state.update_one(
         {"_id": "deployment_stage"},
-        {"$set": {"stage": prev_stage, "entered_at": _now_iso()},
+        {"$set": {"stage": prev_stage, "entered_at": _now_utc()},
          "$push": {"history": entry}})
     return {"ok": True, "stage": prev_stage}
 

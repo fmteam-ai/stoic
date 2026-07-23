@@ -38,7 +38,8 @@ async def nl_strategy(payload: dict, user=Depends(get_current_user)):
     try:
         result = await build_strategy(prompt)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"AI compile failed: {e}")
+        from errors import api_error
+        raise api_error(502, "ai_compile_failed", "The AI strategy compiler is temporarily unavailable.", exc=e)
 
     if result.get("error"):
         raise HTTPException(status_code=502, detail=result["error"])
@@ -60,7 +61,8 @@ async def nl_strategy_code(payload: dict, user=Depends(get_current_user)):  # no
     try:
         dsl = await generate_code(compiled)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Code generation failed: {e}")
+        from errors import api_error
+        raise api_error(502, "code_generation_failed", "Code generation is temporarily unavailable.", exc=e)
     if dsl.get("error"):
         raise HTTPException(status_code=502, detail=dsl["error"])
     return {"dsl": dsl}
@@ -81,7 +83,8 @@ async def nl_strategy_optimize(payload: dict, user=Depends(get_current_user)):
     try:
         result = await optimize_strategy(dsl=dsl, user_id=user["id"])
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Optimization failed: {e}")
+        from errors import api_error
+        raise api_error(500, "optimization_failed", "Optimization failed — the team has been notified.", exc=e)
     return result
 
 

@@ -21,7 +21,8 @@ async def quote(symbol: str, user=Depends(get_current_user)):
     try:
         return await get_quote(symbol)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Market data error: {e}")
+        from errors import api_error
+        raise api_error(502, "market_data_unavailable", "Market data is temporarily unavailable — try again shortly.", exc=e)
 
 
 @router.get("/quotes")
@@ -44,7 +45,8 @@ async def history(symbol: str, user=Depends(get_current_user)):
         indicators = compute_indicators(hist)
         return {"symbol": symbol.upper(), "history": hist, "indicators": indicators}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Market data error: {e}")
+        from errors import api_error
+        raise api_error(502, "market_data_unavailable", "Market data is temporarily unavailable — try again shortly.", exc=e)
 
 
 @router.get("/risk-profiles")

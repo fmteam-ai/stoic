@@ -165,7 +165,10 @@ docker compose build
 echo "-- starting stack"
 docker compose up -d
 
-# 5 · health verification
+# 5 · full release-readiness verification — an install that cannot prove the
+#     complete trading topology (HTTPS/frontend, Mongo round trip, all six
+#     workers, loop progress, reconciliation, outbox, schema) DOES NOT count
+#     as complete.
 echo "-- waiting for API health"
 for i in $(seq 1 45); do
   if curl -fsS http://127.0.0.1:8001/api/health >/dev/null 2>&1; then
@@ -175,6 +178,51 @@ for i in $(seq 1 45); do
   [ "$i" = 45 ] && { echo "ERROR: API did not become healthy"; docker compose logs backend | tail -30; exit 1; }
   sleep 2
 done
+
+echo "-- verifying full release readiness (Mongo, 6 workers, loop progress, reconciliation, outbox, schema)"
+METRICS_TOKEN=$(cat secrets/metrics_token)
+READY=0
+for i in $(seq 1 60); do   # workers need time to acquire leases + first loop iterations
+  if curl -fsS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
+       http://127.0.0.1:8001/api/ops/release-readiness >/dev/null 2>&1; then
+    READY=1; break
+  fi
+  sleep 4
+done
+if [ "${READY}" != 1 ]; then
+  echo "ERROR: release-readiness never became ready — final state:"
+  curl -sS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
+    http://127.0.0.1:8001/api/ops/release-readiness || true
+  echo ""
+  docker compose logs --tail 25
+  echo "INSTALL INCOMPLETE — the stack is running but NOT verified. Fix the"
+  echo "failing checks above and re-run the installer."
+  exit 1
+fi
+echo "   release-readiness: ready"
+
+if [ "${MODE}" = "--production" ]; then
+  echo "-- verifying HTTPS end-to-end (Caddy certificate for ${DOMAIN})"
+  TLS_OK=0
+  for i in $(seq 1 36); do   # cert issuance can take ~1-2 min after DNS resolves
+    if curl -fsS "https://${DOMAIN}/api/health" >/dev/null 2>&1; then
+      TLS_OK=1; break
+    fi
+    sleep 5
+  done
+  if [ "${TLS_OK}" != 1 ]; then
+    echo "ERROR: https://${DOMAIN}/api/health is not reachable with a valid certificate."
+    echo "       Check that DNS points at this host and ports 80/443 are open,"
+    echo "       then re-run: deploy/install.sh --production ${DOMAIN}"
+    docker compose logs caddy --tail 20 || true
+    exit 1
+  fi
+  echo "   HTTPS verified"
+else
+  echo "-- verifying frontend"
+  curl -fsS -o /dev/null http://127.0.0.1:3000 || { echo "ERROR: frontend not reachable on 127.0.0.1:3000"; exit 1; }
+  echo "   frontend serving"
+fi
 
 echo "-- worker status"
 docker compose ps --format '{{.Name}}\t{{.Status}}' | grep worker || true

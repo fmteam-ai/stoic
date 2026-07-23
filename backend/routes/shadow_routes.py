@@ -60,7 +60,8 @@ async def register_shadow_model(req: RegisterModelRequest,
         model = await register_model(db, user["id"], engine, symbol,
                                      params or {}, source=source, note=req.note)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        from errors import api_error
+        raise api_error(422, "shadow_model_invalid", str(e), exc=e)
     return model
 
 
@@ -85,7 +86,8 @@ async def promote_shadow_model(model_id: str, user=Depends(get_current_user)):
     try:
         return await promote_model(db, user["id"], model_id)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        from errors import api_error
+        raise api_error(422, "shadow_promote_invalid", str(e), exc=e)
 
 
 @router.post("/models/{model_id}/retire")
@@ -95,7 +97,8 @@ async def retire_shadow_model(model_id: str, user=Depends(get_current_user)):
     try:
         return await retire_model(db, user["id"], model_id)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        from errors import api_error
+        raise api_error(422, "shadow_retire_invalid", str(e), exc=e)
 
 
 @router.get("/reconciliation")

@@ -223,7 +223,8 @@ async def generate_signal(payload: dict, account_id: Optional[str] = None,
     try:
         signal = await analyze_symbol(symbol, risk_level)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"AI analysis failed: {e}")
+        from errors import api_error
+        raise api_error(502, "ai_analysis_failed", "AI analysis is temporarily unavailable.", exc=e)
 
     signal["user_id"] = user["id"]
     signal["consumed"] = False

@@ -21,6 +21,13 @@ import pytest
 from pymongo import MongoClient
 from bson import ObjectId
 
+
+def _detail_text(r):
+    d = r.json().get("detail", "")
+    if isinstance(d, dict):
+        d = d.get("message", "")
+    return str(d).lower()
+
 def _read_env():
     try:
         with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
@@ -171,14 +178,14 @@ class TestUserPresets:
         s, _ = user_a
         r = s.post(f"{API}/bot/my-presets", json={"name": "  "}, timeout=15)
         assert r.status_code == 400
-        assert "name" in r.json().get("detail", "").lower()
+        assert "name" in _detail_text(r)
 
     def test_save_preset_duplicate_name_400(self, user_a, created_preset):
         s, _ = user_a
         _, name = created_preset
         r = s.post(f"{API}/bot/my-presets", json={"name": name}, timeout=15)
         assert r.status_code == 400
-        assert "already have a preset" in r.json().get("detail", "").lower()
+        assert "already have a preset" in _detail_text(r)
 
     def test_list_presets_includes_custom(self, user_a, created_preset):
         s, _ = user_a
@@ -224,7 +231,7 @@ class TestUserPresets:
         r = s.post(f"{API}/bot/my-presets",
                    json={"name": f"TEST_Limit_overflow_{uuid.uuid4().hex[:4]}"}, timeout=15)
         assert r.status_code == 400, r.text
-        detail = r.json().get("detail", "").lower()
+        detail = _detail_text(r)
         assert ("limit" in detail) or ("max" in detail)
         # Cleanup so other tests aren't affected
         mongo_db.user_presets.delete_many({"user_id": uid})

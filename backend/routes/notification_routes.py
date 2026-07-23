@@ -113,7 +113,8 @@ async def test_telegram(user=Depends(get_current_user)):
                 "disable_web_page_preview": True,
             })
         except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Network error: {e}")
+            from errors import api_error
+            raise api_error(502, "telegram_unreachable", "Telegram could not be reached — check the bot token and network.", exc=e)
     if r.status_code != 200:
         detail = "Bad response from Telegram API"
         try:

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { X, Loader2, Copy, RotateCcw, Ban, BookOpen } from "lucide-react";
+import { X, Loader2, Copy, RotateCcw, Ban, BookOpen, Share2, Pencil, Sparkles } from "lucide-react";
 
 const GRADE_COLOR = {
     A: "text-[#00FF41] border-[#00FF41]/40", B: "text-[#00FF41] border-[#00FF41]/40",
@@ -74,6 +74,8 @@ export const JournalCardBody = ({ card, trade }) => {
 export const JournalCardModal = ({ trade, onClose }) => {
     const [d, setD] = useState(null);
     const [busy, setBusy] = useState(true);
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState({});
 
     const generate = useCallback(async (force = false) => {
         setBusy(true);
@@ -97,6 +99,21 @@ export const JournalCardModal = ({ trade, onClose }) => {
         toast.success("Public link copied — post it anywhere");
     };
 
+    const share = async () => {
+        try {
+            const { data } = await api.post(`/journal/${trade.id}/share`);
+            setD(data);
+            toast.success("Card is now publicly shareable");
+        } catch (e) {
+            const det = e.response?.data?.detail;
+            if (det?.code === "moderation_failed") {
+                toast.error(`Blocked by moderation (${(det.issues || []).join(", ")}) — edit the card text first.`);
+            } else {
+                toast.error(formatApiError(e));
+            }
+        }
+    };
+
     const revoke = async () => {
         try {
             await api.delete(`/journal/${trade.id}/card`);
@@ -107,6 +124,37 @@ export const JournalCardModal = ({ trade, onClose }) => {
         }
     };
 
+    const startEdit = () => {
+        const c = d?.card || {};
+        setDraft({
+            title: c.title || "", summary: c.summary || "",
+            what_went_right: c.what_went_right || "",
+            what_went_wrong: c.what_went_wrong || "",
+            lesson: c.lesson || "",
+        });
+        setEditing(true);
+    };
+
+    const saveEdit = async () => {
+        setBusy(true);
+        try {
+            const { data } = await api.put(`/journal/${trade.id}/card`, draft);
+            setD(data);
+            setEditing(false);
+            toast.success("Card updated");
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const EDIT_FIELDS = [
+        ["title", "TITLE", 1], ["summary", "SUMMARY", 3],
+        ["what_went_right", "WHAT WENT RIGHT", 2],
+        ["what_went_wrong", "WHAT WENT WRONG", 2], ["lesson", "LESSON", 2],
+    ];
+
     return (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={onClose}>
             <div className="bg-[#0A0A0A] border border-[#1F1F1F] max-w-lg w-full max-h-[90vh] overflow-y-auto p-6"
@@ -115,6 +163,13 @@ export const JournalCardModal = ({ trade, onClose }) => {
                     <div className="flex items-center gap-2">
                         <BookOpen className="w-4 h-4 text-[#FFD700]" />
                         <span className="font-display font-bold text-white">Trade Journal Card</span>
+                        {d && (
+                            <span className="flex items-center gap-1 font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#0099FF]/40 text-[#0099FF]"
+                                data-testid="journal-ai-label">
+                                <Sparkles className="w-2.5 h-2.5" />
+                                {d.edited ? "AI + EDITED" : "AI-GENERATED"}
+                            </span>
+                        )}
                     </div>
                     <button onClick={onClose} data-testid="journal-card-close" className="text-[#A1A1AA] hover:text-white">
                         <X className="w-4 h-4" />
@@ -125,7 +180,30 @@ export const JournalCardModal = ({ trade, onClose }) => {
                         <Loader2 className="w-4 h-4 animate-spin" /> WRITING YOUR POST-MORTEM…
                     </div>
                 )}
-                {!busy && d && (
+                {!busy && d && editing && (
+                    <div className="space-y-3" data-testid="journal-edit-form">
+                        {EDIT_FIELDS.map(([k, label, rows]) => (
+                            <div key={k}>
+                                <div className="font-mono text-[9px] tracking-widest text-[#52525B] mb-1">{label}</div>
+                                <textarea rows={rows} value={draft[k]}
+                                    onChange={e => setDraft({ ...draft, [k]: e.target.value })}
+                                    data-testid={`journal-edit-${k}`}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] text-sm text-white p-2 focus:border-[#00FF41]/40 outline-none resize-none" />
+                            </div>
+                        ))}
+                        <div className="flex items-center gap-2 pt-2">
+                            <button onClick={saveEdit} data-testid="journal-edit-save"
+                                className="px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-xs font-mono tracking-widest">
+                                SAVE
+                            </button>
+                            <button onClick={() => setEditing(false)} data-testid="journal-edit-cancel"
+                                className="px-3 py-2 border border-[#1F1F1F] text-[#A1A1AA] hover:text-white text-xs font-mono tracking-widest">
+                                CANCEL
+                            </button>
+                        </div>
+                    </div>
+                )}
+                {!busy && d && !editing && (
                     <>
                         <JournalCardBody card={d.card} trade={d.trade} />
                         <div className="flex items-center gap-2 mt-6 pt-4 border-t border-[#1F1F1F] flex-wrap">
@@ -141,8 +219,15 @@ export const JournalCardModal = ({ trade, onClose }) => {
                                     </button>
                                 </>
                             ) : (
-                                <span className="font-mono text-[10px] tracking-widest text-[#52525B]">SHARE LINK REVOKED</span>
+                                <button onClick={share} data-testid="journal-share"
+                                    className="flex items-center gap-1.5 px-3 py-2 border border-[#0099FF]/40 text-[#0099FF] hover:bg-[#0099FF]/10 text-xs font-mono tracking-widest">
+                                    <Share2 className="w-3 h-3" /> SHARE PUBLICLY
+                                </button>
                             )}
+                            <button onClick={startEdit} data-testid="journal-edit"
+                                className="flex items-center gap-1.5 px-3 py-2 border border-[#1F1F1F] text-[#A1A1AA] hover:text-white text-xs font-mono tracking-widest">
+                                <Pencil className="w-3 h-3" /> EDIT
+                            </button>
                             <button onClick={() => generate(true)} data-testid="journal-regenerate"
                                 className="flex items-center gap-1.5 px-3 py-2 border border-[#1F1F1F] text-[#A1A1AA] hover:text-white text-xs font-mono tracking-widest ml-auto">
                                 <RotateCcw className="w-3 h-3" /> REGENERATE

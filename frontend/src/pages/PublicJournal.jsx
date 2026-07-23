@@ -23,8 +23,8 @@ export default function PublicJournal() {
                     <StoicOfficial size={34} />
                     <div>
                         <div className="font-display font-bold text-xl tracking-tight">STOIC · Trade Journal</div>
-                        <div className="font-mono text-[10px] tracking-widest text-[#52525B]">
-                            AI-WRITTEN POST-MORTEM · REAL TRADE
+                        <div className="font-mono text-[10px] tracking-widest text-[#52525B]" data-testid="public-journal-ai-label">
+                            {d?.edited ? "AI-ASSISTED · TRADER-EDITED · REAL TRADE" : "AI-WRITTEN POST-MORTEM · REAL TRADE"}
                         </div>
                     </div>
                 </div>

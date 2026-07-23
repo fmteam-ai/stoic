@@ -32,6 +32,22 @@ async def _ops_actor(request: Request):
     return False, None
 
 
+def _as_dt(v):
+    """BSON datetime or legacy ISO string → aware datetime (None on junk)."""
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    try:
+        ts = datetime.fromisoformat(str(v))
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _iso(v):
+    dt = _as_dt(v)
+    return dt.isoformat() if dt else None
+
+
 @router.get("/ops/release-readiness")
 async def release_readiness(request: Request):
     # Two auth paths: metrics token (deploy scripts / Prometheus) OR an
@@ -69,11 +85,11 @@ async def release_readiness(request: Request):
 
     # 2 · all six worker leases present and unexpired
     leases = {str(w["_id"]): w async for w in db.worker_leases.find({})}
-    now_iso = now.isoformat()
     workers = {}
     for name in EXPECTED_WORKERS:
         lease = leases.get(name)
-        alive = bool(lease and str(lease.get("expires_at") or "") >= now_iso)
+        exp = _as_dt((lease or {}).get("expires_at"))
+        alive = bool(exp and exp >= now)
         # loop-execution truth: the process may hold its lease while an
         # individual loop coroutine has crashed — require every loop running.
         loops_total = (lease or {}).get("loops_total")
@@ -83,21 +99,31 @@ async def release_readiness(request: Request):
         # 5 min of healthy running marks the worker unhealthy
         crashlooping = [ln for ln, st in ((lease or {}).get("loops") or {}).items()
                         if (st or {}).get("consecutive_failures", 0) >= 3]
+        # stall detection: a loop whose coroutine is alive but has made no
+        # per-iteration progress for 3× its declared interval is unhealthy
+        stalled = []
+        for ln, st in ((lease or {}).get("loops") or {}).items():
+            ivl = (st or {}).get("expected_interval_sec")
+            done = _as_dt((st or {}).get("last_iteration_completed_at"))
+            if ivl and done and alive:
+                if (now - done).total_seconds() > max(3 * int(ivl), 120):
+                    stalled.append(ln)
         workers[name] = {
-            "alive": alive and loops_ok and not crashlooping,
+            "alive": alive and loops_ok and not crashlooping and not stalled,
             "loops": (f"{loops_running}/{loops_total}"
                       if loops_total is not None else None),
             "crashlooping": crashlooping or None,
-            "renewed_at": (lease or {}).get("renewed_at"),
+            "stalled": stalled or None,
+            "renewed_at": _iso((lease or {}).get("renewed_at")),
         }
     checks["workers"] = {"ok": all(w["alive"] for w in workers.values()),
                          "detail": workers}
 
     # 3 · reconciliation lag — lease freshly renewed AND no broker-accepted
     #     order stuck unresolved for more than 5 minutes
-    recon = leases.get("reconciliation") or {}
-    recon_fresh = str(recon.get("renewed_at") or "") >= (
-        now - timedelta(seconds=120)).isoformat()
+    recon_renewed = _as_dt((leases.get("reconciliation") or {}).get("renewed_at"))
+    recon_fresh = bool(recon_renewed
+                       and recon_renewed >= now - timedelta(seconds=120))
     stale_cutoff = (now - timedelta(minutes=5)).isoformat()
     stuck = await db.trades.count_documents(
         {"status": "pending",
@@ -164,7 +190,7 @@ async def ack_alert(alert_id: str, request: Request):
     db = get_db()
     res = await db.ops_alerts.update_one(
         {"_id": oid, "acked_at": None},
-        {"$set": {"acked_at": datetime.now(timezone.utc).isoformat(),
+        {"$set": {"acked_at": datetime.now(timezone.utc),
                   "acked_by": actor}})
     if res.matched_count == 0:
         return JSONResponse(status_code=404,
@@ -180,6 +206,6 @@ async def ack_all_alerts(request: Request):
     db = get_db()
     res = await db.ops_alerts.update_many(
         {"acked_at": None},
-        {"$set": {"acked_at": datetime.now(timezone.utc).isoformat(),
+        {"$set": {"acked_at": datetime.now(timezone.utc),
                   "acked_by": actor}})
     return {"ok": True, "acked": res.modified_count}

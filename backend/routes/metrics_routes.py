@@ -93,6 +93,21 @@ async def metrics(request: Request):
                   (st or {}).get("restart_count", 0), None, lbl)
             gauge("stoic_worker_loop_consecutive_failures",
                   (st or {}).get("consecutive_failures", 0), None, lbl)
+            gauge("stoic_worker_loop_processed_total",
+                  (st or {}).get("processed_count", 0), None, lbl)
+            if (st or {}).get("last_duration_ms") is not None:
+                gauge("stoic_worker_loop_last_duration_ms",
+                      st["last_duration_ms"], None, lbl)
+            _done = (st or {}).get("last_iteration_completed_at")
+            try:
+                _done = (_done if isinstance(_done, datetime)
+                         else datetime.fromisoformat(str(_done)))
+                if _done.tzinfo is None:
+                    _done = _done.replace(tzinfo=timezone.utc)
+                gauge("stoic_worker_loop_last_iteration_age_seconds",
+                      int((now - _done).total_seconds()), None, lbl)
+            except Exception:
+                pass
         if wname == "reconciliation":
             try:
                 renewed = datetime.fromisoformat(str(w.get("renewed_at")))

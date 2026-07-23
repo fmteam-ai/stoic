@@ -29,7 +29,8 @@ async def bayes_run(req: BayesRunRequest, user=Depends(get_current_user)):
             db, user["id"], req.engine, req.symbol,
             iters=max(5, min(int(req.iters), 40)))
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        from errors import api_error
+        raise api_error(422, "optimization_invalid", str(e), exc=e)
     proposal.pop("_id", None)
     return proposal
 

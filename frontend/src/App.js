@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import "@/App.css";
@@ -19,9 +20,7 @@ import SubscriptionSuccess from "@/pages/SubscriptionSuccess";
 import BrandingGallery from "@/pages/BrandingGallery";
 import Affiliate from "@/pages/Affiliate";
 import Notifications from "@/pages/Notifications";
-import Analytics from "@/pages/Analytics";
 import Settings from "@/pages/Settings";
-import Billing from "@/pages/Billing";
 import FAQ from "@/pages/FAQ";
 import Guide from "@/pages/Guide";
 import SafetyBlocks from "@/pages/SafetyBlocks";
@@ -29,28 +28,39 @@ import Agents from "@/pages/Agents";
 import Strategies from "@/pages/Strategies";
 import Portfolio from "@/pages/Portfolio";
 import VerifiedPerformance from "@/pages/VerifiedPerformance";
-import PublicPerformance from "@/pages/PublicPerformance";
-import PublicJournal from "@/pages/PublicJournal";
 import AuditLog from "@/pages/AuditLog";
 import Execution from "@/pages/Execution";
-import Research from "@/pages/Research";
 import Crypto from "@/pages/Crypto";
 import ShadowPerformance from "@/pages/ShadowPerformance";
 import Scoreboard from "@/pages/Scoreboard";
 import BrokerComparison from "@/pages/BrokerComparison";
-import EnterpriseApi from "@/pages/EnterpriseApi";
 import Scalp from "@/pages/Scalp";
 import LossLab from "@/pages/LossLab";
 import BotHealth from "@/pages/BotHealth";
 import AffiliateLanding from "@/pages/AffiliateLanding";
 import WelcomeTrailer from "@/pages/WelcomeTrailer";
 import Terms from "@/pages/Terms";
-import AdminUsers from "@/pages/AdminUsers";
-import AdminAffiliates from "@/pages/AdminAffiliates";
-import AdminMigration from "@/pages/AdminMigration";
 import VerifyEmail from "@/pages/VerifyEmail";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
+
+// Route-level code splitting — heavy/rarely-visited surfaces load on demand
+const Research = lazy(() => import("@/pages/Research"));
+const Analytics = lazy(() => import("@/pages/Analytics"));
+const Billing = lazy(() => import("@/pages/Billing"));
+const EnterpriseApi = lazy(() => import("@/pages/EnterpriseApi"));
+const PublicPerformance = lazy(() => import("@/pages/PublicPerformance"));
+const PublicJournal = lazy(() => import("@/pages/PublicJournal"));
+const AdminUsers = lazy(() => import("@/pages/AdminUsers"));
+const AdminAffiliates = lazy(() => import("@/pages/AdminAffiliates"));
+const AdminMigration = lazy(() => import("@/pages/AdminMigration"));
+
+const RouteFallback = () => (
+    <div className="min-h-screen bg-[#050505] flex items-center justify-center"
+        data-testid="route-loading">
+        <span className="font-mono text-[10px] tracking-[0.3em] text-[#52525B]">LOADING…</span>
+    </div>
+);
 
 
 function App() {
@@ -59,6 +69,7 @@ function App() {
             <ErrorBoundary>
             <BrowserRouter>
                 <AuthProvider>
+                    <Suspense fallback={<RouteFallback />}>
                     <Routes>
                         <Route path="/login" element={<Login />} />
                         <Route path="/register" element={<Register />} />
@@ -119,6 +130,7 @@ function App() {
                         <Route path="/research" element={<ProtectedRoute><Research /></ProtectedRoute>} />
                         <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
+                    </Suspense>
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>
             </BrowserRouter>

@@ -361,7 +361,8 @@ async def enable_webhook(payload: WebhookEnableRequest, user=Depends(get_current
                 json={"url": webhook_url, "allowed_updates": ["message"]},
             )
         except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Network error: {e}")
+            from errors import api_error
+            raise api_error(502, "telegram_unreachable", "Telegram could not be reached — check the bot token and network.", exc=e)
     if r.status_code != 200 or not r.json().get("ok"):
         try:
             desc = r.json().get("description") or "Telegram rejected the webhook"

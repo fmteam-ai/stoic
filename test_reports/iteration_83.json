@@ -1,0 +1,49 @@
+{
+  "summary": "Iter-83 independent verification of journal features + BSON dates + structured error codes + lazy React routes. Backend: 17/17 pytest passing (test_iter83_journal_bson_errcodes.py). Frontend: 5 lazy routes render, /bot-health 4 cards intact, journal modal end-to-end (open → AI-GENERATED badge → EDIT → journal-edit-form → SAVE → 'AI + EDITED' badge → COPY PUBLIC LINK). Moderation: spam text (telegram + https://x.io) correctly returns 422 detail.code='moderation_failed' with issues=[contains_url, contains_solicitation]; clean text then shares 200. BSON: ops_alerts.created_at and worker_leases.expires_at/renewed_at are BSON datetime (not str); API still serializes ISO strings. Ops release-readiness returns 503 in preview with workers.detail.<name>.stalled populated (no serialization errors). /api/metrics returns stoic_worker_lease_alive. Stage roundtrip promote(force+reason)→demote works; final stage=internal_shadow. Preset duplicate name returns 400 detail={code:'preset_invalid',message,request_id}. FOUND GAP: db.llm_usage cost-tracking docs claimed in review-request are NOT implemented — no llm_usage write anywhere in backend/. Cleanup: 0 TEST_iter83 leftovers, stage restored.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/journal/{trade_id}/card", "issue": "LLM cost tracking NOT persisted — review-request claims 'db.llm_usage should receive cost-tracking docs (feature=journal_card, estimated_cost_usd)' but grep across /app/backend shows ZERO writes to db.llm_usage. Journal generation succeeds and writes trade_journal_cards, but no usage/cost telemetry is recorded. Verified: db.llm_usage.count_documents({user_id:admin,feature:'journal_card'}) == 0 after successful force-regeneration where the LLM returned a real card ('Gold Flash Trade Bails in 104 Seconds')."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/research (Research page)", "issues": ["React hydration warning in console: 'In HTML, %s cannot be a child of %s' pointing at a <span> nested inside an <option>. Not a functional break but pollutes console and is a bad-HTML pattern in Research page's <select> options."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter83_journal_bson_errcodes.py",
+    "/app/test_reports/pytest/iter83_results.xml"
+  ],
+  "action_items": [
+    "Implement the promised db.llm_usage cost-tracking write in journal_routes._generate_card (feature='journal_card', user_id, estimated_cost_usd, model='claude-sonnet-4-5-20250929', tokens if available) — currently missing entirely.",
+    "Fix Research page invalid HTML: <span> inside <option> triggers a React hydration warning (visible on /research navigation)."
+  ],
+  "critical_code_review_comments": [
+    "journal_routes.py:210-214 — rate_limit path for journal_generate uses env JOURNAL_GEN_MAX_PER_HOUR (default 15) with a 3600s window; per-user identifier; correctly wired via `request` for the bypass header. Code path verified.",
+    "journal_routes.py:120-168 — _generate_card catches ALL exceptions and falls back to a deterministic card. Good resilience. BUT no telemetry: no llm_usage record on success and no counter on fallback. If cost tracking is a launch requirement, add both.",
+    "journal_routes.py:270-295 — enable_share moderation gate returns 422 with structured {code,message,issues}. Correct. Note: it also short-circuits when share_id exists and !revoked (line 280) — meaning if the user edits the card into moderation-failing text AFTER already sharing, the existing public link continues to serve the bad text. Consider re-running moderation on the edit path (PUT /card) or on GET /public/journal.",
+    "journal_routes.py:308-314 — revoke_card sets revoked=true but keeps share_id, so the share_id can NEVER be reused (enable_share generates a fresh secrets.token_urlsafe(12) after revocation, line 290). Correct URL-immutability guarantee.",
+    "errors.py:17-25 — api_error wraps HTTPException with dict detail {code,message,request_id}. Clean. Consider also logging request.url and request.method for better traceability.",
+    "validation_routes.py — Public POST endpoint is /api/ops/validation/{scenario} (path param), NOT /api/ops/validation with scenario in body. Documented shape is `{status, account_mode, notes, evidence_ref?}` with status/mode enforced by Pydantic pattern.",
+    "ops release-readiness — Response shape is nested `{ready, checks:{workers:{ok, detail:{<name>:{alive,loops,crashlooping,stalled,...}}}, mongo_roundtrip, reconciliation, outbox, ...}}`. Every worker entry has 'stalled' key populated correctly (all null in preview since workers are absent). No datetime-serialization 500s observed.",
+    "BSON migration — Confirmed live: sample ops_alerts.created_at is Python datetime; sample worker_leases.expires_at/renewed_at are Python datetime. GET /api/ops/alerts still returns ISO strings in JSON (no client breakage).",
+    "JournalCardModal.jsx:158-241 — Modal correctly toggles between view / edit / share-vs-copy-vs-revoke states based on d.share_id && !d.revoked. AI badge text switches on d.edited. All required data-testids present (journal-card-modal, journal-ai-label, journal-edit, journal-edit-form, journal-edit-summary, journal-edit-save, journal-share, journal-copy-link, journal-revoke-link, journal-regenerate, journal-card-close). Good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter83_journal_bson_errcodes.py (new — 17 tests, all pass)"
+  ],
+  "success_rate": {
+    "backend_pytest": "17/17 (100%)",
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (no 2FA). RATE_LIMIT_BYPASS_TOKEN + METRICS_TOKEN read from /app/backend/.env.",
+  "seed_data_creation": "Test operated on an existing closed admin trade (there are 1169). Test created ONE journal card, edited it multiple times, shared/revoked it. Also created + deleted ONE TEST_iter83 preset (via /api/bot/my-presets) and ONE TEST_iter83 validation_evidence row (POST /api/ops/validation/restart_recovery). Both cleaned up. Deployment stage promoted internal_shadow→demo_broker (force+reason) then demoted back — final stage=internal_shadow (verified).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Review-request scope fully verified end-to-end (backend + Playwright). ONE gap discovered: llm_usage cost tracking claimed in the changelog is not actually written by journal_routes._generate_card — grep across /app/backend for 'llm_usage' returns only trade_journal_cards references. If main agent decides to implement it, next tester should verify a llm_usage doc with feature='journal_card' + estimated_cost_usd appears after each successful force-regeneration. Preview has many legitimate ea_heartbeat_stale alerts (~62 unacked) — expected behavior, not a bug.",
+  "rca of the issue": "GAP: journal LLM cost tracking not implemented. Main agent's changelog line 'LLM cost tracking' does not correspond to any code change — _generate_card only returns the card dict; there is no db.llm_usage.insert_one anywhere in /app/backend. Reproduction: from admin, POST /api/journal/{closed_trade_id}/card?force=true → returns 200 with a real LLM-generated card; db.llm_usage.count_documents({user_id:admin,feature:'journal_card'}) remains 0. Mitigation for main agent: add an llm_usage write inside _generate_card immediately after the successful chat.send_message (with model name, prompt_tokens, completion_tokens, and computed estimated_cost_usd using Anthropic Claude pricing), and consider also writing a lightweight 'fallback' record when the LLM raises."
+}

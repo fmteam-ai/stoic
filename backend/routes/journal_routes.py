@@ -9,17 +9,19 @@ closed trade.
 import html
 import json
 import logging
+import os
 import re
 import secrets
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
+from security import rate_limit
 
 logger = logging.getLogger("journal")
 
@@ -28,6 +30,28 @@ public_router = APIRouter(prefix="/public", tags=["public-journal"])
 
 _TAG_RE = re.compile(r"[^a-z0-9_]")
 _HTML_RE = re.compile(r"<[^>]*>")
+
+# public-narrative moderation — a shared card must not carry contact bait,
+# links or abusive language
+_MOD_PATTERNS = (
+    ("contains_url", re.compile(r"https?://|www\.", re.I)),
+    ("contains_email", re.compile(r"[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)),
+    ("contains_phone", re.compile(r"\+?\d[\d\s().-]{8,}\d")),
+    ("contains_profanity", re.compile(
+        r"\b(fuck\w*|shit\w*|bitch\w*|cunt|nigg\w*|faggot|retard\w*)\b", re.I)),
+    ("contains_solicitation", re.compile(
+        r"\b(dm me|telegram me|whatsapp|join my|signal group|copy my trades|"
+        r"guaranteed profit)\b", re.I)),
+)
+_CARD_TEXT_FIELDS = ("title", "summary", "what_went_right",
+                     "what_went_wrong", "lesson")
+
+
+def moderate_card(card: dict) -> list[str]:
+    """Deterministic screen for public sharing — returns issue codes."""
+    text = " ".join(str(card.get(f) or "") for f in _CARD_TEXT_FIELDS)
+    text += " " + " ".join(card.get("hashtags") or [])
+    return [code for code, rx in _MOD_PATTERNS if rx.search(text)]
 
 
 def _clean(s: str, limit: int) -> str:
@@ -154,6 +178,8 @@ def _payload(doc: dict) -> dict:
     return {"trade_id": doc["trade_id"], "share_id": doc.get("share_id"),
             "revoked": bool(doc.get("revoked")),
             "card": doc.get("card") or {}, "trade": doc.get("trade") or {},
+            "ai_generated": not bool(doc.get("edited")),
+            "edited": bool(doc.get("edited")),
             "created_at": doc.get("created_at")}
 
 
@@ -169,7 +195,7 @@ async def _owned_closed_trade(db, trade_id: str, user_id: str) -> dict:
 
 
 @router.post("/{trade_id}/card")
-async def create_card(trade_id: str, force: bool = False,
+async def create_card(trade_id: str, request: Request, force: bool = False,
                       include_reasoning: bool = False,
                       user=Depends(get_current_user)):
     """Create a PRIVATE journal card. Public sharing is a separate explicit
@@ -180,6 +206,12 @@ async def create_card(trade_id: str, force: bool = False,
         {"trade_id": trade_id, "user_id": user["id"]})
     if existing and not force:
         return _payload(existing)
+    # regeneration burns LLM budget — cap per user per hour
+    await rate_limit(db, "journal_generate", user["id"],
+                     int(os.environ.get("JOURNAL_GEN_MAX_PER_HOUR", "15")),
+                     3600,
+                     "Journal generation limit reached — try again later.",
+                     request=request)
     card = await _generate_card(trade, include_reasoning=include_reasoning)
     doc = {
         "trade_id": trade_id, "user_id": user["id"],
@@ -188,12 +220,50 @@ async def create_card(trade_id: str, force: bool = False,
         "share_id": ((existing or {}).get("share_id")
                      if existing and not existing.get("revoked") else None),
         "revoked": bool((existing or {}).get("revoked")),
+        "edited": False,
         "card": card, "trade": _trade_snapshot(trade),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc),
     }
     await db.trade_journal_cards.update_one(
         {"trade_id": trade_id, "user_id": user["id"]},
         {"$set": doc}, upsert=True)
+    return _payload(doc)
+
+
+class CardEditIn(BaseModel):
+    """User edits before publishing — same sanitation as the LLM schema."""
+    title: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=600)
+    what_went_right: str | None = Field(default=None, max_length=400)
+    what_went_wrong: str | None = Field(default=None, max_length=400)
+    lesson: str | None = Field(default=None, max_length=300)
+
+    @field_validator("title", "summary", "what_went_right",
+                     "what_went_wrong", "lesson", mode="before")
+    @classmethod
+    def _no_html(cls, v):
+        return None if v is None else _clean(v, 600)
+
+
+@router.put("/{trade_id}/card")
+async def edit_card(trade_id: str, payload: CardEditIn,
+                    user=Depends(get_current_user)):
+    """Let the owner refine the narrative before (or after) publishing."""
+    db = get_db()
+    doc = await db.trade_journal_cards.find_one(
+        {"trade_id": trade_id, "user_id": user["id"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="No card yet")
+    changes = {f"card.{k}": v for k, v in payload.model_dump().items()
+               if v is not None}
+    if not changes:
+        raise HTTPException(status_code=422, detail="Nothing to update")
+    changes["edited"] = True
+    changes["edited_at"] = datetime.now(timezone.utc)
+    await db.trade_journal_cards.update_one(
+        {"trade_id": trade_id, "user_id": user["id"]}, {"$set": changes})
+    doc = await db.trade_journal_cards.find_one(
+        {"trade_id": trade_id, "user_id": user["id"]})
     return _payload(doc)
 
 
@@ -209,6 +279,14 @@ async def enable_share(trade_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Create the card first")
     if doc.get("share_id") and not doc.get("revoked"):
         return _payload(doc)                      # already publicly shared
+    # public-narrative moderation gate — no links, contact bait or abuse
+    issues = moderate_card(doc.get("card") or {})
+    if issues:
+        raise HTTPException(status_code=422, detail={
+            "code": "moderation_failed",
+            "message": "The card text cannot be shared publicly — edit it "
+                       "first (PUT /journal/{trade_id}/card).",
+            "issues": issues})
     new_id = secrets.token_urlsafe(12)
     await db.trade_journal_cards.update_one(
         {"trade_id": trade_id, "user_id": user["id"]},
@@ -247,4 +325,6 @@ async def public_journal(share_id: str):
                             detail="Share link not found or revoked")
     return {"share_id": share_id, "card": doc.get("card") or {},
             "trade": doc.get("trade") or {},
+            "ai_generated": not bool(doc.get("edited")),
+            "edited": bool(doc.get("edited")),
             "created_at": doc.get("created_at")}

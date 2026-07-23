@@ -112,11 +112,58 @@ async def seed_admin():
     )
 
 
+async def _migrate_iso_strings_to_bson_dates(db):
+    """One-time (idempotent) migration: ops/lifecycle timestamps written as
+    ISO strings by earlier builds become BSON UTC datetimes so Mongo can do
+    real date comparisons and TTL expiry."""
+    from datetime import datetime as _dt
+
+    def _conv(v):
+        try:
+            ts = _dt.fromisoformat(str(v))
+            return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    plans = (("worker_leases", ("expires_at", "renewed_at")),
+             ("ops_alerts", ("created_at", "last_seen_at", "acked_at")),
+             ("validation_evidence", ("recorded_at",)),
+             ("trade_journal_cards", ("created_at", "edited_at")))
+    for coll, fields in plans:
+        async for doc in db[coll].find(
+                {"$or": [{f: {"$type": "string"}} for f in fields]}):
+            sets = {f: _conv(doc[f]) for f in fields
+                    if isinstance(doc.get(f), str) and _conv(doc[f])}
+            if sets:
+                await db[coll].update_one({"_id": doc["_id"]}, {"$set": sets})
+    stage = await db.platform_state.find_one({"_id": "deployment_stage"})
+    if stage:
+        sets = {}
+        if isinstance(stage.get("entered_at"), str) and _conv(stage["entered_at"]):
+            sets["entered_at"] = _conv(stage["entered_at"])
+        hist = stage.get("history") or []
+        changed = False
+        for h in hist:
+            if isinstance(h.get("at"), str) and _conv(h["at"]):
+                h["at"] = _conv(h["at"])
+                changed = True
+        if changed:
+            sets["history"] = hist
+        if sets:
+            await db.platform_state.update_one(
+                {"_id": "deployment_stage"}, {"$set": sets})
+
+
 async def ensure_indexes():
     db = get_db()
     await db.users.create_index("email", unique=True)
     await db.accounts.create_index("bridge_token", unique=True)
     await db.accounts.create_index("user_id")
+    # ops collections — BSON-date native (TTL prunes acked alerts after 30d)
+    await db.ops_alerts.create_index([("dedup_key", 1), ("acked_at", 1)])
+    await db.ops_alerts.create_index("acked_at", expireAfterSeconds=2592000)
+    await db.validation_evidence.create_index([("scenario", 1), ("recorded_at", 1)])
+    await _migrate_iso_strings_to_bson_dates(db)
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])

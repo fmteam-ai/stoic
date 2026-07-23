@@ -26,13 +26,13 @@ async def raise_alert(db, kind: str, severity: str, message: str,
                       dedup_key: str | None = None):
     """Insert an alert unless an unacked one with the same dedup_key is open."""
     dedup_key = dedup_key or kind
-    now_iso = _now().isoformat()
+    now = _now()
     existing = await db.ops_alerts.find_one(
         {"dedup_key": dedup_key, "acked_at": None})
     if existing:
         await db.ops_alerts.update_one(
             {"_id": existing["_id"]},
-            {"$set": {"last_seen_at": now_iso, "message": message},
+            {"$set": {"last_seen_at": now, "message": message},
              "$inc": {"occurrences": 1}})
         return None
     res = await db.ops_alerts.insert_one({
@@ -40,8 +40,8 @@ async def raise_alert(db, kind: str, severity: str, message: str,
         "severity": severity if severity in SEVERITIES else "warning",
         "message": message,
         "dedup_key": dedup_key,
-        "created_at": now_iso,
-        "last_seen_at": now_iso,
+        "created_at": now,
+        "last_seen_at": now,
         "occurrences": 1,
         "acked_at": None,
         "acked_by": None,
@@ -81,11 +81,11 @@ async def evaluate_ops_alerts(db) -> int:
                     dedup_key=f"ea_heartbeat:{a['_id']}"):
                 raised += 1
 
-    # 2 · worker lease expired / loop crashlooping
-    now_iso = now.isoformat()
+    # 2 · worker lease expired / loop crashlooping / loop stalled
     async for w in db.worker_leases.find({}):
         name = str(w.get("_id"))
-        if str(w.get("expires_at") or "") < now_iso:
+        exp = _parse_ts(w.get("expires_at"))
+        if exp and exp < now:
             if await raise_alert(
                     db, "worker_lease_expired", "critical",
                     f"Worker '{name}' lease expired at {w.get('expires_at')}",
@@ -99,6 +99,19 @@ async def evaluate_ops_alerts(db) -> int:
                         f"{st['consecutive_failures']} consecutive failures",
                         dedup_key=f"crashloop:{name}:{ln}"):
                     raised += 1
+            # a loop that stops iterating while its coroutine stays alive
+            ivl = (st or {}).get("expected_interval_sec")
+            done = _parse_ts((st or {}).get("last_iteration_completed_at"))
+            if ivl and done and exp and exp >= now:
+                stall_after = max(3 * int(ivl), 120)
+                if (now - done).total_seconds() > stall_after:
+                    if await raise_alert(
+                            db, "worker_loop_stalled", "critical",
+                            f"Loop '{ln}' in worker '{name}' made no progress "
+                            f"for {int((now - done).total_seconds())}s "
+                            f"(expected every {ivl}s)",
+                            dedup_key=f"stalled:{name}:{ln}"):
+                        raised += 1
 
     # 3 · outbox backlog aging / failed events
     backlog_cutoff = (now - timedelta(
@@ -152,10 +165,14 @@ async def evaluate_ops_alerts(db) -> int:
 async def _ops_alert_loop():
     """Periodic evaluator — runs in-process or inside the reconciliation worker."""
     interval = int(os.environ.get("OPS_ALERT_INTERVAL_SEC", "60"))
+    from workers.base import record_progress
     while True:
         try:
             await asyncio.sleep(interval)
-            await evaluate_ops_alerts(get_db())
+            t0 = _now()
+            raised = await evaluate_ops_alerts(get_db())
+            record_progress("_ops_alert_loop", processed=1 + raised,
+                            started_at=t0, interval_sec=interval)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001

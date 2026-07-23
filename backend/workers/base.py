@@ -23,25 +23,50 @@ LEASE_TTL_SEC = 45
 LEASE_RENEW_SEC = 15
 HOLDER = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
+# Per-loop progress telemetry — loops call record_progress() once per
+# iteration; the lease keeper persists it (BSON datetimes) so readiness can
+# distinguish "coroutine alive" from "coroutine making progress".
+LOOP_PROGRESS: dict[str, dict] = {}
+
+
+def record_progress(loop_name: str, processed: int = 0,
+                    started_at: datetime | None = None,
+                    interval_sec: int | None = None) -> None:
+    now = datetime.now(timezone.utc)
+    st = LOOP_PROGRESS.setdefault(loop_name, {"processed_count": 0})
+    if started_at is not None:
+        st["last_iteration_started_at"] = started_at
+        st["last_duration_ms"] = int((now - started_at).total_seconds() * 1000)
+    st["last_iteration_completed_at"] = now
+    st["last_success_at"] = now
+    if processed:
+        st["last_progress_at"] = now
+        st["processed_count"] = st.get("processed_count", 0) + int(processed)
+    if interval_sec:
+        st["expected_interval_sec"] = int(interval_sec)
+
 
 async def _try_acquire(db, name: str) -> bool:
     now = datetime.now(timezone.utc)
     res = await db.worker_leases.update_one(
         {"_id": name,
          "$or": [{"holder": HOLDER},
-                 {"expires_at": {"$lt": now.isoformat()}},
+                 {"expires_at": {"$lt": now}},
+                 # legacy ISO-string leases are always stealable (a string
+                 # never matches a $lt Date due to BSON type bracketing)
+                 {"expires_at": {"$type": "string"}},
                  {"expires_at": {"$exists": False}}]},
         {"$set": {"holder": HOLDER,
-                  "expires_at": (now + timedelta(seconds=LEASE_TTL_SEC)).isoformat(),
-                  "renewed_at": now.isoformat()}},
+                  "expires_at": now + timedelta(seconds=LEASE_TTL_SEC),
+                  "renewed_at": now}},
         upsert=False)
     if res.matched_count == 1:
         return True
     try:
         await db.worker_leases.insert_one(
             {"_id": name, "holder": HOLDER,
-             "expires_at": (now + timedelta(seconds=LEASE_TTL_SEC)).isoformat(),
-             "renewed_at": now.isoformat()})
+             "expires_at": now + timedelta(seconds=LEASE_TTL_SEC),
+             "renewed_at": now})
         return True
     except Exception:
         return False
@@ -61,12 +86,16 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                 return
             # loop-execution monitoring: leases prove the PROCESS is alive,
             # loops_running + per-loop supervisor stats prove every loop is
-            # executing and making progress (not crash-looping).
+            # executing, and record_progress() telemetry proves it is making
+            # actual per-iteration progress (a blocked coroutine goes stale).
             running = sum(1 for t in loop_tasks if not t.done())
+            merged = {k: dict(v) for k, v in (loop_stats or {}).items()}
+            for k, v in LOOP_PROGRESS.items():
+                merged.setdefault(k, {}).update(v)
             await db.worker_leases.update_one(
                 {"_id": name, "holder": HOLDER},
                 {"$set": {"loops_running": running, "loops_total": total,
-                          "loops": loop_stats or {}}})
+                          "loops": merged}})
             if running < total:
                 logger.error("worker %s: %d/%d loops running — a loop died",
                              name, running, total)
@@ -81,8 +110,7 @@ def _supervise(name: str, loop_name: str, factory, stats: dict):
     async def run():
         while True:
             started = asyncio.get_event_loop().time()
-            stats[loop_name]["last_started_at"] = (
-                datetime.now(timezone.utc).isoformat())
+            stats[loop_name]["last_started_at"] = datetime.now(timezone.utc)
             try:
                 await factory()
                 raise RuntimeError("loop coroutine returned unexpectedly")
@@ -96,7 +124,7 @@ def _supervise(name: str, loop_name: str, factory, stats: dict):
                 st["consecutive_failures"] += 1
                 st["restart_count"] += 1
                 st["last_error"] = f"{type(e).__name__}: {e}"[:300]
-                st["last_error_at"] = datetime.now(timezone.utc).isoformat()
+                st["last_error_at"] = datetime.now(timezone.utc)
                 logger.exception("worker %s loop %s crashed (failure #%d) — "
                                  "restarting", name, loop_name,
                                  st["consecutive_failures"])

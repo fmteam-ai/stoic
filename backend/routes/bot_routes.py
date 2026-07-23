@@ -1037,7 +1037,8 @@ async def save_user_preset(payload: dict, account_id: Optional[str] = None,
             config=cfg,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        from errors import api_error
+        raise api_error(400, "preset_invalid", str(e), exc=e)
     return preset
 
 

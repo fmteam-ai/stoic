@@ -17,7 +17,9 @@ BASE_URL = os.environ.get(
 
 
 def _env(name):
-    with open("/app/backend/.env") as f:
+    import pathlib
+    env_path = pathlib.Path(__file__).resolve().parents[1] / ".env"
+    with open(env_path) as f:
         for line in f:
             if line.startswith(name + "="):
                 return line.split("=", 1)[1].strip().strip('"')

@@ -11,8 +11,10 @@ run externally, so API restarts/deploys never interrupt trading loops.
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 
 from database import get_db
+from workers.base import record_progress
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,10 @@ async def _nightly_tuning_loop():
     while True:
         try:
             await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
             await nightly_tuner.sweep_all(get_db())
+            record_progress("_nightly_tuning_loop", processed=1,
+                            started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -40,7 +45,10 @@ async def _optimizer_loop():
     while True:
         try:
             await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
             await ai_optimizer.scheduled_sweep()
+            record_progress("_optimizer_loop", processed=1,
+                            started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -55,7 +63,10 @@ async def _auto_heal_loop():
     while True:
         try:
             await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
             await auto_heal.sweep_all_users()
+            record_progress("_auto_heal_loop", processed=1,
+                            started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -70,7 +81,10 @@ async def _protection_guard_loop():
     while True:
         try:
             await asyncio.sleep(PROT)
+            t0 = datetime.now(timezone.utc)
             await repair_unprotected_positions(get_db())
+            record_progress("_protection_guard_loop", processed=1,
+                            started_at=t0, interval_sec=PROT)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -84,7 +98,10 @@ async def _analytics_loop():
     while True:
         try:
             await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
             await run_daily_aggregates(get_db())
+            record_progress("_analytics_loop", processed=1,
+                            started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -98,7 +115,10 @@ async def _model_maintenance_loop():
     while True:
         try:
             await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
             await run_model_maintenance(get_db())
+            record_progress("_model_maintenance_loop", processed=1,
+                            started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -129,6 +149,7 @@ async def _scalp_reconcile_loop():
     while True:
         try:
             await asyncio.sleep(PROT)
+            t0 = datetime.now(timezone.utc)
             now_m = monotonic()
             if now_m >= next_slot:
                 next_slot = now_m + SLOT
@@ -153,6 +174,8 @@ async def _scalp_reconcile_loop():
                     raise
                 for account_id in {k.split(":")[0] for k in list(_runners)}:
                     verify_account_invariants(account_id)
+            record_progress("_scalp_reconcile_loop", processed=1,
+                            started_at=t0, interval_sec=PROT)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -167,7 +190,10 @@ async def _eod_flatten_loop():
     while True:
         try:
             await asyncio.sleep(60)
+            t0 = datetime.now(timezone.utc)
             await sweep_eod_flatten(get_db())
+            record_progress("_eod_flatten_loop", processed=1,
+                            started_at=t0, interval_sec=60)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -296,6 +322,8 @@ async def _stuck_open_sync_loop():
                 logger.info(
                     "exit-price backfill sweep: %s trade(s) auto-filled", backfilled,
                 )
+            record_progress("_stuck_open_sync_loop", processed=1,
+                            started_at=None, interval_sec=INTERVAL)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
