@@ -50,7 +50,7 @@ def test_register_password_min_length_8():
     assert r.status_code == 422, f"expected 422 for 7-char pw, got {r.status_code} {r.text}"
     # 8 chars -> 200/201
     r2 = requests.post(f"{BASE}/api/auth/register",
-                       json={"email": email, "password": "abc12345",
+                       json={"email": email, "password": "Nw3#Xr8vB5tYqJ6u",
                              "terms_agreed": True}, timeout=15)
     assert r2.status_code in (200, 201), f"8-char register failed: {r2.status_code} {r2.text}"
     # cleanup

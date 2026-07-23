@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write   # cosign keyless (Sigstore OIDC)
+
+jobs:
+  suite-from-archive:
+    # The release is only as good as the archive it ships — run the suite
+    # from the exact exported tree, not the working checkout.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export exact release archive
+        run: git archive --format=tar.gz -o /tmp/stoic-release.tar.gz HEAD
+      - name: Unpack to a clean tree
+        run: mkdir /tmp/release && tar -xzf /tmp/stoic-release.tar.gz -C /tmp/release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run unit + execution-truth suite from the archive
+        run: |
+          cd /tmp/release
+          pip install -r backend/requirements.txt
+          cd backend
+          python -m pytest tests/unit \
+            tests/test_iter148_p0_exec_truth.py \
+            tests/test_iter149_netting_truth.py \
+            tests/test_iter150_netting_hedging.py::TestEaSourceScenarios \
+            -q
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [suite-from-archive]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export release archive
+        run: git archive --format=tar.gz -o stoic-${{ github.ref_name }}.tar.gz HEAD
+
+      - name: Build images
+        run: |
+          docker build -f Dockerfile.backend -t stoic-backend:${{ github.ref_name }} .
+          docker build -f Dockerfile.frontend -t stoic-frontend:${{ github.ref_name }} .
+
+      - name: SBOM (backend image)
+        uses: anchore/sbom-action@v0
+        with:
+          image: stoic-backend:${{ github.ref_name }}
+          format: spdx-json
+          output-file: sbom-backend.spdx.json
+
+      - name: Generate release manifest
+        run: |
+          python3 - << 'EOF'
+          import hashlib, json, os, subprocess
+          def sha256(p):
+              h = hashlib.sha256()
+              with open(p, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+          ref = os.environ["GITHUB_REF_NAME"]
+          sha = os.environ["GITHUB_SHA"]
+          files = {p: sha256(p) for p in [
+              f"stoic-{ref}.tar.gz",
+              "backend/static/EmergentTradingBridge.mq5",
+              "sbom-backend.spdx.json",
+          ] if os.path.exists(p)}
+          ea_version = None
+          for line in open("backend/static/EmergentTradingBridge.mq5",
+                           encoding="utf-8", errors="ignore"):
+              if "#property version" in line:
+                  ea_version = line.split('"')[1] if '"' in line else None
+                  break
+          manifest = {
+              "tag": ref, "commit": sha, "ea_version": ea_version,
+              "built_at": subprocess.check_output(
+                  ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"]).decode().strip(),
+              "artifacts": files,
+              "images": [f"stoic-backend:{ref}", f"stoic-frontend:{ref}"],
+          }
+          with open("release-manifest.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+          print(json.dumps(manifest, indent=2))
+          EOF
+
+      - name: Checksums
+        run: sha256sum stoic-${{ github.ref_name }}.tar.gz release-manifest.json sbom-backend.spdx.json > SHA256SUMS
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign manifest + checksums (keyless, Sigstore)
+        run: |
+          cosign sign-blob --yes release-manifest.json \
+            --output-signature release-manifest.json.sig \
+            --output-certificate release-manifest.json.pem
+          cosign sign-blob --yes SHA256SUMS \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            stoic-${{ github.ref_name }}.tar.gz
+            release-manifest.json
+            release-manifest.json.sig
+            release-manifest.json.pem
+            SHA256SUMS
+            SHA256SUMS.sig
+            SHA256SUMS.pem
+            sbom-backend.spdx.json

@@ -20,7 +20,7 @@ def _fresh_email():
     return f"qa_limits_{uuid.uuid4().hex[:8]}@example.com"
 
 
-def _register(email, password="pass12345"):
+def _register(email, password="Kd5#Zt9mW2xVpR7c"):
     from helpers import make_elite, register_and_login
     s = register_and_login(email, password, name="QA Limits")
     # iter-60 tier quotas (Starter=1/Pro=3) fire with 402 BEFORE the broker

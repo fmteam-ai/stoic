@@ -43,7 +43,7 @@ def _mongo():
 
 def _register_verified() -> tuple[str, requests.Session]:
     suffix = uuid.uuid4().hex[:10]
-    email, pw = f"iter88_{suffix}@example.com", "password123"
+    email, pw = f"iter88_{suffix}@example.com", "Gy6#Vb3kM9zRnD2s"
     r = requests.post(f"{BASE_URL}/api/auth/register",
                       json={"email": email, "password": pw,
                             "name": f"iter88-{suffix}", "terms_agreed": True},

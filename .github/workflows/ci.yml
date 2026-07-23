@@ -33,10 +33,38 @@ jobs:
           python-version: "3.11"
       - name: EA structural + version-consistency check
         run: python scripts/check_ea_structure.py
-      # NOTE: a genuine MetaEditor compile requires a Windows runner with an
-      # MT5 terminal installed. Wire this job to a self-hosted Windows runner:
-      #   metaeditor64.exe /compile:backend/static/EmergentTradingBridge.mq5 /log
-      # and fail on a non-zero result / "0 errors" absence in the log.
+
+  ea-compile:
+    # Real MetaEditor compile gate — fails the pipeline on any MQL error and
+    # publishes the exact verified .ex5 artifact.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MetaTrader 5 (silent)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile mt5setup.exe
+          Start-Process -FilePath .\mt5setup.exe -ArgumentList "/auto" -Wait
+          if (-not (Test-Path "C:\Program Files\MetaTrader 5\metaeditor64.exe")) {
+            throw "MetaEditor not found after install"
+          }
+      - name: Compile EA with MetaEditor
+        shell: pwsh
+        run: |
+          $me = "C:\Program Files\MetaTrader 5\metaeditor64.exe"
+          $src = (Resolve-Path "backend\static\EmergentTradingBridge.mq5").Path
+          Start-Process -FilePath $me -ArgumentList "/compile:`"$src`"","/log:compile.log" -Wait
+          $log = Get-Content compile.log -Encoding Unicode -Raw
+          Write-Host $log
+          if ($log -notmatch "0 error") { throw "EA compilation reported errors" }
+          if (-not (Test-Path "backend\static\EmergentTradingBridge.ex5")) {
+            throw "Compiled .ex5 not produced"
+          }
+      - name: Publish verified .ex5 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmergentTradingBridge-ex5
+          path: backend/static/EmergentTradingBridge.ex5
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -94,15 +122,15 @@ jobs:
           image: stoic-backend:${{ github.sha }}
           format: spdx-json
           output-file: sbom-backend.spdx.json
-      - name: Image vulnerability scan
+      - name: Image vulnerability scan (BLOCKING on critical findings)
         uses: anchore/scan-action@v4
         with:
           image: stoic-backend:${{ github.sha }}
-          fail-build: false
+          fail-build: true
+          severity-cutoff: critical
       - uses: actions/upload-artifact@v4
         with:
           name: sbom
           path: sbom-backend.spdx.json
-      # Artifact signing: push images to your registry and sign with cosign:
-      #   cosign sign --key env://COSIGN_KEY $REGISTRY/stoic-backend@$DIGEST
-      # (requires registry credentials + COSIGN_KEY secrets configured)
+      # Tagged releases are signed via .github/workflows/release.yml
+      # (cosign keyless sign-blob of the manifest + SHA256SUMS).

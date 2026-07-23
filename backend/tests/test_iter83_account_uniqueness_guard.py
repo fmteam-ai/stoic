@@ -57,7 +57,7 @@ def _register_verified() -> tuple[str, str, str, requests.Session]:
     """Create a user + verify email + return (email, pw, user_id, session)."""
     suffix = uuid.uuid4().hex[:10]
     email = f"iter83_{suffix}@example.com"
-    pw = "password123"
+    pw = "Gy6#Vb3kM9zRnD2s"
     r = requests.post(f"{BASE_URL}/api/auth/register",
                       json={"email": email, "password": pw,
                             "name": f"iter83-{suffix}", "terms_agreed": True},

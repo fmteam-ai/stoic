@@ -281,6 +281,14 @@ async def ws_endpoint(websocket: WebSocket):
     """Authenticated WS via the access_token cookie. Query-string tokens
     leak through proxy/LB logs and browser history — allowed only when
     WS_ALLOW_QUERY_TOKEN=true is set explicitly (non-production use)."""
+    # Browser Origin must match the CORS allowlist when one is configured
+    # (cross-site WS hijacking defence at the app layer).
+    from security import _allowed_origins
+    _allowed = _allowed_origins()
+    _origin = websocket.headers.get("origin")
+    if _allowed and _origin and _origin not in _allowed:
+        await websocket.close(code=4403)
+        return
     token = websocket.cookies.get("access_token")
     if not token and (os.environ.get("WS_ALLOW_QUERY_TOKEN", "false")
                       .lower() == "true"):

@@ -9,6 +9,7 @@ from auth import (
     set_auth_cookies, clear_auth_cookies, get_current_user,
 )
 from database import get_db
+from hibp import is_password_breached, BREACHED_DETAIL
 from models import (
     RegisterRequest, LoginRequest, UserOut,
     ProfileUpdateRequest, ChangePasswordRequest,
@@ -84,6 +85,10 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
 
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    # HIBP k-anonymity breached-password screen (fail-open on outage).
+    if await is_password_breached(payload.password):
+        raise HTTPException(status_code=422, detail=BREACHED_DETAIL)
 
     ref_code = request.cookies.get("stoic_ref")
     ref_at = request.cookies.get("stoic_ref_at")
@@ -427,6 +432,10 @@ async def reset_password(payload: ResetPasswordRequest):
                     "message": "Reset link has expired. Request a new one."},
         )
 
+    # HIBP breached-password screen (fail-open on outage).
+    if await is_password_breached(payload.new_password):
+        raise HTTPException(status_code=422, detail=BREACHED_DETAIL)
+
     await db.users.update_one(
         {"_id": user["_id"]},
         {
@@ -545,6 +554,9 @@ async def change_password(payload: ChangePasswordRequest, user=Depends(get_curre
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     if payload.current_password == payload.new_password:
         raise HTTPException(status_code=400, detail="New password must differ from current")
+    # HIBP breached-password screen (fail-open on outage).
+    if await is_password_breached(payload.new_password):
+        raise HTTPException(status_code=422, detail=BREACHED_DETAIL)
     await db.users.update_one(
         {"_id": ObjectId(user["id"])},
         {"$set": {"password_hash": hash_password(payload.new_password)}},

@@ -29,7 +29,7 @@ def _raw_post(path, json=None, cookies=None, headers=None):
     return requests.post(f"{API}{path}", json=json, cookies=cookies, headers=headers or {}, timeout=15)
 
 
-def _register_and_verify(email=None, password="TestPass123!"):
+def _register_and_verify(email=None, password="Uq8#Rn4jS6wLbM3z"):
     """Register a throwaway user and force-verify via DB. Requires bypass header for rate limit."""
     email = email or f"iter57_{uuid.uuid4().hex[:10]}@example.com"
     hdrs = {"Content-Type": "application/json"}

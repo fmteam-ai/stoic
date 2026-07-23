@@ -40,7 +40,7 @@ def user_sess():
     """Register a fresh non-admin user with email_verified=true (via mongo bypass)."""
     from pymongo import MongoClient
     email = f"iter117user_{uuid.uuid4().hex[:8]}@test.com"
-    pw = "TestPass123"
+    pw = "Uq8#Rn4jS6wLbM3z"
     r = requests.post(f"{API}/auth/register",
                       json={"email": email, "password": pw, "name": "iter117",
                             "terms_agreed": True}, timeout=15)

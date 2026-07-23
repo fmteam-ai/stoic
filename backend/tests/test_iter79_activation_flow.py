@@ -72,7 +72,7 @@ def _email() -> str:
 # ─────────────────── Terms acceptance ───────────────────
 def test_register_requires_terms_agreement(cleanup):
     r = requests.post(f"{BASE_URL}/api/auth/register",
-                      json={"email": _email(), "password": "password123",
+                      json={"email": _email(), "password": "Gy6#Vb3kM9zRnD2s",
                             "name": "no-terms"},  # missing terms_agreed
                       timeout=TIMEOUT)
     assert r.status_code == 400
@@ -84,7 +84,7 @@ def test_register_requires_terms_agreement(cleanup):
 def test_register_with_terms_creates_unverified_user(cleanup):
     email = _email()
     r = requests.post(f"{BASE_URL}/api/auth/register",
-                      json={"email": email, "password": "password123",
+                      json={"email": email, "password": "Gy6#Vb3kM9zRnD2s",
                             "terms_agreed": True},
                       timeout=TIMEOUT)
     assert r.status_code == 200, r.text
@@ -105,13 +105,13 @@ def test_register_with_terms_creates_unverified_user(cleanup):
 def test_login_blocked_when_unverified(cleanup):
     email = _email()
     r = requests.post(f"{BASE_URL}/api/auth/register",
-                      json={"email": email, "password": "password123",
+                      json={"email": email, "password": "Gy6#Vb3kM9zRnD2s",
                             "terms_agreed": True},
                       timeout=TIMEOUT)
     cleanup["user_ids"].append(ObjectId(r.json()["id"]))
 
     login = requests.post(f"{BASE_URL}/api/auth/login",
-                          json={"email": email, "password": "password123"},
+                          json={"email": email, "password": "Gy6#Vb3kM9zRnD2s"},
                           timeout=TIMEOUT)
     assert login.status_code == 403
     detail = login.json().get("detail")
@@ -131,7 +131,7 @@ def test_verify_email_with_bad_token_400(cleanup):
 def test_verify_email_happy_path(cleanup):
     email = _email()
     reg = requests.post(f"{BASE_URL}/api/auth/register",
-                        json={"email": email, "password": "password123",
+                        json={"email": email, "password": "Gy6#Vb3kM9zRnD2s",
                               "terms_agreed": True},
                         timeout=TIMEOUT)
     uid = ObjectId(reg.json()["id"])
@@ -162,7 +162,7 @@ def test_verify_email_happy_path(cleanup):
 
     # And password-login also works
     login = requests.post(f"{BASE_URL}/api/auth/login",
-                          json={"email": email, "password": "password123"},
+                          json={"email": email, "password": "Gy6#Vb3kM9zRnD2s"},
                           timeout=TIMEOUT)
     assert login.status_code == 200
 
@@ -170,7 +170,7 @@ def test_verify_email_happy_path(cleanup):
 def test_verify_email_token_is_single_use(cleanup):
     email = _email()
     reg = requests.post(f"{BASE_URL}/api/auth/register",
-                        json={"email": email, "password": "password123",
+                        json={"email": email, "password": "Gy6#Vb3kM9zRnD2s",
                               "terms_agreed": True},
                         timeout=TIMEOUT)
     uid = ObjectId(reg.json()["id"])
@@ -199,7 +199,7 @@ def test_resend_activation_generic_success_for_unknown_email(cleanup):
 def test_resend_activation_respects_cooldown(cleanup):
     email = _email()
     reg = requests.post(f"{BASE_URL}/api/auth/register",
-                        json={"email": email, "password": "password123",
+                        json={"email": email, "password": "Gy6#Vb3kM9zRnD2s",
                               "terms_agreed": True},
                         timeout=TIMEOUT)
     cleanup["user_ids"].append(ObjectId(reg.json()["id"]))
@@ -214,7 +214,7 @@ def test_resend_activation_respects_cooldown(cleanup):
 def test_resend_activation_generates_new_token_after_cooldown(cleanup):
     email = _email()
     reg = requests.post(f"{BASE_URL}/api/auth/register",
-                        json={"email": email, "password": "password123",
+                        json={"email": email, "password": "Gy6#Vb3kM9zRnD2s",
                               "terms_agreed": True},
                         timeout=TIMEOUT)
     uid = ObjectId(reg.json()["id"])

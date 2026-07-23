@@ -1003,3 +1003,17 @@ Audit verdict: no critical/high; core auth/scoping/injection sound. Fixes applie
 - Real data: $6,910.18 net broker-verified, 68.3% win rate, 1145 closed positions, 99.8% verified (488 trades, 1 estimate excluded), max DD $4,864.
 - Verified: testing agent iteration_77.json ALL PASS (incl. cookieless public access, rotate→old 404, revoke→404); clipboard copy() hardened post-report. Test file: tests/test_iter157_verified_perf_audit.py.
 - REMAINING ROADMAP ORDER: #2 Documentation (ARCHITECTURE/API/DEPLOYMENT/ONBOARDING docs) → #3 Automated deployment (install/update/backup scripts) → #4 Broker compatibility matrix → #6 Portfolio management (scope TBD with user: multi-account allocation vs multi-strategy).
+
+## Iter-158 (2026-07-23) — Release-readiness P0/P1 punch list (user review)
+1. **P0 yarn.lock**: was untracked — committed to git (11k lines) + .gitignore for test_reports/*.log. frozen-lockfile CI + Dockerfile.frontend now satisfiable.
+2. **P0 workers in compose**: docker-compose.yml now runs 5 dedicated worker services (worker-trading/protection/reconciliation/analytics/model via `python -m workers.X`) + backend pinned BACKGROUND_WORKERS_IN_PROCESS=false.
+3. **P0 EA compile gate**: ci.yml ea-compile job on windows-latest — silent MT5 install, metaeditor64 /compile /log (UTF-16 log parse, fails unless "0 error"), uploads verified .ex5 artifact.
+4. **P1 XFF**: nginx now `proxy_set_header X-Forwarded-For $remote_addr` (discards client chain entirely).
+5. **P1 blocking scans**: pip-audit --strict (no || true), gitleaks blocking, anchore scan fail-build:true severity-cutoff:critical.
+6. **release.yml** (new, on v* tags): suite-from-archive job (git archive → clean tree → unit+exec-truth suite), release manifest (commit, EA version, sha256 of archive/EA/SBOM), SHA256SUMS, cosign keyless sign-blob (id-token permission), GitHub release with all artifacts.
+7. **HIBP breached-password screening** (backend/hibp.py per integration playbook): k-anonymity range API, Add-Padding, 2.5s timeout, FAIL-OPEN; wired into register / reset-password / change-password → 422 {code:breached_password}. Verified live: password123 rejected. formatApiError already renders .message.
+8. **WS Origin check**: server.py ws_endpoint closes 4403 when Origin not in CORS allowlist (when configured).
+9. **docs/MT5_VALIDATION_CAMPAIGN.md**: restart recovery / replay / multi-deal / netting / hedging / retcode matrices + 2-week soak with weekly alert/recovery/panic drills + sign-off table.
+10. **TEST PASSWORD SWEEP**: all weak fixture passwords (testpass123, password123, abc12345, pass12345, TestPass123!, etc.) replaced with strong unbreached ones across ~25 test files — 178+ register-flow tests re-run green. helpers.register_and_login default now "Kd5#Zt9mW2xVpR7c".
+- str(e) audit: remaining 5 are `except ValueError` with our own controlled validation messages — intentionally kept (documented).
+- NOT DONE (needs infra/user): Vault/KMS migration; running the MT5 campaign itself (manual demo work); multi-week soak.

@@ -40,7 +40,7 @@ ACCOUNT_LABEL = "TEST_OPT_ACC"
 def test_user():
     """Create a fresh verified user + isolated Mongo state (no bleed into admin)."""
     email = f"TEST_optimizer_{uuid.uuid4().hex[:8]}@example.com"
-    password = "Test1234!"
+    password = "Ce9#Km5tV2xPdG7w"
     r = requests.post(f"{API}/auth/register", json={
         "email": email, "password": password, "name": "Optimizer Test",
         "terms_agreed": True,

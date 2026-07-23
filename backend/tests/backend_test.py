@@ -36,11 +36,11 @@ def fresh_user_session():
     """Register a brand-new user for isolation."""
     s = requests.Session()
     email = f"test_{uuid.uuid4().hex[:8]}@example.com"
-    r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "testpass123", "name": "Tester"}, timeout=30)
+    r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e", "name": "Tester"}, timeout=30)
     assert r.status_code == 200, f"Register failed: {r.status_code} {r.text}"
     from helpers import mark_email_verified
     mark_email_verified(email)
-    s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+    s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
     s.email = email  # type: ignore
     return s
 
@@ -73,11 +73,11 @@ class TestAuth:
     def test_register_login_logout(self):
         s = requests.Session()
         email = f"test_{uuid.uuid4().hex[:8]}@example.com"
-        r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+        r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200, r.text
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         assert r.json()["email"] == email.lower()
         # cookie set
         assert "access_token" in s.cookies
@@ -95,7 +95,7 @@ class TestAuth:
 
         # login again
         s2 = requests.Session()
-        r5 = s2.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=10)
+        r5 = s2.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=10)
         assert r5.status_code == 200
 
     def test_login_invalid_credentials(self):
@@ -267,11 +267,11 @@ class TestSignals:
     def signal_user(self):
         s = requests.Session()
         email = f"TEST_sig_{uuid.uuid4().hex[:6]}@example.com"
-        r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+        r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         return s
 
     def test_generate_single_signal(self, signal_user):
@@ -312,11 +312,11 @@ class TestTradeBridge:
     def setup_ctx(self):
         s = requests.Session()
         email = f"TEST_trd_{uuid.uuid4().hex[:6]}@example.com"
-        r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+        r = s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         me = s.get(f"{API}/auth/me", timeout=10).json()
         user_id = me["id"]
 
@@ -493,11 +493,11 @@ class TestSignalDualAIShape:
         s = requests.Session()
         email = f"TEST_dual_{uuid.uuid4().hex[:6]}@example.com"
         r = s.post(f"{API}/auth/register",
-                   json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+                   json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         return s
 
     def test_signal_has_new_fields(self, sig_user):
@@ -952,11 +952,11 @@ class TestSignalPayloadNewFieldsLive:
         s = requests.Session()
         email = f"TEST_iter4_{uuid.uuid4().hex[:6]}@example.com"
         r = s.post(f"{API}/auth/register",
-                   json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+                   json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         return s
 
     def test_signal_has_all_new_iter4_fields(self, sig_user):
@@ -1308,11 +1308,11 @@ class TestSignalPayloadIter5Live:
         s = requests.Session()
         email = f"TEST_iter5_{uuid.uuid4().hex[:6]}@example.com"
         r = s.post(f"{API}/auth/register",
-                   json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+                   json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         return s
 
     def test_signal_has_macro_and_upcoming_macro_fields(self, sig_user):
@@ -1346,11 +1346,11 @@ class TestIter6SignalPayload:
         s = requests.Session()
         email = f"TEST_iter6_{uuid.uuid4().hex[:6]}@example.com"
         r = s.post(f"{API}/auth/register",
-                   json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+                   json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         return s
 
     def test_signal_has_all_iter6_fields(self, sig_user):
@@ -1469,11 +1469,11 @@ class TestPaperTrading:
         s = requests.Session()
         email = f"TEST_paper_{uuid.uuid4().hex[:6]}@example.com"
         r = s.post(f"{API}/auth/register",
-                   json={"terms_agreed": True, "email": email, "password": "testpass123"}, timeout=15)
+                   json={"terms_agreed": True, "email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=15)
         assert r.status_code == 200
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "testpass123"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
         # Paper account
         acc_r = s.post(f"{API}/accounts", json={
             "label": "TEST_Paper", "broker": "Exness",
@@ -1658,7 +1658,7 @@ class TestPriorEndpointsRegression:
         import uuid
         from pymongo import MongoClient
         email = f"panic_test_{uuid.uuid4().hex[:10]}@example.com"
-        password = "PanicTest123!"
+        password = "Pa7#Nc4vT8qWmJ2x"
         r = requests.post(f"{API}/auth/register", json={
             "email": email, "password": password,
             "name": "Panic Tester", "terms_agreed": True}, timeout=10)
@@ -2335,10 +2335,10 @@ class TestSpreadFilter:
         s = requests.Session()
         import uuid as _u
         email = f"compat_{_u.uuid4().hex[:8]}@example.com"
-        s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "pw123456"}, timeout=15)
+        s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "Jt2#Pw7qF4mXcH8v"}, timeout=15)
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "pw123456"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Jt2#Pw7qF4mXcH8v"}, timeout=30)
         r = s.post(
             f"{API}/accounts",
             json={
@@ -2387,10 +2387,10 @@ class TestAffiliateSubGate:
         import asyncio
         s = requests.Session()
         email = f"subgate_{_u.uuid4().hex[:8]}@example.com"
-        s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "pw123456"}, timeout=15)
+        s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "Jt2#Pw7qF4mXcH8v"}, timeout=15)
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "pw123456"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Jt2#Pw7qF4mXcH8v"}, timeout=30)
         me = s.get(f"{API}/auth/me", timeout=10).json()
         # Touch status so the subscription doc gets created
         s.get(f"{API}/affiliate/status", timeout=10)
@@ -2422,10 +2422,10 @@ class TestAffiliateSubGate:
         import asyncio
         s = requests.Session()
         email = f"subgate2_{_u.uuid4().hex[:8]}@example.com"
-        s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "pw123456"}, timeout=15)
+        s.post(f"{API}/auth/register", json={"terms_agreed": True, "email": email, "password": "Jt2#Pw7qF4mXcH8v"}, timeout=15)
         from helpers import mark_email_verified
         mark_email_verified(email)
-        s.post(f"{API}/auth/login", json={"email": email, "password": "pw123456"}, timeout=30)
+        s.post(f"{API}/auth/login", json={"email": email, "password": "Jt2#Pw7qF4mXcH8v"}, timeout=30)
         me = s.get(f"{API}/auth/me", timeout=10).json()
         s.get(f"{API}/affiliate/status", timeout=10)
 

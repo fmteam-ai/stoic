@@ -61,7 +61,7 @@ def cleanup():
         _mongo().users.delete_many({"_id": {"$in": refs["user_ids"]}})
 
 
-def _create_verified_user(*, password="oldpass123") -> tuple[str, str, ObjectId]:
+def _create_verified_user(*, password="Ol6#Dw3sK9rBnF4t") -> tuple[str, str, ObjectId]:
     suffix = uuid.uuid4().hex[:10]
     email = f"iter80_{suffix}@example.com"
     r = requests.post(f"{BASE_URL}/api/auth/register",
@@ -132,7 +132,7 @@ def test_forgot_password_skips_suspended_users_silently(cleanup):
 def test_reset_password_bad_token_400():
     r = requests.post(f"{BASE_URL}/api/auth/reset-password",
                       json={"token": "not-a-real-token-padding-1234567",
-                            "new_password": "newpass123"},
+                            "new_password": "Ne2#Gx7cJ5mQvY8p"},
                       timeout=TIMEOUT)
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "invalid_token"
@@ -152,14 +152,14 @@ def test_reset_password_expired_token_400(cleanup):
         }},
     )
     r = requests.post(f"{BASE_URL}/api/auth/reset-password",
-                      json={"token": expired_token, "new_password": "newpass123"},
+                      json={"token": expired_token, "new_password": "Ne2#Gx7cJ5mQvY8p"},
                       timeout=TIMEOUT)
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "expired_token"
 
 
 def test_reset_password_happy_path_changes_password(cleanup):
-    email, old_password, uid = _create_verified_user(password="oldpassword")
+    email, old_password, uid = _create_verified_user(password="Ov5#Jm2wQ8xTnC7k")
     cleanup["user_ids"].append(uid)
 
     # Issue token
@@ -169,7 +169,7 @@ def test_reset_password_happy_path_changes_password(cleanup):
 
     # Reset
     r = requests.post(f"{BASE_URL}/api/auth/reset-password",
-                      json={"token": token, "new_password": "newpassword"},
+                      json={"token": token, "new_password": "Nz4#Hb8fL3wRkS6d"},
                       timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True
@@ -187,7 +187,7 @@ def test_reset_password_happy_path_changes_password(cleanup):
 
     # New password works
     login_new = requests.post(f"{BASE_URL}/api/auth/login",
-                              json={"email": email, "password": "newpassword"},
+                              json={"email": email, "password": "Nz4#Hb8fL3wRkS6d"},
                               timeout=TIMEOUT)
     assert login_new.status_code == 200
 
@@ -200,7 +200,7 @@ def test_reset_password_token_is_single_use(cleanup):
     token = _mongo().users.find_one({"_id": uid})["password_reset_token"]
 
     first = requests.post(f"{BASE_URL}/api/auth/reset-password",
-                          json={"token": token, "new_password": "newpassword"},
+                          json={"token": token, "new_password": "Nz4#Hb8fL3wRkS6d"},
                           timeout=TIMEOUT)
     assert first.status_code == 200
 

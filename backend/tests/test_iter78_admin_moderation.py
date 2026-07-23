@@ -74,7 +74,7 @@ def _register() -> tuple[str, str, str]:
     """Register a user, mark email_verified so login works for tests."""
     suffix = uuid.uuid4().hex[:10]
     email = f"iter78_{suffix}@example.com"
-    password = "password123"
+    password = "Gy6#Vb3kM9zRnD2s"
     r = requests.post(f"{BASE_URL}/api/auth/register",
                       json={"email": email, "password": password,
                             "name": f"iter78-{suffix}",

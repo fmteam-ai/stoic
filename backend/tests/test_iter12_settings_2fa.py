@@ -25,7 +25,7 @@ def _fresh_email(prefix="qa_2fa"):
     return f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
 
 
-def _register(email: str, password: str = "pass12345"):
+def _register(email: str, password: str = "Kd5#Zt9mW2xVpR7c"):
     from helpers import register_and_login
     return register_and_login(email, password, name="QA")
 
@@ -61,37 +61,37 @@ class TestProfileUpdate:
 class TestChangePassword:
     def test_wrong_current_password_401(self):
         email = _fresh_email()
-        s = _register(email, "pass12345")
+        s = _register(email, "Kd5#Zt9mW2xVpR7c")
         r = s.post(f"{API}/auth/change-password",
-                   json={"current_password": "wrongPW", "new_password": "newpass456"},
+                   json={"current_password": "wrongPW", "new_password": "Hf4#Ls6nC8yQwT3b"},
                    timeout=10)
         assert r.status_code == 401
 
     def test_same_password_400(self):
         email = _fresh_email()
-        s = _register(email, "pass12345")
+        s = _register(email, "Kd5#Zt9mW2xVpR7c")
         r = s.post(f"{API}/auth/change-password",
-                   json={"current_password": "pass12345", "new_password": "pass12345"},
+                   json={"current_password": "Kd5#Zt9mW2xVpR7c", "new_password": "Kd5#Zt9mW2xVpR7c"},
                    timeout=10)
         assert r.status_code == 400
 
     def test_change_password_success_and_login_swap(self):
         email = _fresh_email()
-        s = _register(email, "pass12345")
+        s = _register(email, "Kd5#Zt9mW2xVpR7c")
         r = s.post(f"{API}/auth/change-password",
-                   json={"current_password": "pass12345", "new_password": "newpass456"},
+                   json={"current_password": "Kd5#Zt9mW2xVpR7c", "new_password": "Hf4#Ls6nC8yQwT3b"},
                    timeout=10)
         assert r.status_code == 200
         assert r.json().get("ok") is True
 
         # OLD password must fail
         s2 = requests.Session()
-        r_old = s2.post(f"{API}/auth/login", json={"email": email, "password": "pass12345"}, timeout=10)
+        r_old = s2.post(f"{API}/auth/login", json={"email": email, "password": "Kd5#Zt9mW2xVpR7c"}, timeout=10)
         assert r_old.status_code == 401
 
         # NEW password must work
         s3 = requests.Session()
-        r_new = s3.post(f"{API}/auth/login", json={"email": email, "password": "newpass456"}, timeout=10)
+        r_new = s3.post(f"{API}/auth/login", json={"email": email, "password": "Hf4#Ls6nC8yQwT3b"}, timeout=10)
         assert r_new.status_code == 200
 
 
@@ -156,7 +156,7 @@ class TestTwoFactor:
 class TestLoginWith2FA:
     def _enroll_2fa_user(self):
         email = _fresh_email()
-        s = _register(email, "pass12345")
+        s = _register(email, "Kd5#Zt9mW2xVpR7c")
         r1 = s.post(f"{API}/auth/2fa/enroll", timeout=10)
         secret = r1.json()["secret"]
         code = pyotp.TOTP(secret).now()
@@ -168,7 +168,7 @@ class TestLoginWith2FA:
     def test_login_without_totp_returns_401_with_2fa_required_detail(self):
         email, _, _ = self._enroll_2fa_user()
         s2 = requests.Session()
-        r = s2.post(f"{API}/auth/login", json={"email": email, "password": "pass12345"}, timeout=10)
+        r = s2.post(f"{API}/auth/login", json={"email": email, "password": "Kd5#Zt9mW2xVpR7c"}, timeout=10)
         assert r.status_code == 401
         assert "2fa code required" in (r.json().get("detail", "") or "").lower()
 
@@ -179,7 +179,7 @@ class TestLoginWith2FA:
         time.sleep(1)
         code = pyotp.TOTP(secret).now()
         r = s2.post(f"{API}/auth/login",
-                    json={"email": email, "password": "pass12345", "totp_code": code},
+                    json={"email": email, "password": "Kd5#Zt9mW2xVpR7c", "totp_code": code},
                     timeout=10)
         assert r.status_code == 200, r.text
         body = r.json()
@@ -190,7 +190,7 @@ class TestLoginWith2FA:
         # use the first recovery code as totp_code
         s2 = requests.Session()
         r = s2.post(f"{API}/auth/login",
-                    json={"email": email, "password": "pass12345", "totp_code": recovery[0]},
+                    json={"email": email, "password": "Kd5#Zt9mW2xVpR7c", "totp_code": recovery[0]},
                     timeout=10)
         assert r.status_code == 200, r.text
         # remaining count drops to 7
@@ -201,14 +201,14 @@ class TestLoginWith2FA:
         email, _, _ = self._enroll_2fa_user()
         s2 = requests.Session()
         r = s2.post(f"{API}/auth/login",
-                    json={"email": email, "password": "pass12345", "totp_code": "000000"},
+                    json={"email": email, "password": "Kd5#Zt9mW2xVpR7c", "totp_code": "000000"},
                     timeout=10)
         assert r.status_code == 401
 
 
 # ---------- 2FA disable ----------
 class TestTwoFactorDisable:
-    def _enroll_2fa(self, password="pass12345"):
+    def _enroll_2fa(self, password="Kd5#Zt9mW2xVpR7c"):
         email = _fresh_email()
         s = _register(email, password)
         r1 = s.post(f"{API}/auth/2fa/enroll", timeout=10)
@@ -229,7 +229,7 @@ class TestTwoFactorDisable:
     def test_disable_wrong_code_401(self):
         s, _, _, _ = self._enroll_2fa()
         r = s.post(f"{API}/auth/2fa/disable",
-                   json={"current_password": "pass12345", "code": "000000"}, timeout=10)
+                   json={"current_password": "Kd5#Zt9mW2xVpR7c", "code": "000000"}, timeout=10)
         assert r.status_code == 401
 
     def test_disable_correct_totp_succeeds_and_status_flips(self):
@@ -237,7 +237,7 @@ class TestTwoFactorDisable:
         time.sleep(1)
         code = pyotp.TOTP(secret).now()
         r = s.post(f"{API}/auth/2fa/disable",
-                   json={"current_password": "pass12345", "code": code}, timeout=10)
+                   json={"current_password": "Kd5#Zt9mW2xVpR7c", "code": code}, timeout=10)
         assert r.status_code == 200, r.text
         assert r.json()["ok"] is True
         st = s.get(f"{API}/auth/2fa/status", timeout=10).json()
@@ -247,7 +247,7 @@ class TestTwoFactorDisable:
     def test_disable_with_recovery_code_succeeds(self):
         s, _, _, recovery = self._enroll_2fa()
         r = s.post(f"{API}/auth/2fa/disable",
-                   json={"current_password": "pass12345", "code": recovery[0]}, timeout=10)
+                   json={"current_password": "Kd5#Zt9mW2xVpR7c", "code": recovery[0]}, timeout=10)
         assert r.status_code == 200
         st = s.get(f"{API}/auth/2fa/status", timeout=10).json()
         assert st["enabled"] is False

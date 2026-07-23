@@ -57,7 +57,7 @@ def admin_session():
 def new_user_ctx():
     """Register → activate → login a throwaway user. Returns (session, email, user_id)."""
     email = f"TEST_iter116_{uuid.uuid4().hex[:8]}@example.com"
-    password = "TestPass123!"
+    password = "Uq8#Rn4jS6wLbM3z"
     s = requests.Session()
     s.headers.update({"Content-Type": "application/json"})
 

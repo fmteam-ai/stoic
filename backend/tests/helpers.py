@@ -56,7 +56,7 @@ def make_elite(email: str) -> None:
         upsert=True)
 
 
-def register_and_login(email: str, password: str = "pass12345",
+def register_and_login(email: str, password: str = "Kd5#Zt9mW2xVpR7c",
                        name: str = "QA") -> requests.Session:
     api = f"{base_url()}/api"
     s = requests.Session()

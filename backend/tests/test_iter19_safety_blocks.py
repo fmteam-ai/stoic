@@ -37,13 +37,13 @@ def admin_session():
 @pytest.fixture(scope="module")
 def user_a():
     email = f"TEST_iter19_a_{uuid.uuid4().hex[:8]}@example.com"
-    return _register(email, "testpass123"), email
+    return _register(email, "Vx7#Qm2pL9wTzK4e"), email
 
 
 @pytest.fixture(scope="module")
 def user_b():
     email = f"TEST_iter19_b_{uuid.uuid4().hex[:8]}@example.com"
-    return _register(email, "testpass123"), email
+    return _register(email, "Vx7#Qm2pL9wTzK4e"), email
 
 
 @pytest.fixture(scope="module")

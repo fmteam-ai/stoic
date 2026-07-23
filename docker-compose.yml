@@ -21,11 +21,84 @@ services:
       - backend/.env
     environment:
       MONGO_URL: mongodb://mongo:27017
+      # Dedicated worker services below own the loops — the API must NOT
+      # double-run them.
+      BACKGROUND_WORKERS_IN_PROCESS: "false"
     depends_on:
       mongo:
         condition: service_healthy
     ports:
       - "8001:8001"
+
+  worker-trading:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "workers.trading"]
+    restart: unless-stopped
+    env_file:
+      - backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  worker-protection:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "workers.protection"]
+    restart: unless-stopped
+    env_file:
+      - backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  worker-reconciliation:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "workers.reconciliation"]
+    restart: unless-stopped
+    env_file:
+      - backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  worker-analytics:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "workers.analytics"]
+    restart: unless-stopped
+    env_file:
+      - backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  worker-model:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "workers.model"]
+    restart: unless-stopped
+    env_file:
+      - backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
 
   frontend:
     build:

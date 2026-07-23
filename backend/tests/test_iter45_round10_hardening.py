@@ -43,12 +43,12 @@ def ctx():
     email = f"TEST_iter45_{uuid.uuid4().hex[:8]}@example.com"
     r = s.post(f"{API}/auth/register",
                json={"terms_agreed": True, "email": email,
-                     "password": "testpass123", "name": "iter45"},
+                     "password": "Vx7#Qm2pL9wTzK4e", "name": "iter45"},
                timeout=30)
     assert r.status_code == 200, r.text
     mark_email_verified(email)
     r = s.post(f"{API}/auth/login",
-               json={"email": email, "password": "testpass123"}, timeout=30)
+               json={"email": email, "password": "Vx7#Qm2pL9wTzK4e"}, timeout=30)
     assert r.status_code == 200, r.text
 
     r = s.post(f"{API}/accounts", json={

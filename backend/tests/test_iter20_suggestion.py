@@ -68,13 +68,13 @@ def db():
 @pytest.fixture
 def user_a():
     email = f"TEST_iter20_a_{uuid.uuid4().hex[:8]}@example.com"
-    return _register(email, "testpass123"), email
+    return _register(email, "Vx7#Qm2pL9wTzK4e"), email
 
 
 @pytest.fixture
 def user_b():
     email = f"TEST_iter20_b_{uuid.uuid4().hex[:8]}@example.com"
-    return _register(email, "testpass123"), email
+    return _register(email, "Vx7#Qm2pL9wTzK4e"), email
 
 
 async def _seed_blocks(db, user_id, account_id, code, n=3):
