@@ -36,7 +36,9 @@ async def rate_limit(db, scope: str, identifier: str, max_attempts: int,
     if request is not None:
         bypass = os.environ.get("RATE_LIMIT_BYPASS_TOKEN") or ""
         hdr = request.headers.get("x-ratelimit-bypass") or ""
-        if bypass and hdr and secrets.compare_digest(bypass, hdr):
+        if (bypass and hdr
+                and os.environ.get("APP_ENV", "").lower() != "production"
+                and secrets.compare_digest(bypass, hdr)):
             return
     if scope in ("register", "pwreset"):
         exempt = {ip.strip() for ip in
@@ -95,9 +97,15 @@ async def clear_failures(db, scope: str, identifier: str) -> None:
 
 
 def client_ip(request: Request) -> str:
+    """Client IP for rate-limit keying. Uses the RIGHTMOST X-Forwarded-For
+    entry — the hop appended by our trusted ingress — so attackers cannot
+    rotate lockout keys by spoofing the leftmost value (SEC-002)."""
     fwd = request.headers.get("x-forwarded-for", "")
     if fwd:
-        return fwd.split(",")[0].strip()
+        return fwd.split(",")[-1].strip()
+    real = request.headers.get("x-real-ip", "")
+    if real:
+        return real.strip()
     return request.client.host if request.client else "unknown"
 
 

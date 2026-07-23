@@ -17,6 +17,7 @@ router = APIRouter(tags=["metrics"])
 
 
 def _authorized(request: Request) -> bool:
+    import hmac
     expected = os.environ.get("METRICS_TOKEN")
     if not expected:
         raise HTTPException(status_code=503, detail="metrics disabled")
@@ -24,7 +25,7 @@ def _authorized(request: Request) -> bool:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         got = got or auth[7:]
-    return got == expected
+    return bool(got) and hmac.compare_digest(str(got), expected)
 
 
 def _esc(v: str) -> str:

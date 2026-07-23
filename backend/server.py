@@ -389,6 +389,12 @@ async def on_startup():
             raise RuntimeError(
                 "APP_ENV=production requires CSRF_ENFORCE_ORIGIN=true and an "
                 "explicit CORS_ORIGINS allowlist (not empty, not '*').")
+        # SEC-001 — test bypass secrets must never exist in production.
+        if (os.environ.get("STEP_UP_BYPASS_TOKEN")
+                or os.environ.get("RATE_LIMIT_BYPASS_TOKEN")):
+            raise RuntimeError(
+                "APP_ENV=production forbids STEP_UP_BYPASS_TOKEN / "
+                "RATE_LIMIT_BYPASS_TOKEN — unset them before deploying.")
     try:
         await ensure_indexes()
         await seed_admin()

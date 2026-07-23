@@ -39,9 +39,12 @@ async def require_step_up(db, user, request, action: str) -> None:
     """403 unless the request carries a fresh, unused step-up token for
     `action`. Users without TOTP enrolled are blocked entirely."""
     # Test-suite bypass (mirrors RATE_LIMIT_BYPASS_TOKEN) — server-side
-    # secret, never set in production.
-    bypass = os.environ.get("STEP_UP_BYPASS_TOKEN")
-    if bypass and request.headers.get("X-Step-Up-Bypass") == bypass:
+    # secret, refused outright when APP_ENV=production (SEC-001).
+    bypass = os.environ.get("STEP_UP_BYPASS_TOKEN") or ""
+    hdr = (request.headers.get("X-Step-Up-Bypass") or "")
+    if (bypass and hdr
+            and os.environ.get("APP_ENV", "").lower() != "production"
+            and secrets.compare_digest(bypass, hdr)):
         return
     full = await db.users.find_one({"_id": ObjectId(user["id"])},
                                    {"two_factor_enabled": 1})

@@ -978,3 +978,12 @@ NEXT-CYCLE BACKLOG (audit round 2): EA-native OrderCheck, shared execution kerne
 4. **Cert matrix +3** — order_check (EA≥1.50), fill_policy (EA auto-select ≥1.28), symbol_mapping (available_symbols count). Now 14 checks; iter-152 tests still green (membership asserts only).
 - Verified: testing agent iteration_75.json ALL PASS backend+frontend, zero issues; step-up MFA regression intact.
 - NEXT: Phase B (Analytics research views + Scalp Review), then C (OpenTelemetry/SLO/queue metrics), then D (MT5 validation campaign + release manifests).
+
+## Iter-155 (2026-07-23) — Security Audit remediation (CONDITIONAL PASS → fixed)
+Audit verdict: no critical/high; core auth/scoping/injection sound. Fixes applied:
+1. **SEC-001**: STEP_UP_BYPASS_TOKEN + RATE_LIMIT_BYPASS_TOKEN now code-gated — refused when APP_ENV=production (step_up.py, security.py, both use compare_digest). server.py startup HARD-FAILS in production if either bypass var is set. .env.example updated. Preview/CI keeps them for the 2600-test suite.
+2. **SEC-002**: security.py client_ip now uses RIGHTMOST X-Forwarded-For (trusted ingress hop) → X-Real-IP → client.host; spoofed-XFF no longer rotates lockout keys (verified live: 5×401 then 429). deploy/nginx.conf overwrites X-Forwarded-For with $proxy_add_x_forwarded_for.
+3. Hardening: metrics token constant-time compare (hmac.compare_digest); nginx adds HSTS + CSP + Cache-Control no-store on /api/; Dockerfile.backend runs as non-root user `stoic`.
+4. Kept (documented, P3): GET /accounts returns bridge_token to its owner — required by the Accounts UI for EA pairing; mitigated by no-store header.
+- Verified: test_iter153 (6) + test_iter152 (11) + test_iter139 enterprise (17) all green post-fix; metrics 200/403; XFF lockout curl-verified.
+- NOTE: production deploys MUST set APP_ENV=production (enables CSRF-origin + bypass-token guards).

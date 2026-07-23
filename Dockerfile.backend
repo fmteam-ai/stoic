@@ -11,6 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./
 
+# Run unprivileged (security-audit hardening)
+RUN useradd --create-home --shell /usr/sbin/nologin stoic \
+    && chown -R stoic:stoic /app/backend
+USER stoic
+
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -sf http://localhost:8001/api/health || exit 1
