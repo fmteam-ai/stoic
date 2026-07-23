@@ -75,6 +75,7 @@ async def seed_admin():
             "role": "admin",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
+        log = logging.getLogger("seed")
         log.info("seeded admin account %s", admin_email)
     # Do NOT overwrite an existing admin hash — the admin can change their
     # password and it must survive restarts.

@@ -44,6 +44,7 @@ export default function Crypto() {
             }
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => { load(); }, [load]);

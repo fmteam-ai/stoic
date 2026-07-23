@@ -14,7 +14,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r backend/requirements.txt
+      - run: |
+          pip install -r backend/requirements.txt
+          pip install emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
       - name: Unit + source-level execution-truth tests (no live server needed)
         run: |
           cd backend
@@ -85,15 +87,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Dependency audit (non-blocking report)
+      - name: Dependency audit (BLOCKING — pinned deps, documented ignores)
         run: |
           pip install pip-audit
-          pip-audit -r backend/requirements.txt || true
-      - name: Secret scan
+          # Audit the pinned public deps only (internal wheels + local-tag
+          # torch build are excluded from OSV resolution).
+          grep -vE '^--|^#|\+cpu' backend/requirements.txt > /tmp/audit-reqs.txt
+          # Accepted (tracked in memory/PRD.md):
+          #   PYSEC-2026-1325   ecdsa — no fixed release exists upstream
+          #   starlette PYSECs  — fix requires fastapi>=0.115 major upgrade (backlog P1)
+          pip-audit -r /tmp/audit-reqs.txt --no-deps --strict \
+            --ignore-vuln PYSEC-2026-1325 \
+            --ignore-vuln PYSEC-2026-161 \
+            --ignore-vuln PYSEC-2026-248 \
+            --ignore-vuln PYSEC-2026-249 \
+            --ignore-vuln PYSEC-2026-1941 \
+            --ignore-vuln PYSEC-2026-1943 \
+            --ignore-vuln PYSEC-2026-2280 \
+            --ignore-vuln PYSEC-2026-2281
+      - name: Secret scan (BLOCKING)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
 
   static-analysis:
     runs-on: ubuntu-latest

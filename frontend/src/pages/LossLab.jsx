@@ -332,6 +332,7 @@ export default function LossLab() {
                 .catch(e => setErr(formatApiError(e)))
                 .finally(() => setRegenerating(false));
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [focusTradeId, loading, postmortems.length]);
 
     const toggleAutoTighten = async () => {

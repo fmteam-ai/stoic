@@ -40,7 +40,7 @@ def strip_mql(src: str) -> str:
 
 
 def main() -> int:
-    src = open(EA).read()
+    src = open(EA, encoding="utf-8", errors="replace").read()
     stripped = strip_mql(src)
     failures = []
     for a, b in (("{", "}"), ("(", ")"), ("[", "]")):
@@ -70,7 +70,7 @@ def main() -> int:
          f'LATEST_EA_VERSION = "{v}"'),
     ]
     for path, needle in consistency:
-        if needle not in open(path).read():
+        if needle not in open(path, encoding="utf-8", errors="replace").read():
             failures.append(f"version drift: {needle!r} missing in {path}")
 
     if failures:
