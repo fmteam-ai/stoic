@@ -36,8 +36,13 @@ export default function VerifiedPerformance() {
         } catch (e) { toast.error(formatApiError(e)); }
     };
     const copy = () => {
-        navigator.clipboard?.writeText(shareUrl);
-        toast.success("Link copied");
+        try {
+            navigator.clipboard?.writeText(shareUrl)
+                ?.then(() => toast.success("Link copied"))
+                ?.catch(() => toast.error("Copy blocked — copy manually"));
+        } catch {
+            toast.error("Copy blocked — copy manually");
+        }
     };
 
     return (
