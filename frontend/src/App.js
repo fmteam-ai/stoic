@@ -28,6 +28,9 @@ import SafetyBlocks from "@/pages/SafetyBlocks";
 import Agents from "@/pages/Agents";
 import Strategies from "@/pages/Strategies";
 import Portfolio from "@/pages/Portfolio";
+import VerifiedPerformance from "@/pages/VerifiedPerformance";
+import PublicPerformance from "@/pages/PublicPerformance";
+import AuditLog from "@/pages/AuditLog";
 import Execution from "@/pages/Execution";
 import Research from "@/pages/Research";
 import Crypto from "@/pages/Crypto";
@@ -83,6 +86,9 @@ function App() {
                         <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
                         <Route path="/crypto" element={<ProtectedRoute><Crypto /></ProtectedRoute>} />
                         <Route path="/shadow-performance" element={<ProtectedRoute><ShadowPerformance /></ProtectedRoute>} />
+                        <Route path="/performance" element={<ProtectedRoute><VerifiedPerformance /></ProtectedRoute>} />
+                        <Route path="/audit-log" element={<ProtectedRoute><AuditLog /></ProtectedRoute>} />
+                        <Route path="/p/:shareId" element={<PublicPerformance />} />
                         <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
                         <Route path="/brokers" element={<ProtectedRoute><BrokerComparison /></ProtectedRoute>} />
                         <Route path="/enterprise-api" element={<ProtectedRoute><EnterpriseApi /></ProtectedRoute>} />

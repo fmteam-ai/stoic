@@ -8,7 +8,7 @@ import {
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
-    Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers,
+    Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers, BadgeCheck,
     FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound,
 } from "lucide-react";
 
@@ -38,6 +38,7 @@ const SECTIONS = [
         label: "INSIGHTS",
         items: [
             { to: "/bot-health", label: "Bot Health", icon: Stethoscope, testid: "nav-bot-health" },
+            { to: "/performance", label: "Verified Performance", icon: BadgeCheck, testid: "nav-performance" },
             { to: "/analytics", label: "Analytics", icon: BarChart3, testid: "nav-analytics" },
             { to: "/loss-lab", label: "Loss Lab", icon: FlaskConical, testid: "nav-loss-lab" },
             { to: "/scoreboard", label: "Scoreboard", icon: Trophy, testid: "nav-scoreboard" },
@@ -74,6 +75,7 @@ const SECTIONS = [
         label: "ACCOUNT",
         items: [
             { to: "/notifications", label: "Notifications", icon: Bell, testid: "nav-notifications" },
+            { to: "/audit-log", label: "Audit Log", icon: ShieldCheck, testid: "nav-audit-log" },
             { to: "/subscription", label: "Subscription", icon: Sparkles, testid: "nav-subscription" },
             { to: "/billing", label: "Billing", icon: CreditCard, testid: "nav-billing" },
             { to: "/affiliate", label: "Affiliate", icon: Users, testid: "nav-affiliate" },
