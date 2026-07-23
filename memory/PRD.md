@@ -942,3 +942,16 @@ NEXT-CYCLE BACKLOG (audit round 2): EA-native OrderCheck, shared execution kerne
 6. **Deployment artifacts**: Dockerfile.backend, Dockerfile.frontend (+deploy/nginx.conf), docker-compose.yml (mongo+backend+frontend), .github/workflows/ci.yml (backend-unit, ea-structural-check, frontend-build, security-scan; MetaEditor compile documented as Windows-runner stub), scripts/check_ea_structure.py (brace balance + version-drift gate).
 - Verified: testing agent iteration_72.json 100% both sides (17/17 backend tests, live LLM proposal gate confirmed, all UI testids found). Full regression 2635 passed (live-EA env failures only). Onboarding copy now uses LATEST_EA_VERSION.
 - Backlog (explicitly deferred, told user): OpenTelemetry tracing (trade_trace exists), Scalp session lifecycle timeline UI, analytics CIs/calibration/walk-forward, MFA step-up, SBOM/signed releases, MFE/MAE tracking (needs tick capture).
+
+## Iter-152 (2026-07-23) — Production ops round (review round 5)
+1. **Prometheus**: GET /api/metrics (routes/metrics_routes.py) — token-gated (METRICS_TOKEN in backend/.env, X-Metrics-Token or Bearer; 503 if unset, 403 wrong). Series: stoic_mongo_latency_ms, stoic_trades{status}, stoic_unresolved_submissions, stoic_unprotected_open, stoic_outbox_*, stoic_worker_lease_alive{worker}, stoic_ea_heartbeat_age_seconds{account}, stoic_broker_clock_offset_seconds{account}, stoic_ws_clients.
+2. **Request IDs + structured logs**: server.py request_id_middleware — X-Request-ID generated/echoed, JSON access lines {rid,m,p,s,ms} via 'access' logger.
+3. **execution-health infra v2**: ws_clients (ws_manager._connections), candle feeds[] freshness + feeds_stale, heartbeats[].clock_offset_sec.
+4. **Certification round 2**: +stop_freeze_levels check (symbol_specs stops_level_points), +demo_certified (<30d), can_certify flag, POST /api/accounts/{id}/certify (server re-verifies, 400 certification_blocked with failing[]; stamps demo_certified_at/by). CERTIFY NOW button in AccountCertification.jsx.
+5. **Trades**: REPLAY badge (journal_replayed_at), failed-status broker retcode tooltip.
+6. **.env.example**: rewritten documented (26 keys, comment+KEY= only); METRICS_TOKEN added to live .env (backend restarted).
+7. **Docs**: docs/RUNBOOK.md, DISASTER_RECOVERY.md, ROLLBACK.md, INCIDENT_RESPONSE.md (real procedures incl. EA journal replay recovery, FENCING_MIN_EA rollback rules).
+8. **CI extended**: static-analysis (ruff fatal-only), container-build (both Dockerfiles), anchore SBOM + image scan, cosign signing documented as stub.
+- Verified: testing agent iteration_73.json 100% both sides (28/28 tests). Full regression 2645 passed (7 failures all live-EA-offline environmental).
+- DISCOVERY: frontend/yarn.lock exists on disk but is UNTRACKED in git (not gitignored) — root cause of reviewer's recurring "missing lockfile"; stray empty /app/yarn.lock removed. User should use Save to GitHub to include it.
+- Still deferred: OpenTelemetry (request-IDs + trade_trace cover for now), MFA step-up, Scalp lifecycle timeline UI, analytics CIs, cosign signing (needs keys).
