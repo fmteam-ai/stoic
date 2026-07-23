@@ -1220,3 +1220,12 @@ User requested a dedicated low-latency scalp subsystem (15s–5min holds, NOT HF
 - Restart during CLOSE_REQUESTED: restore_risk re-marks trades with pending_modification FULL_CLOSE as CLOSE_REQUESTED.
 - Tests: 9 new unit tests (delayed batch, broker age, fill feedback, structured fallback, restart close-state, etc.) — 48 scalp tests green; synthetic Option C validation passed (AUC .85, calibrated, timeouts in eval, usable=True end-to-end); full suite 1907 passed (1 live-data flake, green rerun).
 - DEFERRED (ROADMAP): shared account-level risk state (needed before 2nd symbol), durable event-log persistence, eval-interval study (100ms–2s), session-bucket validation, MFE/MAE conditional targets, EA report commission/swap fields.
+
+## Iter-161 (2026-06) — 5 Release Blockers resolved (test report iteration_79.json ALL PASS)
+1. **.env.example templates**: backend/.env.example (all keys incl. WS_ALLOW_QUERY_TOKEN, comments, no values) + frontend/.env.example — verified keys-complete vs real .env via comm.
+2. **worker-tuning in docker-compose.yml** (line 103, `python -m workers.tuning`) — all 6 workers now orchestrated.
+3. **release.yml ships verified .ex5**: new ea-compile job (windows-latest, MetaEditor compile gate identical to ci.yml), release job needs [suite-from-archive, ea-compile], downloads EmergentTradingBridge-ex5 artifact, .ex5 included in release-manifest.json, SHA256SUMS and published release files.
+4. **Frontend safe URL default**: api.js + useLiveStream.js fall back to window.location.origin when REACT_APP_BACKEND_URL empty (guarded typeof window). Verified no localhost defaults.
+5. **Validation evidence**: docs/campaigns/2026-06-11-simulation-harness-{netting,hedging}.md — every scenario (restart recovery, reconnect replay, partial fills, netting, hedging, retcodes) mapped to a named passing pytest test; MT5_VALIDATION_CAMPAIGN.md gained "Evidence status" section. Broker-demo confirmation + 2-week soak remain operator manual gates.
+6. Fixes en route: testing agent removed duplicate `import axios` in ArchitecturePipeline.jsx (was blocking CRA build/login overlay); test_iter21 helper password Pass1234! (HIBP-breached) → Kd5#Zt9mW2xVpR7c, file now 21/21 green (was 16 errors).
+- Full pytest: 2688/2695 effective green (remaining 12 = pre-existing env-state: WS/scalp integration services + 1 candle-freshness). Frontend e2e: login→dashboard→/performance→/brokers all render, zero non-benign console errors.

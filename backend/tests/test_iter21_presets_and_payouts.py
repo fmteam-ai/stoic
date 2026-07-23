@@ -55,7 +55,7 @@ def _login(email: str, password: str) -> requests.Session:
 def _register_unique() -> tuple[requests.Session, str]:
     from helpers import register_and_login
     email = f"iter21_{uuid.uuid4().hex[:10]}@iter21test.com"
-    return register_and_login(email, "Pass1234!", name="Iter21 Tester"), email
+    return register_and_login(email, "Kd5#Zt9mW2xVpR7c", name="Iter21 Tester"), email
 
 
 @pytest.fixture(scope="module")
