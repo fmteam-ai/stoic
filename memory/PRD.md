@@ -987,3 +987,11 @@ Audit verdict: no critical/high; core auth/scoping/injection sound. Fixes applie
 4. Kept (documented, P3): GET /accounts returns bridge_token to its owner — required by the Accounts UI for EA pairing; mitigated by no-store header.
 - Verified: test_iter153 (6) + test_iter152 (11) + test_iter139 enterprise (17) all green post-fix; metrics 200/403; XFF lockout curl-verified.
 - NOTE: production deploys MUST set APP_ENV=production (enables CSRF-origin + bypass-token guards).
+
+## Iter-156 (2026-07-23) — Phase B · Analytics & Scalp Review research views
+1. **GET /api/analytics/research?days=90** (analytics_routes.py): confidence calibration (signal.confidence joined via trade.signal_id, Wilson 95% CIs, calibration gap), per-symbol win-rate CIs, walk-forward weekly buckets (win_rate/total/cum pnl) + stability score, regime attribution (signals.regime is a DICT — extract .regime), strategy decay (30d vs prior-30d expectancy + weekly least-squares slope → STABLE/SOFTENING/DECAYING/INSUFFICIENT_DATA), execution cost attribution (broker_deals gross/commission/swap/net + drag%).
+2. **GET /api/scalp/review** (scalp_routes.py): dow×hour heatmap (scalp_decisions ts_ms, shadow net_pips), gate effectiveness per reject stage (avoided_pips = -sum of vetoed shadow outcomes), cost/latency attribution (gross/spread/slippage/commission pips + time_to_exit p50/p95), per-broker calibration (scalp.broker_stats.summary for user's brokers).
+3. Deltas: /scalp/executions rows now carry `reconciliation` (reconciled/estimated/unknown/backfilled); /trades/{id}/audit execution_summary includes `broker_error`.
+4. UI: components/ResearchPanel.jsx (Analytics, after RrWatchPanel — recharts ComposedChart walk-forward, CI band rows, decay/execution strip), components/ScalpReview.jsx (Scalp page bottom — heatmap table, gate table, cost chips, broker calibration), reconciliation badge in ScalpExecutions.jsx.
+- Verified: testing agent iteration_76.json ALL PASS backend+frontend, zero issues (real data: 488 trades, LOW_VOL_TREND n=434 -$1462 vs TRANSITIONAL +$1235, permission gate saved 21.7p).
+- NEXT: Phase C (OpenTelemetry tracing, SLO dashboards, worker/queue Prometheus metrics), then Phase D (MT5 validation campaign, release manifests, deployment verification checklist, artifact signing, broker failover guide, alerting/escalation policy docs).
