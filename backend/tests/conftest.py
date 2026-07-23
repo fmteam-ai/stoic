@@ -154,11 +154,16 @@ def _auto_csrf_header():
     original = requests.sessions.Session.request
 
     _bypass = os.environ.get("RATE_LIMIT_BYPASS_TOKEN")
+    _stepup = os.environ.get("STEP_UP_BYPASS_TOKEN")
 
     def patched(self, method, url, **kwargs):
         headers = kwargs.get("headers") or {}
         if _bypass:
             headers.setdefault("X-RateLimit-Bypass", _bypass)
+        # Step-up MFA bypass for the legacy HTTP suite. Tests that want the
+        # REAL step-up gate set session.headers["X-Step-Up-Bypass"] = "".
+        if _stepup and "X-Step-Up-Bypass" not in self.headers:
+            headers.setdefault("X-Step-Up-Bypass", _stepup)
         if method.upper() not in ("GET", "HEAD", "OPTIONS"):
             token = self.cookies.get("csrf_token")
             if not token:

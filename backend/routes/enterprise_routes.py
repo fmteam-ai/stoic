@@ -15,8 +15,10 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
+
+from step_up import require_step_up, audit_event
 from pydantic import BaseModel, Field
 
 from auth import get_current_user
@@ -75,12 +77,15 @@ async def list_api_keys(user=Depends(get_current_user)):
 
 
 @mgmt_router.post("")
-async def create_api_key(payload: ApiKeyCreate, user=Depends(get_current_user)):
+async def create_api_key(payload: ApiKeyCreate, request: Request,
+                         user=Depends(get_current_user)):
     bad = [s for s in payload.scopes if s not in VALID_SCOPES]
     if bad:
         raise HTTPException(status_code=400,
                             detail=f"Unknown scopes: {bad}. Valid: {sorted(VALID_SCOPES)}")
     db = get_db()
+    # Step-up MFA — API keys grant programmatic account access.
+    await require_step_up(db, user, request, "api_key_create")
     active = await db.api_keys.count_documents({"user_id": user["id"], "revoked_at": None})
     if active >= 10:
         raise HTTPException(status_code=400,
@@ -101,6 +106,9 @@ async def create_api_key(payload: ApiKeyCreate, user=Depends(get_current_user)):
     }
     res = await db.api_keys.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await audit_event(db, user["id"], "api_key_created",
+                      {"name": doc["name"], "key_prefix": key_prefix,
+                       "scopes": doc["scopes"]}, request, step_up=True)
     # Full key returned ONCE — never persisted, never logged.
     return {"api_key": full_key, "record": _serialize_key(doc)}
 

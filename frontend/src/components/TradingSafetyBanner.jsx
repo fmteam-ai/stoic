@@ -42,6 +42,19 @@ export function TradingSafetyBanner() {
             <Icon className="w-4 h-4 shrink-0" />
             <span className="font-display font-bold text-xs tracking-widest">{meta.label}</span>
             <div className="flex items-center gap-2 flex-wrap">
+                <Pill testid="safety-mode" label="MODE"
+                    value={data.deployment_mode || "—"}
+                    bad={["LIVE", "MIXED"].includes(data.deployment_mode)} />
+                <Pill testid="safety-capital-risk" label="AT RISK"
+                    value={`$${Number(data.capital_at_risk || 0).toFixed(0)}`}
+                    bad={Number(data.capital_at_risk || 0) > 0} />
+                <Pill testid="safety-recon" label="RECON"
+                    value={data.reconciliation_delay_sec == null
+                        ? "—" : `${data.reconciliation_delay_sec}s`}
+                    bad={data.reconciliation_delay_sec > 300} />
+                <Pill testid="safety-panic" label="PANIC"
+                    value={data.panic_active ? "ACTIVE" : "CLEAR"}
+                    bad={!!data.panic_active} />
                 <Pill testid="safety-live" label="LIVE"
                     value={data.live_accounts?.length || 0}
                     bad={data.live_accounts?.length > 0} />

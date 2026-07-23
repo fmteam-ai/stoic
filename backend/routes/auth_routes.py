@@ -637,3 +637,50 @@ async def two_fa_disable(payload: TOTPDisableRequest, user=Depends(get_current_u
     # 2FA reset is a security-posture change → revoke all other sessions.
     await revoke_all_user_sessions(db, user["id"], "2fa_reset")
     return {"ok": True}
+
+
+# ------------------------------------------------------------- Step-up MFA
+from models import StepUpRequest  # noqa: E402
+from step_up import issue_step_up_token, audit_event, STEP_UP_ACTIONS  # noqa: E402
+
+
+@router.post("/step-up")
+async def step_up_verify(payload: StepUpRequest, request: Request,
+                         user=Depends(get_current_user)):
+    """Exchange a fresh TOTP code for a short-lived (5 min), single-use
+    step-up token gating live-sensitive operations."""
+    if payload.action not in STEP_UP_ACTIONS:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown step-up action: {payload.action}")
+    db = get_db()
+    full = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not full.get("two_factor_enabled"):
+        raise HTTPException(status_code=403, detail={
+            "code": "mfa_enrollment_required", "action": payload.action,
+            "message": "Enable two-factor authentication first "
+                       "(Settings → Security)."})
+    await check_failure_limit(db, "stepup", user["id"], 5, 600,
+                              "Too many failed step-up attempts. "
+                              "Try again in a few minutes.")
+    if not verify_code(full.get("totp_secret") or "", payload.code):
+        await record_failure(db, "stepup", user["id"], 600)
+        await audit_event(db, user["id"], "step_up_failed",
+                          {"action": payload.action}, request)
+        raise HTTPException(status_code=401, detail="Invalid 2FA code")
+    await clear_failures(db, "stepup", user["id"])
+    result = await issue_step_up_token(db, user["id"], payload.action)
+    await audit_event(db, user["id"], "step_up_verified",
+                      {"action": payload.action}, request, step_up=True)
+    return result
+
+
+@router.get("/audit")
+async def my_audit_trail(limit: int = 50, user=Depends(get_current_user)):
+    """User-visible slice of the append-only security audit trail."""
+    db = get_db()
+    n = min(max(int(limit), 1), 200)
+    docs = await db.audit_log.find({"user_id": user["id"]}) \
+        .sort("at", -1).to_list(length=n)
+    return [{"action": d.get("action"), "detail": d.get("detail") or {},
+             "step_up_verified": bool(d.get("step_up_verified")),
+             "ip": d.get("ip"), "at": d.get("at")} for d in docs]

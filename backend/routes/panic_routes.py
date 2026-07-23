@@ -7,10 +7,11 @@ Two surfaces:
                                    calling user. Any authenticated user can use it.
 """
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
 from database import get_db
+from step_up import audit_event
 from ws_manager import manager as ws_manager
 from rate_limiter import reset as reset_rate_limiter
 
@@ -52,12 +53,14 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
 
 
 @router.post("/panic")
-async def panic_user(user=Depends(get_current_user)):
+async def panic_user(request: Request, user=Depends(get_current_user)):
     """Per-user panic. Halts bot + cancels pending + requests close on opens."""
     reset_rate_limiter(user["id"])
-    return await _disable_all_bots_and_close_trades(
+    result = await _disable_all_bots_and_close_trades(
         {"user_id": user["id"]}, broadcast_user_id=user["id"]
     )
+    await audit_event(get_db(), user["id"], "panic_triggered", result, request)
+    return result
 
 
 @router.post("/admin/panic")

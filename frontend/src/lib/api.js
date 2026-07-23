@@ -1,4 +1,5 @@
 import axios from "axios";
+import { requestStepUp } from "./stepUp";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -73,6 +74,18 @@ function makeResponseInterceptor(client) {
                 await axios.get(`${API}/auth/csrf`, { withCredentials: true });
                 return client(cfg);
             } catch (_) { /* fall through */ }
+        }
+        // Step-up MFA — sensitive action needs a fresh TOTP verification.
+        const detail = error.response?.data?.detail;
+        if (status === 403 && !cfg._stepUpRetried
+            && (detail?.code === "step_up_required"
+                || detail?.code === "mfa_enrollment_required")) {
+            cfg._stepUpRetried = true;
+            try {
+                const token = await requestStepUp(detail);
+                cfg.headers = { ...(cfg.headers || {}), "X-Step-Up-Token": token };
+                return client(cfg);
+            } catch (_) { /* user cancelled / not enrolled — fall through */ }
         }
         return Promise.reject(error);
     };

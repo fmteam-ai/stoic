@@ -1,11 +1,12 @@
 from datetime import datetime, timezone, timedelta
 import os
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 
 from auth import get_current_user
 from database import get_db
+from step_up import require_step_up, audit_event
 from models import BotConfigUpdate, BotConfigOut
 from route_utils import parse_object_id
 from risk import get_profile, compute_lot_for_account
@@ -651,8 +652,49 @@ async def get_risk_gauge(user=Depends(get_current_user)):
     return {"items": out}
 
 
+RISK_LEVEL_RANK = {"low": 0, "middle": 1, "high": 2, "extreme": 3}
+RISK_RAISE_FIELDS = ("adaptive_risk_cap_pct", "crypto_risk_pct_per_trade")
+
+
+async def _live_context(db, user_id: str, account_id: Optional[str],
+                        owns=None) -> bool:
+    """True when the action can touch live capital."""
+    if account_id:
+        acc = owns or await db.accounts.find_one(
+            {"_id": parse_object_id(account_id, "Account"), "user_id": user_id})
+        return bool(acc) and str(acc.get("mode") or "live").lower() == "live"
+    return await db.accounts.count_documents(
+        {"user_id": user_id, "status": {"$ne": "deleted"},
+         "dormant": {"$ne": True}, "mode": {"$nin": ["paper"]}}) > 0
+
+
+def _is_risk_raise(update: dict, current: dict) -> bool:
+    cur = current or {}
+    if "risk_level" in update:
+        if (RISK_LEVEL_RANK.get(str(update["risk_level"] or "").lower(), 0)
+                > RISK_LEVEL_RANK.get(str(cur.get("risk_level") or "low").lower(), 0)):
+            return True
+    for f in RISK_RAISE_FIELDS:
+        if update.get(f) is not None:
+            try:
+                if float(update[f]) > float(cur.get(f) or 0):
+                    return True
+            except (TypeError, ValueError):
+                continue
+    if update.get("max_lot_size") is not None:
+        try:
+            new_v, cur_v = float(update["max_lot_size"]), float(cur.get("max_lot_size") or 0)
+            # 0 = uncapped → removing an existing cap or raising it is a raise.
+            if cur_v > 0 and (new_v == 0 or new_v > cur_v):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
 @router.put("/config")
 async def update_config(payload: BotConfigUpdate,
+                        request: Request,
                         account_id: Optional[str] = None,
                         user=Depends(get_current_user)):
     db = get_db()
@@ -673,6 +715,19 @@ async def update_config(payload: BotConfigUpdate,
                 "code": "activation_not_ready",
                 "message": "Live activation blocked — fix these first:",
                 "problems": problems})
+
+    # Step-up MFA — activating live trading or raising risk on a live
+    # context requires a fresh TOTP verification (iter-153).
+    current_cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
+    wants_activation = update.get("active") is True and not (current_cfg or {}).get("active")
+    risk_raise = _is_risk_raise(update, current_cfg)
+    if (wants_activation or risk_raise) and await _live_context(db, user["id"], account_id, owns):
+        action = "live_activation" if wants_activation else "risk_raise"
+        await require_step_up(db, user, request, action)
+        await audit_event(db, user["id"], action,
+                          {"account_id": account_id, "via": "config_update",
+                           "fields": sorted(update.keys())},
+                          request, step_up=True)
 
     # Field-specific coercions
     if "symbols" in update:
@@ -785,7 +840,8 @@ async def _activation_readiness(db, account) -> list:
 
 
 @router.post("/start")
-async def start_bot(account_id: Optional[str] = None, user=Depends(get_current_user)):
+async def start_bot(request: Request, account_id: Optional[str] = None,
+                    user=Depends(get_current_user)):
     db = get_db()
     owns = None
     if account_id:
@@ -800,6 +856,16 @@ async def start_bot(account_id: Optional[str] = None, user=Depends(get_current_u
                 "code": "activation_not_ready",
                 "message": "Live activation blocked — fix these first:",
                 "problems": problems})
+    # Step-up MFA — starting a bot on a live context (fresh activation or
+    # panic/trip release) requires a fresh TOTP verification (iter-153).
+    cfg_before = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
+    if await _live_context(db, user["id"], account_id, owns):
+        action = ("panic_release" if (cfg_before or {}).get("tripped_at")
+                  else "live_activation")
+        await require_step_up(db, user, request, action)
+        await audit_event(db, user["id"], action,
+                          {"account_id": account_id, "via": "bot_start"},
+                          request, step_up=True)
     await _get_or_create_config(db, user["id"], account_id)
     # CRITICAL: re-enabling a bot must clear the panic/circuit-breaker trip
     # markers, otherwise the UI keeps showing "PANIC LOCK" forever even
@@ -993,6 +1059,7 @@ async def safety_status(user=Depends(get_current_user)):
             return None
 
     live_accounts, stale_feeds = [], []
+    paper_count, max_hb_age = 0, None
     async for a in db.accounts.find(
             {"user_id": user["id"], "status": {"$ne": "deleted"}},
             {"label": 1, "mode": 1, "trading_enabled": 1,
@@ -1001,10 +1068,32 @@ async def safety_status(user=Depends(get_current_user)):
             continue
         if str(a.get("mode") or "").lower() == "live":
             live_accounts.append(a.get("label"))
+        elif str(a.get("mode") or "").lower() == "paper":
+            paper_count += 1
         age = _age(a.get("last_heartbeat"))
+        if age is not None:
+            max_hb_age = age if max_hb_age is None else max(max_hb_age, age)
         if age is None or age > 300:
             stale_feeds.append({"label": a.get("label"),
                                 "age_sec": int(age) if age else None})
+
+    if live_accounts and paper_count:
+        deployment_mode = "MIXED"
+    elif live_accounts:
+        deployment_mode = "LIVE"
+    elif paper_count:
+        deployment_mode = "PAPER"
+    else:
+        deployment_mode = "IDLE"
+
+    # Capital currently at risk — planned risk of every open position.
+    capital_at_risk = 0.0
+    async for t in db.trades.find({"user_id": user["id"], "status": "open"},
+                                  {"risk_amount": 1}):
+        try:
+            capital_at_risk += float(t.get("risk_amount") or 0)
+        except (TypeError, ValueError):
+            pass
 
     unprotected = await db.trades.count_documents({
         "user_id": user["id"], "status": "open",
@@ -1016,11 +1105,15 @@ async def safety_status(user=Depends(get_current_user)):
         "submission_state": "broker_accepted_unresolved"})
 
     tripped = []
+    panic_active = False
     async for c in db.bot_configs.find(
             {"user_id": user["id"], "tripped_at": {"$ne": None}},
             {"tripped_reason": 1, "tripped_kind": 1}):
         tripped.append({"reason": c.get("tripped_reason"),
                         "kind": c.get("tripped_kind")})
+        if "PANIC" in str(c.get("tripped_reason") or "").upper() \
+                or str(c.get("tripped_kind") or "").lower() == "panic":
+            panic_active = True
 
     daily_worst = 0.0
     try:
@@ -1039,6 +1132,11 @@ async def safety_status(user=Depends(get_current_user)):
 
     return {"generated_at": now.isoformat(),
             "level": level,
+            "deployment_mode": deployment_mode,
+            "capital_at_risk": round(capital_at_risk, 2),
+            "reconciliation_delay_sec": (int(max_hb_age)
+                                         if max_hb_age is not None else None),
+            "panic_active": panic_active,
             "live_accounts": live_accounts,
             "unprotected_open": unprotected,
             "unresolved_submissions": unresolved,

@@ -52,6 +52,11 @@ class TOTPVerifyRequest(BaseModel):
     code: str = Field(min_length=6, max_length=16)
 
 
+class StepUpRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=16)
+    action: str = Field(min_length=1, max_length=40)
+
+
 class TOTPDisableRequest(BaseModel):
     current_password: str
     code: str = Field(min_length=6, max_length=16)

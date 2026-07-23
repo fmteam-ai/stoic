@@ -5,12 +5,14 @@ import { TickerTape } from "@/components/TickerTape";
 import { StatusBar } from "@/components/StatusBar";
 import { QuickActionsBar } from "@/components/QuickActionsBar";
 import { OnboardingBanner } from "@/components/OnboardingBanner";
+import { StepUpDialog } from "@/components/StepUpDialog";
 
 export function AppLayout({ children }) {
     return (
         <div className="min-h-screen bg-[#050505] text-white">
             <Sidebar />
             <QuickActionsBar />
+            <StepUpDialog />
             <main className="md:ml-60 min-h-screen">
                 <StatusBar />
                 <TickerTape />
