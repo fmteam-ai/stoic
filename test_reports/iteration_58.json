@@ -25,7 +25,7 @@
     "backend": "100% — 15/15 new iter-58 verification tests pass in 14.09s; 10/10 iter-57 phase-1 tests still pass (no regressions); full suite 2189 passed / 7 skipped / 0 failed in 541.19s (9m1s). Every review-request item verified.",
     "frontend": "N/A (skipped per request — testing_type='backend only')"
   },
-  "test_credentials": "admin@trading.bot / admin123. RATE_LIMIT_BYPASS_TOKEN=7NYLlT364Hshpz3tam2AFTCNjTEvHe4N (used for register volume + auto-attached to all mutating requests via conftest; login-failure lockout intentionally NOT bypassed by this header, verified in TestLoginRateLimit).",
+  "test_credentials": "admin@trading.bot / admin123. RATE_LIMIT_BYPASS_TOKEN=[REDACTED-ROTATED] (used for register volume + auto-attached to all mutating requests via conftest; login-failure lockout intentionally NOT bypassed by this header, verified in TestLoginRateLimit).",
   "seed_data_creation": "Throwaway email iter58_ratelimit_<uuid>@example.com used ONLY for the failed-login rate-limit test — no register call issued, so no user document created. No cleanup required. No live positions, bridge/execute calls, or destructive bot_config changes were made — min_confidence_override was toggled to 3 and restored to its original value in a finally block.",
   "retest_needed": false,
   "should_main_agent_self_test": true,

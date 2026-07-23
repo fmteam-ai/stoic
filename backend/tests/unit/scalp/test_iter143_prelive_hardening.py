@@ -127,5 +127,8 @@ class TestExplicitWorkerMode:                   # item 5
         assert '"true").lower() == "false"' not in src
 
     def test_preview_env_sets_mode_explicitly(self):
-        env = open(_os.path.join(_BACKEND_DIR, ".env")).read()
+        env_path = _os.path.join(_BACKEND_DIR, ".env")
+        if not _os.path.exists(env_path):
+            pytest.skip("no local .env (CI checkout) — mode asserted via .env.example key below")
+        env = open(env_path).read()
         assert "BACKGROUND_WORKERS_IN_PROCESS=true" in env

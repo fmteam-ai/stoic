@@ -24,7 +24,7 @@
   ],
   "updated_files": [],
   "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
-  "test_credentials": "admin@trading.bot / admin123 (no 2FA); stepup-test@trading.bot / Stepup-Pass-123 (2FA reset off after tests; secret used during test: THBDQVFTUPCQME3D5FJX6PTRH7CLOAEF — no longer active).",
+  "test_credentials": "admin@trading.bot / admin123 (no 2FA); stepup-test@trading.bot / Stepup-Pass-123 (2FA reset off after tests; secret used during test: [REDACTED-EXPIRED-TOTP] — no longer active).",
   "seed_data_creation": "Reset stepup-test user 2FA off + reset 'stepup-live' account to mode=live/status=connected/dormant=false with fresh last_heartbeat before each E2E flow. All resets cleaned up at end (2FA off, totp_secret unset, bot_configs.active=false). Admin's 6 accounts untouched.",
   "retest_needed": false,
   "main_agent_can_self_test": true,

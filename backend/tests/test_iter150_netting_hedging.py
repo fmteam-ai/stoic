@@ -18,8 +18,11 @@ load_dotenv(_os.path.join(_BACKEND_DIR, ".env"))
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
 EA_PATH = _os.path.join(_BACKEND_DIR, "static", "EmergentTradingBridge.mq5")
-BASE = open(_os.path.join(_REPO_DIR, "frontend", ".env")).read().split(
-    "REACT_APP_BACKEND_URL=")[1].splitlines()[0].strip()
+try:
+    BASE = open(_os.path.join(_REPO_DIR, "frontend", ".env")).read().split(
+        "REACT_APP_BACKEND_URL=")[1].splitlines()[0].strip()
+except (FileNotFoundError, IndexError):
+    BASE = _os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001")
 
 
 def _ea():

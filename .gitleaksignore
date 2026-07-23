@@ -1,0 +1,17 @@
+# Accepted gitleaks findings (fingerprints are commit-pinned; history is immutable).
+# Real secrets below were ROTATED + redacted in tracked files (2026-06):
+#   - RATE_LIMIT_BYPASS_TOKEN (iteration_57/58) — rotated in backend/.env
+#   - TOTP test secret (iteration_74) — one-time test secret, account 2FA reset
+9ff41e2697f52a3f2bee5ba6b63a9918221f065b:test_reports/iteration_58.json:generic-api-key:28
+6dec49e10b7d2a10e0fd697ae2179cb260218a67:test_reports/iteration_57.json:generic-api-key:59
+e6f305fa5e43054bbd5e1ccac0fd236f1060910e:test_reports/iteration_74.json:generic-api-key:27
+# False positives — dummy/test fixture values and docs placeholders:
+60f6e7871bd4df1f4501222241a6e5f165b7b0d6:test_reports/iteration_73.json:generic-api-key:2
+07ef2eeaa27dc7fd710da354fba16cbb31b81cb6:frontend/src/pages/EnterpriseApi.jsx:curl-auth-header:237
+07ef2eeaa27dc7fd710da354fba16cbb31b81cb6:frontend/src/pages/EnterpriseApi.jsx:curl-auth-header:238
+07ef2eeaa27dc7fd710da354fba16cbb31b81cb6:frontend/src/pages/EnterpriseApi.jsx:curl-auth-header:239
+07ef2eeaa27dc7fd710da354fba16cbb31b81cb6:frontend/src/pages/EnterpriseApi.jsx:curl-auth-header:240
+b9450a2df9fc2a7ba483832cc10d845c2ee659a0:backend/tests/test_iter115_arch_pipeline.py:generic-api-key:32
+c067875502df5a620132cf1917cc5c28ed481f62:backend/tests/test_iter116_platform_review.py:generic-api-key:34
+c833b9c35e1df0c4174b604b6ded969b51eb98df:backend/tests/test_iter35_crypto_routes_http.py:generic-api-key:133
+c833b9c35e1df0c4174b604b6ded969b51eb98df:backend/tests/test_iter35_crypto_routes_http.py:generic-api-key:134

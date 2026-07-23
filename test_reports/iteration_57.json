@@ -56,7 +56,7 @@
     "backend": "100% on test-suite semantics (176 unit + 225 http-sample + 10 iter-57 = 411/411 pass) but blocks CSRF origin check regression is a critical PRODUCTION bug that the existing test suite cannot detect (no Origin header set by requests/curl).",
     "frontend": "GET-only navigation 100% (Dashboard, Bot Config, Scalp, Accounts render without error). Cookie-auth mutating actions 0% — every POST/PUT/DELETE from a real browser returns 403 csrf_failed/origin_not_allowed. Silent-refresh interceptor code is correct but blocked by backend."
   },
-  "test_credentials": "admin@trading.bot / admin123. RATE_LIMIT_BYPASS_TOKEN=7NYLlT364Hshpz3tam2AFTCNjTEvHe4N from /app/backend/.env (used only for register volume limits, NOT login-failure limits).",
+  "test_credentials": "admin@trading.bot / admin123. RATE_LIMIT_BYPASS_TOKEN=[REDACTED-ROTATED] from /app/backend/.env (used only for register volume limits, NOT login-failure limits).",
   "seed_data_creation": "Throwaway users prefixed 'iter57_' created during test_iter57_phase1_hardening.py — TestLogoutRevokes and TestPasswordChangeRevokesSessions register 2 users each run, all cleaned up post-test via db.users.delete_many({email:{$regex:'^iter57'}}) (0 remaining, verified). admin default active_preset was NEVER changed (verified 'scalper' at teardown).",
   "retest_needed": true,
   "should_main_agent_self_test": false,
