@@ -62,7 +62,7 @@ jobs:
             tests/test_iter149_netting_truth.py \
             tests/test_iter150_netting_hedging.py::TestEaSourceScenarios \
             -q
-          python -m pytest -m integration -q
+          python -m pytest tests/integration -m integration -q
 
   install-from-archive:
     # A fresh deployment must succeed from the exact exported archive: run

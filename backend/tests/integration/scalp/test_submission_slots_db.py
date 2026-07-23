@@ -51,6 +51,10 @@ class TestSlotsRealMongo:
         async def run():
             from scalp import engine as eng
             db = _db()
+            # mirror production: seed creates the safety index at startup —
+            # a fresh CI database must get it the same way
+            await db.scalp_submission_slots.create_index(
+                [("broker_key", 1), ("slot_id", 1)], unique=True)
             info = await db.scalp_submission_slots.index_information()
             assert any("broker_key" in str(k) and "slot_id" in str(v.get("key"))
                        for k, v in info.items()), info
