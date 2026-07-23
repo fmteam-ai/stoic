@@ -8,11 +8,13 @@ import os
 import time
 import uuid
 
+import pathlib
+
 import pytest
 import requests
 from dotenv import load_dotenv
 
-load_dotenv("/app/backend/.env")
+load_dotenv(pathlib.Path(__file__).resolve().parents[1] / ".env")
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
                           "https://stoic-trading.preview.emergentagent.com").rstrip("/")

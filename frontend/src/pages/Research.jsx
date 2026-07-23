@@ -380,16 +380,10 @@ function ProposalCard({ p, onAccept, onDismiss }) {
                         <select value={target} onChange={(e) => setTarget(e.target.value)}
                             data-testid={`proposal-target-${p.id}`}
                             className="bg-[#050505] border border-[#1F1F1F] focus:border-[#FFB000] text-[10px] font-mono tracking-widest px-2 py-1.5 outline-none min-w-[180px]">
-                            <option value="matching">
-                                Matching-symbol bots ({matchingCount ?? "…"})
-                            </option>
-                            <option value="all">
-                                All bots ({totalCount ?? "…"})
-                            </option>
+                            <option value="matching">{`Matching-symbol bots (${matchingCount ?? "…"})`}</option>
+                            <option value="all">{`All bots (${totalCount ?? "…"})`}</option>
                             {(targets?.candidates || []).map(c => (
-                                <option key={c.key} value={c.key}>
-                                    Only · {c.label}{c.matches_proposal_symbols ? " ✓" : ""}
-                                </option>
+                                <option key={c.key} value={c.key}>{`Only · ${c.label}${c.matches_proposal_symbols ? " ✓" : ""}`}</option>
                             ))}
                         </select>
                     )}

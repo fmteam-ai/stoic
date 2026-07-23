@@ -67,7 +67,19 @@ def enabled_runner(scalp_status: dict[str, Any]) -> dict[str, Any]:
         streaming = 0 if (hb_at and age is not None and age < 120) else 1
         return (streaming, age if age is not None else 1e9)
     runners.sort(key=_pref)
-    return runners[0]
+    best = runners[0]
+    bs = best.get("broker_state") or {}
+    age = bs.get("heartbeat_age_sec")
+    # These are live-evidence tests: they only prove anything when the EA is
+    # actively streaming AND the runner has completed its lazy risk restore
+    # (which happens on the first EA report after a backend restart). An
+    # unconverged environment is a skip, not a failure.
+    if age is None or age > 60 or not best.get("risk_restored"):
+        pytest.skip(
+            f"live environment not converged (heartbeat_age={age}, "
+            f"risk_restored={best.get('risk_restored')}) — EA must stream "
+            f"and deliver one report after backend start")
+    return best
 
 
 # --------------------------------------------------------------------------

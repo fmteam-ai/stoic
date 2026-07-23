@@ -143,6 +143,23 @@ async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
             system_message=_SYSTEM,
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
         raw = str(await chat.send_message(UserMessage(text=payload))).strip()
+        # LLM cost tracking — approximate tokens from character volume
+        # (chars/4) at Claude Sonnet public pricing ($3/M in, $15/M out)
+        try:
+            in_tok = int((len(_SYSTEM) + len(payload)) / 4)
+            out_tok = int(len(raw) / 4)
+            await get_db().llm_usage.insert_one({
+                "feature": "journal_card",
+                "user_id": trade.get("user_id"),
+                "trade_id": str(trade.get("_id")),
+                "model": "claude-sonnet-4-5-20250929",
+                "input_tokens_est": in_tok,
+                "output_tokens_est": out_tok,
+                "estimated_cost_usd": round(
+                    in_tok / 1e6 * 3.0 + out_tok / 1e6 * 15.0, 6),
+                "at": datetime.now(timezone.utc)})
+        except Exception:  # noqa: BLE001
+            logger.warning("llm_usage tracking write failed", exc_info=True)
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw.lower().startswith("json"):
@@ -258,6 +275,20 @@ async def edit_card(trade_id: str, payload: CardEditIn,
                if v is not None}
     if not changes:
         raise HTTPException(status_code=422, detail="Nothing to update")
+    # an actively-shared card must stay moderation-clean — a public link
+    # cannot be edited into spam after passing the share gate
+    if doc.get("share_id") and not doc.get("revoked"):
+        merged = dict(doc.get("card") or {})
+        merged.update({k: v for k, v in payload.model_dump().items()
+                       if v is not None})
+        issues = moderate_card(merged)
+        if issues:
+            raise HTTPException(status_code=422, detail={
+                "code": "moderation_failed",
+                "message": "This card is publicly shared — the edit was "
+                           "blocked by moderation. Revoke the share first "
+                           "or remove the flagged content.",
+                "issues": issues})
     changes["edited"] = True
     changes["edited_at"] = datetime.now(timezone.utc)
     await db.trade_journal_cards.update_one(

