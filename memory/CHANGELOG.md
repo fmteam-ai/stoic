@@ -1272,3 +1272,8 @@ ROOT CAUSE (reproduced locally with grype 0.116 — scanned base images via regi
 3. **Preempted next failure — frontend image** (scan added iter-165): nginx:1.27-alpine has criticals (libcrypto 3.3.3, libxml2, curl) → bumped to nginx:1.29-alpine + `apk upgrade` (libssl/libcrypto 3.5.7 fix) + `apk del curl` (8 unfixed alpine curl criticals; nginx doesn't need curl).
 4. **Backend image**: dropped debian curl install (same CVE class risk); HEALTHCHECK now uses python stdlib urllib; added `apt-get upgrade -y` for OS patches.
 - NOTE: pip check reports emergentintegrations' openai pin mismatch — intentional and runtime-verified; documented in Dockerfile comment.
+
+## Iter-167 (2026-06) — CI red (security-scan, backend-unit, backend-integration, container-build skipped) fixed
+ROOT CAUSE (reproduced in fresh venv + pip-audit): iter-166 added litellm==1.93.0 which requires importlib-metadata>=8.0,<9.0, but requirements.txt still pinned importlib_metadata==9.0.0 → ResolutionImpossible in every fresh `pip install -r` (backend-unit/-integration) AND inside pip-audit's internal dry-run resolution (security-scan). container-build was skipped/cancelled due to the failed run, not its own error.
+FIX: importlib_metadata==9.0.0 → ==8.9.0 (matches what pip actually installed alongside litellm here). VERIFIED: fresh-venv dry-run resolution exit 0; pip-audit "No known vulnerabilities found, 10 ignored"; pod runs 8.9.0; unit+truth subset green; backend healthy.
+LESSON: after upgrading any package in-place, ALWAYS re-run a fresh-venv `pip install --dry-run -r requirements.txt` before shipping pin changes — in-place pip installs auto-downgrade siblings without updating the pins file.
