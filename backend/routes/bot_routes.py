@@ -663,9 +663,11 @@ async def _live_context(db, user_id: str, account_id: Optional[str],
         acc = owns or await db.accounts.find_one(
             {"_id": parse_object_id(account_id, "Account"), "user_id": user_id})
         return bool(acc) and str(acc.get("mode") or "live").lower() == "live"
+    # Dormant/disconnected LIVE accounts still count — they can reconnect
+    # at any moment, so the step-up gate must not silently disengage.
     return await db.accounts.count_documents(
         {"user_id": user_id, "status": {"$ne": "deleted"},
-         "dormant": {"$ne": True}, "mode": {"$nin": ["paper"]}}) > 0
+         "mode": {"$nin": ["paper"]}}) > 0
 
 
 def _is_risk_raise(update: dict, current: dict) -> bool:

@@ -3,6 +3,7 @@ live activation, risk raises, panic release, API-key creation. Plus the
 append-only security audit trail (db.audit_log, GET /api/auth/audit)."""
 import os as _os
 import sys as _sys
+from datetime import datetime, timezone
 
 import pyotp
 import requests
@@ -47,7 +48,8 @@ def _ensure_user():
     uid = str(db.users.find_one({"email": EMAIL})["_id"])
     db.accounts.update_one(
         {"user_id": uid, "label": "stepup-live"},
-        {"$set": {"mode": "live", "status": "connected", "dormant": False},
+        {"$set": {"mode": "live", "status": "connected", "dormant": False,
+                  "last_heartbeat": datetime.now(timezone.utc).isoformat()},
          "$setOnInsert": {"bridge_token": "stepup-test-" + uid[-8:]}},
         upsert=True)
     db.bot_configs.update_many({"user_id": uid}, {"$set": {"active": False}})
