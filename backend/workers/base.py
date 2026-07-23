@@ -47,8 +47,9 @@ async def _try_acquire(db, name: str) -> bool:
         return False
 
 
-async def _lease_keeper(name: str, lost: asyncio.Event):
+async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=()):
     db = get_db()
+    total = len(loop_tasks)
     while True:
         await asyncio.sleep(LEASE_RENEW_SEC)
         try:
@@ -57,6 +58,15 @@ async def _lease_keeper(name: str, lost: asyncio.Event):
                 logger.error("worker %s lost its lease — stopping loops", name)
                 lost.set()
                 return
+            # loop-execution monitoring: leases prove the PROCESS is alive,
+            # loops_running proves every loop coroutine is still executing.
+            running = sum(1 for t in loop_tasks if not t.done())
+            await db.worker_leases.update_one(
+                {"_id": name, "holder": HOLDER},
+                {"$set": {"loops_running": running, "loops_total": total}})
+            if running < total:
+                logger.error("worker %s: %d/%d loops running — a loop died",
+                             name, running, total)
         except Exception as e:
             logger.warning("lease renew error for %s: %s", name, e)
 
@@ -74,7 +84,7 @@ async def run_worker(name: str, loop_factories: list) -> None:
     logger.info("worker %s acquired leader lease", name)
     lost = asyncio.Event()
     tasks = [asyncio.create_task(f()) for f in loop_factories]
-    tasks.append(asyncio.create_task(_lease_keeper(name, lost)))
+    tasks.append(asyncio.create_task(_lease_keeper(name, lost, tasks[:])))
     lost_waiter = asyncio.create_task(lost.wait())
     try:
         done, _ = await asyncio.wait([*tasks, lost_waiter],

@@ -56,7 +56,9 @@ services:
       # double-run them.
       BACKGROUND_WORKERS_IN_PROCESS: "false"
     ports:
-      - "8001:8001"
+      # loopback-only: clients must go through the frontend/ingress proxy
+      # (security headers, normalized X-Forwarded-*, TLS) — never direct.
+      - "127.0.0.1:8001:8001"
 
   worker-trading:
     <<: *app-common
@@ -94,7 +96,9 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:3000"
+      # loopback-only by default; public traffic enters through the TLS
+      # ingress (docker-compose.tls.yml → Caddy on 80/443).
+      - "127.0.0.1:3000:3000"
 
 secrets:
   mongo_root_password:

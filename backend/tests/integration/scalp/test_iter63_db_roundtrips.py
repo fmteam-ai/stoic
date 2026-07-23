@@ -77,16 +77,32 @@ async def test_risk_reservation_lifecycle_roundtrip():
         await rr.transition(db, r["reservation_id"], "QUEUED_UNCONFIRMED",
                             trade_id="t1")
         assert await rr.unaccounted_count(db, acct) == 0   # visible in trades
-        await rr.transition(db, r["reservation_id"], "QUEUED_UNCONFIRMED",
-                            trade_id="t1", uncertain=True)
-        assert await rr.unaccounted_count(db, acct) == 1   # uncertain → held
         await rr.release_for_trade(db, "t1", "broker_ack")
         assert await rr.unaccounted_count(db, acct) == 0
         doc = await db.risk_reservations.find_one(
             {"reservation_id": r["reservation_id"]})
         assert doc["state"] == "RELEASED"
         assert doc["release_reason"] == "broker_ack"
-        assert len(doc["transitions"]) >= 3
+
+        # audit P1 — uncertainty is set in ONE guarded step from
+        # RISK_RESERVED (mirrors engine.py slot-link failure path)
+        r2 = await rr.reserve(db, account_id=acct, user_id="u",
+                              decision_id="d2", risk_usd=5.0, lot=0.01)
+        await rr.transition(db, r2["reservation_id"], "QUEUED_UNCONFIRMED",
+                            trade_id="t2", uncertain=True)
+        assert await rr.unaccounted_count(db, acct) == 1   # uncertain → held
+        await rr.release_for_trade(db, "t2", "reconciled")
+        assert await rr.unaccounted_count(db, acct) == 0
+        doc2 = await db.risk_reservations.find_one(
+            {"reservation_id": r2["reservation_id"]})
+        assert doc2["state"] == "RELEASED"
+        assert doc2["release_reason"] == "reconciled"
+        assert len(doc2["transitions"]) >= 2
+        # terminal-state protection: a RELEASED reservation never re-activates
+        assert await rr.transition(db, r2["reservation_id"],
+                                   "QUEUED_UNCONFIRMED",
+                                   idem_key="reactivate-attempt",
+                                   trade_id="t2") == "invalid"
     finally:
         await db.risk_reservations.delete_many({"account_id": acct})
         cli.close()

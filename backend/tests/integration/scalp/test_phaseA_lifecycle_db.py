@@ -31,7 +31,8 @@ async def test_full_lifecycle_roundtrip_and_idempotency():
     tid = str(ins.inserted_id)
     try:
         path = [(osm.QUEUED, "q"), (osm.EA_CLAIMED, "c"),
-                (osm.BROKER_ACCEPTED, "a"), (osm.OPEN, "o"),
+                (osm.BROKER_ACCEPTED, "a"), (osm.PROTECTED, "p"),
+                (osm.OPEN, "o"),
                 (osm.CLOSE_REQUESTED, "cr"), (osm.CLOSED, "cl"),
                 (osm.FINANCIALLY_RECONCILED, "fr")]
         for st, k in path:

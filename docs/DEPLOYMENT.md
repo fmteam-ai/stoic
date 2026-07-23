@@ -1,10 +1,14 @@
 # STOIC — Deployment Guide
 
 ## Topology
-`docker-compose.yml` runs: MongoDB (authenticated), backend API (:8001),
-**six dedicated workers** (trading, protection, reconciliation, analytics,
-model, tuning), frontend (:3000, nginx serving the React build and proxying
-`/api`).
+`docker-compose.yml` runs: MongoDB (authenticated), backend API
+(**loopback-only** `127.0.0.1:8001`), **six dedicated workers** (trading,
+protection, reconciliation, analytics, model, tuning), frontend
+(**loopback-only** `127.0.0.1:3000`, nginx serving the React build and
+proxying `/api`). Public traffic enters ONLY through the TLS ingress
+(`docker-compose.tls.yml` → Caddy on 80/443 with automatic Let's Encrypt
+certificates) — clients can never bypass the proxy's security headers,
+normalized `X-Forwarded-*` or TLS.
 
 ## MongoDB security
 MongoDB runs with authentication enforced:
@@ -34,12 +38,37 @@ secret manager that renders files) — point the `*_FILE` vars at the rendered
 paths. Rotation: replace the file, `docker compose up -d` to restart readers.
 
 ## One-command install
+A deployment mode is **required** — the installer refuses to start without
+one (prevents accidentally exposing a development configuration):
 ```bash
-deploy/install.sh
+deploy/install.sh --dev                            # local: loopback-only
+deploy/install.sh --production trade.example.com   # public TLS via Caddy
 ```
-Does: prereq checks → creates `./.env` (MongoDB credentials) and
-`backend/.env` from their `.env.example` templates with generated secrets →
+Does: prereq checks → generates Docker secrets (`./secrets/`) → creates
+`./.env` + `backend/.env` from the `.env.example` templates (written inline
+if missing from the archive — the installer is self-contained) → production
+mode enforces `APP_ENV=production`, `CSRF_ENFORCE_ORIGIN`, `CORS_ORIGINS`
+and wires `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml` so every
+later `docker compose` / `deploy/*.sh` command manages the TLS stack →
 `docker compose build && up -d` → API health wait → worker status print.
+
+## Release gates (CI)
+Every tagged release requires, on the exact tagged commit:
+1. Full CI workflow (unit + truth tests, DB-integration tests against real
+   MongoDB, gitleaks, pip-audit, static analysis, frontend build, backend +
+   frontend image SBOMs and vulnerability scans, `emergentintegrations`
+   pinned to an exact version).
+2. `suite-from-archive` — the complete classified (non-live) suite from the
+   exported archive + archive-completeness gate (env templates and all
+   deploy files must ship).
+3. `install-from-archive` — the REAL installer runs from the archive and
+   release-readiness must report `ready=true` (Mongo round trip, all six
+   worker leases AND all worker loops running, reconciliation, outbox,
+   schema).
+4. EA compilation via MetaEditor (verified `.ex5` attached to the release).
+The `http` class runs against the staging stack via
+`scripts/run_full_suite.sh`; `broker`-marked tests run during the MT5
+validation campaign with a live EA attached.
 
 ## Updating
 ```bash

@@ -19,29 +19,86 @@ jobs:
       contents: read
 
   suite-from-archive:
-    # The release is only as good as the archive it ships — run the suite
-    # from the exact exported tree, not the working checkout.
+    # The release is only as good as the archive it ships — run the complete
+    # classified (non-live) suite from the exact exported tree: unit +
+    # execution-truth + DB-integration. The http/broker/external classes are
+    # gated by install-from-archive below and the staging soak campaign
+    # (scripts/run_full_suite.sh).
     runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: stoic_release_ci
     steps:
       - uses: actions/checkout@v4
       - name: Export exact release archive
         run: git archive --format=tar.gz -o /tmp/stoic-release.tar.gz HEAD
       - name: Unpack to a clean tree
         run: mkdir /tmp/release && tar -xzf /tmp/stoic-release.tar.gz -C /tmp/release
+      - name: Archive completeness gate (deployment files MUST ship)
+        run: |
+          cd /tmp/release
+          for f in .env.example backend/.env.example frontend/.env.example \
+                   deploy/install.sh docker-compose.yml docker-compose.tls.yml \
+                   deploy/Caddyfile deploy/mongo-init.js; do
+            test -f "$f" || { echo "RELEASE BLOCKED: $f missing from archive"; exit 1; }
+          done
+          echo "all deployment files present in the archive"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Run unit + execution-truth suite from the archive
+      - name: Run classified suite from the archive (unit + truth + integration)
         run: |
           cd /tmp/release
           pip install -r backend/requirements.txt
-          pip install emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+          pip install emergentintegrations==0.2.0 --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
           cd backend
           python -m pytest tests/unit \
             tests/test_iter148_p0_exec_truth.py \
             tests/test_iter149_netting_truth.py \
             tests/test_iter150_netting_hedging.py::TestEaSourceScenarios \
             -q
+          python -m pytest -m integration -q
+
+  install-from-archive:
+    # A fresh deployment must succeed from the exact exported archive: run
+    # the REAL installer (secrets generation, Mongo auth + init script,
+    # image builds, full 9-container topology) and gate on release-readiness
+    # reporting ready=true (Mongo round trip, every worker lease AND every
+    # worker loop running, reconciliation, outbox, schema).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export and unpack exact release archive
+        run: |
+          git archive --format=tar.gz -o /tmp/stoic-release.tar.gz HEAD
+          mkdir /tmp/install && tar -xzf /tmp/stoic-release.tar.gz -C /tmp/install
+      - name: Run the installer (dev mode — loopback only)
+        run: |
+          cd /tmp/install
+          deploy/install.sh --dev
+      - name: Gate on full-topology release readiness
+        run: |
+          cd /tmp/install
+          TOKEN=$(cat secrets/metrics_token)
+          for i in $(seq 1 60); do
+            if curl -sS -H "X-Metrics-Token: ${TOKEN}" http://127.0.0.1:8001/api/ops/release-readiness \
+                 | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ready"], d; print("READY:", d["checks"]["workers"]["detail"])'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "release-readiness never became ready — final state:"
+          curl -sS -H "X-Metrics-Token: ${TOKEN}" http://127.0.0.1:8001/api/ops/release-readiness || true
+          docker compose logs --tail 30
+          exit 1
+      - name: Teardown
+        if: always()
+        run: cd /tmp/install && docker compose down -v || true
 
   ea-compile:
     # Compile the exact tagged EA source with real MetaEditor so the release
@@ -77,7 +134,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [ci-gates, suite-from-archive, ea-compile]
+    needs: [ci-gates, suite-from-archive, install-from-archive, ea-compile]
     steps:
       - uses: actions/checkout@v4
       - name: Download verified .ex5
@@ -100,6 +157,13 @@ jobs:
           format: spdx-json
           output-file: sbom-backend.spdx.json
 
+      - name: SBOM (frontend image)
+        uses: anchore/sbom-action@v0
+        with:
+          image: stoic-frontend:${{ github.ref_name }}
+          format: spdx-json
+          output-file: sbom-frontend.spdx.json
+
       - name: Generate release manifest
         run: |
           python3 - << 'EOF'
@@ -117,6 +181,7 @@ jobs:
               "backend/static/EmergentTradingBridge.mq5",
               "backend/static/EmergentTradingBridge.ex5",
               "sbom-backend.spdx.json",
+              "sbom-frontend.spdx.json",
           ] if os.path.exists(p)}
           ea_version = None
           for line in open("backend/static/EmergentTradingBridge.mq5",
@@ -137,7 +202,7 @@ jobs:
           EOF
 
       - name: Checksums
-        run: sha256sum stoic-${{ github.ref_name }}.tar.gz backend/static/EmergentTradingBridge.ex5 release-manifest.json sbom-backend.spdx.json > SHA256SUMS
+        run: sha256sum stoic-${{ github.ref_name }}.tar.gz backend/static/EmergentTradingBridge.ex5 release-manifest.json sbom-backend.spdx.json sbom-frontend.spdx.json > SHA256SUMS
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
@@ -164,3 +229,4 @@ jobs:
             SHA256SUMS.sig
             SHA256SUMS.pem
             sbom-backend.spdx.json
+            sbom-frontend.spdx.json

@@ -57,8 +57,15 @@ async def release_readiness(request: Request):
     for name in EXPECTED_WORKERS:
         lease = leases.get(name)
         alive = bool(lease and str(lease.get("expires_at") or "") >= now_iso)
+        # loop-execution truth: the process may hold its lease while an
+        # individual loop coroutine has crashed — require every loop running.
+        loops_total = (lease or {}).get("loops_total")
+        loops_running = (lease or {}).get("loops_running")
+        loops_ok = (loops_total is None) or (loops_running == loops_total)
         workers[name] = {
-            "alive": alive,
+            "alive": alive and loops_ok,
+            "loops": (f"{loops_running}/{loops_total}"
+                      if loops_total is not None else None),
             "renewed_at": (lease or {}).get("renewed_at"),
         }
     checks["workers"] = {"ok": all(w["alive"] for w in workers.values()),
