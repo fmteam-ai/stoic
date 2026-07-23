@@ -90,6 +90,15 @@ export function ScalpExecutions({ accountId }) {
                                                 {x.reservation_state}{x.reserved_risk_usd != null ? ` · $${Number(x.reserved_risk_usd).toFixed(0)}` : ""}
                                             </span>
                                         )}
+                                        {x.reconciliation && (
+                                            <span data-testid={`scalp-exec-recon-${x.trade_id}`}
+                                                className={`font-mono text-[9px] tracking-widest px-1.5 py-0.5 border ${
+                                                    x.reconciliation === "reconciled"
+                                                        ? "border-[#00FF41]/40 text-[#00FF41]"
+                                                        : "border-[#FFB000]/40 text-[#FFB000]"}`}>
+                                                {x.reconciliation.toUpperCase()}
+                                            </span>
+                                        )}
                                     </div>
                                 </button>
                                 {open === x.trade_id && (

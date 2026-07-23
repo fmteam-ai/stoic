@@ -89,6 +89,120 @@ async def broker_stats_summary(broker: str, user=Depends(get_current_user)):
     return await summary(get_db(), broker)
 
 
+@router.get("/review")
+async def scalp_review(user=Depends(get_current_user)):
+    """Iter-156 · Fast-Scalp review: execution heatmap (dow×hour), gate
+    effectiveness (what each veto avoided, shadow-labeled), per-broker
+    calibration and cost/latency attribution."""
+    from datetime import datetime, timezone
+    db = get_db()
+
+    def _stage(d):
+        if d.get("reject_stage"):
+            return d["reject_stage"]
+        g = d.get("gates") or {}
+        for name in ("permission", "edge", "risk", "final"):
+            if (g.get(name) or {}).get("ok") is False:
+                return name
+        return "other"
+
+    heat, gates = {}, {}
+    costs = {"labeled": 0, "gross_pips": 0.0, "spread_pips": 0.0,
+             "slippage_pips": 0.0, "commission_pips": 0.0, "net_pips": 0.0}
+    times = []
+    async for d in db.scalp_decisions.find(
+            {"user_id": user["id"]},
+            {"ts_ms": 1, "verdict": 1, "reject_stage": 1, "gates": 1,
+             "outcome": 1}).sort("ts_ms", -1).limit(2000):
+        try:
+            ts = datetime.fromtimestamp((d.get("ts_ms") or 0) / 1000,
+                                        tz=timezone.utc)
+        except Exception:
+            continue
+        out = d.get("outcome") or {}
+        labeled = bool(out.get("result"))
+        net = float(out.get("net_pips") or 0)
+
+        key = (ts.weekday(), ts.hour)
+        h = heat.setdefault(key, {"dow": ts.weekday(), "hour": ts.hour,
+                                  "n": 0, "labeled": 0, "net_pips": 0.0})
+        h["n"] += 1
+        if labeled:
+            h["labeled"] += 1
+            h["net_pips"] += net
+
+        if d.get("verdict") == "rejected":
+            st = _stage(d)
+            g = gates.setdefault(st, {"stage": st, "n": 0, "labeled": 0,
+                                      "net_sum": 0.0, "target_first": 0})
+            g["n"] += 1
+            if labeled:
+                g["labeled"] += 1
+                g["net_sum"] += net
+                if out.get("result") == "target_first":
+                    g["target_first"] += 1
+
+        if labeled:
+            costs["labeled"] += 1
+            costs["gross_pips"] += float(out.get("gross_move_pips") or 0)
+            costs["spread_pips"] += float(out.get("spread_cost_pips") or 0)
+            costs["slippage_pips"] += float(out.get("exit_slippage_pips") or 0)
+            costs["commission_pips"] += float(out.get("commission_pips") or 0)
+            costs["net_pips"] += net
+            if out.get("time_to_exit_ms") is not None:
+                times.append(float(out["time_to_exit_ms"]))
+
+    heatmap = sorted(heat.values(), key=lambda x: (x["dow"], x["hour"]))
+    for h in heatmap:
+        h["net_pips"] = round(h["net_pips"], 2)
+        h["avg_net_pips"] = (round(h["net_pips"] / h["labeled"], 2)
+                             if h["labeled"] else None)
+
+    gate_rows = []
+    for g in sorted(gates.values(), key=lambda x: -x["n"]):
+        g["avoided_pips"] = round(-g["net_sum"], 2) if g["labeled"] else None
+        g["avg_net_pips"] = (round(g["net_sum"] / g["labeled"], 2)
+                             if g["labeled"] else None)
+        g["target_first_rate"] = (round(g["target_first"] / g["labeled"], 2)
+                                  if g["labeled"] else None)
+        g.pop("net_sum", None)
+        gate_rows.append(g)
+
+    for k in ("gross_pips", "spread_pips", "slippage_pips",
+              "commission_pips", "net_pips"):
+        costs[k] = round(costs[k], 2)
+
+    times.sort()
+
+    def _p(p):
+        return (round(times[min(len(times) - 1, int(p * len(times)))] / 1000, 1)
+                if times else None)
+
+    latency = {"labeled": len(times), "time_to_exit_p50_s": _p(0.50),
+               "time_to_exit_p95_s": _p(0.95)}
+
+    brokers = []
+    seen = set()
+    async for a in db.accounts.find({"user_id": user["id"],
+                                     "status": {"$ne": "deleted"}},
+                                    {"broker": 1}).limit(20):
+        b = a.get("broker")
+        if not b or b in seen:
+            continue
+        seen.add(b)
+        try:
+            from scalp.broker_stats import summary
+            brokers.append({"broker": b, **(await summary(db, b))})
+        except Exception:
+            pass
+        if len(brokers) >= 3:
+            break
+
+    return {"heatmap": heatmap, "gate_effectiveness": gate_rows,
+            "cost_attribution": costs, "latency": latency,
+            "brokers": brokers}
+
+
 @router.delete("/config")
 async def remove_config(account_id: str, symbol: str = "EURUSD",
                         user=Depends(get_current_user)):
@@ -209,6 +323,10 @@ async def scalp_executions(limit: int = 25, account_id: str = None,
             "protection": {"protected": protected,
                            "state": t.get("protection_state") or lc or None,
                            "unprotected_age_sec": unprotected_age},
+            "reconciliation": ("estimated" if t.get("pnl_estimated")
+                               else "unknown" if t.get("pnl_unknown")
+                               else "backfilled" if t.get("backfilled_at")
+                               else "reconciled"),
             "opened_at": str(t.get("opened_at")) if t.get("opened_at") else None,
             "closed_at": str(t.get("closed_at")) if t.get("closed_at") else None,
             "pnl": t.get("pnl"),

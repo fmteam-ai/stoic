@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, Fragment } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { ScalpExecutions } from "@/components/ScalpExecutions";
+import { ScalpReview } from "@/components/ScalpReview";
 import { Zap, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -455,6 +456,8 @@ export default function Scalp() {
                     </tbody>
                 </table>
             </div>
+
+            <ScalpReview />
         </AppLayout>
     );
 }

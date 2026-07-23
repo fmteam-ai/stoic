@@ -859,6 +859,8 @@ async def trade_audit(trade_id: str, user=Depends(get_current_user)):
         "expected_cost_pips": expected_cost_pips,
         "commission": round(commission, 2) if broker_deals else None,
         "swap": round(swap, 2) if broker_deals else None,
+        "broker_error": (trade.get("error")
+                         or trade.get("last_modification_error")),
         "reconciliation": {
             "financial_status": fin_status,
             "pnl_estimated": bool(trade.get("pnl_estimated")),

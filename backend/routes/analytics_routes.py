@@ -12,6 +12,184 @@ from database import get_db
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
+@router.get("/research")
+async def research(days: int = 90, user=Depends(get_current_user)):
+    """Iter-156 · research-grade analytics: confidence calibration, Wilson
+    confidence intervals, walk-forward stability, regime attribution,
+    strategy-decay detection and execution cost attribution."""
+    import math
+    from datetime import timedelta
+    from bson import ObjectId
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=min(max(int(days), 7), 365))).isoformat()
+
+    trades = []
+    async for t in db.trades.find(
+            {"user_id": user["id"], "status": "closed", "origin": "auto",
+             "closed_at": {"$gte": since}, "pnl": {"$ne": None}},
+            {"pnl": 1, "closed_at": 1, "symbol": 1, "base_symbol": 1,
+             "signal_id": 1}).sort("closed_at", 1).limit(3000):
+        trades.append(t)
+
+    sig_map = {}
+    oids = []
+    for t in trades:
+        try:
+            if t.get("signal_id"):
+                oids.append(ObjectId(str(t["signal_id"])))
+        except Exception:
+            pass
+    if oids:
+        async for s in db.signals.find({"_id": {"$in": oids}},
+                                       {"confidence": 1, "regime": 1}):
+            sig_map[str(s["_id"])] = s
+
+    def wilson(w, n, z=1.96):
+        if not n:
+            return None, None
+        p = w / n
+        den = 1 + z * z / n
+        centre = (p + z * z / (2 * n)) / den
+        half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
+        return (round(max(0.0, centre - half) * 100, 1),
+                round(min(1.0, centre + half) * 100, 1))
+
+    # 1 · confidence calibration — predicted bucket vs realised win rate
+    cal_buckets = [(0, 49), (50, 59), (60, 69), (70, 79), (80, 89), (90, 100)]
+    cal = [{"bucket": f"{lo}-{hi}", "mid": (lo + hi) / 2, "n": 0, "wins": 0}
+           for lo, hi in cal_buckets]
+    for t in trades:
+        s = sig_map.get(str(t.get("signal_id")))
+        if not s or s.get("confidence") is None:
+            continue
+        c = float(s["confidence"])
+        idx = 0 if c < 50 else min(5, int((c - 40) // 10))
+        cal[idx]["n"] += 1
+        if float(t["pnl"]) > 0:
+            cal[idx]["wins"] += 1
+    for row in cal:
+        row["win_rate"] = round(row["wins"] / row["n"] * 100, 1) if row["n"] else None
+        lo, hi = wilson(row["wins"], row["n"])
+        row["ci_low"], row["ci_high"] = lo, hi
+        row["gap"] = (round(row["win_rate"] - row["mid"], 1)
+                      if row["win_rate"] is not None else None)
+
+    # 2 · per-symbol win-rate CIs
+    sym_rows = {}
+    for t in trades:
+        sym = t.get("base_symbol") or t.get("symbol")
+        r = sym_rows.setdefault(sym, {"symbol": sym, "n": 0, "wins": 0,
+                                      "total_pnl": 0.0})
+        r["n"] += 1
+        r["total_pnl"] += float(t["pnl"])
+        if float(t["pnl"]) > 0:
+            r["wins"] += 1
+    symbols = []
+    for r in sorted(sym_rows.values(), key=lambda x: -x["n"]):
+        r["win_rate"] = round(r["wins"] / r["n"] * 100, 1)
+        r["ci_low"], r["ci_high"] = wilson(r["wins"], r["n"])
+        r["total_pnl"] = round(r["total_pnl"], 2)
+        symbols.append(r)
+
+    # 3 · walk-forward stability — weekly out-of-sample buckets
+    weeks = {}
+    for t in trades:
+        try:
+            d = datetime.fromisoformat(str(t["closed_at"]))
+        except Exception:
+            continue
+        iso = d.isocalendar()
+        key = f"{iso[0]}-W{iso[1]:02d}"
+        w = weeks.setdefault(key, {"week": key, "n": 0, "wins": 0,
+                                   "total_pnl": 0.0})
+        w["n"] += 1
+        w["total_pnl"] += float(t["pnl"])
+        if float(t["pnl"]) > 0:
+            w["wins"] += 1
+    walk = []
+    cum = 0.0
+    for k in sorted(weeks):
+        w = weeks[k]
+        w["win_rate"] = round(w["wins"] / w["n"] * 100, 1)
+        w["total_pnl"] = round(w["total_pnl"], 2)
+        w["avg_pnl"] = round(w["total_pnl"] / w["n"], 2)
+        cum += w["total_pnl"]
+        w["cum_pnl"] = round(cum, 2)
+        walk.append(w)
+    wf_win_rates = [w["win_rate"] for w in walk if w["n"] >= 3]
+    stability = (round(100 - min(100, (max(wf_win_rates) - min(wf_win_rates))), 1)
+                 if len(wf_win_rates) >= 2 else None)
+
+    # 4 · regime attribution
+    reg_rows = {}
+    for t in trades:
+        s = sig_map.get(str(t.get("signal_id")))
+        regime = (s or {}).get("regime") or "UNKNOWN"
+        if isinstance(regime, dict):
+            regime = regime.get("regime") or regime.get("name") or "UNKNOWN"
+        regime = str(regime)
+        r = reg_rows.setdefault(regime, {"regime": regime, "n": 0, "wins": 0,
+                                         "total_pnl": 0.0})
+        r["n"] += 1
+        r["total_pnl"] += float(t["pnl"])
+        if float(t["pnl"]) > 0:
+            r["wins"] += 1
+    regimes = []
+    for r in sorted(reg_rows.values(), key=lambda x: -x["n"]):
+        r["win_rate"] = round(r["wins"] / r["n"] * 100, 1)
+        r["total_pnl"] = round(r["total_pnl"], 2)
+        regimes.append(r)
+
+    # 5 · strategy decay — recent 30d expectancy vs prior 30d + weekly slope
+    d30 = (now - timedelta(days=30)).isoformat()
+    d60 = (now - timedelta(days=60)).isoformat()
+    recent = [float(t["pnl"]) for t in trades if str(t["closed_at"]) >= d30]
+    prior = [float(t["pnl"]) for t in trades if d60 <= str(t["closed_at"]) < d30]
+    slope = None
+    pnls = [w["avg_pnl"] for w in walk]
+    if len(pnls) >= 3:
+        n = len(pnls)
+        xm, ym = (n - 1) / 2, sum(pnls) / n
+        num = sum((i - xm) * (y - ym) for i, y in enumerate(pnls))
+        den = sum((i - xm) ** 2 for i in range(n))
+        slope = round(num / den, 3) if den else None
+    r_avg = round(sum(recent) / len(recent), 2) if recent else None
+    p_avg = round(sum(prior) / len(prior), 2) if prior else None
+    if r_avg is None or p_avg is None:
+        decay_status = "INSUFFICIENT_DATA"
+    elif r_avg >= p_avg or (slope is not None and slope > 0):
+        decay_status = "STABLE_OR_IMPROVING"
+    elif r_avg < p_avg * 0.5 or r_avg < 0 <= p_avg:
+        decay_status = "DECAYING"
+    else:
+        decay_status = "SOFTENING"
+    decay = {"status": decay_status, "recent_30d_avg_pnl": r_avg,
+             "recent_30d_n": len(recent), "prior_30d_avg_pnl": p_avg,
+             "prior_30d_n": len(prior), "weekly_slope": slope}
+
+    # 6 · execution attribution — gross vs commission/swap from broker deals
+    gross = comm = swap = 0.0
+    deal_n = 0
+    async for d in db.broker_deals.find(
+            {"user_id": user["id"], "received_at": {"$gte": since}},
+            {"profit": 1, "commission": 1, "swap": 1}).limit(5000):
+        deal_n += 1
+        gross += float(d.get("profit") or 0)
+        comm += float(d.get("commission") or 0)
+        swap += float(d.get("swap") or 0)
+    execution = {"deals": deal_n, "gross_pnl": round(gross, 2),
+                 "commission": round(comm, 2), "swap": round(swap, 2),
+                 "net_pnl": round(gross + comm + swap, 2),
+                 "cost_drag_pct": (round(abs(comm + swap) / abs(gross) * 100, 1)
+                                   if gross else None)}
+
+    return {"generated_at": now.isoformat(), "window_days": int(days),
+            "trades": len(trades), "calibration": cal, "symbols": symbols,
+            "walk_forward": walk, "walk_forward_stability": stability,
+            "regimes": regimes, "decay": decay, "execution": execution}
+
+
 @router.get("/rr-watch")
 async def rr_watch(user=Depends(get_current_user)):
     """Realized R:R watch — compares trade geometry before vs after the

@@ -1,0 +1,28 @@
+{
+  "summary": "Iter-156 Phase B Analytics & Scalp Review research views — full backend + frontend E2E PASS. Backend (12/12 pytest): iter156 6/6 + iter153 step-up regression 6/6. (B1) GET /api/analytics/research?days=90 returns 200 with all required keys — trades=488, calibration list with bucket/n/win_rate/ci_low/ci_high/gap (Wilson CIs), symbols list with ci_low/ci_high, walk_forward weekly with total_pnl/win_rate/cum_pnl, walk_forward_stability=26.7, regimes list containing LOW_VOL_TREND with n=434 (>400), decay {status:'INSUFFICIENT_DATA', recent_30d_avg_pnl:-1.07, weekly_slope:-8.14}, execution {deals, gross_pnl:7342.65, commission:-470.95, swap:38.48, net_pnl:6910.18, cost_drag_pct:5.9}. days=7 and days=9999 also 200 (clamped). (B2) GET /api/scalp/review returns 200 with heatmap list of {dow,hour,n,labeled,avg_net_pips}, gate_effectiveness with 'permission' stage (×16, avoided 21.7p), cost_attribution {gross_pips:-5.1, spread_pips:-12.1, slippage_pips:-4.5, commission_pips:0, net_pips:-21.7, labeled:15}, latency {time_to_exit_p50_s:6.4, time_to_exit_p95_s:269.9}, brokers list (RoboForex, VTMarkets, KRAKEN_SPOT). (B3) /api/scalp/executions items[] empty (no fills yet — acceptable per spec); /api/trades/6a612a5b6936705cbd7c78f3/audit execution_summary now includes 'broker_error' key. Frontend (2/2 pages): (F1) /analytics data-testid='research-panel' renders below R:R watch with all 7 sub-testids (research-decay, research-execution, research-stability, research-calibration, research-symbol-ci, research-walkforward with recharts SVG, research-regimes); existing 'Performance Attribution' + sessions breakdown intact. (F2) /scalp data-testid='scalp-review-panel' at page bottom with scalp-heatmap (18 cells), scalp-gate-effectiveness (permission ×16, 'saved 21.7p'), scalp-cost-attribution chips (GROSS/SPREAD/SLIPPAGE/COMM/NET/EXIT p50 all rendered), scalp-broker-calibration (RoboForex/VTMarkets/KRAKEN_SPOT); existing config card + decisions table + scalp-executions-panel intact. Zero console errors on both pages. Note: latency payload key is 'time_to_exit_p95_s' (full form) rather than short 'p95' as suggested in review spec — updated test to accept both; frontend renders it as 'EXIT p50 6.4s · p95 269.9s' correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter156_research_review.py",
+    "/app/backend/tests/test_iter153_step_up.py",
+    "/app/test_reports/pytest/iter156_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "analytics_routes.py /research clamps days to [7, 365] — good defense; days=9999 correctly returns 200 with 365d window. Symbol row uses ci_low/ci_high naming (consistent with calibration rows).",
+    "scalp_routes.py /scalp_review latency payload uses 'time_to_exit_p95_s' (full form) not 'p95' — mild inconsistency with the review-request spec wording but frontend consumes it correctly. Not a bug.",
+    "ResearchPanel.jsx renders walk_forward via recharts BarChart cleanly; no console errors from recharts on either page.",
+    "ScalpReview.jsx handles empty labeled outcomes gracefully; heatmap only renders populated cells (18 cells with n>0 shown, MON-WED). Broker calibration displays subs/rejects/fills all 0 correctly since scalp fills haven't materialized yet.",
+    "trade_routes.py execution_summary payload correctly adds 'broker_error' key even when null — good forward-compatibility. reconciliation subrow also present as verified in iter154."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter156_research_review.py (new)"
+  ],
+  "success_rate": {"backend": "100% (12/12 — 6 iter156 + 6 iter153 regression)", "frontend": "100% (2/2 pages, all data-testids + regression checks)"},
+  "test_credentials": "admin@trading.bot / admin123 (no 2FA).",
+  "seed_data_creation": "None — used existing DB seed. 488 auto-closed trades in last 90d, 15 labeled scalp shadow outcomes, 16 permission-stage vetoes, 3 broker calibrations (RoboForex/VTMarkets/KRAKEN_SPOT), trade 6a612a5b6936705cbd7c78f3 for audit broker_error verification.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter-156 Phase B Analytics & Scalp Review is fully green. Reusable test file: /app/backend/tests/test_iter156_research_review.py — 6 tests covering /api/analytics/research (days 90/7/9999 clamp), /api/scalp/review (heatmap/gate/cost/latency/brokers), scalp executions reconciliation field (currently items=[]), and trades audit execution_summary broker_error. Key gotcha: /api/scalp/review latency uses 'time_to_exit_p95_s' full-form key (not short 'p95') — test accepts both. Regime LOW_VOL_TREND has n=434 (>400 as spec expected). Walk-forward stability score is currently 26.7/100 (recharts renders 2 major bars). Frontend research-panel data-testids: research-decay, research-execution, research-stability, research-calibration, research-symbol-ci, research-walkforward, research-regimes. Scalp review testids: scalp-heatmap, scalp-gate-effectiveness, scalp-cost-attribution, scalp-broker-calibration. Iter153 step-up 6/6 still passes.",
+  "rca of the issue": "N/A — no bugs found."
+}
