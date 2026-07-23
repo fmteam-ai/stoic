@@ -77,7 +77,7 @@ function renderMarkdown(md) {
 }
 
 // Public-friendly fetch — uses raw axios so the page works pre-login too.
-const RAW_API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const RAW_API = `${process.env.REACT_APP_BACKEND_URL || window.location.origin}/api`;
 
 export default function Terms() {
     const [data, setData] = useState(null);

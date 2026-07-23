@@ -81,7 +81,7 @@ export default function Notifications() {
     const enableWebhook = async () => {
         setWebhookBusy(true); setErr("");
         try {
-            const baseUrl = process.env.REACT_APP_BACKEND_URL;
+            const baseUrl = (await import("@/lib/api")).BACKEND_URL;
             const { data } = await api.post("/telegram/webhook/enable", { base_url: baseUrl });
             setWebhook({ enabled: true, webhook_url: data.webhook_url });
             toast.success("2-way Telegram control activated", {

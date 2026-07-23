@@ -34,11 +34,48 @@ jobs:
             tests/test_iter150_netting_hedging.py::TestEaSourceScenarios \
             -q
 
-  release:
-    runs-on: ubuntu-latest
-    needs: [suite-from-archive]
+  ea-compile:
+    # Compile the exact tagged EA source with real MetaEditor so the release
+    # ships a verified .ex5, never a locally built binary.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install MetaTrader 5 (silent)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile mt5setup.exe
+          Start-Process -FilePath .\mt5setup.exe -ArgumentList "/auto" -Wait
+          if (-not (Test-Path "C:\Program Files\MetaTrader 5\metaeditor64.exe")) {
+            throw "MetaEditor not found after install"
+          }
+      - name: Compile EA with MetaEditor
+        shell: pwsh
+        run: |
+          $me = "C:\Program Files\MetaTrader 5\metaeditor64.exe"
+          $src = (Resolve-Path "backend\static\EmergentTradingBridge.mq5").Path
+          Start-Process -FilePath $me -ArgumentList "/compile:`"$src`"","/log:compile.log" -Wait
+          $log = Get-Content compile.log -Encoding Unicode -Raw
+          Write-Host $log
+          if ($log -notmatch "0 error") { throw "EA compilation reported errors" }
+          if (-not (Test-Path "backend\static\EmergentTradingBridge.ex5")) {
+            throw "Compiled .ex5 not produced"
+          }
+      - name: Publish verified .ex5 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmergentTradingBridge-ex5
+          path: backend/static/EmergentTradingBridge.ex5
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [suite-from-archive, ea-compile]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download verified .ex5
+        uses: actions/download-artifact@v4
+        with:
+          name: EmergentTradingBridge-ex5
+          path: backend/static/
       - name: Export release archive
         run: git archive --format=tar.gz -o stoic-${{ github.ref_name }}.tar.gz HEAD
 
@@ -69,6 +106,7 @@ jobs:
           files = {p: sha256(p) for p in [
               f"stoic-{ref}.tar.gz",
               "backend/static/EmergentTradingBridge.mq5",
+              "backend/static/EmergentTradingBridge.ex5",
               "sbom-backend.spdx.json",
           ] if os.path.exists(p)}
           ea_version = None
@@ -90,7 +128,7 @@ jobs:
           EOF
 
       - name: Checksums
-        run: sha256sum stoic-${{ github.ref_name }}.tar.gz release-manifest.json sbom-backend.spdx.json > SHA256SUMS
+        run: sha256sum stoic-${{ github.ref_name }}.tar.gz backend/static/EmergentTradingBridge.ex5 release-manifest.json sbom-backend.spdx.json > SHA256SUMS
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
@@ -109,6 +147,7 @@ jobs:
         with:
           files: |
             stoic-${{ github.ref_name }}.tar.gz
+            backend/static/EmergentTradingBridge.ex5
             release-manifest.json
             release-manifest.json.sig
             release-manifest.json.pem

@@ -9,6 +9,17 @@ EA under test: `EmergentTradingBridge.mq5` **v1.53** — use the exact `.ex5`
 produced by the `ea-compile` CI job (artifact `EmergentTradingBridge-ex5`),
 not a locally compiled binary.
 
+## Evidence status
+Automated execution-truth harness evidence is recorded in
+[`docs/campaigns/`](campaigns/):
+- [`2026-06-11-simulation-harness-netting.md`](campaigns/2026-06-11-simulation-harness-netting.md) — sections 1–4 & 6 PASS (harness)
+- [`2026-06-11-simulation-harness-hedging.md`](campaigns/2026-06-11-simulation-harness-hedging.md) — sections 1–3, 5 & 6 PASS (harness)
+
+Every scenario maps to a named test in `backend/tests/` and passes in CI.
+The broker-demo confirmation run (real netting + hedging demo accounts) and
+the 2-week soak test (section 7) remain the operator's final manual gates
+before the live switch.
+
 ## How to record results
 Copy this file to `docs/campaigns/<date>-<broker>-<netting|hedging>.md`,
 fill the PASS/FAIL column and attach the EA log excerpts
@@ -63,7 +74,7 @@ Execution Health and the account block reason:
 
 ## 7 · Soak test (final gate)
 - **Duration**: minimum 2 weeks continuous demo/shadow on the release build.
-- **Topology**: full docker-compose stack (API + all 5 workers + Mongo + nginx).
+- **Topology**: full docker-compose stack (API + all 6 workers + Mongo + nginx).
 - **Weekly drills** during the soak:
   1. Alert drill — kill worker-trading, confirm alerting fires and lease fails over.
   2. Recovery drill — restore Mongo from the nightly backup into a staging copy, verify equity/trade counts match.

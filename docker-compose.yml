@@ -100,12 +100,28 @@ services:
       mongo:
         condition: service_healthy
 
+  worker-tuning:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "-m", "workers.tuning"]
+    restart: unless-stopped
+    env_file:
+      - backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+    depends_on:
+      mongo:
+        condition: service_healthy
+
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
       args:
-        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-http://localhost:3000}
+        # Empty default → frontend uses same-origin API routing (nginx
+        # proxies /api on the same host). Never default to localhost.
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-}
     restart: unless-stopped
     depends_on:
       - backend

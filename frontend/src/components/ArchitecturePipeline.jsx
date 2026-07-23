@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import axios from "axios";
 import { ChevronDown, ChevronUp, Workflow } from "lucide-react";
 
-const API = process.env.REACT_APP_BACKEND_URL;
+import { BACKEND_URL } from "@/lib/api";
+
+const API = BACKEND_URL;
 
 const Dot = ({ status }) => (
     <span className="inline-block w-1.5 h-1.5 rounded-full mr-2 align-middle"

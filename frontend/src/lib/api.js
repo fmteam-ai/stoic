@@ -1,13 +1,14 @@
 import axios from "axios";
 import { requestStepUp } from "./stepUp";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Same-origin fallback: production builds served behind nginx proxy /api on
+// the same host don't need an explicit REACT_APP_BACKEND_URL.
+export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL
+    || (typeof window !== "undefined" ? window.location.origin : "");
 
-if (!BACKEND_URL) {
-    // Fail loudly at startup — otherwise every call silently goes to "undefined/api".
+if (!process.env.REACT_APP_BACKEND_URL) {
     // eslint-disable-next-line no-console
-    console.error("FATAL: REACT_APP_BACKEND_URL is not configured.");
-    throw new Error("REACT_APP_BACKEND_URL is required");
+    console.warn("REACT_APP_BACKEND_URL not set — using same-origin API routing:", BACKEND_URL);
 }
 
 export const API = `${BACKEND_URL}/api`;
