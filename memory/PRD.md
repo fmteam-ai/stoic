@@ -1036,3 +1036,17 @@ Root causes + fixes (all reproduced locally first, verified by testing agent ite
 6. Note: iter-158's blocking-scan ci.yml edits had been reverted somehow (old text at HEAD) — re-applied.
 - App regression sweep after dep upgrades: dashboard/performance/brokers/analytics all render, 474 CI-suite tests green.
 - USER ACTION: push via "Save to GitHub" to re-run CI on GitHub.
+
+## June 2026 — v1.6.0 Release Verification (iter-81)
+- Full local pytest suite: 2694 passed (2 transient network blips re-ran green).
+- Deploy scripts (install.sh/update.sh/soak.sh) + GitHub Actions YAML syntax-validated.
+- Frontend: added must_change_password enforcement — Login redirects to /settings, warning banner (data-testid='must-change-password-banner'), refresh() after password change clears it.
+- testing_agent iteration_81: 100% pass — bootstrap admin flag, change-password flow (revokes sessions by design), Pydantic-validated journal cards, public share revocation (permanent, rotates share_id), worker loop telemetry wired into /api/ops/release-readiness.
+- STATUS: Safe to tag v1.6.0.
+
+## Next (from backlog)
+- P0: User to Save to GitHub → confirm CI green → tag v1.6.0 (immutable GHCR artifacts, .ex5, SBOMs)
+- P0: Live validation campaigns (MT5 restart, replay, netting, hedging, partial-fill)
+- P1: 2-week demo/shadow soak test (deploy/soak.sh, docs/campaigns/SOAK_LOG.md)
+- P1: Panic/rollback/restore/alert-delivery drills
+- P2: CRA → Vite migration
