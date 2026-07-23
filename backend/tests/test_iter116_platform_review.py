@@ -37,7 +37,18 @@ if not BASE_URL:
 
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASSWORD = "admin123"
-BRIDGE_TOKEN = "-14t8rVrFxnX7AK4vWHveL9QAqNFhO-0AeV-yxShWyQ"
+
+
+def _bridge_token() -> str:
+    """Load the Exness#3 test-account bridge token from Mongo at runtime —
+    never hardcode pairing tokens in source (they leak via git)."""
+    from pymongo import MongoClient
+    _db = MongoClient(_os.environ["MONGO_URL"])[_os.environ["DB_NAME"]]
+    doc = _db.accounts.find_one({"label": "Exness#3"}, {"bridge_token": 1})
+    return (doc or {}).get("bridge_token") or ""
+
+
+BRIDGE_TOKEN = _bridge_token()
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────

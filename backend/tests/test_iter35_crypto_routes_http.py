@@ -136,8 +136,8 @@ def test_crypto_accounts_create_bad_keys_rejected_422_no_persist(admin_session):
         f"{API}/crypto/accounts",
         json={
             "label": "TEST_garbage_keys",
-            "api_key": "GARBAGEKEY1234567890",
-            "api_secret": "GARBAGESECRET1234567890",
+            "api_key": "GARBAGEKEY1234567890",  # gitleaks:allow — obvious dummy
+            "api_secret": "GARBAGESECRET1234567890",  # gitleaks:allow — obvious dummy
             "testnet": True,
         },
         timeout=30,

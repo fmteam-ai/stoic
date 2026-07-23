@@ -234,10 +234,10 @@ export default function EnterpriseApi() {
                     </div>
                     <div className="p-5 space-y-3">
                         {[
-                            ["Verify key & scopes", `curl -H "X-API-Key: stoic_live_..." ${API}/v1/me`],
-                            ["List accounts", `curl -H "X-API-Key: stoic_live_..." ${API}/v1/accounts`],
-                            ["Closed trades (paginated)", `curl -H "X-API-Key: stoic_live_..." "${API}/v1/trades?status=closed&limit=50&offset=0"`],
-                            ["Portfolio snapshot", `curl -H "X-API-Key: stoic_live_..." ${API}/v1/portfolio`],
+                            ["Verify key & scopes", `curl -H "X-API-Key: stoic_live_..." ${API}/v1/me`], // gitleaks:allow — docs placeholder
+                            ["List accounts", `curl -H "X-API-Key: stoic_live_..." ${API}/v1/accounts`], // gitleaks:allow — docs placeholder
+                            ["Closed trades (paginated)", `curl -H "X-API-Key: stoic_live_..." "${API}/v1/trades?status=closed&limit=50&offset=0"`], // gitleaks:allow — docs placeholder
+                            ["Portfolio snapshot", `curl -H "X-API-Key: stoic_live_..." ${API}/v1/portfolio`], // gitleaks:allow — docs placeholder
                         ].map(([label, cmd]) => (
                             <div key={label}>
                                 <div className="font-mono text-[10px] text-[#A1A1AA] tracking-widest mb-1">{label.toUpperCase()}</div>
