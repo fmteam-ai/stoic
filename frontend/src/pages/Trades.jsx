@@ -836,6 +836,7 @@ export default function Trades() {
                                                 {t.trail_active && <span title="Trailing stop active" className="font-mono text-[9px] tracking-widest text-[#00FF41] border border-[#00FF41]/40 bg-[#00FF41]/10 px-1" data-testid={`badge-trail-${t.id}`}>TRAIL</span>}
                                                 {t.status === "open" && ["FILLED_UNPROTECTED", "PROTECTION_REQUESTED"].includes(t.lifecycle_state) && <span title="Broker has NOT confirmed the stop-loss yet" className="font-mono text-[9px] tracking-widest text-[#FF3B30] border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-1 animate-pulse" data-testid={`badge-unprot-${t.id}`}>UNPROT</span>}
                                                 {t.partial_fill && <span title={`Partial fill: requested ${t.original_lot_size ?? "?"} → filled ${t.lot_size} lots`} className="font-mono text-[9px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-1" data-testid={`badge-pf-${t.id}`}>PF {t.original_lot_size ?? "?"}→{t.lot_size}</span>}
+                                                {t.journal_replayed_at && <span title={`Recovered via EA journal replay at ${t.journal_replayed_at}`} className="font-mono text-[9px] tracking-widest text-[#0099FF] border border-[#0099FF]/40 bg-[#0099FF]/10 px-1" data-testid={`badge-replay-${t.id}`}>REPLAY</span>}
                                                 {t.pending_modification && <span title={`Pending: ${t.pending_modification.type}`} className="font-mono text-[9px] tracking-widest text-[#FFB000] border border-[#FFB000]/40 bg-[#FFB000]/10 px-1 animate-pulse" data-testid={`badge-pending-${t.id}`}>SYNC</span>}
                                             </div>
                                         </td>
@@ -911,7 +912,8 @@ export default function Trades() {
                                         </td>
                                         <td className="px-3 py-2">
                                             <div className="flex items-center gap-1.5 flex-wrap">
-                                                <span className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border inline-block ${STATUS_STYLE[t.status] || "border-[#1F1F1F]"}`}>
+                                                <span title={t.status === "failed" && t.error ? `Broker: ${t.error}` : undefined}
+                                                    className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border inline-block ${STATUS_STYLE[t.status] || "border-[#1F1F1F]"}`}>
                                                     {t.status?.toUpperCase()}
                                                 </span>
                                                 {t.status !== "closed" && (t.lifecycle_state || t.submission_state) && (() => {

@@ -1212,7 +1212,7 @@ async def execution_health(user=Depends(get_current_user)):
     async for a in db.accounts.find(
             {"user_id": user["id"], "trading_enabled": {"$ne": False},
              "dormant": {"$ne": True}, "status": {"$ne": "deleted"}},
-            {"label": 1, "last_heartbeat": 1}):
+            {"label": 1, "last_heartbeat": 1, "broker_utc_offset_sec": 1}):
         hb_age = None
         try:
             d = datetime.fromisoformat(str(a.get("last_heartbeat")))
@@ -1222,9 +1222,36 @@ async def execution_health(user=Depends(get_current_user)):
         except Exception:
             pass
         heartbeats.append({"label": a.get("label"), "age_sec": hb_age,
-                           "fresh": hb_age is not None and hb_age < 300})
+                           "fresh": hb_age is not None and hb_age < 300,
+                           "clock_offset_sec": a.get("broker_utc_offset_sec")})
+
+    # candle-feed freshness (worst lag per symbol/timeframe for this user)
+    feeds = []
+    async for f in db.candle_feed_health.find(
+            {"user_id": user["id"]},
+            {"symbol": 1, "timeframe": 1, "last_received_at": 1,
+             "bar_lag_s": 1, "last_write_ok": 1}).limit(50):
+        f_age = None
+        try:
+            d = datetime.fromisoformat(str(f.get("last_received_at")))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            f_age = int((now - d).total_seconds())
+        except Exception:
+            pass
+        feeds.append({"key": f"{f.get('symbol')}_{f.get('timeframe')}",
+                      "age_sec": f_age,
+                      "write_ok": bool(f.get("last_write_ok")),
+                      "fresh": f_age is not None
+                               and f_age < 2 * int(f.get("bar_lag_s") or 900)})
+    feeds.sort(key=lambda x: -(x["age_sec"] or 10**9))
+
+    from ws_manager import manager as _wsm
     infra = {"mongo_latency_ms": round((_time.perf_counter() - t0) * 1000, 1),
-             "heartbeats": heartbeats}
+             "ws_clients": sum(len(s) for s in _wsm._connections.values()),
+             "heartbeats": heartbeats,
+             "feeds": feeds[:12],
+             "feeds_stale": sum(1 for f in feeds if not f["fresh"])}
 
     return {"generated_at": now_iso,
             "latency": latency,

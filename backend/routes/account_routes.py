@@ -1070,11 +1070,53 @@ async def accounts_certification(user=Depends(get_current_user)):
              "value": ("mismatch" if a.get("broker_account_mismatch")
                        else "verified"),
              "ok": not a.get("broker_account_mismatch")},
+            {"key": "stop_freeze_levels", "label": "Stop/freeze levels",
+             "value": (f"{sum(1 for s in specs.values() if s.get('stops_level_points') is not None)}"
+                       f"/{len(specs)} symbols"),
+             "ok": len(specs) > 0 and all(
+                 s.get("stops_level_points") is not None
+                 for s in specs.values())},
         ]
+        cert_age = _age(a.get("demo_certified_at"))
+        base_pass = all(c["ok"] for c in checks)
+        checks.append(
+            {"key": "demo_certified", "label": "Demo certification",
+             "value": (f"{int(cert_age / 86400)}d ago"
+                       if cert_age is not None else "never"),
+             "ok": cert_age is not None and cert_age < 30 * 86400,
+             "hint": "stamped via POST /accounts/{id}/certify once all "
+                     "other checks pass"})
         passed = sum(1 for c in checks if c["ok"])
         out.append({"account_id": str(a["_id"]), "label": a.get("label"),
                     "mode": a.get("mode"),
                     "checks": checks, "passed": passed,
                     "total": len(checks),
+                    "can_certify": base_pass,
                     "certified": passed == len(checks)})
     return {"items": out, "generated_at": now.isoformat()}
+
+
+@router.post("/{account_id}/certify")
+async def certify_account(account_id: str,
+                          user=Depends(get_current_user)):
+    """Iter-152 · stamp demo certification — only allowed once every other
+    go-live check currently passes (server-side re-verification)."""
+    cert = await accounts_certification(user=user)
+    item = next((i for i in cert["items"]
+                 if i["account_id"] == account_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not item.get("can_certify"):
+        failing = [c["key"] for c in item["checks"]
+                   if not c["ok"] and c["key"] != "demo_certified"]
+        raise HTTPException(status_code=400, detail={
+            "code": "certification_blocked",
+            "message": "Fix the failing checks before certifying.",
+            "failing": failing})
+    db = get_db()
+    stamp = datetime.now(timezone.utc).isoformat()
+    await db.accounts.update_one(
+        {"_id": ObjectId(account_id), "user_id": user["id"]},
+        {"$set": {"demo_certified_at": stamp,
+                  "demo_certified_by": user.get("email")}})
+    return {"ok": True, "demo_certified_at": stamp}

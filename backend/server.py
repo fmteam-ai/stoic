@@ -93,6 +93,25 @@ async def csrf_middleware(request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def request_id_middleware(request, call_next):
+    """Iter-152 · distributed request IDs + structured JSON access logs."""
+    import uuid
+    import time as _t
+    import json as _json
+    rid = (request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16])[:64]
+    t0 = _t.perf_counter()
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    path = request.url.path
+    if path.startswith("/api") and path not in ("/api/metrics", "/api/ws"):
+        logging.getLogger("access").info(_json.dumps({
+            "rid": rid, "m": request.method, "p": path,
+            "s": response.status_code,
+            "ms": round((_t.perf_counter() - t0) * 1000, 1)}))
+    return response
+
+
 api_router = APIRouter(prefix="/api")
 
 
@@ -249,6 +268,8 @@ api_router.include_router(insights_router)
 api_router.include_router(optimizer_router)
 api_router.include_router(api_keys_router)
 api_router.include_router(enterprise_v1_router)
+from routes.metrics_routes import router as metrics_router  # noqa: E402
+api_router.include_router(metrics_router)
 
 
 # ---------- WebSocket ----------
