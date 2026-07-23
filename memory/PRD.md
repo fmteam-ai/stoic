@@ -1050,3 +1050,19 @@ Root causes + fixes (all reproduced locally first, verified by testing agent ite
 - P1: 2-week demo/shadow soak test (deploy/soak.sh, docs/campaigns/SOAK_LOG.md)
 - P1: Panic/rollback/restore/alert-delivery drills
 - P2: CRA → Vite migration
+
+## June 2026 — Commercial Deployment Prep, Phases A-E (iter-82)
+User requested 5-phase commercial readiness plan; all implemented + verified:
+- **Phase A — Release qualification (COMPLETE)**: New Playwright e2e suite at /app/e2e (11 tests: auth, dashboard, settings, core pages, ops cards). New `frontend-e2e` CI job in ci.yml (prod build + live backend + Mongo service + chromium) — automatically a release gate via release.yml workflow_call. All 10 release gates now automated.
+- **Phase B — Operational monitoring (COMPLETE)**: /app/backend/alerting.py (deduped ops alerts + evaluator loop: EA heartbeat stale 300s-24h window, worker lease expiry, crashloops, outbox backlog/failed, unprotected positions, reconciliation stuck). Endpoints: GET /api/ops/alerts, POST /api/ops/alerts/{id}/ack, /ack-all (metrics token OR admin session via _ops_actor). New metrics: worker loop telemetry, stoic_reconciliation_lease_age_seconds, stoic_outbox_oldest_pending_age_seconds, stoic_pending_trade_oldest_age_seconds, stoic_protection_latency_seconds{quantile} SLO, stoic_alerts_unacked{severity}, stoic_alert_oldest_unacked_age_seconds. AlertsCard on Bot Health with ACK/ACK ALL.
+- **Phase C — Disaster recovery (COMPLETE)**: backup.sh rewritten — per-collection count manifest, AES-256-CBC encryption (BACKUP_PASSPHRASE_FILE), `verify` = automated restore verification in throwaway Mongo container vs manifest, `offsite` via rclone/S3, BACKUP_OFFSITE auto-push, nightly verify cron in `schedule`. New deploy/rollback.sh (one-command rollback via deploy/releases.log, readiness-gated, --with-db). update.sh now appends to releases.log.
+- **Phase D — MT5 validation evidence ledger (COMPLETE)**: /app/backend/routes/validation_routes.py — 12 scenarios × netting/hedging modes, GET /api/ops/validation, POST /api/ops/validation/{scenario} (append-only db.validation_evidence). ValidationCard on Bot Health. Campaign doc updated with curl recipes.
+- **Phase E — Staged rollout gate (COMPLETE)**: stages internal_shadow→demo_broker→small_live→larger_live→production in db.platform_state. GET /api/ops/stage (criteria: min days in stage 3/14/14/30, no unacked criticals, full validation campaign before live stages). promote (force+reason override, audited history) / demote (reason required). live_stage_gate hook in bot start — advisory unless STAGE_ENFORCEMENT=true. StageCard on Bot Health.
+- Testing: pytest 2703 passed; Playwright 11/11; testing_agent iteration_82: 23/23 backend + 100% frontend, no bugs.
+
+## Remaining (operator-side, needs user's MT5/infra)
+- P0: Save to GitHub → CI green → tag v1.6.0 (now includes frontend-e2e gate)
+- P0: Execute the MT5 validation campaign on real netting+hedging demo accounts, record evidence via POST /api/ops/validation/{scenario}
+- P1: 2-week soak at demo_broker stage; then promote through stages as criteria pass (set STAGE_ENFORCEMENT=true in production)
+- P1: Configure BACKUP_PASSPHRASE_FILE + BACKUP_RCLONE_REMOTE/S3 + nightly verify cron; run panic/rollback/restore drills (deploy/rollback.sh, backup.sh verify)
+- P2: CRA → Vite migration
