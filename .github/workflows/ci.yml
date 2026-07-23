@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Reused as a required gate by release.yml — a tag can only ship if the
+  # exact commit passes every CI job (tests, security scans, builds).
+  workflow_call:
 
 jobs:
   backend-unit:

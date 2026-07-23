@@ -1,32 +1,51 @@
 # STOIC — Deployment Guide
 
 ## Topology
-`docker-compose.yml` runs: MongoDB, backend API (:8001), **five dedicated
-workers** (trading, protection, reconciliation, analytics, model), frontend
-(:3000, nginx serving the React build and proxying `/api`).
+`docker-compose.yml` runs: MongoDB (authenticated), backend API (:8001),
+**six dedicated workers** (trading, protection, reconciliation, analytics,
+model, tuning), frontend (:3000, nginx serving the React build and proxying
+`/api`).
+
+## MongoDB security
+MongoDB runs with authentication enforced:
+- Root credentials + a **least-privilege app user** (readWrite on `DB_NAME`
+  only, created by `deploy/mongo-init.js` on first init).
+- Secrets live in the compose-level `./.env` (template: `./.env.example`);
+  `deploy/install.sh` generates strong values automatically.
+- The API and workers connect as the app user:
+  `mongodb://app:***@mongo:27017/<db>?authSource=<db>`.
+- The port is never published to the host; only containers on the compose
+  network can reach it.
 
 ## One-command install
 ```bash
 deploy/install.sh
 ```
-Does: prereq checks → creates `backend/.env` from `.env.example` with generated
-JWT/metrics secrets → `docker compose build && up -d` → API health wait →
-worker status print.
+Does: prereq checks → creates `./.env` (MongoDB credentials) and
+`backend/.env` from their `.env.example` templates with generated secrets →
+`docker compose build && up -d` → API health wait → worker status print.
 
 ## Updating
 ```bash
 deploy/update.sh            # latest origin/main
 deploy/update.sh v1.4.0     # specific signed release tag
 ```
-Backs up Mongo first, checks out the ref, rebuilds, restarts, verifies health
-— and **rolls back automatically** to the previous commit if health fails.
+Backs up Mongo first, checks out the ref, rebuilds, restarts, then verifies
+the **complete trading topology** via `GET /api/ops/release-readiness`
+(all six worker leases fresh, Mongo write/read round trip, reconciliation
+lag, outbox backlog, feature-schema compatibility) plus frontend
+availability — and **rolls back automatically** if any check fails.
 
 ## Backups
 ```bash
 deploy/backup.sh backup           # timestamped gzip archive in ./backups (14-day retention)
-deploy/backup.sh restore <file>   # destructive restore
+deploy/backup.sh restore <file>   # maintenance-mode restore (see below)
 deploy/backup.sh schedule         # prints the nightly crontab line
 ```
+Restore procedure: stops the API and all workers (no writes), **validates the
+archive with a dry run** before touching data, restores, then restarts the
+API only — workers stay stopped until the operator verifies broker
+reconciliation and release readiness, then resumes with `docker compose up -d`.
 Weekly restore drills into a staging copy are part of the soak plan
 (docs/MT5_VALIDATION_CAMPAIGN.md §7).
 
@@ -49,7 +68,7 @@ Frontend build arg: `REACT_APP_BACKEND_URL` = the public origin.
 
 ## Deployment verification checklist
 1. `curl -fsS https://<host>/api/health` → 200.
-2. `docker compose ps` → all 5 workers `Up`; logs show lease acquisition.
+2. `docker compose ps` → all 6 workers `Up`; logs show lease acquisition.
 3. Login works; **Trading Safety banner** shows MODE/RECON/PANIC pills.
 4. Bot Health → Execution Health: Mongo latency, workers, outbox all green.
 5. `curl -H "X-Metrics-Token: …" https://<host>/api/metrics` → Prometheus text.

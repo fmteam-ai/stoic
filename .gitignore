@@ -144,6 +144,10 @@ frontend/node_modules/.cache/default-development/3.pack
 .env
 .env.*
 *.env
+# templates MUST ship — deploy/install.sh copies them into place
+!.env.example
+!backend/.env.example
+!frontend/.env.example
 frontend/node_modules/.cache/default-development/10.pack
 frontend/node_modules/.cache/default-development/16.pack
 frontend/node_modules/.cache/default-development/15.pack

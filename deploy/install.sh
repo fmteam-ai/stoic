@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# STOIC one-command install: builds and starts the full stack (API + 5 workers
+# STOIC one-command install: builds and starts the full stack (API + 6 workers
 # + Mongo + frontend) with generated secrets. Idempotent.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -9,11 +9,30 @@ echo "== STOIC installer =="
 command -v docker >/dev/null || { echo "ERROR: docker is required"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "ERROR: docker compose v2 is required"; exit 1; }
 
+gen() { python3 -c "import secrets;print(secrets.token_urlsafe(32))"; }
+
+# 0 · compose-level .env — MongoDB auth secrets (root + least-privilege app user)
+if [ ! -f .env ]; then
+  echo "-- creating ./.env (compose secrets) from .env.example"
+  cp .env.example .env
+  sed -i.bak \
+    -e "s|^MONGO_ROOT_USER=$|MONGO_ROOT_USER=stoic_root|" \
+    -e "s|^MONGO_ROOT_PASSWORD=$|MONGO_ROOT_PASSWORD=$(gen)|" \
+    -e "s|^MONGO_APP_USER=$|MONGO_APP_USER=stoic_app|" \
+    -e "s|^MONGO_APP_PASSWORD=$|MONGO_APP_PASSWORD=$(gen)|" \
+    -e "s|^DB_NAME=$|DB_NAME=ai_trading_bot|" \
+    .env
+  rm -f .env.bak
+  echo "   generated MongoDB credentials (root + app user)."
+else
+  echo "-- ./.env exists — leaving untouched"
+fi
+
 # 1 · backend/.env — create from template with generated secrets
 if [ ! -f backend/.env ]; then
   echo "-- creating backend/.env from .env.example with generated secrets"
   cp backend/.env.example backend/.env
-  gen() { python3 -c "import secrets;print(secrets.token_urlsafe(32))"; }
+  sed -i.bak "s|^DB_NAME=$|DB_NAME=ai_trading_bot|" backend/.env
   for key in JWT_SECRET JWT_REFRESH_SECRET METRICS_TOKEN; do
     if grep -q "^${key}=$" backend/.env; then
       sed -i.bak "s|^${key}=$|${key}=$(gen)|" backend/.env

@@ -9,6 +9,15 @@ permissions:
   id-token: write   # cosign keyless (Sigstore OIDC)
 
 jobs:
+  ci-gates:
+    # Full CI suite (unit tests, gitleaks, pip-audit, static analysis,
+    # frontend build, container vuln scan) MUST pass on the exact tagged
+    # commit before any release artifact is published.
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+    permissions:
+      contents: read
+
   suite-from-archive:
     # The release is only as good as the archive it ships — run the suite
     # from the exact exported tree, not the working checkout.
@@ -68,7 +77,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [suite-from-archive, ea-compile]
+    needs: [ci-gates, suite-from-archive, ea-compile]
     steps:
       - uses: actions/checkout@v4
       - name: Download verified .ex5

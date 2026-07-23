@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# STOIC update: backup → pull target ref → rebuild → restart → verify,
-# with automatic rollback to the previous ref if the health check fails.
+# STOIC update: backup → pull target ref → rebuild → restart → verify the
+# COMPLETE trading topology (API, 6 workers, Mongo round trip, reconciliation
+# lag, outbox backlog, schema compatibility, frontend), with automatic
+# rollback to the previous ref if any verification fails.
 # Usage: deploy/update.sh [git-ref]   (default: latest origin/main)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -18,7 +20,7 @@ git fetch --all --tags
 git checkout --detach "${REF}"
 
 rollback() {
-  echo "!! health check failed — rolling back to ${PREV}"
+  echo "!! verification failed — rolling back to ${PREV}"
   git checkout --detach "${PREV}"
   docker compose build
   docker compose up -d
@@ -32,15 +34,39 @@ docker compose build
 echo "-- restarting stack"
 docker compose up -d
 
-echo "-- verifying health"
+echo "-- verifying API health"
+API_OK=0
 for i in $(seq 1 30); do
-  if curl -fsS http://localhost:8001/api/health >/dev/null 2>&1 \
-     || curl -fsS http://localhost:8001/api/ >/dev/null 2>&1; then
-    echo "   API healthy on $(git rev-parse --short HEAD)"
-    docker compose ps --format '{{.Name}}\t{{.Status}}'
-    echo "== update complete =="
-    exit 0
+  if curl -fsS http://localhost:8001/api/health >/dev/null 2>&1; then
+    API_OK=1; break
   fi
   sleep 2
 done
-rollback
+[ "$API_OK" = 1 ] || rollback
+echo "   API healthy"
+
+echo "-- verifying frontend"
+curl -fsS -o /dev/null http://localhost:3000 || rollback
+echo "   frontend serving"
+
+echo "-- verifying release readiness (workers, leases, Mongo, reconciliation, outbox, schema)"
+METRICS_TOKEN=$(grep -E '^METRICS_TOKEN=' backend/.env | cut -d= -f2- | tr -d '"')
+[ -n "${METRICS_TOKEN}" ] || { echo "ERROR: METRICS_TOKEN missing from backend/.env"; rollback; }
+READY=0
+for i in $(seq 1 45); do   # workers need time to acquire leases (~45s lease TTL)
+  BODY=$(curl -fsS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
+         http://localhost:8001/api/ops/release-readiness 2>/dev/null) && READY=1 && break
+  sleep 4
+done
+if [ "$READY" = 1 ]; then
+  echo "   release-readiness: ${BODY}"
+else
+  echo "!! release-readiness never returned ready:"
+  curl -sS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
+    http://localhost:8001/api/ops/release-readiness || true
+  rollback
+fi
+
+echo "   API + frontend + full topology verified on $(git rev-parse --short HEAD)"
+docker compose ps --format '{{.Name}}\t{{.Status}}'
+echo "== update complete =="
