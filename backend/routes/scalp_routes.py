@@ -135,6 +135,88 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
     return {"runners": out, "audit": audit_backlog()}
 
 
+@router.get("/executions")
+async def scalp_executions(limit: int = 25, account_id: str = None,
+                           user=Depends(get_current_user)):
+    """Iter-154 · execution metadata for scalp-originated orders: intent /
+    reservation / order / deal / position identifiers, broker latency,
+    lifecycle timeline and protection state."""
+    from datetime import datetime, timezone
+    db = get_db()
+    q = {"user_id": user["id"], "scope": "scalp_fast"}
+    if account_id:
+        q["account_id"] = account_id
+    n = min(max(int(limit), 1), 100)
+    now = datetime.now(timezone.utc)
+
+    def _dt(v):
+        try:
+            d = v if hasattr(v, "tzinfo") and not isinstance(v, str) \
+                else datetime.fromisoformat(str(v))
+            return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d
+        except Exception:
+            return None
+
+    items = []
+    async for t in db.trades.find(q).sort("_id", -1).limit(n):
+        tid = str(t["_id"])
+        did = t.get("scalp_decision_id")
+        resv = None
+        if did:
+            resv = await db.risk_reservations.find_one(
+                {"decision_id": did}, {"reservation_id": 1, "state": 1,
+                                       "risk_usd": 1})
+        ev_q = ({"$or": [{"decision_id": did}, {"trade_id": tid}]}
+                if did else {"trade_id": tid})
+        timeline = []
+        async for e in db.trade_events.find(
+                ev_q, {"event_type": 1, "occurred_at": 1}).sort(
+                "ts_ms", 1).limit(40):
+            timeline.append({"type": e.get("event_type"),
+                             "at": e.get("occurred_at")})
+
+        latency_ms = None
+        d0, d1 = _dt(t.get("_dispatched_at")), _dt(t.get("opened_at"))
+        if d0 and d1:
+            ms = (d1 - d0).total_seconds() * 1000
+            if 0 <= ms < 3_600_000:
+                latency_ms = int(ms)
+
+        lc = str(t.get("lifecycle_state") or "")
+        protected = bool(t.get("stop_loss")) and lc not in (
+            "FILLED_UNPROTECTED", "PROTECTION_REQUESTED")
+        unprotected_age = None
+        if t.get("status") == "open" and not protected and d1:
+            unprotected_age = int((now - d1).total_seconds())
+
+        items.append({
+            "trade_id": tid,
+            "symbol": t.get("symbol"),
+            "action": t.get("action"),
+            "status": t.get("status"),
+            "lifecycle_state": lc or None,
+            "submission_state": t.get("submission_state"),
+            "intent_id": (t.get("intent_id")
+                          or (t.get("pending_modification") or {}).get("intent_id")),
+            "decision_id": did,
+            "reservation_id": (resv or {}).get("reservation_id"),
+            "reservation_state": (resv or {}).get("state"),
+            "reserved_risk_usd": (resv or {}).get("risk_usd"),
+            "order_ticket": t.get("mt5_ticket"),
+            "deal_id": t.get("broker_deal_id"),
+            "position_id": t.get("position_ticket") or t.get("position_id"),
+            "broker_latency_ms": latency_ms,
+            "protection": {"protected": protected,
+                           "state": t.get("protection_state") or lc or None,
+                           "unprotected_age_sec": unprotected_age},
+            "opened_at": str(t.get("opened_at")) if t.get("opened_at") else None,
+            "closed_at": str(t.get("closed_at")) if t.get("closed_at") else None,
+            "pnl": t.get("pnl"),
+            "timeline": timeline,
+        })
+    return {"items": items, "generated_at": now.isoformat()}
+
+
 @router.get("/decisions")
 async def decisions(limit: int = 50, symbol: str = None,
                     user=Depends(get_current_user)):

@@ -1076,6 +1076,22 @@ async def accounts_certification(user=Depends(get_current_user)):
              "ok": len(specs) > 0 and all(
                  s.get("stops_level_points") is not None
                  for s in specs.values())},
+            # iter-154 — round 3 additions: OrderCheck support, fill policy,
+            # symbol mapping coverage.
+            {"key": "order_check", "label": "OrderCheck preflight",
+             "value": (f"supported (EA v{v})" if v and str(v) >= "1.50"
+                       else "requires EA v1.50+"),
+             "ok": bool(v) and str(v) >= "1.50",
+             "hint": "broker-native OrderCheck rejection before submit"},
+            {"key": "fill_policy", "label": "Fill policy",
+             "value": ("EA auto-select per symbol" if v and str(v) >= "1.28"
+                       else "unknown"),
+             "ok": bool(v) and str(v) >= "1.28",
+             "hint": "EA v1.28+ picks the broker-supported filling mode"},
+            {"key": "symbol_mapping", "label": "Symbol mapping",
+             "value": f"{len(a.get('available_symbols') or [])} symbols discovered",
+             "ok": len(a.get("available_symbols") or []) > 0,
+             "hint": "EA reports the broker's tradable symbol names"},
         ]
         cert_age = _age(a.get("demo_certified_at"))
         base_pass = all(c["ok"] for c in checks)

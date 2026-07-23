@@ -475,6 +475,7 @@ export default function BotHealth() {
     const load = useCallback(async () => {
         setLoading(true); setErr("");
         try {
+            const t0 = performance.now();
             const [hs, diag, pulse, sess, pats, adj, blocks, ahSet, ahLog, execH] = await Promise.all([
                 api.get("/bot/health-score"),
                 api.get("/diagnostic/run"),
@@ -493,6 +494,7 @@ export default function BotHealth() {
                 blocks: blocks.data,
                 autoHeal: { settings: ahSet.data, log: ahLog.data?.items || [] },
                 execHealth: execH.data,
+                apiLatencyMs: Math.round(performance.now() - t0),
             });
             setLast(new Date());
         } catch (e) {
@@ -538,7 +540,7 @@ export default function BotHealth() {
 
                 <AutoHealPanel data={data.autoHeal} onChange={load} />
 
-                <ExecutionHealthPanel data={data.execHealth} />
+                <ExecutionHealthPanel data={data.execHealth} apiLatencyMs={data.apiLatencyMs} />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <DiagnosticPanel diag={data.diagnostic} onReload={load} />

@@ -1146,6 +1146,54 @@ function Row({ k, v }) {
 }
 
 
+function ExecutionSummary({ s }) {
+    const rec = s.reconciliation || {};
+    const fmtN = (v, suf = "") => (v == null ? "—" : `${v}${suf}`);
+    const money = (v) => (v == null ? "—" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(2)}`);
+    const cell = (label, value, tone, testid) => (
+        <div className="border border-[#1F1F1F] px-2 py-1.5" data-testid={testid}>
+            <div className="font-mono text-[8px] tracking-widest text-[#52525B]">{label}</div>
+            <div className={`font-mono text-xs mt-0.5 ${tone || "text-white"}`}>{value}</div>
+        </div>
+    );
+    const slipBad = s.slippage_pips != null && s.expected_cost_pips != null
+        && Math.abs(s.slippage_pips) > s.expected_cost_pips;
+    const recBadges = [
+        rec.financial_status && { label: rec.financial_status.toUpperCase(), tone: "text-[#00FF41]" },
+        rec.pnl_estimated && { label: "PNL ESTIMATED", tone: "text-[#FFB000]" },
+        rec.pnl_unknown && { label: "PNL UNKNOWN", tone: "text-[#FF3B30]" },
+        rec.backfilled_at && { label: "BACKFILLED", tone: "text-[#FFB000]" },
+        rec.replayed_at && { label: "REPLAYED", tone: "text-[#FFD700]" },
+    ].filter(Boolean);
+    return (
+        <div className="px-5 py-3 border-b border-[#1F1F1F]" data-testid="audit-execution-summary">
+            <div className="font-mono text-[9px] tracking-widest text-[#52525B] mb-2">EXECUTION SUMMARY</div>
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                {cell("ENTRY QUALITY", fmtN(s.entry_quality, "/100"), null, "exec-sum-entry-q")}
+                {cell("EXIT QUALITY", fmtN(s.exit_quality, "/100"), null, "exec-sum-exit-q")}
+                {cell("REALIZED R", fmtN(s.realized_r, "R"),
+                    s.realized_r != null ? (s.realized_r >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]") : null,
+                    "exec-sum-realized-r")}
+                {cell("MFE / MAE", s.mfe_r == null && s.mae_r == null ? "—" : `${fmtN(s.mfe_r, "R")} / ${fmtN(s.mae_r, "R")}`, null, "exec-sum-mfe-mae")}
+                {cell("SLIPPAGE", s.slippage_pips == null ? "—"
+                    : `${s.slippage_pips}p${s.expected_cost_pips != null ? ` (exp ≤${s.expected_cost_pips}p)` : ""}`,
+                    slipBad ? "text-[#FFB000]" : null, "exec-sum-slippage")}
+                {cell("COMM / SWAP", s.commission == null && s.swap == null ? "—"
+                    : `${money(s.commission)} / ${money(s.swap)}`, null, "exec-sum-costs")}
+            </div>
+            {(recBadges.length > 0 || s.lesson) && (
+                <div className="flex items-center gap-2 flex-wrap mt-2" data-testid="exec-sum-reconciliation">
+                    {recBadges.map((b, i) => (
+                        <span key={i} className={`font-mono text-[9px] tracking-widest border border-current px-1.5 py-0.5 ${b.tone}`}>{b.label}</span>
+                    ))}
+                    {s.lesson && <span className="font-mono text-[10px] text-[#A1A1AA]">{s.lesson}</span>}
+                </div>
+            )}
+        </div>
+    );
+}
+
+
 function AuditTrailModal({ trade, onClose }) {
     const [events, setEvents] = useState(null);
     const [err, setErr] = useState("");
@@ -1183,6 +1231,10 @@ function AuditTrailModal({ trade, onClose }) {
 
                 {err && (
                     <div className="border-b border-[#FF3B30]/30 bg-[#FF3B30]/10 px-5 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>
+                )}
+
+                {events?.execution_summary && (
+                    <ExecutionSummary s={events.execution_summary} />
                 )}
 
                 {events === null && !err && (

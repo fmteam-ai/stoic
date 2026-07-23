@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, Fragment } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { ScalpExecutions } from "@/components/ScalpExecutions";
 import { Zap, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -355,6 +356,8 @@ export default function Scalp() {
 
             {/* Decisions */}
             <h2 className="text-sm text-[#A1A1AA] uppercase tracking-widest mb-2">Recent Decisions <span className="text-[#52525B] normal-case tracking-normal">· click a row for the full pipeline trace</span></h2>
+            <ScalpExecutions accountId={accountId} />
+
             <div className="border border-[#1F1F1F] bg-[#0A0A0A] overflow-x-auto" data-testid="scalp-decisions-table">
                 <table className="w-full text-xs">
                     <thead>

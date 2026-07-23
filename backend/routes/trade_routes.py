@@ -821,11 +821,59 @@ async def trade_audit(trade_id: str, user=Depends(get_current_user)):
         return (1, "") if not ts else (0, ts)
     events.sort(key=_sort_key)
 
+    # iter-154 · execution summary — quality scores, expected-vs-actual
+    # slippage, commission/swap, realized R, MFE/MAE, reconciliation truth.
+    ev = await db.trade_evaluations.find_one({"trade_id": trade_id})
+    commission = sum(float(d.get("commission") or 0) for d in broker_deals)
+    swap = sum(float(d.get("swap") or 0) for d in broker_deals)
+    fin_status = None
+    for d in reversed(broker_deals):
+        if d.get("financial_reconciliation_status"):
+            fin_status = d["financial_reconciliation_status"]
+            break
+    expected_cost_pips = None
+    try:
+        from monte_carlo import typical_cost
+        from pip_utils import base_symbol as _bsym, price_to_pips
+        if trade.get("entry_price"):
+            _sym = trade.get("base_symbol") or _bsym(trade.get("symbol"))
+            expected_cost_pips = round(price_to_pips(
+                _sym, typical_cost(_sym, float(trade["entry_price"]))), 2)
+    except Exception:
+        pass
+    realized_r = (ev or {}).get("realized_r")
+    if realized_r is None and trade.get("pnl") is not None \
+            and trade.get("risk_amount"):
+        try:
+            realized_r = round(float(trade["pnl"]) / float(trade["risk_amount"]), 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    execution_summary = {
+        "entry_quality": (ev or {}).get("entry_quality"),
+        "exit_quality": (ev or {}).get("exit_quality"),
+        "mfe_r": (ev or {}).get("mfe_r"),
+        "mae_r": (ev or {}).get("mae_r"),
+        "realized_r": realized_r,
+        "lesson": (ev or {}).get("lesson"),
+        "slippage_pips": trade.get("slippage_pips"),
+        "expected_cost_pips": expected_cost_pips,
+        "commission": round(commission, 2) if broker_deals else None,
+        "swap": round(swap, 2) if broker_deals else None,
+        "reconciliation": {
+            "financial_status": fin_status,
+            "pnl_estimated": bool(trade.get("pnl_estimated")),
+            "pnl_unknown": bool(trade.get("pnl_unknown")),
+            "backfilled_at": trade.get("backfilled_at"),
+            "replayed_at": trade.get("journal_replayed_at"),
+        },
+    }
+
     return {
         "trade_id": trade_id,
         "mt5_ticket": ticket,
         "events": events,
         "broker_deal_count": len(broker_deals),
+        "execution_summary": execution_summary,
     }
 
 

@@ -1,0 +1,29 @@
+{
+  "summary": "Iter154 Execution Observability UI — full backend + frontend E2E testing PASS. Backend (6/6 pytest + iter152 11/11): (B1) GET /api/scalp/executions?limit=5 → 200 {items:[], generated_at:ISO}; with bogus account_id still 200 empty. (B2) GET /api/trades/6a612a5b6936705cbd7c78f3/audit returns execution_summary with all 11 required keys — entry_quality=50, exit_quality=60, commission=-0.68, reconciliation.financial_status='complete'. Trade 6a61ae5f883889ba6a1a7c0a returns nulls except expected_cost_pips=5.25 as expected. (B3) GET /api/accounts/certification returns 14 checks per item including new keys order_check, fill_policy, symbol_mapping. Existing tests/test_iter152_prod_ops.py 11/11 pass. (REG) POST /api/bot/start without X-Step-Up-Token as admin → 403 {code:'mfa_enrollment_required', action:'live_activation'} (verified with X-Step-Up-Bypass explicitly disabled). Frontend (4/4 flows): (F1) /scalp renders data-testid=scalp-executions-panel with data-testid=scalp-executions-empty 'NO SCALP EXECUTIONS YET — orders appear here once the fast path submits to the broker'; config card + decisions table + shadow performance below intact. (F2) /trades — status filter defaulted showing CLOSED trades already; clicked audit-trade-6a61ae5f883889ba6a1a7c0a → audit-modal opened with audit-execution-summary containing all 6 cells exec-sum-entry-q/exit-q/realized-r/mfe-mae/slippage/costs; events timeline (Trade created + STOIC marked closed) rendered below. (F3) /bot-health execution-health-panel shows 4 new chips exec-api-latency='API 412ms', exec-ws='WS CLIENTS 0', exec-feeds='FEEDS 5 · 5 stale' (amber tone due to stale), exec-clock-skew='CLOCK SKEW 0s' — all non-empty ms/values, existing exec-mongo/exec-outbox-pending/exec-latency chips still render on same SRE row. (F4) /accounts certification matrix on 'micro' account shows '8/14 CHECKS' header and lists the 3 new rows OrderCheck preflight (supported EA v1.50), Fill policy (EA auto-select per symbol), Symbol mapping (7 symbols discovered) without any layout breakage — all 14 rows render in the responsive 3-column grid alongside legacy rows.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter154_exec_observability.py",
+    "/app/backend/tests/test_iter152_prod_ops.py",
+    "/app/test_reports/pytest/iter154_results.xml",
+    "/app/test_reports/pytest/iter152_iter75.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ScalpExecutions.jsx correctly handles empty-state with dedicated data-testid; nested timeline uses per-row testids scalp-exec-timeline-{trade_id} which is clean.",
+    "trade_routes.py execution_summary payload gracefully returns nulls for un-evaluated trades — frontend fmtN/'—' fallback works. Consider surfacing reconciliation badges more prominently: on the mostly-null trade the reconciliation subrow (exec-sum-reconciliation) is still rendered but with backfilled_at=null so only the financial_status/pnl chips appear (or nothing). Not a bug.",
+    "ExecutionHealthPanel.jsx: feeds_stale > 0 flips exec-feeds chip to amber which is correct; in the test env 5/5 feeds are stale (no tick stream since EA offline) — this reflects true infra state so leave as-is. exec-clock-skew uses skew>30s threshold for amber which matches infra['clock_skew_sec'] naming.",
+    "AccountCertification component renders 14 rows in a 3-col grid — verified no wrapping/truncation with the 3 new labels. Icons (green check / red cross) render consistently.",
+    "step_up.py gate uses X-Step-Up-Bypass header for the pytest suite; this is fine but be aware raw curl / browser POST /api/bot/start with no MFA on admin (with valid CSRF) will 403 mfa_enrollment_required — good defense-in-depth. Verified in test_iter154 by explicitly clearing the bypass header."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter154_exec_observability.py (new)"
+  ],
+  "success_rate": {"backend": "100% (6/6 iter154 + 11/11 iter152)", "frontend": "100% (4/4 flows)"},
+  "test_credentials": "admin@trading.bot / admin123 — NOT 2FA enrolled (as required).",
+  "seed_data_creation": "None — used existing DB seed. Trades 6a612a5b6936705cbd7c78f3 and 6a61ae5f883889ba6a1a7c0a already present with expected evaluation fields; admin's 6 accounts already in DB with 14 certification checks populated.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter154 Execution Observability UI is fully green. Reusable test file: /app/backend/tests/test_iter154_exec_observability.py covers all four backend acceptance criteria + step-up regression. Key gotcha: conftest.py auto-injects X-Step-Up-Bypass header — to test the REAL MFA gate, set session.headers['X-Step-Up-Bypass'] = '' explicitly (see TestStepUpMFARegression). Frontend: scalp-executions-empty text is 'NO SCALP EXECUTIONS YET — orders appear here once the fast path submits to the broker'; trades page currently defaults to a filter that shows CLOSED trades with audit buttons visible (no filter switch needed); exec-clock-skew chip goes amber when skew>30s (currently 0s so grey); certification matrix header shows dynamic 'N/14 CHECKS'. Note the info-only test-flake: exec-feeds shows '5 stale' because the EA/MT5 bridge isn't heartbeating in this preview env — expected, not a bug.",
+  "rca of the issue": "N/A — no bugs found."
+}

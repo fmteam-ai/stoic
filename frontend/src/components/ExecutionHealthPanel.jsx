@@ -17,7 +17,7 @@ function Chip({ label, value, tone = "neutral", testid }) {
     );
 }
 
-export function ExecutionHealthPanel({ data }) {
+export function ExecutionHealthPanel({ data, apiLatencyMs }) {
     if (!data) return null;
     const ob = data.outbox || {};
     const slots = data.submission_slots || {};
@@ -79,6 +79,24 @@ export function ExecutionHealthPanel({ data }) {
                 <span className="font-mono text-[10px] tracking-widest px-2 py-1 border border-[#1F1F1F] text-[#A1A1AA]" data-testid="exec-mongo">
                     MONGO <span className="text-white">{infra.mongo_latency_ms ?? "—"}ms</span>
                 </span>
+                <span className="font-mono text-[10px] tracking-widest px-2 py-1 border border-[#1F1F1F] text-[#A1A1AA]" data-testid="exec-api-latency">
+                    API <span className="text-white">{apiLatencyMs != null ? `${apiLatencyMs}ms` : "—"}</span>
+                </span>
+                <span className="font-mono text-[10px] tracking-widest px-2 py-1 border border-[#1F1F1F] text-[#A1A1AA]" data-testid="exec-ws">
+                    WS CLIENTS <span className="text-white">{infra.ws_clients ?? "—"}</span>
+                </span>
+                <span className={`font-mono text-[10px] tracking-widest px-2 py-1 border ${infra.feeds_stale > 0 ? "border-[#FFB000]/40 text-[#FFB000]" : "border-[#1F1F1F] text-[#A1A1AA]"}`} data-testid="exec-feeds">
+                    FEEDS <span className="text-white">{(infra.feeds || []).length}</span>{infra.feeds_stale > 0 ? ` · ${infra.feeds_stale} stale` : ""}
+                </span>
+                {(() => {
+                    const offs = (infra.heartbeats || []).map(h => Math.abs(h.clock_offset_sec || 0));
+                    const skew = offs.length ? Math.max(...offs) : null;
+                    return (
+                        <span className={`font-mono text-[10px] tracking-widest px-2 py-1 border ${skew > 30 ? "border-[#FFB000]/40 text-[#FFB000]" : "border-[#1F1F1F] text-[#A1A1AA]"}`} data-testid="exec-clock-skew">
+                            CLOCK SKEW <span className="text-white">{skew != null ? `${skew}s` : "—"}</span>
+                        </span>
+                    );
+                })()}
                 {(infra.heartbeats || []).map(h => (
                     <span key={h.label} className={`font-mono text-[10px] tracking-widest px-2 py-1 border ${h.fresh ? "border-[#00FF41]/30 text-[#00FF41]" : "border-[#FF3B30]/40 text-[#FF3B30]"}`} data-testid={`exec-hb-${h.label}`}>
                         EA {h.label} <span>{h.age_sec != null ? `${h.age_sec}s` : "never"}</span>
