@@ -192,6 +192,84 @@ async def accounts_equity_curve(days: int = 30, user=Depends(get_current_user)):
     }
 
 
+@router.get("/broker-matrix")
+async def broker_matrix(user=Depends(get_current_user)):
+    """Iter-159 · per-broker compatibility matrix — capabilities, quirks
+    derived from live account data, and learned execution stats."""
+    db = get_db()
+    rows = {}
+    async for a in db.accounts.find(
+            {"user_id": user["id"], "status": {"$ne": "deleted"}},
+            {"broker": 1, "mode": 1, "account_type": 1, "ea_version": 1,
+             "available_symbols": 1, "symbol_specs": 1, "block_retcode": 1,
+             "block_retcode_label": 1, "demo_certified_at": 1}):
+        b = (a.get("broker") or "").strip() or "Unknown"
+        r = rows.setdefault(b, {"broker": b, "accounts": 0, "modes": set(),
+                                "account_types": set(), "ea_versions": set(),
+                                "symbols": 0, "suffixed": False,
+                                "stops_syms": 0, "freeze_syms": 0,
+                                "retcodes": [], "certified": False})
+        r["accounts"] += 1
+        r["modes"].add(str(a.get("mode") or "live"))
+        if a.get("account_type"):
+            r["account_types"].add(str(a["account_type"]).lower())
+        if a.get("ea_version"):
+            r["ea_versions"].add(str(a["ea_version"]))
+        syms = a.get("available_symbols") or []
+        r["symbols"] = max(r["symbols"], len(syms))
+        if any(("." in s or "_" in s or (s and s[-1].islower()))
+               for s in syms if isinstance(s, str)):
+            r["suffixed"] = True
+        specs = a.get("symbol_specs") or {}
+        r["stops_syms"] = max(r["stops_syms"], sum(
+            1 for s in specs.values() if (s.get("stops_level_points") or 0) > 0))
+        r["freeze_syms"] = max(r["freeze_syms"], sum(
+            1 for s in specs.values() if (s.get("freeze_level_points") or 0) > 0))
+        if a.get("block_retcode"):
+            r["retcodes"].append({"retcode": a["block_retcode"],
+                                  "label": a.get("block_retcode_label")})
+        if a.get("demo_certified_at"):
+            r["certified"] = True
+
+    out = []
+    for b, r in rows.items():
+        ver = max(r["ea_versions"]) if r["ea_versions"] else None
+        quirks = []
+        if "netting" in r["account_types"]:
+            quirks.append("Netting mode — same-symbol positions merge; "
+                          "deal-level volume truth applies")
+        if "hedging" in r["account_types"]:
+            quirks.append("Hedging mode — independent tickets per position")
+        if r["suffixed"]:
+            quirks.append("Suffixed symbol names — symbol mapping normalises "
+                          "(e.g. XAUUSD.m → XAUUSD)")
+        if r["stops_syms"]:
+            quirks.append(f"Min stop distance enforced on {r['stops_syms']} "
+                          "symbols (stops_level)")
+        if r["freeze_syms"]:
+            quirks.append(f"Freeze level on {r['freeze_syms']} symbols — "
+                          "no SL/TP edits near market")
+        if r["retcodes"]:
+            quirks.append("Recent broker rejections recorded — see retcodes")
+        learned = None
+        try:
+            from scalp.broker_stats import summary
+            learned = await summary(db, b)
+        except Exception:
+            pass
+        out.append({"broker": b, "accounts": r["accounts"],
+                    "modes": sorted(r["modes"]),
+                    "account_types": sorted(r["account_types"]) or None,
+                    "ea_version": ver,
+                    "ordercheck": bool(ver) and str(ver) >= "1.50",
+                    "symbols_mapped": r["symbols"],
+                    "certified": r["certified"],
+                    "quirks": quirks,
+                    "recent_retcodes": r["retcodes"][:5],
+                    "learned": learned})
+    return {"brokers": sorted(out, key=lambda x: -x["accounts"])}
+
+
 @router.get("/broker-comparison")
 async def broker_comparison(days: int = 30, user=Depends(get_current_user)):
     """iter-138 · Phase H-B — side-by-side broker comparison.

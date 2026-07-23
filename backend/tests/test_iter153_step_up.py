@@ -53,6 +53,7 @@ def _ensure_user():
          "$setOnInsert": {"bridge_token": "stepup-test-" + uid[-8:]}},
         upsert=True)
     db.bot_configs.update_many({"user_id": uid}, {"$set": {"active": False}})
+    db.api_keys.delete_many({"user_id": uid})  # avoid 10-key limit across runs
     return uid
 
 

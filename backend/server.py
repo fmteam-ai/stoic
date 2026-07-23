@@ -285,7 +285,7 @@ async def ws_endpoint(websocket: WebSocket):
     # (cross-site WS hijacking defence at the app layer).
     from security import _allowed_origins
     _allowed = _allowed_origins()
-    _origin = websocket.headers.get("origin")
+    _origin = (websocket.headers.get("origin") or "").rstrip("/")
     if _allowed and _origin and _origin not in _allowed:
         await websocket.close(code=4403)
         return

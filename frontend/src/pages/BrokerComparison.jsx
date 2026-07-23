@@ -1,6 +1,7 @@
 import { useEffect, useState, Fragment } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { BrokerMatrix } from "@/components/BrokerMatrix";
 import { Scale, Zap, DollarSign, Layers, Info } from "lucide-react";
 
 const fmtUsd = (v, dp = 0) => {
@@ -158,6 +159,8 @@ export default function BrokerComparison() {
                         SAMPLES: {brokers.map(b => `${b.broker.toUpperCase()} ${b.execution.slippage_samples}`).join(" · ")}
                     </p>
                 )}
+
+                <BrokerMatrix />
             </div>
         </AppLayout>
     );

@@ -126,10 +126,11 @@ def set_csrf_cookie(response, token: str | None = None) -> str:
 
 
 def _allowed_origins() -> set:
-    raw = (os.environ.get("CORS_ORIGINS") or "").strip()
+    raw = (os.environ.get("CORS_ORIGINS") or "").strip().strip('"').strip("'")
     if not raw or raw == "*":
         return set()
-    return {o.strip().rstrip("/") for o in raw.split(",") if o.strip()}
+    return {o.strip().strip('"').strip("'").rstrip("/")
+            for o in raw.split(",") if o.strip()}
 
 
 def csrf_check(request: Request) -> str | None:
