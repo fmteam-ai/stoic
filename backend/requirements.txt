@@ -94,7 +94,8 @@ networkx==3.6.1
 numpy==2.4.6
 nvidia-nccl-cu12==2.30.7
 oauthlib==3.3.1
-openai==1.99.9
+litellm==1.93.0
+openai==2.47.0
 packageurl-python==0.17.6
 packaging==26.2
 pandas==3.0.3
@@ -147,7 +148,6 @@ rpds-py==2026.5.1
 rsa==4.9.1
 ruff==0.15.22
 s3transfer==0.19.0
-s5cmd==0.2.0
 safetensors==0.8.0
 scikit-learn==1.9.0
 scipy==1.17.1
