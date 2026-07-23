@@ -23,8 +23,8 @@ export default function Login() {
         setUnverifiedEmail("");
         setLoading(true);
         try {
-            await login(email, password, needs2fa ? totpCode : undefined);
-            navigate("/");
+            const u = await login(email, password, needs2fa ? totpCode : undefined);
+            navigate(u?.must_change_password ? "/settings" : "/");
         } catch (err) {
             const detail = err?.response?.data?.detail;
             // Unverified account: surface friendly UI with resend link

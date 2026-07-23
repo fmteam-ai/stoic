@@ -65,6 +65,7 @@ export default function Settings() {
             await api.post("/auth/change-password", { current_password: pwCurrent, new_password: pwNew });
             setPwMsg("Password changed. You'll stay signed in on this device.");
             setPwCurrent(""); setPwNew(""); setPwConfirm("");
+            await refresh();
         } catch (e2) { setPwErr(formatApiError(e2)); }
         finally { setPwSaving(false); }
     };
@@ -126,6 +127,14 @@ export default function Settings() {
             />
 
             <div className="p-4 md:p-8 space-y-6 max-w-3xl">
+                {user.must_change_password && (
+                    <div className="border border-[#FFD700]/40 bg-[#FFD700]/10 px-4 py-3 flex items-center gap-3" data-testid="must-change-password-banner">
+                        <AlertTriangle className="w-4 h-4 text-[#FFD700] shrink-0" />
+                        <div className="text-xs text-[#FFD700] font-mono tracking-wide">
+                            SECURITY: You are using the one-time bootstrap password. Change it below before using the platform.
+                        </div>
+                    </div>
+                )}
                 {/* PROFILE */}
                 <section className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="profile-section">
                     <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">

@@ -70,6 +70,7 @@ class UserOut(BaseModel):
     created_at: Optional[datetime] = None
     two_factor_enabled: bool = False
     email_verified: bool = True
+    must_change_password: bool = False
 
 
 # ---------- Symbols ----------

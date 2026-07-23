@@ -60,6 +60,7 @@ def _user_to_out(user_doc: dict) -> UserOut:
         created_at=user_doc.get("created_at") if isinstance(user_doc.get("created_at"), datetime) else None,
         two_factor_enabled=bool(user_doc.get("two_factor_enabled", False)),
         email_verified=bool(user_doc.get("email_verified", True)),
+        must_change_password=bool(user_doc.get("must_change_password", False)),
     )
 
 
@@ -559,7 +560,8 @@ async def change_password(payload: ChangePasswordRequest, user=Depends(get_curre
         raise HTTPException(status_code=422, detail=BREACHED_DETAIL)
     await db.users.update_one(
         {"_id": ObjectId(user["id"])},
-        {"$set": {"password_hash": hash_password(payload.new_password)}},
+        {"$set": {"password_hash": hash_password(payload.new_password),
+                  "must_change_password": False}},
     )
     # Password change kills every existing session (stolen-cookie defense).
     await revoke_all_user_sessions(db, user["id"], "password_change")

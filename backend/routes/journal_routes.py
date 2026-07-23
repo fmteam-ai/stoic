@@ -6,14 +6,16 @@ closed trade.
   DELETE /api/journal/{trade_id}/card    — revoke the public share link
   GET    /api/public/journal/{share_id}  — unauthenticated masked card
 """
+import html
 import json
 import logging
-import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
 
 from auth import get_current_user
 from database import get_db
@@ -23,6 +25,59 @@ logger = logging.getLogger("journal")
 
 router = APIRouter(prefix="/journal", tags=["journal"])
 public_router = APIRouter(prefix="/public", tags=["public-journal"])
+
+_TAG_RE = re.compile(r"[^a-z0-9_]")
+_HTML_RE = re.compile(r"<[^>]*>")
+
+
+def _clean(s: str, limit: int) -> str:
+    return html.escape(_HTML_RE.sub("", str(s or "")), quote=False)[:limit].strip()
+
+
+class JournalCardModel(BaseModel):
+    """Strict schema for LLM output — enums, max lengths, sanitized tags,
+    no HTML, unexpected fields rejected."""
+    model_config = {"extra": "forbid"}
+    title: str = Field(max_length=120)
+    verdict: str
+    summary: str = Field(max_length=600)
+    what_went_right: str = Field(default="", max_length=400)
+    what_went_wrong: str = Field(default="", max_length=400)
+    lesson: str = Field(default="", max_length=300)
+    grade: str
+    hashtags: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("verdict")
+    @classmethod
+    def _verdict(cls, v):
+        v = str(v).upper().strip()
+        if v not in ("WIN", "LOSS", "SCRATCH"):
+            raise ValueError("bad verdict")
+        return v
+
+    @field_validator("grade")
+    @classmethod
+    def _grade(cls, v):
+        v = str(v).upper().strip()[:1]
+        if v not in ("A", "B", "C", "D", "F"):
+            raise ValueError("bad grade")
+        return v
+
+    @field_validator("title", "summary", "what_went_right",
+                     "what_went_wrong", "lesson", mode="before")
+    @classmethod
+    def _no_html(cls, v):
+        return _clean(v, 600)
+
+    @field_validator("hashtags", mode="before")
+    @classmethod
+    def _tags(cls, v):
+        out = []
+        for t in (v or [])[:5]:
+            t = _TAG_RE.sub("", str(t).lower().lstrip("#"))[:24]
+            if t:
+                out.append(t)
+        return out
 
 _SYSTEM = """You are STOIC's trade-journal writer. Given one closed trade,
 write an honest, punchy post-mortem card a trader would proudly share
@@ -38,8 +93,9 @@ minified JSON, no code fences, exactly these keys:
  "hashtags": ["<3-5 tags without #>"]}"""
 
 
-async def _generate_card(trade: dict) -> dict:
-    payload = json.dumps({
+async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
+    import os
+    data = {
         "symbol": trade.get("symbol"), "action": trade.get("action"),
         "entry_price": trade.get("entry_price"),
         "exit_price": trade.get("exit_price"),
@@ -49,8 +105,12 @@ async def _generate_card(trade: dict) -> dict:
         "close_reason": trade.get("close_reason"),
         "opened_at": trade.get("opened_at") or trade.get("created_at"),
         "closed_at": trade.get("closed_at"),
-        "ai_reasoning_at_entry": (trade.get("reasoning") or "")[:400],
-    }, default=str)
+    }
+    # proprietary strategy reasoning stays PRIVATE unless the user opts in —
+    # a public card must never leak internal signal logic
+    if include_reasoning:
+        data["ai_reasoning_at_entry"] = (trade.get("reasoning") or "")[:400]
+    payload = json.dumps(data, default=str)
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
@@ -63,7 +123,7 @@ async def _generate_card(trade: dict) -> dict:
             raw = raw.strip("`")
             if raw.lower().startswith("json"):
                 raw = raw[4:].strip()
-        card = json.loads(raw)
+        card = JournalCardModel(**json.loads(raw)).model_dump()
         card["_llm_failed"] = False
         return card
     except Exception as e:  # noqa: BLE001
@@ -110,23 +170,50 @@ async def _owned_closed_trade(db, trade_id: str, user_id: str) -> dict:
 
 @router.post("/{trade_id}/card")
 async def create_card(trade_id: str, force: bool = False,
+                      include_reasoning: bool = False,
                       user=Depends(get_current_user)):
+    """Create a PRIVATE journal card. Public sharing is a separate explicit
+    action (POST /{trade_id}/share)."""
     db = get_db()
     trade = await _owned_closed_trade(db, trade_id, user["id"])
     existing = await db.trade_journal_cards.find_one(
         {"trade_id": trade_id, "user_id": user["id"]})
     if existing and not force:
         return _payload(existing)
-    card = await _generate_card(trade)
+    card = await _generate_card(trade, include_reasoning=include_reasoning)
     doc = {
         "trade_id": trade_id, "user_id": user["id"],
-        "share_id": (existing or {}).get("share_id") or secrets.token_urlsafe(12),
-        "revoked": False, "card": card, "trade": _trade_snapshot(trade),
+        # regeneration never resurrects sharing: an active share survives,
+        # a revoked one stays revoked until explicitly re-shared
+        "share_id": ((existing or {}).get("share_id")
+                     if existing and not existing.get("revoked") else None),
+        "revoked": bool((existing or {}).get("revoked")),
+        "card": card, "trade": _trade_snapshot(trade),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.trade_journal_cards.update_one(
         {"trade_id": trade_id, "user_id": user["id"]},
         {"$set": doc}, upsert=True)
+    return _payload(doc)
+
+
+@router.post("/{trade_id}/share")
+async def enable_share(trade_id: str, user=Depends(get_current_user)):
+    """Explicitly enable (or rotate after revocation) the public share link.
+    A previously revoked URL can NEVER become valid again — a fresh
+    share_id is always issued after revocation."""
+    db = get_db()
+    doc = await db.trade_journal_cards.find_one(
+        {"trade_id": trade_id, "user_id": user["id"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Create the card first")
+    if doc.get("share_id") and not doc.get("revoked"):
+        return _payload(doc)                      # already publicly shared
+    new_id = secrets.token_urlsafe(12)
+    await db.trade_journal_cards.update_one(
+        {"trade_id": trade_id, "user_id": user["id"]},
+        {"$set": {"share_id": new_id, "revoked": False}})
+    doc.update({"share_id": new_id, "revoked": False})
     return _payload(doc)
 
 

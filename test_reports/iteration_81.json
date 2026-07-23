@@ -1,0 +1,41 @@
+{
+  "summary": "Iter-81 v1.6.0 release verification — ALL 6 review-request items PASS. Backend: 9/9 pytest tests green (test_iter81_v160_release.py, 6.34s). Frontend: real-browser login → dashboard → /settings verified. (1) POST /api/auth/login for admin@trading.bot/admin123 returns must_change_password:false (field present, value false as required in preview with no ADMIN_PASSWORD_FILE). (2) Register→verify-via-Mongo→change-password full flow: old pw rejected (401), new pw accepted (200), /auth/me carries must_change_password:false. Note: password change revokes existing sessions (stolen-cookie defense per line 567 auth_routes.py) — tests use fresh session for the new-pw login. (3) Journal cards: DB has 43+ cards; sampled admin-owned card GET /api/journal/{id}/card returns 200 with well-formed schema (verdict∈{WIN,LOSS,SCRATCH}, grade∈{A,B,C,D,F}, hashtags list ≤5, title ≤120ch, summary ≤600ch — Pydantic-validated, no 500). (4) Public journal revocation: POST /journal/{id}/share issues share_id → unauth GET /public/journal/{share_id} returns 200 → DELETE /journal/{id}/card sets revoked=true → subsequent unauth GET returns 404 → re-share issues NEW share_id (old stays 404 forever, cannot resurrect — enable_share() line 210-211 correctly requires !revoked before returning existing). (5) GET /api/ops/release-readiness (the actual endpoint; review-request called it /api/ops/readiness but real path is /release-readiness) — admin session gets 503 in preview with full checks payload; all 6 workers (trading/protection/reconciliation/analytics/model/tuning) present in workers.detail with loop-telemetry-derived fields (alive/crashlooping/loops). Worker loop telemetry in workers/base.py (loop_stats dict with consecutive_failures/restart_count per loop, lines 51-131) drives the readiness verdict via lease.loops metadata. (6) Frontend: admin logged in via UI → dashboard fully renders (TRADING SAFE, MTF Confluence, Bot Pulse) → /settings shows profile+change-password+2FA sections. data-testid='must-change-password-banner' count = 0 (correctly hidden for admin, flag=false). pw-current/pw-new/pw-confirm/change-password-button all present. (7) Regression: /api/auth/me → 200, /api/accounts → 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter81_v160_release.py",
+    "/app/test_reports/pytest/iter81_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "auth_routes.py:63 — _user_to_out defaults must_change_password to False when field missing. Correct — admin doc without the field never causes a banner. Login (line 228) returns via _user_to_out so flag is always in the response.",
+    "auth_routes.py:564 — change-password $set clears must_change_password:False and revokes ALL sessions (line 567). This is intentional stolen-cookie defense — but it means the very user who just changed their password gets logged out on every device. Documented UX tradeoff; not a bug. Consider preserving the current session's jti if a smoother UX is desired later.",
+    "journal_routes.py:37-80 — JournalCardModel with extra='forbid', enum validators for verdict/grade, HTML strip on all string fields, hashtag sanitize regex. Very tight schema. If LLM returns anything weird, _generate_card falls back to a deterministic card (lines 129-144) — no 500 surfaces to the client. Excellent defensive design.",
+    "journal_routes.py:210-217 — enable_share only returns the existing share_id if !revoked; otherwise it rotates a fresh secrets.token_urlsafe(12). Old revoked share_id is PERMANENTLY dead because public_journal query is {share_id, revoked: {$ne: true}}. Correct revocation semantics — verified end-to-end.",
+    "ops_routes.py:60-75 — release-readiness now consumes lease.loops_total/loops_running for a loop-level health check (not just lease existence) and derives crashlooping list from consecutive_failures>=3. Loop-telemetry integration is wired correctly.",
+    "workers/base.py:51-131 — _supervise loops write loop_stats={consecutive_failures, restart_count, last_error, last_run_at} into the lease. On success the failure counter resets (line 95). Backoff sleep is bounded at 60s. Solid.",
+    "Console noise (unchanged from iter-80): WSS 403 on /api/ws (preview ingress limitation), recharts width(-1) warnings during mount, 401 on /me pre-auth polls. Not product bugs."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter81_v160_release.py (new — 9 tests, all pass)"
+  ],
+  "success_rate": {
+    "backend_pytest": "9/9 passed (100%)",
+    "frontend_ui": "100% — admin login, dashboard render, /settings banner-absent + change-password form present",
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (no 2FA — do NOT enroll). Fresh user pattern: register with terms_agreed:true then flip db.users.email_verified=true.",
+  "seed_data_creation": "None permanent — test creates and deletes a scratch iter81_<uuid>@example.com user; also toggles share_id/revoked on one existing journal card and RESTORES original state in a try/finally block.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v1.6.0 release verification complete. Note: the review-request references '/api/ops/readiness' but the actual endpoint is '/api/ops/release-readiness' (see ops_routes.py line 18). No renaming needed — Bot Health UI (ReadinessCard.jsx) hits the correct path already. Worker loop telemetry (loop_stats: consecutive_failures / restart_count) is stored INSIDE the worker_leases document (lease.loops dict per workers/base.py line 69) and consumed by the readiness endpoint via the crashlooping check (ops_routes.py:67-68). No direct 'loops_total'/'restart_count' fields are exposed in the readiness response — they're rolled up into the alive/crashlooping/loops summary per worker. Safe to tag v1.6.0.",
+  "rca of the issue": "N/A — no bugs found. All checklist items verified end-to-end."
+}

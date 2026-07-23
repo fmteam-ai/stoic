@@ -73,6 +73,9 @@ async def seed_admin():
             "password_hash": hash_password(admin_password),
             "name": "Admin",
             "role": "admin",
+            # one-time bootstrap credential (installer secret file) — the
+            # operator must replace it at first login
+            "must_change_password": bool(os.environ.get("ADMIN_PASSWORD_FILE")),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         log = logging.getLogger("seed")

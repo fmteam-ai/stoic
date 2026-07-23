@@ -47,7 +47,8 @@ async def _try_acquire(db, name: str) -> bool:
         return False
 
 
-async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=()):
+async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
+                        loop_stats=None):
     db = get_db()
     total = len(loop_tasks)
     while True:
@@ -59,16 +60,48 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=()):
                 lost.set()
                 return
             # loop-execution monitoring: leases prove the PROCESS is alive,
-            # loops_running proves every loop coroutine is still executing.
+            # loops_running + per-loop supervisor stats prove every loop is
+            # executing and making progress (not crash-looping).
             running = sum(1 for t in loop_tasks if not t.done())
             await db.worker_leases.update_one(
                 {"_id": name, "holder": HOLDER},
-                {"$set": {"loops_running": running, "loops_total": total}})
+                {"$set": {"loops_running": running, "loops_total": total,
+                          "loops": loop_stats or {}}})
             if running < total:
                 logger.error("worker %s: %d/%d loops running — a loop died",
                              name, running, total)
         except Exception as e:
             logger.warning("lease renew error for %s: %s", name, e)
+
+
+def _supervise(name: str, loop_name: str, factory, stats: dict):
+    """Restart a crashed loop with backoff and record telemetry: last error,
+    consecutive failures (reset after 5 min of healthy running), restart
+    count, last start time."""
+    async def run():
+        while True:
+            started = asyncio.get_event_loop().time()
+            stats[loop_name]["last_started_at"] = (
+                datetime.now(timezone.utc).isoformat())
+            try:
+                await factory()
+                raise RuntimeError("loop coroutine returned unexpectedly")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                st = stats[loop_name]
+                ran_for = asyncio.get_event_loop().time() - started
+                if ran_for > 300:          # made real progress before dying
+                    st["consecutive_failures"] = 0
+                st["consecutive_failures"] += 1
+                st["restart_count"] += 1
+                st["last_error"] = f"{type(e).__name__}: {e}"[:300]
+                st["last_error_at"] = datetime.now(timezone.utc).isoformat()
+                logger.exception("worker %s loop %s crashed (failure #%d) — "
+                                 "restarting", name, loop_name,
+                                 st["consecutive_failures"])
+                await asyncio.sleep(min(60, 5 * st["consecutive_failures"]))
+    return run
 
 
 async def run_worker(name: str, loop_factories: list) -> None:
@@ -83,8 +116,19 @@ async def run_worker(name: str, loop_factories: list) -> None:
         await asyncio.sleep(LEASE_RENEW_SEC)
     logger.info("worker %s acquired leader lease", name)
     lost = asyncio.Event()
-    tasks = [asyncio.create_task(f()) for f in loop_factories]
-    tasks.append(asyncio.create_task(_lease_keeper(name, lost, tasks[:])))
+    loop_stats = {}
+    tasks = []
+    for i, f in enumerate(loop_factories):
+        loop_name = getattr(f, "__name__", f"loop{i}") or f"loop{i}"
+        if loop_name in loop_stats:
+            loop_name = f"{loop_name}_{i}"
+        loop_stats[loop_name] = {"consecutive_failures": 0, "restart_count": 0,
+                                 "last_error": None, "last_error_at": None,
+                                 "last_started_at": None}
+        tasks.append(asyncio.create_task(
+            _supervise(name, loop_name, f, loop_stats)()))
+    tasks.append(asyncio.create_task(
+        _lease_keeper(name, lost, tasks[:], loop_stats)))
     lost_waiter = asyncio.create_task(lost.wait())
     try:
         done, _ = await asyncio.wait([*tasks, lost_waiter],

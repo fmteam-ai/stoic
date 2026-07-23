@@ -62,10 +62,15 @@ async def release_readiness(request: Request):
         loops_total = (lease or {}).get("loops_total")
         loops_running = (lease or {}).get("loops_running")
         loops_ok = (loops_total is None) or (loops_running == loops_total)
+        # crash-loop detection: a supervised loop that keeps failing without
+        # 5 min of healthy running marks the worker unhealthy
+        crashlooping = [ln for ln, st in ((lease or {}).get("loops") or {}).items()
+                        if (st or {}).get("consecutive_failures", 0) >= 3]
         workers[name] = {
-            "alive": alive and loops_ok,
+            "alive": alive and loops_ok and not crashlooping,
             "loops": (f"{loops_running}/{loops_total}"
                       if loops_total is not None else None),
+            "crashlooping": crashlooping or None,
             "renewed_at": (lease or {}).get("renewed_at"),
         }
     checks["workers"] = {"ok": all(w["alive"] for w in workers.values()),
