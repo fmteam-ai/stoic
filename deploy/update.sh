@@ -72,5 +72,6 @@ else
 fi
 
 echo "   API + frontend + full topology verified on $(git rev-parse --short HEAD)"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-from=$(git rev-parse --short "${PREV}")" >> deploy/releases.log
 docker compose ps --format '{{.Name}}\t{{.Status}}'
 echo "== update complete =="

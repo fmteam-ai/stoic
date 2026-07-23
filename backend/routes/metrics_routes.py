@@ -6,7 +6,7 @@ Disabled (503) when the env var is unset — fail fast, no silent default.
 """
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import PlainTextResponse
@@ -78,9 +78,122 @@ async def metrics(request: Request):
 
     now_iso = now.isoformat()
     async for w in db.worker_leases.find({}):
+        wname = str(w.get("_id"))
         gauge("stoic_worker_lease_alive",
               1 if str(w.get("expires_at") or "") >= now_iso else 0,
-              None, {"worker": str(w.get("_id"))})
+              None, {"worker": wname})
+        if w.get("loops_total") is not None:
+            gauge("stoic_worker_loops_total", w["loops_total"],
+                  None, {"worker": wname})
+            gauge("stoic_worker_loops_running", w.get("loops_running") or 0,
+                  None, {"worker": wname})
+        for ln, st in (w.get("loops") or {}).items():
+            lbl = {"worker": wname, "loop": ln}
+            gauge("stoic_worker_loop_restart_count",
+                  (st or {}).get("restart_count", 0), None, lbl)
+            gauge("stoic_worker_loop_consecutive_failures",
+                  (st or {}).get("consecutive_failures", 0), None, lbl)
+        if wname == "reconciliation":
+            try:
+                renewed = datetime.fromisoformat(str(w.get("renewed_at")))
+                if renewed.tzinfo is None:
+                    renewed = renewed.replace(tzinfo=timezone.utc)
+                gauge("stoic_reconciliation_lease_age_seconds",
+                      int((now - renewed).total_seconds()),
+                      "Age of the reconciliation worker lease renewal")
+            except Exception:
+                pass
+
+    # queue age — oldest pending outbox event
+    oldest = await db.outbox.find_one({"state": "pending"},
+                                      sort=[("created_at", 1)],
+                                      projection={"created_at": 1})
+    if oldest and oldest.get("created_at"):
+        try:
+            ts = oldest["created_at"]
+            if not isinstance(ts, datetime):
+                ts = datetime.fromisoformat(str(ts))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            gauge("stoic_outbox_oldest_pending_age_seconds",
+                  int((now - ts).total_seconds()),
+                  "Age of the oldest undelivered outbox event")
+        except Exception:
+            pass
+
+    # oldest broker command still pending (submit queue age)
+    pend = await db.trades.find_one(
+        {"status": "pending"}, sort=[("created_at", 1)],
+        projection={"created_at": 1, "updated_at": 1})
+    if pend:
+        try:
+            ts = datetime.fromisoformat(
+                str(pend.get("created_at") or pend.get("updated_at")))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            gauge("stoic_pending_trade_oldest_age_seconds",
+                  int((now - ts).total_seconds()),
+                  "Age of the oldest broker command awaiting execution")
+        except Exception:
+            pass
+
+    # execution SLO — fill → broker-confirmed protection latency (24h window)
+    try:
+        cutoff = (now - timedelta(hours=24)).isoformat()
+        samples = []
+        async for ev in db.trade_events.find(
+                {"event_type": "ProtectionPlaced",
+                 "occurred_at": {"$gte": cutoff},
+                 "trade_id": {"$ne": None}},
+                projection={"trade_id": 1, "occurred_at": 1}).sort(
+                    "occurred_at", -1).limit(500):
+            from bson import ObjectId as _OID
+            try:
+                tr = await db.trades.find_one({"_id": _OID(ev["trade_id"])},
+                                              {"opened_at": 1})
+            except Exception:
+                tr = None
+            if not tr or not tr.get("opened_at"):
+                continue
+            try:
+                opened = datetime.fromisoformat(str(tr["opened_at"]))
+                placed = datetime.fromisoformat(str(ev["occurred_at"]))
+                delta = (placed - opened).total_seconds()
+                if 0 <= delta < 3600:
+                    samples.append(delta)
+            except Exception:
+                continue
+        gauge("stoic_protection_latency_samples", len(samples),
+              "Fill→protection latency samples in the last 24h")
+        if samples:
+            samples.sort()
+            def pct(p):
+                return round(samples[min(len(samples) - 1,
+                                         int(p * len(samples)))], 2)
+            for q, v in (("p50", pct(0.50)), ("p95", pct(0.95)),
+                         ("max", samples[-1])):
+                gauge("stoic_protection_latency_seconds", v,
+                      None, {"quantile": q})
+    except Exception:
+        pass
+
+    # alert acknowledgement tracking
+    for sev in ("critical", "warning", "info"):
+        gauge("stoic_alerts_unacked", await db.ops_alerts.count_documents(
+            {"acked_at": None, "severity": sev}),
+            "Unacknowledged ops alerts" if sev == "critical" else None,
+            {"severity": sev})
+    oldest_alert = await db.ops_alerts.find_one(
+        {"acked_at": None}, sort=[("created_at", 1)],
+        projection={"created_at": 1})
+    if oldest_alert:
+        try:
+            ts = datetime.fromisoformat(str(oldest_alert["created_at"]))
+            gauge("stoic_alert_oldest_unacked_age_seconds",
+                  int((now - ts).total_seconds()),
+                  "Age of the oldest unacknowledged alert")
+        except Exception:
+            pass
 
     async for a in db.accounts.find(
             {"trading_enabled": {"$ne": False}, "dormant": {"$ne": True},

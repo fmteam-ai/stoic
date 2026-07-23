@@ -15,6 +15,23 @@ EXPECTED_WORKERS = ("trading", "protection", "reconciliation",
                     "analytics", "model", "tuning")
 
 
+async def _ops_actor(request: Request):
+    """(allowed, actor) — METRICS_TOKEN scraper or an admin session."""
+    try:
+        if _authorized(request):
+            return True, "metrics-token"
+    except Exception:
+        pass
+    try:
+        from auth import get_current_user
+        u = await get_current_user(request)
+        if u.get("role") == "admin":
+            return True, u.get("email") or "admin"
+    except Exception:
+        pass
+    return False, None
+
+
 @router.get("/ops/release-readiness")
 async def release_readiness(request: Request):
     # Two auth paths: metrics token (deploy scripts / Prometheus) OR an
@@ -115,3 +132,54 @@ async def release_readiness(request: Request):
                         content={"ready": ready,
                                  "checked_at": now.isoformat(),
                                  "checks": checks})
+
+
+@router.get("/ops/alerts")
+async def list_alerts(request: Request, include_acked: bool = False,
+                      limit: int = 100):
+    allowed, _ = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    q = {} if include_acked else {"acked_at": None}
+    out = []
+    async for a in db.ops_alerts.find(q).sort("created_at", -1).limit(
+            max(1, min(limit, 500))):
+        a["id"] = str(a.pop("_id"))
+        out.append(a)
+    return {"alerts": out,
+            "unacked": await db.ops_alerts.count_documents({"acked_at": None})}
+
+
+@router.post("/ops/alerts/{alert_id}/ack")
+async def ack_alert(alert_id: str, request: Request):
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from bson import ObjectId
+    try:
+        oid = ObjectId(alert_id)
+    except Exception:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    db = get_db()
+    res = await db.ops_alerts.update_one(
+        {"_id": oid, "acked_at": None},
+        {"$set": {"acked_at": datetime.now(timezone.utc).isoformat(),
+                  "acked_by": actor}})
+    if res.matched_count == 0:
+        return JSONResponse(status_code=404,
+                            content={"detail": "not found or already acked"})
+    return {"ok": True, "acked_by": actor}
+
+
+@router.post("/ops/alerts/ack-all")
+async def ack_all_alerts(request: Request):
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    res = await db.ops_alerts.update_many(
+        {"acked_at": None},
+        {"$set": {"acked_at": datetime.now(timezone.utc).isoformat(),
+                  "acked_by": actor}})
+    return {"ok": True, "acked": res.modified_count}

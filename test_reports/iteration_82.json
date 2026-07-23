@@ -1,0 +1,47 @@
+{
+  "summary": "Iter-82 Phase B/D/E verification (ops metrics, ops alerts, MT5 validation ledger, deployment stage machine, bot regression) — ALL PASS. Backend: 23/23 pytest tests green (test_iter82_phase_be.py, 2.82s). Plus separate in-process dedup test: raise_alert dedup key suppresses duplicate insert and increments occurrences (id2=None, occurrences=2); after ack a new insert IS created (id3 non-null). Frontend: /bot-health renders all 4 cards (readiness-card, ops-alerts-card, stage-card, validation-card) with correct testids; stage-current=SHADOW, stage-stepper + stage-criteria present, stage-promote-btn disabled (criteria fail); validation-progress=0/12 SCENARIOS with 12 scenario rows; 64 UNACKED alerts with ops-alerts-ack-all + 64 individual ACK buttons. ACK button click verified end-to-end: 64→63 (unacked count decreased by 1). Regression: dashboard, /trades, /settings render for admin. Cleanup: TEST validation_evidence removed; deployment_stage restored to internal_shadow (4 history entries from promote/demote roundtrip, all reason-tagged 'iter82').",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter82_phase_be.py",
+    "/app/test_reports/pytest/iter82_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ops_routes.py:154-172 — ack_alert correctly rejects invalid ObjectId strings with 404 (via ObjectId() try/except) and returns 404 when the alert is missing OR already acked. Idempotent behavior is good. Consider distinguishing 404-not-found from 409-already-acked in a future rev if the UI needs different messaging.",
+    "ops_routes.py:175-185 — ack_all uses update_many; safe. Returns count. No pagination needed for the current volume.",
+    "validation_routes.py:47-51 — EvidenceIn uses Pydantic Field(pattern=...) for status/mode which yields FastAPI 422 automatically. min_length=5/max_length=2000 on notes rejects empty/garbage. Solid.",
+    "validation_routes.py:114-135 — _stage_doc lazy-creates the platform_state doc; _promotion_criteria computes days_in with tz-aware ISO parsing. min_days for internal_shadow=3 means the criterion fails immediately after a demote (entered_at resets on demote too) — that is intentional & matches the docstring.",
+    "validation_routes.py:182-209 — promote_stage force flow: if criteria pass, force is irrelevant and it just promotes (200); if criteria fail, force without reason → 422; force with reason → promotes and history entry has forced=True. Correct three-way logic verified end-to-end.",
+    "validation_routes.py:236-246 — live_stage_gate is a no-op when STAGE_ENFORCEMENT unset (env default 'false'), so bot start regression is unaffected in preview. When enabled, blocks stages below small_live. Clean short-circuit.",
+    "alerting.py:25-50 — raise_alert dedup on (dedup_key, acked_at=None) is atomic per-call. Race: two concurrent raise_alert calls could both miss the find_one and both insert — should be a unique compound index on (dedup_key, acked_at) if hot path. Currently the evaluator loop runs single-tenant so this is theoretical.",
+    "alerting.py:66-82 — EA heartbeat evaluator has BOTH a floor (300s) AND a ceiling (86400s), so silent-for-24h accounts stop generating alerts. Excellent guard against noise. The 64 pre-existing ea_heartbeat_stale alerts in preview are the expected result of many old test accounts under the ceiling — NOT a bug.",
+    "metrics_routes.py:181-196 — stoic_alerts_unacked{severity=X} emitted for all three severities even when count=0, so Prometheus recording rules always have a series. stoic_alert_oldest_unacked_age_seconds present when at least one unacked alert exists. Standard pattern.",
+    "AlertsCard.jsx:31-40 — ack + ackAll wrapped in try/finally; setBusy(false) always fires even on API error. If load() throws, the busy flag would clear correctly. Good.",
+    "StageCard.jsx:27-34 — promote button click surfaces server-side detail.detail (nested) or falls back to a generic message. FastAPI returns errors as JSONResponse with {'detail': {...}} so `det?.detail` handles the nested shape correctly.",
+    "ValidationCard.jsx — currently READ-ONLY (no in-UI form to POST evidence). Docs footer directs to POST /api/ops/validation/{scenario}. Fine for a v1 ops surface, but consider a mini form for QA folks in a follow-up.",
+    "BotHealth.jsx:545-548 — 4 cards mounted in order (Readiness, Alerts, Stage, Validation). Each card auto-hides on 401/error so non-admin users don't see broken shells. Good defensive UX."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter82_phase_be.py (new — 23 tests, all pass)"
+  ],
+  "success_rate": {
+    "backend_pytest": "23/23 passed (100%)",
+    "frontend_ui": "100% — all 4 Bot Health cards render + ACK click decreases count",
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (no 2FA — do NOT enroll). METRICS_TOKEN and STEP_UP_BYPASS_TOKEN in /app/backend/.env work for header auth on /api/ops/* and /api/metrics.",
+  "seed_data_creation": "Test created ONE validation_evidence row for restart_recovery (netting, status=pass, notes prefixed 'TEST iter82'). Cleaned up in test_cleanup_test_evidence + a final scripted pass. Test also promoted stage internal_shadow→demo_broker with force+reason then demoted back — final stage is internal_shadow (verified) with 4 history entries recording the roundtrip.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Everything under review-request is verified — no bugs. Preview shows ~63-64 legitimate ea_heartbeat_stale alerts from old test accounts (all within the 300s..86400s window that the evaluator considers actionable) — this is CORRECT evaluator behavior. If a future test wants a clean slate, bulk-ack via POST /api/ops/alerts/ack-all with X-Metrics-Token, but be aware the alerts WILL be re-raised on the next evaluator tick (60s cadence) because the underlying accounts are still stale. Deployment stage is at internal_shadow; enforcement=false (STAGE_ENFORCEMENT unset). live_stage_gate is a no-op until that env is flipped.",
+  "rca of the issue": "N/A — no bugs found. All 5 review-request areas (metrics gauges, ops alerts CRUD + dedup, validation ledger with 12 scenarios × 2 modes, stage machine promote/demote with force+reason semantics, bot-start regression untouched with STAGE_ENFORCEMENT=false) verified end-to-end via pytest, curl, in-process dedup test, and Playwright."
+}

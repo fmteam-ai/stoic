@@ -9,10 +9,27 @@
    self-heal via replay but shorten reconciliation if preserved.
 
 ## Backups
-- Mongo: `mongodump --uri "$MONGO_URL" --db "$DB_NAME"` — run at least hourly
-  in production; retain 7 daily + 4 weekly.
-- Verify restores monthly: `mongorestore --drop` into a scratch DB, then run
-  `cd backend && python -m pytest tests/unit -q` against it.
+- `deploy/backup.sh backup` — gzip archive + per-collection count manifest in
+  `./backups` (14-day retention). Nightly via `deploy/backup.sh schedule`.
+- **Encryption**: set `BACKUP_PASSPHRASE_FILE=/path/to/passphrase` — archives
+  become AES-256-CBC `.enc` files (PBKDF2, 200k iterations). Keep the
+  passphrase OUTSIDE the backup destination.
+- **Off-site**: `deploy/backup.sh offsite [file]` pushes archive + manifest via
+  rclone (`BACKUP_RCLONE_REMOTE=remote:stoic-backups`) or S3
+  (`BACKUP_S3_URI=s3://bucket/stoic`). `BACKUP_OFFSITE=true` pushes
+  automatically after every backup.
+- **Automated restore verification**: `deploy/backup.sh verify [file]` restores
+  the archive into a throwaway Mongo container and compares EVERY collection
+  count against the manifest — schedule it nightly (see `schedule`). A backup
+  that has never been restore-verified is not a backup.
+
+## Rollback
+- During update: `deploy/update.sh` auto-rolls back to the previous ref when
+  any post-deploy verification fails.
+- Standalone: `deploy/rollback.sh` re-pins the previous entry from
+  `deploy/releases.log` (or an explicit ref), rebuilds, and gates on API
+  health + full release readiness. `--with-db <archive>` also restores data.
+  A safety backup of the current state is always taken first.
 
 ## Recovery procedure (total loss)
 1. Restore MongoDB from the latest dump.

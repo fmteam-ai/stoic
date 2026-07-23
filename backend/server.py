@@ -277,6 +277,8 @@ from routes.metrics_routes import router as metrics_router  # noqa: E402
 api_router.include_router(metrics_router)
 from routes.ops_routes import router as ops_router  # noqa: E402
 api_router.include_router(ops_router)
+from routes.validation_routes import router as validation_router  # noqa: E402
+api_router.include_router(validation_router)
 from routes.journal_routes import router as journal_router, public_router as journal_public_router  # noqa: E402
 api_router.include_router(journal_router)
 api_router.include_router(journal_public_router)
@@ -393,6 +395,7 @@ from background_loops import (_analytics_loop, _auto_heal_loop,
 _protection_task = None
 _analytics_task = None
 _model_maint_task = None
+_ops_alert_task = None
 
 
 @app.on_event("startup")
@@ -448,6 +451,9 @@ async def on_startup():
         _protection_task = asyncio.create_task(_protection_guard_loop())
         _analytics_task = asyncio.create_task(_analytics_loop())
         _model_maint_task = asyncio.create_task(_model_maintenance_loop())
+        from alerting import _ops_alert_loop
+        global _ops_alert_task
+        _ops_alert_task = asyncio.create_task(_ops_alert_loop())
         logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
@@ -464,7 +470,8 @@ async def on_shutdown():
     for task in (_bot_runner_task, _warmer_task, _trade_manager_task,
                  _auto_heal_task, _stuck_sync_task, _optimizer_task,
                  _nightly_tuner_task, _scalp_reconcile_task,
-                 _protection_task, _analytics_task, _model_maint_task):
+                 _protection_task, _analytics_task, _model_maint_task,
+                 _ops_alert_task):
         if task and not task.done():
             task.cancel()
             try:

@@ -862,6 +862,12 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
     # panic/trip release) requires a fresh TOTP verification (iter-153).
     cfg_before = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
     if await _live_context(db, user["id"], account_id, owns):
+        # Staged-rollout gate (advisory unless STAGE_ENFORCEMENT=true)
+        from routes.validation_routes import live_stage_gate
+        stage_block = await live_stage_gate(db)
+        if stage_block:
+            raise HTTPException(status_code=409, detail={
+                "code": "deployment_stage_blocked", "message": stage_block})
         action = ("panic_release" if (cfg_before or {}).get("tripped_at")
                   else "live_activation")
         await require_step_up(db, user, request, action)

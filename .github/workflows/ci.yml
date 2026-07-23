@@ -109,6 +109,81 @@ jobs:
       - run: cd frontend && yarn install --frozen-lockfile
       - run: cd frontend && yarn build
 
+  frontend-e2e:
+    # Real-browser UI qualification — Playwright drives the production build
+    # of the frontend against a live backend + MongoDB. A release cannot ship
+    # if login, dashboard, settings or core pages break in an actual browser.
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: stoic_e2e
+      CORS_ORIGINS: http://127.0.0.1:3000
+      BACKGROUND_WORKERS_IN_PROCESS: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - name: Install backend dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install --no-deps emergentintegrations==0.2.0 --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+      - name: Start backend
+        run: |
+          cd backend
+          export JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          export KEY_VAULT_MASTER=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          export METRICS_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+          nohup python -m uvicorn server:app --host 127.0.0.1 --port 8001 > /tmp/backend.log 2>&1 &
+      - name: Build and serve frontend (production build)
+        run: |
+          cd frontend
+          yarn install --frozen-lockfile
+          REACT_APP_BACKEND_URL=http://127.0.0.1:8001 yarn build
+          nohup npx serve -s build -l 3000 > /tmp/serve.log 2>&1 &
+      - name: Wait for backend + frontend
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8001/api/health > /dev/null && backend_ok=1 && break
+            sleep 2
+          done
+          [ "${backend_ok:-}" = "1" ] || { echo "backend never became healthy"; tail -50 /tmp/backend.log; exit 1; }
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000 > /dev/null && exit 0
+            sleep 2
+          done
+          echo "frontend never became reachable"; tail -20 /tmp/serve.log; exit 1
+      - name: Install Playwright
+        run: |
+          cd e2e
+          yarn install --frozen-lockfile
+          npx playwright install --with-deps chromium
+      - name: Run Playwright UI tests
+        run: |
+          cd e2e
+          E2E_BASE_URL=http://127.0.0.1:3000 npx playwright test
+      - name: Backend log on failure
+        if: failure()
+        run: tail -100 /tmp/backend.log || true
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+
+
   security-scan:
     runs-on: ubuntu-latest
     steps:

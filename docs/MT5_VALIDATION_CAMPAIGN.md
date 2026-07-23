@@ -25,6 +25,23 @@ Copy this file to `docs/campaigns/<date>-<broker>-<netting|hedging>.md`,
 fill the PASS/FAIL column and attach the EA log excerpts
 (`MQL5/Files/stoic_intent_journal*.txt` + Experts tab logs).
 
+**Machine-readable evidence ledger** (feeds the staged-rollout promotion gate
+and the Bot Health "MT5 Validation Campaign" card):
+```bash
+curl -X POST "$API/api/ops/validation/restart_recovery" \
+  -H "X-Metrics-Token: $METRICS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status":"pass","account_mode":"netting",
+       "notes":"1.1-1.4 all pass on IC Markets demo 51234567",
+       "evidence_ref":"docs/campaigns/2026-06-25-icmarkets-netting.md"}'
+```
+Scenario keys: `restart_recovery`, `reconnect_recovery`, `duplicate_commands`,
+`stale_acknowledgements`, `partial_fills`, `multi_deal_fills`, `netting`,
+`hedging`, `rejected_orders`, `emergency_close`,
+`manual_broker_intervention`, `long_running_broker_sync`.
+Every scenario needs a `pass` record for BOTH `account_mode=netting` and
+`account_mode=hedging` before the stage gate allows promotion to `small_live`
+(`GET /api/ops/validation` shows progress; `GET /api/ops/stage` the gate).
+
 ## 1 · Restart recovery
 | # | Scenario | Expected | Result |
 |---|----------|----------|--------|
