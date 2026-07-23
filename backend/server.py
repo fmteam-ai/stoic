@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 from pathlib import Path
 load_dotenv(Path(__file__).parent / ".env")
+from secrets_loader import resolve_file_secrets
+resolve_file_secrets()
 
 import os
 import asyncio
@@ -275,6 +277,9 @@ from routes.metrics_routes import router as metrics_router  # noqa: E402
 api_router.include_router(metrics_router)
 from routes.ops_routes import router as ops_router  # noqa: E402
 api_router.include_router(ops_router)
+from routes.journal_routes import router as journal_router, public_router as journal_public_router  # noqa: E402
+api_router.include_router(journal_router)
+api_router.include_router(journal_public_router)
 
 
 # ---------- WebSocket ----------

@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles, FlaskConical } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles, FlaskConical, BookOpen } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import BotPulsePanel from "@/components/BotPulsePanel";
+import { JournalCardModal } from "@/components/JournalCardModal";
 import { Link } from "react-router-dom";
 
 const STATUS_STYLE = {
@@ -294,6 +295,7 @@ export default function Trades() {
     const [refreshing, setRefreshing] = useState(false);
     const [auditTrade, setAuditTrade] = useState(null);  // trade whose audit trail modal is open
     const [explainTrade, setExplainTrade] = useState(null);  // trade whose AI-explainability modal is open
+    const [journalTrade, setJournalTrade] = useState(null);  // trade whose shareable journal card modal is open
     const load = useCallback(async () => {
         setRefreshing(true);
         try {
@@ -984,6 +986,14 @@ export default function Trades() {
                                                         <FlaskConical className="w-3 h-3" /> POST-MORTEM
                                                     </Link>
                                                 )}
+                                                {t.status === "closed" && t.exit_price != null && (
+                                                    <button onClick={() => setJournalTrade(t)}
+                                                        data-testid={`journal-trade-${t.id}`}
+                                                        title="Generate a shareable AI-written journal card for this trade"
+                                                        className="text-[#A1A1AA] hover:text-[#FFD700] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                        <BookOpen className="w-3 h-3" /> JOURNAL
+                                                    </button>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>
@@ -1005,6 +1015,13 @@ export default function Trades() {
                 <ExplainModal
                     trade={explainTrade}
                     onClose={() => setExplainTrade(null)}
+                />
+            )}
+
+            {journalTrade && (
+                <JournalCardModal
+                    trade={journalTrade}
+                    onClose={() => setJournalTrade(null)}
                 />
             )}
         </AppLayout>

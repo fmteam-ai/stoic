@@ -1,10 +1,12 @@
 // Runs once on first MongoDB init (as root, via docker-entrypoint-initdb.d).
 // Creates the least-privilege application account: readWrite on DB_NAME only.
+// The app password comes from a Docker secret, never from an env var.
+const fs = require("fs");
 const dbName = process.env.DB_NAME;
 const appUser = process.env.MONGO_APP_USER;
-const appPwd = process.env.MONGO_APP_PASSWORD;
+const appPwd = fs.readFileSync("/run/secrets/mongo_app_password", "utf8").trim();
 if (!dbName || !appUser || !appPwd) {
-  throw new Error("DB_NAME / MONGO_APP_USER / MONGO_APP_PASSWORD must be set");
+  throw new Error("DB_NAME / MONGO_APP_USER / mongo_app_password secret must be set");
 }
 const appDb = db.getSiblingDB(dbName);
 appDb.createUser({

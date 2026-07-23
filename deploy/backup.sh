@@ -11,9 +11,10 @@ RETENTION_DAYS="${RETENTION_DAYS:-14}"
 MONGO_SVC="${MONGO_SVC:-mongo}"
 APP_SERVICES="backend worker-trading worker-protection worker-reconciliation worker-analytics worker-model worker-tuning"
 
-# mongodump/mongorestore run inside the mongo container as root
-# (MONGO_INITDB_ROOT_* are in the container environment).
-MONGO_AUTH='-u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin'
+# mongodump/mongorestore run inside the mongo container as root. The root
+# password arrives via env OR Docker secret file — the inner shell resolves
+# whichever is present.
+MONGO_AUTH='-u "$MONGO_INITDB_ROOT_USERNAME" -p "${MONGO_INITDB_ROOT_PASSWORD:-$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE")}" --authenticationDatabase admin'
 
 case "${1:-backup}" in
   backup)

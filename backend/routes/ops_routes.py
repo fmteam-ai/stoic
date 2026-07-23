@@ -17,7 +17,21 @@ EXPECTED_WORKERS = ("trading", "protection", "reconciliation",
 
 @router.get("/ops/release-readiness")
 async def release_readiness(request: Request):
-    if not _authorized(request):
+    # Two auth paths: metrics token (deploy scripts / Prometheus) OR an
+    # authenticated admin session (Bot Health dashboard card).
+    allowed = False
+    try:
+        allowed = _authorized(request)
+    except Exception:
+        pass
+    if not allowed:
+        try:
+            from auth import get_current_user
+            u = await get_current_user(request)
+            allowed = u.get("role") == "admin"
+        except Exception:
+            pass
+    if not allowed:
         return JSONResponse(status_code=403,
                             content={"detail": "bad metrics token"})
     db = get_db()

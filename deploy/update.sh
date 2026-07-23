@@ -50,8 +50,12 @@ curl -fsS -o /dev/null http://localhost:3000 || rollback
 echo "   frontend serving"
 
 echo "-- verifying release readiness (workers, leases, Mongo, reconciliation, outbox, schema)"
-METRICS_TOKEN=$(grep -E '^METRICS_TOKEN=' backend/.env | cut -d= -f2- | tr -d '"')
-[ -n "${METRICS_TOKEN}" ] || { echo "ERROR: METRICS_TOKEN missing from backend/.env"; rollback; }
+if [ -f secrets/metrics_token ]; then
+  METRICS_TOKEN=$(cat secrets/metrics_token)
+else
+  METRICS_TOKEN=$(grep -E '^METRICS_TOKEN=' backend/.env | cut -d= -f2- | tr -d '"')
+fi
+[ -n "${METRICS_TOKEN}" ] || { echo "ERROR: metrics token missing (secrets/metrics_token or backend/.env)"; rollback; }
 READY=0
 for i in $(seq 1 45); do   # workers need time to acquire leases (~45s lease TTL)
   BODY=$(curl -fsS -H "X-Metrics-Token: ${METRICS_TOKEN}" \

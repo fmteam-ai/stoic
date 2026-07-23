@@ -11,35 +11,48 @@ docker compose version >/dev/null 2>&1 || { echo "ERROR: docker compose v2 is re
 
 gen() { python3 -c "import secrets;print(secrets.token_urlsafe(32))"; }
 
-# 0 · compose-level .env — MongoDB auth secrets (root + least-privilege app user)
+# 0 · Docker secrets — all credentials live here, never in .env files
+if [ ! -d secrets ]; then
+  echo "-- generating Docker secrets in ./secrets/"
+  mkdir -p secrets && chmod 700 secrets
+  DB_NAME_VAL=ai_trading_bot
+  APP_PWD=$(gen)
+  gen > secrets/mongo_root_password
+  printf '%s' "${APP_PWD}" > secrets/mongo_app_password
+  printf 'mongodb://stoic_app:%s@mongo:27017/%s?authSource=%s' \
+    "${APP_PWD}" "${DB_NAME_VAL}" "${DB_NAME_VAL}" > secrets/mongo_url
+  gen > secrets/jwt_secret
+  gen > secrets/key_vault_master
+  gen > secrets/metrics_token
+  chmod 600 secrets/*
+  echo "   generated mongo_root_password, mongo_app_password, mongo_url,"
+  echo "   jwt_secret, key_vault_master, metrics_token (mode 600)."
+else
+  echo "-- ./secrets exists — leaving untouched"
+fi
+
+# 1 · compose-level .env — NON-SECRET config only
 if [ ! -f .env ]; then
-  echo "-- creating ./.env (compose secrets) from .env.example"
+  echo "-- creating ./.env (compose config) from .env.example"
   cp .env.example .env
   sed -i.bak \
     -e "s|^MONGO_ROOT_USER=$|MONGO_ROOT_USER=stoic_root|" \
-    -e "s|^MONGO_ROOT_PASSWORD=$|MONGO_ROOT_PASSWORD=$(gen)|" \
     -e "s|^MONGO_APP_USER=$|MONGO_APP_USER=stoic_app|" \
-    -e "s|^MONGO_APP_PASSWORD=$|MONGO_APP_PASSWORD=$(gen)|" \
     -e "s|^DB_NAME=$|DB_NAME=ai_trading_bot|" \
     .env
   rm -f .env.bak
-  echo "   generated MongoDB credentials (root + app user)."
 else
   echo "-- ./.env exists — leaving untouched"
 fi
 
-# 1 · backend/.env — create from template with generated secrets
+# 1 · backend/.env — create from template (non-secret config; credentials
+#     come from Docker secrets via *_FILE indirection)
 if [ ! -f backend/.env ]; then
-  echo "-- creating backend/.env from .env.example with generated secrets"
+  echo "-- creating backend/.env from .env.example"
   cp backend/.env.example backend/.env
   sed -i.bak "s|^DB_NAME=$|DB_NAME=ai_trading_bot|" backend/.env
-  for key in JWT_SECRET JWT_REFRESH_SECRET METRICS_TOKEN; do
-    if grep -q "^${key}=$" backend/.env; then
-      sed -i.bak "s|^${key}=$|${key}=$(gen)|" backend/.env
-    fi
-  done
   rm -f backend/.env.bak
-  echo "   generated JWT/metrics secrets. Review backend/.env before go-live."
+  echo "   review backend/.env for integration keys before go-live."
 else
   echo "-- backend/.env exists — leaving untouched"
 fi

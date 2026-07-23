@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
+from secrets_loader import resolve_file_secrets  # noqa: E402
+resolve_file_secrets()
+
 from database import get_db  # noqa: E402
 
 logging.basicConfig(level=logging.INFO,

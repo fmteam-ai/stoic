@@ -30,6 +30,7 @@ import Strategies from "@/pages/Strategies";
 import Portfolio from "@/pages/Portfolio";
 import VerifiedPerformance from "@/pages/VerifiedPerformance";
 import PublicPerformance from "@/pages/PublicPerformance";
+import PublicJournal from "@/pages/PublicJournal";
 import AuditLog from "@/pages/AuditLog";
 import Execution from "@/pages/Execution";
 import Research from "@/pages/Research";
@@ -89,6 +90,7 @@ function App() {
                         <Route path="/performance" element={<ProtectedRoute><VerifiedPerformance /></ProtectedRoute>} />
                         <Route path="/audit-log" element={<ProtectedRoute><AuditLog /></ProtectedRoute>} />
                         <Route path="/p/:shareId" element={<PublicPerformance />} />
+                        <Route path="/j/:shareId" element={<PublicJournal />} />
                         <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
                         <Route path="/brokers" element={<ProtectedRoute><BrokerComparison /></ProtectedRoute>} />
                         <Route path="/enterprise-api" element={<ProtectedRoute><EnterpriseApi /></ProtectedRoute>} />
