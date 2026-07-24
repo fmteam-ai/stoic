@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="6" time="4.603" timestamp="2026-07-24T06:22:55.751575+00:00" hostname="agent-env-34fef4ff-dc7d-4b0a-81b8-dfdc61d3971e"><testcase classname="tests.test_iter84_risk_layers_http.TestRiskLayersEndpoint" name="test_admin_gets_12_layers" time="1.740" /><testcase classname="tests.test_iter84_risk_layers_http.TestRiskLayersEndpoint" name="test_bogus_account_id_404" time="0.385" /><testcase classname="tests.test_iter84_risk_layers_http.TestRiskLayersEndpoint" name="test_non_admin_other_users_account_403" time="1.098" /><testcase classname="tests.test_iter84_risk_layers_http.TestRiskLayersEndpoint" name="test_admin_can_read_any_account" time="0.407" /><testcase classname="tests.test_iter84_risk_layers_http.TestPortfolioStopEndToEnd" name="test_trip_flow_shows_tripped_in_layers" time="0.384"><failure message="RuntimeError: Task &lt;Task pending name='Task-2' coro=&lt;TestPortfolioStopEndToEnd.test_trip_flow_shows_tripped_in_layers.&lt;locals&gt;._do() running at /app/backend/tests/test_iter84_risk_layers_http.py:139&gt; cb=[_run_until_complete_cb() at /usr/local/lib/python3.11/asyncio/base_events.py:181]&gt; got Future &lt;Future pending cb=[_chain_future.&lt;locals&gt;._call_check_cancel() at /usr/local/lib/python3.11/asyncio/futures.py:387]&gt; attached to a different loop">tests/test_iter84_risk_layers_http.py:154: in test_trip_flow_shows_tripped_in_layers
+    trips2 = asyncio.new_event_loop().run_until_complete(_do())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_iter84_risk_layers_http.py:139: in _do
+    return await sweep_portfolio_stop(get_db())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+risk_layers.py:140: in sweep_portfolio_stop
+    async for acc in db.accounts.find(
+/root/.venv/lib/python3.11/site-packages/motor/core.py:1390: in next
+    if self.alive and (self._buffer_size() or await self._get_more()):
+                                              ^^^^^^^^^^^^^^^^^^^^^^
+E   RuntimeError: Task &lt;Task pending name='Task-2' coro=&lt;TestPortfolioStopEndToEnd.test_trip_flow_shows_tripped_in_layers.&lt;locals&gt;._do() running at /app/backend/tests/test_iter84_risk_layers_http.py:139&gt; cb=[_run_until_complete_cb() at /usr/local/lib/python3.11/asyncio/base_events.py:181]&gt; got Future &lt;Future pending cb=[_chain_future.&lt;locals&gt;._call_check_cancel() at /usr/local/lib/python3.11/asyncio/futures.py:387]&gt; attached to a different loop</failure></testcase><testcase classname="tests.test_iter84_risk_layers_http" name="test_metrics_endpoint_ok" time="0.380"><failure message="AssertionError: {&quot;detail&quot;:&quot;bad metrics token&quot;}&#10;assert 403 == 200&#10; +  where 403 = &lt;Response [403]&gt;.status_code">tests/test_iter84_risk_layers_http.py:177: in test_metrics_endpoint_ok
+    assert r.status_code == 200, r.text
+E   AssertionError: {"detail":"bad metrics token"}
+E   assert 403 == 200
+E    +  where 403 = &lt;Response [403]&gt;.status_code</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,49 @@
+{
+  "summary": "iter-84 independent verification of the missing PORTFOLIO STOP layer + read-only Risk Layers registry. Backend: 13/13 pytest green (7 pre-existing test_iter84_risk_layers.py + 6 new HTTP tests in test_iter84_risk_layers_http.py). Verified /api/risk/layers returns exactly 12 layers with all expected keys and valid statuses; 403 for cross-user account; 404 for bogus ObjectId; admin bypass works. Portfolio-stop end-to-end trip flow via HTTP + DB verified: synthetic account (balance 10k, equity 8.5k, fresh heartbeat) + active bot_config → sweep_portfolio_stop returns 1, config becomes active:false with tripped_kind='portfolio', critical ops_alert with dedup_key 'portfolio_stop:<acc>' created, PortfolioStopTripped trade_event written, 2nd sweep returns 0. Stale-heartbeat fail-safe confirmed (2020 hb + 50% dd → degraded, no trip). All synthetic docs cleaned up (0 leftovers). Backend logs show NO exceptions from _portfolio_stop_loop; /api/metrics returns 200 (with X-Metrics-Token). Frontend: admin login → Risk Commander page mounts RiskLayersCard at top with all 12 layer testids present, summary badge = '9/12 ARMED · 3 DEGRADED', account label badge = 'STOIC' (auto-selected most-recent heartbeating account). Chat panel + input still render below the card. Bot Health page loads fine (regression clean).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/metrics", "issue": "Doc drift: /app/memory/test_credentials.md claims '/api/metrics accepts X-Metrics-Token header OR an admin session cookie'. Current metrics_routes.py:_authorized ONLY accepts the token (returns 403 'bad metrics token' for admin cookie). Not a bug per se — this is stricter than doc; update the doc or add the admin fallback."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/commander (Risk Commander)", "issues": ["Review-request stated route is /risk but the actual React route is /commander (App.js:114). The sidebar link labelled 'Risk Commander' navigates to /commander and works correctly, so no user-visible issue. Just a minor doc/spec mismatch."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter84_risk_layers.py",
+    "/app/backend/tests/test_iter84_risk_layers_http.py",
+    "/app/test_reports/pytest/iter84_full.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: reconcile /app/memory/test_credentials.md wording OR extend metrics_routes._authorized to accept an admin session cookie — currently token-only.",
+    "OPTIONAL: update review-request text to say route is '/commander' not '/risk' (or add a '/risk' alias) — sidebar link routes correctly today."
+  ],
+  "critical_code_review_comments": [
+    "risk_layers.py:66-134 — check_portfolio_stop correctly gates on fresh heartbeat + non-null equity BEFORE evaluating drawdown. Fail-safe order is correct (stale/no-data → degraded, never trip). Threshold override read from bot_configs.portfolio_stop_pct is picked from the FIRST config in cfgs list — if multiple configs exist with different overrides, ordering is undefined. Minor: consider min() of all overrides for safety.",
+    "risk_layers.py:96-105 — trip loop iterates cfgs but only checks c.get('active') at the start, so an already-inactive config is silently skipped. This is the correct 'no re-trip' behaviour, verified by test_trip_disable_and_no_retrip.",
+    "risk_layers.py:189-195 — _isolated wrapper is exactly the isolation guarantee promised in the docstring: a raising layer degrades to status='error' without aborting the sweep. Verified by test_isolated_layer_error_cannot_break_others.",
+    "risk_layers.py:198-324 — evaluate_layers is O(12) per call, ~2 mongo hits per invocation (bot_configs.find_one + trades.count_documents + realised_pnl_since×3). Fine for a UI card polled every 30s. No indexes to add — the queries already hit bot_configs {user_id,account_id} and trades {user_id,status}.",
+    "routes/risk_layers_routes.py:16-30 — ownership check compares str(account.user_id) == user['id']. This is correct as long as user['id'] is always a string (it is — see auth.get_current_user). Admin bypass via user.get('role') == 'admin' is correct and tested.",
+    "routes/risk_layers_routes.py:26-29 — auto-select uses sort=[('last_heartbeat', -1)] on ISO-string heartbeats. Lexicographic sort of ISO-8601 strings is chronologically correct as long as heartbeats are always UTC (they are, per _now().isoformat()). No mongo index on accounts.last_heartbeat — for a large tenant this could get slow, but n_accounts_per_user ≪ 100 in practice.",
+    "RiskLayersCard.jsx:16-27 — polls every 30s; on any error setHidden(true) hides the card forever until re-mount. Silent failure is acceptable for a status widget, but consider logging the failure once for support telemetry.",
+    "RiskLayersCard.jsx:41-44 — summary text is derived client-side from layers array, NOT from server d.tripped / d.degraded counters. This means the card's summary and the server counters could disagree during a partial re-render, but in practice they match. Acceptable."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter84_risk_layers_http.py (NEW — 6 HTTP tests, all pass)"
+  ],
+  "success_rate": {
+    "backend_pytest": "13/13 (100%)",
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (no 2FA). METRICS_TOKEN + RATE_LIMIT_BYPASS_TOKEN + STEP_UP_BYPASS_TOKEN read from /app/backend/.env.",
+  "seed_data_creation": "Test suite created & DELETED (per-test cleanup): (a) one TEST_iter84_http_pstop_* account with equity 8500 vs balance 10000 + active bot_config → tripped by sweep, verified, cleaned up; (b) one TEST_iter84_http_other_* account for admin-cross-tenant read test, cleaned up; (c) one iter84-http-* register-and-login test user + owned account for 403 test, cleaned up. Post-run leftover counters ALL zero (accounts, bot_configs, ops_alerts, trade_events).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-84 backend + UI are green. The 3 DEGRADED layers (portfolio_stop, spread_protection, news_protection) in the preview are expected per review-request note (intermittent EA heartbeat + calendar feed DOWN); do NOT flag as bugs. The React route for Risk Commander is /commander (App.js:114), NOT /risk — if the review-request or any doc claims /risk it's out of date. Portfolio stop background loop runs in-process (server.py _portfolio_stop_task) at PORTFOLIO_STOP_INTERVAL_SEC (default 30s) — verified no exceptions in backend logs.",
+  "rca of the issue": "No new bug found. Portfolio-stop layer implementation is correct end-to-end. Only observation is a documentation drift: /api/metrics accepts token-only now, but memory/test_credentials.md still says 'admin session cookie also works'. Impact: any legacy test that hit /api/metrics with admin cookie only will get 403. Mitigation: either update the doc or add admin fallback in metrics_routes._authorized."
+}

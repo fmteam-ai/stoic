@@ -279,6 +279,8 @@ from routes.ops_routes import router as ops_router  # noqa: E402
 api_router.include_router(ops_router)
 from routes.validation_routes import router as validation_router  # noqa: E402
 api_router.include_router(validation_router)
+from routes.risk_layers_routes import router as risk_layers_router  # noqa: E402
+api_router.include_router(risk_layers_router)
 from routes.journal_routes import router as journal_router, public_router as journal_public_router  # noqa: E402
 api_router.include_router(journal_router)
 api_router.include_router(journal_public_router)
@@ -396,6 +398,7 @@ _protection_task = None
 _analytics_task = None
 _model_maint_task = None
 _ops_alert_task = None
+_portfolio_stop_task = None
 
 
 @app.on_event("startup")
@@ -454,6 +457,9 @@ async def on_startup():
         from alerting import _ops_alert_loop
         global _ops_alert_task
         _ops_alert_task = asyncio.create_task(_ops_alert_loop())
+        from risk_layers import _portfolio_stop_loop
+        global _portfolio_stop_task
+        _portfolio_stop_task = asyncio.create_task(_portfolio_stop_loop())
         logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
@@ -471,7 +477,7 @@ async def on_shutdown():
                  _auto_heal_task, _stuck_sync_task, _optimizer_task,
                  _nightly_tuner_task, _scalp_reconcile_task,
                  _protection_task, _analytics_task, _model_maint_task,
-                 _ops_alert_task):
+                 _ops_alert_task, _portfolio_stop_task):
         if task and not task.done():
             task.cancel()
             try:
