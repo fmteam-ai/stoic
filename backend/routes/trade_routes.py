@@ -682,6 +682,53 @@ async def trade_trace(trade_id: str, user=Depends(get_current_user)):
     return await compose(db, trade)
 
 
+@router.get("/{trade_id}/replay")
+async def trade_replay_route(trade_id: str, user=Depends(get_current_user)):
+    """Phase 7 — tick-by-tick replay data for the trade's lifetime window."""
+    from operator_tools import trade_replay
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]})
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return await trade_replay(db, trade)
+
+
+@router.get("/{trade_id}/timeline")
+async def trade_timeline_route(trade_id: str, user=Depends(get_current_user)):
+    """Phase 7 — canonical 8-stage decision timeline
+    (signal→risk→order_check→broker→deal→protection→reconciliation→journal)."""
+    from operator_tools import decision_timeline
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]})
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return await decision_timeline(db, trade)
+
+
+class WhatIfIn(BaseModel):
+    days: int = Field(default=30, ge=1, le=180)
+    risk_pct: float | None = Field(default=None, gt=0, le=10)
+    sl_mult: float | None = Field(default=None, gt=0.1, le=5)
+    tp_mult: float | None = Field(default=None, gt=0.1, le=5)
+    trailing_start_r: float | None = Field(default=None, gt=0.1, le=10)
+
+
+@router.post("/what-if")
+async def what_if_route(payload: WhatIfIn, user=Depends(get_current_user)):
+    """Phase 7 — what-if analysis over the user's actual closed trades."""
+    if not payload.model_dump(exclude={"days"}, exclude_none=True):
+        raise HTTPException(status_code=422,
+                            detail="provide at least one scenario parameter")
+    from operator_tools import what_if
+    db = get_db()
+    return await what_if(db, user["id"], days=payload.days,
+                         risk_pct=payload.risk_pct, sl_mult=payload.sl_mult,
+                         tp_mult=payload.tp_mult,
+                         trailing_start_r=payload.trailing_start_r)
+
+
 @router.get("/{trade_id}/audit")
 async def trade_audit(trade_id: str, user=Depends(get_current_user)):
     """Full deal lineage for a single trade.

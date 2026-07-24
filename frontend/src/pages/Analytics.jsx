@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import RrWatchPanel from "@/components/RrWatchPanel";
 import { ResearchPanel } from "@/components/ResearchPanel";
+import { WhatIfCard } from "@/components/WhatIfCard";
 import { BarChart3, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Target, Gauge, Cpu, Clock } from "lucide-react";
 
 function pnlColor(v) {
@@ -289,6 +290,7 @@ export default function Analytics() {
             />
 
             <div className="p-4 md:p-8 space-y-6">
+                <WhatIfCard />
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="analytics-error">{err}</div>}
 
                 <RrWatchPanel />

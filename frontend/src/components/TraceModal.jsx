@@ -20,12 +20,16 @@ const fmtTime = (v) => {
 
 export const TraceModal = ({ trade, onClose }) => {
     const [d, setD] = useState(null);
+    const [tl, setTl] = useState(null);
     const [err, setErr] = useState(null);
 
     useEffect(() => {
         api.get(`/trades/${trade.id}/trace`)
             .then(r => setD(r.data))
             .catch(e => setErr(e?.response?.data?.detail || "trace unavailable"));
+        api.get(`/trades/${trade.id}/timeline`)
+            .then(r => setTl(r.data))
+            .catch(() => {});
     }, [trade.id]);
 
     return (
@@ -53,6 +57,24 @@ export const TraceModal = ({ trade, onClose }) => {
                 )}
                 {d && (
                     <div className="p-5 space-y-4">
+                        {tl && (
+                            <div data-testid="trace-decision-timeline">
+                                <div className="font-mono text-[9px] tracking-widest text-[#38BDF8]">DECISION TIMELINE</div>
+                                <div className="flex items-center gap-1 flex-wrap mt-1.5">
+                                    {tl.stages.map((s, i) => (
+                                        <span key={s.stage} className="flex items-center gap-1" title={s.detail}>
+                                            <span data-testid={`timeline-stage-${s.stage}`}
+                                                className={`font-mono text-[8px] tracking-widest px-1.5 py-0.5 border ${s.status === "complete"
+                                                    ? "border-[#00FF41]/40 text-[#00FF41]"
+                                                    : "border-[#3F3F46] text-[#52525B]"}`}>
+                                                {s.stage.toUpperCase().replace("_", "")}
+                                            </span>
+                                            {i < tl.stages.length - 1 && <span className="text-[#3F3F46] text-[9px]">→</span>}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         {SECTIONS.map(([key, title]) => {
                             const s = d[key];
                             if (!s) return null;
