@@ -926,6 +926,20 @@ async def modification_ack(payload: BridgeModificationAck):
         new_sl=(payload.new_sl if payload.type == "MODIFY_SL" else None),
         error=payload.error))
     if payload.success:
+        try:
+            from trade_events import append as _ev_append, build as _ev_build
+            await _ev_append(get_db(), _ev_build(
+                "ModificationConfirmed", user_id=trade.get("user_id"),
+                trade_id=str(trade["_id"]), account_id=str(acc["_id"]),
+                symbol=trade.get("symbol"), source="bridge_ack",
+                payload={"detail": f"{payload.type} confirmed by broker"
+                                   + (f" (SL {payload.confirmed_position_sl or payload.new_sl})"
+                                      if payload.type == "MODIFY_SL" else "")
+                                   + (f" (remaining {payload.remaining_volume or payload.new_volume} lots)"
+                                      if payload.type == "PARTIAL_CLOSE" else ""),
+                         "type": payload.type}))
+        except Exception:  # noqa: BLE001
+            pass
         # EA v1.50 — prefer the broker-CONFIRMED position SL over the intent
         actual_sl = payload.confirmed_position_sl or payload.new_sl
         if payload.type == "MODIFY_SL" and actual_sl is not None:

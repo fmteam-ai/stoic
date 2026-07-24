@@ -23,6 +23,9 @@ EVENT_TYPES = (
     "PositionOpened", "ProtectionPlaced", "PositionClosed",
     "FinancialApplied",
     "StopModifyConfirmed", "StopModifyRejected",   # round 18 item 2
+    # Phase 6 · adaptive-exit + modification lifecycle (execution trace)
+    "TargetsRescaled", "StopTightened", "PartialCloseRequested",
+    "ModificationConfirmed",
 )
 
 _indexed = False

@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles, FlaskConical, BookOpen } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles, FlaskConical, BookOpen, Route } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import BotPulsePanel from "@/components/BotPulsePanel";
 import { JournalCardModal } from "@/components/JournalCardModal";
+import { TraceModal } from "@/components/TraceModal";
 import { Link } from "react-router-dom";
 
 const STATUS_STYLE = {
@@ -295,6 +296,7 @@ export default function Trades() {
     const [refreshing, setRefreshing] = useState(false);
     const [auditTrade, setAuditTrade] = useState(null);  // trade whose audit trail modal is open
     const [explainTrade, setExplainTrade] = useState(null);  // trade whose AI-explainability modal is open
+    const [traceTrade, setTraceTrade] = useState(null);  // trade whose full execution-trace modal is open
     const [journalTrade, setJournalTrade] = useState(null);  // trade whose shareable journal card modal is open
     const load = useCallback(async () => {
         setRefreshing(true);
@@ -978,6 +980,11 @@ export default function Trades() {
                                                     className="text-[#A1A1AA] hover:text-[#00FF41] text-xs font-mono tracking-widest flex items-center gap-1">
                                                     <Sparkles className="w-3 h-3" /> EXPLAIN
                                                 </button>
+                                                <button onClick={() => setTraceTrade(t)} data-testid={`trace-trade-${t.id}`}
+                                                    title="Full execution trace: why opened, why then, why that size/stop/target, what changed, why closed"
+                                                    className="text-[#A1A1AA] hover:text-[#FFD700] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                    <Route className="w-3 h-3" /> TRACE
+                                                </button>
                                                 {t.status === "closed" && parseFloat(t.pnl) < 0 && (
                                                     <Link to={`/loss-lab?trade=${t.id}`}
                                                         data-testid={`postmortem-trade-${t.id}`}
@@ -1015,6 +1022,13 @@ export default function Trades() {
                 <ExplainModal
                     trade={explainTrade}
                     onClose={() => setExplainTrade(null)}
+                />
+            )}
+
+            {traceTrade && (
+                <TraceModal
+                    trade={traceTrade}
+                    onClose={() => setTraceTrade(null)}
                 />
             )}
 

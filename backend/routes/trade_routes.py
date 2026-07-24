@@ -667,6 +667,21 @@ async def trade_explain(trade_id: str, user=Depends(get_current_user)):
     return await explain_trade(db, trade)
 
 
+@router.get("/{trade_id}/trace")
+async def trade_trace(trade_id: str, user=Depends(get_current_user)):
+    """Phase 6 — full execution trace. Answers, with recorded evidence:
+    why opened · why at that time · why that size · why that stop ·
+    why that target · what changed in flight · why closed."""
+    from execution_trace import compose
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]}
+    )
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return await compose(db, trade)
+
+
 @router.get("/{trade_id}/audit")
 async def trade_audit(trade_id: str, user=Depends(get_current_user)):
     """Full deal lineage for a single trade.

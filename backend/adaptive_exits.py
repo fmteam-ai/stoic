@@ -192,6 +192,18 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
 
     now_iso = _now().isoformat()
     from ws_manager import manager as ws_manager
+    from trade_events import append, build
+
+    async def _event(etype, detail, data=None):
+        try:
+            await append(db, build(etype, user_id=trade["user_id"],
+                                   trade_id=str(trade["_id"]),
+                                   account_id=trade.get("account_id"),
+                                   symbol=trade.get("symbol"),
+                                   source="adaptive_exits",
+                                   payload={"detail": detail, **(data or {})}))
+        except Exception:  # noqa: BLE001
+            pass
 
     act = vol_retarget(trade, feats, pips_up)
     if act:
@@ -204,6 +216,10 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
         await ws_manager.broadcast(trade["user_id"], "trade_management", {
             "trade_id": str(trade["_id"]), "action": act["kind"],
             "new_tp_pips": act["new_tp_pips"], "atr_ratio": act["atr_ratio"]})
+        await _event("TargetsRescaled",
+                     f"TP ladder rescaled ×{act['scale']} — ATR "
+                     f"{act['atr_ratio']}× vs entry",
+                     {"new_tp_pips": act["new_tp_pips"]})
         logger.info("vol retarget trade=%s scale=%.2f", trade["_id"], act["scale"])
         return True
 
@@ -220,6 +236,10 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
             "trade_id": str(trade["_id"]), "action": act["kind"],
             "new_sl": act["new_sl"], "locked_pips": act["locked_pips"],
             "pips": round(pips_up, 1)})
+        await _event("StopTightened",
+                     f"stop tightened to {act['new_sl']} — momentum fading "
+                     f"with {act['locked_pips']} pips locked",
+                     {"new_sl": act["new_sl"]})
         logger.info("fade tighten trade=%s sl→%.5f", trade["_id"], act["new_sl"])
         return True
 
@@ -237,6 +257,10 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
             "trade_id": str(trade["_id"]), "action": act["kind"],
             "to_lot": act["new_volume"], "barrier": act["barrier"],
             "pips": round(pips_up, 1)})
+        await _event("PartialCloseRequested",
+                     f"25% de-risked into opposing structure at "
+                     f"{act['barrier']} ({act['dist_pips']} pips away)",
+                     {"new_volume": act["new_volume"]})
         logger.info("resistance de-risk trade=%s lot→%.2f", trade["_id"],
                     act["new_volume"])
         return True
