@@ -1,0 +1,31 @@
+{
+  "summary": "Phase 2 (broker intel, execution timing, adaptive exits) verified end-to-end. Backend: 12/12 iter-89 tests + 29/29 regression tests (iter-25b, iter-41, iter-50, iter-55) pass. GET /api/broker-intel returns 5 brokers with score/provisional/fills_measured/5 component keys/timing dict/best_execution (null since all 5 are provisional — expected). Frontend /brokers renders BrokerIntelCard with data-testid broker-intel-card + broker-intel-<account_id> for all 5 accounts and broker-intel-score-<account_id>, all 5 component columns visible; Broker Comparison matrix underneath still renders. Dashboard and Bot Health pages load without new console errors (pre-existing WS 403 noise unrelated to Phase 2). Zero synthetic docs left in Mongo.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter89_phase2_execution.py",
+    "/app/test_reports/pytest/iter86_phase2.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "broker_intel.reject_component: score=100 when submissions=0 fails could bypass detection when only rejects exist and no fills — currently mitigated because len(trades)+len(failed) drives the denominator; still worth adding a comment that pure-fail windows are captured because failed contributes to total.",
+    "adaptive_exits.compute_features EMA seeding for the trailing 'ema_prev' branch iterates closes[:-8] when len<29 — could produce a stale prev slope; not blocking but worth documenting the min-bar contract (24) vs the 29-bar preferred path.",
+    "execution_timing._HIST is process-local — with multi-worker deployments (uvicorn --workers >1) the rolling window becomes worker-local and decisions will drift. BACKGROUND_WORKERS_IN_PROCESS=true here so fine, but flag for prod scale-out.",
+    "broker_intel.sweep filters by last_heartbeat >= 6h cutoff string ISO — works because ISO strings sort lexicographically only when the tz suffix is consistent; all writers use isoformat() UTC so OK, but a bad-input account with local time would slip through."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (41/41)", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123 (existing)",
+  "seed_data_creation": "None — all iter-89 tests use isolated UIDs (iter89-<uuid>, det-<uuid>, cd-<uuid>, t-<uuid>) and clean up in their own finally blocks. Verified 0 leftover docs after run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 2 execution intelligence stack (broker_intel.py, execution_timing.py, adaptive_exits.py, broker_intel_routes.py, BrokerIntelCard.jsx) is fully green. Real broker_intel_scores now has real snapshots — best_execution is null in the API response because all 5 currently connected brokers are still provisional (<3 fills or <50% component weight). Once fills accumulate on a live account best_execution should populate. Pre-existing WS /api/ws 403 handshake errors and a couple of 503s on Bot Health are unrelated to this iteration.",
+  "rca of the issue": "N/A — no issues found."
+}

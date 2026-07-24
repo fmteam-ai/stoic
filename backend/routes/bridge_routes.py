@@ -75,6 +75,11 @@ async def heartbeat(payload: BridgeHeartbeat):
         if clean:
             set_doc["current_spreads"] = clean
             set_doc["spreads_updated_at"] = now_iso
+            try:
+                from execution_timing import record_spread
+                record_spread(str(acc["_id"]), clean)
+            except Exception:  # noqa: BLE001
+                pass
     # EA v1.48+ — persist precise broker stop constraints per BASE symbol
     # (round 13 item 5); protection_guard consumes these when computing
     # emergency stops.

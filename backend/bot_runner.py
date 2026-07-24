@@ -1953,6 +1953,20 @@ async def _process_user_account_locked(db, cfg: dict):
             logger.warning("EV/quality scoring failed (fail-open): %s", e)
 
         engine = engine_for_account(target_account)
+        # Phase 2 · Execution timing — brief pre-send delay when the live
+        # spread is spiking vs its 10-min median (never vetoes).
+        if (cfg.get("execution_timing_enabled", True)
+                and (target_account.get("connection_type") or "mt5") != "binance"):
+            try:
+                from execution_timing import consider_delay
+                timing = await consider_delay(db, target_account, sym)
+                if timing.get("waited_ms"):
+                    signal["execution_timing"] = timing
+                    await db.signals.update_one(
+                        {"_id": result.inserted_id},
+                        {"$set": {"execution_timing": timing}})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("execution timing failed (fail-open): %s", e)
         from versioning import version_stamp
         trade_doc = await engine.execute(
             user_id=user_id,

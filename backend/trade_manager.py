@@ -247,6 +247,17 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             # alerts fire from modification_ack once the EA confirms the move.
             return
 
+    # Phase 2 · Adaptive exit engine — runs only when the tiered TP logic
+    # above found nothing to do this tick (tier actions return early).
+    # Strictly protective: TP ladder rescales to live ATR, SL only ever
+    # tightens on momentum fade, size only ever shrinks into resistance.
+    try:
+        from adaptive_exits import manage_exits
+        await manage_exits(db, trade, cfg, current, pips_up)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("adaptive exits failed (fail-open) trade=%s: %s",
+                       trade_id, e)
+
 
 async def _check_daily_drawdown(cfg: dict) -> None:
     """If today's realised P&L falls below -daily_drawdown_pct of starting equity,

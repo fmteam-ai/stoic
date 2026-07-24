@@ -280,7 +280,9 @@ api_router.include_router(ops_router)
 from routes.validation_routes import router as validation_router  # noqa: E402
 api_router.include_router(validation_router)
 from routes.risk_layers_routes import router as risk_layers_router  # noqa: E402
+from routes.broker_intel_routes import router as broker_intel_router  # noqa: E402
 api_router.include_router(risk_layers_router)
+api_router.include_router(broker_intel_router)
 from routes.journal_routes import router as journal_router, public_router as journal_public_router  # noqa: E402
 api_router.include_router(journal_router)
 api_router.include_router(journal_public_router)
@@ -460,6 +462,9 @@ async def on_startup():
         from risk_layers import _portfolio_stop_loop
         global _portfolio_stop_task
         _portfolio_stop_task = asyncio.create_task(_portfolio_stop_loop())
+        from broker_intel import _broker_intel_loop
+        global _broker_intel_task
+        _broker_intel_task = asyncio.create_task(_broker_intel_loop())
         logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)

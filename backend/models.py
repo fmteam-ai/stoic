@@ -210,6 +210,9 @@ class BotConfigUpdate(BaseModel):
     risk_engine_enabled: bool = True
     monthly_drawdown_pct: float = 12.0
     monthly_drawdown_enabled: bool = True
+    # Phase 2 — execution intelligence
+    execution_timing_enabled: bool = True   # brief pre-send delay on spread spikes
+    adaptive_exits_enabled: bool = True     # vol retarget / fade tighten / de-risk
     max_leverage: float = 20.0
     cvar_budget_pct: float = 8.0
     event_exposure_cap_pct: float = 100.0
