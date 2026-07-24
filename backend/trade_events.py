@@ -55,6 +55,24 @@ def build(event_type: str, *, user_id: str | None = None,
 
 
 async def append(db, event: dict) -> None:
+    # Phase 8 — tamper-evident hash chain per user: each event carries the
+    # previous event's hash; any later mutation breaks the chain.
+    try:
+        import hashlib
+        import json as _json
+        prev = await db.trade_events.find_one(
+            {"user_id": event.get("user_id")},
+            sort=[("ts_ms", -1), ("_id", -1)])
+        prev_hash = (prev or {}).get("hash") or "genesis"
+        body = {k: event.get(k) for k in
+                ("event_type", "user_id", "trade_id", "account_id",
+                 "symbol", "source", "ts_ms", "occurred_at", "payload")}
+        event["prev_hash"] = prev_hash
+        event["hash"] = hashlib.sha256(
+            (prev_hash + _json.dumps(body, sort_keys=True, default=str)
+             ).encode()).hexdigest()
+    except Exception:  # noqa: BLE001 — chain is best-effort, never blocks
+        pass
     """Insert-only. Events are never updated or deleted."""
     global _indexed
     if not _indexed:
