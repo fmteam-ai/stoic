@@ -1,0 +1,42 @@
+{
+  "summary": "iter-85 independent verification of the new adaptive daily risk budget (risk_budget.py) + 3 new sizing multipliers (spread/regime/exposure) + hot-path regression (bot_runner + execution). Backend: 17/17 pytest green — 9/9 pre-existing tests/test_iter85_sizing_budget.py (multiplier math, scope classification, exhaustion/shrink/perf-shrink) + 8 NEW tests in tests/test_iter85_budget_http.py (auth gating, response shape, admin default, non-admin cross-tenant 403, bogus id 404, perf-shrink observable, bot/status 200, trades list 200, risk/layers 200). Live-verified GET /api/risk/budget returns pool_risk_pct=3.0 + 5 strategies with allocations summing to 100 and every required key (allocation_pct, perf_weight, budget_risk_pct, spent_risk_pct, remaining_risk_pct). Admin trend perf_weight=0.66 confirmed (real losing history). No exceptions in backend logs from bot_runner budget gate or adaptive_sizing (grepped for 'risk budget check failed', 'traceback', 'bot_runner' — none). Frontend: admin session → /commander renders BOTH Protection Layers card (10/12 ARMED · 2 DEGRADED — news + weekly-loss, expected) AND the new Daily Risk Budget card (data-testid risk-budget-card + risk-budget-pool badge 'POOL 3% / DAY · RESETS 00:00 UTC' + all 5 rows risk-budget-{trend|scalp|breakout|mean_reversion|experimental} with progress bars). TREND row shows the ×0.66 PERF shrink tag (admin has losing history). Regression pages (/bot-health, /trades, /dashboard) load fine. Test users cleaned up post-run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter85_sizing_budget.py",
+    "/app/backend/tests/test_iter85_budget_http.py",
+    "/app/test_reports/pytest/iter85_verify.xml",
+    "/app/test_reports/pytest/iter85_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "risk_budget.py — DEFAULT_ALLOCATIONS keys (trend/scalp/breakout/mean_reversion/experimental) sum to exactly 1.0 (verified). budget_status returns strategies in a deterministic order and always includes every key required by the UI. Shape is stable — safe for the UI card to iterate directly.",
+    "risk_budget.check_budget — 3-way outcome (blocked | shrunk | allowed) is verified by the 9-case pytest. Fail-open policy is correct: bot_runner's try/except wrapper logs a warning and lets the pulse through if the check errors — consistent with the review-request note 'never disable'.",
+    "adaptive_sizing.py — spread_mult / regime_mult / exposure_mult are pure functions with no I/O; unit-tested boundaries: FX spread tiers (1→0.85→0.7→0.55), XAU exempt (3.0 pips still 1.0), regime scaling (TREND 1.1 / RANGE 0.9 / SHOCK 0.7 / None 1.0), exposure floor and floating-loss compounding. Composition inside compute_adaptive_risk multiplies these — because every factor is bounded ∈ [0.5, 1.1], the compounded risk_pct stays bounded (no unbounded amplification).",
+    "routes/risk_layers_routes.py:39-58 (GET /risk/budget) — ownership check identical to /risk/layers (admin bypass via role, 404 on unknown ObjectId, 403 on cross-tenant), and cfg lookup falls back to the user's global bot_config when account_id absent. Clean, no MongoDB ObjectId leakage in the response.",
+    "bot_runner.py budget gate (lines ~1518-1544) — SKIP-pulse on exhausted, shrink otherwise, fail-open on exception. No backend log evidence of the gate misfiring during the ~20 min preview window observed. Note: scalp-side enforcement is intentionally deferred per review-request; consumption still tracked via strategy_class on trade docs.",
+    "execution.py (~L246/330) — trade_doc now carries strategy_class + risk_pct. No insert errors in logs; existing GET /api/trades continues to serialize fine (verified via HTTP test). Older trade docs lacking these fields don't break budget_status (the aggregation uses $ifNull-style defaults). ",
+    "RiskBudgetCard.jsx — polls every 60s (vs 30s for RiskLayersCard), on any error setHidden(true) hides the card until re-mount (same silent-failure pattern as RiskLayersCard). Progress-bar color transitions correctly at 75%/100% and never overflows past 100% (Math.min guard). Font stack + colors consistent with the surrounding STOIC UI."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter85_budget_http.py (NEW — 8 HTTP tests, all pass)"
+  ],
+  "success_rate": {
+    "backend_pytest": "17/17 (100%)",
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "test_credentials": "admin@trading.bot / admin123 (no 2FA). STEP_UP_BYPASS_TOKEN + RATE_LIMIT_BYPASS_TOKEN read from /app/backend/.env via conftest.",
+  "seed_data_creation": "Two ephemeral non-admin test users (iter85http+*@example.com) were created via /api/auth/register + email_verified flip, used for cross-tenant 403 test, and DELETED post-run (verified 0 leftover users, accounts, bot_configs). No TEST_iter85 trades leaked (per-test cleanup verified). Backend logs show no exceptions attributable to iter-85 code paths.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-85 is fully green — budget engine, sizing multipliers, HTTP endpoint, hot-path regression, and UI card all verified. Preview environment noise to ignore going forward: (a) WebSocket 403 on /api/ws (pre-existing, unrelated to iter-85), (b) email_sender resend 'example.com' errors (test-mode Resend restriction, cosmetic), (c) news_protection + weekly_loss_stop layers are DEGRADED in the preview (news feed intermittently 429 + insufficient closed-trade history). Route reminder: Risk Commander is /commander, NOT /risk.",
+  "rca of the issue": "No bugs found. Adaptive daily risk budget implementation and 3 new sizing multipliers are correct end-to-end. The only observable 'anomaly' — admin trend row showing ×0.66 PERF — is expected per the review-request (real losing history in the admin account). The perf shrink correctly bottoms out well above zero (0.66) so the trend engine is NEVER disabled, only sized down, which matches the spec 'shrink-only, never disables'."
+}

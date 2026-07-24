@@ -34,3 +34,25 @@ async def risk_layers(account_id: str | None = None,
             "tripped": sum(1 for l in layers if l["status"] == "tripped"),
             "degraded": sum(1 for l in layers
                             if l["status"] in ("degraded", "error"))}
+
+
+@router.get("/budget")
+async def risk_budget_status(account_id: str | None = None,
+                             user=Depends(get_current_user)):
+    """Adaptive daily risk budget — per-strategy pool, spend and remaining."""
+    db = get_db()
+    if account_id:
+        account = await db.accounts.find_one(
+            {"_id": parse_object_id(account_id)})
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if (str(account.get("user_id")) != user["id"]
+                and user.get("role") != "admin"):
+            raise HTTPException(status_code=403, detail="Not your account")
+    cfg = await db.bot_configs.find_one(
+        {"user_id": user["id"],
+         **({"account_id": account_id} if account_id else
+            {"$or": [{"account_id": None},
+                     {"account_id": {"$exists": False}}]})}) or {}
+    from risk_budget import budget_status
+    return await budget_status(db, user["id"], cfg, account_id)

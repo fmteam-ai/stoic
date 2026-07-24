@@ -253,6 +253,9 @@ class MT5BridgeEngine(ExecutionEngine):
             "error": None,
             "origin": signal.get("origin", "manual"),
             "scope": signal.get("scope"),
+            "strategy_class": signal.get("strategy_class"),
+            "risk_pct": (signal.get("risk_pct")
+                         or (signal.get("adaptive_sizing") or {}).get("risk_pct")),
             "scalp_lease_epoch": signal.get("scalp_lease_epoch"),
             "trend_ride": signal.get("trend_ride"),
             "versions": signal.get("versions"),
@@ -341,6 +344,9 @@ class PaperEngine(ExecutionEngine):
             "closed_at": None,
             "error": None,
             "origin": signal.get("origin", "manual"),
+            "strategy_class": signal.get("strategy_class"),
+            "risk_pct": (signal.get("risk_pct")
+                         or (signal.get("adaptive_sizing") or {}).get("risk_pct")),
         }
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)

@@ -1534,6 +1534,33 @@ async def _process_user_account_locked(db, cfg: dict):
                     )
             except Exception as e:  # noqa: BLE001
                 logger.warning("adaptive_risk lookup failed: %s — using base risk", e)
+        # Phase-1 · Adaptive daily risk budget — every strategy gets a share
+        # of today's risk pool; a nearly-spent budget SHRINKS this trade, an
+        # exhausted one skips it (resets at UTC midnight, never disables).
+        signal["strategy_class"] = signal.get("strategy_class") or "trend"
+        if cfg.get("risk_budget_enabled", True):
+            try:
+                from risk_budget import check_budget
+                bres = await check_budget(
+                    db, user_id, cfg, signal["strategy_class"],
+                    float(profile.get("risk_pct") or 0), cfg_account_id)
+                if not bres["allowed"]:
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="info",
+                        reason=f"Risk budget — {bres['reason']}",
+                    )
+                    continue
+                if bres.get("shrunk_from"):
+                    profile = {**profile, "risk_pct": bres["risk_pct"]}
+                    logger.info("Risk budget shrink user=%s sym=%s %s",
+                                user_id, sym, bres["reason"])
+                signal["risk_budget"] = {
+                    k: bres.get(k) for k in
+                    ("risk_pct", "shrunk_from", "remaining_after", "reason")}
+                signal["risk_pct"] = float(profile.get("risk_pct") or 0)
+            except Exception as e:  # noqa: BLE001 — budget is allocative; the
+                # protective floors (breakers, portfolio stop) sit below it
+                logger.warning("risk budget check failed: %s — allowing", e)
         # Iter-65: pass today's locked daily-profit so it's removed from the
         # equity pool used for Kelly sizing. The locked $ becomes untouchable.
         from profit_target import locked_profit_amount

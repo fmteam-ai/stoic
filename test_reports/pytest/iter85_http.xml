@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="8" time="3.917" timestamp="2026-07-24T12:20:03.431852+00:00" hostname="agent-env-34fef4ff-dc7d-4b0a-81b8-dfdc61d3971e"><testcase classname="tests.test_iter85_budget_http.TestRiskBudgetHTTP" name="test_unauthenticated_401_or_403" time="1.855" /><testcase classname="tests.test_iter85_budget_http.TestRiskBudgetHTTP" name="test_admin_default_shape" time="0.396" /><testcase classname="tests.test_iter85_budget_http.TestRiskBudgetHTTP" name="test_non_admin_cannot_read_others_account" time="1.256"><failure message="KeyError: 'id'">tests/test_iter85_budget_http.py:96: in test_non_admin_cannot_read_others_account
+    foreign = run_async(_find_foreign())
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:100: in run_async
+    return _shared_loop().run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+tests/test_iter85_budget_http.py:94: in _find_foreign
+    acc = await db.accounts.find_one({"user_id": u["id"]})
+                                                 ^^^^^^^
+E   KeyError: 'id'</failure></testcase><testcase classname="tests.test_iter85_budget_http.TestRiskBudgetHTTP" name="test_bogus_account_id_404" time="0.048" /><testcase classname="tests.test_iter85_budget_http.TestRiskBudgetHTTP" name="test_admin_has_perf_shrink_on_trend" time="0.053" /><testcase classname="tests.test_iter85_budget_http.TestHotPathRegression" name="test_bot_status_ok" time="0.070" /><testcase classname="tests.test_iter85_budget_http.TestHotPathRegression" name="test_trades_list_ok" time="0.045" /><testcase classname="tests.test_iter85_budget_http.TestHotPathRegression" name="test_risk_layers_still_ok" time="0.052" /></testsuite></testsuites>
