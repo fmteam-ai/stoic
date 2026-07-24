@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { ClipboardCheck } from "lucide-react";
+import { ClipboardCheck, Play, Loader2 } from "lucide-react";
 
 const LABELS = {
     restart_recovery: "RESTART RECOVERY",
@@ -32,6 +32,8 @@ function ModeDot({ rec }) {
 export const ValidationCard = () => {
     const [d, setD] = useState(null);
     const [hidden, setHidden] = useState(false);
+    const [running, setRunning] = useState(false);
+    const [runSummary, setRunSummary] = useState(null);
 
     const load = useCallback(async () => {
         try {
@@ -40,6 +42,20 @@ export const ValidationCard = () => {
         } catch { setHidden(true); }
     }, []);
     useEffect(() => { load(); }, [load]);
+
+    const runCampaign = async () => {
+        setRunning(true);
+        setRunSummary(null);
+        try {
+            const { data } = await api.post("/ops/validation/run", { account_mode: "both" });
+            const passed = data.runs.reduce((a, r) => a + r.passed, 0);
+            const failed = data.runs.reduce((a, r) => a + r.failed, 0);
+            setRunSummary({ passed, failed });
+            await load();
+        } catch (e) {
+            setRunSummary({ error: e?.response?.data?.detail || "run failed" });
+        } finally { setRunning(false); }
+    };
 
     if (hidden || !d) return null;
     const done = d.scenarios.filter(s => s.complete).length;
@@ -53,7 +69,21 @@ export const ValidationCard = () => {
                     data-testid="validation-progress">
                     {done}/{d.scenarios.length} SCENARIOS
                 </span>
+                <button onClick={runCampaign} disabled={running}
+                    data-testid="validation-run-btn"
+                    className="ml-auto flex items-center gap-1.5 font-mono text-[10px] tracking-widest px-2.5 py-1 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 disabled:opacity-50 transition-colors">
+                    {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                    {running ? "RUNNING…" : "RUN AUTOMATED CAMPAIGN"}
+                </button>
             </div>
+            {runSummary && (
+                <div className={`font-mono text-[10px] tracking-widest mt-2 ${runSummary.error || runSummary.failed ? "text-[#FF3B30]" : "text-[#00FF41]"}`}
+                    data-testid="validation-run-summary">
+                    {runSummary.error
+                        ? `HARNESS ERROR: ${runSummary.error}`
+                        : `HARNESS RUN COMPLETE — ${runSummary.passed} PASS · ${runSummary.failed} FAIL (netting + hedging)`}
+                </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 mt-3">
                 {d.scenarios.map(s => (
                     <div key={s.scenario} className="flex items-center justify-between gap-2"

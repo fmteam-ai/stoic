@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 444 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 1974 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2004 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 2449 tests across 227 files.**
+**Total: 2479 tests across 231 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -193,9 +193,13 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter84_pairing_flow.py` | http-live | 11 |
 | `backend/tests/test_iter84_risk_layers.py` | http-live | 7 |
 | `backend/tests/test_iter84_risk_layers_http.py` | http-live | 6 |
+| `backend/tests/test_iter85_budget_http.py` | http-live | 8 |
 | `backend/tests/test_iter85_ea_token_autoload.py` | http-live | 13 |
+| `backend/tests/test_iter85_sizing_budget.py` | http-live | 9 |
+| `backend/tests/test_iter86_risk_layers_expanded.py` | http-live | 10 |
 | `backend/tests/test_iter86_test_trade.py` | http-live | 6 |
 | `backend/tests/test_iter87_migration_helper.py` | http-live | 6 |
+| `backend/tests/test_iter87_validation_harness.py` | http-live | 3 |
 | `backend/tests/test_iter88_ghost_orphan_autoack.py` | http-live | 2 |
 | `backend/tests/test_iter90_heartbeat_reconcile.py` | http-live | 2 |
 | `backend/tests/test_iter91_bot_start_clears_panic.py` | http-live | 2 |

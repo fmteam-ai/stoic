@@ -1,4 +1,4 @@
-# STOIC frontend — reproducible build (CRA build served by nginx)
+# STOIC frontend — reproducible build (Vite build served by nginx)
 FROM node:20-alpine AS build
 
 WORKDIR /app/frontend

@@ -267,8 +267,27 @@ async def evaluate_layers(db, user_id: str, account: dict | None) -> list[dict]:
         return await _drawdown("monthly", 30, 12.0, "monthly_drawdown_pct")
 
     async def volatility():
-        return {"status": "armed",
-                "detail": "pre-trade shock check (4× median range) + volatility-scaled sizing"}
+        cdoc = None
+        if acc_id:
+            cdoc = await db.intraday_candles.find_one(
+                {"user_id": user_id, "account_id": acc_id},
+                sort=[("updated_at", -1)])
+        if not cdoc:
+            cdoc = await db.intraday_candles.find_one(
+                {"user_id": user_id}, sort=[("updated_at", -1)])
+        bars = (cdoc or {}).get("bars") or []
+        if len(bars) < 30:
+            return {"status": "degraded",
+                    "detail": "no intraday candle stream — shock detection "
+                              "blind (pre-trade check still enforced)"}
+        from risk_engine import abnormal_market_check
+        chk = abnormal_market_check(bars[-96:])
+        sym = cdoc.get("symbol") or ""
+        if chk["status"] == "block":
+            return {"status": "tripped", "detail": f"{sym}: {chk['detail']}"}
+        if chk["status"] == "trim":
+            return {"status": "degraded", "detail": f"{sym}: {chk['detail']}"}
+        return {"status": "armed", "detail": f"{sym}: {chk['detail']}"}
 
     async def spread():
         upd = _parse_ts((account or {}).get("spreads_updated_at"))
@@ -278,31 +297,61 @@ async def evaluate_layers(db, user_id: str, account: dict | None) -> list[dict]:
         return {"status": "armed", "detail": "spread kill-switch + cost gates on every entry"}
 
     async def liquidity():
+        mode = (the_cfg or {}).get("liquidity_gate_mode") or "enforce"
+        if mode == "off":
+            return {"status": "degraded",
+                    "detail": "liquidity gate switched OFF in bot config"}
+        q = {"user_id": user_id}
+        dom = await db.dom_snapshots.find_one(q, sort=[("updated_at", -1)])
+        upd = _parse_ts((dom or {}).get("updated_at"))
+        dom_live = bool(upd and (now - upd).total_seconds() < 300)
         return {"status": "armed",
-                "detail": "liquidity gate vetoes entries into opposing resting liquidity"}
+                "detail": f"gate {mode} — DOM "
+                          f"{'LIVE' if dom_live else 'offline (candle-based zones only)'}"
+                          f"; vetoes entries into opposing resting liquidity"}
 
     async def broker_anomaly():
         if account and account.get("trading_blocked"):
             return {"status": "tripped",
                     "detail": account.get("block_reason")
                     or "reject-streak breaker halted trading"}
+        blocked = await db.accounts.count_documents(
+            {"user_id": user_id, "trading_blocked": True,
+             "status": {"$ne": "deleted"}})
+        if blocked:
+            return {"status": "tripped",
+                    "detail": f"{blocked} account(s) halted by the "
+                              f"reject-streak breaker — manual release required"}
         return {"status": "armed",
                 "detail": "reject-streak breaker + stale-feed suspension active"}
 
     async def news():
         try:
-            from economic_calendar import feed_status
+            from economic_calendar import (feed_status, macro_freeze_check,
+                                           upcoming_for)
             st = (feed_status() or {}).get("status")
             if st == "DOWN":
                 return {"status": "degraded",
                         "detail": "calendar feed DOWN — event gate blind until it recovers"}
+            frz = await macro_freeze_check("XAUUSD")
+            if frz.get("frozen"):
+                return {"status": "degraded",
+                        "detail": f"event freeze ACTIVE — {frz.get('reason')}"}
             if st == "DEGRADED":
                 return {"status": "degraded",
                         "detail": "calendar feed degraded — using last cached events"}
+            ev = await upcoming_for("XAUUSD", hours=24)
+            if ev:
+                nxt = ev[0]
+                mins = max(0, int((float(nxt["when_ts"]) - now.timestamp()) / 60))
+                return {"status": "armed",
+                        "detail": f"next {nxt['impact']}-impact: "
+                                  f"{(nxt.get('title') or 'event')[:60]} in "
+                                  f"{mins // 60}h{mins % 60:02d}m — freeze window armed"}
         except Exception:
             pass
         return {"status": "armed",
-                "detail": "macro gate + event-exposure cap around red-flag prints"}
+                "detail": "macro gate + event-exposure cap armed (no red-flag prints next 24h)"}
 
     async def breaker():
         if (the_cfg or {}).get("tripped_at"):

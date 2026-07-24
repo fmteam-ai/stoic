@@ -209,6 +209,7 @@ class BotConfigUpdate(BaseModel):
     # daily/weekly/monthly drawdown ladder, abnormal-market halt, CVaR budget.
     risk_engine_enabled: bool = True
     monthly_drawdown_pct: float = 12.0
+    monthly_drawdown_enabled: bool = True
     max_leverage: float = 20.0
     cvar_budget_pct: float = 8.0
     event_exposure_cap_pct: float = 100.0

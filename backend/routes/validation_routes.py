@@ -94,6 +94,34 @@ async def validation_status(request: Request):
             "required_modes": list(ACCOUNT_MODES)}
 
 
+class RunIn(BaseModel):
+    account_mode: str = Field(default="netting", pattern="^(netting|hedging|both)$")
+    scenarios: list[str] | None = None
+    record: bool = True
+
+
+@router.post("/ops/validation/run")
+async def run_validation_campaign(payload: RunIn, request: Request):
+    """Automated simulated-EA campaign — exercises the real bridge endpoints
+    on a throwaway account and records evidence per scenario."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    if payload.scenarios:
+        unknown = [s for s in payload.scenarios if s not in VALIDATION_SCENARIOS]
+        if unknown:
+            return JSONResponse(status_code=422, content={
+                "detail": f"unknown scenarios: {unknown}"})
+    from validation_harness import run_campaign
+    db = get_db()
+    modes = (["netting", "hedging"] if payload.account_mode == "both"
+             else [payload.account_mode])
+    runs = [await run_campaign(db, m, scenarios=payload.scenarios,
+                               record=payload.record, actor=actor)
+            for m in modes]
+    return {"ok": True, "runs": runs}
+
+
 @router.post("/ops/validation/{scenario}")
 async def record_evidence(scenario: str, payload: EvidenceIn,
                           request: Request):

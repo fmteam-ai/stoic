@@ -22,6 +22,12 @@ DEFAULT_WEEKLY_DRAWDOWN_PCT = {
     "high": 14.0,
     "extreme": 25.0,
 }
+DEFAULT_MONTHLY_DRAWDOWN_PCT = {
+    "low": 8.0,
+    "medium": 12.0,
+    "high": 20.0,
+    "extreme": 35.0,
+}
 
 
 def today_iso() -> str:
@@ -30,6 +36,10 @@ def today_iso() -> str:
 
 def week_ago_iso() -> str:
     return (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+
+
+def month_ago_iso() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
 
 
 async def realised_pnl_since(db, user_id: str, since_iso: str,
@@ -68,6 +78,13 @@ def _weekly_limit(cfg: dict) -> float:
     return DEFAULT_WEEKLY_DRAWDOWN_PCT.get(cfg.get("risk_level", "medium"), 8.0)
 
 
+def _monthly_limit(cfg: dict) -> float:
+    explicit = cfg.get("monthly_drawdown_pct")
+    if explicit is not None:
+        return float(explicit)
+    return DEFAULT_MONTHLY_DRAWDOWN_PCT.get(cfg.get("risk_level", "medium"), 12.0)
+
+
 async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
     """Inspect today's and the rolling 7-day loss vs the user's limits.
 
@@ -88,28 +105,36 @@ async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
     total_equity = sum((a.get("equity") or 0) for a in accounts) or sum((a.get("balance") or 0) for a in accounts)
     pnl_today = await realised_pnl_since(db, user_id, today_iso(), account_id=cfg_account_id)
     pnl_week = await realised_pnl_since(db, user_id, week_ago_iso(), account_id=cfg_account_id)
+    pnl_month = await realised_pnl_since(db, user_id, month_ago_iso(), account_id=cfg_account_id)
     daily_limit_pct = _daily_limit(cfg)
     weekly_limit_pct = _weekly_limit(cfg)
+    monthly_limit_pct = _monthly_limit(cfg)
     daily_enabled = bool(cfg.get("daily_drawdown_enabled", True))
     weekly_enabled = bool(cfg.get("weekly_drawdown_enabled", True))
+    monthly_enabled = bool(cfg.get("monthly_drawdown_enabled", True))
 
     base = {
         "pnl_today": round(pnl_today, 2),
         "pnl_week": round(pnl_week, 2),
+        "pnl_month": round(pnl_month, 2),
         "limit_pct": daily_limit_pct,
         "weekly_limit_pct": weekly_limit_pct,
+        "monthly_limit_pct": monthly_limit_pct,
         "equity": round(total_equity, 2),
         "daily_enabled": daily_enabled,
         "weekly_enabled": weekly_enabled,
+        "monthly_enabled": monthly_enabled,
     }
 
     # Can't compute a percentage without equity reported by the EA — skip.
     if total_equity <= 0:
         return {**base, "tripped": False, "reason": "", "kind": "",
-                "drawdown_pct": 0.0, "drawdown_week_pct": 0.0}
+                "drawdown_pct": 0.0, "drawdown_week_pct": 0.0,
+                "drawdown_month_pct": 0.0}
 
     drawdown_pct = (pnl_today / total_equity) * 100
     drawdown_week_pct = (pnl_week / total_equity) * 100
+    drawdown_month_pct = (pnl_month / total_equity) * 100
 
     tripped, reason, kind = False, "", ""
     if daily_enabled and drawdown_pct <= -daily_limit_pct:
@@ -118,6 +143,9 @@ async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
     elif weekly_enabled and drawdown_week_pct <= -weekly_limit_pct:
         tripped, kind = True, "weekly"
         reason = f"Weekly drawdown {drawdown_week_pct:.2f}% breached -{weekly_limit_pct}% limit (7-day window)"
+    elif monthly_enabled and drawdown_month_pct <= -monthly_limit_pct:
+        tripped, kind = True, "monthly"
+        reason = f"Monthly drawdown {drawdown_month_pct:.2f}% breached -{monthly_limit_pct}% limit (30-day window)"
 
     if tripped:
         # Disable only the cfg that tripped — per-account override OR default profile.
@@ -143,6 +171,7 @@ async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
         "kind": kind,
         "drawdown_pct": round(drawdown_pct, 2),
         "drawdown_week_pct": round(drawdown_week_pct, 2),
+        "drawdown_month_pct": round(drawdown_month_pct, 2),
     }
 
 
