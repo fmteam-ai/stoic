@@ -135,7 +135,7 @@ def _serialize(cfg: dict) -> dict:
         "pre_news_protect_enabled": cfg.get("pre_news_protect_enabled", True),
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
         "min_confidence_override": cfg.get("min_confidence_override", 0),
-        "operational_mode": cfg.get("operational_mode", "autonomous_live"),
+        "operational_mode": cfg.get("operational_mode", "observe"),
         "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
         # iter-74 · Adaptive Mode visibility
@@ -731,6 +731,49 @@ async def update_config(payload: BotConfigUpdate,
                           {"account_id": account_id, "via": "config_update",
                            "fields": sorted(update.keys())},
                           request, step_up=True)
+
+    # Operational-mode promotion gate — moving TOWARD live execution is
+    # explicit, step-up-MFA'd, certification-tied and audited. Demotions
+    # (toward observe/defensive) apply instantly and are audited only.
+    if "operational_mode" in update:
+        from change_governance import MODE_RANK, snapshot_config
+        from operational_modes import DEFAULT_MODE, promotion_gate
+        cur_mode = (current_cfg or {}).get("operational_mode") or DEFAULT_MODE
+        new_mode = update["operational_mode"]
+        if MODE_RANK.get(new_mode, 0) > MODE_RANK.get(cur_mode, 0):
+            await require_step_up(db, user, request, "live_activation")
+            gate = await promotion_gate(db, user["id"], account_id, new_mode)
+            if gate["blockers"]:
+                await audit_event(db, user["id"], "mode_promotion_blocked",
+                                  {"from": cur_mode, "to": new_mode,
+                                   "blockers": gate["blockers"]},
+                                  request, step_up=True)
+                raise HTTPException(status_code=409, detail={
+                    "code": "mode_promotion_blocked",
+                    "message": "Mode promotion blocked by certification gate:",
+                    "blockers": gate["blockers"],
+                    "warnings": gate["warnings"]})
+            version_id = await snapshot_config(
+                db, user["id"], account_id, f"pre-promotion:{new_mode}")
+            now_dt = datetime.now(timezone.utc)
+            await db.governed_changes.insert_one({
+                "user_id": user["id"], "account_id": account_id,
+                "field": "operational_mode", "old_value": cur_mode,
+                "new_value": new_mode, "classification": "aggressive",
+                "status": "approved", "source": "mode_promotion",
+                "evidence": gate["evidence"],
+                "config_version_before": version_id,
+                "proposed_at": now_dt, "applied_at": now_dt})
+            await audit_event(db, user["id"], "mode_promotion",
+                              {"from": cur_mode, "to": new_mode,
+                               "warnings": gate["warnings"],
+                               "config_version": version_id,
+                               "evidence": gate["evidence"]},
+                              request, step_up=True)
+        elif new_mode != cur_mode:
+            await audit_event(db, user["id"], "mode_demotion",
+                              {"from": cur_mode, "to": new_mode,
+                               "account_id": account_id}, request)
 
     # Field-specific coercions
     if "symbols" in update:

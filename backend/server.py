@@ -428,6 +428,10 @@ async def on_startup():
     try:
         await ensure_indexes()
         await seed_admin()
+        # Safety review — DEFAULT_MODE is observe; grandfather migration
+        # stamps pre-existing configs explicitly (idempotent, audited).
+        from operational_modes import migrate_default_modes
+        await migrate_default_modes(get_db())
         from seed import dependency_health_check
         await dependency_health_check()
         logger.info("Startup: indexes ensured, admin seeded.")

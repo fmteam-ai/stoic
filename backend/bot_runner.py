@@ -1992,15 +1992,19 @@ async def _process_user_account_locked(db, cfg: dict):
             from operational_modes import mode_gate, record_intercept
             _mg = mode_gate(cfg, target_account)
         except Exception as e:  # noqa: BLE001
-            logger.warning("mode gate failed (fail-open to autonomous): %s", e)
-            _mg = {"mode": "autonomous_live", "allow_new": True,
-                   "lot_scale": 1.0, "reason": ""}
+            # SAFETY: mode-gate errors fail CLOSED to observe — a broken
+            # gate must never default to live execution.
+            logger.error("mode gate failed — failing CLOSED to observe: %s", e)
+            _mg = {"mode": "observe", "allow_new": False,
+                   "lot_scale": 0.0,
+                   "reason": "mode gate error — failing closed to observe"}
         if not _mg["allow_new"]:
             try:
                 await record_intercept(db, user_id, target_account, signal,
                                        effective_lot, _mg)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning("mode intercept record failed (skip still "
+                               "enforced): %s", e)
             await db.signals.update_one(
                 {"_id": result.inserted_id},
                 {"$set": {"operational_mode": _mg["mode"],
@@ -2103,6 +2107,8 @@ async def loop():
     interval = _loop_interval()
     logger.info("Bot runner started — interval=%ss, cooldown=%smin", interval, _cooldown_minutes())
     while True:
+        _cycle_started = datetime.now(timezone.utc)
+        _cycle_configs = 0
         try:
             db = get_db()
             # Pick up both fully-active bots AND paper-shadow bots (the latter
@@ -2112,6 +2118,7 @@ async def loop():
                 "$or": [{"active": True}, {"paper_shadow_mode": True}],
             })
             configs = await cursor.to_list(length=200)
+            _cycle_configs = len(configs)
             if configs:
                 await asyncio.gather(*[_process_user(db, c) for c in configs],
                                      return_exceptions=True)
@@ -2234,4 +2241,13 @@ async def loop():
                 logger.exception("Drift detection sweep failed: %s", e)
         except Exception as e:
             logger.exception("Bot runner tick failed: %s", e)
+        # Loop-progress telemetry — readiness distinguishes "coroutine alive"
+        # from "loop actually completing scan cycles" (stall detection).
+        try:
+            from workers.base import persist_progress, record_progress
+            record_progress("bot_runner.loop", processed=_cycle_configs,
+                            started_at=_cycle_started, interval_sec=interval)
+            await persist_progress(db, "bot_runner.loop")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("loop progress telemetry failed: %s", e)
         await asyncio.sleep(interval)

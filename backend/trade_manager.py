@@ -382,9 +382,19 @@ async def _tick() -> None:
 
 async def run_loop() -> None:
     """Forever loop — started from server.py startup."""
+    from datetime import datetime, timezone
     while True:
+        started = datetime.now(timezone.utc)
         try:
             await _tick()
         except Exception as e:
             logger.exception("trade_manager tick crashed: %s", e)
+        try:
+            from database import get_db
+            from workers.base import persist_progress, record_progress
+            record_progress("trade_manager.run_loop", processed=1,
+                            started_at=started, interval_sec=_interval())
+            await persist_progress(get_db(), "trade_manager.run_loop")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("loop progress telemetry failed: %s", e)
         await asyncio.sleep(_interval())

@@ -119,6 +119,25 @@ async def release_readiness(request: Request):
     checks["workers"] = {"ok": all(w["alive"] for w in workers.values()),
                          "detail": workers}
 
+    # 2b · REAL loop-progress telemetry (safety review) — the trading scan
+    # loop and trade manager must be COMPLETING iterations, not merely
+    # holding a lease. Works in both worker and in-process modes.
+    loop_rows = {}
+    async for lp in db.loop_progress.find({}):
+        done = _as_dt(lp.get("last_iteration_completed_at"))
+        ivl = int(lp.get("expected_interval_sec") or 60)
+        fresh = bool(done and (now - done).total_seconds()
+                     <= max(3 * ivl, 120))
+        loop_rows[str(lp["_id"])] = {
+            "ok": fresh,
+            "last_iteration_completed_at": _iso(done),
+            "last_duration_ms": lp.get("last_duration_ms"),
+            "processed_count": lp.get("processed_count"),
+            "expected_interval_sec": ivl}
+    checks["loop_progress"] = {
+        "ok": bool(loop_rows) and all(r["ok"] for r in loop_rows.values()),
+        "detail": loop_rows or {"note": "no loop progress recorded yet"}}
+
     # 3 · reconciliation lag — lease freshly renewed AND no broker-accepted
     #     order stuck unresolved for more than 5 minutes
     recon_renewed = _as_dt((leases.get("reconciliation") or {}).get("renewed_at"))

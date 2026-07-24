@@ -347,8 +347,9 @@ async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
                     source="loss_advisor",
                     evidence=m.get("evidence"),
                     detail=m.get("title"))
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning("governance ledger record failed "
+                               "(measure still applied): %s", e)
         elif mtype in GATE_TYPES:
             if active_n >= MAX_ACTIVE_GUARDS:
                 continue
@@ -376,8 +377,9 @@ async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
                     db, user_id, f"auto_guard:{mtype}", None,
                     m.get("params") or {}, source="loss_advisor",
                     evidence=m.get("evidence"), detail=m.get("title"))
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning("governance ledger record failed "
+                               "(guard still applied): %s", e)
     if applied:
         logger.warning("Auto-learning applied %d measure(s) user=%s", len(applied), user_id)
         try:

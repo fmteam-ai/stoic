@@ -4,13 +4,15 @@ import { toast } from "sonner";
 import { Scale, Check, X } from "lucide-react";
 
 const STATUS_COLOR = {
-    pending: "#FFB000", auto_applied: "#00FF41",
-    approved: "#38BDF8", rejected: "#52525B",
+    pending: "#FFB000", pending_second_approval: "#FF8C00",
+    auto_applied: "#00FF41", approved: "#38BDF8", rejected: "#52525B",
 };
 
 export const GovernanceCard = () => {
     const [d, setD] = useState(null);
     const [hidden, setHidden] = useState(false);
+    const [reasonFor, setReasonFor] = useState(null);
+    const [reason, setReason] = useState("");
 
     const load = useCallback(() => {
         api.get("/governance/changes?limit=20")
@@ -24,9 +26,12 @@ export const GovernanceCard = () => {
 
     const resolve = async (id, action) => {
         try {
-            const { data } = await api.post(`/governance/changes/${id}/${action}`);
-            if (data.ok) { toast.success(`Change ${data.status}`); load(); }
-            else toast.error(data.error || "Failed");
+            const body = action === "approve" ? { reason } : {};
+            const { data } = await api.post(`/governance/changes/${id}/${action}`, body);
+            if (data.ok) {
+                toast.success(data.detail || `Change ${data.status}`);
+                setReasonFor(null); setReason(""); load();
+            } else toast.error(data.error || "Failed");
         } catch (e) { toast.error(formatApiError(e)); }
     };
 
@@ -73,19 +78,41 @@ export const GovernanceCard = () => {
                                 </span>
                             </div>
                             {c.detail && <div className="text-[10px] text-[#71717A] mt-1">{c.detail}</div>}
-                            {c.status === "pending" && (
-                                <div className="flex items-center gap-2 mt-2">
-                                    <button onClick={() => resolve(c.id, "approve")}
-                                        data-testid={`governance-approve-${c.id}`}
-                                        className="flex items-center gap-1 px-3 py-1.5 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-[10px] font-mono tracking-widest">
-                                        <Check className="w-3 h-3" /> APPROVE
-                                    </button>
-                                    <button onClick={() => resolve(c.id, "reject")}
-                                        data-testid={`governance-reject-${c.id}`}
-                                        className="flex items-center gap-1 px-3 py-1.5 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 text-[10px] font-mono tracking-widest">
-                                        <X className="w-3 h-3" /> REJECT
-                                    </button>
-                                </div>
+                            {(c.status === "pending" || c.status === "pending_second_approval") && (
+                                reasonFor === c.id ? (
+                                    <div className="mt-2 space-y-2">
+                                        <input value={reason} onChange={e => setReason(e.target.value)}
+                                            placeholder="Reason for approval (required, ≥10 chars — audited)"
+                                            data-testid={`governance-reason-${c.id}`}
+                                            className="w-full bg-black border border-[#333] px-2.5 py-1.5 text-xs text-white font-mono focus:border-[#00FF41] outline-none" />
+                                        <div className="flex items-center gap-2">
+                                            <button onClick={() => resolve(c.id, "approve")}
+                                                disabled={reason.trim().length < 10}
+                                                data-testid={`governance-confirm-approve-${c.id}`}
+                                                className="flex items-center gap-1 px-3 py-1.5 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-[10px] font-mono tracking-widest disabled:opacity-40">
+                                                <Check className="w-3 h-3" /> CONFIRM (2FA REQUIRED)
+                                            </button>
+                                            <button onClick={() => { setReasonFor(null); setReason(""); }}
+                                                className="px-3 py-1.5 border border-[#333] text-[#A1A1AA] text-[10px] font-mono tracking-widest">
+                                                CANCEL
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-2 mt-2">
+                                        <button onClick={() => { setReasonFor(c.id); setReason(""); }}
+                                            data-testid={`governance-approve-${c.id}`}
+                                            className="flex items-center gap-1 px-3 py-1.5 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-[10px] font-mono tracking-widest">
+                                            <Check className="w-3 h-3" />
+                                            {c.status === "pending_second_approval" ? "SECOND APPROVAL" : "APPROVE"}
+                                        </button>
+                                        <button onClick={() => resolve(c.id, "reject")}
+                                            data-testid={`governance-reject-${c.id}`}
+                                            className="flex items-center gap-1 px-3 py-1.5 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 text-[10px] font-mono tracking-widest">
+                                            <X className="w-3 h-3" /> REJECT
+                                        </button>
+                                    </div>
+                                )
                             )}
                         </div>
                     ))}

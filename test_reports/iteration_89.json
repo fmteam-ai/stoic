@@ -1,0 +1,38 @@
+{
+  "summary": "iter-98 safety-hardening pass verified end-to-end on live preview. Backend: 8/8 unit tests (test_iter98_hardening.py) + 33/33 iter-96+iter-97 regression + 11/11 new HTTP tests (test_iter98_hardening_http.py) — 52/52 total. Verified: admin config grandfathered to autonomous_live (bot NOT stopped); fresh users default to observe; PUT /api/bot/config supervised_live WITHOUT step-up → 403 mfa_enrollment_required; WITH X-Step-Up-Bypass header (from backend/.env) → 200; demotion back to observe needs no MFA; governance approve WITHOUT step-up → 403 mfa_enrollment_required, reject with reason → 200 ok; release-readiness loop_progress.ok=true with both bot_runner.loop and trade_manager.run_loop showing last_iteration_completed_at + last_duration_ms + processed_count; audit_log has operational_mode_migration entry (grandfathered_active_to_autonomous_live=5, defaulted_inactive_to_observe=7625) and governance_reject entries. Frontend: /commander GovernanceCard renders governance-card + 12 governance-change-<id> rows; APPROVE on a pending change reveals governance-reason-<id> input and CONFIRM button (data-testid=governance-confirm-approve-<id>, note: my probe searched governance-confirm-<id> — cosmetic mismatch, not a bug). /bot-config OperationalModeCard renders all 7 mode buttons with data-testid mode-observe|shadow|demo_autopilot|supervised_live|autonomous_live|defensive|panic. Regression: /performance/verified, /learning/failure-summary, /risk/regime, /learning/speeds all 200.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "global", "issues": ["Repeated WebSocket wss://.../api/ws 403 handshake failures on every page (JWT cookie not authenticating WS upgrade) — non-blocking, carried over from iter-88 report. 401s during initial page load before login also appear as console noise."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter98_hardening.py",
+    "/app/backend/tests/test_iter98_hardening_http.py",
+    "/app/test_reports/pytest/iter98_verify.xml",
+    "/app/test_reports/pytest/iter98_full_regression.xml",
+    "/app/test_reports/pytest/iter89_http.xml"
+  ],
+  "action_items": [
+    "Main agent: regenerate /app/docs/TEST_MANIFEST.md — new file test_iter98_hardening_http.py added (11 HTTP tests: grandfather, fresh-user observe default, promotion step-up gate + bypass roundtrip, governance approve MFA gate + reject cleanup, release-readiness loop_progress structure, audit-log migration+governance entries, 4-endpoint regression).",
+    "Investigate WebSocket /api/ws 403 handshake (JWT cookie not sent on Upgrade) — carried over, non-blocking."
+  ],
+  "critical_code_review_comments": [
+    "operational_modes.migrate_default_modes uses `action` key in audit_log while some other subsystems use `event` — consider a single canonical field name across audit_log writers to simplify querying (my first-cut test failed until I discovered the inconsistency).",
+    "governance /propose endpoint accepts body {field, new_value} — no `from` snapshot in the request; server reads old_value from bot_configs. Correct defence but the frontend must render classification=aggressive even when old_value=null (as observed) — verify UX still communicates risk direction when the field was previously unset.",
+    "release-readiness returns HTTP 503 when overall ready=false (e.g., worker_leases FAIL in preview single-process mode) — this is correct fail-closed behaviour, but tests must accept 200 OR 503 and inspect checks.loop_progress independently. Documenting this behaviour in the API contract would help.",
+    "GovernanceCard testids: approve/reject use `governance-{action}-{id}` while confirm uses `governance-confirm-approve-{id}` — inconsistent naming (approve vs confirm-approve). Consider `governance-approve-confirm-{id}` for symmetry with `governance-approve-{id}`."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter98_hardening_http.py"
+  ],
+  "success_rate": {"backend": "100% (52/52 across 3 files)", "frontend": "100% (governance approve→reason input flow + operational mode card render verified; admin config NOT mutated)"},
+  "test_credentials": "admin@trading.bot / admin123 + STEP_UP_BYPASS_TOKEN from backend/.env for real-gate + bypass tests. Fresh test users registered via helpers.register_and_login with @example.com emails and strong password (Kd5#Zt9mW2xVpR7c).",
+  "seed_data_creation": "Two fresh users created for promotion tests (iter98-promo-*@example.com, iter98-promo2-*@example.com) and one for observe default check. All governance proposals created during tests (2 total — one via pytest, one via browser) were REJECTED at end. Admin's operational_mode was NEVER changed. Admin's bot_config risk_pct unchanged (proposal rejected before apply).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter-98 hardening pass is stable. New HTTP file test_iter98_hardening_http.py (11 tests, ~5s runtime) is the go-to regression for grandfather/observe/step-up-gate/governance-mfa/loop-progress/audit-log. IMPORTANT: 3 test failures on first run were self-fixed (propose body uses `new_value` not `from/to`; release-readiness returns 503 when overall not-ready even if loop_progress ok — accept 200|503; audit_log uses `action` key not `event`). LIVE broker still connected — do NOT approve risk-raising governance proposals, always reject to clean up. Admin has no TOTP — cannot exercise the real happy-path approve flow, only the 403 gate.",
+  "rca of the issue": "No blocking issues found. Cosmetic findings only: (a) audit_log field naming (action vs event) inconsistency across subsystems, (b) GovernanceCard testid naming asymmetry (governance-approve vs governance-confirm-approve), (c) release-readiness HTTP 503 semantics — all documented in critical_code_review_comments for future polish."
+}

@@ -186,29 +186,46 @@ def test_bot_config_operational_mode_default(sess):
 
 
 def test_bot_config_put_operational_mode_roundtrip_and_restore(sess):
-    # Read current
-    cfg = sess.get(f"{API}/bot/config", timeout=30).json()
-    original = cfg.get("operational_mode") or "autonomous_live"
-    try:
-        # Invalid mode → 422
-        bad = sess.put(f"{API}/bot/config",
-                       json={"operational_mode": "yolo"}, timeout=30)
-        assert bad.status_code == 422, f"expected 422 for invalid mode, got {bad.status_code} {bad.text}"
+    """Hardened (safety review): promotions toward live now require step-up
+    MFA + certification gate, so this roundtrip uses a FRESH user (no live
+    accounts → gate passes with the non-prod bypass token) instead of
+    demoting the admin's real live config."""
+    import uuid as _uuid
+    from helpers import register_and_login
+    s = register_and_login(f"iter97-mode-{_uuid.uuid4().hex[:8]}@example.com")
+    bypass = {"X-Step-Up-Bypass": os.environ.get("STEP_UP_BYPASS_TOKEN", "")}
 
-        # Valid mode set to 'observe'
-        ok = sess.put(f"{API}/bot/config",
-                      json={"operational_mode": "observe"}, timeout=30)
-        assert ok.status_code == 200, ok.text
-        after = sess.get(f"{API}/bot/config", timeout=30).json()
-        assert after.get("operational_mode") == "observe"
-    finally:
-        # ALWAYS restore to original (live bot!)
-        restore = sess.put(f"{API}/bot/config",
-                           json={"operational_mode": original}, timeout=30)
-        assert restore.status_code == 200, restore.text
-        final = sess.get(f"{API}/bot/config", timeout=30).json()
-        assert final.get("operational_mode") == original, \
-            f"FAILED TO RESTORE operational_mode! original={original}, current={final.get('operational_mode')}"
+    # Invalid mode → 422
+    bad = s.put(f"{API}/bot/config",
+                json={"operational_mode": "yolo"}, timeout=30)
+    assert bad.status_code == 422, f"expected 422 for invalid mode, got {bad.status_code} {bad.text}"
+
+    # Fresh users default to observe (fail-safe default)
+    cfg = s.get(f"{API}/bot/config", timeout=30).json()
+    assert cfg.get("operational_mode") == "observe", cfg.get("operational_mode")
+
+    # Promotion WITHOUT step-up MFA → 403 (disable the conftest auto-bypass
+    # for this call to exercise the REAL gate)
+    s.headers["X-Step-Up-Bypass"] = ""
+    denied = s.put(f"{API}/bot/config",
+                   json={"operational_mode": "supervised_live"}, timeout=30)
+    assert denied.status_code == 403, denied.text
+    assert denied.json()["detail"]["code"] in (
+        "step_up_required", "mfa_enrollment_required")
+    del s.headers["X-Step-Up-Bypass"]
+
+    # Promotion WITH bypass (test env) → allowed, audited
+    ok = s.put(f"{API}/bot/config",
+               json={"operational_mode": "supervised_live"},
+               headers=bypass, timeout=30)
+    assert ok.status_code == 200, ok.text
+    assert ok.json().get("operational_mode") == "supervised_live"
+
+    # Demotion back to observe — instant, no MFA needed
+    down = s.put(f"{API}/bot/config",
+                 json={"operational_mode": "observe"}, timeout=30)
+    assert down.status_code == 200, down.text
+    assert down.json().get("operational_mode") == "observe"
 
 
 # ---------------------------------------------------------- regression

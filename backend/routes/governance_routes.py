@@ -1,5 +1,9 @@
-"""Autopilot #10 — change governance API (approval queue + ledger)."""
-from fastapi import APIRouter, Depends
+"""Autopilot #10 — change governance API (approval queue + ledger).
+
+Hardening: approvals of risk-increasing changes require fresh step-up MFA
+(TOTP), a written reason, and produce immutable config-version snapshots +
+append-only audit events. Material changes need dual approval."""
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from auth import get_current_user
@@ -60,14 +64,42 @@ async def propose(body: ProposeBody, user=Depends(get_current_user)):
     return doc
 
 
+class ApproveBody(BaseModel):
+    reason: str
+
+
+class RejectBody(BaseModel):
+    reason: str | None = None
+
+
 @router.post("/changes/{change_id}/approve")
-async def approve_change(change_id: str, user=Depends(get_current_user)):
+async def approve_change(change_id: str, body: ApproveBody, request: Request,
+                         user=Depends(get_current_user)):
     from change_governance import resolve_change
-    return await resolve_change(get_db(), user["id"], change_id, approve=True)
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    # risk-increasing approval = live-sensitive → fresh TOTP required
+    await require_step_up(db, user, request, "risk_raise")
+    result = await resolve_change(db, user["id"], change_id, approve=True,
+                                  reason=body.reason)
+    await audit_event(db, user["id"], "governance_approve",
+                      {"change_id": change_id, "reason": body.reason,
+                       "result": result.get("status") or result.get("error")},
+                      request, step_up=True)
+    return result
 
 
 @router.post("/changes/{change_id}/reject")
-async def reject_change(change_id: str, user=Depends(get_current_user)):
+async def reject_change(change_id: str, request: Request,
+                        body: RejectBody | None = None,
+                        user=Depends(get_current_user)):
     from change_governance import resolve_change
-    return await resolve_change(get_db(), user["id"], change_id,
-                                approve=False)
+    from step_up import audit_event
+    db = get_db()
+    result = await resolve_change(db, user["id"], change_id, approve=False,
+                                  reason=(body.reason if body else None))
+    await audit_event(db, user["id"], "governance_reject",
+                      {"change_id": change_id,
+                       "result": result.get("status") or result.get("error")},
+                      request)
+    return result

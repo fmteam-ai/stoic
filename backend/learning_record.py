@@ -121,7 +121,7 @@ async def build_learning_record(db, trade: dict) -> dict:
         "failure": failure,
         "opened_at": trade.get("opened_at"),
         "closed_at": trade.get("closed_at"),
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "recorded_at": datetime.now(timezone.utc),
     }
 
 

@@ -192,31 +192,54 @@ def test_governance_propose_and_resolve(db):
         await db.bot_configs.insert_one(
             {"user_id": uid, "account_id": f"acc-{uid}", "active": True,
              "risk_pct": 1.0, "min_confidence_override": 55})
-        # conservative → auto-applied
+        # conservative → auto-applied (with immutable pre-apply snapshot)
         d1 = await propose_change(db, uid, "risk_pct", 1.0, 0.5,
                                   source="test")
         assert d1["status"] == "auto_applied" and d1["updated_configs"] == 1
+        assert d1.get("config_version_before")
         cfg = await db.bot_configs.find_one({"user_id": uid})
         assert cfg["risk_pct"] == 0.5
         # aggressive → pending, config untouched
         d2 = await propose_change(db, uid, "risk_pct", 0.5, 1.5,
                                   source="test")
         assert d2["status"] == "pending"
+        assert d2["risk_impact"]["direction"] == "risk_increasing"
         cfg = await db.bot_configs.find_one({"user_id": uid})
         assert cfg["risk_pct"] == 0.5
-        # approve applies it
-        r = await resolve_change(db, uid, d2["_id"], approve=True)
-        assert r["ok"] and r["status"] == "approved"
+        # approval without a reason is refused (hardening)
+        r0 = await resolve_change(db, uid, d2["_id"], approve=True)
+        assert not r0["ok"]
+        # 0.5→1.5 is a 3× raise = MATERIAL → dual approval flow
+        r1 = await resolve_change(db, uid, d2["_id"], approve=True,
+                                  reason="validated on demo for two weeks")
+        assert r1["ok"] and r1["status"] == "pending_second_approval"
+        cfg = await db.bot_configs.find_one({"user_id": uid})
+        assert cfg["risk_pct"] == 0.5  # still untouched
+        # immediate second approval blocked by cooling period
+        r2 = await resolve_change(db, uid, d2["_id"], approve=True,
+                                  reason="second sign-off after review")
+        assert not r2["ok"] and "cooling" in r2["error"]
+        # backdate the first approval → second approval applies the change
+        from datetime import datetime, timedelta, timezone
+        await db.governed_changes.update_one(
+            {"_id": d2["_id"]},
+            {"$set": {"first_approval.at": datetime.now(timezone.utc)
+                      - timedelta(minutes=16)}})
+        r3 = await resolve_change(db, uid, d2["_id"], approve=True,
+                                  reason="second sign-off after review")
+        assert r3["ok"] and r3["status"] == "approved"
+        assert r3["config_version_before"] and r3["config_version_after"]
         cfg = await db.bot_configs.find_one({"user_id": uid})
         assert cfg["risk_pct"] == 1.5
-        # double-resolve refused
-        r2 = await resolve_change(db, uid, d2["_id"], approve=True)
-        assert not r2["ok"]
+        # double-resolve refused (idempotency)
+        r4 = await resolve_change(db, uid, d2["_id"], approve=True,
+                                  reason="second sign-off after review")
+        assert not r4["ok"]
         # reject path
         d3 = await propose_change(db, uid, "kelly_enabled", False, True,
                                   source="test")
-        r3 = await resolve_change(db, uid, d3["_id"], approve=False)
-        assert r3["ok"] and r3["status"] == "rejected"
+        r5 = await resolve_change(db, uid, d3["_id"], approve=False)
+        assert r5["ok"] and r5["status"] == "rejected"
         cfg = await db.bot_configs.find_one({"user_id": uid})
         assert not cfg.get("kelly_enabled")
         # forbidden → rejected outright
@@ -225,4 +248,5 @@ def test_governance_propose_and_resolve(db):
         assert d4["status"] == "rejected"
         await db.bot_configs.delete_many({"user_id": uid})
         await db.governed_changes.delete_many({"user_id": uid})
+        await db.config_versions.delete_many({"user_id": uid})
     _run(go())

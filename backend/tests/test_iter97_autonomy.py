@@ -33,10 +33,11 @@ UID = f"iter97-{uuid.uuid4().hex[:8]}"
 
 
 # ------------------------------------------------------ operational modes
-def test_mode_gate_defaults_to_autonomous():
+def test_mode_gate_defaults_to_observe():
+    """Safety review — a missing/unknown config must NEVER default to live."""
     mg = mode_gate({}, {})
-    assert mg["mode"] == DEFAULT_MODE
-    assert mg["allow_new"] and mg["lot_scale"] == 1.0
+    assert mg["mode"] == DEFAULT_MODE == "observe"
+    assert not mg["allow_new"] and mg["lot_scale"] == 0.0
 
 
 def test_mode_gate_non_executing_modes():

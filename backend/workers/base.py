@@ -46,6 +46,17 @@ def record_progress(loop_name: str, processed: int = 0,
         st["expected_interval_sec"] = int(interval_sec)
 
 
+async def persist_progress(db, loop_name: str) -> None:
+    """Persist a loop's progress snapshot (safety review: readiness must see
+    REAL per-iteration progress in BOTH deployment modes — the lease keeper
+    covers dedicated workers; this covers in-process mode)."""
+    st = LOOP_PROGRESS.get(loop_name)
+    if not st:
+        return
+    await db.loop_progress.update_one(
+        {"_id": loop_name}, {"$set": dict(st)}, upsert=True)
+
+
 async def _try_acquire(db, name: str) -> bool:
     now = datetime.now(timezone.utc)
     res = await db.worker_leases.update_one(

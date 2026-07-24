@@ -22,7 +22,7 @@ const MODES = [
 
 export const OperationalModeCard = ({ cfg, setCfg, accountQuery }) => {
     const [saving, setSaving] = useState(false);
-    const current = cfg?.operational_mode || "autonomous_live";
+    const current = cfg?.operational_mode || "observe";
 
     const pick = async (key) => {
         if (key === current || saving) return;
@@ -32,11 +32,17 @@ export const OperationalModeCard = ({ cfg, setCfg, accountQuery }) => {
                 { operational_mode: key });
             setCfg(prev => ({ ...prev, operational_mode: data.operational_mode }));
             toast.success(`Operational mode: ${key.replace(/_/g, " ").toUpperCase()}`);
-        } catch (e) { toast.error(formatApiError(e)); }
+        } catch (e) {
+            const detail = e?.response?.data?.detail;
+            if (detail?.code === "mode_promotion_blocked") {
+                toast.error(`Promotion blocked: ${(detail.blockers || []).join(" · ")}`,
+                    { duration: 9000 });
+            } else toast.error(formatApiError(e));
+        }
         finally { setSaving(false); }
     };
 
-    const active = MODES.find(m => m.key === current) || MODES[4];
+    const active = MODES.find(m => m.key === current) || MODES[0];
 
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="operational-mode-card">
@@ -49,7 +55,7 @@ export const OperationalModeCard = ({ cfg, setCfg, accountQuery }) => {
                     {active.label}
                 </span>
             </div>
-            <p className="text-xs text-[#A1A1AA] mb-3">{active.detail}. Downgrading is instant; upgrades toward live trading are the aggressive direction.</p>
+            <p className="text-xs text-[#A1A1AA] mb-3">{active.detail}. Downgrading is instant; promotions toward live trading require fresh 2FA and pass the broker-certification gate (audited).</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                 {MODES.map(m => {
                     const Icon = m.icon;
