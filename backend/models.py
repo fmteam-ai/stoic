@@ -213,6 +213,9 @@ class BotConfigUpdate(BaseModel):
     # Phase 2 — execution intelligence
     execution_timing_enabled: bool = True   # brief pre-send delay on spread spikes
     adaptive_exits_enabled: bool = True     # vol retarget / fade tighten / de-risk
+    # Phase 3 — multi-strategy portfolio: allocate the daily risk pool from
+    # live per-strategy metrics (E[R], vol, DD, correlation, capacity, confidence)
+    dynamic_allocation_enabled: bool = True
     max_leverage: float = 20.0
     cvar_budget_pct: float = 8.0
     event_exposure_cap_pct: float = 100.0

@@ -56,3 +56,22 @@ async def risk_budget_status(account_id: str | None = None,
                      {"account_id": {"$exists": False}}]})}) or {}
     from risk_budget import budget_status
     return await budget_status(db, user["id"], cfg, account_id)
+
+
+@router.get("/strategy-portfolio")
+async def strategy_portfolio_report(account_id: str | None = None,
+                                    user=Depends(get_current_user)):
+    """Phase 3 — per-strategy metric table (expected return, volatility,
+    drawdown, correlation, capacity, confidence) + dynamic allocation."""
+    db = get_db()
+    from risk_budget import DEFAULT_ALLOCATIONS
+    from strategy_portfolio import build_allocation, strategy_metrics
+    m = await strategy_metrics(db, user["id"], account_id)
+    total = sum(v["n_trades"] for v in m["strategies"].values())
+    dynamic = build_allocation(m["strategies"]) if total >= 10 else None
+    return {**m,
+            "total_trades": total,
+            "base_allocation": DEFAULT_ALLOCATIONS,
+            "dynamic_allocation": dynamic,
+            "allocation_basis": "dynamic" if dynamic else
+            "static (needs ≥10 closed bot trades in window)"}

@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { RiskLayersCard } from "@/components/RiskLayersCard";
 import { RiskBudgetCard } from "@/components/RiskBudgetCard";
+import { StrategyPortfolioCard } from "@/components/StrategyPortfolioCard";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import {
@@ -202,6 +203,7 @@ export default function RiskCommander() {
             <div className="p-4 md:p-8 space-y-6 max-w-4xl">
                 <RiskLayersCard />
                 <RiskBudgetCard />
+                <StrategyPortfolioCard />
                 {err && (
                     <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono"
                         data-testid="risk-commander-error">

@@ -93,6 +93,20 @@ async def budget_status(db, user_id: str, cfg: dict,
     pool = float((cfg or {}).get("daily_risk_budget_pct")
                  or DEFAULT_POOL_PCT)
     alloc = _allocations(cfg or {})
+    alloc_basis = "static"
+    # Phase 3 — dynamic multi-strategy allocation (expected return, vol,
+    # drawdown, correlation, capacity, confidence → weights). Fail-open to
+    # the static shares.
+    if (cfg or {}).get("dynamic_allocation_enabled", True):
+        try:
+            from strategy_portfolio import current_allocations
+            dyn = await current_allocations(db, user_id, cfg or {}, account_id)
+            if dyn and dyn.get("weights"):
+                alloc = dyn["weights"]
+                alloc_basis = "dynamic"
+        except Exception:  # noqa: BLE001
+            logger.warning("dynamic allocation failed — static shares",
+                           exc_info=True)
     weights = await _perf_weights(db, user_id, account_id)
     spent = await _spent_today(db, user_id, account_id)
     rows = []
@@ -105,6 +119,7 @@ async def budget_status(db, user_id: str, cfg: dict,
                      "spent_risk_pct": spent[k],
                      "remaining_risk_pct": round(max(0.0, budget - spent[k]), 3)})
     return {"pool_risk_pct": pool, "resets_at_utc_midnight": True,
+            "allocation_basis": alloc_basis,
             "strategies": rows}
 
 
