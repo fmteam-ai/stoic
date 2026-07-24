@@ -78,14 +78,16 @@ async def check_portfolio_stop(db, account: dict) -> dict:
                 "detail": "no equity/balance in heartbeat"}
     threshold = DEF_PORTFOLIO_STOP_PCT
     cfgs = await _governing_cfgs(db, account)
+    overrides = []
     for c in cfgs:
         try:
             v = c.get("portfolio_stop_pct")
             if v is not None and float(v) > 0:
-                threshold = float(v)
-                break
+                overrides.append(float(v))
         except Exception:
             pass
+    if overrides:
+        threshold = min(overrides)   # most conservative override wins
     if dd > -threshold:
         return {"account_id": acc_id, "status": "armed",
                 "detail": f"floating {dd:+.2f}% vs -{threshold}% limit"}

@@ -1087,3 +1087,11 @@ All 10 user-requested corrections implemented + verified:
 - P0: MT5 validation campaign evidence (12 scenarios × netting/hedging)
 - P1: Soak at demo_broker stage; STAGE_ENFORCEMENT=true in production; backup passphrase + off-site remote + nightly verify cron; rollback drill
 - P2: CRA → Vite migration; trade-lifecycle BSON datetime migration (dedicated pass)
+
+## June 2026 — Phase 1: Multi-Layer Risk Engine (iter-84)
+User requested 12 independent protection layers; audit: 11 already existed. Added:
+- **Portfolio stop (new layer)**: risk_layers.py — floating drawdown (equity vs balance from broker heartbeat) per account; breach of -10% (PORTFOLIO_STOP_PCT / bot_configs.portfolio_stop_pct, min-of-overrides) → governing bot_configs disabled (tripped_kind='portfolio', user chose disable-only), critical ops alert, PortfolioStopTripped ledger event. Fail-safe: never trips on stale heartbeat/missing equity. Independent 30s loop (in-process + protection worker, with record_progress telemetry).
+- **Unified layer registry**: evaluate_layers() — all 12 layers each isolated in try/except (one erroring can never disable others; errors surface loudly). GET /api/risk/layers (ownership + admin checks).
+- **UI**: RiskLayersCard (12 rows, armed/tripped/degraded/error badges) on Risk Commander (/commander).
+- Layer map: strategy_stop+position_stop (engines/protection_guard), daily/weekly (circuit_breakers), monthly+volatility (risk_engine), spread (scalp kill/costs), liquidity (liquidity_map), broker anomaly (broker_reject_breaker→accounts.trading_blocked), news (economic_calendar/macro_gate), circuit_breaker (breakers+panic+safety_guardian).
+- Testing: 13/13 pytest (test_iter84_risk_layers.py + _http.py) + testing_agent iteration_84 100% backend+frontend. Trip flow verified end-to-end incl. no-re-trip + healthy + stale fail-safe.
