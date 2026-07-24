@@ -5,9 +5,12 @@ import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from auth import get_current_user
 from database import get_db
+from differentiation import (KEY_ID, feature_evidence, perf_attestation,
+                             verify_attestation)
 
 router = APIRouter(prefix="/performance", tags=["performance"])
 public_router = APIRouter(prefix="/public", tags=["public-performance"])
@@ -119,6 +122,7 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
 async def verified(user=Depends(get_current_user)):
     db = get_db()
     payload = await _verified_payload(db, user["id"])
+    payload["attestation"] = perf_attestation(payload)
     share = await db.performance_shares.find_one(
         {"user_id": user["id"], "revoked": {"$ne": True}})
     payload["share"] = ({"share_id": share["share_id"],
@@ -158,5 +162,25 @@ async def public_performance(share_id: str):
     if not share:
         raise HTTPException(status_code=404, detail="Share link not found or revoked")
     payload = await _verified_payload(db, share["user_id"], mask=True)
+    payload["attestation"] = perf_attestation(payload)
     payload["shared"] = True
     return payload
+
+
+class VerifyBody(BaseModel):
+    payload_hash: str
+    signature: str
+
+
+@public_router.post("/performance/verify")
+async def verify_performance(body: VerifyBody):
+    """Anyone can verify a track record wasn't tampered with (Phase 8)."""
+    return {"valid": verify_attestation(body.payload_hash, body.signature),
+            "key_id": KEY_ID}
+
+
+@router.get("/evidence")
+async def evidence(days: int = 30, user=Depends(get_current_user)):
+    """Phase 9 evidence board — every feature measured from real data."""
+    db = get_db()
+    return await feature_evidence(db, user["id"], days=max(1, min(days, 365)))

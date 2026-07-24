@@ -1,0 +1,41 @@
+{
+  "summary": "Phase 8/9 (Commercial Differentiation + Evidence-Based Development) verified end-to-end. Backend: 8/8 unit tests in test_iter95_differentiation.py + 14/14 new HTTP integration tests in test_iter158_differentiation_http.py all pass (22/22 = 100%). GET /api/performance/verified returns full attestation object (payload_hash 64-hex, signature 64-hex, key_id=perf-hmac-v1, algo=HMAC-SHA256(canonical-JSON), signed_at); regression fields (overall, equity_curve, accounts, integrity, generated_at) intact. POST /api/public/performance/verify works unauthenticated: returns valid=true for legitimate attestation and valid=false for tampered payload_hash or wrong signature. Public share flow: POST /performance/share → GET /public/performance/{share_id} (masked labels ACCOUNT-N, attestation attached and re-verifies OK) → DELETE /performance/share → follow-up GET returns 404. Evidence board returns exactly 6 features (execution_timing, adaptive_exits, regime_gating, dynamic_allocation, risk_layers, learning_pipeline); summary counts sum to 6; principle string present; days param clamped 1..365 (days=0 → 1, days=99999 → 365); requires auth. Broker intel: every row includes certification{tier,detail} with tier ∈ {CERTIFIED, ACCEPTABLE, DEGRADED, PROVISIONAL}. /broker-intel/certification returns brokers list + tiers legend dict with all 4 tier keys. Frontend: /performance shows attestation-seal, clicking attestation-verify-btn produces attestation-valid badge with text 'SIGNATURE VALID — TRACK RECORD IS TAMPER-FREE'. /agents renders evidence-board with all 6 evidence-<feature> rows and evidence-verdict-<feature> badges; evidence-summary shows '2 PROVEN 4 EXPERIMENTAL' matching backend live data (dynamic_allocation N=490 PROVEN, learning_pipeline N=1 PROVEN, others experimental — regime_gating N=0 expected per problem statement). BrokerIntelCard with broker-cert-<account_id> PROVISIONAL badges renders on /brokers (5 badges for all 5 accounts).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/agents Feature Evidence Board", "issues": ["Minor: evidence-summary chips render without separator between '2 PROVEN' and '4 EXPERIMENTAL' (reads as '2 PROVEN4 EXPERIMENTAL'). Add gap-based spacing text or a middle dot separator for readability."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter95_differentiation.py",
+    "/app/backend/tests/test_iter158_differentiation_http.py",
+    "/app/test_reports/pytest/iter95_unit.xml",
+    "/app/test_reports/pytest/iter158_http.xml"
+  ],
+  "action_items": [
+    "NEW backend test file added: /app/backend/tests/test_iter158_differentiation_http.py — regenerate /app/docs/TEST_MANIFEST.md",
+    "Cosmetic: add explicit spacing/separator between summary chips in EvidenceBoard.jsx (evidence-summary currently renders '2 PROVEN4 EXPERIMENTAL' with no visible gap due to inline text nodes)",
+    "Note: BrokerIntelCard renders on /brokers route (not /execution as described in request). This matches iter-86 placement; if the intent was to also embed it on /execution, wire it there. Not blocking — certification tier badges work correctly on /brokers."
+  ],
+  "critical_code_review_comments": [
+    "differentiation.perf_attestation uses os.environ['JWT_SECRET'] as fallback signing key — if JWT_SECRET is ever rotated, all previously-signed public attestations become unverifiable retroactively (the signed_at timestamp is inside the wrapper, not the payload). Consider making PERF_SIGNING_KEY a mandatory separate secret with its own rotation policy and embedding key_id (already present) into the verification lookup so old keys can still verify historical shares.",
+    "public_performance() masks labels but the equity_curve and integrity block leak absolute net PnL, per-account net_pnl, deal counts, and dates — that IS the intent of a share link, but worth documenting so future changes don't accidentally strip masking off account labels while leaving PII in payload notes fields.",
+    "VerifyBody accepts arbitrary-length payload_hash / signature strings. Consider Pydantic constraints (constr(regex='^[0-9a-f]{64}$')) so obvious garbage 400s at the schema layer instead of returning valid=false.",
+    "evidence() clamps days to 1..365 but silently — an out-of-range request returns 200 with the clamped window. That's fine, but the response doesn't echo the requested vs applied value, so a client asking for 5000 days won't know it got 365. Minor UX."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter158_differentiation_http.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (22/22)", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123 (existing, cookie auth)",
+  "seed_data_creation": "None. HTTP tests use admin session, create + immediately revoke a share link (no residual docs). Unit tests use isolated UIDs (iter95-<uuid>) with own cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 8/9 endpoints all green: /api/performance/verified (with attestation), /api/public/performance/verify (HMAC-SHA256 canonical-JSON, KEY_ID=perf-hmac-v1), /api/performance/share (create/revoke), /api/public/performance/{share_id} (masked labels + attestation), /api/performance/evidence (6 features, days clamp 1..365), /api/broker-intel (certification per row), /api/broker-intel/certification (rows + 4-tier legend). Live evidence board reads '2 PROVEN / 4 EXPERIMENTAL' on admin account (dynamic_allocation N=490, learning_pipeline N=1, rest experimental incl. regime_gating N=0 which is expected). BrokerIntelCard is on /brokers route, not /execution. Pre-existing WS /api/ws 403 handshake noise unchanged.",
+  "rca of the issue": "N/A — no issues found."
+}

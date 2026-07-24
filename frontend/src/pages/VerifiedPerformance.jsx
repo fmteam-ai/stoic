@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { EquityCurve, StatTiles, IntegrityStamp, AccountsTable } from "@/components/VerifiedPerf";
+import { AttestationSeal } from "@/components/AttestationSeal";
 import { toast } from "sonner";
 import { Share2, Copy, XCircle } from "lucide-react";
 
@@ -55,6 +56,7 @@ export default function VerifiedPerformance() {
                 {d && (
                     <>
                         <IntegrityStamp integrity={d.integrity} />
+                        <AttestationSeal attestation={d.attestation} />
                         <StatTiles overall={d.overall} maxDrawdown={d.max_drawdown} />
                         <EquityCurve curve={d.equity_curve} />
                         <AccountsTable accounts={d.accounts} />

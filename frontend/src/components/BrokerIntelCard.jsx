@@ -13,6 +13,13 @@ const COMP_LABELS = {
 const scoreColor = (s) =>
     s == null ? "#52525B" : s >= 80 ? "#00FF41" : s >= 55 ? "#FFD700" : "#FF3B30";
 
+const TIER_COLOR = {
+    CERTIFIED: "#00FF41",
+    ACCEPTABLE: "#FFD700",
+    DEGRADED: "#FF3B30",
+    PROVISIONAL: "#52525B",
+};
+
 export const BrokerIntelCard = () => {
     const [d, setD] = useState(null);
     const [hidden, setHidden] = useState(false);
@@ -49,6 +56,15 @@ export const BrokerIntelCard = () => {
                                 data-testid={`broker-intel-score-${b.account_id}`}>
                                 {b.score == null ? "—" : b.score}
                             </span>
+                            {b.certification && (
+                                <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border"
+                                    style={{ color: TIER_COLOR[b.certification.tier] || "#52525B",
+                                        borderColor: `${TIER_COLOR[b.certification.tier] || "#52525B"}55` }}
+                                    title={b.certification.detail}
+                                    data-testid={`broker-cert-${b.account_id}`}>
+                                    {b.certification.tier}
+                                </span>
+                            )}
                             {b.provisional && (
                                 <span className="font-mono text-[9px] tracking-widest text-[#FFD700] border border-[#FFD700]/30 px-1.5 py-0.5">
                                     PROVISIONAL · {b.fills_measured} FILLS

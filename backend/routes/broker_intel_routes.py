@@ -11,6 +11,7 @@ router = APIRouter(prefix="/broker-intel", tags=["broker-intel"])
 async def broker_intel(user=Depends(get_current_user)):
     """Live execution score for every connected broker + routing pick."""
     from broker_intel import score_account
+    from differentiation import certify
     from execution_timing import timing_stats
     db = get_db()
     out = []
@@ -19,6 +20,8 @@ async def broker_intel(user=Depends(get_current_user)):
              "dormant": {"$ne": True}, "harness": {"$ne": True}}):
         res = await score_account(db, acc)
         res["timing"] = await timing_stats(db, res["account_id"])
+        res["certification"] = certify(res["score"], res["provisional"],
+                                       res["fills_measured"])
         out.append(res)
     scored = [r for r in out if r["score"] is not None and not r["provisional"]]
     best = max(scored, key=lambda r: r["score"]) if scored else None
@@ -26,3 +29,27 @@ async def broker_intel(user=Depends(get_current_user)):
             "best_execution": (
                 {"account_id": best["account_id"], "label": best["label"],
                  "score": best["score"]} if best else None)}
+
+
+@router.get("/certification")
+async def broker_certification(user=Depends(get_current_user)):
+    """Phase 8 — broker certification tiers from measured live execution."""
+    from broker_intel import score_account
+    from differentiation import certify
+    db = get_db()
+    rows = []
+    async for acc in db.accounts.find(
+            {"user_id": user["id"], "status": {"$ne": "deleted"},
+             "dormant": {"$ne": True}, "harness": {"$ne": True}}):
+        res = await score_account(db, acc)
+        rows.append({"account_id": res["account_id"], "label": res["label"],
+                     "broker": acc.get("broker"), "score": res["score"],
+                     "fills_measured": res["fills_measured"],
+                     "certification": certify(res["score"],
+                                              res["provisional"],
+                                              res["fills_measured"])})
+    return {"brokers": rows,
+            "tiers": {"CERTIFIED": "score ≥ 80, ≥10 measured fills",
+                      "ACCEPTABLE": "score 55-79 — adequate, monitor",
+                      "DEGRADED": "score < 55 — avoid routing",
+                      "PROVISIONAL": "not enough measured fills yet"}}

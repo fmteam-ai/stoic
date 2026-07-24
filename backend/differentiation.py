@@ -71,9 +71,11 @@ async def feature_evidence(db, user_id: str, days: int = 30) -> dict:
         return "experimental"
 
     # 1. execution timing — spread saved on delayed sends
-    docs = await db.execution_timing_stats.find(
-        {"at": {"$gte": since_dt}}).to_list(500)
-    mine = [d for d in docs]  # per-account, all belong to user's accounts
+    acc_ids = [str(a["_id"]) async for a in db.accounts.find(
+        {"user_id": user_id}, {"_id": 1})]
+    mine = await db.execution_timing_stats.find(
+        {"at": {"$gte": since_dt},
+         "account_id": {"$in": acc_ids}}).to_list(500)
     n = len(mine)
     saved = sum(d["spread_before"] - d["spread_after"] for d in mine)
     imp = sum(1 for d in mine if d.get("improved"))

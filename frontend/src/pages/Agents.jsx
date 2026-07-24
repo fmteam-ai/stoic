@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AgentReportCard from "@/components/AgentReportCard";
+import { EvidenceBoard } from "@/components/EvidenceBoard";
 import {
     Brain, Search, ShieldCheck, Send, Activity, RefreshCw,
     CheckCircle2, XCircle, AlertTriangle, Clock, Cpu,
@@ -107,6 +108,7 @@ export default function Agents() {
 
                 <StrategyGeneratorCta />
                 <AgentReportCard />
+                <EvidenceBoard />
                 <AgentRoster />
                 <MacroSnapshot macro={macro} />
                 <ActivityFeed loading={loading} activity={activity} />

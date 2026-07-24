@@ -4,6 +4,7 @@ import axios from "axios";
 import { API } from "@/lib/api";
 import { StoicOfficial } from "@/components/StoicLogo";
 import { EquityCurve, StatTiles, IntegrityStamp, AccountsTable } from "@/components/VerifiedPerf";
+import { AttestationSeal } from "@/components/AttestationSeal";
 
 export default function PublicPerformance() {
     const { shareId } = useParams();
