@@ -59,6 +59,35 @@ export const RegimeCard = () => {
                 <div>{r.volatility.detail} · {r.sentiment.detail}</div>
                 <div>{r.news.detail}</div>
             </div>
+            {r.probabilities && (
+                <div className="mt-3 pt-2 border-t border-[#141414]" data-testid="regime-probabilities">
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="font-mono text-[9px] tracking-widest text-[#52525B]">
+                            REGIME PROBABILITIES — UNCERTAIN CLASSIFICATION = REDUCED EXPOSURE
+                        </span>
+                        <span className={`font-mono text-[9px] tracking-widest ${
+                            r.probabilities.uncertainty > 0.7 ? "text-[#FF8C00]" : "text-[#A1A1AA]"}`}
+                            data-testid="regime-uncertainty">
+                            UNCERTAINTY {Math.round(r.probabilities.uncertainty * 100)}%
+                        </span>
+                    </div>
+                    <div className="space-y-1">
+                        {Object.entries(r.probabilities.classes).slice(0, 5).map(([cls, p]) => (
+                            <div key={cls} className="flex items-center gap-2" data-testid={`regime-prob-${cls}`}>
+                                <span className="font-mono text-[9px] text-[#A1A1AA] w-40 shrink-0">
+                                    {cls.replace(/_/g, " ").toUpperCase()}
+                                </span>
+                                <div className="flex-1 h-1.5 bg-[#141414]">
+                                    <div className="h-full bg-[#38BDF8]" style={{ width: `${Math.round(p * 100)}%` }} />
+                                </div>
+                                <span className="font-mono text-[9px] text-white w-9 text-right tabular-nums">
+                                    {Math.round(p * 100)}%
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
             <div className="mt-3 pt-2 border-t border-[#141414]">
                 <div className="font-mono text-[9px] tracking-widest text-[#52525B] mb-1.5">
                     STRATEGY FIT IN THIS REGIME — PROVEN NEGATIVE EDGE IS BENCHED UNTIL CONDITIONS CHANGE

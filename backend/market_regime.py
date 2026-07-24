@@ -111,6 +111,58 @@ def _regime_key(trend: str, vol: str, news: bool) -> str:
     return "news_driven" if news else f"{trend}|{vol}"
 
 
+REGIME_CLASSES = ("strong_trend", "weak_trend", "range", "breakout",
+                  "volatility_expansion", "volatility_contraction",
+                  "news_driven", "abnormal")
+
+
+def regime_probabilities(bars, trend: str, trend_conf: float, vol: dict,
+                         news_driven: bool) -> dict:
+    """Soft-evidence probability distribution over regime classes instead of
+    one absolute label. Returns classes, top, top_p and a normalized-entropy
+    uncertainty (0 = certain, 1 = maximally uncertain)."""
+    scores = {c: 0.05 for c in REGIME_CLASSES}
+    trending = trend in ("trending_up", "trending_down")
+    conf = max(0.0, min(1.0, float(trend_conf or 0)))
+    if trending:
+        scores["strong_trend"] += conf if conf >= 0.7 else conf * 0.5
+        scores["weak_trend"] += (1 - conf) * 0.6 if conf >= 0.7 else 0.7
+    else:
+        scores["range"] += 0.8
+
+    ratio = float(vol.get("ratio") or 1.0)
+    if ratio >= 1.25:
+        scores["volatility_expansion"] += min(1.0, ratio - 1.0)
+    elif ratio <= 0.8:
+        scores["volatility_contraction"] += min(1.0, (1.0 - ratio) * 2)
+
+    if bars and len(bars) >= 25:
+        ranges = sorted(b["h"] - b["l"] for b in bars[-25:])
+        med = ranges[len(ranges) // 2]
+        last = bars[-1]
+        if med > 0 and (last["h"] - last["l"]) >= 3.0 * med:
+            scores["abnormal"] += 1.0
+        hi = max(b["h"] for b in bars[-23:-3])
+        lo = min(b["l"] for b in bars[-23:-3])
+        if any(b["c"] > hi or b["c"] < lo for b in bars[-3:]):
+            scores["breakout"] += 0.7
+    if ratio >= 2.5:
+        scores["abnormal"] += 0.8
+
+    if news_driven:
+        scores["news_driven"] += 0.8
+
+    total = sum(scores.values())
+    probs = {c: s / total for c, s in scores.items()}
+    entropy = -sum(p * math.log(p) for p in probs.values() if p > 0)
+    uncertainty = entropy / math.log(len(REGIME_CLASSES))
+    top = max(probs, key=probs.get)
+    return {"classes": {c: round(p, 3) for c, p in
+                        sorted(probs.items(), key=lambda kv: -kv[1])},
+            "top": top, "top_p": round(probs[top], 3),
+            "uncertainty": round(uncertainty, 3)}
+
+
 async def detect(db, user_id: str, force: bool = False) -> dict:
     """Unified snapshot, cached 5 min per user."""
     cached = _CACHE.get(user_id)
@@ -169,6 +221,9 @@ async def detect(db, user_id: str, force: bool = False) -> dict:
         "volatility": vol,
         "sentiment": sent,
         "news": news,
+        "probabilities": regime_probabilities(
+            docs.get(primary_sym) if primary_sym else None,
+            trend, trend_conf, vol, news["news_driven"]),
         "primary_symbol": primary_sym,
         "at": datetime.now(timezone.utc).isoformat(),
     }

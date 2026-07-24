@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { FailureTaxonomyCard } from "@/components/FailureTaxonomyCard";
 import {
     RefreshCw, FlaskConical, AlertTriangle, Brain, TrendingDown, ShieldCheck,
     Activity, ChevronRight, Calendar,
@@ -398,6 +399,8 @@ export default function LossLab() {
                     </button>
                 </div>
                 {reviews.length > 0 && <ReviewCard r={reviews[0]} />}
+
+                <FailureTaxonomyCard />
 
                 {/* iter-55 — Daily Auto-Learning: master toggle + active guards */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="auto-learning-card">

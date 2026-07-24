@@ -286,6 +286,10 @@ api_router.include_router(broker_intel_router)
 from routes.journal_routes import router as journal_router, public_router as journal_public_router  # noqa: E402
 api_router.include_router(journal_router)
 api_router.include_router(journal_public_router)
+from routes.learning_routes import router as learning_router  # noqa: E402
+from routes.governance_routes import router as governance_router  # noqa: E402
+api_router.include_router(learning_router)
+api_router.include_router(governance_router)
 
 
 # ---------- WebSocket ----------

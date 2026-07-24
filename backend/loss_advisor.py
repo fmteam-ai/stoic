@@ -340,6 +340,15 @@ async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
             r = await db.bot_configs.update_many({"user_id": user_id}, {"$set": upd})
             applied.append({"kind": "config", "measure": m,
                             "updated_configs": r.modified_count, "applied_at": now_iso})
+            try:
+                from change_governance import record_auto_applied
+                await record_auto_applied(
+                    db, user_id, "friday_flat_enabled", None, upd,
+                    source="loss_advisor",
+                    evidence=m.get("evidence"),
+                    detail=m.get("title"))
+            except Exception:  # noqa: BLE001
+                pass
         elif mtype in GATE_TYPES:
             if active_n >= MAX_ACTIVE_GUARDS:
                 continue
@@ -361,6 +370,14 @@ async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
             })
             active_n += 1
             applied.append({"kind": "guard", "measure": m, "applied_at": now_iso})
+            try:
+                from change_governance import record_auto_applied
+                await record_auto_applied(
+                    db, user_id, f"auto_guard:{mtype}", None,
+                    m.get("params") or {}, source="loss_advisor",
+                    evidence=m.get("evidence"), detail=m.get("title"))
+            except Exception:  # noqa: BLE001
+                pass
     if applied:
         logger.warning("Auto-learning applied %d measure(s) user=%s", len(applied), user_id)
         try:

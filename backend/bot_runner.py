@@ -2123,6 +2123,14 @@ async def loop():
                 await sweep_self_evaluation(db)
             except Exception as e:
                 logger.exception("Self-evaluation sweep failed: %s", e)
+            # Learning records (autopilot #8) — unified post-trade dataset
+            # with failure classification. Runs AFTER self-eval so MFE/MAE
+            # grades exist. Self-throttled to 1 sweep/5min.
+            try:
+                from learning_record import sweep_learning_records
+                await sweep_learning_records(db)
+            except Exception as e:
+                logger.exception("Learning-record sweep failed: %s", e)
             # Friday Flat guard (iter-52) — close/tighten open positions ahead
             # of the Friday 21:00 UTC weekly close (weekend gap protection).
             try:

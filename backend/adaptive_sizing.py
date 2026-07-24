@@ -125,6 +125,21 @@ def regime_mult(regime: str | None) -> float:
     return 1.0
 
 
+def regime_certainty_mult(uncertainty: float | None) -> float:
+    """Autopilot #1 — reduce exposure when the market classification itself
+    is uncertain (normalized regime-probability entropy 0..1)."""
+    if uncertainty is None:
+        return 1.0
+    u = float(uncertainty)
+    if u <= 0.55:
+        return 1.0
+    if u <= 0.70:
+        return 0.9
+    if u <= 0.85:
+        return 0.8
+    return 0.65
+
+
 def exposure_mult(open_auto_count: int, floating_dd_pct: float | None) -> float:
     """Portfolio exposure: the more concurrent open risk, the smaller each
     NEW position. Floating losses shrink new risk further."""
@@ -211,6 +226,15 @@ async def compute_adaptive_risk(db, user_id: str, cfg: dict, signal: dict,
     regime = ((signal.get("regime_execution_mode") or {}).get("regime")
               or cfg.get("_last_regime"))
     comps["regime"] = regime_mult(regime)
+
+    # regime-classification uncertainty — uncertain market = smaller size
+    try:
+        from market_regime import detect as _regime_detect
+        snap = await _regime_detect(db, user_id)
+        comps["regime_certainty"] = regime_certainty_mult(
+            (snap.get("probabilities") or {}).get("uncertainty"))
+    except Exception:  # noqa: BLE001
+        comps["regime_certainty"] = 1.0
 
     # portfolio exposure — concurrent open auto-risk + floating P&L
     open_q = {"user_id": user_id, "status": "open", "origin": "auto"}

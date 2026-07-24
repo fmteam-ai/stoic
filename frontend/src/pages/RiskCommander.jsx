@@ -5,6 +5,7 @@ import { RiskLayersCard } from "@/components/RiskLayersCard";
 import { RiskBudgetCard } from "@/components/RiskBudgetCard";
 import { StrategyPortfolioCard } from "@/components/StrategyPortfolioCard";
 import { RegimeCard } from "@/components/RegimeCard";
+import { GovernanceCard } from "@/components/GovernanceCard";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import {
@@ -205,6 +206,7 @@ export default function RiskCommander() {
                 <RiskLayersCard />
                 <RiskBudgetCard />
                 <RegimeCard />
+                <GovernanceCard />
                 <StrategyPortfolioCard />
                 {err && (
                     <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono"
