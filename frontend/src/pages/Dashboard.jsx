@@ -15,6 +15,7 @@ import { DiagnosticModal } from "@/components/DiagnosticModal";
 import BotPulsePanel from "@/components/BotPulsePanel";
 import SilentBotBanner from "@/components/SilentBotBanner";
 import MtfCascadePanel from "@/components/MtfCascadePanel";
+import TrendScoreStrip from "@/components/TrendScoreStrip";
 import MarketPosture from "@/components/MarketPosture";
 import ArchitecturePipeline from "@/components/ArchitecturePipeline";
 import BotWatching from "@/components/BotWatching";
@@ -511,6 +512,7 @@ export default function Dashboard() {
                 <SilentBotBanner />
 
                 <MtfCascadePanel />
+                <TrendScoreStrip />
 
                 <MarketPosture />
                 <ArchitecturePipeline />

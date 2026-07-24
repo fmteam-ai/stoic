@@ -219,6 +219,12 @@ class BotConfigUpdate(BaseModel):
     # Phase 4 — regime detection: strategies trade only where their
     # historical edge fits the live regime (fail-open without evidence)
     regime_gating_enabled: bool = True
+    # Autopilot #15 — operational mode (observe|shadow|demo_autopilot|
+    # supervised_live|autonomous_live|defensive|panic)
+    operational_mode: Optional[str] = Field(
+        default=None,
+        pattern="^(observe|shadow|demo_autopilot|supervised_live|"
+                "autonomous_live|defensive|panic)$")
     max_leverage: float = 20.0
     cvar_budget_pct: float = 8.0
     event_exposure_cap_pct: float = 100.0

@@ -1969,6 +1969,53 @@ async def _process_user_account_locked(db, cfg: dict):
         except Exception as e:  # noqa: BLE001
             logger.warning("EV/quality scoring failed (fail-open): %s", e)
 
+        # Autopilot #12 — trend-quality + exhaustion stamp (informational)
+        try:
+            from pip_utils import base_symbol as _bs_ts
+            from trend_score import trend_report
+            _cd = await db.intraday_candles.find_one(
+                {"user_id": user_id, "symbol": _bs_ts(sym)}, {"bars": 1})
+            _tbars = (_cd or {}).get("bars") or []
+            if len(_tbars) >= 40:
+                _ts = trend_report(_tbars[-96:], symbol=sym)
+                signal["trend_score"] = _ts
+                await db.signals.update_one(
+                    {"_id": result.inserted_id},
+                    {"$set": {"trend_score": _ts}})
+        except Exception as e:  # noqa: BLE001
+            logger.debug("trend score stamp skipped: %s", e)
+
+        # Autopilot #15 — operational mode gate (observe/shadow/defensive/
+        # demo/supervised/autonomous/panic). Runs after the full pipeline so
+        # non-executing modes still produce studyable decisions.
+        try:
+            from operational_modes import mode_gate, record_intercept
+            _mg = mode_gate(cfg, target_account)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mode gate failed (fail-open to autonomous): %s", e)
+            _mg = {"mode": "autonomous_live", "allow_new": True,
+                   "lot_scale": 1.0, "reason": ""}
+        if not _mg["allow_new"]:
+            try:
+                await record_intercept(db, user_id, target_account, signal,
+                                       effective_lot, _mg)
+            except Exception:  # noqa: BLE001
+                pass
+            await db.signals.update_one(
+                {"_id": result.inserted_id},
+                {"$set": {"operational_mode": _mg["mode"],
+                          "tradeable": False}})
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP",
+                level="info",
+                reason=(f"operational mode {_mg['mode'].upper()} — "
+                        f"{_mg['reason']}"),
+                signal=signal)
+            await inc_intel_counter(user_id, f"mode_intercept_{_mg['mode']}")
+            continue
+        if _mg.get("lot_scale", 1.0) < 1.0:
+            effective_lot = max(0.01, round(effective_lot * _mg["lot_scale"], 2))
+            signal["operational_mode"] = _mg["mode"]
+
         engine = engine_for_account(target_account)
         # Phase 2 · Execution timing — brief pre-send delay when the live
         # spread is spiking vs its 10-min median (never vetoes).

@@ -14,6 +14,7 @@ import { AlertsCard } from "../components/AlertsCard";
 import { ValidationCard } from "../components/ValidationCard";
 import { StageCard } from "../components/StageCard";
 import { LearningPipelineCard } from "../components/LearningPipelineCard";
+import { LearningSpeedsCard } from "../components/LearningSpeedsCard";
 
 const SEV_STYLE = {
     excellent:{ fg:"text-[#00FF41]", bd:"border-[#00FF41]/30", bg:"bg-[#00FF41]/5" },
@@ -548,6 +549,7 @@ export default function BotHealth() {
                 <StageCard />
                 <ValidationCard />
                 <LearningPipelineCard />
+                <LearningSpeedsCard />
 
                 <AutoHealPanel data={data.autoHeal} onChange={load} />
 

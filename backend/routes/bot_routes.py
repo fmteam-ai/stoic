@@ -135,6 +135,7 @@ def _serialize(cfg: dict) -> dict:
         "pre_news_protect_enabled": cfg.get("pre_news_protect_enabled", True),
         "pre_news_protect_minutes": cfg.get("pre_news_protect_minutes", 5),
         "min_confidence_override": cfg.get("min_confidence_override", 0),
+        "operational_mode": cfg.get("operational_mode", "autonomous_live"),
         "max_lot_size": float(cfg.get("max_lot_size") or 0.0),
         "active_preset": cfg.get("active_preset"),
         # iter-74 · Adaptive Mode visibility

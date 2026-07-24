@@ -57,11 +57,22 @@ SAFER_BOOL = {
 FORBIDDEN_FIELDS = {"bridge_token", "broker", "mode", "account_type",
                     "user_id", "account_id"}
 
+# operational mode ranks — lower = safer (autopilot #15)
+MODE_RANK = {"panic": 0, "defensive": 1, "observe": 2, "shadow": 3,
+             "demo_autopilot": 4, "supervised_live": 5,
+             "autonomous_live": 6}
+
 
 def classify_change(field: str, old, new) -> str:
     """→ 'conservative' | 'aggressive' | 'forbidden'."""
     if field in FORBIDDEN_FIELDS:
         return "forbidden"
+    if field == "operational_mode":
+        old_r = MODE_RANK.get(str(old or "autonomous_live"))
+        new_r = MODE_RANK.get(str(new))
+        if new_r is None or old_r is None:
+            return "aggressive"
+        return "conservative" if new_r <= old_r else "aggressive"
     if field in SAFER_BOOL:
         return "conservative" if bool(new) == SAFER_BOOL[field] else "aggressive"
     direction = SAFER_DIRECTION.get(field)

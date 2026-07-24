@@ -1,0 +1,32 @@
+{
+  "summary": "iter-96 + iter-97 autopilot autonomy stack verified end-to-end. Backend: 13/13 HTTP tests pass on live preview (regime probabilities sum to 1.0 over 8 classes, failure-summary/records populated, governance policy + propose-aggressive-then-reject roundtrip with config-untouched safety, double-resolve refused, learning-speeds 3 tiers, safety-invariants exactly 9 all 'enforced', trend-score XAUUSD UP 74/100 with all 5 components, operational_mode PUT valid mode 200 / invalid 'yolo' 422 with restore to original). Frontend: all 6 targeted UI sections render with correct data-testids on /commander, /loss-lab, /bot-config, /, /bot-health — mode-observe click toasts and mode-autonomous_live restore round-trip works; safety-invariants-toggle expands list. Regression: /performance/verified, /performance/evidence, /broker-intel all 200.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "global", "issues": ["Console noise: repeated 429 rate-limit errors on some dashboards, WebSocket /api/ws 403 handshake failures — not blocking but flags rate-limiter tuning + WS auth path"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter97_autonomy_http.py",
+    "/app/test_reports/pytest/iter97_http.xml"
+  ],
+  "action_items": [
+    "Main agent: regenerate /app/docs/TEST_MANIFEST.md — new file test_iter97_autonomy_http.py added (13 tests covering iter-96 + iter-97 HTTP surface).",
+    "Investigate WebSocket /api/ws 403 handshake in browser (JWT cookie not accepted on WS upgrade?) — non-blocking but appears on every page."
+  ],
+  "critical_code_review_comments": [
+    "governance_routes.propose reads current cfg value from bot_configs before proposing — good defence against stale UI diffs.",
+    "learning_routes.safety-invariants status is hardcoded 'enforced'; consider deriving from real system checks (e.g., stop_removal_lever==false) for future audit truthfulness.",
+    "posture_routes trend-score returns direction as string from trend_report — no enum guard on frontend; low risk since it renders as text."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter97_autonomy_http.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (6/6 sections)"},
+  "test_credentials": "admin@trading.bot / admin123 (cookie + x-csrf-token header for mutations) — from /app/memory/test_credentials.md",
+  "seed_data_creation": "None. All governance proposals created during test were rejected (aggressive risk raise) — no live config mutated. operational_mode change to 'observe' was reversed to autonomous_live in finally block.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New HTTP regression file test_iter97_autonomy_http.py is stable (4s runtime). Existing unit tests test_iter96_autopilot.py and test_iter97_autonomy.py were NOT re-run this iteration but were reported passing previously (8+12). LIVE broker still connected — never approve aggressive governance proposals; always restore operational_mode & risk_pct after any mutation.",
+  "rca of the issue": "No issues found."
+}
