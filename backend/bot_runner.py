@@ -1538,6 +1538,23 @@ async def _process_user_account_locked(db, cfg: dict):
         # of today's risk pool; a nearly-spent budget SHRINKS this trade, an
         # exhausted one skips it (resets at UTC midnight, never disables).
         signal["strategy_class"] = signal.get("strategy_class") or "trend"
+        # Phase 4 · Regime gate — a strategy only trades when its historical
+        # edge fits the CURRENT market regime (trend/vol/sentiment/news).
+        # Unknown regimes fail open; proven-negative edge in this exact
+        # regime skips the trade until conditions change.
+        try:
+            from market_regime import regime_gate
+            rg = await regime_gate(db, user_id, cfg, signal["strategy_class"])
+            signal["market_regime"] = {
+                "key": rg["regime"]["key"], "label": rg["regime"]["label"]}
+            if not rg["allowed"]:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="info",
+                    reason=f"Regime gate — {rg['reason']}",
+                )
+                continue
+        except Exception as e:  # noqa: BLE001 — advisory gate, fail-open
+            logger.warning("regime gate failed: %s — allowing", e)
         if cfg.get("risk_budget_enabled", True):
             try:
                 from risk_budget import check_budget

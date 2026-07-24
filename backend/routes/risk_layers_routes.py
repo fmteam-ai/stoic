@@ -75,3 +75,14 @@ async def strategy_portfolio_report(account_id: str | None = None,
             "dynamic_allocation": dynamic,
             "allocation_basis": "dynamic" if dynamic else
             "static (needs ≥10 closed bot trades in window)"}
+
+
+@router.get("/regime")
+async def market_regime_report(user=Depends(get_current_user)):
+    """Phase 4 — unified live regime (trend/volatility/sentiment/news) and
+    each strategy's historical edge fit in the current regime."""
+    from market_regime import detect, strategy_edge
+    db = get_db()
+    regime = await detect(db, user["id"])
+    edge = await strategy_edge(db, user["id"], regime["key"])
+    return {"regime": regime, "strategy_fit": edge}

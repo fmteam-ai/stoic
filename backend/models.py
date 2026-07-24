@@ -216,6 +216,9 @@ class BotConfigUpdate(BaseModel):
     # Phase 3 — multi-strategy portfolio: allocate the daily risk pool from
     # live per-strategy metrics (E[R], vol, DD, correlation, capacity, confidence)
     dynamic_allocation_enabled: bool = True
+    # Phase 4 — regime detection: strategies trade only where their
+    # historical edge fits the live regime (fail-open without evidence)
+    regime_gating_enabled: bool = True
     max_leverage: float = 20.0
     cvar_budget_pct: float = 8.0
     event_exposure_cap_pct: float = 100.0

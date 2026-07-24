@@ -254,6 +254,7 @@ class MT5BridgeEngine(ExecutionEngine):
             "origin": signal.get("origin", "manual"),
             "scope": signal.get("scope"),
             "strategy_class": signal.get("strategy_class"),
+            "market_regime": signal.get("market_regime"),
             "risk_pct": (signal.get("risk_pct")
                          or (signal.get("adaptive_sizing") or {}).get("risk_pct")),
             "scalp_lease_epoch": signal.get("scalp_lease_epoch"),
@@ -345,6 +346,7 @@ class PaperEngine(ExecutionEngine):
             "error": None,
             "origin": signal.get("origin", "manual"),
             "strategy_class": signal.get("strategy_class"),
+            "market_regime": signal.get("market_regime"),
             "risk_pct": (signal.get("risk_pct")
                          or (signal.get("adaptive_sizing") or {}).get("risk_pct")),
         }
