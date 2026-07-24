@@ -31,6 +31,20 @@ async def broker_intel(user=Depends(get_current_user)):
                  "score": best["score"]} if best else None)}
 
 
+@router.get("/forecast")
+async def broker_forecast(account_id: str, symbol: str | None = None,
+                          user=Depends(get_current_user)):
+    """Tier 9 — pre-trade execution quality forecast for an account."""
+    from bson import ObjectId
+    from broker_intel import execution_forecast
+    db = get_db()
+    acc = await db.accounts.find_one(
+        {"_id": ObjectId(account_id), "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return await execution_forecast(db, acc, symbol)
+
+
 @router.get("/certification")
 async def broker_certification(user=Depends(get_current_user)):
     """Phase 8 — broker certification tiers from measured live execution."""

@@ -51,6 +51,14 @@ def _unlock_hints(sig: dict) -> list:
     return hints
 
 
+@router.get("/market-state")
+async def market_state(user=Depends(get_current_user)):
+    """Tier 3 — composite Market State Score."""
+    from market_state import market_state_score
+    return await market_state_score(get_db(),
+                                    str(user.get("id") or user.get("_id")))
+
+
 @router.get("/trend-score")
 async def trend_score_endpoint(symbol: str = "XAUUSD",
                                user=Depends(get_current_user)):

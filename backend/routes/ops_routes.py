@@ -179,6 +179,79 @@ async def release_readiness(request: Request):
                                  "checks": checks})
 
 
+@router.get("/ops/release-safety")
+async def release_safety(request: Request):
+    """Tier 16 — composite Release Safety Score (0-100) with promotion
+    verdict: readiness checks, test manifest, validation campaigns,
+    confidence calibration."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    comps = {}
+    ready = await release_readiness(request)
+    if hasattr(ready, "body"):
+        import json as _json
+        ready = _json.loads(ready.body)
+    checks = (ready if isinstance(ready, dict) else {}).get("checks") or {}
+    ok_n = sum(1 for c in checks.values() if c.get("ok"))
+    comps["readiness"] = {"score": round(ok_n / max(1, len(checks)) * 100),
+                          "detail": f"{ok_n}/{len(checks)} checks green"}
+    try:
+        import re
+        with open("/app/docs/TEST_MANIFEST.md") as f:
+            head = f.read(2000)
+        m = re.search(r"Total:\s*([\d,]+)\s*tests", head)
+        n_tests = int(m.group(1).replace(",", "")) if m else 0
+        comps["test_suite"] = {"score": 100 if n_tests >= 2000 else 60,
+                               "detail": f"{n_tests} manifest-locked tests"}
+    except Exception:  # noqa: BLE001
+        comps["test_suite"] = {"score": 0, "detail": "manifest unreadable"}
+    runs = await db.validation_runs.find(
+        {}, sort=[("at", -1)]).limit(10).to_list(10)
+    if runs:
+        passed = sum(1 for r in runs if r.get("passed"))
+        comps["validation_campaigns"] = {
+            "score": round(passed / len(runs) * 100),
+            "detail": f"{passed}/{len(runs)} recent campaigns passed"}
+    else:
+        comps["validation_campaigns"] = {
+            "score": None,
+            "detail": "no campaigns recorded — run the MT5 validation harness"}
+    try:
+        from calibration import compute_calibration
+        admin = await db.users.find_one({"role": "admin"}, {"_id": 1})
+        table = await compute_calibration(
+            db, str(admin["_id"])) if admin else {}
+        errs, ns = [], 0
+        for ent in (table.values() if isinstance(table, dict) else []):
+            for b in (ent.get("buckets") or []):
+                n = b.get("n") or 0
+                if n >= 30 and b.get("gap") is not None:
+                    errs.append(abs(float(b["gap"])) * n)
+                    ns += n
+        if ns:
+            err = sum(errs) / ns
+            comps["calibration"] = {
+                "score": round(max(0, 100 - err * 2)),
+                "detail": f"avg calibration error {err:.1f}pts over {ns} trades"}
+        else:
+            comps["calibration"] = {
+                "score": None,
+                "detail": "not enough closed trades per confidence bucket"}
+    except Exception as e:  # noqa: BLE001
+        comps["calibration"] = {"score": None, "detail": f"unavailable: {e}"}
+
+    scored = [c["score"] for c in comps.values() if c["score"] is not None]
+    score = round(sum(scored) / len(scored), 1) if scored else 0.0
+    verdict = ("PROMOTE" if score >= 90 else
+               "CANARY_ONLY" if score >= 75 else "BLOCK")
+    return {"release_safety_score": score, "verdict": verdict,
+            "threshold": {"promote": 90, "canary": 75},
+            "components": comps,
+            "principle": "only releases above the threshold can be promoted"}
+
+
 @router.get("/ops/alerts")
 async def list_alerts(request: Request, include_acked: bool = False,
                       limit: int = 100):

@@ -63,6 +63,40 @@ async def _governing_cfgs(db, account: dict) -> list[dict]:
          "$or": [{"account_id": None}, {"account_id": {"$exists": False}}]})]
 
 
+async def _trip_configs(db, cfgs: list, reason: str) -> bool:
+    """Deactivate configs on a portfolio breach. Tier 7 — Autonomous Risk
+    Commander: live-mode configs are also demoted to DEFENSIVE so
+    re-activation only manages exposure until an explicit (MFA'd)
+    re-promotion. Recorded in the governance ledger."""
+    tripped_any = False
+    for c in cfgs:
+        if not c.get("active"):
+            continue
+        upd = {"active": False,
+               "tripped_at": _now().isoformat(),
+               "tripped_reason": reason,
+               "tripped_kind": "portfolio"}
+        prev_mode = c.get("operational_mode")
+        if prev_mode in ("demo_autopilot", "supervised_live",
+                         "autonomous_live"):
+            upd["operational_mode"] = "defensive"
+        await db.bot_configs.update_one({"_id": c["_id"]}, {"$set": upd})
+        if upd.get("operational_mode"):
+            try:
+                from change_governance import record_auto_applied
+                await record_auto_applied(
+                    db, c["user_id"], "operational_mode", prev_mode,
+                    "defensive", source="risk_commander",
+                    evidence=reason,
+                    detail="portfolio breaker tripped — auto-demoted to "
+                           "defensive (conservative, re-promotion needs MFA)")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("governance record for auto-defensive "
+                               "failed (demotion still applied): %s", e)
+        tripped_any = True
+    return tripped_any
+
+
 async def check_portfolio_stop(db, account: dict) -> dict:
     """Evaluate ONE account. Trips the governing bot configs on breach.
     Fail-safe rules: stale heartbeat = degraded (never trip on stale data);
@@ -94,17 +128,7 @@ async def check_portfolio_stop(db, account: dict) -> dict:
 
     reason = (f"Portfolio stop: floating drawdown {dd:.2f}% breached "
               f"-{threshold}% of balance")
-    tripped_any = False
-    for c in cfgs:
-        if not c.get("active"):
-            continue
-        await db.bot_configs.update_one(
-            {"_id": c["_id"]},
-            {"$set": {"active": False,
-                      "tripped_at": _now().isoformat(),
-                      "tripped_reason": reason,
-                      "tripped_kind": "portfolio"}})
-        tripped_any = True
+    tripped_any = await _trip_configs(db, cfgs, reason)
     if tripped_any:
         logger.critical("PORTFOLIO STOP tripped for account %s (%s): %s",
                         acc_id, account.get("label"), reason)

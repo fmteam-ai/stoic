@@ -667,6 +667,19 @@ async def trade_explain(trade_id: str, user=Depends(get_current_user)):
     return await explain_trade(db, trade)
 
 
+@router.get("/{trade_id}/dna")
+async def trade_dna(trade_id: str, user=Depends(get_current_user)):
+    """Tier 1 — Decision DNA: consolidated, HMAC-signed decision record
+    answering why / evidence / risks / outcome-vs-expectation."""
+    from decision_dna import compose_dna
+    db = get_db()
+    trade = await db.trades.find_one(
+        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]})
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return await compose_dna(db, trade)
+
+
 @router.get("/{trade_id}/trace")
 async def trade_trace(trade_id: str, user=Depends(get_current_user)):
     """Phase 6 — full execution trace. Answers, with recorded evidence:

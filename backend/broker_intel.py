@@ -167,7 +167,77 @@ async def score_account(db, account: dict) -> dict:
             "broker": account.get("broker") or account.get("server"),
             "score": score, "provisional": provisional,
             "fills_measured": len(filled), "components": components,
+            "suitability": style_suitability(components),
             "window_days": WINDOW_DAYS}
+
+
+def style_suitability(components: dict) -> dict:
+    """Tier 10 — which trading styles this broker's measured execution
+    suits. Weighted blends of the measured components (None-safe)."""
+    def blend(weights: dict) -> int | None:
+        acc = tot = 0.0
+        for key, w in weights.items():
+            s = (components.get(key) or {}).get("score")
+            if s is None:
+                continue
+            acc += w * s
+            tot += w
+        return round(acc / tot) if tot >= 0.3 else None
+    return {
+        "scalping": blend({"fill_speed": 0.35, "spread": 0.30,
+                           "slippage": 0.25, "rejects": 0.10}),
+        "swing": blend({"spread": 0.20, "slippage": 0.25, "rejects": 0.25,
+                        "freeze": 0.15, "fill_speed": 0.15}),
+        "gold": blend({"slippage": 0.40, "spread": 0.30, "fill_speed": 0.30}),
+        "indices": blend({"fill_speed": 0.40, "rejects": 0.30,
+                          "spread": 0.30}),
+        "crypto": blend({"spread": 0.45, "slippage": 0.35, "rejects": 0.20}),
+    }
+
+
+async def execution_forecast(db, account: dict,
+                             symbol: str | None = None) -> dict:
+    """Tier 9 — predict execution quality BEFORE trading: expected slippage,
+    latency, rejection probability and a fill-quality grade from measured
+    history (not price prediction — execution prediction)."""
+    from statistics import median
+    acc_id = str(account["_id"])
+    since = (_now() - timedelta(days=WINDOW_DAYS)).isoformat()
+    q = {"account_id": acc_id, "origin": "auto",
+         "opened_at": {"$gte": since}}
+    if symbol:
+        q["symbol"] = {"$regex": f"^{symbol[:6]}", "$options": "i"}
+    slips, lats = [], []
+    async for t in db.trades.find(q, {"slippage_pips": 1, "_dispatched_at": 1,
+                                      "acknowledged_at": 1}).limit(300):
+        if t.get("slippage_pips") is not None:
+            slips.append(abs(float(t["slippage_pips"])))
+        d, a = _parse_iso(t.get("_dispatched_at")), _parse_iso(
+            t.get("acknowledged_at"))
+        if d and a:
+            lats.append((a - d).total_seconds() * 1000)
+    res = await score_account(db, account)
+    rej = (res["components"].get("rejects") or {}).get("score")
+    score = res.get("score")
+    grade = (None if score is None else
+             "A" if score >= 85 else "B" if score >= 70
+             else "C" if score >= 55 else "D")
+    return {
+        "account_id": acc_id, "label": res.get("label"),
+        "symbol": symbol,
+        "expected_slippage_pips": round(median(slips), 2) if slips else None,
+        "worst_case_slippage_pips": round(
+            sorted(slips)[int(len(slips) * 0.9)], 2) if len(slips) >= 5 else None,
+        "expected_latency_ms": round(median(lats)) if lats else None,
+        "rejection_probability_pct": (round((100 - rej) * 0.1, 1)
+                                      if rej is not None else None),
+        "fill_quality_grade": grade,
+        "broker_score": score,
+        "sample_size": len(slips),
+        "suitability": res.get("suitability"),
+        "note": "execution forecast from measured fills — sometimes the best "
+                "trade is not the best execution",
+    }
 
 
 async def detect_deterioration(db, account_id: str, score: float) -> dict | None:

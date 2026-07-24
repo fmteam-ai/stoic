@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles, FlaskConical, BookOpen, Route, Film } from "lucide-react";
+import { RefreshCw as ArrowsClockwise, X, Trash2 as Trash, ChevronDown, GitMerge, History, RotateCcw, Sparkles, FlaskConical, BookOpen, Route, Film, Dna } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import BotPulsePanel from "@/components/BotPulsePanel";
 import { JournalCardModal } from "@/components/JournalCardModal";
 import { TraceModal } from "@/components/TraceModal";
+import { DnaModal } from "@/components/DnaModal";
 import { ReplayModal } from "@/components/ReplayModal";
 import { Link } from "react-router-dom";
 
@@ -298,6 +299,7 @@ export default function Trades() {
     const [auditTrade, setAuditTrade] = useState(null);  // trade whose audit trail modal is open
     const [explainTrade, setExplainTrade] = useState(null);  // trade whose AI-explainability modal is open
     const [traceTrade, setTraceTrade] = useState(null);  // trade whose full execution-trace modal is open
+    const [dnaTrade, setDnaTrade] = useState(null);      // trade whose Decision DNA modal is open
     const [replayTrade, setReplayTrade] = useState(null);  // trade whose tick replay modal is open
     const [journalTrade, setJournalTrade] = useState(null);  // trade whose shareable journal card modal is open
     const load = useCallback(async () => {
@@ -987,6 +989,11 @@ export default function Trades() {
                                                     className="text-[#A1A1AA] hover:text-[#FFD700] text-xs font-mono tracking-widest flex items-center gap-1">
                                                     <Route className="w-3 h-3" /> TRACE
                                                 </button>
+                                                <button onClick={() => setDnaTrade(t)} data-testid={`dna-trade-${t.id}`}
+                                                    title="Decision DNA: the complete signed record — regime, trend, volatility, liquidity, news, confidence, EV, risk, versions, AI + deterministic opinions, execution, broker, exit, learning"
+                                                    className="text-[#A1A1AA] hover:text-[#00FF41] text-xs font-mono tracking-widest flex items-center gap-1">
+                                                    <Dna className="w-3 h-3" /> DNA
+                                                </button>
                                                 <button onClick={() => setReplayTrade(t)} data-testid={`replay-trade-${t.id}`}
                                                     title="Replay the trade's price path tick by tick with entries, stops and lifecycle events"
                                                     className="text-[#A1A1AA] hover:text-[#38BDF8] text-xs font-mono tracking-widest flex items-center gap-1">
@@ -1036,6 +1043,13 @@ export default function Trades() {
                 <TraceModal
                     trade={traceTrade}
                     onClose={() => setTraceTrade(null)}
+                />
+            )}
+
+            {dnaTrade && (
+                <DnaModal
+                    trade={dnaTrade}
+                    onClose={() => setDnaTrade(null)}
                 />
             )}
 
