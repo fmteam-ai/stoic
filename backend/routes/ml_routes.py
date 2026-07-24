@@ -25,6 +25,16 @@ async def get_ensemble_status(user=Depends(get_current_user)):
     return _summary(await get_meta(db, uid))
 
 
+@router.get("/learning-pipeline")
+async def learning_pipeline_status(user=Depends(get_current_user)):
+    """Phase 5 — staged continuous-learning pipeline state: freeze guard,
+    recent gated retrain runs, shadow-lab queue, rollback versions."""
+    from learning_pipeline import pipeline_status
+    db = get_db()
+    uid = str(user.get("id") or user.get("_id"))
+    return await pipeline_status(db, uid)
+
+
 @router.post("/train")
 async def retrain_ensemble(user=Depends(get_current_user)):
     from ml_ensemble import train_ensemble

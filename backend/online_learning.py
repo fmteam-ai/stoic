@@ -53,20 +53,15 @@ async def sweep_online_learning(db) -> int:
                 trigger = trigger or "initial baseline"
             if not trigger:
                 continue
-            results = {}
-            from ml_ensemble import train_ensemble
-            from rl_policy import train_policy
-            from bayes_decision import train_model
-            for name, fn in (("ml_ensemble", train_ensemble),
-                             ("rl_policy", train_policy),
-                             ("bayes", train_model)):
-                try:
-                    await fn(db, uid)
-                    results[name] = "ok"
-                except Exception as e:  # noqa: BLE001
-                    results[name] = f"failed: {e}"
-                    logger.warning("online learning %s retrain failed "
-                                   "user=%s: %s", name, uid, e)
+            # Phase 5 — staged pipeline: replay → shadow → validation →
+            # approval → production, with a losing-streak freeze guard.
+            # NEVER retrain-and-serve directly from live trades.
+            from learning_pipeline import gated_retrain
+            run = await gated_retrain(db, uid, trigger=trigger)
+            results = {k: (v.get("status") if isinstance(v, dict) else v)
+                       for k, v in run["stages"].items()}
+            if run.get("frozen"):
+                results["frozen"] = run["freeze_reason"]
             await db.online_learning.update_one(
                 {"user_id": uid},
                 {"$set": {"n_trades": n_closed,
