@@ -377,7 +377,18 @@ Audit findings and resolutions:
 2. **backend-unit**: test_iter148 `test_no_hardcoded_app_paths_in_test_code` failed — testing-agent files test_iter99_http.py / test_iter100_http.py used literal `/app/backend/.env` paths → replaced with `__file__`-relative load_dotenv. 474 unit-suite + 15 HTTP tests pass; manifest --check clean. LESSON: testing-agent-created test files must use __file__-relative paths (CI gate scans for '/app/(backend|frontend)' literals in tests).
 3. **Node 20 deprecation warnings**: bumped ALL actions in ci.yml + release.yml to Node-24 majors — checkout@v6, setup-python@v6, setup-node@v6, upload-artifact@v6, download-artifact@v6. YAML validated.
 
+## Iter-103/104 (2026-07-25) — Safety-review corrections DONE (iteration_93.json 100%)
+User's 6-point correction list, all delivered:
+1. **Migration policy**: `migrate_default_modes` now stamps legacy active configs `supervised_live` (never autonomous). NEW `remigrate_autonomous_to_supervised` (one-time, platform_state flag `mode_safety_remigration`) demoted all 5 grandfathered live configs to supervised_live; explicitly-promoted configs (governed_changes source=mode_promotion OR `mode_explicitly_promoted` stamp — now written by the promotion path in bot_routes) are kept. Ops alert raised on demotion. Admin bots now run supervised_live (half size) until explicitly re-promoted via the certification gate.
+2. **Allocator evidence floors** (`rl_allocator.py` rewritten): MIN_TRADES=30 (below → NO authority, neutral 1.0), FULL_AUTHORITY_TRADES=100 (30-99 → limited, floor 0.5; ≥100 → full, floor 0.25), Bayesian shrinkage toward p=0.5 with PRIOR_N=30, CI95 reported, gradual cap ±0.10/refresh vs `db.allocator_state` persisted weights, tail-correlation trim ×0.85 on daily-P&L corr ≥0.7 (lower-evidence scope). test_iter139 rewritten (13 tests). Live: unattributed 480 trades → 0.871 full authority.
+3. **Silent exceptions**: `silent_failures.py::record_swallow` (structured JSON log + in-process counters + ops alert when material or ≥20/hr per component). Instrumented 25 formerly-silent `except: pass` sites in execution.py(4), bridge_routes.py(15), adaptive_exits.py(2), risk_layers.py(3), trade_reconciler.py(1). GET /api/ops/swallowed (_ops_actor). Bridge/execution regression 119/119 green.
+4. **CI SHA-pinned**: all 10 actions in ci.yml + release.yml pinned to full commit SHAs (checkout/setup-python/setup-node/upload/download-artifact @v6 SHAs; anchore sbom/scan, docker login, cosign-installer, gh-release). `# vN` comments retained.
+5. **Immutable promotion** (`config_promotion.py`): every PUT /api/bot/config records an immutable post-state version (content-hash dedup) in config_versions and advances `config_pointers` (_id user:account, active+previous). POST /api/config/rollback (step-up MFA) re-applies previous version atomically w/ MODE-RANK GUARD (rollback can NEVER raise operational_mode); pointer swap keeps roll-forward symmetric. GET /api/config/versions. ConfigVersionsCard.jsx on BotConfig (ACTIVE/ROLLBACK TARGET badges). test_iter104 (4 tests).
+6. **Requirements split**: /app/backend/requirements/{api,workers,research,llm,maintenance}.txt layered manifests constrained by the master lockfile (`pip install -c ../requirements.txt -r api.txt`); root requirements.txt untouched (preview/CI/Docker unaffected). README documents unused heavy deps (pandas/matplotlib/plotly/litellm/openai/boto3/stripe direct) as cleanup candidates.
+- Manifest → **2,644 tests / 252 files**. Note for future tests: conftest auto-injects X-Step-Up-Bypass; set header '' to exercise the real step-up gate.
+
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
+
 
 
 
