@@ -19,11 +19,14 @@ async def market_state_score(db, user_id: str) -> dict:
     volatility = round(min(100, ratio * 50))                # activity level
     vol_stability = round(max(0, 100 - abs(ratio - 1.0) * 60))
 
-    # liquidity — average broker spread-component across scored accounts
+    # liquidity — average broker spread-component across fresh scores (24h)
+    from datetime import datetime, timezone, timedelta
+    fresh_after = datetime.now(timezone.utc) - timedelta(hours=24)
     spreads = []
     async for s in db.broker_intel_scores.find(
-            {}, sort=[("at", -1)], projection={"components": 1,
-                                               "account_id": 1}).limit(20):
+            {"at": {"$gte": fresh_after}},
+            sort=[("at", -1)], projection={"components": 1,
+                                           "account_id": 1}).limit(20):
         v = (s.get("components") or {}).get("spread")
         if v is not None:
             spreads.append(float(v))

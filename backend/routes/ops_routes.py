@@ -199,7 +199,9 @@ async def release_safety(request: Request):
                           "detail": f"{ok_n}/{len(checks)} checks green"}
     try:
         import re
-        with open("/app/docs/TEST_MANIFEST.md") as f:
+        from pathlib import Path
+        manifest = Path(__file__).resolve().parents[2] / "docs" / "TEST_MANIFEST.md"
+        with open(manifest) as f:
             head = f.read(2000)
         m = re.search(r"Total:\s*([\d,]+)\s*tests", head)
         n_tests = int(m.group(1).replace(",", "")) if m else 0

@@ -40,8 +40,8 @@ async def compose_dna(db, trade: dict) -> dict:
                            "components": ts.get("components")},
         "volatility_score": (ts.get("components") or {}).get(
             "volatility_support"),
-        "liquidity_score": (round((spread_mult(spread, trade.get("symbol"))
-                                   - 0.55) / 0.45 * 100)
+        "liquidity_score": (max(0, min(100, round(
+            (spread_mult(spread, trade.get("symbol")) - 0.55) / 0.45 * 100)))
                             if spread is not None else None),
         "news_score": {"net": (sig.get("news_ai") or {}).get("net"),
                        "calendar": (sig.get("calendar_intel") or {}).get("event")},
@@ -75,10 +75,12 @@ async def compose_dna(db, trade: dict) -> dict:
     realized = ev.get("realized_r")
     dna["four_questions"] = {
         "why_decided": (
+            f"{trade.get('action')} {trade.get('symbol')} — signal record "
+            "unavailable (older trade)" if not sig else
             f"{trade.get('action')} {trade.get('symbol')} via "
             f"{dna['deterministic_opinion']['engine'] or 'engine'} at "
-            f"{sig.get('confidence')}% confidence in regime "
-            f"{(regime or {}).get('key') if isinstance(regime, dict) else regime}"),
+            f"{sig.get('confidence') if sig.get('confidence') is not None else '—'}% confidence in regime "
+            f"{((regime or {}).get('key') if isinstance(regime, dict) else regime) or '—'}"),
         "evidence": {
             "consensus_score": cons.get("score"),
             "expected_value_r": expected,
