@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { ExecutionHealthPanel } from "../components/ExecutionHealthPanel";
 import { ReadinessCard } from "../components/ReadinessCard";
+import { ChaosDrillsCard } from "../components/ChaosDrillsCard";
 import { AlertsCard } from "../components/AlertsCard";
 import { ValidationCard } from "../components/ValidationCard";
 import { StageCard } from "../components/StageCard";
@@ -545,6 +546,7 @@ export default function BotHealth() {
                 <HeadlineScore data={data.healthScore} />
 
                 <ReadinessCard />
+                <ChaosDrillsCard />
                 <AlertsCard />
                 <StageCard />
                 <ValidationCard />

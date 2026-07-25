@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration 92 — Batch B+C (Tiers 5/11/12/14) end-to-end verified against production preview URL. All 6 pytest unit tests in test_iter101_batch_bc.py PASS; regression suites test_iter100_batch_a.py, test_iter100_http.py, test_iter99_http.py (21 tests) PASS. Live HTTP checks against admin cookie confirm: /api/coach/cards (5 waiting, 4 rejected, lesson present, confidence predicted 63.4 / actual 71.7 / n=463), /api/marketplace/strategies (8 cards; scalper verified with 2 stars; fast_scalp 5 stars; best_broker 'Start Trader' on all), /api/ops/chaos GET + POST /run all 5 drills PASS (duplicate_order, broker_disconnect (weekend by-design), volatility_shock, worker_crash, db_recovery), /api/ops/release-safety exposes components.chaos_drills {score:100, detail:'5/5 failure drills passed'}, /api/trades/{id}/replay includes steps[] starting with DECISION then ENTRY/FILLED/CLOSED/EXIT and additional lifecycle. Frontend Playwright: coach-panel + coach-toggle + coach-waiting/rejected/lesson all render with real content, collapsed header 'says 63.4% → wins 71.7%'; /marketplace market-grid with 8 market-card-* cards, scalper shows VERIFIED + stars + P&L/PF/WR/max-drawdown + market-installed-scalper chip, market-install-adaptive opens picker (1 market-pick-* button) and CANCEL closes it (no install completed on admin per constraint); /bot-health chaos-card + chaos-run works, chaos-score '5/5 PASSED', 5 chaos-drill-* rows all PASS; /trades replay-trade-* opens ReplayModal with FLIGHT RECORDER, 5–7 replay-step-* rows starting DECISION, replay-step-prev/next present and functional. Regression: MarketStateStrip + SilentBotBanner render on Dashboard.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter101_batch_bc.py",
+    "/app/test_reports/pytest/iter92_batchbc.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Non-blocking: /api/ws WebSocket returns 403 during Playwright sessions (cookie not forwarded through wss upgrade in some flows) — surfaces as repeated console errors and 'socket error' warnings; functional REST auth is fine, WS gracefully reconnects. Consider auth token via subprotocol or query for wss to reduce console noise.",
+    "Non-blocking: post-login redirect lands at '/' which then routes to Dashboard when authenticated but to /welcome when unauthenticated; expected behavior, just noting the flow differs from a hard '/dashboard' redirect.",
+    "Two 503 responses observed briefly while chaos POST was running (likely worker_crash drill dropping a background poller). Recovered immediately — acceptable for a self-cleaning synthetic drill."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "None. Chaos drill wrote & auto-cleaned synthetic broker_deals rows under account_id='chaos-drill' (verified 0 after run per prior iteration; run POST re-executed on this session too and drills all passed).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Batch B+C (Tier 5 Marketplace, Tier 11 Coach, Tier 12 Replay Studio, Tier 14 Chaos Drills) all shipped and green. Constraints honored: no INSTALL completed on admin, no bot start/stop, no governance approvals. Chaos POST is safe & self-cleaning. /api/trades/history requires date_from/date_to — use /api/trades?limit=N. Marketplace style_suitability normalized to dicts already (bug fixed pre-run). WebSocket 403 in Playwright is cosmetic; ignore.",
+  "rca of the issue": "N/A — no defects surfaced."
+}

@@ -17,6 +17,7 @@ import SilentBotBanner from "@/components/SilentBotBanner";
 import MtfCascadePanel from "@/components/MtfCascadePanel";
 import TrendScoreStrip from "@/components/TrendScoreStrip";
 import MarketStateStrip from "@/components/MarketStateStrip";
+import CoachPanel from "@/components/CoachPanel";
 import MarketPosture from "@/components/MarketPosture";
 import ArchitecturePipeline from "@/components/ArchitecturePipeline";
 import BotWatching from "@/components/BotWatching";
@@ -511,6 +512,8 @@ export default function Dashboard() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="dashboard-error">{err}</div>}
 
                 <SilentBotBanner />
+
+                <CoachPanel />
 
                 <MtfCascadePanel />
                 <MarketStateStrip />

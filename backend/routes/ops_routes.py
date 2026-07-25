@@ -245,6 +245,17 @@ async def release_safety(request: Request):
         comps["calibration"] = {"score": None, "detail": f"unavailable: {e}"}
 
     scored = [c["score"] for c in comps.values() if c["score"] is not None]
+    chaos = await db.chaos_drills.find_one({}, sort=[("at", -1)])
+    if chaos:
+        comps["chaos_drills"] = {
+            "score": round(chaos["passed"] / max(1, chaos["total"]) * 100),
+            "detail": f"{chaos['passed']}/{chaos['total']} failure drills "
+                      f"passed"}
+        scored.append(comps["chaos_drills"]["score"])
+    else:
+        comps["chaos_drills"] = {
+            "score": None,
+            "detail": "no chaos drills recorded — POST /api/ops/chaos/run"}
     score = round(sum(scored) / len(scored), 1) if scored else 0.0
     verdict = ("PROMOTE" if score >= 90 else
                "CANARY_ONLY" if score >= 75 else "BLOCK")
@@ -252,6 +263,31 @@ async def release_safety(request: Request):
             "threshold": {"promote": 90, "canary": 75},
             "components": comps,
             "principle": "only releases above the threshold can be promoted"}
+
+
+@router.get("/ops/chaos")
+async def chaos_latest(request: Request):
+    """Tier 14 — latest chaos-drill campaign results."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    doc = await get_db().chaos_drills.find_one({}, sort=[("at", -1)])
+    if not doc:
+        return {"results": [], "passed": 0, "total": 0, "at": None}
+    at = doc.get("at")
+    return {"results": doc.get("results") or [],
+            "passed": doc.get("passed"), "total": doc.get("total"),
+            "at": at.isoformat() if hasattr(at, "isoformat") else at}
+
+
+@router.post("/ops/chaos/run")
+async def chaos_run(request: Request):
+    """Tier 14 — run the chaos-drill campaign (synthetic, self-cleaning)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from chaos_drills import run_drills
+    return await run_drills(get_db())
 
 
 @router.get("/ops/alerts")

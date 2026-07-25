@@ -73,6 +73,18 @@ export const ReplayModal = ({ trade, onClose }) => {
     }
 
     const cur = ticks[cursor];
+    const steps = d?.steps || [];
+    const curT = cur?.t ?? 0;
+    let activeStep = -1;
+    steps.forEach((s, i) => { if (s.t <= curT) activeStep = i; });
+    const jumpToStep = (i) => {
+        const s = steps[i];
+        if (!s || !ticks.length) return;
+        setPlaying(false);
+        let idx = ticks.findIndex(tk => tk.t >= s.t);
+        if (idx < 0) idx = ticks.length - 1;
+        setCursor(idx);
+    };
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
             onClick={onClose} data-testid="replay-modal">
@@ -114,6 +126,31 @@ export const ReplayModal = ({ trade, onClose }) => {
                         </div>
                     )}
                     {d?.note && <div className="font-mono text-[9px] text-[#71717A] mt-2">{d.note}</div>}
+                    {steps.length > 0 && (
+                        <div className="mt-3 border-t border-[#1F1F1F] pt-2.5" data-testid="replay-steps">
+                            <div className="flex items-center gap-2 mb-1.5">
+                                <span className="font-mono text-[9px] text-[#52525B] tracking-widest">FLIGHT RECORDER · {steps.length} STEPS</span>
+                                <button onClick={() => jumpToStep(Math.max(0, activeStep - 1))} data-testid="replay-step-prev"
+                                    className="ml-auto font-mono text-[9px] px-2 py-0.5 border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#38BDF8]/40">‹ PREV</button>
+                                <button onClick={() => jumpToStep(Math.min(steps.length - 1, activeStep + 1))} data-testid="replay-step-next"
+                                    className="font-mono text-[9px] px-2 py-0.5 border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#38BDF8]/40">NEXT ›</button>
+                            </div>
+                            <div className="max-h-40 overflow-y-auto space-y-0.5">
+                                {steps.map((s, i) => (
+                                    <button key={i} onClick={() => jumpToStep(i)} data-testid={`replay-step-${i}`}
+                                        className={`w-full text-left flex items-start gap-2 px-1.5 py-1 border ${i === activeStep ? "border-[#38BDF8]/50 bg-[#38BDF8]/5" : "border-transparent hover:border-[#1F1F1F]"}`}>
+                                        <span className={`font-mono text-[9px] shrink-0 w-24 ${i === activeStep ? "text-[#38BDF8]" : "text-[#52525B]"}`}>
+                                            {s.kind}
+                                        </span>
+                                        <span className="font-mono text-[9px] text-[#71717A] min-w-0 truncate">{s.label}</span>
+                                        <span className="font-mono text-[8px] text-[#3F3F46] ml-auto shrink-0">
+                                            {new Date(s.t * 1000).toISOString().slice(11, 19)}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

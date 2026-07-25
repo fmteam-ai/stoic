@@ -94,8 +94,48 @@ async def trade_replay(db, trade: dict) -> dict:
                         "price": trade.get("exit_price"),
                         "label": f"exit @ {trade.get('exit_price')} "
                                  f"(${trade.get('pnl')})"})
+
+    # flight-recorder steps: the AI decision + every dated lifecycle event
+    steps = []
+    signal = {}
+    if trade.get("signal_id"):
+        try:
+            from bson import ObjectId
+            signal = await db.signals.find_one(
+                {"_id": ObjectId(str(trade["signal_id"]))}) or {}
+        except Exception:  # noqa: BLE001
+            signal = {}
+    conf = signal.get("confidence") or trade.get("confidence")
+    cons = (signal.get("consensus") or {}).get("score")
+    mc = signal.get("monte_carlo") or {}
+    ev = mc.get("ev_r_net", mc.get("ev_r"))
+    decision_bits = [f"{trade.get('action')} decided"]
+    if conf is not None:
+        decision_bits.append(f"confidence {conf}%")
+    if cons is not None:
+        decision_bits.append(f"consensus {cons}")
+    if ev is not None:
+        decision_bits.append(f"MC EV {ev:+.2f}R")
+    steps.append({"t": t0 - 1, "kind": "DECISION",
+                  "label": " · ".join(decision_bits)})
+    steps.extend(m for m in markers if m.get("t"))
+    try:
+        from execution_trace import _flag_events
+        for f in _flag_events(trade):
+            ft = _ts(f.get("at"))
+            steps.append({"t": ft or t1, "kind": f["kind"],
+                          "label": f.get("detail") or f["kind"]})
+    except Exception:  # noqa: BLE001
+        pass
+    dedup_steps, seen_steps = [], set()
+    for s in sorted(steps, key=lambda x: (x["t"], x["kind"])):
+        k = (s["kind"], round(s["t"]))
+        if k not in seen_steps:
+            seen_steps.add(k)
+            dedup_steps.append(s)
+
     return {"source": source, "symbol": sym,
-            "ticks": ticks, "markers": markers,
+            "ticks": ticks, "markers": markers, "steps": dedup_steps,
             "levels": {"entry": trade.get("entry_price"),
                        "stop_loss": trade.get("original_stop_loss")
                        or trade.get("stop_loss"),

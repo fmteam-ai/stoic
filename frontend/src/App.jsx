@@ -33,6 +33,7 @@ import Execution from "@/pages/Execution";
 import Crypto from "@/pages/Crypto";
 import ShadowPerformance from "@/pages/ShadowPerformance";
 import Scoreboard from "@/pages/Scoreboard";
+import Marketplace from "@/pages/Marketplace";
 import BrokerComparison from "@/pages/BrokerComparison";
 import Scalp from "@/pages/Scalp";
 import LossLab from "@/pages/LossLab";
@@ -103,6 +104,7 @@ function App() {
                         <Route path="/p/:shareId" element={<PublicPerformance />} />
                         <Route path="/j/:shareId" element={<PublicJournal />} />
                         <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
+                        <Route path="/marketplace" element={<ProtectedRoute><Marketplace /></ProtectedRoute>} />
                         <Route path="/brokers" element={<ProtectedRoute><BrokerComparison /></ProtectedRoute>} />
                         <Route path="/enterprise-api" element={<ProtectedRoute><EnterpriseApi /></ProtectedRoute>} />
                         <Route path="/scalp" element={<ProtectedRoute><Scalp /></ProtectedRoute>} />
