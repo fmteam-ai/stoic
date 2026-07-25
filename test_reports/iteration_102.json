@@ -1,0 +1,24 @@
+{
+  "summary": "Independent confirmation pass for the 3 CI fixes (ruff F821, iter148 policy tests, gitleaks) plus regression on 5 modified HTTP test files and infra endpoints. All checks green.",
+  "verification_results": {
+    "ruff_ci_command": "ruff check backend --select E9,F63,F7,F82 -> 'All checks passed!' exit 0",
+    "iter148_pytest": "14/14 passed in 0.28s (test_no_raw_exception_strings_in_route_responses + test_no_hardcoded_app_paths_in_test_code both green)",
+    "gitleaks": "/tmp/gitleaks git --no-banner -> 616 commits scanned, no leaks found, exit 0",
+    "entitlements_import": "python -c 'import entitlements' -> ok, exit 0",
+    "regression_5_http_test_files": "46/46 passed in 37.16s (iter93 + iter110 + iter114 + iter112 + iter105)",
+    "infra_overview_admin": "GET /api/infra/overview (cookie auth admin@trading.bot) -> HTTP 200 {agents:[],mt5_instances:[],backups:[]}",
+    "infra_revoke_bogus_id": "POST /api/infra/installations/definitely-not-an-id/revoke (with CSRF) -> HTTP 404 {detail:'installation not found or already revoked'} - clean message, no raw stack"
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@trading.bot / admin123 (cookie-based auth with CSRF token from cookie jar)",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 3 CI failures resolved and independently confirmed. Ruff clean, iter148 14/14, gitleaks no leaks, 5 regression test files 46/46, infra endpoints healthy with clean error messages. Note: infra revoke endpoint requires CSRF token (X-CSRF-Token header from csrf_token cookie) in addition to session cookie."
+}

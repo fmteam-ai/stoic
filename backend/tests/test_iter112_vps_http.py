@@ -238,7 +238,8 @@ def test_pairing_flow(sess, created_ids):
     from pymongo import MongoClient
     import os as _os
     from dotenv import load_dotenv as _ld
-    _ld("/app/backend/.env")
+    _ld(_os.path.join(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))), ".env"))
     mdb = MongoClient(_os.environ["MONGO_URL"])[_os.environ["DB_NAME"]]
     uid = "iter112http-pair"
     res = mdb.accounts.insert_one({

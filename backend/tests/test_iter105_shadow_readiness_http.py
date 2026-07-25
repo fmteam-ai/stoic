@@ -13,8 +13,9 @@ import requests
 
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if not BASE_URL:
-    with open("/app/frontend/.env") as f:
+    with open(os.path.join(_REPO, "frontend", ".env")) as f:
         for line in f:
             if line.startswith("REACT_APP_BACKEND_URL="):
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
@@ -25,7 +26,7 @@ ADMIN_PASSWORD = "admin123"
 
 def _read_env(key):
     try:
-        with open("/app/backend/.env") as f:
+        with open(os.path.join(_REPO, "backend", ".env")) as f:
             for line in f:
                 if line.startswith(f"{key}="):
                     return line.split("=", 1)[1].strip()

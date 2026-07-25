@@ -362,8 +362,8 @@ async def create_pairing(payload: dict, user=Depends(get_current_user)):
         if "not found" in str(e):
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:  # noqa: BLE001 — malformed ObjectId etc.
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:  # noqa: BLE001 — malformed ObjectId etc.
+        raise HTTPException(status_code=400, detail="invalid request")
 
 
 @router.post("/pairing/claim")

@@ -19,10 +19,11 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
 from pymongo import MongoClient  # noqa: E402
 from bson import ObjectId  # noqa: E402
 
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") \
     if os.environ.get("REACT_APP_BACKEND_URL") \
-    else open("/app/frontend/.env").read().split("REACT_APP_BACKEND_URL=")[
-    1].split("\n")[0].strip().strip('"')
+    else open(os.path.join(_REPO, "frontend", ".env")).read().split(
+        "REACT_APP_BACKEND_URL=")[1].split("\n")[0].strip().strip('"')
 API = f"{BASE}/api"
 ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
 TAG = f"TEST_iter114_{uuid.uuid4().hex[:6]}"

@@ -181,7 +181,10 @@ def test_no_raw_exception_strings_in_route_responses():
                 # deliberate ValueError validation messages are allowed
                 offenders.append(f"{f}:{i}: {s}")
     # our own crafted ValueError messages (validation text) remain by design
-    allowed = ("bot_routes.py", "quant_routes.py", "shadow_routes.py")
+    # (infra_routes surfaces deliberate ValueError/RuntimeError/Partner
+    #  messages from the vps modules — never raw unexpected exceptions)
+    allowed = ("bot_routes.py", "quant_routes.py", "shadow_routes.py",
+               "infra_routes.py")
     offenders = [o for o in offenders if not o.startswith(allowed)]
     assert not offenders, f"raw str(e) leaked to clients: {offenders}"
 

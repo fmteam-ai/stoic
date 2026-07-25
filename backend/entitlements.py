@@ -19,6 +19,7 @@ plus the minimum tier that would unlock it so the frontend can render an
 upgrade-prompt modal targeted at the right plan.
 """
 from __future__ import annotations
+from typing import Optional
 from fastapi import HTTPException
 
 from subscription_plans import (
