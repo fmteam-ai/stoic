@@ -248,7 +248,8 @@ async def promotion_gate(db, user_id: str, account_id: str | None,
     from versioning import version_stamp
     stage = await db.platform_state.find_one({"_id": "deployment_stage"}) or {}
     last_validation = await db.validation_runs.find_one(
-        {}, sort=[("at", -1)], projection={"campaign": 1, "passed": 1, "at": 1})
+        {}, sort=[("at", -1)],
+        projection={"run_id": 1, "mode": 1, "passed": 1, "failed": 1, "at": 1})
     verdict["evidence"] = {
         "target_mode": target_mode,
         "certifications": certs,
@@ -256,8 +257,10 @@ async def promotion_gate(db, user_id: str, account_id: str | None,
         "ea_accounts": ea,
         "deployment_stage": stage.get("stage"),
         "last_broker_validation": {
-            "campaign": (last_validation or {}).get("campaign"),
+            "campaign": (last_validation or {}).get("run_id"),
+            "mode": (last_validation or {}).get("mode"),
             "passed": (last_validation or {}).get("passed"),
+            "failed": (last_validation or {}).get("failed"),
             "at": str((last_validation or {}).get("at") or "")}
         if last_validation else None,
         "evaluated_at": datetime.now(timezone.utc).isoformat(),

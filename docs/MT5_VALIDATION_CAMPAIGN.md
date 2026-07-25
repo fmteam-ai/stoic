@@ -5,15 +5,19 @@ before real capital. **Every item must pass on BOTH a netting and a hedging
 demo account** before the live switch. These are validation exercises —
 no architectural change is expected.
 
-EA under test: `EmergentTradingBridge.mq5` **v1.53** — use the exact `.ex5`
+EA under test: `EmergentTradingBridge.mq5` **v1.55** — use the exact `.ex5`
 produced by the `ea-compile` CI job (artifact `EmergentTradingBridge-ex5`),
 not a locally compiled binary.
 
 ## Evidence status
 Automated execution-truth harness evidence is recorded in
 [`docs/campaigns/`](campaigns/):
-- [`2026-06-11-simulation-harness-netting.md`](campaigns/2026-06-11-simulation-harness-netting.md) — sections 1–4 & 6 PASS (harness)
-- [`2026-06-11-simulation-harness-hedging.md`](campaigns/2026-06-11-simulation-harness-hedging.md) — sections 1–3, 5 & 6 PASS (harness)
+- [`2026-07-25-simulation-harness-netting.md`](campaigns/2026-07-25-simulation-harness-netting.md) — **ALL 12 scenarios PASS** (harness run `d953e3badee8`)
+- [`2026-07-25-simulation-harness-hedging.md`](campaigns/2026-07-25-simulation-harness-hedging.md) — **ALL 12 scenarios PASS** (harness run `82a08884d7c7`)
+- The validation ledger (`GET /api/ops/validation`) reports **complete: true**
+  — every scenario has a `pass` record for BOTH account modes.
+- Earlier partial runs: [`2026-06-11-simulation-harness-netting.md`](campaigns/2026-06-11-simulation-harness-netting.md),
+  [`2026-06-11-simulation-harness-hedging.md`](campaigns/2026-06-11-simulation-harness-hedging.md)
 
 Every scenario maps to a named test in `backend/tests/` and passes in CI.
 The broker-demo confirmation run (real netting + hedging demo accounts) and

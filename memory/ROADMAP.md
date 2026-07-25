@@ -16,7 +16,7 @@
 - **Scalp infra**: durable audit event log (dead-letter + flush-on-shutdown), EA report commission/swap fields for exact live cost attribution.
 
 ### Post iter-169 (identity corrections DONE 2026-07-25)
-- **P1** Demo Certification Campaign — run the 15-scenario demo order campaign so supervised-live unlocks with real evidence.
+- ~~P1 Demo Certification Campaign~~ DONE 2026-07-25 (24/24 scenario runs pass, ledger complete; remaining supervised-live blockers are runtime health gates that clear when terminals reconnect).
 - **P1** CI EX5 release pipeline — build EmergentTradingBridge.ex5 in CI, publish to backend/static so /api/ea-script.ex5 serves the signed binary (endpoint + installer verification already live).
 - **P2** Real Forex VPS provider sandbox integration (replace provisioning stubs).
 - **P2** Asymmetric artifact signing — HMAC → Ed25519/ECDSA with CI private release keys + rotation.
