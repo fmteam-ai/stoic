@@ -1,34 +1,48 @@
-"""Generate the STOIC intro trailer voiceover via ElevenLabs.
+"""Generate the STOIC intro trailer voiceover via OpenAI TTS (Emergent LLM key).
 
 Run once to produce /app/frontend/public/trailer.mp3 — the WelcomeTrailer
 page's <audio> element auto-loads from /trailer.mp3 and drives the scene
 state machine off the audio's currentTime.
+
+After regenerating, re-anchor the scene timings in WelcomeTrailer.jsx using
+Whisper word timestamps (see scripts/transcribe_trailer.py pattern in git
+history or run OpenAISpeechToText with verbose_json + word granularity).
 """
+import asyncio
 import os
 from pathlib import Path
-from elevenlabs.client import ElevenLabs
 
-# Brian — calm, measured, slightly cynical. Matches the "we refuse to do
-# dumb things" brand. Voice ID is from the public ElevenLabs library.
-VOICE_ID = "nPczCjzI2devNBz1zQrb"  # "Brian"
-MODEL_ID = "eleven_multilingual_v2"
+from dotenv import load_dotenv
 
-NARRATION = """85% of retail traders blow up their accounts within twelve months.
+load_dotenv("/app/backend/.env")
+
+VOICE = "onyx"        # deep, authoritative — matches the STOIC brand
+MODEL = "tts-1-hd"
+SPEED = 0.95          # slightly measured cadence
+
+NARRATION = """85 percent of retail traders blow up their accounts within twelve months.
 Most trading bots make it worse.
 
 You wanted an AI co-pilot. You got a fast Excel macro.
 Bots that fire trades the moment the market gets noisy.
 Bots that don't know what they don't know.
-Bots that stack you into five-times leverage on gold, when gold is already moving against you.
+Bots that keep trading while their own data feed is dying.
 
-STOIC is different. Not one model. Not one signal. A seven-agent AI hedge fund that thinks before it trades.
-Claude Sonnet 4.5. Calibrated probabilities. And a ten-layer risk veto cascade that refuses dumb trades — even the ones the AI wants to take.
+STOIC is different. A multi-agent AI hedge fund that thinks before it trades — and refuses to trade when it can't prove it's safe.
 
-One. Calibrated AI probabilities. Real win-rate forecasts. Not LLM confidence theater.
-Two. Loss Lab. When you lose, the AI investigates the trade and auto-tightens the guardrails.
-Three. Correlation-aware Kelly sizing. Your bot will never double-stack you into a moving market.
-Four. ADWIN drift detection. Auto-retrains your model the moment the regime shifts.
-Five. Multi-account isolation. RoboForex, VT Markets, Binance — each with its own circuit breaker.
+Six reasons nothing else comes close.
+
+One. Calibrated AI probabilities. Real win-rate forecasts — not LLM confidence theater.
+
+Two. Loss Lab. Every loss gets investigated by AI. Guardrails tighten automatically for next time.
+
+Three. Fail-closed safety governance. When health drops, STOIC demotes itself — before it hurts you. No other bot does this.
+
+Four. Explainable AI. Every trade shows exactly why it entered, why that size, and what could go wrong.
+
+Five. One-command VPS. Auto-provision a server, or connect your own. Hardened pairing. One terminal, one account, twenty-four seven.
+
+Six. Digital Twin and Research Lab. Strategies improve themselves in the shadows — and go live only when the evidence says so.
 
 STOIC doesn't promise you the moon.
 It promises a bot that refuses to lose stupidly.
@@ -37,31 +51,19 @@ Stop guessing. Start trading like a quant fund.
 STOIC AI Trader.
 """
 
-def main():
-    api_key = os.environ.get("ELEVENLABS_API_KEY")
-    if not api_key:
-        raise SystemExit("ELEVENLABS_API_KEY env var not set.")
-    client = ElevenLabs(api_key=api_key)
+
+async def main():
+    from emergentintegrations.llm.openai import OpenAITextToSpeech
+    api_key = os.environ["EMERGENT_LLM_KEY"]
+    tts = OpenAITextToSpeech(api_key=api_key)
     out_path = Path("/app/frontend/public/trailer.mp3")
     print(f"Generating ~{len(NARRATION)} chars to {out_path} …")
+    audio_bytes = await tts.generate_speech(
+        text=NARRATION, model=MODEL, voice=VOICE, speed=SPEED,
+        response_format="mp3")
+    out_path.write_bytes(audio_bytes)
+    print(f"OK — wrote {out_path.stat().st_size / 1024:.1f} KB")
 
-    # ElevenLabs v2 SDK streams chunks — concatenate to MP3.
-    audio_gen = client.text_to_speech.convert(
-        voice_id=VOICE_ID,
-        model_id=MODEL_ID,
-        text=NARRATION,
-        # Default voice settings — slightly slower than default for our
-        # measured narrator brand. stability=0.55 keeps cadence consistent.
-        voice_settings={
-            "stability": 0.55,
-            "similarity_boost": 0.75,
-            "style": 0.15,
-            "use_speaker_boost": True,
-        },
-    )
-    out_path.write_bytes(b"".join(audio_gen))
-    size_kb = out_path.stat().st_size / 1024
-    print(f"OK — wrote {size_kb:.1f} KB")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

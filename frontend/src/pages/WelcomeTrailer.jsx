@@ -3,11 +3,11 @@ import { useNavigate } from "react-router-dom";
 import "@/styles/intro_trailer.css";
 
 /* Scene-by-scene state machine — timings in ms from t=0, anchored
-   to the ACTUAL trailer.mp3 (86.42s, transcribed via Whisper).
-   Each scene starts/ends precisely on a spoken phrase boundary. */
+   to the ACTUAL trailer.mp3 (85.20s, OpenAI TTS "onyx", word-level
+   Whisper timestamps). Each scene starts/ends on a spoken phrase. */
 const SCENES = [
     {
-        id: "hook", start: 0, end: 6680,
+        id: "hook", start: 0, end: 7440,
         kicker: "Trading is hard",
         render: () => (
             <h1 className="headline">
@@ -18,7 +18,7 @@ const SCENES = [
         sub: "Most trading bots make it worse.",
     },
     {
-        id: "pain", start: 6680, end: 22760,
+        id: "pain", start: 7440, end: 22160,
         kicker: "What you wanted vs what you got",
         render: () => (
             <h1 className="headline">
@@ -26,44 +26,46 @@ const SCENES = [
                 <span className="strike">You got a fast Excel macro.</span>
             </h1>
         ),
-        sub: "Bots that fire trades the moment the market gets noisy. Bots that double-stack you into 5× leverage on gold — when gold is already moving against you.",
+        sub: "Bots that fire the moment the market gets noisy. Bots that don't know what they don't know. Bots that keep trading while their own data feed is dying.",
     },
     {
-        id: "pivot", start: 22760, end: 40640,
+        id: "pivot", start: 22160, end: 32460,
         kicker: "Introducing",
         render: () => (
             <h1 className="headline">
                 <em>STOIC</em> is different.<br/>
-                A 7-agent AI hedge fund<br/>that thinks <em>before</em> it trades.
+                A multi-agent AI hedge fund<br/>that thinks <em>before</em> it trades.
             </h1>
         ),
-        sub: "Claude Sonnet 4.5. Calibrated probabilities. A 10-layer risk veto cascade that refuses dumb trades — even the ones the AI wants to take.",
+        sub: "And refuses to trade when it can't prove it's safe. Six reasons nothing else comes close.",
     },
     {
-        id: "pillars", start: 40640, end: 76600,
-        kicker: "Five reasons it's different",
-        /* Per-pillar beat timings anchored to "One.", "Two." ... "Five."
+        id: "pillars", start: 32460, end: 76060,
+        kicker: "Six reasons it's different",
+        /* Per-pillar beat timings anchored to "One.", "Two." ... "Six."
            spoken in the audio. Pillar lights up the moment its number lands. */
-        pillarBeats: [40640, 47920, 54400, 60840, 67200],
+        pillarBeats: [32460, 38180, 44700, 52140, 57600, 67840],
         render: (t) => {
-            const beats = [40640, 47920, 54400, 60840, 67200];
+            const beats = [32460, 38180, 44700, 52140, 57600, 67840];
             const activeBeat = beats.findIndex((s, i) =>
                 t >= s && (i === beats.length - 1 || t < beats[i + 1]));
             return (
                 <>
-                    <h1 className="headline">Five reasons it&apos;s <em>different.</em></h1>
+                    <h1 className="headline">Six reasons it&apos;s <em>different.</em></h1>
                     <div className="pillar-grid">
                         {[
                             ["01", "Calibrated probabilities",
                                 "Real win-rate forecasts — not LLM confidence theater. Platt-scaled, Brier-score validated."],
                             ["02", "Loss Lab",
-                                "When you lose, the AI investigates the trade and auto-tightens the guardrails for next time."],
-                            ["03", "Correlation-aware Kelly",
-                                "Never double-stacks you into a moving market. Sizes per-position against your full open book."],
-                            ["04", "ADWIN drift detection",
-                                "Auto-retrains your model the moment the market regime shifts. No manual upkeep."],
-                            ["05", "Multi-account isolation",
-                                "RoboForex, VT Markets, Binance — each broker with its own circuit breaker. Per-account everything."],
+                                "Every loss gets investigated by AI. Guardrails tighten automatically for next time."],
+                            ["03", "Fail-closed safety governance",
+                                "When health drops, STOIC demotes itself — before it hurts you. No other bot does this."],
+                            ["04", "Explainable AI",
+                                "Every trade shows exactly why it entered, why that size, and what could go wrong."],
+                            ["05", "One-command VPS",
+                                "Auto-provision a server or connect your own. Hardened pairing. One terminal, one account, 24/7."],
+                            ["06", "Digital Twin + Research Lab",
+                                "Strategies improve themselves in the shadows — and go live only when the evidence says so."],
                         ].map(([n, title, body], i) => (
                             <div className={`pillar ${i === activeBeat ? "beat" : i < activeBeat ? "lit" : ""}`}
                                  key={n} data-testid={`pillar-${n}`}>
@@ -78,7 +80,7 @@ const SCENES = [
         },
     },
     {
-        id: "close", start: 76600, end: 86420,
+        id: "close", start: 76060, end: 85200,
         kicker: "The promise",
         render: () => (
             <h1 className="headline">
@@ -90,7 +92,7 @@ const SCENES = [
     },
 ];
 
-const TRAILER_END_MS = 86420;
+const TRAILER_END_MS = 85200;
 
 export default function WelcomeTrailer() {
     const nav = useNavigate();
@@ -117,7 +119,7 @@ export default function WelcomeTrailer() {
             id = setInterval(() => {
                 const elapsed = Date.now() - start;
                 setT(elapsed);
-                if (elapsed >= 72000) {
+                if (elapsed >= TRAILER_END_MS) {
                     setPlaying(false);
                     clearInterval(id);
                 }
@@ -202,9 +204,10 @@ export default function WelcomeTrailer() {
                         that <em>refuses</em> to lose stupidly.
                     </h1>
                     <p className="subline">
-                        Sound on. Watch how a 7-agent AI pipeline +
-                        a 10-layer risk veto cascade trades gold and
-                        bitcoin — so you don&apos;t have to.
+                        Sound on. Watch how a multi-agent AI pipeline,
+                        fail-closed safety governance and one-command VPS
+                        infrastructure trade gold and bitcoin — so you
+                        don&apos;t have to.
                     </p>
                     <div className="cta-block" style={{ marginTop: "2.5rem" }}>
                         <button
@@ -249,15 +252,15 @@ export default function WelcomeTrailer() {
                         Without becoming one.
                     </h1>
                     <p className="subline">
-                        Start with a free Starter plan. Upgrade when you're ready.
-                        Cancel anytime — no auto-renewals, ever.
+                        Create a free account and watch it trade in Shadow Mode.
+                        Plans from $39/mo. Cancel anytime — no auto-renewals, ever.
                     </p>
                     <div className="cta-block" style={{ marginTop: "2.5rem" }}>
                         <button
                             className="cta-button"
                             onClick={() => nav("/register")}
                             data-testid="trailer-cta-register">
-                            Start free →
+                            Create account →
                         </button>
                         <button
                             className="cta-secondary"
