@@ -74,13 +74,27 @@ async def get_subscription(user_id: str) -> dict:
     except Exception:
         user = None
     is_admin = user and user.get("role") == "admin"
+    # Legacy grace applies ONLY to users who existed before the tier rollout —
+    # a brand-new sign-up must start at Starter, not 30 days of free Trader.
+    pre_rollout = False
+    if user and not is_admin:
+        created = user.get("created_at")
+        if isinstance(created, str):
+            try:
+                created = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            except ValueError:
+                created = None
+        if isinstance(created, datetime):
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            pre_rollout = created < _ROLLOUT_AT
     stub = {
         "user_id": user_id,
         "current_plan_id": "admin_grandfather" if is_admin else None,
         "valid_until": (_now() + timedelta(days=365 * 10)).isoformat() if is_admin else None,
         "auto_renew": False,
         "grace_until": (_ROLLOUT_AT + timedelta(days=LEGACY_GRACE_DAYS)).isoformat()
-        if user and not is_admin else None,
+        if pre_rollout else None,
         "created_at": _now().isoformat(),
     }
     await db.subscriptions.insert_one({**stub})
