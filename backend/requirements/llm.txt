@@ -1,0 +1,4 @@
+# LLM services — copilot, news/narrative analysis, self-evaluation.
+# Install: pip install -c ../requirements.txt -r llm.txt
+-r api.txt
+emergentintegrations

@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from pip_utils import base_symbol, pips_to_price, price_to_pips
+from silent_failures import record_swallow
 
 logger = logging.getLogger("adaptive-exits")
 
@@ -130,8 +131,8 @@ def fade_tighten(trade: dict, feats: dict, current: float,
                 ts = ts.replace(tzinfo=timezone.utc)
             if _now() - ts < timedelta(minutes=TIGHTEN_COOLDOWN_MIN):
                 return None
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("adaptive_exits", "fade_tighten", _sw)
     move = current - entry if action == "BUY" else entry - current
     lock = entry + FADE_LOCK_FRAC * move if action == "BUY" \
         else entry - FADE_LOCK_FRAC * move
@@ -202,8 +203,8 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
                                    symbol=trade.get("symbol"),
                                    source="adaptive_exits",
                                    payload={"detail": detail, **(data or {})}))
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("adaptive_exits", "_event", _sw)
 
     act = vol_retarget(trade, feats, pips_up)
     if act:

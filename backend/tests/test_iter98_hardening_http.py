@@ -30,12 +30,18 @@ def admin():
 
 
 # --------------------------------------------- grandfather (admin) mode
-def test_admin_config_grandfathered_autonomous_live(admin):
+def test_admin_config_grandfathered_supervised_live(admin):
+    """iter-103: no config silently keeps autonomous authority — legacy
+    active configs were re-migrated to supervised_live."""
     r = admin.get(f"{API}/bot/config", timeout=15)
     assert r.status_code == 200, r.text
     cfg = r.json()
-    assert cfg.get("operational_mode") == "autonomous_live", (
-        f"admin config expected autonomous_live got {cfg.get('operational_mode')}")
+    assert cfg.get("operational_mode") in ("supervised_live",
+                                           "autonomous_live"), (
+        f"admin config expected a live mode, got {cfg.get('operational_mode')}")
+    if cfg.get("operational_mode") == "autonomous_live":
+        # only allowed when explicitly promoted through the gate
+        assert cfg.get("mode_explicitly_promoted") is True
 
 
 # ----------------------------------------------- fresh user fail-safe

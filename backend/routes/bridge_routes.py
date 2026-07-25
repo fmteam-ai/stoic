@@ -14,6 +14,7 @@ from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips, base_symbol
 from intelligence_counters import increment as inc_intel_counter
 from trade_reconciler import reconcile_account, reconcile_user
+from silent_failures import record_swallow
 
 router = APIRouter(prefix="/bridge", tags=["bridge"])
 
@@ -78,8 +79,8 @@ async def heartbeat(payload: BridgeHeartbeat):
             try:
                 from execution_timing import record_spread
                 record_spread(str(acc["_id"]), clean)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as _sw:  # noqa: BLE001
+                record_swallow("bridge", "heartbeat", _sw)
     # EA v1.48+ — persist precise broker stop constraints per BASE symbol
     # (round 13 item 5); protection_guard consumes these when computing
     # emergency stops.
@@ -938,8 +939,8 @@ async def modification_ack(payload: BridgeModificationAck):
                                    + (f" (remaining {payload.remaining_volume or payload.new_volume} lots)"
                                       if payload.type == "PARTIAL_CLOSE" else ""),
                          "type": payload.type}))
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "modification_ack", _sw)
         # EA v1.50 — prefer the broker-CONFIRMED position SL over the intent
         actual_sl = payload.confirmed_position_sl or payload.new_sl
         if payload.type == "MODIFY_SL" and actual_sl is not None:
@@ -1044,8 +1045,8 @@ async def modification_ack(payload: BridgeModificationAck):
                         bool(payload.success),
                         new_sl=(trade.get("pending_modification")
                                 or {}).get("new_sl"), db=db)
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "modification_ack", _sw)
     await ws_manager.broadcast(acc["user_id"], "trade_updated", {
         "trade_id": payload.trade_id,
         **update,
@@ -1134,8 +1135,8 @@ async def report_trade(payload: BridgeTradeReport):
                        str(acc["_id"]))
         try:
             await inc_intel_counter(acc["user_id"], "accepted_unresolved")
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "report_trade", _sw)
         return {"ok": True, "unresolved": True}
 
     update = {"status": payload.status,
@@ -1152,8 +1153,8 @@ async def report_trade(payload: BridgeTradeReport):
                        payload.trade_id, str(acc["_id"]), payload.error)
         try:
             await inc_intel_counter(acc["user_id"], "broker_preflight_reject")
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "report_trade", _sw)
     if payload.mt5_ticket:
         update["mt5_ticket"] = payload.mt5_ticket
         update["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
@@ -1213,13 +1214,13 @@ async def report_trade(payload: BridgeTradeReport):
                         "position_id": payload.position_id,
                         "at": datetime.now(timezone.utc).isoformat(),
                     })
-                except Exception:
-                    pass
+                except Exception as _sw:  # noqa: BLE001
+                    record_swallow("bridge", "report_trade", _sw)
                 try:
                     await inc_intel_counter(acc["user_id"],
                                             "partial_fill_open")
-                except Exception:
-                    pass
+                except Exception as _sw:  # noqa: BLE001
+                    record_swallow("bridge", "report_trade", _sw)
 
     # Slippage veto — on first OPEN report, compare actual fill vs intended entry
     slippage_force_close = False
@@ -1362,13 +1363,13 @@ async def report_trade(payload: BridgeTradeReport):
                     await order_state.apply(db, payload.trade_id,
                                             order_state.CLOSED,
                                             f"closed:{payload.trade_id}")
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "report_trade", _sw)
     if slippage_force_close:
         try:
             await inc_intel_counter(acc["user_id"], "slippage_veto")
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "report_trade", _sw)
     await ws_manager.broadcast(acc["user_id"], "trade_updated", {
         "trade_id": payload.trade_id,
         **update,
@@ -1386,8 +1387,8 @@ async def report_trade(payload: BridgeTradeReport):
                 )
             elif payload.status == "closed":
                 await notify_trade_closed(acc["user_id"], full_trade)
-    except Exception:
-        pass
+    except Exception as _sw:  # noqa: BLE001
+        record_swallow("bridge", "report_trade", _sw)
 
     # Loss post-mortem + auto-loosen on winners — fire-and-forget. Skips itself
     # if not eligible.
@@ -1399,8 +1400,8 @@ async def report_trade(payload: BridgeTradeReport):
             asyncio.create_task(maybe_record_postmortem(db, payload.trade_id))
             asyncio.create_task(maybe_record_winner(db, payload.trade_id))
             asyncio.create_task(record_residual_for_trade(db, payload.trade_id))
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "report_trade", _sw)
 
     return {"ok": True}
 
@@ -1609,8 +1610,8 @@ async def external_deal(payload: BridgeExternalDeal):
         await db.broker_deals.update_one(
             {"deal_id": payload.deal_id, "account_id": account_id},
             {"$set": {"occurred_at": deal_iso}})
-    except Exception:  # noqa: BLE001 — annotation only, never blocks the deal
-        pass
+    except Exception as _sw:  # noqa: BLE001 — annotation only, never blocks the deal
+        record_swallow("bridge", "external_deal", _sw)
 
     # 2. Look up matching STOIC trade by (account, mt5_ticket).
     existing = await db.trades.find_one({
@@ -1736,8 +1737,8 @@ async def external_deal(payload: BridgeExternalDeal):
                 from notifier import notify_trade_opened
                 trade_doc["_id"] = result.inserted_id
                 await notify_trade_opened(user_id, trade_doc)
-            except Exception:
-                pass
+            except Exception as _sw:  # noqa: BLE001
+                record_swallow("bridge", "external_deal", _sw)
         return {"ok": True, "created": tid, "external_open": is_external}
 
     # deal_entry == "out" or "inout" → CLOSE event
@@ -1945,8 +1946,8 @@ async def external_deal(payload: BridgeExternalDeal):
             import asyncio as _aio
             from loss_postmortem import maybe_record_postmortem
             _aio.create_task(maybe_record_postmortem(db, tid))
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "external_deal", _sw)
 
     if existing and existing.get("exit_price") is None:
         try:
@@ -1954,7 +1955,7 @@ async def external_deal(payload: BridgeExternalDeal):
             full = await db.trades.find_one({"_id": ObjectId(tid)})
             if full:
                 await notify_trade_closed(user_id, full)
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "external_deal", _sw)
 
     return {"ok": True, "updated": tid, "pnl": realized}

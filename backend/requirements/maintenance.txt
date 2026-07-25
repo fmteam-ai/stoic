@@ -1,0 +1,3 @@
+# Migration & maintenance tooling (vault rekey, previews, drills).
+# Install: pip install -c ../requirements.txt -r maintenance.txt
+-r api.txt

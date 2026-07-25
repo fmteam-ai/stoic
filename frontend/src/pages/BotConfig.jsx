@@ -4,6 +4,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { OperationalModeCard } from "@/components/OperationalModeCard";
+import { ConfigVersionsCard } from "@/components/ConfigVersionsCard";
 import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass } from "lucide-react";
 import { toast } from "sonner";
 
@@ -653,6 +654,7 @@ export default function BotConfig() {
 
                 {/* Autopilot #15 — Operational Mode */}
                 <OperationalModeCard cfg={cfg} setCfg={setCfg} accountQuery={accountQuery} />
+                <ConfigVersionsCard accountQuery={accountQuery} />
 
                 <div className="flex items-center justify-end gap-3 flex-wrap" data-testid="bot-save-row">
                     {saveMsg && (

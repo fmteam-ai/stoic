@@ -20,6 +20,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from database import get_db
+from silent_failures import record_swallow
 
 logger = logging.getLogger("risk-layers")
 
@@ -118,8 +119,8 @@ async def check_portfolio_stop(db, account: dict) -> dict:
             v = c.get("portfolio_stop_pct")
             if v is not None and float(v) > 0:
                 overrides.append(float(v))
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("risk_layers", "check_portfolio_stop", _sw)
     if overrides:
         threshold = min(overrides)   # most conservative override wins
     if dd > -threshold:
@@ -152,8 +153,8 @@ async def check_portfolio_stop(db, account: dict) -> dict:
                 "source": "risk_layers",
                 "payload": {"floating_dd_pct": dd, "threshold_pct": threshold},
             })
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("risk_layers", "check_portfolio_stop", _sw)
     return {"account_id": acc_id,
             "status": "tripped" if tripped_any else "already_tripped",
             "detail": reason, "floating_dd_pct": dd,
@@ -372,8 +373,8 @@ async def evaluate_layers(db, user_id: str, account: dict | None) -> list[dict]:
                         "detail": f"next {nxt['impact']}-impact: "
                                   f"{(nxt.get('title') or 'event')[:60]} in "
                                   f"{mins // 60}h{mins % 60:02d}m — freeze window armed"}
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("risk_layers", "news", _sw)
         return {"status": "armed",
                 "detail": "macro gate + event-exposure cap armed (no red-flag prints next 24h)"}
 

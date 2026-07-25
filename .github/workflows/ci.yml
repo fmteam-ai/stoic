@@ -12,8 +12,8 @@ jobs:
   backend-unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
           cache: pip
@@ -42,8 +42,8 @@ jobs:
       MONGO_URL: mongodb://localhost:27017
       DB_NAME: stoic_ci
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
           cache: pip
@@ -58,8 +58,8 @@ jobs:
   ea-structural-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
       - name: EA structural + version-consistency check
@@ -70,7 +70,7 @@ jobs:
     # publishes the exact verified .ex5 artifact.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Install MetaTrader 5 (silent)
         shell: pwsh
         run: |
@@ -92,7 +92,7 @@ jobs:
             throw "Compiled .ex5 not produced"
           }
       - name: Publish verified .ex5 artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: EmergentTradingBridge-ex5
           path: backend/static/EmergentTradingBridge.ex5
@@ -100,8 +100,8 @@ jobs:
   frontend-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
         with:
           node-version: "20"
           cache: yarn
@@ -125,12 +125,12 @@ jobs:
       CORS_ORIGINS: http://127.0.0.1:3000
       BACKGROUND_WORKERS_IN_PROCESS: "false"
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
           cache: pip
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
         with:
           node-version: "20"
           cache: yarn
@@ -178,7 +178,7 @@ jobs:
         run: tail -100 /tmp/backend.log || true
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: playwright-report
           path: e2e/playwright-report/
@@ -187,13 +187,13 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
         with:
           # Full history — a shallow clone makes gitleaks see the entire tree
           # as one new commit, breaking .gitleaksignore commit-pinned
           # fingerprints.
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
       - name: Dependency audit (BLOCKING — pinned deps, documented ignores)
@@ -222,8 +222,8 @@ jobs:
   static-analysis:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
       - name: Ruff (fatal error classes only)
@@ -237,25 +237,25 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend-unit, frontend-build]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Build backend image
         run: docker build -f Dockerfile.backend -t stoic-backend:${{ github.sha }} .
       - name: Build frontend image
         run: docker build -f Dockerfile.frontend -t stoic-frontend:${{ github.sha }} .
       - name: SBOM (backend image)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
         with:
           image: stoic-backend:${{ github.sha }}
           format: spdx-json
           output-file: sbom-backend.spdx.json
       - name: SBOM (frontend image)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
         with:
           image: stoic-frontend:${{ github.sha }}
           format: spdx-json
           output-file: sbom-frontend.spdx.json
       - name: Image vulnerability scan — backend (BLOCKING on fixable criticals)
-        uses: anchore/scan-action@v7
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
         with:
           image: stoic-backend:${{ github.sha }}
           fail-build: true
@@ -265,13 +265,13 @@ jobs:
           # permanently red.
           only-fixed: true
       - name: Image vulnerability scan — frontend (BLOCKING on fixable criticals)
-        uses: anchore/scan-action@v7
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
         with:
           image: stoic-frontend:${{ github.sha }}
           fail-build: true
           severity-cutoff: critical
           only-fixed: true
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: sbom
           path: |

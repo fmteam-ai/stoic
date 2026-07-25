@@ -85,33 +85,96 @@ async def record_intercept(db, user_id: str, account: dict, signal: dict,
 
 
 async def migrate_default_modes(db) -> dict:
-    """One-time grandfather migration (user choice 1a): configs that predate
-    the operational-mode system get an EXPLICIT mode so flipping the default
-    to observe cannot silently stop a running live bot. Active configs are
-    stamped autonomous_live (status-quo, audited); inactive ones observe.
-    Idempotent — only touches configs missing the field."""
+    """Safety migration (revised iter-103): legacy configs get an EXPLICIT
+    mode, but NO config silently obtains full autonomous authority. Active
+    legacy configs are stamped supervised_live (half size, operator in the
+    loop); autonomous_live requires the explicit certification-gated,
+    step-up-MFA'd promotion. Idempotent — only touches configs missing the
+    field."""
     now = datetime.now(timezone.utc)
     r_active = await db.bot_configs.update_many(
         {"operational_mode": {"$exists": False}, "active": True},
-        {"$set": {"operational_mode": "autonomous_live"}})
+        {"$set": {"operational_mode": "supervised_live",
+                  "mode_migrated_at": now.isoformat(),
+                  "mode_migration_policy":
+                      "legacy_active_to_supervised_live"}})
     r_inactive = await db.bot_configs.update_many(
         {"operational_mode": {"$exists": False}},
         {"$set": {"operational_mode": "observe"}})
     if r_active.modified_count or r_inactive.modified_count:
         await db.audit_log.insert_one({
             "user_id": "system", "action": "operational_mode_migration",
-            "detail": {"grandfathered_active_to_autonomous_live":
+            "detail": {"legacy_active_to_supervised_live":
                        r_active.modified_count,
                        "defaulted_inactive_to_observe":
                        r_inactive.modified_count,
-                       "reason": "DEFAULT_MODE changed to observe — explicit "
-                                 "stamps preserve running-bot behavior"},
+                       "reason": "no migrated config silently obtains "
+                                 "autonomous authority — explicit promotion "
+                                 "required for autonomous_live"},
             "step_up_verified": False, "at": now})
-        logger.warning("operational-mode migration: %d active→autonomous_live"
+        logger.warning("operational-mode migration: %d active→supervised_live"
                        ", %d inactive→observe", r_active.modified_count,
                        r_inactive.modified_count)
     return {"active_grandfathered": r_active.modified_count,
             "inactive_defaulted": r_inactive.modified_count}
+
+
+async def remigrate_autonomous_to_supervised(db) -> dict:
+    """One-time safety re-migration (iter-103): configs that obtained
+    autonomous_live from the ORIGINAL grandfather migration (i.e. without a
+    recorded explicit mode_promotion) are demoted to supervised_live. They
+    keep trading at half size; full autonomy needs explicit re-promotion
+    through the certification gate. Idempotent via platform_state flag."""
+    flag = await db.platform_state.find_one(
+        {"_id": "mode_safety_remigration"})
+    if flag and flag.get("done"):
+        return {"demoted": 0, "already_done": True}
+    now = datetime.now(timezone.utc)
+    demoted = 0
+    async for cfg in db.bot_configs.find(
+            {"operational_mode": "autonomous_live"}):
+        if cfg.get("mode_explicitly_promoted"):
+            continue
+        promoted = await db.governed_changes.find_one({
+            "user_id": cfg.get("user_id"),
+            "field": "operational_mode",
+            "new_value": "autonomous_live",
+            "source": "mode_promotion", "status": "approved"})
+        if promoted:
+            continue
+        await db.bot_configs.update_one(
+            {"_id": cfg["_id"]},
+            {"$set": {"operational_mode": "supervised_live",
+                      "mode_migrated_at": now.isoformat(),
+                      "mode_migration_policy":
+                          "remigration_autonomous_to_supervised"}})
+        demoted += 1
+    await db.platform_state.update_one(
+        {"_id": "mode_safety_remigration"},
+        {"$set": {"done": True, "demoted": demoted, "at": now}},
+        upsert=True)
+    if demoted:
+        await db.audit_log.insert_one({
+            "user_id": "system",
+            "action": "operational_mode_safety_remigration",
+            "detail": {"demoted_to_supervised_live": demoted,
+                       "reason": "grandfathered autonomous_live withdrawn — "
+                                 "explicit certification-gated promotion "
+                                 "required for full autonomy"},
+            "step_up_verified": False, "at": now})
+        try:
+            from alerting import raise_alert
+            await raise_alert(
+                db, "mode_safety_remigration", "warning",
+                f"{demoted} bot config(s) demoted from autonomous_live to "
+                f"supervised_live (safety re-migration). Re-promote "
+                f"explicitly via the certification gate when ready.",
+                dedup_key="mode_safety_remigration")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("remigration alert failed: %s", e)
+        logger.warning("mode safety re-migration: %d autonomous_live → "
+                       "supervised_live", demoted)
+    return {"demoted": demoted, "already_done": False}
 
 
 # ---------------------------------------------------------------------------

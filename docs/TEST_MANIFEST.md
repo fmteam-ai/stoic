@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 444 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2151 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2163 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 2626 tests across 249 files.**
+**Total: 2638 tests across 251 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -23,7 +23,9 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter101_forecast_agent.py` | http-live | 9 |
 | `backend/tests/test_iter102_consensus.py` | http-live | 11 |
 | `backend/tests/test_iter103_prob_forecast.py` | http-live | 12 |
+| `backend/tests/test_iter103_safety_corrections.py` | http-live | 4 |
 | `backend/tests/test_iter104_bayes_decision.py` | http-live | 13 |
+| `backend/tests/test_iter104_immutable_promotion.py` | http-live | 4 |
 | `backend/tests/test_iter105_liquidity_map.py` | http-live | 13 |
 | `backend/tests/test_iter106_news_understanding.py` | http-live | 12 |
 | `backend/tests/test_iter107_calendar_intel.py` | http-live | 13 |
@@ -53,7 +55,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter138_bayes_opt.py` | http-live | 14 |
 | `backend/tests/test_iter138_broker_comparison.py` | http-live | 9 |
 | `backend/tests/test_iter139_enterprise_api.py` | http-live | 17 |
-| `backend/tests/test_iter139_rl_allocator.py` | http-live | 9 |
+| `backend/tests/test_iter139_rl_allocator.py` | http-live | 13 |
 | `backend/tests/test_iter13_broker_limits.py` | http-live | 10 |
 | `backend/tests/test_iter140_shadow_models.py` | http-live | 8 |
 | `backend/tests/test_iter141_calibrated_loosening.py` | http-live | 10 |

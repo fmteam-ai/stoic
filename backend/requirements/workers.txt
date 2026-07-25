@@ -1,0 +1,6 @@
+# Trading workers — signal engines, risk, execution, crypto bridge.
+# Install: pip install -c ../requirements.txt -r workers.txt
+-r api.txt
+numpy
+scipy
+ccxt

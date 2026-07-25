@@ -292,12 +292,14 @@ from routes.twin_routes import router as twin_router  # noqa: E402
 from routes.genetics_routes import router as genetics_router  # noqa: E402
 from routes.coach_routes import router as coach_router  # noqa: E402
 from routes.marketplace_routes import router as marketplace_router  # noqa: E402
+from routes.config_version_routes import router as config_version_router  # noqa: E402
 api_router.include_router(learning_router)
 api_router.include_router(governance_router)
 api_router.include_router(twin_router)
 api_router.include_router(genetics_router)
 api_router.include_router(coach_router)
 api_router.include_router(marketplace_router)
+api_router.include_router(config_version_router)
 
 
 # ---------- WebSocket ----------
@@ -438,8 +440,10 @@ async def on_startup():
         await seed_admin()
         # Safety review — DEFAULT_MODE is observe; grandfather migration
         # stamps pre-existing configs explicitly (idempotent, audited).
-        from operational_modes import migrate_default_modes
+        from operational_modes import (migrate_default_modes,
+                                       remigrate_autonomous_to_supervised)
         await migrate_default_modes(get_db())
+        await remigrate_autonomous_to_supervised(get_db())
         from seed import dependency_health_check
         await dependency_health_check()
         logger.info("Startup: indexes ensured, admin seeded.")

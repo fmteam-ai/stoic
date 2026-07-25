@@ -1,0 +1,7 @@
+# Research / model training — nightly tuner, ML ensemble, forecaster.
+# Install: pip install -c ../requirements.txt -r research.txt
+-r workers.txt
+scikit-learn
+xgboost
+lightgbm
+torch

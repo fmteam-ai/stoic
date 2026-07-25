@@ -265,6 +265,16 @@ async def release_safety(request: Request):
             "principle": "only releases above the threshold can be promoted"}
 
 
+@router.get("/ops/swallowed")
+async def swallowed_exceptions(request: Request):
+    """iter-103 — in-process counters of suppressed failures per component."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from silent_failures import swallow_counters
+    return {"counters": swallow_counters()}
+
+
 @router.get("/ops/chaos")
 async def chaos_latest(request: Request):
     """Tier 14 — latest chaos-drill campaign results."""

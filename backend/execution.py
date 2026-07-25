@@ -13,6 +13,7 @@ from database import get_db
 from market import get_quote
 from safety_guardian import audit_pre_trade
 from ws_manager import manager as ws_manager
+from silent_failures import record_swallow
 
 logger = logging.getLogger("execution")
 
@@ -273,8 +274,8 @@ class MT5BridgeEngine(ExecutionEngine):
                 db, user_id=user_id, symbol=signal["symbol"],
                 signal=signal, trade_doc=trade_doc,
             )
-        except Exception:  # noqa: BLE001
-            pass  # explanation is informational — never block a trade
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("execution", "execute", _sw)  # explanation is informational — never block a trade
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
@@ -363,8 +364,8 @@ class PaperEngine(ExecutionEngine):
                 await db.trades.update_one(
                     {"_id": r.inserted_id}, {"$set": {"notified_opened": True}}
                 )
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("execution", "execute", _sw)
         return trade_doc
 
 
@@ -443,8 +444,8 @@ async def settle_paper_trades_against_price() -> int:
         try:
             from notifier import notify_trade_closed
             await notify_trade_closed(t["user_id"], {**t, "exit_price": round(price, 5), "pnl": pnl})
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("execution", "settle_paper_trades_against_price", _sw)
         # Loss post-mortem + auto-loosen on winners — fire-and-forget
         try:
             from loss_postmortem import maybe_record_postmortem, maybe_record_winner
@@ -453,8 +454,8 @@ async def settle_paper_trades_against_price() -> int:
             asyncio.create_task(maybe_record_postmortem(db, t["_id"]))
             asyncio.create_task(maybe_record_winner(db, t["_id"]))
             asyncio.create_task(record_residual_for_trade(db, t["_id"]))
-        except Exception:
-            pass
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("execution", "settle_paper_trades_against_price", _sw)
         closed += 1
     return closed
 

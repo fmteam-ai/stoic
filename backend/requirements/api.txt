@@ -1,0 +1,19 @@
+# API / control plane — FastAPI service, auth, ops, payments.
+# Install: pip install -c ../requirements.txt -r api.txt
+fastapi
+uvicorn
+starlette
+pydantic
+motor
+pymongo
+python-dotenv
+httpx
+requests
+aiohttp
+PyJWT
+bcrypt
+pyotp
+qrcode
+cryptography
+python-multipart
+email-validator

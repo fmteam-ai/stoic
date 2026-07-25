@@ -755,6 +755,8 @@ async def update_config(payload: BotConfigUpdate,
                     "warnings": gate["warnings"]})
             version_id = await snapshot_config(
                 db, user["id"], account_id, f"pre-promotion:{new_mode}")
+            if new_mode == "autonomous_live":
+                update["mode_explicitly_promoted"] = True
             now_dt = datetime.now(timezone.utc)
             await db.governed_changes.insert_one({
                 "user_id": user["id"], "account_id": account_id,
@@ -833,6 +835,9 @@ async def update_config(payload: BotConfigUpdate,
         _config_filter(user["id"], account_id), {"$set": update}
     )
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
+    from config_promotion import record_version
+    await record_version(db, cfg, label="post-update",
+                         source="config_update")
     return _serialize(cfg)
 
 

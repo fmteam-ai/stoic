@@ -53,7 +53,7 @@ def test_grandfather_migration_idempotent(db):
         await migrate_default_modes(db)
         by = {c["account_id"]: c async for c in
               db.bot_configs.find({"user_id": uid})}
-        assert by["a1"]["operational_mode"] == "autonomous_live"  # grandfathered
+        assert by["a1"]["operational_mode"] == "supervised_live"  # iter-103: no silent autonomy
         assert by["a2"]["operational_mode"] == "observe"          # fail-safe
         assert by["a3"]["operational_mode"] == "shadow"           # untouched
         # idempotent — second run touches nothing

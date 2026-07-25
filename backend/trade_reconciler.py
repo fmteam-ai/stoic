@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from database import get_db
 from ws_manager import manager as ws_manager
+from silent_failures import record_swallow
 
 
 def _infer_close_reason(t: dict, exit_price) -> str:
@@ -35,8 +36,8 @@ def _infer_close_reason(t: dict, exit_price) -> str:
                 return "take_profit_reconciled"
             if sl > 0 and abs(exit_p - sl) <= tol:
                 return "stop_loss_reconciled"
-    except Exception:
-        pass
+    except Exception as _sw:  # noqa: BLE001
+        record_swallow("reconciliation", "_infer_close_reason", _sw)
     return "broker_reconciled_estimated"
 
 
