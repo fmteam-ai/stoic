@@ -1,4 +1,7 @@
 // Landing-page testimonials — front-page "wall of trust".
+import { useEffect, useRef, useState } from "react";
+import { BACKEND_URL } from "@/lib/api";
+
 // ─── EDIT YOUR TESTIMONIALS HERE ────────────────────────────────────
 // Quotes are deliberately about experience, safety and control — not
 // profit promises (compliance-safe for a trading product). Swap these
@@ -26,6 +29,74 @@ const TESTIMONIALS = [
       quote: "No auto-renewals, cancel anytime, and it downgrades gracefully. Billing that respects you is rare." },
 ];
 // ────────────────────────────────────────────────────────────────────
+
+const API = BACKEND_URL;
+
+const useCountUp = (target, duration = 1600) => {
+    const [val, setVal] = useState(0);
+    useEffect(() => {
+        if (target == null) return;
+        let raf; const t0 = performance.now();
+        const tick = (now) => {
+            const p = Math.min(1, (now - t0) / duration);
+            setVal(target * (1 - Math.pow(1 - p, 3)));
+            if (p < 1) raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
+    }, [target, duration]);
+    return val;
+};
+
+const Stat = ({ label, value, suffix = "", decimals = 0, testId }) => {
+    const v = useCountUp(value);
+    return (
+        <div className="tst-stat" data-testid={testId}>
+            <div className="tst-stat-value">
+                {value == null ? "—"
+                    : v.toLocaleString(undefined, {
+                        minimumFractionDigits: decimals,
+                        maximumFractionDigits: decimals })}{suffix}
+            </div>
+            <div className="tst-stat-label">{label}</div>
+        </div>
+    );
+};
+
+const TrustBar = () => {
+    const [stats, setStats] = useState(null);
+    const [visible, setVisible] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+        fetch(`${API}/api/public/trust-stats`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(setStats)
+            .catch(() => setStats(null));
+    }, []);
+    useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const obs = new IntersectionObserver(
+            ([e]) => e.isIntersecting && setVisible(true),
+            { threshold: 0.4 });
+        obs.observe(el);
+        return () => obs.disconnect();
+    }, [stats]);
+    if (!stats) return null;
+    return (
+        <div ref={ref} className="tst-trustbar" data-testid="trust-bar">
+            <Stat label="Accounts protected" testId="trust-stat-accounts"
+                  value={visible ? stats.accounts_protected : null} />
+            <div className="tst-stat-divider" />
+            <Stat label="Trades vetoed by governance" testId="trust-stat-vetoed"
+                  value={visible ? stats.signals_vetoed : null} />
+            <div className="tst-stat-divider" />
+            <Stat label="Platform uptime · 30d" testId="trust-stat-uptime"
+                  value={visible ? stats.uptime_30d_pct : null}
+                  suffix="%" decimals={1} />
+        </div>
+    );
+};
 
 const Stars = ({ n }) => (
     <div className="tst-stars" aria-label={`${n} out of 5 stars`}>
@@ -61,6 +132,7 @@ export const LandingTestimonials = () => {
             <p className="tst-subline">
                 What traders say about living with a bot that says &ldquo;no&rdquo; a lot.
             </p>
+            <TrustBar />
             <div className="tst-marquee" data-testid="testimonials-marquee">
                 <div className="tst-track">
                     {[...rowA, ...rowA].map((t, i) => (

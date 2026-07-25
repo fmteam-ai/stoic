@@ -1303,3 +1303,9 @@ LESSON: after upgrading any package in-place, ALWAYS re-run a fresh-venv `pip in
 - New frontend/src/components/LandingTestimonials.jsx: 10 curated compliance-safe testimonials (UX/safety focused, no profit claims) in an EDIT-HERE array; dual counter-scrolling marquee rows (pause on hover, edge fade masks, prefers-reduced-motion fallback), glass cards, green star ratings, initial avatars, risk disclaimer.
 - WelcomeTrailer.jsx intro state is now scrollable (.trailer-scroll wrapper): hero + "What traders say ▼" hint + testimonials below the fold. Trailer scene machinery untouched — verified play still works (screenshots).
 - CSS appended to styles/intro_trailer.css (tst-* classes).
+
+## Iter-172 (2026-07-25) — Alert inbox cleanup + landing trust bar
+- Alerts: bulk-ack already existed (POST /api/ops/alerts/ack-all + BotHealth AlertsCard "ACK ALL" button). Executed as admin: 27 unacked (ea_heartbeat_stale, worker_lease_expired) → 0; stage-gate criterion no_unacked_critical_alerts now True (only time-based min_3_days_in_stage remains).
+- Trust bar: new public GET /api/public/trust-stats (accounts_protected, signals_vetoed=HOLD signals, uptime_30d_pct from ops_soak_samples coverage; 5-min in-process cache, no per-user data). TrustBar component in LandingTestimonials.jsx (count-up on scroll into view via IntersectionObserver, glass strip above marquee). Uses BACKEND_URL from lib/api (process.env define didn't apply in this component context).
+- Gotcha fixed: an import-reshuffle edit dropped the <TrustBar /> JSX usage — element was defined but never rendered; re-added and verified via screenshot (4,220 / 17,349 / 100.0%).
+- Tests: tests/test_iter126b_trust_stats.py (3); manifest regenerated (2901 tests / 274 files).

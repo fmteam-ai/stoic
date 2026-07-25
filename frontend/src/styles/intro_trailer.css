@@ -311,3 +311,37 @@
     font-size: 11.5px; letter-spacing: 0.04em;
     color: rgba(250,250,250,0.35);
 }
+
+/* ─── Trust bar (live stats strip above testimonials) ───────────── */
+.tst-trustbar {
+    display: flex; align-items: stretch; justify-content: center;
+    gap: 2.5rem; flex-wrap: wrap;
+    margin: 0 auto 3.25rem; padding: 1.4rem 2.5rem;
+    max-width: 860px;
+    border: 1px solid rgba(0,255,65,0.16);
+    border-radius: 16px;
+    background: rgba(0,255,65,0.03);
+    backdrop-filter: blur(14px);
+}
+.tst-stat { text-align: center; min-width: 170px; }
+.tst-stat-value {
+    font-family: 'Space Grotesk', monospace;
+    font-size: clamp(1.7rem, 3vw, 2.4rem);
+    font-weight: 700; color: #00FF41;
+    text-shadow: 0 0 18px rgba(0,255,65,0.35);
+    font-variant-numeric: tabular-nums;
+}
+.tst-stat-label {
+    margin-top: 0.35rem;
+    font-family: 'Space Grotesk', monospace;
+    font-size: 10.5px; letter-spacing: 0.28em; text-transform: uppercase;
+    color: rgba(250,250,250,0.5);
+}
+.tst-stat-divider {
+    width: 1px; align-self: stretch;
+    background: linear-gradient(180deg, transparent, rgba(0,255,65,0.25), transparent);
+}
+@media (max-width: 720px) {
+    .tst-stat-divider { display: none; }
+    .tst-trustbar { gap: 1.5rem; padding: 1.25rem 1rem; }
+}
