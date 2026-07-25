@@ -2085,6 +2085,7 @@ async def _process_user_account_locked(db, cfg: dict):
             reason=f"Executed {signal['action']} {sym} {effective_lot} lots @ {signal.get('entry_price')} (conf {signal.get('confidence')}%).",
         )
         # iter-134 · Ledger: approved decisions are permanent audit records too
+        from decision_validation import four_verdicts
         from trade_decisions import record_decision
         await record_decision(
             db, user_id=user_id, symbol=sym, status="executed",
@@ -2093,7 +2094,8 @@ async def _process_user_account_locked(db, cfg: dict):
             cfg=cfg, signal=signal,
             execution={"trade_id": str(trade_doc.get("id")),
                        "lot_size": effective_lot,
-                       "sizing_method": sizing_method})
+                       "sizing_method": sizing_method,
+                       "validation_quorum": four_verdicts(signal, cfg)})
         inflight += 1
 
 

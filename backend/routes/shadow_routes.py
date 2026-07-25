@@ -18,6 +18,28 @@ from shadow_performance import compute_aggregate
 router = APIRouter(prefix="/shadow", tags=["shadow"])
 
 
+@router.get("/health")
+async def shadow_health(user=Depends(get_current_user)):
+    """Phase 1.4 — live shadow health score (pauses promotions < threshold)."""
+    from shadow_health import health_score
+    return await health_score(get_db(), user["id"])
+
+
+@router.get("/benchmark")
+async def shadow_benchmark(days: int = Query(30, ge=7, le=90),
+                           user=Depends(get_current_user)):
+    """Phase 1.2 — continuous variant benchmark on the same window."""
+    from shadow_benchmark import benchmark
+    return await benchmark(get_db(), user["id"], days=days)
+
+
+@router.get("/validation")
+async def shadow_validation(user=Depends(get_current_user)):
+    """Phase 1.1 — four-verdict quorum agreement audit."""
+    from decision_validation import quorum_stats
+    return await quorum_stats(get_db(), user["id"])
+
+
 @router.get("/performance")
 async def shadow_performance(since_days: int = Query(90, ge=1, le=365),
                              limit: int = Query(500, ge=1, le=2000),

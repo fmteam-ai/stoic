@@ -252,4 +252,17 @@ async def promotion_gate(db, user_id: str, account_id: str | None,
         if last_validation else None,
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Phase 1.4 — shadow health pauses live promotions automatically
+    if target_mode in LIVE_MODES:
+        try:
+            from shadow_health import THRESHOLD, health_score
+            hs = await health_score(db, user_id)
+            verdict["evidence"]["shadow_health"] = hs
+            if hs.get("promotions_paused"):
+                verdict["blockers"].append(
+                    f"shadow health {hs['overall']} < {THRESHOLD} — "
+                    f"promotions paused until system health recovers")
+                verdict["allowed"] = False
+        except Exception as e:  # noqa: BLE001 — health probe must not crash the gate
+            logger.warning("shadow health probe failed: %s", e)
     return verdict

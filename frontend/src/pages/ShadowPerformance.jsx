@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { ShadowHealthCard, ShadowBenchmarkTable, TwinStressPanel, ValidationQuorumCard } from "@/components/ShadowReadinessPanels";
 import { Eye, TrendingUp, TrendingDown, RefreshCw, Trophy, AlertTriangle, Activity } from "lucide-react";
 
 export default function ShadowPerformance() {
@@ -37,6 +38,13 @@ export default function ShadowPerformance() {
                     </button>
                 }
             />
+
+            <div className="space-y-4 mb-4" data-testid="shadow-readiness">
+                <ShadowHealthCard />
+                <ValidationQuorumCard />
+                <ShadowBenchmarkTable />
+                <TwinStressPanel />
+            </div>
 
             {err && (
                 <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 p-3 mb-4 text-xs text-[#FF3B30] font-mono" data-testid="shadow-error">{err}</div>

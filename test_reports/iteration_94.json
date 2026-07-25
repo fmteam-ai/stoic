@@ -1,0 +1,31 @@
+{
+  "summary": "iter-105 Phase 1 Shadow Readiness fully verified. All 7 unit tests pass, all 16 regression tests (iter-98/103/104) pass, all 6 new live HTTP tests pass, and the full frontend readiness section renders with correct testids and no new console errors. Backend live values match the review request spec exactly: shadow health overall=46-47 with promotions_paused=true (threshold 60), 4 benchmark variants populated (current_production n=490 ev_r=-0.02, rule_baseline n=1490), 6 twin stress scenarios each with verdicts (market_gap=DEGRADED worst-case), validation quorum total=0 (expected pre-executions). Promotion gate BLOCK path verified: PUT /api/bot/config {operational_mode:autonomous_live} was rejected and operational_mode remained supervised_live.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Global (all pages)", "issues": ["Pre-existing WebSocket 403 on wss://.../api/ws — unrelated to iter-105 but recurring in console; may want ingress/route fix in a future iteration"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter105_shadow_readiness.py",
+    "/app/backend/tests/test_iter105_shadow_readiness_http.py",
+    "/app/test_reports/pytest/iter105_results.xml",
+    "/app/test_reports/pytest/iter105_http_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "shadow_routes.py enforces days clamp via FastAPI Query(ge=7, le=90) which returns 422 for out-of-range — that is correct/defensive but the review-request phrasing 'verify days clamp (7-90)' implied silent clamping; documenting this: the endpoint validates rather than clamps. Frontend already hits ?days=30 so no user-facing impact.",
+    "ShadowReadinessPanels.jsx: each of the 4 panels calls api.get on mount with no error state and .catch(() => {}) — a silent swallow. If any endpoint 500s the panel just stays null with no user feedback. Consider a minimal error tile.",
+    "ShadowHealthCard: h.overall of 0 would render as '—' due to `h.overall ?? '—'` — that's a null-vs-zero ambiguity (unlikely in practice since score composition floors > 0 usually)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter105_shadow_readiness_http.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md); STEP_UP_BYPASS_TOKEN read from /app/backend/.env for gated endpoints",
+  "seed_data_creation": "None (used live admin ledger data; iter-105 unit test quorum_stats inserts + deletes its own iter105-* user_id document)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-105 verified end-to-end. New test file added: /app/backend/tests/test_iter105_shadow_readiness_http.py (6 live HTTP tests hitting preview URL). TEST_MANIFEST.md should be regenerated to include it. Backend admin config remains supervised_live (unchanged). Live current data at test time: shadow health overall≈46-47, promotions_paused=true, benchmark current_production n=490 ev_r=-0.02, rule_baseline n=1490, twin stress 990 decisions clean_net_r=-260.55 worst_case=market_gap. All 6 stress scenarios present. Validation quorum total=0 (expected). Pre-existing (unrelated) issue: wss://.../api/ws 403 handshake failures observed on all pages — main agent may want to add /ws to ingress or move to /api/ws2 if a rewrite blocks it.",
+  "rca of the issue": "N/A — no issues found. Only meta-note: the one initial test failure I hit (days clamp) was a test-authoring mistake on my side; the API correctly returns 422 for out-of-range days (FastAPI Query validation). Fixed the test to assert 422 for out-of-range and 200 for boundary values 7 and 90."
+}
