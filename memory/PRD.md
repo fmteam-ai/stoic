@@ -364,7 +364,16 @@ User re-pasted the full 20-tier list; mapping done — 13 tiers already existed.
 - **T5 Strategy Marketplace** — `marketplace.py::strategy_cards`: 8 preset cards w/ verified performance from scope-attributed closed trades (n/WR/pnl/PF/max-DD equity-curve), stars from PF, risk class, regime fit, best broker per style from broker_intel_scores + style_suitability (NOTE: real components values are FLOATS — normalized to {'score': v} dicts before style_suitability), installed_on from active bot_configs. GET /api/marketplace/strategies. New page `/marketplace` (Marketplace.jsx) + Sidebar nav-marketplace (Store icon, AUTOMATION group). INSTALL uses existing POST /api/bot/preset/{key}?account_id= with inline account picker.
 - Tests: test_iter101_batch_bc.py (6). Manifest → **2,626 tests / 249 files**. All 20 tiers now covered (built or pre-existing).
 
+## Iter-102 (2026-07-25) — Security audit (CONDITIONAL PASS) + fixes applied
+Audit findings and resolutions:
+- **SEC-001 (P1, env)**: STEP_UP_BYPASS_TOKEN/RATE_LIMIT_BYPASS_TOKEN active because APP_ENV unset. ALREADY MITIGATED for real deployments: `deploy/install.sh --production` sets APP_ENV=production and `server.py` startup HARD-FAILS if either bypass token exists in production. Preview keeps bypass intentionally (pytest conftest depends on it — do NOT set APP_ENV=production in preview).
+- **SEC-002 (P2, ReDoS) FIXED**: user/DB-influenced strings into Mongo `$regex` now `re.escape`d at ALL sites: routes/trade_routes.py (decisions ?symbol=), broker_intel.py, security.py clear_failures, operator_tools.py (×2), routes/posture_routes.py. Verified live: catastrophic pattern probe returns 200 instantly as literal.
+- **SEC-003 (P3, tenant mixing) FIXED**: market_state.py liquidity axis now scoped to the requesting user's own accounts (`account_id $in own_accounts`); marketplace.py best-broker query scoped to user's accounts too (was global newest-60 scan).
+- 31 tier-suite tests green post-fix; market-state/marketplace endpoints verified live.
+- Verified false positives (do not re-report): Terms.jsx XSS (DOMPurify), localStorage auth, lazy-import cycles, eval() misread.
+
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
+
 
 Session review: gold -2.1% trend day, bot went 14W/18L (+$67). 4 failure patterns found & fixed:
 1. session_trend_gate (payoff_guard.py): vetoes counter-trend entries vs intraday session structure (range≥0.45% gold / 0.9% crypto, pos band + EMA20 slope + swing structure). Would have blocked both counter-trend BUY clusters (-$110).

@@ -67,10 +67,12 @@ async def strategy_cards(db, user_id: str, days: int = 90) -> dict:
                                     {"label": 1, "broker": 1}):
         labels[str(a["_id"])] = a.get("label") or a.get("broker")
 
-    # best broker per style from the newest intel score of each account
+    # best broker per style from the newest intel score of each of the
+    # USER'S OWN accounts (query scoped — never scans other tenants)
     best: dict = {}
     seen_accounts: set = set()
-    async for s in db.broker_intel_scores.find({}).sort("at", -1).limit(60):
+    async for s in db.broker_intel_scores.find(
+            {"account_id": {"$in": list(labels)}}).sort("at", -1).limit(60):
         acc = str(s.get("account_id"))
         if acc in seen_accounts or acc not in labels:
             continue

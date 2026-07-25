@@ -92,8 +92,9 @@ async def record_failure(db, scope: str, identifier: str,
 
 
 async def clear_failures(db, scope: str, identifier: str) -> None:
+    import re as _re
     await db.rate_limits.delete_many(
-        {"_id": {"$regex": f"^{scope}:{identifier}:"}})
+        {"_id": {"$regex": f"^{_re.escape(f'{scope}:{identifier}')}:"}})
 
 
 def client_ip(request: Request) -> str:

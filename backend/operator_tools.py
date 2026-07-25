@@ -12,6 +12,7 @@
                      geometry, trailing start) and compares to reality.
 """
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from pip_utils import base_symbol
@@ -41,13 +42,13 @@ async def trade_replay(db, trade: dict) -> dict:
     lo, hi = t0 - 300, t1 + 300
     ticks = []
     async for p in db.price_ticks.find(
-            {"symbol": {"$regex": f"^{sym}"},
+            {"symbol": {"$regex": f"^{re.escape(sym)}"},
              "ts": {"$gte": lo, "$lte": hi}}).sort("ts", 1).limit(20000):
         ticks.append({"t": float(p["ts"]),
                       "price": float(p.get("price") or p.get("bid") or 0),
                       "bid": p.get("bid"), "ask": p.get("ask")})
     async for batch in db.scalp_ticks.find(
-            {"user_id": trade["user_id"], "symbol": {"$regex": f"^{sym}"},
+            {"user_id": trade["user_id"], "symbol": {"$regex": f"^{re.escape(sym)}"},
              "last_ms": {"$gte": lo * 1000}, "first_ms": {"$lte": hi * 1000}}
             ).limit(200):
         for tk in batch.get("ticks") or []:

@@ -300,7 +300,8 @@ async def list_trade_decisions(limit: int = 100, symbol: str = None,
     db = get_db()
     q = {"user_id": user["id"]}
     if symbol:
-        q["symbol"] = {"$regex": f"^{symbol}", "$options": "i"}
+        import re as _re
+        q["symbol"] = {"$regex": f"^{_re.escape(symbol)}", "$options": "i"}
     if status:
         q["status"] = status
     if stage:

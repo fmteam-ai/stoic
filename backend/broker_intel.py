@@ -206,7 +206,8 @@ async def execution_forecast(db, account: dict,
     q = {"account_id": acc_id, "origin": "auto",
          "opened_at": {"$gte": since}}
     if symbol:
-        q["symbol"] = {"$regex": f"^{symbol[:6]}", "$options": "i"}
+        import re as _re
+        q["symbol"] = {"$regex": f"^{_re.escape(symbol[:6])}", "$options": "i"}
     slips, lats = [], []
     async for t in db.trades.find(q, {"slippage_pips": 1, "_dispatched_at": 1,
                                       "acknowledged_at": 1}).limit(300):

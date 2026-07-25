@@ -95,7 +95,7 @@ async def market_posture(user=Depends(get_current_user)):
 
     for base in traded[:4]:
         sig = await db.signals.find_one(
-            {"symbol": {"$regex": f"^{base}"}}, sort=[("_id", -1)]) or {}
+            {"symbol": {"$regex": f"^{re.escape(base)}"}}, sort=[("_id", -1)]) or {}
         vetoes = [ln.strip() for ln in (sig.get("reasoning") or "").split("\n")
                   if ln.strip().startswith("VETO")]
         cdoc = await db.intraday_candles.find_one({"user_id": uid, "symbol": base})
