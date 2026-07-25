@@ -20,12 +20,40 @@ via PowerShell auto-installer, and full broker-terminal data integrity
 - Production domain: stoicaibot.com.
 
 ## Current EA version
-**v1.52** — `LATEST_EA` hardcoded in: `routes/bot_routes.py`, `routes/diagnostic_routes.py`,
-`routes/setup_routes.py` (`ea_latest_version`), `frontend/src/pages/Accounts.jsx`,
-`frontend/src/components/EaVersionStrip.jsx`, EA `#property version` + `EA_CLIENT_VERSION`.
-`FENCING_MIN_EA = "1.50"` (live activation floor) deliberately stays at 1.50 so running EAs keep working.
-Version tests: `tests/test_iter40_ea_clamp_stops.py::test_version_138_everywhere`,
-`tests/test_iter85_ea_token_autoload.py` (EXPECTED_VERSION).
+**v1.55** — single source: EA `#property version` + `EA_CLIENT_VERSION` (tests derive via
+`tests/ea_version.py::current_ea_version`). Synced in: `routes/bot_routes.py` /
+`routes/diagnostic_routes.py` (`LATEST_EA`), `routes/setup_routes.py` (`ea_latest_version`),
+`frontend/src/pages/Accounts.jsx`, `frontend/src/components/EaVersionStrip.jsx`.
+`FENCING_MIN_EA = "1.50"` (live activation floor) stays at 1.50.
+v1.55 heartbeat carries the MANDATORY identity block: `installation_id` (from EA input or
+`MQL5\Files\STOIC-Installation.txt` dropped by installer/pairing), `broker_server`
+(ACCOUNT_SERVER), `terminal_build`, `ea_version`. Heartbeats WITHOUT installation_id are
+telemetry-only: NEVER renew execution leases, NEVER promote deployments, and live dispatch is
+blocked by the identity gate (`vps_agent.verify_execution_identity`, wired in
+`execution.MT5BridgeEngine.execute`).
+
+## Identity model (iter-125, July 2026 — DONE)
+- Accounts carry `display_name` (presentation only), `expected_identity{account_number,broker_server}`
+  (user claim at registration), `verified_identity{account_number,broker_server,installation_id,verified_at}`
+  (stamped ONLY by a fully verified EA heartbeat chain). Startup backfill: `identity_model.backfill_identity_structure`.
+- Authority order: verified_identity > broker_account_id_reported > expected > user-entered
+  (`identity_model.authoritative_account_number`; used by `execution.broker_identity_snapshot`,
+  `vps_agent.verify_heartbeat_identity`, pairing `permitted_account`).
+- Broker-server matching: EXACT normalized alias-registry match (`broker_servers.servers_match`,
+  merges db.broker_profiles server_names) — substring matching removed.
+- Artifact trust: `vps_pathb.build_artifact_manifest` RAISES without AGENT_SIGNING_KEY (503 at
+  `/api/infra/artifacts/manifest`); CI EX5 delivery via `GET /api/ea-script.ex5` (409
+  ex5_not_published until release pipeline uploads `backend/static/EmergentTradingBridge.ex5`);
+  installers verify X-STOIC-SHA256 and report digests to `POST /api/infra/agent/artifact-digest`
+  (agent_token or bridge_token; stored in db.artifact_digests with match flag).
+- `/api/setup/claim-pairing` now registers a fresh installation (revoking prior ones), grants the
+  lease and returns `installation_id`; installer writes `STOIC-Installation.txt`.
+- WS fix: `/api/ws` allows same-origin upgrades even when Origin isn't in CORS_ORIGINS; auth
+  rejections accept-then-close with 4401/4403 (previously opaque HTTP 403).
+- Affiliate accounting: integer cents (`commission_cents`, `unpaid_balance_cents`, …) with usd
+  mirrors; commission insert swallows ONLY DuplicateKeyError (outbox retries real failures).
+- Tests: `tests/test_iter125_identity_corrections.py` (17) + testing-agent
+  `tests/test_iter103_identity_regression.py` (12) — all green.
 
 ## Key bridge endpoints
 - `POST /api/bridge/heartbeat` — balance/equity/positions snapshot, reconcile, ghost-close estimation, auto-heal deep-sync queueing (5-min `ghost_check_at` throttle).
