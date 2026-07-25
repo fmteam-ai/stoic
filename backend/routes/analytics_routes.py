@@ -190,6 +190,31 @@ async def research(days: int = 90, user=Depends(get_current_user)):
             "regimes": regimes, "decay": decay, "execution": execution}
 
 
+@router.get("/calibration")
+async def calibration_card(days: int = 90, user=Depends(get_current_user)):
+    """Tier 17 · calibration transparency — stated confidence vs realized
+    win rate per engine, with an overall calibration-error headline."""
+    from calibration import compute_calibration
+    table = await compute_calibration(get_db(), user["id"],
+                                      days=min(max(int(days), 7), 365))
+    tot_n = 0
+    stated_sum = realized_sum = err_sum = 0.0
+    for ent in table.values():
+        for b in ent["buckets"]:
+            n = b["n"]
+            tot_n += n
+            stated_sum += b["stated"] * n
+            realized_sum += b["realized"] * n
+            err_sum += abs(b["gap"]) * n
+    summary = None
+    if tot_n:
+        summary = {"predicted": round(stated_sum / tot_n, 1),
+                   "actual": round(realized_sum / tot_n, 1),
+                   "calibration_error": round(err_sum / tot_n, 1),
+                   "n": tot_n}
+    return {"days": days, "summary": summary, "engines": table}
+
+
 @router.get("/rr-watch")
 async def rr_watch(user=Depends(get_current_user)):
     """Realized R:R watch — compares trade geometry before vs after the

@@ -3,6 +3,8 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Trophy, RefreshCw, Filter } from "lucide-react";
 import { TuningPanel, AllocatorPanel, ShadowLabPanel } from "@/components/quant/QuantPanels";
+import { DigitalTwinPanel } from "@/components/DigitalTwinPanel";
+import { GeneticsPanel } from "@/components/GeneticsPanel";
 
 const ENGINE_LABELS = {
     hf_scalp: "SCALPER",
@@ -200,6 +202,8 @@ export default function Scoreboard() {
                         </div>
                         <Funnel funnel={data?.funnel || []} />
                         <AblationPanel days={days} />
+                        <DigitalTwinPanel days={days} />
+                        <GeneticsPanel />
                         <AllocatorPanel />
                         <TuningPanel />
                         <ShadowLabPanel />
