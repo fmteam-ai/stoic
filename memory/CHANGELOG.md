@@ -1309,3 +1309,8 @@ LESSON: after upgrading any package in-place, ALWAYS re-run a fresh-venv `pip in
 - Trust bar: new public GET /api/public/trust-stats (accounts_protected, signals_vetoed=HOLD signals, uptime_30d_pct from ops_soak_samples coverage; 5-min in-process cache, no per-user data). TrustBar component in LandingTestimonials.jsx (count-up on scroll into view via IntersectionObserver, glass strip above marquee). Uses BACKEND_URL from lib/api (process.env define didn't apply in this component context).
 - Gotcha fixed: an import-reshuffle edit dropped the <TrustBar /> JSX usage — element was defined but never rendered; re-added and verified via screenshot (4,220 / 17,349 / 100.0%).
 - Tests: tests/test_iter126b_trust_stats.py (3); manifest regenerated (2901 tests / 274 files).
+
+## Iter-173 (2026-07-25) — GitHub CI red fixes
+1. backend-unit: test_iter103_identity_regression.py (added by testing agent) had hardcoded /app/frontend/.env + /app/backend/.env paths → violated test_no_hardcoded_app_paths_in_test_code guard. Fixed with dynamic __file__-relative resolution. Exact CI command now: 474 passed.
+2. security-scan: gitleaks flagged 2 false positives — PRD.md changelog text "API router. Tests: test_iter110_phase3_4.py" matched generic-api-key in 2 history blobs (e15a88c:1367, 3cb4447:411). Fingerprints added to .gitleaksignore + current PRD.md line reworded ("Tests —") to prevent re-flagging. gitleaks local scan: 624 commits, no leaks found.
+LESSON (recurring): any "SomeWord: test_xxx" colon phrasing in memory/*.md near high-entropy tokens can trip gitleaks generic-api-key — prefer em-dash. Testing-agent test files must never hardcode /app paths.

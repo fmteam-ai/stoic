@@ -26,9 +26,12 @@ import requests
 from bson import ObjectId
 from pymongo import MongoClient
 
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ROOT_DIR = os.path.dirname(_BACKEND_DIR)
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
-    with open("/app/frontend/.env") as f:
+    with open(os.path.join(_ROOT_DIR, "frontend", ".env")) as f:
         for ln in f:
             if ln.startswith("REACT_APP_BACKEND_URL"):
                 BASE_URL = ln.split("=", 1)[1].strip().strip('"').rstrip("/")
@@ -37,7 +40,7 @@ TIMEOUT = 30
 
 
 def _mongo():
-    with open("/app/backend/.env") as f:
+    with open(os.path.join(_BACKEND_DIR, ".env")) as f:
         cfg = {ln.split("=", 1)[0]: ln.split("=", 1)[1].strip().strip("\"'")
                for ln in f if "=" in ln and not ln.startswith("#")}
     return MongoClient(cfg["MONGO_URL"])[cfg["DB_NAME"]]
