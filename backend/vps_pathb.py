@@ -263,13 +263,30 @@ async def queue_command(db, user_id: str, agent_id: str, command: str,
     if agent.get("commands_frozen") and command != "run_diagnostics":
         raise RuntimeError("commands are frozen for this agent "
                            "(incident workflow active)")
-    cmd = {"command_id": f"cmd_{uuid.uuid4().hex[:10]}",
+    # iter-122 Phase 3 — authenticated, monotonic command sequence: every
+    # command carries a per-agent seq + HMAC signature (command_key issued
+    # at enrollment). The agent verifies sig and rejects seq <= last seen —
+    # replayed or reordered commands are structurally dead.
+    bumped = await db.vps_agents.find_one_and_update(
+        {"_id": agent["_id"]}, {"$inc": {"command_seq": 1}},
+        return_document=True)
+    seq = int((bumped or {}).get("command_seq") or 1)
+    command_id = f"cmd_{uuid.uuid4().hex[:10]}"
+    sig = None
+    if agent.get("command_key"):
+        import hmac as _hmac
+        sig = _hmac.new(
+            agent["command_key"].encode(),
+            f"{agent_id}|{command_id}|{seq}|{command}".encode(),
+            hashlib.sha256).hexdigest()
+    cmd = {"command_id": command_id,
            "agent_id": agent_id, "user_id": user_id,
            "command": command, "params": params or {},
+           "seq": seq, "sig": sig,
            "issued_by": issued_by, "status": "queued",
            "created_at": datetime.now(timezone.utc)}
     await db.agent_commands.insert_one(cmd)
-    return {"command_id": cmd["command_id"], "status": "queued"}
+    return {"command_id": cmd["command_id"], "status": "queued", "seq": seq}
 
 
 async def poll_commands(db, agent_token: str) -> list:
@@ -284,7 +301,8 @@ async def poll_commands(db, agent_token: str) -> list:
             {"_id": c["_id"]},
             {"$set": {"status": "delivered", "delivered_at": now}})
         out.append({"command_id": c["command_id"],
-                    "command": c["command"], "params": c["params"]})
+                    "command": c["command"], "params": c["params"],
+                    "seq": c.get("seq"), "sig": c.get("sig")})
     return out
 
 
@@ -297,6 +315,17 @@ async def ack_command(db, agent_token: str, command_id: str,
         {"command_id": command_id, "agent_id": agent["agent_id"]})
     if not cmd:
         raise ValueError("command not found")
+    # iter-122 Phase 3 — monotonic ack ordering: a replayed / stale ack for
+    # an already-superseded sequence number is rejected.
+    if cmd.get("seq") is not None:
+        last = int(agent.get("last_acked_seq") or 0)
+        if int(cmd["seq"]) <= last and cmd.get("status") in ("acked", "done", "failed"):
+            raise ValueError(
+                f"stale or replayed ack (seq {cmd['seq']} <= {last})")
+        await db.vps_agents.update_one(
+            {"_id": agent["_id"]},
+            [{"$set": {"last_acked_seq": {"$max": ["$last_acked_seq",
+                                                    int(cmd["seq"])]}}}])
     now = datetime.now(timezone.utc)
     await db.agent_commands.update_one(
         {"_id": cmd["_id"]},
@@ -424,7 +453,7 @@ def build_artifact_manifest() -> dict:
             ea_version = m.group(1) if m else None
     except OSError:
         pass
-    return {"artifacts": [
+    manifest = {"artifacts": [
         {"name": "stoic-agent", "type": "powershell", "version": "1.0.0",
          "url": "/api/infra/agent/bootstrap/installer",
          "sha256": None, "rollback_version": None,
@@ -440,7 +469,30 @@ def build_artifact_manifest() -> dict:
          "note": "installers MUST deploy the exact CI-compiled, "
                  "hash-verified .ex5 — never recompile .mq5 locally. "
                  "Published by the signed release pipeline."},
-    ], "generated_at": datetime.now(timezone.utc).isoformat()}
+    ], "generated_at": datetime.now(timezone.utc).isoformat(),
+       "update_policy": {
+           "verify": "agents verify manifest signature + per-artifact "
+                     "sha256 BEFORE installing; mismatch → abort",
+           "rollback": "agents keep the previously-verified artifact and "
+                       "roll back automatically when a new artifact fails "
+                       "hash/signature verification or health checks",
+       }}
+    # iter-122 Phase 3 — signed manifest: HMAC-SHA256 over the canonical
+    # JSON body with the server-held AGENT_SIGNING_KEY. Agents pin the key
+    # at enrollment and refuse unsigned/invalid manifests.
+    import hmac as _hmac
+    import json as _json
+    key = os.environ.get("AGENT_SIGNING_KEY", "")
+    body = _json.dumps({k: manifest[k] for k in ("artifacts", "update_policy")},
+                       sort_keys=True, separators=(",", ":"),
+                       default=str).encode()
+    manifest["signature"] = {
+        "alg": "HMAC-SHA256", "key_id": "stoic-server-v1",
+        "value": _hmac.new(key.encode(), body,
+                           hashlib.sha256).hexdigest() if key else None,
+        "signed_fields": ["artifacts", "update_policy"],
+    }
+    return manifest
 
 
 # ── broker profile registry ─────────────────────────────────────

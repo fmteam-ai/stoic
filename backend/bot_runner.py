@@ -66,7 +66,15 @@ def _cooldown_minutes(cfg: dict | None = None) -> int:
                 val = None
     if val is None:
         val = int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
-    return max(1, val)
+    # iter-122 Phase 2 — plan floor: tiers below Elite AI can't dial the
+    # cooldown under their entitlement (stashed on cfg by the run pass).
+    tier_floor = 1
+    if cfg is not None:
+        try:
+            tier_floor = int(cfg.get("_tier_min_cooldown") or 1)
+        except (TypeError, ValueError):
+            tier_floor = 1
+    return max(1, val, tier_floor)
 
 
 def _sl_cooldown_minutes_default() -> int:
@@ -276,6 +284,19 @@ async def _process_user_account_locked(db, cfg: dict):
     # 0. Subscription gate — paper accounts always allowed; live execution requires active sub
     entitlement = await subscription_active(user_id)
 
+    # iter-122 Phase 2 — resolve plan features once per pass. Cooldown floor,
+    # auto-execution right and calibration access are plan-scoped; stashed on
+    # cfg (ephemeral keys) so downstream sync helpers can read them.
+    try:
+        from subscription_service import get_user_tier as _get_tier
+        from subscription_plans import get_tier_features as _get_feats
+        _feats = _get_feats(await _get_tier(user_id))
+    except Exception:
+        from subscription_plans import STARTER as _feats  # fail closed to lowest
+    cfg["_tier_min_cooldown"] = _feats.min_signal_cooldown_minutes
+    cfg["_tier_auto_execute"] = _feats.auto_execute
+    cfg["_tier_calibrated_p_win"] = _feats.calibrated_p_win
+
     # Resolve which accounts this cfg controls.
     #   - Per-account cfg: only that single account.
     #   - Default cfg: every account that does NOT have its own per-account cfg.
@@ -445,7 +466,8 @@ async def _process_user_account_locked(db, cfg: dict):
         return
 
     risk_level = cfg.get("risk_level", "medium")
-    auto_exec = bool(cfg.get("auto_execute", True))
+    auto_exec = (bool(cfg.get("auto_execute", True))
+                 and bool(cfg.get("_tier_auto_execute", True)))
     # Paper-shadow mode (iter-39): when the cfg is in shadow mode but not
     # fully active, run the entire signal pipeline but FORCE auto_execute
     # off. Signals get tagged origin='shadow' so the UI can filter them
@@ -629,7 +651,8 @@ async def _process_user_account_locked(db, cfg: dict):
             # iter-142 · Attach the calibrated probability (realized win rate
             # for this engine + score bucket) so gates and the decision
             # ledger see an honest p_win, never the raw setup score.
-            if signal.get("action") in ("BUY", "SELL"):
+            if (signal.get("action") in ("BUY", "SELL")
+                    and cfg.get("_tier_calibrated_p_win", True)):
                 try:
                     from calibration import calibrated_p_win
                     signal["calibrated_p_win"] = await calibrated_p_win(

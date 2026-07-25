@@ -31,6 +31,16 @@ class MT5BridgeEngine(ExecutionEngine):
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
 
+        # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — the dispatcher never
+        # trusts upstream gates; plan authority is re-verified per trade.
+        from entitlements import verify_execution_entitlement
+        ent_block = await verify_execution_entitlement(
+            db, user_id=user_id, account=account, signal=signal)
+        if ent_block:
+            logger.warning("MT5 execute blocked by entitlement user=%s sym=%s: %s",
+                           user_id, signal.get("symbol"), ent_block.get("reason"))
+            return ent_block
+
         # MARKET-HOURS HARD VETO (iter-63) — block at execution layer too, so
         # any in-flight signal from before the analyze_symbol fix can't fire.
         # XAUUSD / forex: closed Fri 21:00 → Sun 22:00 UTC. Broker would

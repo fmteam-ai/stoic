@@ -182,6 +182,15 @@ async def sweep_user(user_id: str) -> dict:
     settings = (user.get("auto_heal_settings") or {})
     if not settings.get("enabled"):
         return {"ok": True, "skipped": "auto_heal disabled"}
+    # iter-122 Phase 2 — auto-heal is a Trader+ plan feature (worker-side gate)
+    try:
+        from subscription_service import get_user_tier
+        from subscription_plans import get_tier_features
+        tier = await get_user_tier(user_id)
+        if tier != "admin" and not get_tier_features(tier).auto_heal:
+            return {"ok": True, "skipped": "plan does not include auto_heal"}
+    except Exception:
+        return {"ok": True, "skipped": "entitlement lookup failed"}
 
     all_actions = []
     for fn in (

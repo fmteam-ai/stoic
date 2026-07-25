@@ -10,8 +10,12 @@ all other pre-existing users get a 30-day grace period from now.
 """
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from dateutil.relativedelta import relativedelta
 from database import get_db
-from subscription_plans import get_plan, get_tier_features, Features
+from subscription_plans import (
+    get_plan, get_tier_features, Features, TIER_RANK, TIER_BASE_CENTS,
+    canonical_tier,
+)
 
 
 # Existing users created BEFORE this timestamp get a 30-day grace period.
@@ -123,6 +127,27 @@ async def is_active(user_id: str) -> dict:
             return {"active": True, "reason": "in_grace_period",
                     "valid_until": valid_until, "in_grace": True,
                     "grace_until": grace, "plan_id": None}
+    # 3) Scheduled (downgraded) pass — lazily promote once the current
+    #    pass has lapsed. Downgrades never shorten the paid-for period.
+    sched_id = sub.get("scheduled_plan_id")
+    sched_vu_raw = sub.get("scheduled_valid_until")
+    if sched_id and sched_vu_raw:
+        try:
+            sched_vu = datetime.fromisoformat(sched_vu_raw.replace("Z", "+00:00"))
+        except ValueError:
+            sched_vu = None
+        if sched_vu and sched_vu > now:
+            db = get_db()
+            await db.subscriptions.update_one(
+                {"user_id": user_id},
+                {"$set": {"current_plan_id": sched_id,
+                          "valid_until": sched_vu_raw,
+                          "scheduled_plan_id": None,
+                          "scheduled_valid_until": None}},
+            )
+            return {"active": True, "reason": "scheduled_plan_started",
+                    "valid_until": sched_vu_raw, "in_grace": False,
+                    "plan_id": sched_id}
     return {"active": False, "reason": "expired_or_unsubscribed",
             "valid_until": valid_until, "in_grace": False, "plan_id": None}
 
@@ -147,85 +172,191 @@ async def record_transaction(
     return str(r.inserted_id)
 
 
-async def apply_successful_payment(session_id: str) -> Optional[dict]:
-    """Idempotent: extend the user's `valid_until` by the plan's duration.
+_CLAIM_STALE_MINUTES = 5
 
-    Returns the updated subscription doc or None if already applied / not found.
-    Admin users are short-circuited so a stray payment never demotes them out
-    of the grandfather state.
+
+async def apply_successful_payment(session_id: str, *,
+                                   source: str = "unknown") -> Optional[dict]:
+    """Exactly-once payment application (iter-122).
+
+    The Stripe webhook and the browser poll can both observe `paid`
+    concurrently — an atomic single-writer CLAIM on the ledger row
+    guarantees only one of them extends the subscription. The claim
+    self-heals after _CLAIM_STALE_MINUTES if a holder crashed mid-apply.
+
+    Durations are calendar-aware (relativedelta months — annual means one
+    calendar year, not 360 days). Cross-tier purchases prorate:
+      • upgrade   — remaining days convert into equal-VALUE days of the new
+                    tier immediately (value ratio of tier base prices);
+      • downgrade — the purchased pass is SCHEDULED to start when the
+                    current pass expires (never shortens what was paid for).
     """
     db = get_db()
-    txn = await db.payment_transactions.find_one({"session_id": session_id})
+    now = _now()
+    stale_before = (now - timedelta(minutes=_CLAIM_STALE_MINUTES)).isoformat()
+    txn = await db.payment_transactions.find_one_and_update(
+        {"session_id": session_id, "applied": {"$ne": True},
+         "$or": [{"apply_claimed_at": None},
+                 {"apply_claimed_at": {"$exists": False}},
+                 {"apply_claimed_at": {"$lt": stale_before}}]},
+        {"$set": {"apply_claimed_at": now.isoformat(), "apply_source": source}},
+    )
     if not txn:
-        return None
-    if txn.get("payment_status") == "paid" and txn.get("applied"):
-        return None  # already processed — idempotency guard
+        return None  # unknown session, already applied, or claim held elsewhere
 
-    # Admin grandfather protection — never overwrite admin entitlement
-    from bson import ObjectId
     try:
-        user_doc = await db.users.find_one({"_id": ObjectId(txn["user_id"])})
-    except Exception:
-        user_doc = None
-    if user_doc and user_doc.get("role") == "admin":
+        # Admin grandfather protection — never overwrite admin entitlement
+        from bson import ObjectId
+        try:
+            user_doc = await db.users.find_one({"_id": ObjectId(txn["user_id"])})
+        except Exception:
+            user_doc = None
+        if user_doc and user_doc.get("role") == "admin":
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {"payment_status": "paid", "applied": True,
+                          "applied_at": now.isoformat(),
+                          "skipped_reason": "admin_grandfather"}},
+            )
+            return await get_subscription(txn["user_id"])
+
+        plan = get_plan(txn["plan_id"])
+        if not plan:
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {"payment_status": "paid", "applied": True,
+                          "applied_at": now.isoformat(),
+                          "skipped_reason": "unknown_plan"}},
+            )
+            return None
+
+        sub = await get_subscription(txn["user_id"])
+        current_vu = None
+        if sub.get("valid_until"):
+            try:
+                current_vu = datetime.fromisoformat(
+                    sub["valid_until"].replace("Z", "+00:00"))
+            except ValueError:
+                current_vu = None
+        active_remaining = current_vu is not None and current_vu > now
+        cur_plan = get_plan(sub.get("current_plan_id") or "")
+
+        update = {"last_renewed_at": now.isoformat(),
+                  "last_session_id": session_id}
+        if active_remaining and cur_plan and cur_plan.tier != plan.tier:
+            cur_rank = TIER_RANK[canonical_tier(cur_plan.tier)]
+            new_rank = TIER_RANK[canonical_tier(plan.tier)]
+            if new_rank > cur_rank:
+                # UPGRADE — convert remaining time into equal-value new-tier days
+                remaining_days = (current_vu - now).total_seconds() / 86400.0
+                credit_days = remaining_days * (
+                    TIER_BASE_CENTS[cur_plan.tier] / TIER_BASE_CENTS[plan.tier])
+                new_vu = (now + relativedelta(months=plan.duration_months)
+                          + timedelta(days=credit_days))
+                update.update({
+                    "current_plan_id": plan.id,
+                    "valid_until": new_vu.isoformat(),
+                    "scheduled_plan_id": None, "scheduled_valid_until": None,
+                    "proration": {"kind": "upgrade", "from_plan": cur_plan.id,
+                                  "credited_days": round(credit_days, 2),
+                                  "at": now.isoformat()},
+                })
+            else:
+                # DOWNGRADE — schedule the new pass after the current one ends
+                sched_vu = current_vu + relativedelta(months=plan.duration_months)
+                new_vu = current_vu
+                update.update({
+                    "scheduled_plan_id": plan.id,
+                    "scheduled_valid_until": sched_vu.isoformat(),
+                    "proration": {"kind": "downgrade_scheduled",
+                                  "from_plan": cur_plan.id,
+                                  "starts_at": current_vu.isoformat(),
+                                  "at": now.isoformat()},
+                })
+        else:
+            # Same tier (or nothing active) — extend from the later of
+            # valid_until / now, calendar-aware.
+            base = current_vu if active_remaining else now
+            new_vu = base + relativedelta(months=plan.duration_months)
+            update.update({"current_plan_id": plan.id,
+                           "valid_until": new_vu.isoformat()})
+
+        await db.subscriptions.update_one(
+            {"user_id": txn["user_id"]}, {"$set": update}, upsert=True)
         await db.payment_transactions.update_one(
             {"session_id": session_id},
             {"$set": {"payment_status": "paid", "applied": True,
-                      "applied_at": _now().isoformat(),
-                      "skipped_reason": "admin_grandfather"}},
-        )
-        return await get_subscription(txn["user_id"])
-
-    plan = get_plan(txn["plan_id"])
-    if not plan:
-        return None
-
-    sub = await get_subscription(txn["user_id"])
-    now = _now()
-    # Extend from whichever is later: current valid_until or now
-    current_vu = None
-    if sub.get("valid_until"):
-        try:
-            current_vu = datetime.fromisoformat(
-                sub["valid_until"].replace("Z", "+00:00")
-            )
-        except ValueError:
-            current_vu = None
-    base = current_vu if (current_vu and current_vu > now) else now
-    new_vu = base + timedelta(days=plan.duration_months * 30)
-
-    await db.subscriptions.update_one(
-        {"user_id": txn["user_id"]},
-        {"$set": {
-            "current_plan_id": plan.id,
-            "valid_until": new_vu.isoformat(),
-            "last_renewed_at": now.isoformat(),
-            "last_session_id": session_id,
-        }},
-        upsert=True,
-    )
-    await db.payment_transactions.update_one(
-        {"session_id": session_id},
-        {"$set": {
-            "payment_status": "paid",
-            "applied": True,
-            "applied_at": now.isoformat(),
-            "new_valid_until": new_vu.isoformat(),
-        }},
-    )
-
-    # Affiliate commission hook — fire-and-forget, never block payment
-    try:
-        from affiliate_service import record_commission_if_referred
-        await record_commission_if_referred(
-            user_id=txn["user_id"],
-            plan_id=plan.id,
-            amount_usd=float(txn.get("amount_usd") or plan.amount_usd),
-            session_id=session_id,
+                      "applied_at": now.isoformat(),
+                      "new_valid_until": new_vu.isoformat()}},
         )
     except Exception:
-        pass  # commissioning failure must never roll back a paid subscription
+        # Release the claim so a later webhook/poll retry can re-apply.
+        await db.payment_transactions.update_one(
+            {"session_id": session_id, "applied": {"$ne": True}},
+            {"$set": {"apply_claimed_at": None}})
+        raise
+
+    # Affiliate commission — durable OUTBOX (never blocks payment). The
+    # billing loop retries failed entries; commission creation itself is
+    # idempotent (unique (session_id, tier) index).
+    try:
+        await db.affiliate_outbox.update_one(
+            {"session_id": session_id},
+            {"$setOnInsert": {
+                "session_id": session_id,
+                "user_id": txn["user_id"],
+                "plan_id": plan.id,
+                "amount_usd": float(txn.get("amount_usd") or plan.amount_usd),
+                "status": "pending", "attempts": 0,
+                "created_at": now.isoformat(),
+            }},
+            upsert=True,
+        )
+        from affiliate_service import process_affiliate_outbox
+        await process_affiliate_outbox(db, only_session=session_id)
+    except Exception:
+        pass  # the billing loop will retry pending outbox entries
 
     out = await db.subscriptions.find_one({"user_id": txn["user_id"]})
     out["id"] = str(out.pop("_id"))
     return out
+
+
+async def revoke_payment(session_id: str, *, reason: str = "refund") -> Optional[dict]:
+    """Refund / chargeback handling: pull the purchased duration back out of
+    `valid_until` (or drop a scheduled pass) and reverse any affiliate
+    commissions for the session. Idempotent via the `revoked` flag."""
+    db = get_db()
+    now = _now()
+    txn = await db.payment_transactions.find_one_and_update(
+        {"session_id": session_id, "applied": True, "revoked": {"$ne": True}},
+        {"$set": {"revoked": True, "revoked_at": now.isoformat(),
+                  "revoke_reason": reason, "payment_status": "refunded"}},
+    )
+    if not txn:
+        return None
+    plan = get_plan(txn.get("plan_id") or "")
+    sub = await get_subscription(txn["user_id"])
+    if plan and not txn.get("skipped_reason"):
+        if sub.get("scheduled_plan_id") == plan.id:
+            await db.subscriptions.update_one(
+                {"user_id": txn["user_id"]},
+                {"$set": {"scheduled_plan_id": None,
+                          "scheduled_valid_until": None}})
+        elif sub.get("valid_until"):
+            try:
+                vu = datetime.fromisoformat(
+                    sub["valid_until"].replace("Z", "+00:00"))
+                new_vu = vu - relativedelta(months=plan.duration_months)
+            except ValueError:
+                new_vu = now
+            await db.subscriptions.update_one(
+                {"user_id": txn["user_id"]},
+                {"$set": {"valid_until": new_vu.isoformat(),
+                          "last_revoked_session": session_id}})
+    try:
+        from affiliate_service import reverse_commissions_for_session
+        await reverse_commissions_for_session(db, session_id, reason=reason)
+    except Exception:
+        pass
+    return await get_subscription(txn["user_id"])

@@ -61,6 +61,17 @@ class BinanceCCXTEngine(ExecutionEngine):
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+
+        # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — same authority
+        # boundary as the MT5 engine; crypto is not a bypass.
+        from entitlements import verify_execution_entitlement
+        ent_block = await verify_execution_entitlement(
+            db, user_id=user_id, account=account, signal=signal)
+        if ent_block:
+            logger.warning("binance execute blocked by entitlement user=%s sym=%s: %s",
+                           user_id, signal.get("symbol"), ent_block.get("reason"))
+            return ent_block
+
         symbol_internal = signal["symbol"]
         ccxt_symbol = normalize_symbol(symbol_internal)
         action = (signal.get("action") or "").upper()

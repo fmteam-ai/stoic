@@ -225,7 +225,14 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
     plan = get_plan(plan_id)
     if not plan:
         return None
-    commission_usd = round(amount_usd * COMMISSION_RATE, 2)
+    # Idempotency guard #1 — one commission set per checkout session, ever.
+    # (Unique index on (session_id, tier) is the hard backstop.)
+    existing = await db.affiliate_commissions.find_one(
+        {"session_id": session_id, "tier": 1})
+    if existing:
+        return None
+    commission_cents = int(round(amount_usd * 100 * COMMISSION_RATE))
+    commission_usd = commission_cents / 100.0
     is_first = not user.get("first_paid_at")
     doc = {
         "affiliate_id": str(affiliate["_id"]),
@@ -242,7 +249,11 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
         "status": "pending",  # 'pending' until payout; 'paid' after admin payout
         "created_at": _now().isoformat(),
     }
-    res = await db.affiliate_commissions.insert_one(doc)
+    res = None
+    try:
+        res = await db.affiliate_commissions.insert_one(doc)
+    except Exception:
+        return None  # unique (session_id, tier) backstop — already recorded
     tier1_commission_id = str(res.inserted_id)
     await db.affiliates.update_one(
         {"_id": affiliate["_id"]},
@@ -293,6 +304,67 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
             {"$set": {"first_paid_at": _now().isoformat()}},
         )
     return doc
+
+
+# --- Outbox + reversal (iter-122 billing correctness) -----------------------
+async def process_affiliate_outbox(db, only_session: str | None = None,
+                                   max_attempts: int = 8) -> dict:
+    """Process pending affiliate-commission outbox entries. Called inline
+    right after a payment applies AND periodically by the billing loop, so a
+    transient failure can never permanently lose a commission. Commission
+    creation itself is idempotent (unique (session_id, tier) index)."""
+    q = {"status": "pending", "attempts": {"$lt": max_attempts}}
+    if only_session:
+        q["session_id"] = only_session
+    processed = failed = 0
+    cursor = db.affiliate_outbox.find(q).limit(50)
+    async for entry in cursor:
+        try:
+            await record_commission_if_referred(
+                user_id=entry["user_id"], plan_id=entry["plan_id"],
+                amount_usd=float(entry.get("amount_usd") or 0),
+                session_id=entry["session_id"])
+            await db.affiliate_outbox.update_one(
+                {"_id": entry["_id"]},
+                {"$set": {"status": "done", "done_at": _now().isoformat()}})
+            processed += 1
+        except Exception as e:  # keep pending — retried by the billing loop
+            await db.affiliate_outbox.update_one(
+                {"_id": entry["_id"]},
+                {"$inc": {"attempts": 1},
+                 "$set": {"last_error": f"{type(e).__name__}: {e}",
+                          "last_attempt_at": _now().isoformat()}})
+            failed += 1
+    return {"processed": processed, "failed": failed}
+
+
+async def reverse_commissions_for_session(db, session_id: str,
+                                          reason: str = "refund") -> int:
+    """Refund/chargeback reversal — mark the session's commissions reversed
+    and pull the amounts back out of the affiliates' balances. Idempotent."""
+    reversed_n = 0
+    cursor = db.affiliate_commissions.find(
+        {"session_id": session_id, "status": {"$in": ["pending", "paid"]}})
+    async for c in cursor:
+        was = c.get("status")
+        r = await db.affiliate_commissions.update_one(
+            {"_id": c["_id"], "status": was},
+            {"$set": {"status": "reversed", "reversed_at": _now().isoformat(),
+                      "reverse_reason": reason, "status_before_reversal": was}})
+        if r.modified_count != 1:
+            continue  # concurrent reversal — skip the balance adjustment
+        amount = float(c.get("commission_usd") or 0)
+        inc = {"lifetime_earnings_usd": -amount}
+        # Pending money comes straight out of the unpaid balance; already
+        # paid-out money becomes a clawback owed by the affiliate.
+        if was == "pending":
+            inc["unpaid_balance_usd"] = -amount
+        else:
+            inc["clawback_owed_usd"] = amount
+        await db.affiliates.update_one(
+            {"_id": ObjectId(c["affiliate_id"])}, {"$inc": inc})
+        reversed_n += 1
+    return reversed_n
 
 
 # --- Stats for affiliate dashboard ----------------------------------------

@@ -185,10 +185,12 @@ def tier_at_least(user_tier: str, required: str) -> bool:
 
 
 # =============================================================================
-# Plan SKUs (tier × duration)
+# Plan SKUs (tier × duration) — prices stored as INTEGER CENTS (iter-122).
 # =============================================================================
-TIER_BASE_USD = {"starter": 39.0, "trader": 99.0,
-                 "professional": 199.0, "elite_ai": 399.0}
+TIER_BASE_CENTS = {"starter": 3900, "trader": 9900,
+                   "professional": 19900, "elite_ai": 39900}
+# Float view kept for display/back-compat — derived, never authoritative.
+TIER_BASE_USD = {t: c / 100.0 for t, c in TIER_BASE_CENTS.items()}
 DURATION_DISCOUNTS = [
     ("monthly",     1,  0),
     ("quarterly",   3,  10),
@@ -204,12 +206,17 @@ class Plan:
     duration_label: str    # "Monthly" / "3 Months" / "6 Months" / "Annual"
     duration_months: int
     discount_pct: int
-    amount_usd: float
+    amount_cents: int      # authoritative price — INTEGER CENTS
     description: str
 
     @property
+    def amount_usd(self) -> float:
+        """Display/back-compat view — exact because cents are integral."""
+        return self.amount_cents / 100.0
+
+    @property
     def effective_monthly_usd(self) -> float:
-        return round(self.amount_usd / self.duration_months, 2)
+        return round(self.amount_cents / self.duration_months / 100.0, 2)
 
     @property
     def features(self) -> Features:
@@ -224,21 +231,23 @@ class Plan:
             "duration_label": self.duration_label,
             "duration_months": self.duration_months,
             "discount_pct": self.discount_pct,
+            "amount_cents": self.amount_cents,
             "amount_usd": self.amount_usd,
             "effective_monthly_usd": self.effective_monthly_usd,
-            "savings_usd": round(
-                TIER_BASE_USD[self.tier] * self.duration_months - self.amount_usd, 2
-            ),
+            "savings_usd": (
+                TIER_BASE_CENTS[self.tier] * self.duration_months
+                - self.amount_cents
+            ) / 100.0,
             "description": self.description,
         }
 
 
 def _build_plans() -> dict[str, Plan]:
     out: dict[str, Plan] = {}
-    for tier, base_usd in TIER_BASE_USD.items():
+    for tier, base_cents in TIER_BASE_CENTS.items():
         for dur_id, months, disc in DURATION_DISCOUNTS:
-            gross = base_usd * months
-            net = round(gross * (1.0 - disc / 100.0), 2)
+            gross_cents = base_cents * months
+            net_cents = int(round(gross_cents * (100 - disc) / 100.0))
             label_dur = {
                 "monthly": "Monthly", "quarterly": "3 Months",
                 "semi_annual": "6 Months", "annual": "Annual",
@@ -252,7 +261,7 @@ def _build_plans() -> dict[str, Plan]:
             out[f"{tier}_{dur_id}"] = Plan(
                 id=f"{tier}_{dur_id}", tier=tier,
                 duration_label=label_dur, duration_months=months,
-                discount_pct=disc, amount_usd=net, description=desc,
+                discount_pct=disc, amount_cents=net_cents, description=desc,
             )
     return out
 

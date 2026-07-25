@@ -17,6 +17,7 @@ from auth import get_current_user
 from subscription_plans import get_plan, all_plans_public
 from subscription_service import (
     get_subscription, is_active, record_transaction, apply_successful_payment,
+    revoke_payment,
 )
 from database import get_db
 
@@ -84,8 +85,16 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
         )
     plan_id = payload.get("plan_id")
     origin = payload.get("origin")
-    if not origin or not origin.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="valid origin required")
+    # iter-122: checkout redirect origins come from a configured allowlist —
+    # never trust an arbitrary client-supplied URL (open-redirect vector).
+    allowed = {
+        o.strip().rstrip("/")
+        for o in os.environ.get("CHECKOUT_ALLOWED_ORIGINS", "").split(",")
+        if o.strip()
+    }
+    if not origin or origin.rstrip("/") not in allowed:
+        raise HTTPException(status_code=400,
+                            detail="origin not in the approved domain list")
     plan = get_plan(plan_id)
     if not plan:
         raise HTTPException(status_code=400, detail=f"unknown plan: {plan_id}")
@@ -159,7 +168,8 @@ async def poll_session(session_id: str, request: Request, user=Depends(get_curre
         ) from e
 
     if status.payment_status == "paid":
-        sub = await apply_successful_payment(session_id)
+        sub = (await apply_successful_payment(session_id, source="poll")
+               or await get_subscription(user["id"]))
         return {"payment_status": "paid", "subscription": sub,
                 "status": status.status, "amount_total": status.amount_total}
     if status.status == "expired":
@@ -187,11 +197,34 @@ async def stripe_webhook(request: Request):
         logger.warning("Stripe webhook rejected: %s: %s", type(e).__name__, e)
         raise HTTPException(status_code=400, detail="webhook signature invalid") from e
     # Only act on terminal payment events
+    et = (getattr(event, "event_type", "") or "").lower()
     if event.payment_status == "paid" and event.session_id:
-        await apply_successful_payment(event.session_id)
+        await apply_successful_payment(event.session_id, source="webhook")
+    elif event.session_id and ("refund" in et or "dispute" in et
+                               or "charge_failed" in et):
+        await revoke_payment(event.session_id, reason=et or "refund")
     logger.info("Stripe webhook event_type=%s session=%s status=%s",
                 event.event_type, event.session_id, event.payment_status)
     return {"ok": True}
+
+
+@sub_router.post("/admin/refund")
+async def admin_refund(payload: dict, user=Depends(get_current_user)):
+    """Manual refund/chargeback processing (admin): revokes the purchased
+    access period and reverses affiliate commissions for the session.
+    (The Stripe money movement itself happens in the Stripe dashboard.)"""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
+    session_id = payload.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    sub = await revoke_payment(session_id,
+                               reason=payload.get("reason") or "manual_refund")
+    if sub is None:
+        raise HTTPException(
+            status_code=404,
+            detail="transaction not found, not applied, or already revoked")
+    return {"ok": True, "subscription": sub}
 
 
 router.include_router(sub_router)

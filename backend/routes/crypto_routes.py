@@ -106,6 +106,11 @@ async def list_crypto_accounts(user=Depends(get_current_user)):
 async def create_crypto_account(payload: BinanceAccountCreate, user=Depends(get_current_user)):
     db = get_db()
 
+    # iter-122 Phase 2 — crypto accounts count toward the plan account quota
+    from entitlements import enforce_account_quota
+    current_count = await db.accounts.count_documents({"user_id": user["id"]})
+    await enforce_account_quota(user, current_count)
+
     # Validate exchange_id up front
     exchange_id = (payload.exchange_id or DEFAULT_EXCHANGE_ID).lower()
     meta = EXCHANGES.get(exchange_id)

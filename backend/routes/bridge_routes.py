@@ -58,6 +58,21 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "Attach the EA to the correct MT5 terminal."
             )
 
+    # iter-122 Phase 3 — verified installation identity. When the EA reports
+    # an installation_id, the heartbeat is AUTHORITATIVE only if the full
+    # chain verifies: installation recognized → bound to this account →
+    # broker server matches → login matches → holds the execution lease.
+    identity: Optional[dict] = None
+    if payload.installation_id:
+        from vps_agent import verify_heartbeat_identity
+        identity = await verify_heartbeat_identity(
+            db, acc, installation_id=payload.installation_id,
+            broker_server=payload.broker_server,
+            reported_login=payload.account_login)
+        if not identity["ok"]:
+            mismatch = True
+            mismatch_reason = mismatch_reason or identity.get("reason")
+
     set_doc = {
         "balance": payload.balance if not mismatch else None,
         "equity": payload.equity if not mismatch else None,
@@ -65,6 +80,17 @@ async def heartbeat(payload: BridgeHeartbeat):
         "status": "connected" if not mismatch else "disconnected",
         "last_heartbeat": now_iso,
     }
+    if payload.installation_id:
+        set_doc["ea_identity"] = {
+            "installation_id": payload.installation_id,
+            "broker_server": payload.broker_server,
+            "terminal_build": payload.terminal_build,
+            "ea_version": payload.ea_version,
+            "authoritative": bool(identity and identity["ok"]),
+            "reason": None if (identity and identity["ok"])
+                      else (identity or {}).get("reason"),
+            "verified_at": now_iso,
+        }
     if payload.spreads:
         # Normalise keys + clamp to non-negative floats
         clean = {}
@@ -281,7 +307,9 @@ async def heartbeat(payload: BridgeHeartbeat):
     # EA-deployment machine + execution-owner lease renewal (iter-114).
     try:
         from vps_agent import on_ea_heartbeat
-        await on_ea_heartbeat(db, acc, payload.account_login)
+        await on_ea_heartbeat(db, acc, payload.account_login,
+                              installation_id=payload.installation_id,
+                              broker_server=payload.broker_server)
     except Exception as _dep_e:  # noqa: BLE001 — hook must never break HB
         record_swallow("bridge", "ea_deploy_hook", _dep_e)
 

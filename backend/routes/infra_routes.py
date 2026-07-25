@@ -517,6 +517,64 @@ async def queue_agent_command(agent_id: str, payload: dict,
                             else 400, detail=str(e))
 
 
+@router.post("/agents/{agent_id}/rotate-credentials")
+async def rotate_agent_credentials(agent_id: str,
+                                   user=Depends(get_current_user)):
+    """iter-122 Phase 3 — rotate the agent's installation-scoped credentials
+    (agent_token + command_key). Old credentials die instantly; the VPS
+    operator re-runs the enrollment step with the new values."""
+    from entitlements import enforce_feature
+    await enforce_feature(user, "vps_quick_connect")
+    import secrets as _secrets
+    db = get_db()
+    q = {"agent_id": agent_id, "revoked": {"$ne": True}}
+    if user.get("role") != "admin":
+        q["user_id"] = user["id"]
+    new_token = f"agt_tok_{_secrets.token_urlsafe(32)}"
+    new_key = _secrets.token_hex(32)
+    r = await db.vps_agents.update_one(
+        q, {"$set": {"agent_token": new_token, "command_key": new_key,
+                     "credentials_rotated_at":
+                         datetime.now(timezone.utc).isoformat()}})
+    if r.matched_count != 1:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return {"agent_id": agent_id, "agent_token": new_token,
+            "command_key": new_key,
+            "note": "previous credentials revoked immediately"}
+
+
+@router.post("/installations/{installation_id}/revoke")
+async def revoke_installation(installation_id: str,
+                              user=Depends(get_current_user)):
+    """iter-122 Phase 3 — explicit installation revocation: kills the
+    execution lease and rotates the account bridge token so the revoked
+    terminal loses ALL authority immediately."""
+    from bson import ObjectId
+    import secrets as _secrets
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    q = {"installation_id": installation_id, "revoked": {"$ne": True}}
+    if user.get("role") != "admin":
+        q["user_id"] = user["id"]
+    inst = await db.installations.find_one_and_update(
+        q, {"$set": {"revoked": True, "revoked_at": now,
+                     "revoked_reason": "explicit_revoke"}})
+    if not inst:
+        raise HTTPException(status_code=404,
+                            detail="installation not found or already revoked")
+    await db.execution_leases.update_one(
+        {"account_id": inst["account_id"],
+         "installation_id": installation_id},
+        {"$set": {"revoked": True, "revoked_at": now}})
+    await db.accounts.update_one(
+        {"_id": ObjectId(inst["account_id"])},
+        {"$set": {"bridge_token": f"tok_{_secrets.token_urlsafe(32)}",
+                  "bridge_token_rotated_at": now.isoformat()}})
+    return {"ok": True, "installation_id": installation_id,
+            "note": "lease revoked + bridge token rotated — re-pair to "
+                    "restore execution"}
+
+
 @router.post("/agent/commands/poll")
 async def poll_agent_commands(payload: dict):
     from vps_pathb import poll_commands

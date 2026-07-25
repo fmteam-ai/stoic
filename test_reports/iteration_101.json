@@ -1,0 +1,33 @@
+{
+  "summary": "iter-123 E2E validation of 3-phase commercial hardening (billing atomicity, entitlement enforcement, VPS trust). Wrote 10 new E2E HTTP tests in tests/test_iter123_e2e.py covering checkout origin allowlist, payment application → status flow, admin refund 200/403/404, plans catalog integer-cent contract, bridge heartbeat identity binding (unknown installation → non-authoritative + balance nulled; legacy heartbeat preserved), signed artifact manifest (HMAC-SHA256 + rollback policy), and entitlement 402 regression for coach/twin. Ran full regression suite (iter122 billing + iter122b enforcement + iter122c VPS trust + iter113 pathb + iter97 autonomy HTTP + new iter123) — 71 passed / 1 skipped (shadow-health promotion legitimately gated by preview). Frontend smoke on /subscription confirmed 4 tier cards render correctly with monthly prices $39/$99/$199/$399 after clicking MONTHLY tab; admin login worked and admin_grandfather badge shown. Everything green.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/subscription", "issues": ["Default tab is ANNUAL (-40%) so $39/$99/$199/$399 monthly prices aren't visible on first load — minor UX note only; MONTHLY tab works correctly. Not a bug."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter123_e2e.py",
+    "/app/test_reports/pytest/iter123_e2e.xml",
+    "/app/test_reports/pytest/iter123_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Checkout origin allowlist correctly reads env at request time (env-driven, no hardcoding). ✓",
+    "apply_successful_payment uses atomic find_one_and_update claim with stale timeout — safe against webhook/poll race. ✓",
+    "Admin refund endpoint properly gated by role check + returns 404 for unknown session (revoke_payment returns None). ✓",
+    "Bridge heartbeat correctly falls into non-authoritative branch when installation_id unrecognized (balance nulled, status disconnected); legacy (no installation_id) heartbeat path preserved with authoritative connected status + balance persisted. ✓",
+    "Signed manifest returns HMAC-SHA256 with non-null value + update_policy.rollback field. ✓",
+    "Console: /api/ws returns 403 on WebSocket handshake and 3× 401 resource errors on dashboard — pre-existing (not related to iter-123 changes). Worth investigating separately if not already tracked."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter123_e2e.py"],
+  "success_rate": {"backend": "100% (71/71 non-skip)", "frontend": "100% smoke"},
+  "test_credentials": "Admin admin@trading.bot / admin123 (from /app/memory/test_credentials.md style env). Fresh users generated dynamically as iter123_<uuid>@example.com.",
+  "seed_data_creation": "Synthetic bridge heartbeat account (id=iter123-acct-*, collection db.accounts) created and cleaned up in the same test; fresh user accounts left in Mongo (expected, prefixed iter123_).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-123 E2E harness lives at /app/backend/tests/test_iter123_e2e.py — reuse the fixtures for future billing/heartbeat regression. Bridge accounts live in db.accounts (not db.trading_accounts). /api/subscription/plans returns a bare list (not wrapped). /api/subscription/status returns nested {subscription:{valid_until}, entitlement:{active, reason}}. Payment application is service-level: insert txn via /checkout → mark payment_status=paid in Mongo → asyncio.run(apply_successful_payment(session_id)). WebSocket /api/ws 403 handshake seen on frontend — pre-existing across iterations, likely upstream ingress config.",
+  "rca of the issue": "N/A — no issues found."
+}

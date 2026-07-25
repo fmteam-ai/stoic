@@ -11,7 +11,7 @@ run externally, so API restarts/deploys never interrupt trading loops.
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from database import get_db
 from workers.base import record_progress
@@ -366,6 +366,47 @@ def _rss_mb() -> float | None:
     except OSError:
         return None
     return None
+
+
+async def _billing_loop():
+    """iter-122 — billing correctness daemon: retries pending affiliate
+    commission outbox entries and sends prepaid renewal reminders 7 days
+    and 1 day before a pass lapses (in-app notification, deduped per
+    valid_until)."""
+    await asyncio.sleep(45)
+    while True:
+        try:
+            db = get_db()
+            from affiliate_service import process_affiliate_outbox
+            await process_affiliate_outbox(db)
+            now = datetime.now(timezone.utc)
+            for days, flag in ((7, "reminder_7d_for"), (1, "reminder_1d_for")):
+                horizon = (now + timedelta(days=days)).isoformat()
+                cursor = db.subscriptions.find({
+                    "valid_until": {"$gt": now.isoformat(), "$lt": horizon},
+                    "current_plan_id": {"$nin": [None, "admin_grandfather"]},
+                })
+                async for sub in cursor:
+                    vu = sub.get("valid_until")
+                    if sub.get(flag) == vu:
+                        continue  # already reminded for this expiry
+                    await db.notifications.insert_one({
+                        "user_id": sub["user_id"],
+                        "type": "renewal_reminder",
+                        "title": f"Your STOIC plan lapses in {days} day{'s' if days > 1 else ''}",
+                        "message": ("Your prepaid access pass "
+                                    f"({sub.get('current_plan_id')}) ends on "
+                                    f"{vu[:10]}. Renew from the Subscription "
+                                    "page to keep the bot trading — we never "
+                                    "auto-charge you."),
+                        "read": False,
+                        "created_at": now.isoformat(),
+                    })
+                    await db.subscriptions.update_one(
+                        {"_id": sub["_id"]}, {"$set": {flag: vu}})
+        except Exception:
+            logger.exception("billing loop iteration failed")
+        await asyncio.sleep(3600)
 
 
 async def _soak_sampler_loop():

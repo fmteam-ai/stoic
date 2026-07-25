@@ -136,6 +136,22 @@ async def send_telegram(user_id: str, event_type: str, title: str, lines: list) 
         cfg = await _get_user_telegram(user_id)
         if not cfg:
             return False
+        # iter-122 Phase 2 — premium notification gate: Telegram push is a
+        # Trader+ feature EXCEPT for safety-critical events, which always
+        # send (never paywall a warning that protects the user's money).
+        SAFETY_EVENTS = {"circuit_breaker", "auto_demotion", "mode_demotion",
+                         "panic", "protection", "account_blocked",
+                         "drawdown_warning"}
+        if event_type not in SAFETY_EVENTS:
+            try:
+                from subscription_service import get_user_tier
+                from subscription_plans import get_tier_features
+                _tier = await get_user_tier(user_id)
+                if (_tier != "admin"
+                        and not get_tier_features(_tier).priority_notifications):
+                    return False
+            except Exception:
+                pass  # notification path never hard-fails on billing lookups
         # Respect per-event opt-out (default to enabled if missing)
         alerts = cfg.get("alerts") or {}
         if alerts.get(event_type, True) is False:

@@ -199,6 +199,67 @@ async def cooldown_floor(user: dict) -> int:
     return feats.min_signal_cooldown_minutes
 
 
+async def verify_execution_entitlement(db, *, user_id: str, account: dict,
+                                       signal: dict) -> Optional[dict]:
+    """FINAL AUTHORITY-BOUNDARY CHECK (iter-122 Phase 2).
+
+    Called by the live execution engines (MT5 bridge + crypto CCXT)
+    immediately before a NEW trade is dispatched — the UI/route gates are
+    advisory; THIS is the enforcement point. Verifies, at dispatch time:
+
+      • subscription active (live accounts),
+      • plan allows automatic execution (for origin='auto' signals),
+      • symbol inside the plan allow-list,
+      • the account sits within the plan's account quota (oldest-first
+        rank — accounts beyond the cap after a downgrade cannot trade),
+      • plan mode ceiling includes live execution (live accounts).
+
+    Returns None when allowed, or a `{"blocked": "entitlement", ...}` dict.
+    FAILS CLOSED for live accounts on any lookup error; paper accounts
+    fail open (demo trading must survive billing outages)."""
+    mode = (account.get("mode") or "live").lower()
+    try:
+        tier = await get_user_tier(user_id)
+        if tier == "admin":
+            return None
+        feats = get_tier_features(tier)
+        from subscription_service import is_active
+        if mode != "paper":
+            state = await is_active(user_id)
+            if not state.get("active"):
+                return {"blocked": "entitlement",
+                        "reason": "subscription inactive — live execution disabled"}
+            from operational_modes import MODES
+            ceiling_rank = (MODES.get(feats.max_operational_mode) or {}).get("rank", 0)
+            live_rank = (MODES.get("supervised_live") or {}).get("rank", 99)
+            if ceiling_rank < live_rank:
+                return {"blocked": "entitlement",
+                        "reason": (f"{feats.label} plan is demo/shadow only — "
+                                   "upgrade to Trader for live execution")}
+        if (signal.get("origin") == "auto") and not feats.auto_execute:
+            return {"blocked": "entitlement",
+                    "reason": f"{feats.label} plan does not include automatic execution"}
+        sym = (signal.get("symbol") or "").upper()
+        if "*" not in feats.allowed_symbols and sym not in feats.allowed_symbols:
+            return {"blocked": "entitlement",
+                    "reason": f"symbol {sym} not included in the {feats.label} plan"}
+        cap = feats.max_accounts
+        if cap >= 0:
+            # Oldest `cap` accounts stay entitled after a downgrade.
+            cursor = db.accounts.find(
+                {"user_id": user_id}, {"_id": 1}).sort("created_at", 1).limit(cap)
+            allowed_ids = {str(d["_id"]) async for d in cursor}
+            if str(account.get("_id")) not in allowed_ids:
+                return {"blocked": "entitlement",
+                        "reason": (f"account exceeds the {feats.label} plan quota "
+                                   f"of {cap} — remove accounts or upgrade")}
+    except Exception as e:
+        if mode != "paper":
+            return {"blocked": "entitlement",
+                    "reason": f"entitlement verification failed ({type(e).__name__}) — failing closed"}
+    return None
+
+
 __all__ = [
     "enforce_feature", "enforce_account_quota", "enforce_symbol_allowed",
     "enforce_mode_ceiling", "enforce_vps_quota",

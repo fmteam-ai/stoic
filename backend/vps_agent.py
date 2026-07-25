@@ -63,6 +63,8 @@ async def register_agent(db, token: str, facts: dict) -> dict:
     agent_token = f"agt_tok_{secrets.token_urlsafe(32)}"
     await db.vps_agents.insert_one({
         "agent_id": agent_id, "agent_token": agent_token,
+        "command_key": secrets.token_hex(32),   # iter-122 P3: HMAC key for signed commands
+        "command_seq": 0, "last_acked_seq": 0,
         "user_id": boot["user_id"],
         "deployment_id": boot["deployment_id"],
         "fingerprint": facts.get("machine_fingerprint"),
@@ -72,10 +74,14 @@ async def register_agent(db, token: str, facts: dict) -> dict:
         "hardening": {}, "revoked": False,
         "registered_at": now, "last_heartbeat": None})
     return {"agent_id": agent_id, "agent_token": agent_token,
+            "command_key": (await db.vps_agents.find_one(
+                {"agent_id": agent_id}))["command_key"],
             "heartbeat_interval_sec": 60,
             "capabilities": ["heartbeat", "hardening", "mt5_install",
                              "ea_install", "health_check"],
-            "note": "scoped token auth — mTLS enrollment planned"}
+            "note": ("installation-scoped credentials — agent_token for "
+                     "auth, command_key verifies signed command sequence; "
+                     "mTLS enrollment requires PKI at deploy time")}
 
 
 async def agent_by_token(db, agent_token: str) -> dict:
@@ -275,6 +281,8 @@ async def claim_pairing_code(db, code: str, terminal: dict) -> dict:
         {"account_id": doc["account_id"]},
         {"$set": {"installation_id": installation_id,
                   "user_id": doc["user_id"], "revoked": False,
+                  "broker_server": acc.get("server"),
+                  "account_number": acc.get("account_number"),
                   "acquired_at": now,
                   "expires_at": now + timedelta(seconds=LEASE_SECONDS)}},
         upsert=True)
@@ -295,24 +303,97 @@ async def claim_pairing_code(db, code: str, terminal: dict) -> dict:
                     "verified EA heartbeat from the expected account"}
 
 
-async def on_ea_heartbeat(db, acc: dict, reported_login=None) -> None:
+async def verify_heartbeat_identity(db, acc: dict, *, installation_id: str,
+                                    broker_server: str | None = None,
+                                    reported_login=None) -> dict:
+    """iter-122 Phase 3 — the verified-identity chain for EA heartbeats.
+
+    A heartbeat is AUTHORITATIVE only when ALL of:
+      1. the installation_id is recognized (registered, not revoked),
+      2. it is bound to THIS account,
+      3. the reported broker server matches the registered pairing,
+      4. the reported MT5 login matches the expected account number,
+      5. the installation currently owns the execution lease.
+    Display labels play no part — only broker-verified identity."""
+    account_id = str(acc["_id"])
+    inst = await db.installations.find_one(
+        {"installation_id": installation_id, "revoked": {"$ne": True}})
+    if not inst:
+        return {"ok": False, "reason":
+                f"installation {installation_id} unknown or revoked"}
+    if str(inst.get("account_id")) != account_id:
+        return {"ok": False,
+                "reason": "installation is bound to a different account"}
+    configured_server = str(acc.get("server") or "").strip().lower()
+    if broker_server and configured_server:
+        rep = str(broker_server).strip().lower()
+        if configured_server not in rep and rep not in configured_server:
+            return {"ok": False, "reason":
+                    (f"broker server mismatch: EA reports '{broker_server}', "
+                     f"account is registered on '{acc.get('server')}'")}
+    configured_login = str(acc.get("account_number") or "").strip()
+    if reported_login is not None and configured_login and \
+            configured_login not in ("", "—") and \
+            str(reported_login).strip() != configured_login:
+        return {"ok": False, "reason":
+                (f"MT5 login mismatch: EA reports {reported_login}, "
+                 f"expected {configured_login}")}
+    lease = await db.execution_leases.find_one({"account_id": account_id})
+    owns = (lease and not lease.get("revoked")
+            and lease.get("installation_id") == installation_id)
+    if not owns:
+        return {"ok": False, "reason":
+                "installation does not hold the execution lease"}
+    return {"ok": True, "installation_id": installation_id}
+
+
+async def on_ea_heartbeat(db, acc: dict, reported_login=None,
+                          installation_id: str | None = None,
+                          broker_server: str | None = None) -> None:
     """Bridge-heartbeat hook: renews the execution-owner lease and drives
     the deployment machine to READY_FOR_SHADOW only when the heartbeat
-    matches the expected account (and server, from account config)."""
+    matches the expected account (and server, from account config).
+
+    iter-122 Phase 3: when the EA reports an installation_id, the lease is
+    renewed ONLY for the lease-owning installation — a heartbeat from any
+    other installation can never steal or keep execution authority."""
     account_id = str(acc["_id"])
     now = datetime.now(timezone.utc)
-    inst = await db.installations.find_one(
-        {"account_id": account_id, "revoked": {"$ne": True}},
-        sort=[("created_at", -1)])
-    if inst:
-        await db.execution_leases.update_one(
-            {"account_id": account_id},
-            {"$set": {"installation_id": inst["installation_id"],
-                      "user_id": inst["user_id"], "revoked": False,
-                      "renewed_at": now,
-                      "expires_at": now + timedelta(
-                          seconds=LEASE_SECONDS)}},
-            upsert=True)
+    if installation_id:
+        inst = await db.installations.find_one(
+            {"installation_id": installation_id, "account_id": account_id,
+             "revoked": {"$ne": True}})
+        lease = await db.execution_leases.find_one({"account_id": account_id})
+        owner_ok = (inst is not None and (
+            lease is None or lease.get("revoked")
+            or lease.get("installation_id") == installation_id))
+        if owner_ok:
+            await db.execution_leases.update_one(
+                {"account_id": account_id},
+                {"$set": {"installation_id": installation_id,
+                          "user_id": inst["user_id"], "revoked": False,
+                          "broker_server": acc.get("server"),
+                          "account_number": acc.get("account_number"),
+                          "renewed_at": now,
+                          "expires_at": now + timedelta(
+                              seconds=LEASE_SECONDS)}},
+                upsert=True)
+    else:
+        # Legacy EAs (< v1.55) — renew for the latest registered installation
+        inst = await db.installations.find_one(
+            {"account_id": account_id, "revoked": {"$ne": True}},
+            sort=[("created_at", -1)])
+        if inst:
+            await db.execution_leases.update_one(
+                {"account_id": account_id},
+                {"$set": {"installation_id": inst["installation_id"],
+                          "user_id": inst["user_id"], "revoked": False,
+                          "broker_server": acc.get("server"),
+                          "account_number": acc.get("account_number"),
+                          "renewed_at": now,
+                          "expires_at": now + timedelta(
+                              seconds=LEASE_SECONDS)}},
+                upsert=True)
     dep = await db.ea_deployments.find_one(
         {"account_id": account_id,
          "state": {"$nin": ["READY_FOR_SHADOW", "FAILED"]}},

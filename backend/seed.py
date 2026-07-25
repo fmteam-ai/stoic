@@ -195,6 +195,19 @@ async def ensure_indexes():
     # whole subsystem fails closed until indexes are healthy.
     try:
         await db.scalp_owners.create_index("account_id", unique=True)
+        # iter-122 billing correctness — exactly-once payment ledger,
+        # idempotent affiliate commissions, durable commission outbox,
+        # one subscription doc per user, TTL cleanup of short-lived
+        # VPS credentials (BSON-date expiries).
+        await db.payment_transactions.create_index("session_id", unique=True)
+        await db.affiliate_commissions.create_index(
+            [("session_id", 1), ("tier", 1)], unique=True, sparse=True)
+        await db.affiliate_outbox.create_index("session_id", unique=True)
+        await db.subscriptions.create_index("user_id", unique=True)
+        await db.ea_pairing_codes.create_index(
+            "expires_at", expireAfterSeconds=3600)
+        await db.vps_bootstrap_tokens.create_index(
+            "expires_at", expireAfterSeconds=3600)
         # Round 17 item 7 — one document per capacity unit is a SAFETY
         # guarantee: duplicates would double broker capacity.
         await db.scalp_submission_slots.create_index(

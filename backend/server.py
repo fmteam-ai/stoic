@@ -414,7 +414,8 @@ from background_loops import (_analytics_loop, _auto_heal_loop,
                               _model_maintenance_loop,
                               _nightly_tuning_loop, _optimizer_loop,
                               _protection_guard_loop, _scalp_reconcile_loop,
-                              _soak_sampler_loop, _stuck_open_sync_loop)
+                              _soak_sampler_loop, _stuck_open_sync_loop,
+                              _billing_loop)
 _protection_task = None
 _analytics_task = None
 _model_maint_task = None
@@ -480,6 +481,7 @@ async def on_startup():
         _scalp_reconcile_task = asyncio.create_task(_scalp_reconcile_loop())
         _eod_flatten_task = asyncio.create_task(_eod_flatten_loop())
         asyncio.create_task(_soak_sampler_loop())
+        asyncio.create_task(_billing_loop())
         asyncio.create_task(_mode_guardian_loop())
         # Phase F — separated services (in-process mode runs them all)
         global _protection_task, _analytics_task, _model_maint_task

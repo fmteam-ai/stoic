@@ -137,6 +137,17 @@ async def authenticate_api_key(x_api_key: Optional[str] = Security(api_key_heade
     if not doc or not hmac.compare_digest(_hash_key(x_api_key), doc["key_hash"]):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    # iter-122 Phase 2 — re-verify the OWNER's plan still includes API access
+    # at request time (a downgrade revokes programmatic access immediately).
+    from subscription_service import get_user_tier
+    from subscription_plans import get_tier_features
+    owner_tier = await get_user_tier(doc["user_id"])
+    if owner_tier != "admin" and not get_tier_features(owner_tier).api_access:
+        raise HTTPException(
+            status_code=402,
+            detail={"error": "feature_locked", "feature": "api_access",
+                    "message": "API access requires the Professional plan or higher."})
+
     # Sliding-window rate limit (per key, per process, 60s window)
     now = datetime.now(timezone.utc)
     kid = str(doc["_id"])

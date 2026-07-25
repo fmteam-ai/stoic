@@ -152,7 +152,7 @@ class TestLegacyAliasesCheckout:
         to trader_monthly ($99). Fresh non-admin user (admin returns 400)."""
         r = fresh_user_session.post(
             f"{API}/subscription/checkout",
-            json={"plan_id": "monthly", "origin": "https://qa.test"},
+            json={"plan_id": "monthly", "origin": os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")},
             timeout=30)
         # Success → plan echoed back must be trader_monthly.
         # Some environments may fail with a 502 (Stripe cannot reach — but
@@ -167,7 +167,7 @@ class TestLegacyAliasesCheckout:
     def test_elite_monthly_alias_resolves_to_professional_monthly(self, fresh_user_session):
         r = fresh_user_session.post(
             f"{API}/subscription/checkout",
-            json={"plan_id": "elite_monthly", "origin": "https://qa.test"},
+            json={"plan_id": "elite_monthly", "origin": os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")},
             timeout=30)
         assert r.status_code in (200, 502), r.text
         if r.status_code == 200:
@@ -178,7 +178,7 @@ class TestLegacyAliasesCheckout:
     def test_admin_cannot_checkout(self, admin_session):
         r = admin_session.post(
             f"{API}/subscription/checkout",
-            json={"plan_id": "trader_monthly", "origin": "https://qa.test"},
+            json={"plan_id": "trader_monthly", "origin": os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")},
             timeout=30)
         assert r.status_code == 400
         assert "admin" in r.text.lower() or "grandfathered" in r.text.lower()

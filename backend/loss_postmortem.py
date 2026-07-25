@@ -207,6 +207,16 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
     if not trade or trade.get("status") != "closed":
         return None
 
+    # iter-122 Phase 2 — Loss Lab is a Trader+ plan feature (worker-side gate)
+    try:
+        from subscription_service import get_user_tier
+        from subscription_plans import get_tier_features
+        _tier = await get_user_tier(trade["user_id"])
+        if _tier != "admin" and not get_tier_features(_tier).loss_lab:
+            return None
+    except Exception:
+        return None  # fail closed — no free premium analysis on lookup errors
+
     # Idempotent
     existing = await db.loss_postmortems.find_one({"trade_id": str(trade_id)})
     if existing:
