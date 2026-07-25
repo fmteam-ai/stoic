@@ -396,6 +396,23 @@ User began a 4-phase roadmap ("complete phases 1 to 4, starting with Phase 1" �
 - UI: ShadowReadinessPanels.jsx (4 panels) atop /shadow-performance. Tests: test_iter105_shadow_readiness.py (7) + _http.py (6, by testing agent). Manifest → **2,657 tests / 254 files**.
 - KNOWN PRE-EXISTING: wss://…/api/ws 403 handshake noise on all pages (ingress) — candidate future fix.
 
+## Iter-106 (2026-07-25) — Phase 2 "Demo Readiness" DONE (prev session, tested)
+- **2.1 Broker Qualification Matrix** — `broker_qualification.py`: evidence-based tiers CERTIFIED/ACCEPTABLE/PROVISIONAL/DEGRADED per account from observed checks (latency, slippage, fills…). GET /api/broker-intel/qualification. UI: BrokerQualificationMatrix (DemoReadinessPanels.jsx) on /brokers.
+- **2.2 Long Soak telemetry** — GET /api/ops/soak?days=N (memory RSS growth, worker restarts, missed heartbeats, recon backlog, chaos results, suppressed failures). UI: SoakReportCard on /bot-health.
+- **2.3 Statistical promotion validation** — `statistical_validation.py::promotion_evidence` (MIN_TRADES, MAX_DD_R, CI gates) blocks thin-evidence promotions.
+- Chaos drills expanded to 8 (api_outage, clock_skew, alert_storm_dedup…). Tests: test_iter106_phase2.py.
+
+## Iter-110 (2026-07-25) — Phase 3 "Supervised-Live" + Phase 4 "Autonomous-Live" DONE (iteration_95.json 100%)
+- **3.1 Progressive capital scaling** — `capital_stages.py`: Stage 1 PILOT (cap 0.25%/trade, entry) → Stage 2 SCALE (0.5% after ≥100 trades, PF≥1.05, DD≤20R) → Stage 3 DEPLOY (config risk honored after ≥300 trades, CI95-lower>0, DD≤40R). Evidence-only, never time. `stage_risk_cap` (15-min cache) enforced in bot_runner sizing (~L1518) AFTER adaptive sizing — can only LOWER risk. Signal field `capital_stage`. GET /api/risk/capital-stage.
+- **3.2 Operator intervention framework** — `operator_actions.py`: 5 one-click AUDITED actions (freeze_trading→observe, reduce_exposure halve risk floor 0.05%, pause_symbol, defensive_mode half-risk+1-trade, panic_mode freeze ALL). All reduce authority → no step-up MFA needed (raising stays behind promotion gate). Every action → audit_log `operator_action:<name>`. POST /api/operator/action, GET /api/operator/actions.
+- **3.3 Real-time risk composite** — GET /api/risk/realtime: accounts (equity/balance), open trades by symbol+scope, broker intel scores, shadow health, subsystem conservatism, capital stage in one payload.
+- **4.1 Subsystem self-monitoring** — `subsystem_health.py`: 5 subsystems mapped to shadow-health axes (learning→calibration, execution→execution_quality, risk→worker_health, broker→broker_stability, market→data_freshness). Worst score <60→×0.75, <40→×0.5 sizing multiplier, auto-applied in bot_runner (~L1532). Signal field `subsystem_conservatism`. GET /api/subsystems/health.
+- UI: LiveOpsPanels.jsx on /bot-health — CapitalStageCard (capital-stage-card/-label/-cap/-next), SubsystemHealthCard (subsystem-<name>, subsystem-conservatism), RealtimeRiskCard (realtime-risk-card, realtime-open-trades), OperatorConsole (operator-action-<name>, two-click CONFIRM? + operator-cancel-<name>, operator-pause-symbol-input).
+- Routes in routes/liveops_routes.py, included in server.py api_router. Tests: test_iter110_phase3_4.py (19) + _http.py (6) — 25/25 pass. iteration_95.json: 100% backend + 100% frontend, zero action items. Manifest → **2,687 tests / 257 files**.
+- Live at test time: STAGE 1 PILOT (n=490, PF 0.97, DD 74.4R — correctly gated), subsystems risk_engine=0 → sizing ×0.5 (workers idle in preview — designed conservatism path).
+- Backlog notes from tester (P2): silent fetch-error swallow in panels (blank tile on 500), risk_engine=0 could use a WHY drill-down, capital-stage milestone as checklist UI. Pre-existing wss 403 noise unchanged.
+
+
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
 
 
