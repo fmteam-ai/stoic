@@ -4,8 +4,9 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
-load_dotenv("/app/backend/.env")
-load_dotenv("/app/frontend/.env")
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
+load_dotenv(os.path.join(os.path.dirname(_BACKEND_DIR), "frontend", ".env"))
 
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") + "/api"
 ADMIN = ("admin@trading.bot", "admin123")

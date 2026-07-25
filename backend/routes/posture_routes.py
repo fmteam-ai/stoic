@@ -3,6 +3,7 @@
 GET /api/bot/posture — aggregates Market Structure, Macro, News, Quant and
 Risk agent states + what must happen before the bot trades again."""
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends

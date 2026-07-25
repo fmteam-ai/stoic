@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
 
-load_dotenv("/app/backend/.env")
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), ".env"))
 
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") + "/api"
 METRICS_TOKEN = os.environ["METRICS_TOKEN"]

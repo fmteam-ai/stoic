@@ -372,7 +372,13 @@ Audit findings and resolutions:
 - 31 tier-suite tests green post-fix; market-state/marketplace endpoints verified live.
 - Verified false positives (do not re-report): Terms.jsx XSS (DOMPurify), localStorage auth, lazy-import cycles, eval() misread.
 
+## Iter-103 (2026-07-25) — GitHub CI red fixed (2 errors + Node20 warnings)
+1. **static-analysis (ruff F821)**: `re` missing in routes/posture_routes.py (introduced by SEC-002 escape edit) + pre-existing `HTTPException` missing in routes/broker_intel_routes.py — both imports added. Ruff E9,F63,F7,F82 clean.
+2. **backend-unit**: test_iter148 `test_no_hardcoded_app_paths_in_test_code` failed — testing-agent files test_iter99_http.py / test_iter100_http.py used literal `/app/backend/.env` paths → replaced with `__file__`-relative load_dotenv. 474 unit-suite + 15 HTTP tests pass; manifest --check clean. LESSON: testing-agent-created test files must use __file__-relative paths (CI gate scans for '/app/(backend|frontend)' literals in tests).
+3. **Node 20 deprecation warnings**: bumped ALL actions in ci.yml + release.yml to Node-24 majors — checkout@v6, setup-python@v6, setup-node@v6, upload-artifact@v6, download-artifact@v6. YAML validated.
+
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
+
 
 
 Session review: gold -2.1% trend day, bot went 14W/18L (+$67). 4 failure patterns found & fixed:

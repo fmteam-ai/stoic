@@ -1,5 +1,5 @@
 """Broker execution intelligence API (Phase 2)."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
 from database import get_db
