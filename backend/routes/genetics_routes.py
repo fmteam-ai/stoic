@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends
 
 from auth import get_current_user
 from database import get_db
+from entitlements import require_feature
 
-router = APIRouter(prefix="/genetics", tags=["strategy-genetics"])
+router = APIRouter(prefix="/genetics", tags=["strategy-genetics"],
+                   dependencies=[Depends(require_feature("strategy_evolution"))])
 
 
 @router.get("/lineage")

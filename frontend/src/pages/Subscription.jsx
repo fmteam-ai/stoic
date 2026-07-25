@@ -2,52 +2,77 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Check, X, Sparkles, Loader2, Shield, Crown, Rocket } from "lucide-react";
+import { Check, X, Sparkles, Loader2, Shield, Crown, Rocket, BrainCircuit } from "lucide-react";
+
+const TIER_IDS = ["starter", "trader", "professional", "elite_ai"];
 
 const TIER_META = {
     starter: {
         label: "Starter", icon: Shield, ringHex: "#52525B",
         ringClass: "border-[#1F1F1F]",
         accent: "text-[#A1A1AA]",
-        tagline: "Essentials. Manual trading + AI signal feed.",
+        tagline: "New traders. 1 account, Shadow + Demo trading.",
     },
-    pro: {
-        label: "Pro", icon: Rocket, ringHex: "#00FF41",
+    trader: {
+        label: "Trader", icon: Rocket, ringHex: "#00FF41",
         ringClass: "border-[#00FF41] shadow-[0_0_30px_rgba(0,255,65,0.18)]",
         accent: "text-[#00FF41]",
-        tagline: "Auto-execute. Multi-account. Loss Lab + Auto-Heal.",
+        tagline: "Supervised Live. 3 accounts, Replay Studio + AI Coach.",
         recommended: true,
     },
-    elite: {
-        label: "Elite", icon: Crown, ringHex: "#A855F7",
+    professional: {
+        label: "Professional", icon: Crown, ringHex: "#A855F7",
         ringClass: "border-[#A855F7] shadow-[0_0_30px_rgba(168,85,247,0.22)]",
         accent: "text-[#A855F7]",
-        tagline: "Unlimited accounts. Drift retraining. Paper Shadow.",
+        tagline: "10 accounts. Digital Twin, Research Lab, VPS management.",
     },
+    elite_ai: {
+        label: "Elite AI", icon: BrainCircuit, ringHex: "#FFD700",
+        ringClass: "border-[#FFD700] shadow-[0_0_30px_rgba(255,215,0,0.18)]",
+        accent: "text-[#FFD700]",
+        tagline: "The flagship. 50 accounts, Autonomous Live after certification.",
+    },
+};
+
+const MODE_LABELS = {
+    demo_autopilot: "Demo + Shadow",
+    supervised_live: "Supervised Live",
+    autonomous_live: "Autonomous Live*",
 };
 
 // Marketing-friendly row order for the comparison table. Each row maps a
 // human label to a `Features` key from backend/subscription_plans.py.
 const FEATURE_ROWS = [
-    { k: "max_accounts", label: "Connected accounts",
+    { k: "max_accounts", label: "MT5 accounts",
       render: (v) => v < 0 ? "Unlimited" : `${v}` },
-    { k: "allowed_symbols", label: "Tradable symbols",
-      render: (v) => Array.isArray(v) && v.includes("*") ? "All" : (v || []).join(", ") },
-    { k: "auto_execute", label: "Auto-execute trades" },
+    { k: "max_operational_mode", label: "Max trading mode",
+      render: (v) => MODE_LABELS[v] || v },
+    { k: "paper_shadow_mode", label: "Shadow Mode" },
+    { k: "loss_lab", label: "Loss Lab AI post-mortems" },
+    { k: "replay_studio", label: "Replay Studio" },
+    { k: "ai_coach", label: "AI Coach" },
+    { k: "evidence_board", label: "Evidence Board" },
+    { k: "broker_intelligence", label: "Broker Intelligence" },
+    { k: "vps_quick_connect", label: "VPS Quick Connect" },
+    { k: "vps_management", label: "VPS management dashboard" },
+    { k: "multi_vps", label: "Multiple VPS management" },
+    { k: "digital_twin", label: "Digital Twin" },
+    { k: "research_lab", label: "Research Lab" },
+    { k: "strategy_marketplace", label: "Strategy Marketplace" },
+    { k: "portfolio_optimization", label: "Portfolio optimization" },
+    { k: "calibrated_p_win", label: "AI probability calibration" },
+    { k: "chaos_testing", label: "Chaos testing" },
+    { k: "agent_report_cards", label: "Agent report cards" },
+    { k: "strategy_evolution", label: "Strategy evolution" },
+    { k: "hypothesis_generation", label: "AI hypothesis generation" },
+    { k: "fleet_monitoring", label: "Fleet monitoring" },
+    { k: "white_label_reporting", label: "White-label reporting" },
+    { k: "api_access", label: "API access" },
+    { k: "priority_notifications", label: "Mobile + Telegram alerts" },
     { k: "min_signal_cooldown_minutes", label: "Min signal cooldown",
       render: (v) => `${v} min` },
-    { k: "loss_lab", label: "Loss Lab post-mortems" },
-    { k: "auto_heal", label: "Auto-Heal scheduler" },
-    { k: "correlation_kelly", label: "Correlation-aware sizing + CVaR" },
-    { k: "calibrated_p_win", label: "Calibrated AI probabilities" },
-    { k: "drift_auto_retrain", label: "ADWIN auto-retrain on drift" },
-    { k: "paper_shadow_mode", label: "Paper Shadow Mode" },
-    { k: "custom_thresholds", label: "Custom A+/entropy/sector caps" },
-    { k: "weekly_digest_pdf", label: "Weekly AI Digest (PDF)" },
-    { k: "api_access", label: "Programmatic API access" },
-    { k: "priority_notifications", label: "Telegram + email + SMS" },
     { k: "support_tier", label: "Support",
-      render: (v) => v.charAt(0).toUpperCase() + v.slice(1) },
+      render: (v) => (v || "").charAt(0).toUpperCase() + (v || "").slice(1) },
 ];
 
 const DURATIONS = [
@@ -89,7 +114,7 @@ export default function Subscription() {
 
     // Bucket plans by tier for the duration selector to pick the active SKU.
     const plansByTier = useMemo(() => {
-        const out = { starter: {}, pro: {}, elite: {} };
+        const out = { starter: {}, trader: {}, professional: {}, elite_ai: {} };
         for (const p of plans) {
             if (!out[p.tier]) continue;
             out[p.tier][p.duration_months === 1 ? "monthly"
@@ -151,8 +176,8 @@ export default function Subscription() {
             </div>
 
             {/* Tier cards */}
-            <div className="grid md:grid-cols-3 gap-4 mb-12">
-                {["starter", "pro", "elite"].map(tierId => {
+            <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4 mb-12">
+                {TIER_IDS.map(tierId => {
                     const meta = TIER_META[tierId];
                     const Icon = meta.icon;
                     const plan = plansByTier[tierId]?.[duration];
@@ -191,8 +216,9 @@ export default function Subscription() {
                                 data-testid={`subscribe-${tierId}-${duration}`}
                                 className={`w-full py-2 rounded text-xs font-mono uppercase transition mb-4 ${
                                     isCurrent ? "bg-[#0F0F0F] text-[#52525B] cursor-not-allowed"
-                                    : tierId === "pro" ? "bg-[#00FF41] text-black hover:bg-[#33FF66]"
-                                    : tierId === "elite" ? "bg-[#A855F7] text-white hover:bg-[#9333EA]"
+                                    : tierId === "trader" ? "bg-[#00FF41] text-black hover:bg-[#33FF66]"
+                                    : tierId === "professional" ? "bg-[#A855F7] text-white hover:bg-[#9333EA]"
+                                    : tierId === "elite_ai" ? "bg-[#FFD700] text-black hover:bg-[#FFE44D]"
                                     : "bg-[#FAFAFA] text-black hover:bg-white"
                                 }`}>
                                 {isCurrent ? "Current plan"
@@ -202,9 +228,9 @@ export default function Subscription() {
 
                             {/* Per-tier highlights */}
                             <div className="space-y-1.5 text-xs">
-                                {(tierMatrix[tierId] ? FEATURE_ROWS.slice(0, 7) : []).map(row => {
+                                {(tierMatrix[tierId] ? FEATURE_ROWS.slice(0, 8) : []).map(row => {
                                     const v = tierMatrix[tierId][row.k];
-                                    const isOn = v === true || (typeof v === "number" && v !== 0) || (Array.isArray(v) && v.length > 0);
+                                    const isOn = v === true || (typeof v === "number" && v !== 0) || (typeof v === "string" && v.length > 0);
                                     const display = row.render ? row.render(v) : (isOn ? "Included" : "—");
                                     return (
                                         <div key={row.k} className="flex items-start gap-2">
@@ -229,11 +255,12 @@ export default function Subscription() {
             {/* Full feature comparison */}
             <div className="border border-[#1F1F1F] rounded-lg overflow-hidden" data-testid="feature-comparison">
                 <div className="bg-[#0F0F0F] px-4 py-3 font-display text-sm">Full feature comparison</div>
+                <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                     <thead className="bg-[#0A0A0A] text-[#52525B]">
                         <tr>
                             <th className="text-left px-4 py-2 font-mono">Feature</th>
-                            {["starter", "pro", "elite"].map(t => (
+                            {TIER_IDS.map(t => (
                                 <th key={t} className={`text-center px-4 py-2 font-mono ${TIER_META[t].accent}`}>
                                     {TIER_META[t].label}
                                 </th>
@@ -244,10 +271,10 @@ export default function Subscription() {
                         {FEATURE_ROWS.map((row, i) => (
                             <tr key={row.k} className={i % 2 === 0 ? "bg-[#0A0A0A]" : "bg-[#0F0F0F]"}>
                                 <td className="px-4 py-2 text-[#A1A1AA]">{row.label}</td>
-                                {["starter", "pro", "elite"].map(t => {
+                                {TIER_IDS.map(t => {
                                     const v = (tierMatrix[t] || {})[row.k];
                                     const isOn = v === true || (typeof v === "number" && v !== 0)
-                                                  || (Array.isArray(v) && v.length > 0);
+                                                  || (typeof v === "string" && v.length > 0);
                                     const display = row.render ? row.render(v)
                                                                 : (isOn ? <Check className="w-4 h-4 text-[#00FF41] mx-auto" />
                                                                        : <X className="w-4 h-4 text-[#52525B] mx-auto" />);
@@ -261,9 +288,14 @@ export default function Subscription() {
                         ))}
                     </tbody>
                 </table>
+                </div>
             </div>
 
             <div className="text-xs text-[#52525B] mt-4">
+                *Autonomous Live activates only for accounts that pass STOIC&apos;s broker-certification
+                process — a subscription alone never bypasses the promotion gate.
+            </div>
+            <div className="text-xs text-[#52525B] mt-2">
                 All plans are prepaid. No surprise renewals — your plan stays active until the
                 <span className="text-[#A1A1AA]"> &ldquo;valid until&rdquo;</span> date and we&apos;ll email you before it lapses.
                 Cancel any time = simply don&apos;t renew.

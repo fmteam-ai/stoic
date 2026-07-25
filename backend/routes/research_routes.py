@@ -20,8 +20,10 @@ from research_agent.proposal_targeting import (
     list_candidate_bots, resolve_target_configs, apply_proposal_to_configs,
 )
 from route_utils import parse_object_id
+from entitlements import require_feature
 
-router = APIRouter(prefix="/research", tags=["research-agent"])
+router = APIRouter(prefix="/research", tags=["research-agent"],
+                   dependencies=[Depends(require_feature("research_lab"))])
 
 
 async def _find_user(db, user_id: str) -> dict | None:

@@ -27,13 +27,14 @@ def _now() -> datetime:
 
 async def get_user_tier(user_id: str) -> str:
     """Resolve the user's effective subscription tier — returns
-    `"admin" | "elite" | "pro" | "starter"`. Used by entitlement gates.
+    `"admin" | "elite_ai" | "professional" | "trader" | "starter"`
+    (legacy plan ids resolve forward: pro→trader, elite→professional).
 
     Resolution order:
       1. Admin role → "admin" (full bypass).
       2. Active paid subscription → tier from current_plan_id.
-      3. In legacy grace period → "pro" (existing paying customers
-         pre-tier-rollout get grandfathered into Pro until grace expires).
+      3. In legacy grace period → "trader" (existing paying customers
+         pre-tier-rollout get grandfathered until grace expires).
       4. Otherwise → "starter".
     """
     db = get_db()
@@ -44,9 +45,9 @@ async def get_user_tier(user_id: str) -> str:
         return "admin"
     if not state.get("active"):
         return "starter"
-    # In-grace legacy customers get Pro
+    # In-grace legacy customers get Trader
     if state.get("in_grace"):
-        return "pro"
+        return "trader"
     # Active paid subscription — derive tier from plan_id
     plan = get_plan(plan_id)
     if plan:

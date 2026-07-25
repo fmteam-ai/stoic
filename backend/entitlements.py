@@ -1,4 +1,4 @@
-"""Feature-gate helpers — iter-60 tiered subscriptions.
+"""Feature-gate helpers — 4-tier subscriptions (iter-120).
 
 Routes that gate features should `Depend(...)` on the helpers below or
 explicitly call `enforce_feature(...)` so the same 402 (Payment Required)
@@ -10,7 +10,7 @@ Usage pattern from a FastAPI route:
 
     @router.post("/expensive-thing")
     async def do_thing(payload: dict, user=Depends(get_current_user)):
-        features = await enforce_feature(user, "loss_lab")
+        features = await enforce_feature(user, "research_lab")
         ...
 
 `enforce_feature` raises HTTPException(402) when the feature flag is False
@@ -22,19 +22,20 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from subscription_plans import (
-    Features, TIERS, get_tier_features, tier_at_least,
+    Features, TIERS, TIER_ORDER, canonical_tier, get_tier_features,
+    tier_at_least,
 )
 from subscription_service import get_user_tier, get_user_features
 
 
 def _minimum_tier_for(feature: str) -> str:
-    """Walk Starter → Pro → Elite and return the first tier where the
-    feature flag is True. Returns 'elite' as a safe fallback so the
-    upgrade-prompt always points the user somewhere useful."""
-    for tier in ("starter", "pro", "elite"):
+    """Walk Starter → Trader → Professional → Elite AI and return the first
+    tier where the feature flag is True. Returns 'elite_ai' as a safe
+    fallback so the upgrade-prompt always points somewhere useful."""
+    for tier in TIER_ORDER:
         if getattr(TIERS[tier], feature, False) is True:
             return tier
-    return "elite"
+    return "elite_ai"
 
 
 async def enforce_feature(user: dict, feature: str) -> Features:
@@ -53,7 +54,7 @@ async def enforce_feature(user: dict, feature: str) -> Features:
             detail={
                 "error": "feature_locked",
                 "feature": feature,
-                "current_tier": tier,
+                "current_tier": canonical_tier(tier),
                 "minimum_tier": min_tier,
                 "message": (
                     f"This feature requires the {TIERS[min_tier].label} plan or higher."
@@ -74,19 +75,26 @@ async def enforce_account_quota(user: dict, current_account_count: int) -> Featu
     if tier == "admin" or feats.max_accounts < 0:
         return feats
     if current_account_count >= feats.max_accounts:
-        # First tier with a higher cap (or unlimited).
-        upgrade_to = "pro" if tier == "starter" else "elite"
+        # First tier with a higher cap (top tier points at itself).
+        cur = canonical_tier(tier)
+        upgrade_to = TIER_ORDER[-1]
+        for t in TIER_ORDER:
+            cap = TIERS[t].max_accounts
+            if cap < 0 or cap > feats.max_accounts:
+                upgrade_to = t
+                break
         raise HTTPException(
             status_code=402,
             detail={
                 "error": "account_quota_exceeded",
-                "current_tier": tier,
+                "current_tier": cur,
                 "current_accounts": current_account_count,
                 "max_accounts": feats.max_accounts,
                 "minimum_tier": upgrade_to,
                 "message": (
                     f"Your {feats.label} plan allows {feats.max_accounts} account(s). "
-                    f"Upgrade to {TIERS[upgrade_to].label} for more."
+                    + (f"Upgrade to {TIERS[upgrade_to].label} for more."
+                       if upgrade_to != cur else "You are on the top plan.")
                 ),
             },
         )
@@ -94,15 +102,15 @@ async def enforce_account_quota(user: dict, current_account_count: int) -> Featu
 
 
 async def enforce_symbol_allowed(user: dict, symbol: str) -> Features:
-    """Raise 402 when the symbol isn't in the user's tier allow-list."""
+    """Raise 402 when the symbol isn't in the user's tier allow-list.
+    (All current tiers allow every symbol — kept for future laddering.)"""
     tier = await get_user_tier(user["id"])
     feats = get_tier_features(tier)
     if tier == "admin" or "*" in feats.allowed_symbols:
         return feats
     if symbol.upper() not in feats.allowed_symbols:
-        # Find the first tier that allows this symbol.
-        upgrade_to = "elite"
-        for t in ("pro", "elite"):
+        upgrade_to = TIER_ORDER[-1]
+        for t in TIER_ORDER[1:]:
             allowed = TIERS[t].allowed_symbols
             if "*" in allowed or symbol.upper() in allowed:
                 upgrade_to = t
@@ -112,12 +120,72 @@ async def enforce_symbol_allowed(user: dict, symbol: str) -> Features:
             detail={
                 "error": "symbol_locked",
                 "symbol": symbol.upper(),
-                "current_tier": tier,
+                "current_tier": canonical_tier(tier),
                 "allowed_symbols": list(feats.allowed_symbols),
                 "minimum_tier": upgrade_to,
                 "message": (
                     f"Trading {symbol.upper()} requires the {TIERS[upgrade_to].label} plan."
                 ),
+            },
+        )
+    return feats
+
+
+async def enforce_mode_ceiling(user: dict, target_mode: str) -> Features:
+    """Raise 402 when the requested operational mode exceeds the plan's
+    `max_operational_mode` ceiling. Called on mode PROMOTIONS only —
+    demotions always apply instantly. The broker-certification promotion
+    gate still runs AFTER this check (a plan never bypasses safety)."""
+    from operational_modes import MODES
+    tier = await get_user_tier(user["id"])
+    feats = get_tier_features(tier)
+    if tier == "admin":
+        return feats
+    target_rank = (MODES.get(target_mode) or {}).get("rank", 99)
+    ceiling_rank = (MODES.get(feats.max_operational_mode) or {}).get("rank", 0)
+    if target_rank > ceiling_rank:
+        min_tier = TIER_ORDER[-1]
+        for t in TIER_ORDER:
+            t_ceiling = (MODES.get(TIERS[t].max_operational_mode) or {}).get("rank", 0)
+            if t_ceiling >= target_rank:
+                min_tier = t
+                break
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "mode_locked",
+                "target_mode": target_mode,
+                "max_operational_mode": feats.max_operational_mode,
+                "current_tier": canonical_tier(tier),
+                "minimum_tier": min_tier,
+                "message": (
+                    f"{(MODES.get(target_mode) or {}).get('label', target_mode)} requires "
+                    f"the {TIERS[min_tier].label} plan (your ceiling: "
+                    f"{feats.max_operational_mode})."
+                ),
+            },
+        )
+    return feats
+
+
+async def enforce_vps_quota(user: dict, active_deployment_count: int) -> Features:
+    """Raise 402 when creating a SECOND (or later) VPS deployment on a plan
+    without the `multi_vps` flag. First deployment is governed by the
+    vps_management / vps_quick_connect flags instead."""
+    tier = await get_user_tier(user["id"])
+    feats = get_tier_features(tier)
+    if tier == "admin" or feats.multi_vps:
+        return feats
+    if active_deployment_count >= 1:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "feature_locked",
+                "feature": "multi_vps",
+                "current_tier": canonical_tier(tier),
+                "minimum_tier": _minimum_tier_for("multi_vps"),
+                "message": ("Managing multiple VPS deployments requires the "
+                            f"{TIERS[_minimum_tier_for('multi_vps')].label} plan."),
             },
         )
     return feats
@@ -133,6 +201,7 @@ async def cooldown_floor(user: dict) -> int:
 
 __all__ = [
     "enforce_feature", "enforce_account_quota", "enforce_symbol_allowed",
+    "enforce_mode_ceiling", "enforce_vps_quota",
     "cooldown_floor", "tier_at_least", "get_user_tier", "get_user_features",
     "require_feature",
 ]
@@ -144,7 +213,7 @@ def require_feature(feature: str):
     Usage:
         from auth import get_current_user
         from entitlements import require_feature
-        router = APIRouter(dependencies=[Depends(require_feature("loss_lab"))])
+        router = APIRouter(dependencies=[Depends(require_feature("research_lab"))])
     """
     from fastapi import Depends
     from auth import get_current_user

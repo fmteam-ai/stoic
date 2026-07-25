@@ -741,6 +741,8 @@ async def update_config(payload: BotConfigUpdate,
         cur_mode = (current_cfg or {}).get("operational_mode") or DEFAULT_MODE
         new_mode = update["operational_mode"]
         if MODE_RANK.get(new_mode, 0) > MODE_RANK.get(cur_mode, 0):
+            from entitlements import enforce_mode_ceiling
+            await enforce_mode_ceiling(user, new_mode)
             await require_step_up(db, user, request, "live_activation")
             gate = await promotion_gate(db, user["id"], account_id, new_mode)
             if gate["blockers"]:

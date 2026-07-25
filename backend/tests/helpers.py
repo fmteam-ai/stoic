@@ -52,7 +52,7 @@ def make_elite(email: str) -> None:
     assert u, f"no such user {email}"
     db.subscriptions.update_one(
         {"user_id": str(u["_id"])},
-        {"$set": {"current_plan_id": "elite_monthly", "valid_until": valid}},
+        {"$set": {"current_plan_id": "elite_ai_monthly", "valid_until": valid}},
         upsert=True)
 
 

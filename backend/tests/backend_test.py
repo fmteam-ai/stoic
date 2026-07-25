@@ -1959,18 +1959,19 @@ class TestBugReports:
 # ---------- Subscriptions (iter-8) ----------
 class TestSubscriptionPlans:
     def test_plans_public_endpoint(self, admin_session):
-        """iter-143 refresh: catalog is now tiered — starter/pro/elite ×
+        """iter-120 refresh: catalog is now 4-tier — starter/trader/professional/elite_ai ×
         monthly/quarterly/semi-annual/annual with 0/10/20/40% discounts."""
         r = admin_session.get(f"{API}/subscription/plans", timeout=10)
         assert r.status_code == 200
         plans = r.json()
-        assert isinstance(plans, list) and len(plans) == 12
+        assert isinstance(plans, list) and len(plans) == 16
         by_id = {p["id"]: p for p in plans}
-        expected_ids = {f"{tier}_{dur}" for tier in ("starter", "pro", "elite")
+        expected_ids = {f"{tier}_{dur}" for tier in ("starter", "trader", "professional", "elite_ai")
                         for dur in ("monthly", "quarterly", "semi_annual", "annual")}
         assert set(by_id.keys()) == expected_ids
 
-        monthly_price = {"starter": 29.0, "pro": 99.0, "elite": 199.0}
+        monthly_price = {"starter": 39.0, "trader": 99.0,
+                         "professional": 199.0, "elite_ai": 399.0}
         durations = {"monthly": (1, 0), "quarterly": (3, 10),
                      "semi_annual": (6, 20), "annual": (12, 40)}
         for tier, base in monthly_price.items():
@@ -2051,8 +2052,8 @@ class TestSubscriptionCheckout:
         assert body["checkout_url"].startswith("https://checkout.stripe.com")
         sid = body["session_id"]
         assert sid.startswith("cs_test_") or sid.startswith("cs_")
-        # legacy "monthly" alias resolves to the Pro tier plan
-        assert body["plan"]["id"] == "pro_monthly"
+        # legacy "monthly" alias resolves to the Trader tier plan
+        assert body["plan"]["id"] == "trader_monthly"
         assert body["plan"]["amount_usd"] == 99.0
 
     def test_admin_cannot_subscribe(self, admin_session):

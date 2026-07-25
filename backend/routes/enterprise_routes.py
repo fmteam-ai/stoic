@@ -19,13 +19,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 
 from step_up import require_step_up, audit_event
+from entitlements import require_feature
 from pydantic import BaseModel, Field
 
 from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
 
-mgmt_router = APIRouter(prefix="/api-keys", tags=["enterprise-api-keys"])
+mgmt_router = APIRouter(prefix="/api-keys", tags=["enterprise-api-keys"],
+                        dependencies=[Depends(require_feature("api_access"))])
 public_router = APIRouter(prefix="/v1", tags=["enterprise-public-api"])
 
 KEY_PREFIX = "stoic_live_"

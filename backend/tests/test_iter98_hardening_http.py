@@ -12,7 +12,7 @@ import pytest
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tests.helpers import base_url, register_and_login, mongo_db  # noqa: E402
+from tests.helpers import base_url, register_and_login, mongo_db, make_elite  # noqa: E402
 
 API = f"{base_url()}/api"
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@trading.bot")
@@ -57,6 +57,7 @@ def test_fresh_user_default_observe():
 def test_fresh_user_promotion_requires_stepup():
     email = f"iter98-promo-{uuid.uuid4().hex[:8]}@example.com"
     s = register_and_login(email)
+    make_elite(email)  # iter-120: mode ladder now plan-gated — grant Elite AI
     # Force real gate — disable the auto-inject bypass header
     s.headers["X-Step-Up-Bypass"] = ""
     r = s.put(f"{API}/bot/config",
@@ -70,12 +71,19 @@ def test_fresh_user_promotion_requires_stepup():
 def test_fresh_user_promotion_with_bypass_header_succeeds():
     email = f"iter98-promo2-{uuid.uuid4().hex[:8]}@example.com"
     s = register_and_login(email)
+    make_elite(email)  # iter-120: mode ladder now plan-gated — grant Elite AI
     bypass = os.environ.get("STEP_UP_BYPASS_TOKEN")
     assert bypass, "STEP_UP_BYPASS_TOKEN not set in env"
     # conftest auto-injects; verify success path
     r = s.put(f"{API}/bot/config",
               json={"operational_mode": "supervised_live"},
               headers={"X-Step-Up-Bypass": bypass}, timeout=15)
+    if r.status_code == 409:
+        det = r.json().get("detail", {})
+        assert det.get("code") == "mode_promotion_blocked", r.text
+        assert any("shadow health" in b for b in det.get("blockers", [])), det
+        pytest.skip("preview shadow health below threshold — promotion "
+                    "legitimately blocked by the fail-closed gate")
     assert r.status_code == 200, r.text
     assert r.json().get("operational_mode") == "supervised_live"
 

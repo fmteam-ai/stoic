@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends
 
 from auth import get_current_user
 from database import get_db
+from entitlements import require_feature
 
-router = APIRouter(prefix="/twin", tags=["digital-twin"])
+router = APIRouter(prefix="/twin", tags=["digital-twin"],
+                   dependencies=[Depends(require_feature("digital_twin"))])
 
 
 @router.get("/summary")

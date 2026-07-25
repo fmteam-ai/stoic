@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
 from database import get_db
+from entitlements import require_feature
 
-router = APIRouter(prefix="/broker-intel", tags=["broker-intel"])
+router = APIRouter(prefix="/broker-intel", tags=["broker-intel"],
+                   dependencies=[Depends(require_feature("broker_intelligence"))])
 
 
 @router.get("/qualification")

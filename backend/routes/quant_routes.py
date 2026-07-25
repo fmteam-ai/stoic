@@ -50,6 +50,8 @@ async def bayes_proposals(engine: str | None = None,
 
 @router.get("/allocator")
 async def allocator_weights(user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    await enforce_feature(user, "portfolio_optimization")
     from rl_allocator import LOOKBACK_DAYS, MIN_TRADES, MIN_WEIGHT, get_allocations
     db = get_db()
     allocs = await get_allocations(db, user["id"])

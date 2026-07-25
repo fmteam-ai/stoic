@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends
 
 from auth import get_current_user
 from database import get_db
+from entitlements import require_feature
 
-router = APIRouter(prefix="/coach", tags=["ai-coach"])
+router = APIRouter(prefix="/coach", tags=["ai-coach"],
+                   dependencies=[Depends(require_feature("ai_coach"))])
 
 
 @router.get("/cards")

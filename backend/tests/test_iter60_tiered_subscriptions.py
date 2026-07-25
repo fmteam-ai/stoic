@@ -1,51 +1,61 @@
-"""Tests for iter-60 — tiered subscriptions + feature gates.
+"""Tests for the 4-tier subscription catalog + feature gates (iter-120).
 
 Covers:
-  • PLANS contains 12 SKUs (3 tiers × 4 durations).
-  • Legacy plan_ids (monthly/quarterly/...) alias to pro_* for backward compat.
-  • TIER_RANK + tier_at_least correctness.
-  • get_user_tier resolution: admin → admin, grace → pro, active paid → tier,
-    expired → starter.
+  • PLANS contains 16 SKUs (4 tiers × 4 durations) at the new base prices.
+  • Legacy plan_ids alias forward (monthly/pro_* → trader_*, elite_* → professional_*).
+  • TIER_RANK + tier_at_least correctness incl. legacy tier names.
+  • Per-tier feature matrices (Starter/Trader/Professional/Elite AI).
   • enforce_feature 402 + payload shape on locked features.
-  • enforce_account_quota 402 when at cap, allows when under.
-  • enforce_symbol_allowed honours wildcards + denials.
+  • enforce_account_quota 402 at the 1/3/10/50 caps.
+  • enforce_mode_ceiling — plan ladder ceiling on operational modes.
+  • enforce_vps_quota — multi-VPS locked below Elite AI.
 """
 import pytest
 from fastapi import HTTPException
 
 from subscription_plans import (
     PLANS, LEGACY_ALIASES, get_plan, TIERS, tier_at_least,
-    get_tier_features, STARTER, PRO, ELITE, TIER_BASE_USD,
+    get_tier_features, STARTER, TRADER, PROFESSIONAL, ELITE_AI,
+    TIER_BASE_USD,
 )
 
 
 # ============ Catalog shape ============
-def test_catalog_has_twelve_skus():
-    assert len(PLANS) == 12
-    expected = {f"{t}_{d}" for t in ("starter", "pro", "elite")
+def test_catalog_has_sixteen_skus():
+    assert len(PLANS) == 16
+    expected = {f"{t}_{d}" for t in ("starter", "trader", "professional", "elite_ai")
                             for d in ("monthly", "quarterly", "semi_annual", "annual")}
     assert set(PLANS.keys()) == expected
 
 
 def test_each_sku_resolves_correct_tier_and_duration():
-    p = PLANS["pro_annual"]
-    assert p.tier == "pro"
+    p = PLANS["trader_annual"]
+    assert p.tier == "trader"
     assert p.duration_months == 12
     assert p.discount_pct == 40
     assert p.amount_usd == round(99.0 * 12 * 0.60, 2)
+    e = PLANS["elite_ai_monthly"]
+    assert e.amount_usd == 399.0 and e.tier == "elite_ai"
 
 
 def test_starter_monthly_is_cheapest_sku():
     starter_monthly = PLANS["starter_monthly"]
-    elite_annual = PLANS["elite_annual"]
+    elite_annual = PLANS["elite_ai_annual"]
     assert starter_monthly.amount_usd < elite_annual.amount_usd
-    assert starter_monthly.amount_usd == 29.0
+    assert starter_monthly.amount_usd == 39.0
+    assert TIER_BASE_USD == {"starter": 39.0, "trader": 99.0,
+                             "professional": 199.0, "elite_ai": 399.0}
 
 
-def test_legacy_aliases_map_to_pro():
-    assert get_plan("monthly").id == "pro_monthly"
-    assert get_plan("annual").id == "pro_annual"
-    assert get_plan("semi_annual").tier == "pro"
+def test_legacy_aliases_map_forward():
+    # Pre-iter-60 singles and iter-60 pro_* → Trader (price-equivalent)
+    assert get_plan("monthly").id == "trader_monthly"
+    assert get_plan("annual").id == "trader_annual"
+    assert get_plan("pro_monthly").id == "trader_monthly"
+    assert get_plan("pro_annual").tier == "trader"
+    # iter-60 elite_* → Professional (price-equivalent)
+    assert get_plan("elite_monthly").id == "professional_monthly"
+    assert get_plan("elite_annual").tier == "professional"
 
 
 def test_unknown_plan_id_returns_none():
@@ -56,42 +66,68 @@ def test_unknown_plan_id_returns_none():
 
 # ============ Tier rank + features ============
 def test_tier_rank_ordering():
-    assert tier_at_least("admin", "elite") is True
-    assert tier_at_least("elite", "pro") is True
-    assert tier_at_least("pro", "starter") is True
-    assert tier_at_least("starter", "pro") is False
+    assert tier_at_least("admin", "elite_ai") is True
+    assert tier_at_least("elite_ai", "professional") is True
+    assert tier_at_least("professional", "trader") is True
+    assert tier_at_least("trader", "starter") is True
+    assert tier_at_least("starter", "trader") is False
     assert tier_at_least("", "starter") is False
+    # Legacy names keep price-equivalent ranks
+    assert tier_at_least("pro", "trader") is True
+    assert tier_at_least("elite", "professional") is True
+    assert tier_at_least("elite", "elite_ai") is False
 
 
-def test_starter_features_locked():
+def test_starter_features():
     assert STARTER.max_accounts == 1
-    assert STARTER.auto_execute is False
-    assert STARTER.loss_lab is False
-    assert STARTER.auto_heal is False
-    assert STARTER.allowed_symbols == ("XAUUSD",)
+    assert STARTER.max_operational_mode == "demo_autopilot"
+    assert STARTER.paper_shadow_mode is True
+    assert STARTER.allowed_symbols == ("*",)
+    for locked in ("replay_studio", "ai_coach", "digital_twin", "research_lab",
+                   "vps_quick_connect", "vps_management", "portfolio_optimization",
+                   "api_access", "loss_lab"):
+        assert getattr(STARTER, locked) is False, locked
 
 
-def test_pro_features_unlocked():
-    assert PRO.max_accounts == 3
-    assert PRO.auto_execute is True
-    assert PRO.loss_lab is True
-    assert PRO.auto_heal is True
-    assert PRO.correlation_kelly is True
-    assert "BTCUSD" in PRO.allowed_symbols
-    assert PRO.drift_auto_retrain is False  # Elite-only
+def test_trader_features():
+    assert TRADER.max_accounts == 3
+    assert TRADER.max_operational_mode == "supervised_live"
+    for on in ("replay_studio", "ai_coach", "evidence_board", "broker_intelligence",
+               "vps_quick_connect", "loss_lab", "auto_heal", "priority_notifications"):
+        assert getattr(TRADER, on) is True, on
+    for locked in ("digital_twin", "research_lab", "strategy_marketplace",
+                   "vps_management", "calibrated_p_win", "api_access", "multi_vps"):
+        assert getattr(TRADER, locked) is False, locked
 
 
-def test_elite_features_all_on():
-    assert ELITE.max_accounts == -1
-    assert ELITE.allowed_symbols == ("*",)
-    assert ELITE.drift_auto_retrain is True
-    assert ELITE.paper_shadow_mode is True
-    assert ELITE.custom_thresholds is True
+def test_professional_features():
+    assert PROFESSIONAL.max_accounts == 10
+    assert PROFESSIONAL.max_operational_mode == "supervised_live"
+    for on in ("digital_twin", "research_lab", "strategy_marketplace",
+               "portfolio_optimization", "calibrated_p_win", "chaos_testing",
+               "agent_report_cards", "vps_management", "api_access"):
+        assert getattr(PROFESSIONAL, on) is True, on
+    for locked in ("multi_vps", "strategy_evolution", "hypothesis_generation",
+                   "fleet_monitoring", "white_label_reporting"):
+        assert getattr(PROFESSIONAL, locked) is False, locked
 
 
-def test_get_tier_features_defaults_to_starter():
+def test_elite_ai_features():
+    assert ELITE_AI.max_accounts == 50
+    assert ELITE_AI.max_operational_mode == "autonomous_live"
+    for on in ("multi_vps", "strategy_evolution", "hypothesis_generation",
+               "fleet_monitoring", "white_label_reporting", "digital_twin",
+               "research_lab"):
+        assert getattr(ELITE_AI, on) is True, on
+    assert ELITE_AI.support_tier == "premium"
+
+
+def test_get_tier_features_defaults_and_legacy():
     assert get_tier_features("unknown") is STARTER
     assert get_tier_features(None) is STARTER
+    assert get_tier_features("pro") is TRADER
+    assert get_tier_features("elite") is PROFESSIONAL
+    assert get_tier_features("admin") is ELITE_AI
 
 
 # ============ Entitlement gates (HTTPException shape) ============
@@ -100,8 +136,8 @@ async def test_enforce_feature_admin_bypasses(monkeypatch):
     from entitlements import enforce_feature
     monkeypatch.setattr("entitlements.get_user_tier",
                         _async_return("admin"))
-    feats = await enforce_feature({"id": "user-1"}, "drift_auto_retrain")
-    assert feats is ELITE or feats.label  # admin gets default; the call just doesn't raise
+    feats = await enforce_feature({"id": "user-1"}, "strategy_evolution")
+    assert feats is ELITE_AI
 
 
 @pytest.mark.asyncio
@@ -115,71 +151,105 @@ async def test_enforce_feature_blocks_starter_from_loss_lab(monkeypatch):
     assert payload["error"] == "feature_locked"
     assert payload["feature"] == "loss_lab"
     assert payload["current_tier"] == "starter"
-    assert payload["minimum_tier"] == "pro"
+    assert payload["minimum_tier"] == "trader"
 
 
 @pytest.mark.asyncio
-async def test_enforce_feature_blocks_pro_from_drift_retrain(monkeypatch):
+async def test_enforce_feature_blocks_professional_from_evolution(monkeypatch):
     from entitlements import enforce_feature
-    monkeypatch.setattr("entitlements.get_user_tier", _async_return("pro"))
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("professional"))
     with pytest.raises(HTTPException) as exc:
-        await enforce_feature({"id": "user-1"}, "drift_auto_retrain")
-    assert exc.value.detail["minimum_tier"] == "elite"
+        await enforce_feature({"id": "user-1"}, "strategy_evolution")
+    assert exc.value.detail["minimum_tier"] == "elite_ai"
+    # trader locked out of professional features → points at professional
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("trader"))
+    with pytest.raises(HTTPException) as exc2:
+        await enforce_feature({"id": "user-1"}, "digital_twin")
+    assert exc2.value.detail["minimum_tier"] == "professional"
 
 
 @pytest.mark.asyncio
 async def test_enforce_feature_allows_when_tier_has_flag(monkeypatch):
     from entitlements import enforce_feature
-    monkeypatch.setattr("entitlements.get_user_tier", _async_return("pro"))
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("trader"))
     feats = await enforce_feature({"id": "user-1"}, "loss_lab")
     assert feats.loss_lab is True
+    # Legacy "pro" tier resolves to trader features
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("pro"))
+    feats2 = await enforce_feature({"id": "user-1"}, "replay_studio")
+    assert feats2 is TRADER
 
 
 @pytest.mark.asyncio
-async def test_enforce_account_quota_blocks_starter_at_one(monkeypatch):
+async def test_enforce_account_quota_blocks_at_caps(monkeypatch):
     from entitlements import enforce_account_quota
     monkeypatch.setattr("entitlements.get_user_tier", _async_return("starter"))
     with pytest.raises(HTTPException) as exc:
         await enforce_account_quota({"id": "u"}, current_account_count=1)
     assert exc.value.detail["error"] == "account_quota_exceeded"
-    assert exc.value.detail["minimum_tier"] == "pro"
-
-
-@pytest.mark.asyncio
-async def test_enforce_account_quota_blocks_pro_at_three(monkeypatch):
-    from entitlements import enforce_account_quota
-    monkeypatch.setattr("entitlements.get_user_tier", _async_return("pro"))
-    with pytest.raises(HTTPException) as exc:
+    assert exc.value.detail["minimum_tier"] == "trader"
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("trader"))
+    with pytest.raises(HTTPException) as exc2:
         await enforce_account_quota({"id": "u"}, current_account_count=3)
-    assert exc.value.detail["max_accounts"] == 3
-    assert exc.value.detail["minimum_tier"] == "elite"
+    assert exc2.value.detail["max_accounts"] == 3
+    assert exc2.value.detail["minimum_tier"] == "professional"
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("professional"))
+    with pytest.raises(HTTPException) as exc3:
+        await enforce_account_quota({"id": "u"}, current_account_count=10)
+    assert exc3.value.detail["minimum_tier"] == "elite_ai"
 
 
 @pytest.mark.asyncio
-async def test_enforce_account_quota_unlimited_for_elite(monkeypatch):
+async def test_enforce_account_quota_elite_ai_cap_fifty(monkeypatch):
     from entitlements import enforce_account_quota
-    monkeypatch.setattr("entitlements.get_user_tier", _async_return("elite"))
-    # No raise even at 100 accounts.
-    await enforce_account_quota({"id": "u"}, current_account_count=100)
-
-
-@pytest.mark.asyncio
-async def test_enforce_symbol_allowed_blocks_starter_from_btc(monkeypatch):
-    from entitlements import enforce_symbol_allowed
-    monkeypatch.setattr("entitlements.get_user_tier", _async_return("starter"))
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("elite_ai"))
+    await enforce_account_quota({"id": "u"}, current_account_count=49)  # no raise
     with pytest.raises(HTTPException) as exc:
-        await enforce_symbol_allowed({"id": "u"}, "BTCUSD")
-    assert exc.value.detail["error"] == "symbol_locked"
-    assert exc.value.detail["minimum_tier"] == "pro"
+        await enforce_account_quota({"id": "u"}, current_account_count=50)
+    assert exc.value.detail["max_accounts"] == 50
+    # Admin is unlimited
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("admin"))
+    await enforce_account_quota({"id": "u"}, current_account_count=500)
 
 
 @pytest.mark.asyncio
-async def test_enforce_symbol_allowed_elite_wildcard(monkeypatch):
-    from entitlements import enforce_symbol_allowed
-    monkeypatch.setattr("entitlements.get_user_tier", _async_return("elite"))
-    # All symbols pass when allowed_symbols contains "*".
-    await enforce_symbol_allowed({"id": "u"}, "EURUSD")
-    await enforce_symbol_allowed({"id": "u"}, "SPX500")
+async def test_enforce_mode_ceiling(monkeypatch):
+    from entitlements import enforce_mode_ceiling
+    # Starter capped at demo — supervised_live blocked
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("starter"))
+    await enforce_mode_ceiling({"id": "u"}, "demo_autopilot")  # allowed
+    with pytest.raises(HTTPException) as exc:
+        await enforce_mode_ceiling({"id": "u"}, "supervised_live")
+    assert exc.value.status_code == 402
+    assert exc.value.detail["error"] == "mode_locked"
+    assert exc.value.detail["minimum_tier"] == "trader"
+    # Trader allowed supervised, blocked autonomous (min tier elite_ai)
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("trader"))
+    await enforce_mode_ceiling({"id": "u"}, "supervised_live")
+    with pytest.raises(HTTPException) as exc2:
+        await enforce_mode_ceiling({"id": "u"}, "autonomous_live")
+    assert exc2.value.detail["minimum_tier"] == "elite_ai"
+    # Professional also blocked from autonomous; Elite AI + admin allowed
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("professional"))
+    with pytest.raises(HTTPException):
+        await enforce_mode_ceiling({"id": "u"}, "autonomous_live")
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("elite_ai"))
+    await enforce_mode_ceiling({"id": "u"}, "autonomous_live")
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("admin"))
+    await enforce_mode_ceiling({"id": "u"}, "autonomous_live")
+
+
+@pytest.mark.asyncio
+async def test_enforce_vps_quota(monkeypatch):
+    from entitlements import enforce_vps_quota
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("professional"))
+    await enforce_vps_quota({"id": "u"}, active_deployment_count=0)  # first VPS ok
+    with pytest.raises(HTTPException) as exc:
+        await enforce_vps_quota({"id": "u"}, active_deployment_count=1)
+    assert exc.value.detail["feature"] == "multi_vps"
+    assert exc.value.detail["minimum_tier"] == "elite_ai"
+    monkeypatch.setattr("entitlements.get_user_tier", _async_return("elite_ai"))
+    await enforce_vps_quota({"id": "u"}, active_deployment_count=5)
 
 
 # ============ helpers ============

@@ -61,6 +61,8 @@ async def latest_per_symbol(user=Depends(get_current_user)):
 @router.get("/report-card")
 async def report_card(force: bool = False, user=Depends(get_current_user)):
     """Weekly per-agent report card — gate activity + estimated P&L impact."""
+    from entitlements import enforce_feature
+    await enforce_feature(user, "agent_report_cards")
     from agent_report_card import get_report_card
     return await get_report_card(get_db(), user["id"], force=force)
 

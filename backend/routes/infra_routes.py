@@ -32,6 +32,8 @@ async def list_providers(user=Depends(get_current_user)):
 @router.post("/providers/{name}/connect")
 async def connect_provider(name: str, payload: dict,
                            user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    await enforce_feature(user, "vps_management")
     from vps_providers import PROVIDERS
     from secrets_vault import encrypt, mask
     if name not in PROVIDERS:
@@ -105,7 +107,14 @@ async def create_deployment_ep(payload: dict,
                                idempotency_key: str | None = Header(
                                    default=None, alias="Idempotency-Key"),
                                user=Depends(get_current_user)):
+    from entitlements import enforce_feature, enforce_vps_quota
     from vps_deployments import create_deployment
+    path = str(payload.get("path") or "provision")
+    await enforce_feature(
+        user, "vps_quick_connect" if path == "existing_vps" else "vps_management")
+    active = await get_db().vps_deployments.count_documents(
+        {"user_id": user["id"], "state": {"$nin": ["DELETED", "FAILED"]}})
+    await enforce_vps_quota(user, active)
     dep = await create_deployment(get_db(), user["id"], payload,
                                   idempotency_key)
     needs_bootstrap = (dep["path"] == "existing_vps"
@@ -145,6 +154,8 @@ async def get_deployment(deployment_id: str,
 @router.post("/deployments/{deployment_id}/bootstrap-token")
 async def issue_bootstrap(deployment_id: str,
                           user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    await enforce_feature(user, "vps_quick_connect")
     from vps_agent import create_bootstrap_token
     db = get_db()
     dep = await db.vps_deployments.find_one(
@@ -157,6 +168,8 @@ async def issue_bootstrap(deployment_id: str,
 @router.post("/deployments/{deployment_id}/actions")
 async def server_action(deployment_id: str, payload: dict,
                         user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    await enforce_feature(user, "vps_management")
     from vps_providers import PartnerRequiredError
     db = get_db()
     dep = await db.vps_deployments.find_one(
@@ -334,6 +347,8 @@ async def mt5_instance_ep(payload: dict):
 # ── EA pairing ──────────────────────────────────────────────────
 @router.post("/pairing")
 async def create_pairing(payload: dict, user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    await enforce_feature(user, "vps_quick_connect")
     from vps_agent import create_pairing_code
     try:
         return await create_pairing_code(
@@ -420,6 +435,11 @@ async def ea_deploy_progress(payload: dict):
 @router.post("/vps/connect-existing")
 async def connect_existing_ep(payload: dict,
                               user=Depends(get_current_user)):
+    from entitlements import enforce_feature, enforce_vps_quota
+    await enforce_feature(user, "vps_quick_connect")
+    active = await get_db().vps_deployments.count_documents(
+        {"user_id": user["id"], "state": {"$nin": ["DELETED", "FAILED"]}})
+    await enforce_vps_quota(user, active)
     from vps_pathb import connect_existing
     return await connect_existing(get_db(), user["id"], payload)
 
@@ -461,6 +481,8 @@ async def list_discovery(deployment_id: str,
 @router.post("/discovery/{discovery_id}/decision")
 async def terminal_decision(discovery_id: str, payload: dict,
                             user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    await enforce_feature(user, "vps_quick_connect")
     from vps_pathb import decide_terminal
     try:
         return await decide_terminal(
@@ -480,6 +502,8 @@ async def terminal_decision(discovery_id: str, payload: dict,
 @router.post("/agents/{agent_id}/commands")
 async def queue_agent_command(agent_id: str, payload: dict,
                               user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    await enforce_feature(user, "vps_quick_connect")
     from vps_pathb import queue_command
     try:
         return await queue_command(get_db(), user["id"], agent_id,
