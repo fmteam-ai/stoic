@@ -24,6 +24,12 @@ async def test_mt5_engine_blocks_when_cap_reached(monkeypatch):
     fake_db.trades.count_documents = AsyncMock(return_value=5)  # already at cap
     fake_db.trades.insert_one = AsyncMock()
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+        return None
+    monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+    monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+    monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+
     monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
 
     engine = MT5BridgeEngine()
@@ -56,6 +62,12 @@ async def test_mt5_engine_allows_when_below_cap(monkeypatch):
     fake_inserted.inserted_id = "fakeid"
     fake_db.trades.insert_one = AsyncMock(return_value=fake_inserted)
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+        return None
+    monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+    monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+    monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+
     monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
     monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
 
@@ -94,6 +106,12 @@ async def test_mt5_engine_no_cap_arg_allows(monkeypatch):
     fake_inserted.inserted_id = "fakeid"
     fake_db.trades.insert_one = AsyncMock(return_value=fake_inserted)
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+        return None
+    monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+    monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+    monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+
     monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
     monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
 

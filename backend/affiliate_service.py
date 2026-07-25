@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from bson import ObjectId
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 from database import get_db
 from subscription_plans import get_plan
 
@@ -231,7 +232,10 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
         {"session_id": session_id, "tier": 1})
     if existing:
         return None
-    commission_cents = int(round(amount_usd * 100 * COMMISSION_RATE))
+    # Money is accounted in INTEGER CENTS end-to-end (correction #5.3) —
+    # the *_usd fields are derived for display/back-compat only.
+    amount_cents = int(round(amount_usd * 100))
+    commission_cents = int(round(amount_cents * COMMISSION_RATE))
     commission_usd = commission_cents / 100.0
     is_first = not user.get("first_paid_at")
     doc = {
@@ -241,7 +245,9 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
         "referred_user_email": user.get("email"),
         "plan_id": plan_id,
         "session_id": session_id,
+        "sale_amount_cents": amount_cents,
         "sale_amount_usd": amount_usd,
+        "commission_cents": commission_cents,
         "commission_usd": commission_usd,
         "rate": COMMISSION_RATE,
         "tier": 1,
@@ -252,12 +258,17 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
     res = None
     try:
         res = await db.affiliate_commissions.insert_one(doc)
-    except Exception:
-        return None  # unique (session_id, tier) backstop — already recorded
+    except DuplicateKeyError:
+        # unique (session_id, tier) backstop — already recorded. ONLY the
+        # duplicate case is swallowed; network/DB failures must propagate so
+        # the outbox retries them (correction #5.2).
+        return None
     tier1_commission_id = str(res.inserted_id)
     await db.affiliates.update_one(
         {"_id": affiliate["_id"]},
         {"$inc": {
+            "lifetime_earnings_cents": commission_cents,
+            "unpaid_balance_cents": commission_cents,
             "lifetime_earnings_usd": commission_usd,
             "unpaid_balance_usd": commission_usd,
             **({"lifetime_conversions": 1} if is_first else {}),
@@ -271,32 +282,41 @@ async def record_commission_if_referred(*, user_id: str, plan_id: str,
             {"_id": ObjectId(affiliate["parent_affiliate_id"]), "active": True}
         )
         if parent:
-            override_usd = round(amount_usd * TIER2_OVERRIDE_RATE, 2)
-            await db.affiliate_commissions.insert_one({
-                "affiliate_id": str(parent["_id"]),
-                "affiliate_code": parent["code"],
-                "referred_user_id": user_id,
-                "referred_user_email": user.get("email"),
-                "plan_id": plan_id,
-                "session_id": session_id,
-                "sale_amount_usd": amount_usd,
-                "commission_usd": override_usd,
-                "rate": TIER2_OVERRIDE_RATE,
-                "tier": 2,
-                "tier1_commission_id": tier1_commission_id,
-                "tier1_affiliate_id": str(affiliate["_id"]),
-                "tier1_affiliate_code": code,
-                "is_first_payment": is_first,
-                "status": "pending",
-                "created_at": _now().isoformat(),
-            })
-            await db.affiliates.update_one(
-                {"_id": parent["_id"]},
-                {"$inc": {
-                    "lifetime_earnings_usd": override_usd,
-                    "unpaid_balance_usd": override_usd,
-                }},
-            )
+            override_cents = int(round(amount_cents * TIER2_OVERRIDE_RATE))
+            override_usd = override_cents / 100.0
+            try:
+                await db.affiliate_commissions.insert_one({
+                    "affiliate_id": str(parent["_id"]),
+                    "affiliate_code": parent["code"],
+                    "referred_user_id": user_id,
+                    "referred_user_email": user.get("email"),
+                    "plan_id": plan_id,
+                    "session_id": session_id,
+                    "sale_amount_cents": amount_cents,
+                    "sale_amount_usd": amount_usd,
+                    "commission_cents": override_cents,
+                    "commission_usd": override_usd,
+                    "rate": TIER2_OVERRIDE_RATE,
+                    "tier": 2,
+                    "tier1_commission_id": tier1_commission_id,
+                    "tier1_affiliate_id": str(affiliate["_id"]),
+                    "tier1_affiliate_code": code,
+                    "is_first_payment": is_first,
+                    "status": "pending",
+                    "created_at": _now().isoformat(),
+                })
+            except DuplicateKeyError:
+                pass  # tier-2 already recorded for this session
+            else:
+                await db.affiliates.update_one(
+                    {"_id": parent["_id"]},
+                    {"$inc": {
+                        "lifetime_earnings_cents": override_cents,
+                        "unpaid_balance_cents": override_cents,
+                        "lifetime_earnings_usd": override_usd,
+                        "unpaid_balance_usd": override_usd,
+                    }},
+                )
 
     if is_first:
         await db.users.update_one(
@@ -353,13 +373,18 @@ async def reverse_commissions_for_session(db, session_id: str,
                       "reverse_reason": reason, "status_before_reversal": was}})
         if r.modified_count != 1:
             continue  # concurrent reversal — skip the balance adjustment
-        amount = float(c.get("commission_usd") or 0)
-        inc = {"lifetime_earnings_usd": -amount}
+        amount_cents = int(c.get("commission_cents")
+                           or round(float(c.get("commission_usd") or 0) * 100))
+        amount = amount_cents / 100.0
+        inc = {"lifetime_earnings_cents": -amount_cents,
+               "lifetime_earnings_usd": -amount}
         # Pending money comes straight out of the unpaid balance; already
         # paid-out money becomes a clawback owed by the affiliate.
         if was == "pending":
+            inc["unpaid_balance_cents"] = -amount_cents
             inc["unpaid_balance_usd"] = -amount
         else:
+            inc["clawback_owed_cents"] = amount_cents
             inc["clawback_owed_usd"] = amount
         await db.affiliates.update_one(
             {"_id": ObjectId(c["affiliate_id"])}, {"$inc": inc})

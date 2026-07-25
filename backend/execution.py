@@ -19,16 +19,19 @@ logger = logging.getLogger("execution")
 
 
 def broker_identity_snapshot(account: dict) -> dict:
-    """Identity rule (iter-124): user-entered labels are presentation-only.
+    """Identity rule (iter-124/125): user-entered labels are presentation-only.
     Every trade record stamps the broker-VERIFIED identity at open time so
     reconciliation, auditing and affiliate/risk attribution survive account
     renames, label collisions and even account-doc deletion."""
+    from identity_model import authoritative_account_number
+    ver = account.get("verified_identity") or {}
     return {
-        "account_number": (account.get("broker_account_id_reported")
-                           or account.get("account_number")),
-        "broker_server": account.get("server"),
+        "account_number": authoritative_account_number(account),
+        "broker_server": ver.get("broker_server") or account.get("server"),
         "broker": account.get("broker"),
-        "installation_id": (account.get("ea_identity") or {}).get("installation_id"),
+        "installation_id": (ver.get("installation_id")
+                            or (account.get("ea_identity") or {})
+                            .get("installation_id")),
     }
 
 
@@ -54,6 +57,18 @@ class MT5BridgeEngine(ExecutionEngine):
             logger.warning("MT5 execute blocked by entitlement user=%s sym=%s: %s",
                            user_id, signal.get("symbol"), ent_block.get("reason"))
             return ent_block
+
+        # LIVE IDENTITY GATE (iter-125 correction #1) — one account → one
+        # verified installation → one terminal → one execution lease. A live
+        # trade never dispatches unless the last heartbeat verified the full
+        # identity chain AND that installation holds the current lease.
+        from vps_agent import verify_execution_identity
+        id_block = await verify_execution_identity(db, account)
+        if id_block:
+            logger.warning("MT5 execute blocked by identity gate user=%s "
+                           "sym=%s: %s", user_id, signal.get("symbol"),
+                           id_block.get("reason"))
+            return id_block
 
         # MARKET-HOURS HARD VETO (iter-63) — block at execution layer too, so
         # any in-flight signal from before the analyze_symbol fix can't fire.

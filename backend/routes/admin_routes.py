@@ -357,6 +357,7 @@ async def _set_affiliate_state(db, *, aff_id: str, new_state: str, reason: str,
             "terminated_at": now,
             "terminated_by": actor_email,
             "unpaid_balance_usd": 0.0,
+            "unpaid_balance_cents": 0,
             "forfeited_balance_usd": forfeit,
         }
         # Cancel any pending payout requests for this affiliate.

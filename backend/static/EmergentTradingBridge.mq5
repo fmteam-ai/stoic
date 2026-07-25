@@ -261,17 +261,18 @@
 //|             chart symbol) so DST/session handling is certifiable. |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.54"
+#property version   "1.55"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.54"
+#define EA_CLIENT_VERSION "1.55"
 
 input string ServerUrl              = "https://stoic-trading.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
+input string InstallationId         = "";  // v1.55 — issued by pairing claim; auto-loaded from STOIC-Installation.txt when blank
 input string TrackedSymbols         = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
 input int    PollSeconds            = 5;
 input int    Slippage               = 10;
@@ -348,6 +349,47 @@ datetime lastReportedDealTime  = 0;   // high-watermark — never re-push deals 
 // paste in the MT5 inputs dialog required.
 string EffectiveToken = "";
 
+// EA v1.55 · Resolved installation identity. The server-issued
+// installation_id (from the pairing claim) proves WHICH physical
+// EA install is talking. Heartbeats without it are treated as
+// UNVERIFIED by the server: telemetry only — no execution-lease
+// renewal, no live trading.
+string EffectiveInstallation = "";
+
+//+------------------------------------------------------------------+
+// Resolve the installation id from input OR the installer drop file.
+string ResolveInstallationId() {
+   string input_trim = InstallationId;
+   StringTrimLeft(input_trim);
+   StringTrimRight(input_trim);
+   if (StringLen(input_trim) > 0) {
+      Print("STOIC: using installation id from EA inputs dialog.");
+      return input_trim;
+   }
+   if (!FileIsExist("STOIC-Installation.txt")) {
+      Print("STOIC: WARNING — no InstallationId in EA inputs AND no STOIC-Installation.txt in MQL5\\Files. Heartbeats will be UNVERIFIED (telemetry only, no live trading). Pair this terminal from the STOIC dashboard.");
+      return "";
+   }
+   int fh = FileOpen("STOIC-Installation.txt", FILE_READ | FILE_TXT | FILE_ANSI);
+   if (fh == INVALID_HANDLE) {
+      Print("STOIC: WARNING — STOIC-Installation.txt exists but FileOpen failed (", GetLastError(), ").");
+      return "";
+   }
+   string inst = "";
+   while (!FileIsEnding(fh)) {
+      string line = FileReadString(fh);
+      StringTrimLeft(line); StringTrimRight(line);
+      if (StringLen(line) == 0) continue;
+      if (StringGetCharacter(line, 0) == '#') continue;
+      inst = line;
+      break;
+   }
+   FileClose(fh);
+   if (StringLen(inst) > 0)
+      Print("STOIC: installation id auto-loaded from MQL5\\Files\\STOIC-Installation.txt.");
+   return inst;
+}
+
 //+------------------------------------------------------------------+
 // Resolve the bridge token from input OR the auto-installer drop file.
 // Returns "" if neither source has a usable token (user needs to paste).
@@ -417,6 +459,8 @@ int OnInit() {
    _ea_boot_time = TimeCurrent();
    // EA v1.36: resolve token from inputs OR auto-installer drop file.
    EffectiveToken = ResolveBridgeToken();
+   // EA v1.55: resolve the installation identity for verified heartbeats.
+   EffectiveInstallation = ResolveInstallationId();
    // EA v1.43: subscribe to the broker's order book (no-op if unsupported).
    if (DomEnabled) _dom_subscribed = MarketBookAdd(_Symbol);
    // EA v1.50: prune intent-journal Global Variables idle for 7+ days.
@@ -1239,17 +1283,25 @@ void SendHeartbeat() {
       CACHED_AVAILABLE_SYMBOLS = BuildAvailableSymbolsJson();
       _last_symbols_emit = now_t;
    }
+   // EA v1.55: mandatory identity block — broker server, installation id,
+   // terminal build and ea_version ride on EVERY heartbeat so the server
+   // can verify the full identity chain (unverified = telemetry only).
+   string broker_srv = AccountInfoString(ACCOUNT_SERVER);
+   int term_build = (int)TerminalInfoInteger(TERMINAL_BUILD);
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
+      "\"broker_server\":\"%s\",\"installation_id\":\"%s\","
+      "\"terminal_build\":%d,\"ea_version\":\"%s\","
       "\"positions\":%s,\"client_version\":\"%s\","
       "\"symbol_specs\":%s,"
       "\"broker_time\":%s,"
       "\"available_symbols\":%s}",
-      EffectiveToken, balance, equity, openPos, spreads, login, ccy, positions,
-      EA_CLIENT_VERSION, BuildSymbolSpecsJson(), BuildBrokerTimeJson(),
-      CACHED_AVAILABLE_SYMBOLS);
+      EffectiveToken, balance, equity, openPos, spreads, login, ccy,
+      broker_srv, EffectiveInstallation, term_build, EA_CLIENT_VERSION,
+      positions, EA_CLIENT_VERSION, BuildSymbolSpecsJson(),
+      BuildBrokerTimeJson(), CACHED_AVAILABLE_SYMBOLS);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 

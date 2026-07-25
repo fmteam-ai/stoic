@@ -632,7 +632,53 @@ async def agent_health(agent_id: str, user=Depends(get_current_user)):
 @router.get("/artifacts/manifest")
 async def artifacts_manifest():
     from vps_pathb import build_artifact_manifest
-    return build_artifact_manifest()
+    try:
+        return build_artifact_manifest()
+    except RuntimeError as e:
+        # iter-125 correction #3 — unsigned manifests are refused outright.
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@router.post("/agent/artifact-digest")
+async def report_artifact_digest(payload: dict):
+    """iter-125 correction #3 — installers report the SHA-256 digest of the
+    artifact they ACTUALLY deployed. The server compares it against the
+    CI-published hash so a tampered/locally-recompiled EX5 is detected."""
+    from vps_agent import agent_by_token
+    token = str(payload.get("agent_token") or "")
+    bridge_token = str(payload.get("bridge_token") or "")
+    db = get_db()
+    reporter = None
+    if token:
+        agent = await agent_by_token(db, token)
+        reporter = {"kind": "agent", "agent_id": str(agent["_id"])}
+    elif bridge_token:
+        acc = await db.accounts.find_one({"bridge_token": bridge_token})
+        if not acc:
+            raise HTTPException(status_code=401, detail="unknown bridge token")
+        reporter = {"kind": "installer", "account_id": str(acc["_id"])}
+    else:
+        raise HTTPException(status_code=401,
+                            detail="agent_token or bridge_token required")
+    name = str(payload.get("artifact") or "")
+    digest = str(payload.get("sha256") or "").lower()
+    if not name or not digest:
+        raise HTTPException(status_code=422,
+                            detail="artifact and sha256 are required")
+    from vps_pathb import build_artifact_manifest
+    try:
+        manifest = build_artifact_manifest()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    expected = next((a.get("sha256") for a in manifest["artifacts"]
+                     if a["name"] == name), None)
+    match = bool(expected) and expected.lower() == digest
+    await db.artifact_digests.insert_one({
+        **reporter, "artifact": name, "sha256": digest,
+        "expected_sha256": expected, "match": match,
+        "version": payload.get("version"),
+        "reported_at": datetime.now(timezone.utc).isoformat()})
+    return {"ok": True, "match": match, "expected_sha256": expected}
 
 
 @router.get("/broker-profiles")

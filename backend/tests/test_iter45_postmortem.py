@@ -61,7 +61,10 @@ def test_pattern_key_tolerates_missing():
 
 
 @pytest.mark.asyncio
-async def test_maybe_record_skips_when_existing():
+async def test_maybe_record_skips_when_existing(monkeypatch):
+    async def _tier(_uid):
+        return "elite_ai"  # Loss Lab is Trader+ — bypass the billing gate
+    monkeypatch.setattr("subscription_service.get_user_tier", _tier)
     db = MagicMock()
     tid = ObjectId()
     db.trades.find_one = AsyncMock(return_value={

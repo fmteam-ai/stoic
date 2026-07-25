@@ -15,6 +15,12 @@ import pytest
 import requests
 from unittest.mock import AsyncMock, MagicMock
 
+
+@pytest.fixture(autouse=True)
+def _market_always_open(monkeypatch):
+    """Cap-logic tests must not depend on the wall-clock trading session."""
+    monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
                           "https://stoic-trading.preview.emergentagent.com").rstrip("/")
 ADMIN_EMAIL = "admin@trading.bot"

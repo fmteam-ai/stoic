@@ -182,6 +182,37 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         }},
     )
 
+    # iter-125 correction #1 — the installer flow registers a VERIFIED
+    # installation identity too (one account → one installation → one
+    # terminal → one execution lease). EA v1.55 sends this id on every
+    # heartbeat; without it, heartbeats are telemetry-only.
+    import uuid as _uuid
+    now = datetime.now(timezone.utc)
+    installation_id = f"inst_{_uuid.uuid4().hex[:12]}"
+    account_id_str = str(account["_id"])
+    await db.installations.update_many(
+        {"account_id": account_id_str, "revoked": {"$ne": True}},
+        {"$set": {"revoked": True,
+                  "revoked_reason": "superseded by new installer pairing",
+                  "revoked_at": now}})
+    await db.installations.insert_one({
+        "installation_id": installation_id,
+        "user_id": account.get("user_id"),
+        "account_id": account_id_str,
+        "terminal_path": "installer",
+        "host_fingerprint": payload.hostname or "unknown-host",
+        "revoked": False, "created_at": now})
+    from vps_agent import LEASE_SECONDS
+    await db.execution_leases.update_one(
+        {"account_id": account_id_str},
+        {"$set": {"installation_id": installation_id,
+                  "user_id": account.get("user_id"), "revoked": False,
+                  "broker_server": account.get("server"),
+                  "account_number": account.get("account_number"),
+                  "acquired_at": now,
+                  "expires_at": now + timedelta(seconds=LEASE_SECONDS)}},
+        upsert=True)
+
     backend_base = os.environ.get(
         "PUBLIC_BACKEND_URL"
     ) or os.environ.get("REACT_APP_BACKEND_URL")
@@ -193,13 +224,14 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
 
     return {
         "bridge_token": account.get("bridge_token"),
+        "installation_id": installation_id,
         "account_label": account.get("label"),
         "broker": account.get("broker"),
         "account_number": account.get("account_number"),
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.54",
+        "ea_latest_version": "1.55",
     }
 
 

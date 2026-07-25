@@ -60,6 +60,13 @@ def _register_verified() -> tuple[str, requests.Session]:
     s = requests.Session()
     s.post(f"{BASE_URL}/api/auth/login",
            json={"email": email, "password": pw}, timeout=TIMEOUT)
+    # live test-trades sit behind the iter-122 tier gate — seed an active
+    # plan so the test exercises the trade path, not billing.
+    valid = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    _mongo().subscriptions.update_one(
+        {"user_id": uid},
+        {"$set": {"current_plan_id": "elite_ai_monthly", "valid_until": valid}},
+        upsert=True)
     return uid, s
 
 
@@ -77,17 +84,36 @@ def _add_live(sess: requests.Session, broker: str = "STARTRADER") -> str:
 def _seed_healthy_account(aid: str):
     """Make the account look freshly heartbeated with a tradeable symbol list
     so the test-trade endpoint doesn't refuse for unrelated reasons."""
+    acc = _mongo().accounts.find_one({"_id": ObjectId(aid)})
+    inst_id = f"inst_iter86_{uuid.uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc)
     _mongo().accounts.update_one(
         {"_id": ObjectId(aid)},
         {"$set": {
             "status": "connected",
-            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-            "ea_version": "1.40",
+            "last_heartbeat": now.isoformat(),
+            "ea_version": "1.55",
             "available_symbols": ["XAUUSD", "EURUSD", "BTCUSD"],
             "balance": 10000.0,
             "equity": 10000.0,
+            # iter-125 identity gate: live dispatch requires a verified
+            # installation identity holding the execution lease.
+            "ea_identity": {"installation_id": inst_id,
+                            "authoritative": True,
+                            "ea_version": "1.55",
+                            "verified_at": now.isoformat()},
         }},
     )
+    _mongo().installations.insert_one({
+        "installation_id": inst_id, "user_id": acc["user_id"],
+        "account_id": aid, "terminal_path": "C:/mt5",
+        "host_fingerprint": "iter86", "revoked": False, "created_at": now})
+    _mongo().execution_leases.update_one(
+        {"account_id": aid},
+        {"$set": {"installation_id": inst_id, "user_id": acc["user_id"],
+                  "revoked": False,
+                  "expires_at": now + timedelta(seconds=120)}},
+        upsert=True)
 
 
 @pytest.fixture

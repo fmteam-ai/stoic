@@ -3,7 +3,7 @@ live activation, risk raises, panic release, API-key creation. Plus the
 append-only security audit trail (db.audit_log, GET /api/auth/audit)."""
 import os as _os
 import sys as _sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import pyotp
 import requests
@@ -54,6 +54,13 @@ def _ensure_user():
         upsert=True)
     db.bot_configs.update_many({"user_id": uid}, {"$set": {"active": False}})
     db.api_keys.delete_many({"user_id": uid})  # avoid 10-key limit across runs
+    # api_access is gated to Professional+ (iter-122 tiers) — the step-up
+    # tests exercise the MFA gate BEHIND the tier gate.
+    valid = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    db.subscriptions.update_one(
+        {"user_id": uid},
+        {"$set": {"current_plan_id": "elite_ai_monthly", "valid_until": valid}},
+        upsert=True)
     return uid
 
 

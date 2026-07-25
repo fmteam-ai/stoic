@@ -79,6 +79,7 @@ function Install-Stoic {
     }
 
     $bridgeToken    = $claimResp.bridge_token
+    $installationId = $claimResp.installation_id
     $accountLabel   = $claimResp.account_label
     $broker         = $claimResp.broker
     $accountNumber  = $claimResp.account_number
@@ -145,6 +146,17 @@ function Install-Stoic {
 $bridgeToken
 "@ | Set-Content -Path $tokenFile -Encoding UTF8 -NoNewline:$false
 
+        # v1.55 — write the installation identity (EA sends it on every
+        # heartbeat; the server rejects lease renewal without it).
+        if ($installationId) {
+            $instFile = Join-Path $filesDir "STOIC-Installation.txt"
+            @"
+# STOIC installation id — proves WHICH EA install is talking.
+# Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
+$installationId
+"@ | Set-Content -Path $instFile -Encoding UTF8 -NoNewline:$false
+        }
+
         # Whitelist heartbeat URL in terminal.ini (WebRequest allow-list)
         $heartbeatHost = ([Uri]$heartbeatUrl).Scheme + "://" + ([Uri]$heartbeatUrl).Authority
         if (Test-Path $iniPath) {
@@ -165,7 +177,38 @@ $bridgeToken
         }
 
         # Compile via MetaEditor CLI (if found) — produces .ex5
+        # v1.55: PREFER the CI-built EX5 published by the release pipeline —
+        # download, verify SHA-256, report the digest back. Local MetaEditor
+        # compilation is the FALLBACK only (server returns 409 when no CI
+        # binary is published yet).
+        $ciEx5Deployed = $false
         if (-not $NoCompile) {
+            $ex5Dest = [System.IO.Path]::ChangeExtension($destMq5, ".ex5")
+            try {
+                $ex5Resp = Invoke-WebRequest -Uri "$ServerUrl/api/ea-script.ex5" -OutFile "$ex5Dest.tmp" -UseBasicParsing -PassThru
+                $expectedHash = $ex5Resp.Headers["X-STOIC-SHA256"]
+                $actualHash = (Get-FileHash "$ex5Dest.tmp" -Algorithm SHA256).Hash.ToLower()
+                if ($expectedHash -and $actualHash -eq $expectedHash.ToLower()) {
+                    Move-Item -Force "$ex5Dest.tmp" $ex5Dest
+                    $ciEx5Deployed = $true
+                    Write-Host "    ✓ $($t.Name)  →  CI-built .ex5 deployed (SHA-256 verified)" -ForegroundColor Green
+                    # Report the deployed digest back to the server.
+                    try {
+                        $digestBody = @{ bridge_token = $bridgeToken; artifact = "stoic-ea-ex5"; sha256 = $actualHash; version = $eaLatestVer } | ConvertTo-Json
+                        Invoke-RestMethod -Uri "$ServerUrl/api/infra/agent/artifact-digest" -Method Post -Body $digestBody -ContentType "application/json" | Out-Null
+                    } catch {
+                        Write-Host "    ⚠ digest report failed (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
+                    }
+                } else {
+                    Remove-Item -Force "$ex5Dest.tmp" -ErrorAction SilentlyContinue
+                    Write-Host "    ✗ CI .ex5 hash mismatch (expected $expectedHash, got $actualHash) — REFUSING to install it; falling back to local compile" -ForegroundColor Red
+                }
+            } catch {
+                Remove-Item -Force "$ex5Dest.tmp" -ErrorAction SilentlyContinue
+                Write-Host "    • No CI-built .ex5 published yet — falling back to local MetaEditor compile" -ForegroundColor DarkGray
+            }
+        }
+        if (-not $NoCompile -and -not $ciEx5Deployed) {
             $editor = $null
             foreach ($candidate in @(
                 "C:\Program Files\MetaTrader 5\metaeditor64.exe",

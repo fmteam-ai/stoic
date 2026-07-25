@@ -117,7 +117,8 @@ def test_replay_steps_include_decision(db):
 def test_chaos_drills_all_pass_and_persist(db):
     async def go():
         out = await run_drills(db)
-        assert out["total"] == 5
+        assert out["total"] == len(out["results"]) >= 5
+        assert out["passed"] == out["total"], out["results"]
         by = {r["drill"]: r for r in out["results"]}
         assert by["duplicate_order"]["passed"] is True
         assert by["volatility_shock"]["passed"] is True
@@ -125,7 +126,7 @@ def test_chaos_drills_all_pass_and_persist(db):
         assert by["db_recovery"]["passed"] is True
         assert by["broker_disconnect"]["passed"] is True
         doc = await db.chaos_drills.find_one({}, sort=[("at", -1)])
-        assert doc and doc["total"] == 5
+        assert doc and doc["total"] == out["total"]
         # synthetic residue cleaned up
         assert await db.broker_deals.count_documents(
             {"account_id": "chaos-drill"}) == 0

@@ -6,6 +6,9 @@ import string
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from identity_model import (authoritative_account_number,
+                            expected_broker_server)
+
 BOOTSTRAP_TTL_MIN = 20
 PAIRING_TTL_MIN = 10
 
@@ -294,8 +297,12 @@ async def claim_pairing_code(db, code: str, terminal: dict) -> dict:
             "bridge_token": new_token,
             "account_id": doc["account_id"],
             "bridge_endpoint": "/api/bridge",
-            "permitted_account": acc.get("account_number")
-            or acc.get("broker_account_id_reported"),
+            # iter-125 correction #2 — broker-reported identity outranks the
+            # user-entered account_number until verified_identity exists.
+            "permitted_account": (
+                (acc.get("verified_identity") or {}).get("account_number")
+                or acc.get("broker_account_id_reported")
+                or acc.get("account_number")),
             "lease_seconds": LEASE_SECONDS,
             "config_version": "current",
             "connected": False,
@@ -324,14 +331,18 @@ async def verify_heartbeat_identity(db, acc: dict, *, installation_id: str,
     if str(inst.get("account_id")) != account_id:
         return {"ok": False,
                 "reason": "installation is bound to a different account"}
-    configured_server = str(acc.get("server") or "").strip().lower()
+    configured_server = expected_broker_server(acc)
     if broker_server and configured_server:
-        rep = str(broker_server).strip().lower()
-        if configured_server not in rep and rep not in configured_server:
+        from broker_servers import servers_match
+        extra = [p.get("server_names") or []
+                 async for p in db.broker_profiles.find(
+                     {}, {"server_names": 1}).limit(200)]
+        if not servers_match(configured_server, broker_server, extra):
             return {"ok": False, "reason":
                     (f"broker server mismatch: EA reports '{broker_server}', "
-                     f"account is registered on '{acc.get('server')}'")}
-    configured_login = str(acc.get("account_number") or "").strip()
+                     f"account is registered on '{configured_server}' "
+                     "(exact alias-registry match required)")}
+    configured_login = str(authoritative_account_number(acc) or "").strip()
     if reported_login is not None and configured_login and \
             configured_login not in ("", "—") and \
             str(reported_login).strip() != configured_login:
@@ -349,14 +360,16 @@ async def verify_heartbeat_identity(db, acc: dict, *, installation_id: str,
 
 async def on_ea_heartbeat(db, acc: dict, reported_login=None,
                           installation_id: str | None = None,
-                          broker_server: str | None = None) -> None:
+                          broker_server: str | None = None,
+                          identity_verified: bool | None = None) -> None:
     """Bridge-heartbeat hook: renews the execution-owner lease and drives
     the deployment machine to READY_FOR_SHADOW only when the heartbeat
     matches the expected account (and server, from account config).
 
-    iter-122 Phase 3: when the EA reports an installation_id, the lease is
-    renewed ONLY for the lease-owning installation — a heartbeat from any
-    other installation can never steal or keep execution authority."""
+    iter-125 (correction #1) — identity is MANDATORY for authority:
+    a heartbeat WITHOUT a recognized installation_id NEVER renews the
+    execution lease (it may only update non-sensitive telemetry upstream).
+    The legacy sub-v1.55 renewal fallback is removed."""
     account_id = str(acc["_id"])
     now = datetime.now(timezone.utc)
     if installation_id:
@@ -378,22 +391,7 @@ async def on_ea_heartbeat(db, acc: dict, reported_login=None,
                           "expires_at": now + timedelta(
                               seconds=LEASE_SECONDS)}},
                 upsert=True)
-    else:
-        # Legacy EAs (< v1.55) — renew for the latest registered installation
-        inst = await db.installations.find_one(
-            {"account_id": account_id, "revoked": {"$ne": True}},
-            sort=[("created_at", -1)])
-        if inst:
-            await db.execution_leases.update_one(
-                {"account_id": account_id},
-                {"$set": {"installation_id": inst["installation_id"],
-                          "user_id": inst["user_id"], "revoked": False,
-                          "broker_server": acc.get("server"),
-                          "account_number": acc.get("account_number"),
-                          "renewed_at": now,
-                          "expires_at": now + timedelta(
-                              seconds=LEASE_SECONDS)}},
-                upsert=True)
+    # No installation_id → UNVERIFIED heartbeat → no lease renewal, ever.
     dep = await db.ea_deployments.find_one(
         {"account_id": account_id,
          "state": {"$nin": ["READY_FOR_SHADOW", "FAILED"]}},
@@ -401,15 +399,52 @@ async def on_ea_heartbeat(db, acc: dict, reported_login=None,
     if not dep:
         return
     await advance_ea_deployment(db, account_id, "EA_HEARTBEAT_RECEIVED")
+    # READY_FOR_SHADOW requires the FULL verified identity chain when the
+    # verification result is known; login/server facts alone no longer
+    # promote an unidentified heartbeat.
+    if identity_verified is False or not installation_id:
+        return
     exp_login = dep.get("expected_login")
     exp_server = dep.get("expected_server")
     login_ok = not exp_login or (
         reported_login is not None
         and str(reported_login) == str(exp_login))
-    server_ok = not exp_server or (
-        str(exp_server).lower() in str(acc.get("server") or "").lower())
+    from broker_servers import servers_match
+    server_ok = not exp_server or servers_match(
+        exp_server, broker_server or acc.get("server"))
     if login_ok and server_ok:
         await advance_ea_deployment(db, account_id,
                                     "BROKER_ACCOUNT_VERIFIED",
                                     f"login={reported_login}")
         await advance_ea_deployment(db, account_id, "READY_FOR_SHADOW")
+
+
+async def verify_execution_identity(db, account: dict):
+    """iter-125 — LIVE DISPATCH IDENTITY GATE.
+
+    A live trade may only be dispatched when the account's last heartbeat
+    carried a fully verified identity chain AND that installation currently
+    holds an unexpired, unrevoked execution lease. Paper accounts are
+    exempt. Returns None when allowed, else a blocked dict."""
+    if (account.get("mode") or "live").lower() == "paper":
+        return None
+    ident = account.get("ea_identity") or {}
+    if not ident.get("authoritative") or not ident.get("installation_id"):
+        last = ident.get("reason") or "no identity payload in heartbeat"
+        return {"blocked": "identity",
+                "reason": ("EA identity unverified — live trading requires "
+                           "EA v1.55+ with a paired installation_id "
+                           "(dashboard → Accounts → Pair terminal). "
+                           f"Last reason: {last}")}
+    lease = await db.execution_leases.find_one(
+        {"account_id": str(account["_id"])})
+    now = datetime.now(timezone.utc)
+    if (not lease or lease.get("revoked")
+            or lease.get("installation_id") != ident["installation_id"]
+            or (_aware(lease.get("expires_at")) or now) <= now):
+        return {"blocked": "identity",
+                "reason": ("installation does not hold a valid execution "
+                           "lease — heartbeat identity must verify to renew "
+                           "it (one account → one verified installation → "
+                           "one terminal → one lease)")}
+    return None

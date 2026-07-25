@@ -245,11 +245,12 @@ def test_unreachable_freezes_commands_and_opens_incident(db):
 
 # ─── artifacts + broker profiles + matrix ───────────────────────
 def test_artifact_manifest_has_real_ea_checksum(db):
+    from ea_version import current_ea_version
     m = build_artifact_manifest()
     ea = next(a for a in m["artifacts"] if a["name"] == "stoic-ea")
-    assert ea["version"] == "1.54"
+    assert ea["version"] == current_ea_version()
     assert ea["sha256"] and len(ea["sha256"]) == 64
-    assert ea["rollback_version"] == "1.53"
+    assert ea["rollback_version"] == "1.54"
 
 
 def test_broker_profiles_seeded(db):

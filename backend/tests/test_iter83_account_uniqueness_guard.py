@@ -73,6 +73,14 @@ def _register_verified() -> tuple[str, str, str, requests.Session]:
     login = s.post(f"{BASE_URL}/api/auth/login",
                    json={"email": email, "password": pw}, timeout=TIMEOUT)
     assert login.status_code == 200, login.text
+    # the uniqueness guard sits BEHIND the iter-122 account quota — seed an
+    # active plan so multiple live accounts are allowed.
+    from datetime import datetime, timedelta, timezone
+    valid = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    _mongo().subscriptions.update_one(
+        {"user_id": uid},
+        {"$set": {"current_plan_id": "elite_ai_monthly", "valid_until": valid}},
+        upsert=True)
     return email, pw, uid, s
 
 

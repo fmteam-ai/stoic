@@ -201,6 +201,30 @@ async def ea_script():
                         })
 
 
+@api_router.get("/ea-script.ex5")
+async def ea_binary():
+    """CI-built EX5 delivery (iter-125 correction #3). Installers deploy the
+    exact CI-compiled binary and verify its SHA-256 against the signed
+    artifact manifest — local MetaEditor recompiles are a fallback only."""
+    import hashlib as _hashlib
+    path = Path(__file__).parent / "static" / "EmergentTradingBridge.ex5"
+    if not path.exists():
+        return JSONResponse(status_code=409, content={
+            "error": "ex5_not_published",
+            "detail": ("No CI-built EX5 has been published to this server "
+                       "yet — the signed release pipeline uploads it to "
+                       "backend/static/EmergentTradingBridge.ex5. Installers "
+                       "fall back to local MetaEditor compilation.")})
+    digest = _hashlib.sha256(path.read_bytes()).hexdigest()
+    return FileResponse(path, media_type="application/octet-stream",
+                        filename="EmergentTradingBridge.ex5",
+                        headers={
+                            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                            "Pragma": "no-cache",
+                            "X-STOIC-SHA256": digest,
+                        })
+
+
 @api_router.get("/setup/installer.ps1")
 async def installer_script():
     """Serve the PowerShell auto-installer for MT5 hosts.
@@ -317,28 +341,48 @@ async def ws_endpoint(websocket: WebSocket):
     from security import _allowed_origins
     _allowed = _allowed_origins()
     _origin = (websocket.headers.get("origin") or "").rstrip("/")
-    if _allowed and _origin and _origin not in _allowed:
-        await websocket.close(code=4403)
+    # Same-origin upgrades are always trusted (the Origin host equals the
+    # request Host) — fixes WS 403s when the deployment URL isn't listed in
+    # CORS_ORIGINS (preview forks / custom domains). Cross-origin still
+    # requires an allowlist entry.
+    _host = (websocket.headers.get("host") or "").strip().lower()
+    _origin_host = _origin.split("://", 1)[-1].strip().lower()
+    _same_origin = bool(_host) and _origin_host == _host
+
+    async def _reject(code: int):
+        # Closing BEFORE accept() surfaces as an opaque HTTP 403 handshake
+        # error in browsers (the original "WS 403" bug). Accept first, then
+        # close with a meaningful app-level code (4401/4403) the frontend
+        # can distinguish and act on.
+        try:
+            await websocket.accept()
+        except Exception:  # noqa: BLE001
+            pass
+        await websocket.close(code=code)
+
+    if _allowed and _origin and not _same_origin \
+            and _origin not in _allowed:
+        await _reject(4403)
         return
     token = websocket.cookies.get("access_token")
     if not token and (os.environ.get("WS_ALLOW_QUERY_TOKEN", "false")
                       .lower() == "true"):
         token = websocket.query_params.get("token")
     if not token:
-        await websocket.close(code=4401)
+        await _reject(4401)
         return
     try:
         payload = decode_token(token)
         if payload.get("type") != "access":
-            await websocket.close(code=4401)
+            await _reject(4401)
             return
         user_id = payload["sub"]
         db = get_db()
         if not await db.users.find_one({"_id": ObjectId(user_id)}):
-            await websocket.close(code=4401)
+            await _reject(4401)
             return
     except Exception:
-        await websocket.close(code=4401)
+        await _reject(4401)
         return
 
     await ws_manager.connect(user_id, websocket)
@@ -453,6 +497,10 @@ async def on_startup():
         # Correction #4 — converge any config change journaled mid-crash.
         from config_promotion import repair_incomplete_promotions
         await repair_incomplete_promotions(get_db())
+        # iter-125 — identity structure backfill (display_name /
+        # expected_identity / verified_identity). Idempotent.
+        from identity_model import backfill_identity_structure
+        await backfill_identity_structure(get_db())
         from seed import dependency_health_check
         await dependency_health_check()
         logger.info("Startup: indexes ensured, admin seeded.")

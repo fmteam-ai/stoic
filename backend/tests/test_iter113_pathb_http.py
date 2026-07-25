@@ -310,9 +310,10 @@ def test_artifact_manifest_public():
     assert r.status_code == 200, r.text
     j = r.json()
     ea = next(a for a in j["artifacts"] if a["name"] == "stoic-ea")
-    assert ea["version"] == "1.54"
+    from ea_version import current_ea_version
+    assert ea["version"] == current_ea_version()
     assert len(ea["sha256"]) == 64
-    assert ea["rollback_version"] == "1.53"
+    assert ea["rollback_version"] == "1.54"
 
 
 def test_broker_profiles_seeded(sess):

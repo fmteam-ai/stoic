@@ -495,6 +495,14 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
     doc = {
         "user_id": user["id"],
         "label": payload.label,
+        # iter-125 identity structure — display_name is PRESENTATION ONLY;
+        # expected_identity is the user's registration claim; the
+        # verified_identity is stamped later by a verified EA heartbeat.
+        "display_name": payload.label,
+        "expected_identity": {
+            "account_number": payload.account_number,
+            "broker_server": "paper-virtual" if is_paper else payload.server,
+        },
         "broker": "INTERNAL_PAPER" if is_paper else payload.broker,
         "server": "paper-virtual" if is_paper else payload.server,
         "account_number": payload.account_number,
@@ -986,11 +994,15 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
         except Exception:
             pass
 
-    # Pick a base symbol the broker actually offers.
+    # Pick a base symbol the broker actually offers AND whose market is
+    # currently open (weekends: XAUUSD/EURUSD closed → falls to BTCUSD).
     from broker_symbol_detector import resolve_broker_symbol
+    from microstructure import is_market_closed
     available = account.get("available_symbols")
     chosen_base = None
     for candidate in ("XAUUSD", "BTCUSD", "EURUSD"):
+        if is_market_closed(candidate):
+            continue
         if resolve_broker_symbol(candidate, available, account.get("auto_detected_symbol_suffix") or ""):
             chosen_base = candidate
             break
@@ -998,7 +1010,7 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
         raise HTTPException(
             status_code=409,
             detail={"code": "no_tradeable_symbol",
-                    "message": "Broker's MarketWatch doesn't list XAUUSD, BTCUSD, or EURUSD. Add one in MT5 (right-click MarketWatch → Show All)."},
+                    "message": "No open-market symbol available right now — broker's MarketWatch must list XAUUSD, BTCUSD, or EURUSD (BTCUSD trades 24/7). Add one in MT5 (right-click MarketWatch → Show All)."},
         )
 
     # Fetch a live price so we can stamp entry/SL/TP on the signal — the

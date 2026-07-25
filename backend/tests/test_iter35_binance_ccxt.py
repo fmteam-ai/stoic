@@ -21,6 +21,15 @@ from crypto_bridge.binance_ccxt import (
 from crypto_bridge.binance_engine import BinanceCCXTEngine, _smart_route
 
 
+@pytest.fixture(autouse=True)
+def _bypass_dispatch_gates(monkeypatch):
+    """These are engine-mechanics tests — bypass the iter-122 entitlement
+    gate (billing) so blocks under test surface deterministically."""
+    async def _open(*a, **k):
+        return None
+    monkeypatch.setattr("entitlements.verify_execution_entitlement", _open)
+
+
 # ============================================================
 # Symbol normalization
 # ============================================================

@@ -158,9 +158,11 @@ class TestBotConfigAtomicUpdate:
             timeout=15)
 
 
-# ── #5 EA version = 1.54 ─────────────────────────────────────────
+# ── #5 EA version = latest ───────────────────────────────────────
 class TestEAVersion:
     def test_ea_version_154(self, admin_session):
+        from ea_version import current_ea_version
+        v = current_ea_version()
         # Try known setup/diagnostic endpoints
         candidates = [
             "/api/bot/health-score",
@@ -170,15 +172,15 @@ class TestEAVersion:
         found = False
         for path in candidates:
             r = admin_session.get(f"{BASE_URL}{path}", timeout=10)
-            if r.status_code == 200 and "1.54" in r.text:
+            if r.status_code == 200 and v in r.text:
                 found = True
                 break
         if not found:
             # fallback: look at bot health / any endpoint reporting ea_latest_version
             r = admin_session.get(f"{BASE_URL}/api/bot/health", timeout=10)
-            if r.status_code == 200 and "1.54" in r.text:
+            if r.status_code == 200 and v in r.text:
                 found = True
-        assert found, "no endpoint reports EA v1.54"
+        assert found, f"no endpoint reports EA v{v}"
 
 
 # ── #6 liveops regression ───────────────────────────────────────

@@ -91,6 +91,30 @@ async def heartbeat(payload: BridgeHeartbeat):
                       else (identity or {}).get("reason"),
             "verified_at": now_iso,
         }
+        # iter-125 correction #2 — a fully verified chain stamps the
+        # broker-REPORTED identity as the account's verified_identity.
+        if identity and identity["ok"]:
+            from identity_model import build_verified_identity
+            set_doc["verified_identity"] = build_verified_identity(
+                account_number=payload.account_login,
+                broker_server=payload.broker_server,
+                installation_id=payload.installation_id)
+    else:
+        # iter-125 correction #1 — EA v1.55+ MUST carry the identity block.
+        # A modern EA heartbeat without installation_id is UNVERIFIED:
+        # telemetry only, never authoritative.
+        ver = str(payload.ea_version or payload.client_version or "")
+        if ver >= "1.55":
+            set_doc["ea_identity"] = {
+                "installation_id": None,
+                "broker_server": payload.broker_server,
+                "terminal_build": payload.terminal_build,
+                "ea_version": ver,
+                "authoritative": False,
+                "reason": ("EA v1.55+ heartbeat missing installation_id — "
+                           "pair this terminal from the dashboard"),
+                "verified_at": now_iso,
+            }
     if payload.spreads:
         # Normalise keys + clamp to non-negative floats
         clean = {}
@@ -309,7 +333,9 @@ async def heartbeat(payload: BridgeHeartbeat):
         from vps_agent import on_ea_heartbeat
         await on_ea_heartbeat(db, acc, payload.account_login,
                               installation_id=payload.installation_id,
-                              broker_server=payload.broker_server)
+                              broker_server=payload.broker_server,
+                              identity_verified=(identity["ok"]
+                                                 if identity else None))
     except Exception as _dep_e:  # noqa: BLE001 — hook must never break HB
         record_swallow("bridge", "ea_deploy_hook", _dep_e)
 

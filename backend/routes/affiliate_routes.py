@@ -199,7 +199,7 @@ async def admin_process_payout(rid: str, user=Depends(get_current_user)):
         return {"ok": True, "id": rid, "warning": "affiliate balance not zeroed (id corrupt)"}
     await db.affiliates.update_one(
         {"_id": aff_oid},
-        {"$set": {"unpaid_balance_usd": 0.0}},
+        {"$set": {"unpaid_balance_usd": 0.0, "unpaid_balance_cents": 0}},
     )
     return {"ok": True, "id": rid}
 
@@ -301,8 +301,11 @@ async def admin_mark_paid(cid: str, user=Depends(get_current_user)):
     except Exception:
         logger.error("Corrupt affiliate_id in commission %s: %r", cid, doc.get("affiliate_id"))
         return {"ok": True, "warning": "affiliate balance not updated (id corrupt)"}
+    _cents = int(doc.get("commission_cents")
+                 or round(float(doc["commission_usd"]) * 100))
     await db.affiliates.update_one(
         {"_id": aff_oid},
-        {"$inc": {"unpaid_balance_usd": -float(doc["commission_usd"])}},
+        {"$inc": {"unpaid_balance_cents": -_cents,
+                  "unpaid_balance_usd": -(_cents / 100.0)}},
     )
     return {"ok": True}

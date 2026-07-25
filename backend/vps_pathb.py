@@ -460,12 +460,12 @@ def build_artifact_manifest() -> dict:
          "note": "token-personalised script — verify TLS + enrollment "
                  "code binding; signed MSI planned"},
         {"name": "stoic-ea", "type": "mq5", "version": ea_version,
-         "url": "/api/bot/ea/download", "sha256": _sha256_file(ea_path),
-         "rollback_version": "1.53"},
+         "url": "/api/ea-script", "sha256": _sha256_file(ea_path),
+         "rollback_version": "1.54"},
         {"name": "stoic-ea-ex5", "type": "ex5", "version": ea_version,
-         "url": None, "sha256": _sha256_file(ea_path.replace(".mq5",
-                                                             ".ex5")),
-         "rollback_version": "1.53",
+         "url": "/api/ea-script.ex5",
+         "sha256": _sha256_file(ea_path.replace(".mq5", ".ex5")),
+         "rollback_version": "1.54",
          "note": "installers MUST deploy the exact CI-compiled, "
                  "hash-verified .ex5 — never recompile .mq5 locally. "
                  "Published by the signed release pipeline."},
@@ -477,19 +477,25 @@ def build_artifact_manifest() -> dict:
                        "roll back automatically when a new artifact fails "
                        "hash/signature verification or health checks",
        }}
-    # iter-122 Phase 3 — signed manifest: HMAC-SHA256 over the canonical
-    # JSON body with the server-held AGENT_SIGNING_KEY. Agents pin the key
-    # at enrollment and refuse unsigned/invalid manifests.
+    # iter-125 correction #3 — signing is MANDATORY. A manifest without a
+    # signature would let agents install unsigned/compromised artifacts, so
+    # a missing AGENT_SIGNING_KEY is a hard configuration error, never a
+    # silent null signature.
     import hmac as _hmac
     import json as _json
     key = os.environ.get("AGENT_SIGNING_KEY", "")
+    if not key:
+        raise RuntimeError(
+            "AGENT_SIGNING_KEY is not configured — refusing to emit an "
+            "UNSIGNED artifact manifest. Set AGENT_SIGNING_KEY in the "
+            "backend environment.")
     body = _json.dumps({k: manifest[k] for k in ("artifacts", "update_policy")},
                        sort_keys=True, separators=(",", ":"),
                        default=str).encode()
     manifest["signature"] = {
         "alg": "HMAC-SHA256", "key_id": "stoic-server-v1",
         "value": _hmac.new(key.encode(), body,
-                           hashlib.sha256).hexdigest() if key else None,
+                           hashlib.sha256).hexdigest(),
         "signed_fields": ["artifacts", "update_policy"],
     }
     return manifest

@@ -198,6 +198,12 @@ async def test_mt5_engine_calls_guardian_and_blocks_on_failure(monkeypatch):
     fake_db.trades.insert_one = AsyncMock()
     fake_db.safety_blocks.insert_one = AsyncMock()
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+        return None
+    monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+    monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+    monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+
 
     async def fake_audit(**kw):  # noqa: ARG001
         return {"ok": False, "blocked_by": "per_trade_risk_cap",
@@ -230,6 +236,12 @@ async def test_mt5_engine_stamps_safety_audit_on_good_trade(monkeypatch):
     inserted.inserted_id = "tid"
     fake_db.trades.insert_one = AsyncMock(return_value=inserted)
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+        return None
+    monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+    monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+    monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+
     monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
 
     fake_audit = {"ok": True, "blocked_by": None,

@@ -393,6 +393,44 @@ class TestTradeBridge:
 
         assert sig.get("action") in ("BUY", "SELL"), f"Expected non-HOLD signal, got {sig.get('action')}"
 
+        # Live dispatch prerequisites: fresh equity snapshot (sizing), an
+        # active plan (iter-122 entitlement gate) and a verified installation
+        # holding the execution lease (iter-125 identity gate).
+        hb = requests.post(f"{API}/bridge/heartbeat", json={
+            "bridge_token": acc["bridge_token"],
+            "balance": 10000.0, "equity": 10000.0, "open_positions": 0,
+        }, timeout=10)
+        assert hb.status_code == 200, hb.text
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        from bson import ObjectId
+        from helpers import mongo_db
+        _db = mongo_db()
+        me = s.get(f"{API}/auth/me", timeout=10).json()
+        _now = _dt.now(_tz.utc)
+        _db.subscriptions.update_one(
+            {"user_id": me["id"]},
+            {"$set": {"current_plan_id": "elite_ai_monthly",
+                      "valid_until": (_now + _td(days=30)).isoformat()}},
+            upsert=True)
+        inst_id = f"inst_bt_{uuid.uuid4().hex[:8]}"
+        _db.accounts.update_one(
+            {"_id": ObjectId(acc["id"])},
+            {"$set": {"ea_identity": {"installation_id": inst_id,
+                                      "authoritative": True,
+                                      "ea_version": "1.55",
+                                      "verified_at": _now.isoformat()}}})
+        _db.installations.insert_one({
+            "installation_id": inst_id, "user_id": me["id"],
+            "account_id": acc["id"], "terminal_path": "C:/mt5",
+            "host_fingerprint": "backend-test", "revoked": False,
+            "created_at": _now})
+        _db.execution_leases.update_one(
+            {"account_id": acc["id"]},
+            {"$set": {"installation_id": inst_id, "user_id": me["id"],
+                      "revoked": False,
+                      "expires_at": _now + _td(seconds=120)}},
+            upsert=True)
+
         # Execute trade
         r = s.post(f"{API}/trades/execute/{sig['id']}", json={"account_id": acc["id"]}, timeout=15)
         assert r.status_code == 200, r.text
@@ -533,8 +571,16 @@ class TestWebSocket:
 
         async def run():
             try:
-                async with websockets.connect(self._ws_url(), open_timeout=10) as _:
-                    return "connected_unexpectedly"
+                async with websockets.connect(self._ws_url(), open_timeout=10) as ws:
+                    # iter-125: the server ACCEPTS then immediately closes
+                    # with 4401/4403 (close-before-accept surfaced as an
+                    # opaque HTTP 403 in browsers). A connection only counts
+                    # as accepted if it actually delivers the welcome frame.
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=5)
+                        return f"connected_unexpectedly:{msg[:40]}"
+                    except websockets.exceptions.ConnectionClosed as e:
+                        return f"closed:{e.rcvd.code if e.rcvd else None}"
             except websockets.exceptions.InvalidStatus as e:
                 # HTTP-level rejection (e.g., 403) is also acceptable as "rejected"
                 return f"http_reject:{e.response.status_code}"
@@ -545,8 +591,11 @@ class TestWebSocket:
 
         result = asyncio.run(run())
         # Either close-code 4401 OR an HTTP-level reject is acceptable; what we
-        # must NOT see is a fully successful connection.
-        assert result != "connected_unexpectedly", f"WS accepted unauth connection: {result}"
+        # must NOT see is a connection that stays open and serves events.
+        assert not result.startswith("connected_unexpectedly"), \
+            f"WS accepted unauth connection: {result}"
+        if result.startswith("closed:"):
+            assert result in ("closed:4401", "closed:4403"), result
 
     def test_ws_accepts_with_token_and_emits_connected(self, admin_session):
         """Query-string tokens are DISABLED by default (they leak through

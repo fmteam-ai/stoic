@@ -16,6 +16,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 
 
+@pytest.fixture(autouse=True)
+def _bypass_dispatch_gates(monkeypatch):
+    """Engine-mechanics tests — bypass the iter-122 entitlement gate."""
+    async def _open(*a, **k):
+        return None
+    monkeypatch.setattr("entitlements.verify_execution_entitlement", _open)
+
+
 # =========================================================
 # CHEAP HOLD pre-filter — shape sanity (the response keys must match what UI expects)
 # =========================================================

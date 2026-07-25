@@ -52,8 +52,9 @@ class TestScalpApi:
         email = f"TEST_scalp_{uuid.uuid4().hex[:6]}@example.com"
         s.post(f"{api}/auth/register", json={"terms_agreed": True, "email": email,
                                              "password": "Vq7#Xn4bT8wKm2Ye"}, timeout=15)
-        from helpers import mark_email_verified
+        from helpers import mark_email_verified, make_elite
         mark_email_verified(email)
+        make_elite(email)  # starter caps at 1 account; e2e needs a 2nd
         s.post(f"{api}/auth/login", json={"email": email, "password": "Vq7#Xn4bT8wKm2Ye"},
                timeout=30)
         acc = s.post(f"{api}/accounts", json={

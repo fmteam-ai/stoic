@@ -108,7 +108,7 @@ class TestRiskBudget:
                      "strategy_class": "breakout", "pnl": -25.0,
                      "closed_at": closed, "opened_at": closed,
                      "symbol": "EURUSD", "label": "TEST_iter85"}
-                    for _ in range(20)]
+                    for _ in range(40)]  # rl_allocator needs ≥30 for authority
             ids = (await db.trades.insert_many(docs)).inserted_ids
             try:
                 st = await budget_status(db, UID, {})

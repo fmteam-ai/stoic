@@ -154,7 +154,7 @@ def test_state_machine_full_ladder(db):
                                       expected_server="Test-Live01")
         dep = await db.ea_deployments.find_one({"account_id": aid})
         assert dep["state"] == "TOKEN_ISSUED"
-        await claim_pairing_code(db, p["code"], TERM)
+        claim = await claim_pairing_code(db, p["code"], TERM)
         dep = await db.ea_deployments.find_one({"account_id": aid})
         assert dep["state"] == "TERMINAL_SELECTED"
         await advance_ea_deployment(db, aid, "ARTIFACT_VERIFIED")
@@ -163,10 +163,24 @@ def test_state_machine_full_ladder(db):
         await advance_ea_deployment(db, aid, "HOST_INSPECTED")
         dep = await db.ea_deployments.find_one({"account_id": aid})
         assert dep["state"] == "EA_INSTALLED"
-        # heartbeat from expected account/server → READY_FOR_SHADOW
         from bson import ObjectId
         acc = await db.accounts.find_one({"_id": ObjectId(aid)})
+        # iter-125 — an UNIDENTIFIED heartbeat (no installation_id) never
+        # promotes past EA_HEARTBEAT_RECEIVED and never renews the lease.
+        await db.execution_leases.update_one(
+            {"account_id": aid}, {"$set": {"revoked": True}})
         await on_ea_heartbeat(db, acc, reported_login="10001")
+        dep = await db.ea_deployments.find_one({"account_id": aid})
+        assert dep["state"] == "EA_HEARTBEAT_RECEIVED"
+        lease = await db.execution_leases.find_one({"account_id": aid})
+        assert lease["revoked"] is True  # NOT renewed without identity
+        await db.execution_leases.update_one(
+            {"account_id": aid}, {"$set": {"revoked": False}})
+        # verified heartbeat (with the claimed installation) → READY
+        await on_ea_heartbeat(db, acc, reported_login="10001",
+                              installation_id=claim["installation_id"],
+                              broker_server="Test-Live01",
+                              identity_verified=True)
         dep = await db.ea_deployments.find_one({"account_id": aid})
         assert dep["state"] == "READY_FOR_SHADOW"
         states = [s["state"] for s in dep["state_history"]]

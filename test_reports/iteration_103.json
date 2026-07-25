@@ -1,0 +1,28 @@
+{
+  "summary": "iter-125 identity-corrections verification: wrote /app/backend/tests/test_iter103_identity_regression.py (12 HTTP+WS+DB tests) — all 12 PASS. Covers admin login/me, WS accept-with-cookie & 4401-without, /api/infra/artifacts/manifest signed with stoic-ea + stoic-ea-ex5 entries, /api/ea-script.ex5 409 ex5_not_published, /api/infra/agent/artifact-digest 401-without-token + 200 match=false, unidentified heartbeat never renews execution lease, account create stamps display_name+expected_identity, /api/ea-script v1.55 markers, installer.ps1 STOIC-Installation+X-STOIC-SHA256+artifact-digest, and live test-trade identity gate blocks with detail.code='identity' then unblocks once ea_identity/installation/lease seeded. Frontend WS smoke: dashboard loads after admin login with zero WS 403/401 or 4401 console errors.",
+  "pytest_results": {
+    "iter103": "12/12 passed in 6.34s -> /app/test_reports/pytest/iter103.xml"
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter103_identity_regression.py",
+    "/app/test_reports/pytest/iter103.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [
+    "/app/backend/tests/test_iter103_identity_regression.py",
+    "/app/docs/TEST_MANIFEST.md (regenerated via scripts/generate_test_manifest.py -> 2898 tests)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100% (WS smoke only)"},
+  "test_credentials": "admin@trading.bot / admin123 (see /app/memory/test_credentials.md). Fresh users registered per test with terms_agreed=true and email_verified flipped in Mongo; elite_ai_monthly subscription seeded for identity-gate account.",
+  "seed_data_creation": "Per-test fresh users (iter103_<hex>@example.com), transient live accounts with STARTRADER/IC-Markets brokers, transient installations + execution_leases docs — all cleaned up by fixture teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter-125 identity corrections are fully verified end-to-end at the HTTP+WS+DB layer. WS test uses websockets.sync.client with a Cookie header (access_token=<jwt>) — same-origin cookie auth works; anonymous connect surfaces as 4401 accept-then-close (NOT opaque HTTP 403). Manifest endpoint is public (no auth), digest endpoint accepts bridge_token in JSON body. Identity gate reason surfaces at HTTP as detail.code='identity' with detail.context.blocked='identity'. Frontend WS establishes cleanly for authed sessions; only benign pre-auth 401s appear before login."
+}
