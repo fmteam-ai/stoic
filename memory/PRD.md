@@ -447,6 +447,20 @@ Works with any Windows Forex VPS. Backend `vps_pathb.py` + /api/infra extensions
 - UI: InfraWizard Path B form (pathb-*) + result (enrollment-code, pathb-command); Infrastructure page: PathBStatusLadder + DiscoveredTerminals (CLONE SAFE/MANAGE/LEAVE UNMANAGED) per existing_vps deployment, AgentHealthCard (queue commands, frozen/drift banners), FailureMatrixCard; deployment rows show meta.label.
 - Tests: test_iter113_pathb.py (18) + test_iter113_pathb_http.py (24, testing agent). iteration_98.json 100%/100%. Manifest → **2,788 tests / 263 files**.
 
+## Iter-114 (2026-07-25) — Pairing/Installer Hardening (iteration_99.json 100%, 26/26)
+Six critical corrections (user list; strict rotate-on-re-pair chosen):
+1. **One account ↔ one installation ↔ one terminal ↔ one host** — claim requires {terminal_path, host_fingerprint} (400 otherwise); creates `installations` identity; `install_ea` commands require explicit terminal_path+account_ref (never blanket-deploy a token).
+2. **Atomic claim** — single `find_one_and_update` on {code_digest, consumed_at:None, expires_at>now}; 8-way concurrency test: exactly one winner.
+3. **Digest-only pairing codes** — SHA-256 `code_digest` stored, plaintext shown once at creation.
+4. **No irm|iex** — quick command removed; only verified download→checksum→run flow. Manifest adds `stoic-ea-ex5` (CI-compiled, never recompile locally).
+5. **EA deployment state machine** — `ea_deployments`: TOKEN_ISSUED→TOKEN_CLAIMED→HOST_INSPECTED→TERMINAL_SELECTED→ARTIFACT_VERIFIED→EA_INSTALLED→EA_HEARTBEAT_RECEIVED→BROKER_ACCOUNT_VERIFIED→READY_FOR_SHADOW/FAILED (forward-only via advance_ea_deployment; agents may only report HOST_INSPECTED/ARTIFACT_VERIFIED/EA_INSTALLED/FAILED via POST /infra/ea-deploy/progress). "Connected" ONLY when state READY_FOR_SHADOW **and** lease active — driven by `on_ea_heartbeat` hook in bridge_routes (~L282, swallow-safe) verifying expected_login (+server from account doc). Wrong login stalls at EA_HEARTBEAT_RECEIVED.
+6. **Execution-owner lease** — `execution_leases` (20s, renewed each EA heartbeat). Re-pair blocked 409 while lease active unless revoke_existing:true (revokes old installation); successful claim ROTATES accounts.bridge_token (old terminal cut off instantly).
+- Endpoints: /infra/pairing (expected_login/server, revoke_existing), /infra/pairing/claim (terminal binding), GET /infra/ea-deployments (ladder + connected + execution_owner + lease_active), POST /infra/ea-deploy/progress.
+- UI: EaDeploymentsCard on /infrastructure (ea-deployments-card, 9-chip ladder, "CONNECTED ONLY AFTER A VERIFIED HEARTBEAT", owner + lease badge).
+- ⚠️ TESTING GOTCHA: pairing claim ROTATES the account bridge_token — NEVER pair a real admin account in tests; mint synthetic accounts via pymongo.
+- Tests: test_iter114_pairing_hardening.py (13) + test_iter114_pairing_http.py (13, testing agent; pymongo-sync pattern for DB asserts). iteration_99.json 100%/100%. Updated iter-112 pairing tests to hardened API. Manifest → **2,814 tests / 265 files**.
+- Backlog (tester notes, P2): typed error for 400/401 claim mapping; lease host_fingerprint pinning on renewal (defense-in-depth); signed URL for .ex5 when CI artifact becomes downloadable.
+
 
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
 
