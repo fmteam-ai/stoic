@@ -164,6 +164,9 @@ async def score_account(db, account: dict) -> dict:
     score = round(acc / total_w, 1) if total_w > 0 else None
     provisional = len(filled) < 3 or total_w < 0.5
     return {"account_id": acc_id, "label": account.get("label"),
+            "account_number": (account.get("broker_account_id_reported")
+                               or account.get("account_number")),
+            "broker_server": account.get("server"),
             "broker": account.get("broker") or account.get("server"),
             "score": score, "provisional": provisional,
             "fills_measured": len(filled), "components": components,

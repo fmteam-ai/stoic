@@ -228,10 +228,20 @@ async def promotion_gate(db, user_id: str, account_id: str | None,
             res = await score_account(db, acc)
             c = certify(res["score"], res["provisional"],
                         res["fills_measured"])
-            certs.append({"account": res["label"], "tier": c["tier"],
+            certs.append({"account": (res.get("account_number")
+                                      or res["label"]),
+                          "account_label": res["label"],
+                          "account_id": res["account_id"],
+                          "account_number": res.get("account_number"),
+                          "broker_server": res.get("broker_server"),
+                          "tier": c["tier"],
                           "detail": c.get("detail"),
                           "fills_measured": res["fills_measured"]})
-        ea.append({"account": acc.get("label"),
+        ea.append({"account": (acc.get("broker_account_id_reported")
+                               or acc.get("account_number")
+                               or acc.get("label")),
+                   "account_label": acc.get("label"),
+                   "account_id": str(acc["_id"]),
                    "ea_version": acc.get("ea_version"),
                    "last_heartbeat": str(acc.get("last_heartbeat") or "")})
     verdict = evaluate_promotion(target_mode, certs)

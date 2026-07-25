@@ -294,8 +294,8 @@ async def claim_pairing_code(db, code: str, terminal: dict) -> dict:
             "bridge_token": new_token,
             "account_id": doc["account_id"],
             "bridge_endpoint": "/api/bridge",
-            "permitted_account": acc.get("broker_account_id_reported")
-            or acc.get("label"),
+            "permitted_account": acc.get("account_number")
+            or acc.get("broker_account_id_reported"),
             "lease_seconds": LEASE_SECONDS,
             "config_version": "current",
             "connected": False,

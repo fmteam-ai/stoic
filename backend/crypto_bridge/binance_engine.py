@@ -215,6 +215,11 @@ class BinanceCCXTEngine(ExecutionEngine):
             "error": None,
             "origin": signal.get("origin", "manual"),
             "source": "binance",
+            "broker_identity": {
+                "exchange_id": account.get("exchange_id") or "binance",
+                "api_key_fingerprint": account.get("api_key_fingerprint"),
+                "account_number": account.get("account_number"),
+            },
             "partial_closed": False,
             "breakeven_set": False,
             "trail_active": False,

@@ -18,6 +18,20 @@ from silent_failures import record_swallow
 logger = logging.getLogger("execution")
 
 
+def broker_identity_snapshot(account: dict) -> dict:
+    """Identity rule (iter-124): user-entered labels are presentation-only.
+    Every trade record stamps the broker-VERIFIED identity at open time so
+    reconciliation, auditing and affiliate/risk attribution survive account
+    renames, label collisions and even account-doc deletion."""
+    return {
+        "account_number": (account.get("broker_account_id_reported")
+                           or account.get("account_number")),
+        "broker_server": account.get("server"),
+        "broker": account.get("broker"),
+        "installation_id": (account.get("ea_identity") or {}).get("installation_id"),
+    }
+
+
 class ExecutionEngine(ABC):
     @abstractmethod
     async def execute(self, *, user_id, account, signal,
@@ -258,6 +272,7 @@ class MT5BridgeEngine(ExecutionEngine):
             "status": "pending",
             "mode": "live",
             "broker": account.get("broker", "MT5"),
+            "broker_identity": broker_identity_snapshot(account),
             "mt5_ticket": None,
             "opened_at": datetime.now(timezone.utc).isoformat(),
             "closed_at": None,
@@ -351,6 +366,7 @@ class PaperEngine(ExecutionEngine):
             "status": "open",
             "mode": "paper",
             "broker": "INTERNAL_PAPER",
+            "broker_identity": broker_identity_snapshot(account),
             "mt5_ticket": None,
             "opened_at": datetime.now(timezone.utc).isoformat(),
             "closed_at": None,

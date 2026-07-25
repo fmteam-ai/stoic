@@ -1348,3 +1348,11 @@ User-approved decisions: PREPAID model (no auto-renewals, marketing matches); up
 - register_agent issues command_key; queue_command: monotonic seq ($inc) + HMAC-SHA256 sig; ack replay rejection (last_acked_seq). Signed artifact manifest (env AGENT_SIGNING_KEY, HMAC over artifacts+update_policy) + rollback policy. Endpoints: POST /infra/agents/{id}/rotate-credentials, POST /infra/installations/{id}/revoke (kills lease + rotates bridge token). mTLS/signed MSI documented as deploy-time PKI prerequisites.
 Tests: test_iter122_billing.py (11), test_iter122b_enforcement.py (9), test_iter122c_vps_trust.py (5), testing agent test_iter123_e2e.py (10). Manifest → 2,866 tests / 270 files. iteration_101: 100%.
 Note (pre-existing, tracked): /api/ws 403 WebSocket handshake + 3x 401 on dashboard console — upstream ingress, predates these changes.
+
+## Iter-124 (2026-07-25) — Identity rule codified codebase-wide (3 new tests, regression green)
+Rule: user-entered labels = presentation only; broker-verified identity (account_number + broker_server + terminal_build + installation_id) = authoritative. Documented in /app/docs/IDENTITY_MODEL.md.
+- execution.broker_identity_snapshot(): every trade (MT5 live, paper, binance) stamps immutable broker identity at open (reported login wins over user-typed). 
+- vps_agent claim response permitted_account = account_number (never label).
+- broker_intel.score_account + operational_modes promotion evidence carry account_id/account_number/broker_server; label demoted to account_label (display).
+- Tests: test_iter124_identity_rule.py (3). Manifest → 2,869 tests / 271 files.
+- KNOWN (pre-existing): test_iter111_corrections.py::test_promotion_gate_blocks_during_recovery is order-dependent (needs earlier test in same file to seed demotion doc) — passes in file order/CI, fails standalone. Not fixed (out of scope).
