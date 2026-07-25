@@ -12,7 +12,7 @@ export function ShadowHealthCard() {
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="shadow-health-card">
             <div className="flex items-center gap-3 mb-2">
                 <span className="font-mono text-[10px] text-[#52525B] tracking-widest">SHADOW HEALTH · PROMOTION GATE</span>
-                <span className={`font-mono text-2xl ${scoreCls(h.overall)}`} data-testid="shadow-health-overall">{h.overall ?? "—"}</span>
+                <span className={`font-mono text-2xl ${scoreCls(h.overall)}`} data-testid="shadow-health-overall">{h.overall != null ? h.overall : "—"}</span>
                 <span className={`ml-auto font-mono text-[10px] px-2 py-0.5 border ${h.promotions_paused ? "text-[#FF3B30] border-[#FF3B30]/40" : "text-[#00FF41] border-[#00FF41]/40"}`}
                     data-testid="shadow-health-verdict">
                     {h.promotions_paused ? `PROMOTIONS PAUSED (< ${h.threshold})` : "PROMOTIONS OPEN"}

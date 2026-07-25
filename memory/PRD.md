@@ -387,7 +387,17 @@ User's 6-point correction list, all delivered:
 6. **Requirements split**: /app/backend/requirements/{api,workers,research,llm,maintenance}.txt layered manifests constrained by the master lockfile (`pip install -c ../requirements.txt -r api.txt`); root requirements.txt untouched (preview/CI/Docker unaffected). README documents unused heavy deps (pandas/matplotlib/plotly/litellm/openai/boto3/stripe direct) as cleanup candidates.
 - Manifest → **2,644 tests / 252 files**. Note for future tests: conftest auto-injects X-Step-Up-Bypass; set header '' to exercise the real step-up gate.
 
+## Iter-105 (2026-07-25) — Phase 1 "Shadow Readiness" DONE (iteration_94.json 100%)
+User began a 4-phase roadmap ("complete phases 1 to 4, starting with Phase 1" — ONLY Phase 1 spec provided so far; ask for Phase 2-4 specs next). Phase 1 delivered:
+- **1.1 Decision Validation Framework** — `decision_validation.py::four_verdicts` (AI / deterministic / risk / execution verdicts, abstain-approve on missing data); stamped as `execution.validation_quorum` on every executed decision (bot_runner ~L2090); `quorum_stats` audit → GET /api/shadow/validation (total=0 until new executions — expected).
+- **1.2 Continuous Shadow Benchmark** — `shadow_benchmark.py`: variants current_production (executed R; risk_amount fallback = median |losing pnl| ≈1R proxy since live trades lack risk_amount), previous_production (legacy strategy_version trades), experimental_ai (production + conf≥70 intercepts replayed), rule_baseline (all intercepts replayed). Metrics EV/WR/PF/maxDD + FP/FN rates. GET /api/shadow/benchmark. Live: production −0.02R EV vs experimental −0.56R, baseline −0.21R → gates verifiably add value.
+- **1.3 Twin Stress Lab** — `twin_stress.py`: 6 R-level scenarios (latency_spike −0.05R, delayed_fill winners×0.9, spread_explosion −0.12R, liquidity_drop ×0.5, broker_outage drop every 5th, market_gap losers×1.3). GET /api/twin/stress.
+- **1.4 Shadow Health Score** — `shadow_health.py`: 7 components (data_freshness, regime_confidence, calibration_quality, execution_quality, broker_stability, worker_health, synchronization), THRESHOLD=60; `promotion_gate` (operational_modes) now blocks LIVE_MODES promotions when paused + evidence.shadow_health. Preview overall ~47 paused=true (workers not running in preview — expected).
+- UI: ShadowReadinessPanels.jsx (4 panels) atop /shadow-performance. Tests: test_iter105_shadow_readiness.py (7) + _http.py (6, by testing agent). Manifest → **2,657 tests / 254 files**.
+- KNOWN PRE-EXISTING: wss://…/api/ws 403 handshake noise on all pages (ingress) — candidate future fix.
+
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
+
 
 
 
