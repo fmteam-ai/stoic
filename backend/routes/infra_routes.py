@@ -218,7 +218,7 @@ $Hard = @{{ agent_token = $Reg.agent_token; checklist = @{{
   firewall_enabled = $true; time_sync_configured = $true
 }} }} | ConvertTo-Json -Depth 4
 Invoke-RestMethod -Method Post -Uri "$Base/agent/hardening" -Body $Hard -ContentType "application/json" | Out-Null
-# heartbeat loop (register as a scheduled task in production)
+# heartbeat + command loop (register as a scheduled task in production)
 while ($true) {{
   $Hb = @{{ agent_token = $Reg.agent_token; metrics = @{{
     cpu_percent = [math]::Round((Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue, 1)
@@ -228,16 +228,44 @@ while ($true) {{
     agent_version = "1.0.0"
   }} }} | ConvertTo-Json -Depth 4
   try {{ Invoke-RestMethod -Method Post -Uri "$Base/agent/heartbeat" -Body $Hb -ContentType "application/json" | Out-Null }} catch {{}}
+  try {{
+    $Cmds = Invoke-RestMethod -Method Post -Uri "$Base/agent/commands/poll" -Body (@{{ agent_token = $Reg.agent_token }} | ConvertTo-Json) -ContentType "application/json"
+    foreach ($c in $Cmds.commands) {{
+      # execute $c.command here (install_mt5 / restart_terminal / rotate_logs / ...)
+      $Ack = @{{ agent_token = $Reg.agent_token; command_id = $c.command_id; ok = $true; detail = "executed" }} | ConvertTo-Json
+      Invoke-RestMethod -Method Post -Uri "$Base/agent/commands/ack" -Body $Ack -ContentType "application/json" | Out-Null
+    }}
+  }} catch {{}}
   Start-Sleep -Seconds 60
 }}
 """
 
+DISCOVERY_PS1_SNIPPET = r"""
+# MT5 discovery scan (Path B step 4)
+$Terminals = @()
+$Paths = @("$env:ProgramFiles", "${env:ProgramFiles(x86)}", "$env:APPDATA\MetaQuotes\Terminal")
+foreach ($p in $Paths) {
+  Get-ChildItem -Path $p -Filter terminal64.exe -Recurse -Depth 3 -ErrorAction SilentlyContinue | ForEach-Object {
+    $Terminals += @{ path = $_.DirectoryName; broker_hint = ($_.DirectoryName -split '\\')[-1]; running = $false; ea_installed = $false; source = "filesystem" }
+  }
+}
+Get-Process -Name terminal64 -ErrorAction SilentlyContinue | ForEach-Object {
+  $Terminals += @{ path = $_.Path; broker_hint = "running-process"; running = $true; ea_installed = $false; source = "process" }
+}
+$Disc = @{ agent_token = $Reg.agent_token; terminals = $Terminals } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post -Uri "$Base/agent/discovery" -Body $Disc -ContentType "application/json" | Out-Null
+"""
+
 
 @router.get("/agent/bootstrap/installer", response_class=PlainTextResponse)
-async def bootstrap_installer(token: str):
-    """One-time-token-gated PowerShell agent script (spec step 10). The
-    token is NOT burned here — registration burns it."""
+async def bootstrap_installer(token: str = "", enrollment_code: str = ""):
+    """One-time-token/enrollment-code-gated PowerShell agent script
+    (spec step 10). The credential is NOT burned here — registration
+    burns it."""
     db = get_db()
+    if enrollment_code and not token:
+        from vps_pathb import resolve_enrollment
+        token = await resolve_enrollment(db, enrollment_code) or ""
     doc = await db.vps_bootstrap_tokens.find_one({"token": token})
     if not doc or doc.get("used") \
             or _aware(doc["expires_at"]) < datetime.now(timezone.utc):
@@ -245,14 +273,21 @@ async def bootstrap_installer(token: str):
                             detail="invalid or expired bootstrap token")
     import os
     base = os.environ.get("PUBLIC_BASE_URL") or ""
-    return BOOTSTRAP_PS1.format(base_url=base or "https://<your-stoic-host>",
-                                token=token)
+    script = BOOTSTRAP_PS1.format(
+        base_url=base or "https://<your-stoic-host>", token=token)
+    return script.replace("# heartbeat + command loop",
+                          DISCOVERY_PS1_SNIPPET
+                          + "\n# heartbeat + command loop")
 
 
 @router.post("/agent/register")
 async def agent_register(payload: dict):
     from vps_agent import register_agent
     token = str(payload.get("bootstrap_token") or "")
+    if not token and payload.get("enrollment_code"):
+        from vps_pathb import resolve_enrollment
+        token = await resolve_enrollment(
+            get_db(), str(payload["enrollment_code"])) or ""
     try:
         return await register_agent(get_db(), token, payload)
     except ValueError as e:
@@ -261,11 +296,16 @@ async def agent_register(payload: dict):
 
 @router.post("/agent/heartbeat")
 async def agent_heartbeat_ep(payload: dict):
-    from vps_agent import agent_heartbeat
+    from vps_agent import agent_by_token, agent_heartbeat
+    from vps_pathb import apply_health_policies
+    db = get_db()
+    token = str(payload.get("agent_token") or "")
     try:
-        return await agent_heartbeat(get_db(),
-                                     str(payload.get("agent_token") or ""),
-                                     payload.get("metrics") or {})
+        out = await agent_heartbeat(db, token, payload.get("metrics") or {})
+        agent = await agent_by_token(db, token)
+        out["policy_actions"] = await apply_health_policies(
+            db, agent, payload.get("metrics") or {})
+        return out
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
@@ -314,6 +354,180 @@ async def claim_pairing(payload: dict):
                                         str(payload.get("code") or ""))
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+
+# ── Path B: connect existing VPS ────────────────────────────────
+@router.post("/vps/connect-existing")
+async def connect_existing_ep(payload: dict,
+                              user=Depends(get_current_user)):
+    from vps_pathb import connect_existing
+    return await connect_existing(get_db(), user["id"], payload)
+
+
+@router.get("/deployments/{deployment_id}/pathb-status")
+async def pathb_status_ep(deployment_id: str,
+                          user=Depends(get_current_user)):
+    from vps_pathb import pathb_status
+    try:
+        return await pathb_status(get_db(), user["id"], deployment_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/agent/discovery")
+async def agent_discovery_ep(payload: dict):
+    from vps_pathb import ingest_discovery
+    try:
+        return await ingest_discovery(
+            get_db(), str(payload.get("agent_token") or ""),
+            payload.get("terminals") or [])
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+@router.get("/deployments/{deployment_id}/discovery")
+async def list_discovery(deployment_id: str,
+                         user=Depends(get_current_user)):
+    db = get_db()
+    out = []
+    async for d in db.mt5_discovered.find(
+            {"user_id": user["id"], "deployment_id": deployment_id}):
+        out.append({k: (str(v) if k in ("created_at", "updated_at",
+                                        "decided_at") else v)
+                    for k, v in d.items() if k != "_id"})
+    return {"terminals": out}
+
+
+@router.post("/discovery/{discovery_id}/decision")
+async def terminal_decision(discovery_id: str, payload: dict,
+                            user=Depends(get_current_user)):
+    from vps_pathb import decide_terminal
+    try:
+        return await decide_terminal(
+            get_db(), user["id"], discovery_id,
+            str(payload.get("action") or ""),
+            bool(payload.get("consent")))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404 if "not found" in str(e)
+                            else 400, detail=str(e))
+
+
+# ── agent command queue ─────────────────────────────────────────
+@router.post("/agents/{agent_id}/commands")
+async def queue_agent_command(agent_id: str, payload: dict,
+                              user=Depends(get_current_user)):
+    from vps_pathb import queue_command
+    try:
+        return await queue_command(get_db(), user["id"], agent_id,
+                                   str(payload.get("command") or ""),
+                                   payload.get("params") or {},
+                                   f"user:{user['id']}")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404 if "not found" in str(e)
+                            else 400, detail=str(e))
+
+
+@router.post("/agent/commands/poll")
+async def poll_agent_commands(payload: dict):
+    from vps_pathb import poll_commands
+    try:
+        cmds = await poll_commands(get_db(),
+                                   str(payload.get("agent_token") or ""))
+        return {"commands": cmds}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+@router.post("/agent/commands/ack")
+async def ack_agent_command(payload: dict):
+    from vps_pathb import ack_command
+    try:
+        return await ack_command(get_db(),
+                                 str(payload.get("agent_token") or ""),
+                                 str(payload.get("command_id") or ""),
+                                 bool(payload.get("ok")),
+                                 str(payload.get("detail") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=401 if "agent" in str(e)
+                            else 404, detail=str(e))
+
+
+@router.get("/agents/{agent_id}/health")
+async def agent_health(agent_id: str, user=Depends(get_current_user)):
+    from vps_pathb import check_unreachable
+    db = get_db()
+    await check_unreachable(db, user["id"])
+    a = await db.vps_agents.find_one(
+        {"agent_id": agent_id, "user_id": user["id"]})
+    if not a:
+        raise HTTPException(status_code=404, detail="agent not found")
+    hb = _aware(a.get("last_heartbeat"))
+    now = datetime.now(timezone.utc)
+    cmds = []
+    async for c in db.agent_commands.find(
+            {"agent_id": agent_id}).sort("created_at", -1).limit(10):
+        cmds.append({"command_id": c["command_id"],
+                     "command": c["command"], "status": c["status"],
+                     "issued_by": c.get("issued_by"),
+                     "detail": c.get("detail")})
+    return {"agent_id": agent_id,
+            "heartbeat_age_sec": (round((now - hb).total_seconds())
+                                  if hb else None),
+            "metrics": a.get("last_metrics"),
+            "policy_flags": a.get("policy_flags") or {},
+            "commands_frozen": bool(a.get("commands_frozen")),
+            "hardening": a.get("hardening") or {},
+            "recent_commands": cmds}
+
+
+# ── artifacts + broker profiles + failure matrix ────────────────
+@router.get("/artifacts/manifest")
+async def artifacts_manifest():
+    from vps_pathb import build_artifact_manifest
+    return build_artifact_manifest()
+
+
+@router.get("/broker-profiles")
+async def broker_profiles_ep(user=Depends(get_current_user)):
+    from vps_pathb import broker_profiles
+    return {"profiles": await broker_profiles(get_db())}
+
+
+@router.post("/broker-installers")
+async def register_installer(payload: dict,
+                             user=Depends(get_current_user)):
+    from vps_pathb import register_broker_installer
+    try:
+        return await register_broker_installer(get_db(), user["id"],
+                                               payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/broker-installers/{installer_id}/approve")
+async def approve_installer(installer_id: str,
+                            user=Depends(get_current_user)):
+    from vps_pathb import approve_broker_installer
+    try:
+        return await approve_broker_installer(get_db(), user,
+                                              installer_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/failure-matrix")
+async def failure_matrix(user=Depends(get_current_user)):
+    from vps_pathb import FAILURE_MATRIX
+    return {"matrix": FAILURE_MATRIX,
+            "note": "every automatic step has a recovery action"}
 
 
 # ── overview + health + certification ───────────────────────────

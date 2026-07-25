@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/lib/api";
 import { AddVpsWizard } from "../components/InfraWizard";
+import { AgentHealthCard, DiscoveredTerminals, FailureMatrixCard, PathBStatusLadder } from "../components/PathBPanels";
 
 const SECTIONS = ["VPS Servers", "MT5 Instances", "Deployment Jobs", "Health Monitoring", "Backups"];
 const STATE_CLS = {
@@ -53,6 +54,12 @@ export default function Infrastructure() {
                                     <span key={i} className="font-mono text-[7px] px-1 py-0.5 border border-[#1F1F1F] text-[#52525B]">{s.state}</span>
                                 ))}
                             </div>
+                            {d.path === "existing_vps" && (
+                                <>
+                                    <PathBStatusLadder deploymentId={d.deployment_id} />
+                                    <DiscoveredTerminals deploymentId={d.deployment_id} />
+                                </>
+                            )}
                         </div>
                     ))}
                 </div>
@@ -76,6 +83,7 @@ export default function Infrastructure() {
                         {a.hardening_missing?.length > 0 && (
                             <div className="font-mono text-[8px] text-[#FFD700] mt-1">hardening pending: {a.hardening_missing.join(", ")}</div>
                         )}
+                        <AgentHealthCard agentId={a.agent_id} />
                     </div>
                 ))}
             </div>
@@ -115,6 +123,8 @@ export default function Infrastructure() {
                     <div className="font-mono text-[8px] text-[#3F3F46] mt-2">{cert.note}</div>
                 </div>
             )}
+
+            <FailureMatrixCard />
         </div>
     );
 }

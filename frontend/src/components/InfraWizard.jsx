@@ -12,6 +12,18 @@ export function AddVpsWizard({ onDone }) {
     const [rec, setRec] = useState(null);
     const [busy, setBusy] = useState(false);
     const [result, setResult] = useState(null);
+    const [pathb, setPathb] = useState({ provider_name: "", label: "", region: "", os: "windows-server", mt5_installed: true });
+    const [pathbResult, setPathbResult] = useState(null);
+
+    const createExisting = async () => {
+        setBusy(true);
+        try {
+            const { data } = await api.post("/infra/vps/connect-existing", pathb);
+            setPathbResult(data);
+            toast.success(`Deployment ${data.deployment_id} — waiting for agent`);
+            onDone && onDone();
+        } catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
+    };
 
     useEffect(() => {
         api.get("/infra/providers").then(({ data }) => setProviders(data.providers || [])).catch(() => {});
@@ -64,6 +76,22 @@ export function AddVpsWizard({ onDone }) {
         </button>
     );
 
+    if (pathbResult) {
+        return (
+            <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="pathb-result">
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">CONNECT EXISTING VPS · {pathbResult.deployment_id}</div>
+                <div className="font-mono text-[11px] text-white mb-1">Enrollment code: <span className="text-[#00FF41]" data-testid="enrollment-code">{pathbResult.enrollment_code}</span> <span className="text-[#52525B]">(single use, {pathbResult.expires_in_min} min)</span></div>
+                <div className="font-mono text-[9px] text-[#FFD700] mb-1">Run via RDP on the VPS as Administrator (recommended — downloads, verifies, then runs):</div>
+                <pre className="font-mono text-[9px] text-[#A1A1AA] bg-black border border-[#141414] p-2 overflow-x-auto whitespace-pre-wrap" data-testid="pathb-command">
+{(pathbResult.install_commands?.recommended || []).join("\n")}
+                </pre>
+                <div className="font-mono text-[8px] text-[#3F3F46] mt-1">Quick (less safe): {pathbResult.install_commands?.quick}</div>
+                <div className="font-mono text-[9px] text-[#52525B] mt-2">Dashboard updates automatically: Waiting for Agent → Agent Connected → Inspecting Server → Ready for Setup</div>
+                <div className="mt-3"><Btn onClick={() => { setPathbResult(null); setStep(0); }} testid="pathb-new">ADD ANOTHER</Btn></div>
+            </div>
+        );
+    }
+
     if (result) {
         return (
             <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="wizard-result">
@@ -97,10 +125,32 @@ export function AddVpsWizard({ onDone }) {
                             <div className="font-mono text-[9px] text-[#52525B]">{d}</div>
                         </button>
                     ))}
-                    <Btn onClick={() => setStep(form.path === "existing_vps" ? 2 : 1)} testid="wizard-next-0">NEXT</Btn>
+                    <Btn onClick={() => setStep(1)} testid="wizard-next-0">NEXT</Btn>
                 </div>
             )}
-            {step === 1 && (
+            {step === 1 && form.path === "existing_vps" && (
+                <div className="space-y-2" data-testid="pathb-form">
+                    <div className="font-mono text-[9px] text-[#52525B]">Works with almost any Windows Forex VPS. No RDP password requested — you run one command yourself.</div>
+                    {[["provider_name", "Provider name (e.g. ForexVPS, Contabo)"], ["label", "VPS label"], ["region", "Approximate region (e.g. London)"]].map(([k, ph]) => (
+                        <input key={k} value={pathb[k]} onChange={(e) => setPathb((p) => ({ ...p, [k]: e.target.value }))} placeholder={ph}
+                            data-testid={`pathb-${k}`}
+                            className="w-full bg-transparent border border-[#1F1F1F] font-mono text-[10px] px-2 py-2 text-white placeholder:text-[#3F3F46]" />
+                    ))}
+                    <div className="flex items-center gap-3">
+                        <select value={pathb.os} onChange={(e) => setPathb((p) => ({ ...p, os: e.target.value }))} data-testid="pathb-os"
+                            className="bg-black border border-[#1F1F1F] font-mono text-[10px] px-2 py-2 text-white">
+                            <option value="windows-server">Windows Server</option>
+                            <option value="windows-10">Windows 10/11</option>
+                        </select>
+                        <label className="font-mono text-[9px] text-[#52525B] flex items-center gap-1">
+                            <input type="checkbox" checked={pathb.mt5_installed} onChange={(e) => setPathb((p) => ({ ...p, mt5_installed: e.target.checked }))} data-testid="pathb-mt5-installed" />
+                            MT5 already installed
+                        </label>
+                    </div>
+                    <Btn onClick={createExisting} disabled={!pathb.label.trim()} testid="pathb-create">{busy ? "CREATING…" : "GENERATE INSTALL COMMAND"}</Btn>
+                </div>
+            )}
+            {step === 1 && form.path === "new_vps" && (
                 <div className="space-y-2">
                     {providers.map((p) => (
                         <button key={p.name} onClick={() => p.available && set("provider", p.name)} data-testid={`provider-${p.name}`}
