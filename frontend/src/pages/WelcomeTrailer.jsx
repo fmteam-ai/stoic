@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { LandingTestimonials } from "@/components/LandingTestimonials";
 import "@/styles/intro_trailer.css";
 
 /* Scene-by-scene state machine — timings in ms from t=0, anchored
@@ -196,40 +197,48 @@ export default function WelcomeTrailer() {
             />
 
             {/* Intro poster — required by browser autoplay policy.
-                Audio cannot start until the user clicks something. */}
+                Audio cannot start until the user clicks something.
+                Scrollable: testimonials wall lives below the hero. */}
             {!started && (
-                <div className="scene active trailer-intro" data-testid="trailer-intro">
-                    <div className="kicker">STOIC · 90-second trailer</div>
-                    <h1 className="headline">
-                        An AI hedge fund<br/>
-                        that <em>refuses</em> to lose stupidly.
-                    </h1>
-                    <p className="subline">
-                        Sound on. Watch how a multi-agent AI pipeline,
-                        fail-closed safety governance and one-command VPS
-                        infrastructure trade gold and bitcoin — so you
-                        don&apos;t have to.
-                    </p>
-                    <div className="cta-block" style={{ marginTop: "2.5rem" }}>
-                        <button
-                            className="cta-button trailer-play-btn"
-                            onClick={startTrailer}
-                            data-testid="trailer-play">
-                            ▶ Play trailer
-                        </button>
-                        <button
-                            className="cta-secondary"
-                            onClick={() => nav("/login")}
-                            data-testid="trailer-skip-intro">
-                            Sign in
-                        </button>
-                        <button
-                            className="cta-secondary"
-                            onClick={() => nav("/register")}
-                            data-testid="trailer-create-account-intro">
-                            Create account
-                        </button>
+                <div className="trailer-scroll" data-testid="trailer-scroll">
+                    <div className="scene active trailer-intro" data-testid="trailer-intro">
+                        <div className="kicker">STOIC · 90-second trailer</div>
+                        <h1 className="headline">
+                            An AI hedge fund<br/>
+                            that <em>refuses</em> to lose stupidly.
+                        </h1>
+                        <p className="subline">
+                            Sound on. Watch how a multi-agent AI pipeline,
+                            fail-closed safety governance and one-command VPS
+                            infrastructure trade gold and bitcoin — so you
+                            don&apos;t have to.
+                        </p>
+                        <div className="cta-block" style={{ marginTop: "2.5rem" }}>
+                            <button
+                                className="cta-button trailer-play-btn"
+                                onClick={startTrailer}
+                                data-testid="trailer-play">
+                                ▶ Play trailer
+                            </button>
+                            <button
+                                className="cta-secondary"
+                                onClick={() => nav("/login")}
+                                data-testid="trailer-skip-intro">
+                                Sign in
+                            </button>
+                            <button
+                                className="cta-secondary"
+                                onClick={() => nav("/register")}
+                                data-testid="trailer-create-account-intro">
+                                Create account
+                            </button>
+                        </div>
+                        <div className="intro-scroll-hint" data-testid="intro-scroll-hint">
+                            <span>What traders say</span>
+                            <span>▼</span>
+                        </div>
                     </div>
+                    <LandingTestimonials />
                 </div>
             )}
 

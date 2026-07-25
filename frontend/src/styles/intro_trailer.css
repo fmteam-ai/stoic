@@ -203,3 +203,111 @@
     0%, 100% { box-shadow: 0 0 32px rgba(0,255,65,0.25); }
     50%      { box-shadow: 0 0 56px rgba(0,255,65,0.55); }
 }
+
+/* ─── Landing testimonials (front-page wall of trust) ───────────── */
+.trailer-scroll {
+    position: absolute; inset: 0;
+    overflow-y: auto; overflow-x: hidden;
+    z-index: 20;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,255,65,0.35) transparent;
+}
+.trailer-scroll .trailer-intro {
+    position: relative; inset: auto;
+    min-height: 100vh;
+    opacity: 1; pointer-events: auto;
+}
+.intro-scroll-hint {
+    margin-top: 3.5rem;
+    font-family: 'Space Grotesk', monospace;
+    font-size: 11px; letter-spacing: 0.35em; text-transform: uppercase;
+    color: rgba(250,250,250,0.45);
+    display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
+    animation: hintBob 2.4s ease-in-out infinite;
+    cursor: default;
+}
+@keyframes hintBob {
+    0%, 100% { transform: translateY(0); opacity: 0.55; }
+    50%      { transform: translateY(6px); opacity: 1; }
+}
+
+.tst-section {
+    position: relative;
+    padding: 5.5rem 0 4rem;
+    border-top: 1px solid rgba(0,255,65,0.12);
+    background:
+        radial-gradient(ellipse at 50% 0%, rgba(0,255,65,0.05) 0%, transparent 55%),
+        #050505;
+    text-align: center;
+}
+.tst-headline {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: clamp(1.6rem, 3.4vw, 2.6rem);
+    font-weight: 700; line-height: 1.1;
+    margin: 0 auto 0.75rem; max-width: 720px;
+    color: #FAFAFA;
+}
+.tst-headline em { color: #00FF41; font-style: normal; }
+.tst-subline {
+    color: rgba(250,250,250,0.55);
+    font-size: 15px; margin: 0 auto 3rem; max-width: 560px;
+}
+.tst-marquee {
+    display: flex; flex-direction: column; gap: 1.25rem;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.tst-track {
+    display: flex; gap: 1.25rem; width: max-content;
+    padding: 0.25rem 0;
+    animation: tstScroll 55s linear infinite;
+}
+.tst-track.reverse { animation: tstScrollBack 62s linear infinite; }
+.tst-marquee:hover .tst-track { animation-play-state: paused; }
+@keyframes tstScroll     { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes tstScrollBack { from { transform: translateX(-50%); } to { transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) {
+    .tst-track, .tst-track.reverse { animation: none; flex-wrap: wrap; width: auto; justify-content: center; }
+}
+
+.tst-card {
+    width: 340px; flex-shrink: 0;
+    margin: 0; padding: 1.4rem 1.5rem 1.25rem;
+    text-align: left;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(0,255,65,0.14);
+    border-radius: 14px;
+    backdrop-filter: blur(14px);
+    transition: border-color 300ms ease, transform 300ms ease, background-color 300ms ease;
+}
+.tst-card:hover {
+    border-color: rgba(0,255,65,0.45);
+    background: rgba(0,255,65,0.045);
+    transform: translateY(-3px);
+}
+.tst-stars { margin-bottom: 0.7rem; letter-spacing: 0.15em; }
+.tst-star { color: rgba(250,250,250,0.18); font-size: 13px; }
+.tst-star.on { color: #00FF41; text-shadow: 0 0 8px rgba(0,255,65,0.5); }
+.tst-quote {
+    margin: 0 0 1.1rem;
+    font-size: 14.5px; line-height: 1.55;
+    color: rgba(250,250,250,0.86);
+}
+.tst-person { display: flex; align-items: center; gap: 0.75rem; }
+.tst-avatar {
+    width: 38px; height: 38px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: 'Space Grotesk', monospace;
+    font-size: 13px; font-weight: 700; color: #050505;
+    background: linear-gradient(135deg, #00FF41 0%, #0aa32f 100%);
+    box-shadow: 0 0 14px rgba(0,255,65,0.25);
+    flex-shrink: 0;
+}
+.tst-name { display: block; font-weight: 600; font-size: 13.5px; color: #FAFAFA; }
+.tst-role { display: block; font-size: 12px; color: rgba(250,250,250,0.45); }
+.tst-honesty {
+    margin: 2.75rem auto 0; max-width: 520px;
+    font-size: 11.5px; letter-spacing: 0.04em;
+    color: rgba(250,250,250,0.35);
+}

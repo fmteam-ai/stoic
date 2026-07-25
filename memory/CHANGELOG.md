@@ -1298,3 +1298,8 @@ LESSON: after upgrading any package in-place, ALWAYS re-run a fresh-venv `pip in
 - promotion_gate evidence fix: last_broker_validation now surfaces run_id/mode/passed/failed (was projecting a nonexistent 'campaign' field → None).
 - Supervised-live remaining blockers are RUNTIME health gates, not campaign evidence: shadow health 29<60 (EA terminals offline — weekend) and auto-demotion recovery window (24h green + ≥10 healthy samples). Both clear naturally once terminals are back online in market hours. Stage gate (internal_shadow→demo_broker) additionally needs 3 days in stage + 0 unacked critical alerts (27 open).
 - Regression: test_iter87_validation_harness + iter124 + iter105 + iter82 all green (35 passed).
+
+## Iter-171 (2026-07-25) — Landing testimonials ("wall of trust")
+- New frontend/src/components/LandingTestimonials.jsx: 10 curated compliance-safe testimonials (UX/safety focused, no profit claims) in an EDIT-HERE array; dual counter-scrolling marquee rows (pause on hover, edge fade masks, prefers-reduced-motion fallback), glass cards, green star ratings, initial avatars, risk disclaimer.
+- WelcomeTrailer.jsx intro state is now scrollable (.trailer-scroll wrapper): hero + "What traders say ▼" hint + testimonials below the fold. Trailer scene machinery untouched — verified play still works (screenshots).
+- CSS appended to styles/intro_trailer.css (tst-* classes).
