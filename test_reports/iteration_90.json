@@ -1,0 +1,47 @@
+{
+  "summary": "iter-99 tier batch (Tier 1 Decision DNA, Tier 3 Market State, Tier 16 Release Safety) verified end-to-end. Backend: 4/4 unit tests in test_iter99_tiers.py pass; NEW test_iter99_http.py (8 HTTP tests) 8/8 pass covering /api/trades/{id}/dna (real seeded trade, unknown-404, auth-required), /api/bot/market-state (shape + auth), /api/ops/release-safety (X-Metrics-Token + admin-cookie + no-auth 403). Regression: 107/108 pass across iter96-iter99 (test_iter99_structure_agents::test_posture_endpoint flaked once on cold /bot/posture 30s timeout, passed on rerun — pre-existing slow endpoint, not a regression). Frontend: Dashboard renders market-state-strip with all 5 sub-cells (market-state-trend/volatility/liquidity/news_risk/confidence) + market-health-score (=59 MARKET HEALTH). Trades page: dna-trade-{id} button opens DnaModal (data-testid=dna-modal) with dna-four-questions section; dna-close closes correctly; 0 pageerrors. Admin config NOT mutated; no governance proposals created; no bots started.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/bot/posture", "issue": "cold response can exceed 30s in preview (test_iter99_structure_agents::test_posture_endpoint flaked); passed on rerun. Pre-existing, unrelated to iter-99 tier batch."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Trades → DnaModal (older trades)", "issues": ["When a trade's signal_id points to a signal doc that no longer exists (older admin data), the four-questions section shows 'via engine at None% confidence in regime None' and null-filled evidence/risks/outcome — technically correct fallback, but user-facing 'None' strings look broken. Consider rendering em-dash placeholders or 'signal record unavailable' when sig is empty in compose_dna."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter99_tiers.py",
+    "/app/backend/tests/test_iter99_http.py",
+    "/app/test_reports/pytest/iter99_tiers.xml",
+    "/app/test_reports/pytest/iter99_http.xml",
+    "/app/test_reports/pytest/iter96_98_regression.xml"
+  ],
+  "action_items": [
+    "Main agent: regenerate /app/docs/TEST_MANIFEST.md — added new file test_iter99_http.py (8 HTTP tests: market-state shape+auth, release-safety token+cookie+forbidden, trades DNA real+404+auth). Manifest test count grows by 8.",
+    "Consider gracefully displaying missing-signal DNA (older trades whose signal was rotated/deleted) so the modal doesn't show literal 'None' strings in four_questions.why_decided (compose_dna already handles it structurally, just needs prettier fallback in DnaModal.jsx or the compose function)."
+  ],
+  "critical_code_review_comments": [
+    "decision_dna.compose_dna: liquidity_score uses (spread_mult(spread,symbol)-0.55)/0.45*100 — negative or >100 values are possible when spread is far outside expected band; consider clamping to [0,100] to match documented axis semantics.",
+    "market_state.market_state_score: liquidity axis averages `components.spread` values from broker_intel_scores WITHOUT any freshness filter (no date bound on find()) — a very stale broker score can dominate the composite forever. Add a max-age filter (e.g. at>=now-24h) or use a rolling window.",
+    "ops_routes.release_safety: opens /app/docs/TEST_MANIFEST.md with hard-coded absolute path — will fail in any deploy layout where /app is different. Consider os.path.join(BASE_DIR, 'docs', ...).",
+    "ops_routes.release_safety: calls release_readiness(request) internally then parses JSONResponse body — this incurs a second full readiness probe on every safety call (Mongo write+read+delete). Consider a helper that returns the dict form so both endpoints share one probe.",
+    "posture_routes has a mid-file blank auth: /market-state uses str(user.get('id') or user.get('_id')) but nowhere else in the codebase mixes both — verify get_current_user always sets 'id' (it does, per iter-98 tests). Redundant .get('_id') is harmless dead branch."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter99_http.py"
+  ],
+  "success_rate": {
+    "backend": "100% (12/12 iter-99 tests + 107/108 iter96-98 regression, 1 flake resolved on rerun)",
+    "frontend": "100% (market-state-strip + all 5 axes + market-health-score verified; DnaModal open/four-questions/close verified; 0 pageerrors)"
+  },
+  "test_credentials": "admin@trading.bot / admin123 + METRICS_TOKEN & STEP_UP_BYPASS_TOKEN from /app/backend/.env. All values match /app/memory/test_credentials.md.",
+  "seed_data_creation": "test_iter99_http.py::test_trade_dna_real_trade seeds ONE trade + signal + trade_evaluation under admin's user_id with _test_tag='TEST-iter99-<hex>' and deletes them in finally. test_iter99_tiers.py fixtures use user_id='iter99-<hex>' and clean up. Zero residual test data confirmed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter-99 tier batch (DNA/MarketState/ReleaseSafety) is stable. New file test_iter99_http.py runs in ~3s and is the go-to smoke for these three endpoints. LIVE broker still connected — do NOT approve governance proposals; always reject. /api/bot/posture is intermittently slow (>30s cold) — bump timeout or retry once when using it. Frontend market-state-strip testids: market-state-strip, market-health-score, market-state-{trend|volatility|liquidity|news_risk|confidence}. DNA flow testids: dna-trade-{id} (button), dna-modal, dna-four-questions, dna-close.",
+  "rca of the issue": "No blocking issues. Documented cosmetic + code-quality items only."
+}
