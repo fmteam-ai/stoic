@@ -278,6 +278,13 @@ async def heartbeat(payload: BridgeHeartbeat):
 
     await db.accounts.update_one({"_id": acc["_id"]}, {"$set": set_doc})
 
+    # EA-deployment machine + execution-owner lease renewal (iter-114).
+    try:
+        from vps_agent import on_ea_heartbeat
+        await on_ea_heartbeat(db, acc, payload.account_login)
+    except Exception as _dep_e:  # noqa: BLE001 — hook must never break HB
+        record_swallow("bridge", "ea_deploy_hook", _dep_e)
+
     # Round 14 P0 — propagate the fresh snapshot into in-memory scalp
     # runners so readiness/staleness checks and sizing never depend on the
     # (possibly old) account doc preloaded by the last tick batch.

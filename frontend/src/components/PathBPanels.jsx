@@ -109,6 +109,51 @@ export function AgentHealthCard({ agentId }) {
     );
 }
 
+export function EaDeploymentsCard() {
+    const [d, setD] = useState(null);
+    useEffect(() => {
+        api.get("/infra/ea-deployments").then(({ data }) => setD(data)).catch(() => {});
+    }, []);
+    if (!d || !d.deployments.length) return null;
+    const active = d.states.filter((s) => s !== "FAILED");
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="ea-deployments-card">
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">
+                EA DEPLOYMENTS · CONNECTED ONLY AFTER A VERIFIED HEARTBEAT
+            </div>
+            <div className="font-mono text-[8px] text-[#3F3F46] mb-2">
+                One account → one installation identity → one MT5 terminal → one Windows host. Execution-owner lease: {d.lease_seconds}s.
+            </div>
+            {d.deployments.map((dep) => {
+                const idx = active.indexOf(dep.state);
+                return (
+                    <div key={dep.ea_deployment_id} className="border border-[#141414] p-2 mb-2" data-testid={`ea-deploy-${dep.ea_deployment_id}`}>
+                        <div className="font-mono text-[9px] text-white">
+                            acct {dep.account_id.slice(0, 8)}…
+                            <span className={`ml-2 ${dep.connected ? "text-[#00FF41]" : dep.state === "FAILED" ? "text-[#FF3B30]" : "text-[#FFD700]"}`}
+                                data-testid={`ea-deploy-status-${dep.ea_deployment_id}`}>
+                                {dep.connected ? "CONNECTED" : dep.state === "FAILED" ? "FAILED" : `NOT CONNECTED — ${dep.state.replace(/_/g, " ")}`}
+                            </span>
+                            {dep.execution_owner && (
+                                <span className={`ml-2 font-mono text-[8px] ${dep.lease_active ? "text-[#0099FF]" : "text-[#52525B]"}`}>
+                                    owner {dep.execution_owner}{dep.lease_active ? " (lease active)" : " (lease expired)"}
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                            {active.map((s, i) => (
+                                <span key={s} className={`font-mono text-[7px] px-1 py-0.5 border ${dep.state === "FAILED" ? "border-[#1F1F1F] text-[#3F3F46]" : i < idx ? "border-[#00FF41]/30 text-[#00FF41]/60" : i === idx ? "border-[#00FF41] text-[#00FF41]" : "border-[#1F1F1F] text-[#3F3F46]"}`}>
+                                    {s.replace(/_/g, " ")}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 export function FailureMatrixCard() {
     const [m, setM] = useState(null);
     const [open, setOpen] = useState(false);

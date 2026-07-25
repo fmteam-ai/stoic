@@ -144,46 +144,191 @@ def _pairing_code() -> str:
     return f"PAIR-{part()}-{part()}"
 
 
-async def create_pairing_code(db, user_id: str, account_id: str) -> dict:
-    """One-time EA pairing code, 10-min TTL, scoped to ONE account
-    (spec step 19)."""
+def _digest(value: str) -> str:
+    import hashlib
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+LEASE_SECONDS = 20
+
+DEPLOY_STATES = ["TOKEN_ISSUED", "TOKEN_CLAIMED", "HOST_INSPECTED",
+                 "TERMINAL_SELECTED", "ARTIFACT_VERIFIED", "EA_INSTALLED",
+                 "EA_HEARTBEAT_RECEIVED", "BROKER_ACCOUNT_VERIFIED",
+                 "READY_FOR_SHADOW", "FAILED"]
+AGENT_PROGRESS_STATES = {"HOST_INSPECTED", "ARTIFACT_VERIFIED",
+                         "EA_INSTALLED", "FAILED"}
+
+
+async def advance_ea_deployment(db, account_id: str, state: str,
+                                detail: str = "") -> dict | None:
+    """Forward-only deployment state machine — 'paired' never implies
+    'deployed'; READY_FOR_SHADOW requires a verified EA heartbeat."""
+    if state not in DEPLOY_STATES:
+        raise ValueError(f"unknown deployment state '{state}'")
+    dep = await db.ea_deployments.find_one(
+        {"account_id": account_id, "state": {"$ne": "FAILED"}},
+        sort=[("created_at", -1)])
+    if not dep:
+        return None
+    now = datetime.now(timezone.utc)
+    if state != "FAILED" and DEPLOY_STATES.index(state) <= \
+            DEPLOY_STATES.index(dep["state"]):
+        return dep
+    await db.ea_deployments.update_one(
+        {"_id": dep["_id"]},
+        {"$set": {"state": state, "updated_at": now},
+         "$push": {"state_history": {"state": state, "detail": detail,
+                                     "at": now.isoformat()}}})
+    return await db.ea_deployments.find_one({"_id": dep["_id"]})
+
+
+async def create_pairing_code(db, user_id: str, account_id: str,
+                              expected_login: str | None = None,
+                              expected_server: str | None = None,
+                              revoke_existing: bool = False) -> dict:
+    """One-time EA pairing code — digest-only storage, 10-min TTL, scoped
+    to ONE account. Blocked while another installation holds the
+    execution-owner lease unless the caller explicitly revokes it."""
     from bson import ObjectId
     acc = await db.accounts.find_one(
         {"_id": ObjectId(account_id), "user_id": user_id})
     if not acc:
         raise ValueError("account not found")
-    code = _pairing_code()
     now = datetime.now(timezone.utc)
+    lease = await db.execution_leases.find_one({"account_id": account_id})
+    active = (lease and not lease.get("revoked")
+              and _aware(lease["expires_at"]) > now)
+    if active and not revoke_existing:
+        raise RuntimeError(
+            f"account already has an active execution owner "
+            f"({lease['installation_id']}, lease {LEASE_SECONDS}s) — "
+            f"revoke it explicitly (revoke_existing) to re-pair")
+    if lease and revoke_existing:
+        await db.execution_leases.update_one(
+            {"_id": lease["_id"]},
+            {"$set": {"revoked": True, "revoked_at": now}})
+        await db.installations.update_many(
+            {"account_id": account_id, "revoked": {"$ne": True}},
+            {"$set": {"revoked": True, "revoked_at": now,
+                      "revoked_reason": "re-pair"}})
+    code = _pairing_code()
     await db.ea_pairing_codes.insert_one({
-        "code": code, "user_id": user_id, "account_id": account_id,
-        "used": False, "created_at": now,
+        "code_digest": _digest(code), "user_id": user_id,
+        "account_id": account_id, "consumed_at": None,
+        "created_at": now,
         "expires_at": now + timedelta(minutes=PAIRING_TTL_MIN)})
+    dep_id = f"eadep_{uuid.uuid4().hex[:10]}"
+    await db.ea_deployments.insert_one({
+        "ea_deployment_id": dep_id, "user_id": user_id,
+        "account_id": account_id,
+        "expected_login": expected_login,
+        "expected_server": expected_server or acc.get("server"),
+        "state": "TOKEN_ISSUED",
+        "state_history": [{"state": "TOKEN_ISSUED", "detail": "",
+                           "at": now.isoformat()}],
+        "created_at": now, "updated_at": now})
     return {"code": code, "expires_in_min": PAIRING_TTL_MIN,
-            "account_id": account_id}
+            "account_id": account_id, "ea_deployment_id": dep_id,
+            "note": "code shown once — only a digest is stored"}
 
 
-async def claim_pairing_code(db, code: str) -> dict:
-    """EA exchanges the pairing code for its account-scoped bridge
-    credential + endpoint. Single use."""
+async def claim_pairing_code(db, code: str, terminal: dict) -> dict:
+    """Atomic single-claimant exchange. Requires binding to EXACTLY one
+    MT5 terminal on one host (one account → one installation identity →
+    one terminal → one Windows host). Rotates the account bridge token,
+    instantly cutting off any previous terminal."""
+    terminal = terminal or {}
+    terminal_path = str(terminal.get("terminal_path") or "").strip()
+    host = str(terminal.get("host_fingerprint") or "").strip()
+    if not terminal_path or not host:
+        raise ValueError(
+            "exactly one MT5 terminal must be selected — terminal_path "
+            "and host_fingerprint are required (never deploy one token "
+            "to every terminal)")
     from bson import ObjectId
-    doc = await db.ea_pairing_codes.find_one({"code": code})
+    now = datetime.now(timezone.utc)
+    # atomic: digest match + not consumed + unexpired — one winner only
+    doc = await db.ea_pairing_codes.find_one_and_update(
+        {"code_digest": _digest(str(code or "").strip().upper()),
+         "consumed_at": None, "expires_at": {"$gt": now}},
+        {"$set": {"consumed_at": now,
+                  "claimed_terminal": terminal_path,
+                  "claimed_host": host}})
     if not doc:
-        raise ValueError("invalid pairing code")
-    if doc.get("used"):
-        raise ValueError("pairing code already used")
-    if _aware(doc["expires_at"]) < datetime.now(timezone.utc):
-        raise ValueError("pairing code expired")
-    r = await db.ea_pairing_codes.update_one(
-        {"_id": doc["_id"], "used": False},
-        {"$set": {"used": True, "used_at": datetime.now(timezone.utc)}})
-    if r.modified_count != 1:
-        raise ValueError("pairing code already used")
+        raise ValueError("invalid, expired or already-claimed pairing code")
     acc = await db.accounts.find_one({"_id": ObjectId(doc["account_id"])})
     if not acc:
         raise ValueError("account no longer exists")
-    return {"bridge_token": acc.get("bridge_token"),
+    # rotate bridge credential — strict single-writer
+    new_token = f"tok_{secrets.token_urlsafe(32)}"
+    await db.accounts.update_one(
+        {"_id": acc["_id"]},
+        {"$set": {"bridge_token": new_token,
+                  "bridge_token_rotated_at": now.isoformat()}})
+    installation_id = f"inst_{uuid.uuid4().hex[:12]}"
+    await db.installations.insert_one({
+        "installation_id": installation_id,
+        "user_id": doc["user_id"], "account_id": doc["account_id"],
+        "terminal_path": terminal_path, "host_fingerprint": host,
+        "revoked": False, "created_at": now})
+    await db.execution_leases.update_one(
+        {"account_id": doc["account_id"]},
+        {"$set": {"installation_id": installation_id,
+                  "user_id": doc["user_id"], "revoked": False,
+                  "acquired_at": now,
+                  "expires_at": now + timedelta(seconds=LEASE_SECONDS)}},
+        upsert=True)
+    await advance_ea_deployment(db, doc["account_id"], "TOKEN_CLAIMED",
+                                f"installation {installation_id}")
+    await advance_ea_deployment(db, doc["account_id"], "TERMINAL_SELECTED",
+                                terminal_path)
+    return {"installation_id": installation_id,
+            "bridge_token": new_token,
             "account_id": doc["account_id"],
             "bridge_endpoint": "/api/bridge",
             "permitted_account": acc.get("broker_account_id_reported")
             or acc.get("label"),
-            "config_version": "current"}
+            "lease_seconds": LEASE_SECONDS,
+            "config_version": "current",
+            "connected": False,
+            "note": "NOT connected yet — READY_FOR_SHADOW requires a "
+                    "verified EA heartbeat from the expected account"}
+
+
+async def on_ea_heartbeat(db, acc: dict, reported_login=None) -> None:
+    """Bridge-heartbeat hook: renews the execution-owner lease and drives
+    the deployment machine to READY_FOR_SHADOW only when the heartbeat
+    matches the expected account (and server, from account config)."""
+    account_id = str(acc["_id"])
+    now = datetime.now(timezone.utc)
+    inst = await db.installations.find_one(
+        {"account_id": account_id, "revoked": {"$ne": True}},
+        sort=[("created_at", -1)])
+    if inst:
+        await db.execution_leases.update_one(
+            {"account_id": account_id},
+            {"$set": {"installation_id": inst["installation_id"],
+                      "user_id": inst["user_id"], "revoked": False,
+                      "renewed_at": now,
+                      "expires_at": now + timedelta(
+                          seconds=LEASE_SECONDS)}},
+            upsert=True)
+    dep = await db.ea_deployments.find_one(
+        {"account_id": account_id,
+         "state": {"$nin": ["READY_FOR_SHADOW", "FAILED"]}},
+        sort=[("created_at", -1)])
+    if not dep:
+        return
+    await advance_ea_deployment(db, account_id, "EA_HEARTBEAT_RECEIVED")
+    exp_login = dep.get("expected_login")
+    exp_server = dep.get("expected_server")
+    login_ok = not exp_login or (
+        reported_login is not None
+        and str(reported_login) == str(exp_login))
+    server_ok = not exp_server or (
+        str(exp_server).lower() in str(acc.get("server") or "").lower())
+    if login_ok and server_ok:
+        await advance_ea_deployment(db, account_id,
+                                    "BROKER_ACCOUNT_VERIFIED",
+                                    f"login={reported_login}")
+        await advance_ea_deployment(db, account_id, "READY_FOR_SHADOW")

@@ -218,7 +218,7 @@ def test_agent_token_auth_rejects_unknown(db):
     _run(go())
 
 
-# ─── EA pairing (step 19) ───────────────────────────────────────
+# ─── EA pairing (step 19, hardened in iter-114) ─────────────────
 def test_pairing_code_flow(db):
     async def go():
         res = await db.accounts.insert_one({
@@ -226,11 +226,15 @@ def test_pairing_code_flow(db):
             "bridge_token": f"tok-{uuid.uuid4().hex}"})
         p = await create_pairing_code(db, UID, str(res.inserted_id))
         assert p["code"].startswith("PAIR-")
-        claim = await claim_pairing_code(db, p["code"])
-        assert claim["bridge_token"].startswith("tok-")
+        claim = await claim_pairing_code(db, p["code"], {
+            "terminal_path": "C:\\STOIC\\MT5\\account-1\\",
+            "host_fingerprint": "host-a"})
+        assert claim["bridge_token"].startswith("tok_")
         assert claim["account_id"] == str(res.inserted_id)
-        with pytest.raises(ValueError, match="already used"):
-            await claim_pairing_code(db, p["code"])
+        assert claim["connected"] is False
+        with pytest.raises(ValueError, match="already-claimed|invalid"):
+            await claim_pairing_code(db, p["code"], {
+                "terminal_path": "x", "host_fingerprint": "y"})
     _run(go())
 
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/lib/api";
 import { AddVpsWizard } from "../components/InfraWizard";
-import { AgentHealthCard, DiscoveredTerminals, FailureMatrixCard, PathBStatusLadder } from "../components/PathBPanels";
+import { AgentHealthCard, DiscoveredTerminals, EaDeploymentsCard, FailureMatrixCard, PathBStatusLadder } from "../components/PathBPanels";
 
 const SECTIONS = ["VPS Servers", "MT5 Instances", "Deployment Jobs", "Health Monitoring", "Backups"];
 const STATE_CLS = {
@@ -125,6 +125,8 @@ export default function Infrastructure() {
             )}
 
             <FailureMatrixCard />
+
+            <EaDeploymentsCard />
         </div>
     );
 }

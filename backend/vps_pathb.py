@@ -98,8 +98,6 @@ async def connect_existing(db, user_id: str, payload: dict) -> dict:
             "enrollment_code": code,
             "expires_in_min": BOOTSTRAP_TTL_MIN,
             "install_commands": {
-                "quick": f"irm {base}/api/infra/agent/install "
-                         f"-Headers @{{Enrollment='{code}'}} | iex",
                 "recommended": [
                     f"Invoke-WebRequest -Uri \"{base}/api/infra/agent/"
                     f"bootstrap/installer?enrollment_code={code}\" "
@@ -250,6 +248,13 @@ async def queue_command(db, user_id: str, agent_id: str, command: str,
                         params: dict | None, issued_by: str) -> dict:
     if command not in ALLOWED_COMMANDS:
         raise ValueError(f"unknown command '{command}'")
+    # one account ↔ one terminal: EA installs must target exactly one
+    # terminal — never blanket-deploy a token to every discovered MT5.
+    if command == "install_ea":
+        p = params or {}
+        if not p.get("terminal_path") or not p.get("account_ref"):
+            raise ValueError("install_ea requires explicit terminal_path "
+                             "and account_ref — one terminal per account")
     agent = await db.vps_agents.find_one(
         {"agent_id": agent_id, "user_id": user_id,
          "revoked": {"$ne": True}})
@@ -428,6 +433,13 @@ def build_artifact_manifest() -> dict:
         {"name": "stoic-ea", "type": "mq5", "version": ea_version,
          "url": "/api/bot/ea/download", "sha256": _sha256_file(ea_path),
          "rollback_version": "1.53"},
+        {"name": "stoic-ea-ex5", "type": "ex5", "version": ea_version,
+         "url": None, "sha256": _sha256_file(ea_path.replace(".mq5",
+                                                             ".ex5")),
+         "rollback_version": "1.53",
+         "note": "installers MUST deploy the exact CI-compiled, "
+                 "hash-verified .ex5 — never recompile .mq5 locally. "
+                 "Published by the signed release pipeline."},
     ], "generated_at": datetime.now(timezone.utc).isoformat()}
 
 

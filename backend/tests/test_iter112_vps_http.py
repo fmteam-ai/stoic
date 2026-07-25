@@ -231,37 +231,66 @@ def test_agent_endpoints_reject_bad_token():
     assert r.status_code == 401
 
 
-# ── pairing ─────────────────────────────────────────────────────
+# ── pairing (hardened iter-114: synthetic account — claim ROTATES the
+# bridge token, so never pair a real admin account in tests) ─────
 def test_pairing_flow(sess, created_ids):
-    r = sess.get(f"{BASE_URL}/api/accounts", timeout=15)
-    assert r.status_code == 200
-    accts = r.json()
-    # payload varies — list or dict with accounts
-    if isinstance(accts, dict):
-        accts = accts.get("accounts") or accts.get("items") or []
-    if not accts:
-        pytest.skip("no admin accounts available for pairing")
-    account_id = accts[0].get("id") or accts[0].get("_id")
-    assert account_id
-    r = sess.post(f"{BASE_URL}/api/infra/pairing",
-                  json={"account_id": account_id}, timeout=15)
-    assert r.status_code == 200, r.text
-    code = r.json()["code"]
-    assert code.startswith("PAIR-")
-    created_ids["pairing_codes"].append(code)
+    import uuid as _uuid
+    from pymongo import MongoClient
+    import os as _os
+    from dotenv import load_dotenv as _ld
+    _ld("/app/backend/.env")
+    mdb = MongoClient(_os.environ["MONGO_URL"])[_os.environ["DB_NAME"]]
+    uid = "iter112http-pair"
+    res = mdb.accounts.insert_one({
+        "user_id": "admin-user-id-placeholder", "mode": "demo",
+        "label": "http-pair-test",
+        "bridge_token": f"tok-{_uuid.uuid4().hex}"})
+    account_id = str(res.inserted_id)
+    # bind the synthetic account to the logged-in admin user id
+    me = sess.get(f"{BASE_URL}/api/auth/me", timeout=15).json()
+    admin_id = me.get("id") or me.get("user", {}).get("id")
+    mdb.accounts.update_one({"_id": res.inserted_id},
+                            {"$set": {"user_id": admin_id}})
+    try:
+        r = sess.post(f"{BASE_URL}/api/infra/pairing",
+                      json={"account_id": account_id}, timeout=15)
+        assert r.status_code == 200, r.text
+        code = r.json()["code"]
+        assert code.startswith("PAIR-")
+        # digest-only storage — plaintext code is not in the DB
+        assert mdb.ea_pairing_codes.find_one({"code": code}) is None
 
-    # claim WITHOUT auth
-    r = requests.post(f"{BASE_URL}/api/infra/pairing/claim",
-                      json={"code": code}, timeout=15)
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body.get("bridge_token")
-    assert body.get("account_id") == account_id
+        # claim without terminal binding → 400
+        r = requests.post(f"{BASE_URL}/api/infra/pairing/claim",
+                          json={"code": code}, timeout=15)
+        assert r.status_code == 400
 
-    # re-claim → 401 already used
-    r = requests.post(f"{BASE_URL}/api/infra/pairing/claim",
-                      json={"code": code}, timeout=15)
-    assert r.status_code == 401
+        # claim WITHOUT auth, bound to exactly one terminal
+        r = requests.post(
+            f"{BASE_URL}/api/infra/pairing/claim",
+            json={"code": code,
+                  "terminal": {"terminal_path": "C:\\STOIC\\MT5\\a\\",
+                               "host_fingerprint": "host-http"}},
+            timeout=15)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body.get("bridge_token", "").startswith("tok_")  # rotated
+        assert body.get("account_id") == account_id
+        assert body.get("connected") is False
+
+        # re-claim → 401 already claimed
+        r = requests.post(
+            f"{BASE_URL}/api/infra/pairing/claim",
+            json={"code": code,
+                  "terminal": {"terminal_path": "x",
+                               "host_fingerprint": "y"}}, timeout=15)
+        assert r.status_code == 401
+    finally:
+        mdb.accounts.delete_one({"_id": res.inserted_id})
+        mdb.ea_pairing_codes.delete_many({"account_id": account_id})
+        mdb.ea_deployments.delete_many({"account_id": account_id})
+        mdb.installations.delete_many({"account_id": account_id})
+        mdb.execution_leases.delete_many({"account_id": account_id})
 
 
 # ── overview + certification ────────────────────────────────────

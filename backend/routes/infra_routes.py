@@ -337,7 +337,12 @@ async def create_pairing(payload: dict, user=Depends(get_current_user)):
     from vps_agent import create_pairing_code
     try:
         return await create_pairing_code(
-            get_db(), user["id"], str(payload.get("account_id") or ""))
+            get_db(), user["id"], str(payload.get("account_id") or ""),
+            expected_login=payload.get("expected_login"),
+            expected_server=payload.get("expected_server"),
+            revoke_existing=bool(payload.get("revoke_existing")))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         if "not found" in str(e):
             raise HTTPException(status_code=404, detail=str(e))
@@ -350,10 +355,65 @@ async def create_pairing(payload: dict, user=Depends(get_current_user)):
 async def claim_pairing(payload: dict):
     from vps_agent import claim_pairing_code
     try:
-        return await claim_pairing_code(get_db(),
-                                        str(payload.get("code") or ""))
+        return await claim_pairing_code(
+            get_db(), str(payload.get("code") or ""),
+            payload.get("terminal") or {})
+    except ValueError as e:
+        if "terminal" in str(e):
+            raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+@router.get("/ea-deployments")
+async def list_ea_deployments(user=Depends(get_current_user)):
+    from vps_agent import DEPLOY_STATES, LEASE_SECONDS
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    out = []
+    async for d in db.ea_deployments.find(
+            {"user_id": user["id"]}).sort("created_at", -1).limit(20):
+        lease = await db.execution_leases.find_one(
+            {"account_id": d["account_id"]})
+        lease_active = bool(lease and not lease.get("revoked")
+                            and _aware(lease["expires_at"]) > now)
+        out.append({
+            "ea_deployment_id": d["ea_deployment_id"],
+            "account_id": d["account_id"], "state": d["state"],
+            "connected": d["state"] == "READY_FOR_SHADOW" and lease_active,
+            "state_history": d.get("state_history") or [],
+            "expected_login": d.get("expected_login"),
+            "expected_server": d.get("expected_server"),
+            "execution_owner": (lease or {}).get("installation_id"),
+            "lease_active": lease_active})
+    return {"deployments": out, "states": DEPLOY_STATES,
+            "lease_seconds": LEASE_SECONDS}
+
+
+@router.post("/ea-deploy/progress")
+async def ea_deploy_progress(payload: dict):
+    """Agent-reported install progress (HOST_INSPECTED, ARTIFACT_VERIFIED,
+    EA_INSTALLED, FAILED). Heartbeat-driven states are backend-only."""
+    from vps_agent import (AGENT_PROGRESS_STATES, advance_ea_deployment,
+                           agent_by_token)
+    db = get_db()
+    try:
+        agent = await agent_by_token(
+            db, str(payload.get("agent_token") or ""))
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
+    state = str(payload.get("state") or "")
+    if state not in AGENT_PROGRESS_STATES:
+        raise HTTPException(status_code=400, detail=(
+            f"agents may only report {sorted(AGENT_PROGRESS_STATES)}"))
+    account_id = str(payload.get("account_id") or "")
+    dep = await db.ea_deployments.find_one(
+        {"account_id": account_id, "user_id": agent["user_id"]})
+    if not dep:
+        raise HTTPException(status_code=404,
+                            detail="no deployment for that account")
+    out = await advance_ea_deployment(db, account_id, state,
+                                      str(payload.get("detail") or ""))
+    return {"ok": True, "state": (out or {}).get("state")}
 
 
 # ── Path B: connect existing VPS ────────────────────────────────
