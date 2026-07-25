@@ -9,7 +9,7 @@ import {
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers, BadgeCheck,
-    FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound, Store,
+    FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound, Store, Server,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -55,6 +55,7 @@ const SECTIONS = [
             { to: "/strategies", label: "Strategies", icon: Sparkles, testid: "nav-strategies" },
             { to: "/marketplace", label: "Marketplace", icon: Store, testid: "nav-marketplace" },
             { to: "/agents", label: "Agents", icon: Cpu, testid: "nav-agents" },
+            { to: "/infrastructure", label: "Infrastructure", icon: Server, testid: "nav-infrastructure" },
             { to: "/research", label: "Research Agent", icon: Brain, testid: "nav-research" },
         ],
     },

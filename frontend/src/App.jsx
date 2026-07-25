@@ -48,6 +48,7 @@ import ResetPassword from "@/pages/ResetPassword";
 // Route-level code splitting — heavy/rarely-visited surfaces load on demand
 const Research = lazy(() => import("@/pages/Research"));
 const Analytics = lazy(() => import("@/pages/Analytics"));
+const Infrastructure = lazy(() => import("@/pages/Infrastructure"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const EnterpriseApi = lazy(() => import("@/pages/EnterpriseApi"));
 const PublicPerformance = lazy(() => import("@/pages/PublicPerformance"));
@@ -121,6 +122,7 @@ function App() {
                         <Route path="/affiliate" element={<ProtectedRoute><Affiliate /></ProtectedRoute>} />
                         <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
                         <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
+                        <Route path="/infrastructure" element={<ProtectedRoute><Infrastructure /></ProtectedRoute>} />
                         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                         <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
                         <Route path="/faq" element={<ProtectedRoute><FAQ /></ProtectedRoute>} />

@@ -1,0 +1,37 @@
+{
+  "summary": "iter-112 VPS infrastructure end-to-end verified. Backend: existing unit suite 15/15 pass + new HTTP contract suite 15/15 pass (providers list w/ partner gating, vultr connect returns masked key, /brokers/catalog, /recommend for IC Markets → recommended_region=london + capacity plan 4vcpu-8gb + research_workload note mentions 'separate worker', /deployments idempotency by header, mode=shadow / state=REQUESTED, bootstrap issued with bst_ prefix, simulated state machine advances to READY within ~28s, full agent lifecycle over HTTP: bootstrap installer PS1 served on valid token, 401 on bogus, register → agent_id+agent_token, re-register with same bootstrap → 401 single-use, heartbeat OK, hardening returns complete=false with rdp_restricted in missing, mt5 instance directory C:\\STOIC\\MT5\\account-99001\\, deployment then READY, pairing PAIR-XXXX-XXXX flow with claim + double-claim 401, /overview + /certification correct shapes (8 checks, initial_mode=shadow), unauth session endpoints 401/403). Frontend: /infrastructure loads via sidebar nav-infrastructure (verified from dashboard), full Path A wizard (path→provider(simulated)→broker(IC Markets, mt5=3)→recommend=LONDON+4vcpu-8gb→review→create), wizard-result renders bootstrap-command with iwr URL + bst_ token, deployment appears in deployment-jobs list and state advances on 15s poll (observed VALIDATING on refresh), shadow-certification card renders all 8 cert-* tiles with PASS/FAIL badges. Cleanup: 1 UI-created simulated deployment + related bootstrap tokens + vultr creds deleted; test-created pairing codes (used=true) purged.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Infrastructure / broker step", "issues": ["React hydration warning: '<span> cannot be a child of <option>' — visual editor injects x-* spans inside <option> children. Cosmetic, no functional break, likely from a dev-only overlay. Consider suppressing the visual-editor wrapper on <option> children."]},
+      {"screen": "Global", "issues": ["Pre-existing wss:///api/ws 403 handshake errors persist (carried from earlier iterations, unrelated to iter-112).", "Recharts width(-1)/height(-1) warning still present on cold nav (carried)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter112_vps.py",
+    "/app/backend/tests/test_iter112_vps_http.py",
+    "/app/test_reports/pytest/iter97_vps_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "vps_deployments.advance_deployment for simulated provider computes state purely from wall-clock elapsed since created_at — restarting the backend within 28s of a REQUESTED simulated deployment can jump the state machine multiple steps in one GET (crossed[] captures every step so state_history is correct, but clients only see the final state). Fine for a demo/simulated provider; document this so ops don't mistake the behaviour for a bug on real providers.",
+    "infra_routes.create_pairing catches bare Exception and always returns 400. Malformed ObjectId returns 400 which is right, but a genuine ValueError('account not found') from vps_agent.create_pairing_code should ideally be 404. Minor.",
+    "infra_routes.py line 3 imports statistics but never uses it (dead import).",
+    "Unused imports and no-Content-Type checks on agent endpoints are fine given the JSON body is optional and .get()'s handle it, but consider validating Content-Type=application/json for safer parsing.",
+    "vps_deployments.recommend_capacity accepts negative mt5_instances silently (max(1, n)) — worth surfacing a 400 if the client sends 0/negative rather than transparently clamping.",
+    "The 'existing_vps' path automatically issues a bootstrap token via create_deployment_ep — if the client also passes issue_bootstrap:true and this becomes idempotent (retry), a second bootstrap token is minted every POST retry even though the deployment is the same. Consider gating the token issuance behind 'new deployment created' (dep created_at == now).",
+    "Bootstrap installer endpoint returns 401 on invalid tokens but writes no audit_log entry. For a security-sensitive one-time-token flow, add an audit_log write on both success and failure attempts."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter112_vps_http.py"
+  ],
+  "success_rate": {"backend": "100% (15 unit + 15 HTTP = 30/30)", "frontend": "100% (nav + full wizard + deployment poll + certification card)"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "HTTP tests created 3 simulated deployments (2 for idempotency+advance, 1 for existing_vps agent lifecycle) + 1 vultr provider cred + 1 pairing code (via a synthetic account inserted by the create_pairing helper for the module UID). All are cleaned in test_zz_cleanup via direct DB writes tied to the module-scoped `created_ids` list. UI test created 1 additional simulated deployment (dep_f679c7e1ef) which was purged post-run via a targeted admin cleanup script.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-112 VPS integration is fully green — 30/30 tests pass end-to-end. Preview URL: https://stoic-trading.preview.emergentagent.com. Certification card shows 5/8 PASS in the current preview (market_data_receiving/ea_heartbeat/clock_synchronization FAIL — expected because there are no fresh MT5 candles / EA heartbeats / registered agent metrics for admin). Backend TCP probe to IC Markets from the preview cluster measured ~5ms median (well below the 40 threshold). Sidebar nav-infrastructure testid is only present when viewing from a page other than /infrastructure itself (the sidebar collapses on that route on wide screens? — verified working from /dashboard). No blocking issues left. If the visual-editor <span>-in-<option> hydration warning becomes a concern, gate the dev overlay off <option> children.",
+  "rca of the issue": "N/A — no issues found."
+}

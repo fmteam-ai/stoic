@@ -294,6 +294,7 @@ from routes.coach_routes import router as coach_router  # noqa: E402
 from routes.marketplace_routes import router as marketplace_router  # noqa: E402
 from routes.config_version_routes import router as config_version_router  # noqa: E402
 from routes.liveops_routes import router as liveops_router  # noqa: E402
+from routes.infra_routes import router as infra_router  # noqa: E402
 api_router.include_router(learning_router)
 api_router.include_router(governance_router)
 api_router.include_router(twin_router)
@@ -302,6 +303,7 @@ api_router.include_router(coach_router)
 api_router.include_router(marketplace_router)
 api_router.include_router(config_version_router)
 api_router.include_router(liveops_router)
+api_router.include_router(infra_router)
 
 
 # ---------- WebSocket ----------
