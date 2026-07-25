@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     HelpCircle, Search, ChevronDown, Rocket, Brain, ShieldCheck,
-    Plug, CreditCard, Lock, MessageCircle, Wrench,
+    Plug, CreditCard, Lock, MessageCircle, Wrench, Server, Activity,
 } from "lucide-react";
 
 // ─── FAQ data ────────────────────────────────────────────────────────────────
@@ -14,6 +14,8 @@ const CATEGORIES = [
     { id: "signals", label: "AI Signals",       icon: Brain },
     { id: "risk",    label: "Risk & Trading",   icon: ShieldCheck },
     { id: "mt5",     label: "MT5 Bridge",       icon: Plug },
+    { id: "infra",   label: "VPS & Infrastructure", icon: Server },
+    { id: "modes",   label: "Modes & Safety",   icon: Activity },
     { id: "billing", label: "Billing & Plans",  icon: CreditCard },
     { id: "security",label: "Security & 2FA",   icon: Lock },
     { id: "alerts",  label: "Notifications",    icon: MessageCircle },
@@ -75,11 +77,37 @@ const FAQS = [
     { cat: "mt5", q: "My account shows as DISCONNECTED. How do I fix it?",
       a: "The EA hasn't sent a heartbeat in 5+ minutes. Check: (1) MT5 is open and AutoTrading is ON, (2) the EA is attached to a chart and showing 🙂 (not ☹️), (3) WebRequest URL is whitelisted in MT5 → Tools → Options → Expert Advisors, (4) the bridge token in the EA inputs matches the one on the Accounts page." },
     { cat: "mt5", q: "Where do I find my bridge token?",
-      a: "Accounts page → click the eye icon next to your account label. Treat it like a password — anyone with that token can place trades on your MT5 account." },
+      a: "Accounts page → click the eye icon next to your account label. Treat it like a password — anyone with that token can place trades on your MT5 account. Note: claiming an EA pairing code (Infrastructure flow) ROTATES this token automatically, so a previously copied token stops working after a new pairing." },
     { cat: "mt5", q: "What is a paper account?",
       a: "An internal sandbox that simulates trade execution without touching any real broker. Use it to test the full signal-to-execution pipeline, evaluate STOIC's edge, and try config changes risk-free. P&L is calculated as if filled at the live price." },
     { cat: "mt5", q: "Can I use the same MT5 account on two devices?",
-      a: "Yes, but only ONE MT5 terminal should be running the EA per bridge token — otherwise you'll see duplicate fills. If you need two terminals, create a second MT5 account in STOIC (counts as 1 of your 3 per-broker slots)." },
+      a: "STOIC now ENFORCES a single-writer execution lease per account: the terminal that claims the pairing holds the lease and is the only one allowed to execute trades. Pairing a new terminal rotates the bridge token and takes over cleanly — the old terminal loses execution rights instantly. Duplicate fills are impossible by design." },
+
+    // VPS & Infrastructure ───────────────────────────────────────────────────
+    { cat: "infra", q: "How do I get a 24/7 VPS through STOIC?",
+      a: "Infrastructure page → NEW DEPLOYMENT → 'Provision for me' (Path A). Pick a provider (Vultr works today with your own API key — stored encrypted; ForexVPS/CNS/Beeks partner integrations are staged), STOIC recommends the region closest to your broker via a live latency probe and sizes the server by how many accounts you run. The pipeline then installs the STOIC Agent, MT5 and the EA automatically and shows every state until READY." },
+    { cat: "infra", q: "I already have a Windows VPS. Can I connect it?",
+      a: "Yes — Path B. Infrastructure → CONNECT EXISTING VPS. You get a single-use enrollment code (valid 20 minutes) plus a 3-step PowerShell command that downloads the STOIC Agent, verifies its signature and SHA-256 hash, then enrolls. STOIC never asks for your RDP password." },
+    { cat: "infra", q: "What does the STOIC Agent do on my VPS?",
+      a: "It sends infrastructure heartbeats (CPU, memory, uptime), discovers MT5 terminals already installed (you decide per terminal: CLONE SAFE / MANAGE / LEAVE UNMANAGED), isolates each managed account in its own MT5 instance folder, runs an 11-point security hardening checklist, and executes queued install/repair commands from the Infrastructure page." },
+    { cat: "infra", q: "What is an EA pairing code?",
+      a: "A PAIR-XXXX-XXXX code — single-use, expires in 10 minutes, and stored server-side only as a SHA-256 digest (never plaintext). Claiming it binds that exact terminal to your account and ROTATES the account's bridge token, instantly invalidating any older copies floating around." },
+    { cat: "infra", q: "Why can only one terminal trade my account?",
+      a: "Every account has a strict single-writer execution lease. Exactly one paired terminal holds the lease and may execute; any other terminal can observe but never place orders. This makes duplicate fills — the classic multi-terminal EA disaster — structurally impossible." },
+
+    // Modes & Safety ─────────────────────────────────────────────────────────
+    { cat: "modes", q: "What are the trading modes?",
+      a: "The mode ladder: SHADOW (signals only, no execution) → DEMO → SUPERVISED-LIVE (real money at half size) → AUTONOMOUS-LIVE (full autonomy). Promotions require hard evidence + a step-up MFA confirmation and pass through the promotion gate. Demotions are instant and never need confirmation — safety always moves fast downward, slow upward." },
+    { cat: "modes", q: "What is the Shadow Health Score?",
+      a: "A 0-100 composite of 7 components: data freshness, regime confidence, calibration quality, execution quality, broker stability, worker health, and synchronization. It FAILS CLOSED — a missing critical component scores 0, not 'unknown'. Overall < 60 or any fail-closed condition pauses all promotions and blocks autonomous-live entries." },
+    { cat: "modes", q: "Why was my bot demoted automatically?",
+      a: "The Mode Guardian samples health every 5 minutes. Overall < 60 sustained ≥ 15 min → demoted to supervised-live. < 40 → defensive. Broker-truth uncertainty (broker stability or synchronization missing/zero) → observe. Every demotion is audited, alerted, and listed on the Bot Health page's Mode Guardian card." },
+    { cat: "modes", q: "How do I get promoted back after a demotion?",
+      a: "Recovery is NEVER automatic. You need 24 hours of green health since the demotion (≥ 10 healthy samples, none below 60 or fail-closed). Only then does the promotion gate unlock — and re-promotion still requires the usual evidence + step-up MFA." },
+    { cat: "modes", q: "Can I roll back a config change?",
+      a: "Yes. Every config save is recorded as an immutable version (applied atomically — config, version, pointer and audit as one unit). Bot Config → Config Versions card → ROLLBACK (step-up MFA required). A rollback can restore any setting but can NEVER raise your operational mode." },
+    { cat: "modes", q: "What is broker certification?",
+      a: "Before autonomous-live, every live account's broker must be scored CERTIFIED or ACCEPTABLE on its specs — symbol mappings, fill quality, spread behavior, stops levels. A blocked promotion returns the exact failing evidence so you know what to fix." },
 
     // Billing ────────────────────────────────────────────────────────────────
     { cat: "billing", q: "How can I see my current plan?",

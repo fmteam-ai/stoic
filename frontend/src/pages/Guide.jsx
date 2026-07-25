@@ -29,10 +29,11 @@ const SECTIONS = [
     { id: "advanced",     title: "17. Advanced — tuning & auditing",   icon: SettingsIcon },
     { id: "presets",      title: "18. Strategy Presets",               icon: Bookmark },
     { id: "crypto",       title: "19. Crypto · Binance Spot",          icon: Bitcoin },
-    { id: "vps",          title: "20. VPS — 24/7 uptime",              icon: Server },
-    { id: "going-live",   title: "21. Going live (paper → real)",      icon: TrendingUp },
-    { id: "affiliate",    title: "22. Earn 20% recurring (affiliate)", icon: DollarSign },
-    { id: "faq",          title: "23. Quick links",                    icon: Zap },
+    { id: "vps",          title: "20. VPS & Infrastructure",           icon: Server },
+    { id: "governance",   title: "21. Safety Modes & Governance",      icon: Activity },
+    { id: "going-live",   title: "22. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "23. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "24. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -109,6 +110,7 @@ export default function Guide() {
                     <PresetsSection />
                     <CryptoSection />
                     <VpsSection />
+                    <GovernanceSection />
                     <GoingLive />
                     <AffiliateSection />
                     <QuickLinks />
@@ -498,9 +500,17 @@ function SetupSteps() {
                 </Step>
                 <Step n="3" title="Install the EA bridge (live accounts only)" testid="step-ea">
                     <p>Click <strong>Download EA</strong> on your live account row → drop <code className="text-[#00FF41]">EmergentTradingBridge.mq5</code> into your MT5 <code>MQL5/Experts</code> folder. Attach it to any chart, paste the bridge token in the EA inputs, and make sure AutoTrading is ON + the STOIC URL is whitelisted in MT5 → Tools → Options → Expert Advisors → WebRequest.</p>
+                    <Callout kind="good">
+                        <strong>Easier path — let Infrastructure do it:</strong> the{" "}
+                        <Link to="/infrastructure" className="underline text-[#00FF41]">Infrastructure</Link> page can
+                        provision a VPS (or connect your existing one) and install MT5 + the EA for you, pairing via a
+                        single-use <span className="font-mono text-[11px]">PAIR-XXXX-XXXX</span> code instead of manual
+                        token copy-paste. See section 20.
+                    </Callout>
                     <Callout kind="warn">
                         <strong>For 24/7 autopilot:</strong> your MT5 terminal must stay open. Use a VPS (Forex VPS providers
-                        run ~$5–15/mo) so the EA can poll for orders even when your laptop is off.
+                        run ~$5–15/mo) so the EA can poll for orders even when your laptop is off. Note: only ONE terminal
+                        can hold the execution lease per account — pairing a new terminal rotates the token and takes over.
                     </Callout>
                 </Step>
                 <Step n="4" title="Configure your bot" testid="step-config">
@@ -904,7 +914,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>21. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>22. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -916,6 +926,11 @@ function GoingLive() {
                 <strong>Realistic expectation:</strong> STOIC aims for ~55–65% win rate at 1.5–2.5 R:R — that translates to
                 ~6–12% monthly when sized correctly. Anything claiming &quot;200% / month consistently&quot; is selling fantasy.
             </Callout>
+            <Callout kind="info">
+                <strong>Note — the mode ladder applies here too:</strong> going live isn&apos;t just a subscription toggle.
+                Your bot climbs SHADOW → DEMO → SUPERVISED-LIVE (half size) → AUTONOMOUS-LIVE through the governed
+                promotion gate described in section 21 — evidence, green health, certified broker, step-up MFA.
+            </Callout>
         </section>
     );
 }
@@ -923,17 +938,60 @@ function GoingLive() {
 function VpsSection() {
     return (
         <section>
-            <H2 id="vps" icon={Server}>20. VPS — 24/7 uptime (eliminate disconnects)</H2>
+            <H2 id="vps" icon={Server}>20. VPS & Infrastructure — 24/7 uptime, fully managed</H2>
             <P>
                 Autopilot only works while your <strong className="text-white">MT5 terminal is running and online</strong>.
                 If your PC sleeps, closes its lid, reboots, or loses internet — the bot loses contact with your broker,
-                pending trades stall, and stop-losses can drift. The industry-standard fix is to move MT5 onto a{" "}
-                <strong className="text-[#FFD700]">virtual private server (VPS)</strong> that&apos;s online 24/7.
+                pending trades stall, and stop-losses can drift. STOIC solves this with a dedicated{" "}
+                <Link to="/infrastructure" className="text-[#00FF41] hover:underline">Infrastructure</Link> page that
+                provisions and manages a <strong className="text-[#FFD700]">virtual private server (VPS)</strong> for you —
+                two paths, depending on whether you already own one.
             </P>
 
+            <div className="grid md:grid-cols-2 gap-3 mt-4" data-testid="guide-vps-paths">
+                <div className="border border-[#00FF41]/30 bg-[#00FF41]/5 p-4" data-testid="guide-vps-path-a">
+                    <div className="font-mono text-[10px] text-[#00FF41] tracking-widest mb-1">PATH A · PROVISION FOR ME</div>
+                    <div className="font-display font-bold text-base mb-2">STOIC creates the VPS</div>
+                    <ul className="text-xs text-[#A1A1AA] leading-relaxed space-y-1.5">
+                        <li>• Pick a provider — <strong className="text-white">Vultr</strong> works today with your own API key (stored encrypted); ForexVPS / CNS / Beeks partner integrations are staged.</li>
+                        <li>• STOIC recommends the <strong className="text-white">region closest to your broker</strong> using a live latency probe (median / p95 / jitter shown before you commit).</li>
+                        <li>• Server capacity is sized by how many MT5 accounts you run (1-2 → 2vCPU/4GB up to 6-10 → 8vCPU/16GB).</li>
+                        <li>• The pipeline then runs itself: server boot → STOIC Agent → MT5 install → EA install → validation → <strong className="text-[#00FF41]">READY</strong>. Every state is visible on the Deployment Jobs board.</li>
+                    </ul>
+                </div>
+                <div className="border border-[#FFD700]/30 bg-[#FFD700]/5 p-4" data-testid="guide-vps-path-b">
+                    <div className="font-mono text-[10px] text-[#FFD700] tracking-widest mb-1">PATH B · CONNECT EXISTING VPS</div>
+                    <div className="font-display font-bold text-base mb-2">Bring your own Windows VPS</div>
+                    <ul className="text-xs text-[#A1A1AA] leading-relaxed space-y-1.5">
+                        <li>• Click <strong className="text-white">CONNECT EXISTING VPS</strong> — you get a single-use <strong className="text-white">enrollment code</strong> (valid 20 minutes) and a 3-step PowerShell command.</li>
+                        <li>• The command downloads the STOIC Agent, <strong className="text-white">verifies its signature and SHA-256 hash</strong>, then enrolls. STOIC never asks for your RDP password.</li>
+                        <li>• The Agent discovers MT5 terminals already installed on the box — you choose per terminal: <strong className="text-white">CLONE SAFE</strong>, MANAGE, or LEAVE UNMANAGED.</li>
+                        <li>• From then on the Agent reports CPU / memory / uptime heartbeats and runs an 11-point security hardening checklist.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <Callout kind="good">
+                <strong>Hardened EA pairing (no more copy-pasting tokens):</strong> managed terminals pair via a{" "}
+                <span className="font-mono text-[11px]">PAIR-XXXX-XXXX</span> code — single-use, expires in 10 minutes,
+                stored server-side only as a cryptographic digest. Claiming a code binds that exact terminal to your
+                account and <strong>rotates the account&apos;s bridge token</strong>, instantly invalidating any older copies.
+                A strict <strong>single-writer execution lease</strong> guarantees exactly ONE terminal can ever execute
+                trades for an account — duplicate fills are impossible by design.
+            </Callout>
+
+            <Callout kind="warn">
+                <strong>New deployments always start in SHADOW mode</strong> — signals only, zero execution — regardless of
+                which path you used. Going live requires walking the mode ladder in section 21.
+            </Callout>
+
+            <div className="mt-5">
+                <CTAButton to="/infrastructure" testid="guide-cta-infrastructure">OPEN INFRASTRUCTURE</CTAButton>
+            </div>
+
             <Callout kind="info">
-                <strong>RoboForex users:</strong> a Free VPS is available when your account equity is ≥ $300{" "}
-                <em>and</em> you trade at least 3 standard lots per month.
+                <strong>Prefer a fully manual setup?</strong> The classic route below still works — e.g. RoboForex users get
+                a Free VPS when account equity is ≥ $300 <em>and</em> you trade at least 3 standard lots per month.
                 Activate it from your{" "}
                 <a href="https://roboforex.com/clients/services/forex-vps/" target="_blank" rel="noreferrer"
                     className="text-[#00FF41] hover:underline">RoboForex VPS service page</a>{" "}
@@ -941,7 +999,7 @@ function VpsSection() {
                 If you don&apos;t meet the volume requirement, the VPS is available for $5/month from the same page.
             </Callout>
 
-            <div className="font-display font-bold text-base mt-6 mb-2">Step-by-step · RoboForex Free VPS</div>
+            <div className="font-display font-bold text-base mt-6 mb-2">Manual step-by-step · RoboForex Free VPS</div>
             <div className="space-y-3">
                 <Step n="1" title="Eligibility check" testid="guide-vps-step-1">
                     Log in to your{" "}
@@ -1096,7 +1154,7 @@ function PresetsSection() {
 function AffiliateSection() {
     return (
         <section>
-            <H2 id="affiliate" icon={DollarSign}>22. Earn 20% recurring (affiliate program)</H2>
+            <H2 id="affiliate" icon={DollarSign}>23. Earn 20% recurring (affiliate program)</H2>
             <P>
                 Refer one trader — get paid every month they stay subscribed. STOIC pays{" "}
                 <strong className="text-[#FFD700]">20% recurring commission</strong> on the base subscription fee for the
@@ -1175,6 +1233,8 @@ function QuickLinks() {
         { to: "/crypto", label: "Crypto · Binance" },
         { to: "/trades", label: "Trades" },
         { to: "/shadow-performance", label: "Shadow Report" },
+        { to: "/infrastructure", label: "Infrastructure · VPS" },
+        { to: "/bot-health", label: "Bot Health" },
         { to: "/research", label: "Research Agent" },
         { to: "/portfolio", label: "Portfolio Risk" },
         { to: "/execution", label: "Execution Intel" },
@@ -1186,7 +1246,7 @@ function QuickLinks() {
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>23. Quick links</H2>
+            <H2 id="faq" icon={Zap}>24. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (
@@ -1198,7 +1258,7 @@ function QuickLinks() {
                 ))}
             </div>
             <Callout kind="info">
-                Still stuck? Open <Link to="/faq" className="text-[#00FF41] hover:underline">FAQ</Link> for the 40 most common
+                Still stuck? Open <Link to="/faq" className="text-[#00FF41] hover:underline">FAQ</Link> for the 55 most common
                 questions, or use the <Link to="/commander" className="text-[#00FF41] hover:underline">Risk Commander</Link> chat for ad-hoc questions about market state, the bot&apos;s reasoning, or your portfolio.
             </Callout>
         </section>
@@ -1370,6 +1430,100 @@ function CryptoSection() {
                 + your full balance breakdown.
             </Callout>
             <CTAButton to="/crypto" testid="cta-crypto">Open Crypto · Binance →</CTAButton>
+        </section>
+    );
+}
+
+function GovernanceSection() {
+    const ladder = [
+        { name: "SHADOW",          color: "#52525B", d: "Signals only — the full pipeline runs, nothing executes. Every new deployment starts here." },
+        { name: "DEMO",            color: "#0099FF", d: "Executes on demo/paper accounts. Validates the whole signal-to-fill chain risk-free." },
+        { name: "SUPERVISED-LIVE", color: "#FFB000", d: "Real money at HALF size. Operator watches; promotion gate required to enter." },
+        { name: "AUTONOMOUS-LIVE", color: "#00FF41", d: "Full autonomy at full size. Requires certified brokers + green health + evidence." },
+    ];
+    return (
+        <section>
+            <H2 id="governance" icon={Activity}>21. Safety Modes & Governance</H2>
+            <P>
+                STOIC treats going live as a <strong className="text-white">governed promotion</strong>, not a toggle.
+                Every bot walks a mode ladder where promotions are slow, evidence-based, and MFA-confirmed — while
+                demotions are instant and automatic. This is the layer that keeps a degraded system from ever trading
+                at full authority.
+            </P>
+
+            <div className="border border-[#1F1F1F] bg-[#0A0A0A] mt-4" data-testid="guide-mode-ladder">
+                <div className="px-4 py-2 border-b border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
+                    THE MODE LADDER — SLOW UP · FAST DOWN
+                </div>
+                <ol className="divide-y divide-[#1F1F1F]">
+                    {ladder.map((m, i) => (
+                        <li key={m.name} className="flex items-start gap-3 px-4 py-3">
+                            <div className="shrink-0 w-6 h-6 rounded-full border flex items-center justify-center font-mono text-[10px]"
+                                style={{ borderColor: m.color, color: m.color }}>{i + 1}</div>
+                            <div className="flex-1">
+                                <div className="font-display font-bold text-sm" style={{ color: m.color }}>{m.name}</div>
+                                <div className="text-xs text-[#A1A1AA] leading-relaxed mt-0.5">{m.d}</div>
+                            </div>
+                        </li>
+                    ))}
+                </ol>
+            </div>
+
+            <div className="space-y-3 mt-4">
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1.5">SHADOW HEALTH SCORE — FAILS CLOSED</div>
+                    <P>
+                        A 0-100 composite of <strong className="text-white">7 components</strong> (data freshness, regime
+                        confidence, calibration, execution quality, broker stability, worker health, synchronization).
+                        Missing critical data scores <strong className="text-[#FF3B30]">0, not &quot;unknown&quot;</strong> — the
+                        system never assumes health it can&apos;t prove. Overall &lt; 60 or any fail-closed condition pauses
+                        all promotions and blocks autonomous-live entries. Live on the{" "}
+                        <Link to="/bot-health" className="text-[#00FF41] hover:underline">Bot Health</Link> page.
+                    </P>
+                </div>
+                <div className="border border-[#FFB000]/30 bg-[#FFB000]/5 p-4">
+                    <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-1.5">MODE GUARDIAN — AUTO-DEMOTION LADDER</div>
+                    <ul className="text-sm text-[#A1A1AA] space-y-1.5">
+                        <li>• Health &lt; 60 sustained ≥ 15 min → <strong className="text-white">supervised-live</strong></li>
+                        <li>• Health &lt; 40 → <strong className="text-white">defensive</strong> (half risk, 1 trade)</li>
+                        <li>• Broker-truth uncertainty (stability / sync missing) → <strong className="text-white">observe</strong></li>
+                    </ul>
+                    <P>
+                        Every demotion is version-recorded, audited, and alerted. Recovery is{" "}
+                        <strong className="text-white">never automatic</strong>: re-promotion unlocks only after{" "}
+                        <strong className="text-[#00FF41]">24 hours of green health</strong> (≥ 10 healthy samples, none
+                        below 60) — and still requires evidence + step-up MFA at the gate.
+                    </P>
+                </div>
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1.5">IMMUTABLE CONFIG PROMOTION + ROLLBACK</div>
+                    <P>
+                        Every config save is recorded as an <strong className="text-white">immutable version</strong> —
+                        config, version snapshot, pointer, and audit entry applied as one atomic unit. The{" "}
+                        <strong className="text-white">Config Versions</strong> card in Bot Config lets you roll back to the
+                        previous version with one click (step-up MFA) — and a rollback can{" "}
+                        <strong className="text-[#FF3B30]">never raise</strong> your operational mode.
+                    </P>
+                </div>
+                <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
+                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1.5">BROKER CERTIFICATION</div>
+                    <P>
+                        Autonomous-live requires every live account&apos;s broker to score{" "}
+                        <strong className="text-[#00FF41]">CERTIFIED</strong> or <strong className="text-white">ACCEPTABLE</strong>{" "}
+                        on its specs — symbol mappings, fill quality, spread behavior, stops levels. A blocked promotion
+                        returns the exact failing evidence so you know precisely what to fix.
+                    </P>
+                </div>
+            </div>
+
+            <Callout kind="info">
+                <strong>Operator toolkit:</strong> five one-click audited actions — freeze trading, reduce exposure,
+                pause symbol, defensive mode, panic mode — are always available without MFA because they only ever{" "}
+                <em>reduce</em> authority. Raising authority is the only thing that needs the gate.
+            </Callout>
+            <div className="mt-4">
+                <CTAButton to="/bot-health" testid="guide-cta-bot-health">OPEN BOT HEALTH</CTAButton>
+            </div>
         </section>
     );
 }
