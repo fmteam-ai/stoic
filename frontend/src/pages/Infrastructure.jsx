@@ -44,7 +44,7 @@ export default function Infrastructure() {
                     {deployments.map((d) => (
                         <div key={d.deployment_id} className="border border-[#141414] p-2" data-testid={`deployment-${d.deployment_id}`}>
                             <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-mono text-[10px] text-white">{d.deployment_id}</span>
+                                <span className="font-mono text-[10px] text-white">{d.meta?.label ? `${d.meta.label} · ` : ""}{d.deployment_id}</span>
                                 <span className={`font-mono text-[8px] px-1.5 py-0.5 border ${STATE_CLS[d.state] || "text-[#FFD700] border-[#FFD700]/40"}`}>{d.state}</span>
                                 <span className="font-mono text-[8px] text-[#52525B]">{d.provider} · {d.region || "—"} · {d.plan || "—"} · mode {d.mode}</span>
                                 {d.server?.ip && <span className="font-mono text-[8px] text-[#A1A1AA]">ip {d.server.ip}</span>}

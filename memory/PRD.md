@@ -434,6 +434,19 @@ Two connection paths: (A) automated provisioning via provider adapters, (B) conn
 - Tests: test_iter112_vps.py (15) + test_iter112_vps_http.py (15, testing agent). iteration_97.json 100%/100%, zero action items. Post-review fixes: dead import, pairing 404, replay-safe bootstrap issuance. Manifest → **2,746 tests / 261 files**.
 - Note: preview cert board shows 5/8 PASS (no fresh candles/EA heartbeat/agent clock for admin — expected). Known cosmetic: visual-editor span-in-option hydration warning (dev-only overlay).
 
+## Iter-113 (2026-07-25) — Path B: Connect Existing VPS (iteration_98.json 100%, 42/42)
+Works with any Windows Forex VPS. Backend `vps_pathb.py` + /api/infra extensions:
+- **Connect flow** — POST /infra/vps/connect-existing (provider name/label/region/OS/mt5_installed — NO RDP password): deployment + enrollment code (XXX-NNN, single-use 20min, resolvable to bootstrap token) + safe 3-step install command (download → verify sig/SHA vs artifacts/manifest → run -EnrollmentCode). installer + register endpoints accept enrollment_code.
+- **Status ladder** — GET /infra/deployments/{id}/pathb-status: WAITING_FOR_AGENT (w/ bootstrap diagnostics) → AGENT_CONNECTED (register) → INSPECTING_SERVER (first heartbeat) → READY_FOR_SETUP (discovery posted).
+- **MT5 discovery** — agent POST /infra/agent/discovery (PS script scans ProgramFiles/AppData/processes); per-terminal decisions POST /infra/discovery/{id}/decision: manage (403 without explicit consent), unmanage, clone (safe default → C:\STOIC\MT5\account-<login>\ + install_mt5 command queued). **Single-writer guard**: same account_login managed/claimed elsewhere → 409 (never two terminals on one account).
+- **Command queue** — POST /infra/agents/{id}/commands (user), /infra/agent/commands/poll (deliver-once) + /ack. Failed command → COMPENSATION auto-queued (install_mt5→rollback_mt5, update_agent→rollback_agent, install_ea→restart_terminal) + alert.
+- **Health policies (failure matrix live)** — on heartbeat: disk<5GB → rotate_logs queued (deduped) + alert; |clock_offset|>1s → policy_flags.order_entry_disabled (+clears on recovery); check_unreachable (hb>10min) → commands_frozen + incident audit/alert (run_diagnostics still allowed). GET /infra/agents/{id}/health.
+- **Artifact service** — GET /infra/artifacts/manifest (public): stoic-agent + stoic-ea (real SHA-256 of EA file, version parsed from EA, rollback 1.53).
+- **Broker profile registry** — GET /infra/broker-profiles (seeded from catalog: server aliases, silent args, official-installer-required note); custom installers POST /infra/broker-installers (approved:false) + admin-only /approve.
+- **Failure matrix** — GET /infra/failure-matrix: the 10 failure→recovery rows.
+- UI: InfraWizard Path B form (pathb-*) + result (enrollment-code, pathb-command); Infrastructure page: PathBStatusLadder + DiscoveredTerminals (CLONE SAFE/MANAGE/LEAVE UNMANAGED) per existing_vps deployment, AgentHealthCard (queue commands, frozen/drift banners), FailureMatrixCard; deployment rows show meta.label.
+- Tests: test_iter113_pathb.py (18) + test_iter113_pathb_http.py (24, testing agent). iteration_98.json 100%/100%. Manifest → **2,788 tests / 263 files**.
+
 
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
 
