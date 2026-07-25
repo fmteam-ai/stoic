@@ -265,6 +265,52 @@ async def release_safety(request: Request):
             "principle": "only releases above the threshold can be promoted"}
 
 
+@router.get("/ops/soak")
+async def soak_report(request: Request, days: int = 14):
+    """Phase 2.2 — long-soak report: memory growth, worker restarts,
+    missed heartbeats, reconciliation backlog, suppressed failures."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    from datetime import timedelta
+    days = min(max(int(days), 1), 45)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    samples = await db.ops_soak_samples.find(
+        {"at": {"$gte": since}}).sort("at", 1).to_list(10000)
+    rss = [s["rss_mb"] for s in samples if s.get("rss_mb") is not None]
+    missed_hb = sum(1 for s in samples
+                    if (s.get("hb_age_max_s") or 0) > 600)
+    restarts = 0
+    prev_alive = None
+    for s in samples:
+        a = s.get("workers_alive")
+        if prev_alive is not None and a is not None and a < prev_alive:
+            restarts += 1
+        prev_alive = a if a is not None else prev_alive
+    recon_backlog = await db.broker_deals.count_documents(
+        {"financial_reconciliation_status": {"$nin": [None, "ok",
+                                                      "reconciled"]}})
+    from silent_failures import swallow_counters
+    chaos = await db.chaos_drills.find_one({}, sort=[("at", -1)]) or {}
+    return {"days": days, "samples": len(samples),
+            "memory": {"first_mb": rss[0] if rss else None,
+                       "last_mb": rss[-1] if rss else None,
+                       "max_mb": max(rss) if rss else None,
+                       "growth_pct": (round((rss[-1] - rss[0]) / rss[0]
+                                            * 100, 1)
+                                      if len(rss) > 1 and rss[0] else None)},
+            "worker_restart_events": restarts,
+            "missed_heartbeat_samples": missed_hb,
+            "reconciliation_backlog": recon_backlog,
+            "suppressed_failures": swallow_counters(),
+            "last_chaos": {"passed": chaos.get("passed"),
+                           "total": chaos.get("total")},
+            "note": ("Samples every ~10min (SOAK_SAMPLE_INTERVAL_SEC); "
+                     "TTL 45 days. Run the soak for 14-30 days and watch "
+                     "growth_pct, restarts and missed heartbeats.")}
+
+
 @router.get("/ops/swallowed")
 async def swallowed_exceptions(request: Request):
     """iter-103 — in-process counters of suppressed failures per component."""

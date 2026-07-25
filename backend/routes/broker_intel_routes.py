@@ -7,6 +7,13 @@ from database import get_db
 router = APIRouter(prefix="/broker-intel", tags=["broker-intel"])
 
 
+@router.get("/qualification")
+async def broker_qualification(user=Depends(get_current_user)):
+    """Phase 2.1 — evidence-based broker certification matrix."""
+    from broker_qualification import qualification_matrix
+    return await qualification_matrix(get_db(), user["id"])
+
+
 @router.get("")
 async def broker_intel(user=Depends(get_current_user)):
     """Live execution score for every connected broker + routing pick."""

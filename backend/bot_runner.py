@@ -1515,6 +1515,35 @@ async def _process_user_account_locked(db, cfg: dict):
                     asz["multiplier"], asz["risk_pct"], asz["components"])
             except Exception as e:  # noqa: BLE001
                 logger.warning("adaptive sizing failed: %s — using base risk", e)
+            # Phase 3.1 — capital stage cap (evidence-based, only lowers)
+            try:
+                from capital_stages import stage_risk_cap
+                cap, stage_info = await stage_risk_cap(db, user_id)
+                if cap is not None and \
+                        float(profile.get("risk_pct") or 0) > cap:
+                    profile = {**profile, "risk_pct": cap}
+                    signal["capital_stage"] = {
+                        "stage": stage_info["stage"],
+                        "label": stage_info["label"], "cap_pct": cap}
+                    logger.info("Capital stage %s caps risk at %.2f%% "
+                                "user=%s", stage_info["label"], cap, user_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("capital stage cap failed: %s", e)
+            # Phase 4.1 — subsystem self-monitoring conservatism
+            try:
+                from subsystem_health import subsystem_conservatism
+                csm = await subsystem_conservatism(db, user_id)
+                if csm["multiplier"] < 1.0:
+                    profile = {**profile, "risk_pct": max(0.05, round(
+                        float(profile.get("risk_pct") or 0.5)
+                        * csm["multiplier"], 3))}
+                    signal["subsystem_conservatism"] = {
+                        "multiplier": csm["multiplier"],
+                        "reason": csm["reason"]}
+                    logger.info("Subsystem conservatism ×%.2f (%s) user=%s",
+                                csm["multiplier"], csm["reason"], user_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("subsystem conservatism failed: %s", e)
         elif cfg.get("adaptive_risk_enabled"):
             try:
                 from adaptive_mode import compute_risk_multiplier

@@ -2,6 +2,7 @@ import { useEffect, useState, Fragment } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { BrokerMatrix } from "@/components/BrokerMatrix";
+import { BrokerQualificationMatrix } from "@/components/DemoReadinessPanels";
 import { BrokerIntelCard } from "@/components/BrokerIntelCard";
 import { Scale, Zap, DollarSign, Layers, Info } from "lucide-react";
 
@@ -74,6 +75,7 @@ export default function BrokerComparison() {
 
             <div className="p-4 md:p-8 space-y-4" data-testid="broker-comparison-page">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
+                <BrokerQualificationMatrix />
                 <BrokerIntelCard />
 
                 <div className="flex items-start gap-2 border border-[#1F1F1F] bg-[#0A0A0A] px-4 py-3">

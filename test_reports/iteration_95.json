@@ -1,0 +1,31 @@
+{
+  "summary": "iter-110 Phase 3/4 (Supervised & Autonomous Live Readiness) verified end-to-end. Backend: all 25 pytest cases pass (6 live HTTP + 19 unit). Frontend: all 4 new LiveOps cards render with live data on /bot-health, all required data-testids exist, and the operator two-click arm/cancel UX works correctly (freeze_trading arm → CONFIRM? state + cancel button visible; cancel → disarmed without executing). No real operator actions were confirmed against admin.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Global", "issues": ["Pre-existing wss://.../api/ws 403 handshake errors on all pages (carried from iter-105 report) — not related to iter-110."]},
+      {"screen": "Bot Health (before scroll)", "issues": ["Recharts warning 'width(-1) height(-1)' from a chart container rendering with 0 dimensions before layout — cosmetic, no visual regression observed. Consider setting minWidth/minHeight on the ResponsiveContainer."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter110_phase3_4.py",
+    "/app/backend/tests/test_iter110_phase3_4_http.py",
+    "/app/test_reports/pytest/iter95_iter110.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Live subsystem health shows risk_engine=0 and learning_engine=40, driving multiplier ×0.5. This is the designed conservatism path and is displayed correctly on the UI ('SIZING ×0.5 — risk_engine at 0'), but a persistent risk_engine=0 in production would keep the bot at half-size forever — worth surfacing a WHY tooltip / drill-down link so operators can act on the root cause rather than accept the reduced sizing.",
+    "Capital-stage evidence in preview shows n=490 trades with PF 0.97 and DD 74.4R while stuck at STAGE 1 (PILOT) — expected per gates, but next_milestone text combines 3 unmet criteria in one line; consider a checklist UI to make the blocking condition obvious.",
+    "LiveOpsPanels.jsx: each panel silently swallows fetch errors (same pattern flagged in iter-105 for ShadowReadinessPanels). If /api/risk/realtime or /api/subsystems/health 500s the tile just stays blank with no user feedback."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None (test_iter110_phase3_4.py self-inserts+cleans its own account_id fixtures; test_zz_cleanup runs at end)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-110 Phase 3/4 fully verified. Live values at test time: capital-stage = STAGE 1 (PILOT), risk cap 0.25%/trade, evidence n=490 mean_r pending PF 0.97 DD 74.4R (blocked from stage 2). Subsystem health: learning=40, execution=85, risk=0, broker=15, market=89 → multiplier ×0.5 reason 'risk_engine at 0'. Realtime open_trades total=0. Operator two-click UX confirmed (arm shows CONFIRM? + operator-cancel-freeze_trading; cancel disarms). SAFETY respected — never posted a valid confirm. Pre-existing wss 403 still recurring, unrelated.",
+  "rca of the issue": "N/A — no issues found."
+}

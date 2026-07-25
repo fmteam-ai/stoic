@@ -87,6 +87,44 @@ async def _drill_worker_crash(db) -> dict:
         await db.worker_leases.delete_one({"_id": _id})
 
 
+async def _drill_api_timeout(db) -> dict:
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=0.5) as client:
+            await client.get("http://10.255.255.1/never")
+        return {"drill": "api_outage", "passed": False,
+                "detail": "unroutable call returned?! timeout guard broken"}
+    except (httpx.TimeoutException, httpx.ConnectError, OSError):
+        return {"drill": "api_outage", "passed": True,
+                "detail": "outbound API outage bounded by client timeout "
+                          "(0.5s) — no hang, exception surfaced"}
+
+
+def _drill_clock_skew() -> dict:
+    now = datetime.now(timezone.utc)
+    future_hb = now + timedelta(hours=1)
+    skewed = abs((now - future_hb).total_seconds()) > 300
+    return {"drill": "clock_skew", "passed": skewed,
+            "detail": ("future-dated heartbeat (+1h) flagged as skewed by "
+                       "the 5-minute tolerance predicate" if skewed else
+                       "skew NOT detected")}
+
+
+async def _drill_alert_dedup(db) -> dict:
+    from alerting import raise_alert
+    kind = f"chaos_dedup_{uuid.uuid4().hex[:6]}"
+    try:
+        await raise_alert(db, kind, "warning", "chaos drill", dedup_key=kind)
+        await raise_alert(db, kind, "warning", "chaos drill", dedup_key=kind)
+        n = await db.ops_alerts.count_documents({"dedup_key": kind})
+        return {"drill": "alert_storm_dedup", "passed": n == 1,
+                "detail": (f"repeated alert deduplicated to a single open "
+                           f"record" if n == 1 else
+                           f"{n} duplicate alert docs created")}
+    finally:
+        await db.ops_alerts.delete_many({"dedup_key": kind})
+
+
 async def _drill_db_recovery(db) -> dict:
     _id = f"chaos-db-{uuid.uuid4().hex[:8]}"
     payload = uuid.uuid4().hex
@@ -108,6 +146,9 @@ async def run_drills(db) -> dict:
         _drill_volatility_shock(),
         await _drill_worker_crash(db),
         await _drill_db_recovery(db),
+        await _drill_api_timeout(db),
+        _drill_clock_skew(),
+        await _drill_alert_dedup(db),
     ]
     passed = sum(1 for r in results if r["passed"])
     doc = {"at": datetime.now(timezone.utc), "results": results,

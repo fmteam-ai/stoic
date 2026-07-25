@@ -265,4 +265,15 @@ async def promotion_gate(db, user_id: str, account_id: str | None,
                 verdict["allowed"] = False
         except Exception as e:  # noqa: BLE001 — health probe must not crash the gate
             logger.warning("shadow health probe failed: %s", e)
+    # Phase 2.4 — autonomous authority requires statistical evidence (CIs)
+    if target_mode == "autonomous_live":
+        try:
+            from statistical_validation import promotion_evidence
+            ev = await promotion_evidence(db, user_id)
+            verdict["evidence"]["statistical_validation"] = ev
+            if not ev["sufficient"]:
+                verdict["blockers"].extend(ev["blockers"])
+                verdict["allowed"] = False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("statistical validation probe failed: %s", e)
     return verdict

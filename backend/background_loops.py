@@ -328,3 +328,68 @@ async def _stuck_open_sync_loop():
             raise
         except Exception as e:  # noqa: BLE001
             logger.warning("stuck-open sync loop error: %s", e)
+
+
+def _rss_mb() -> float | None:
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except OSError:
+        return None
+    return None
+
+
+async def _soak_sampler_loop():
+    """Phase 2.2 — long-soak telemetry: RSS, worker liveness, heartbeat age
+    sampled every SOAK_SAMPLE_INTERVAL_SEC into ops_soak_samples (30d TTL)."""
+    INTERVAL = int(os.environ.get("SOAK_SAMPLE_INTERVAL_SEC", "600"))
+    indexed = False
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            db = get_db()
+            if not indexed:
+                await db.ops_soak_samples.create_index(
+                    "at", expireAfterSeconds=45 * 24 * 3600)
+                indexed = True
+            now = datetime.now(timezone.utc)
+            total = alive = 0
+            async for w in db.worker_leases.find({}, {"expires_at": 1}):
+                exp = w.get("expires_at")
+                if isinstance(exp, str):
+                    try:
+                        exp = datetime.fromisoformat(exp)
+                    except ValueError:
+                        exp = None
+                if exp is not None and exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                total += 1
+                if exp and exp > now:
+                    alive += 1
+            hb_ages = []
+            async for a in db.accounts.find(
+                    {"last_heartbeat": {"$ne": None},
+                     "status": {"$ne": "deleted"}}, {"last_heartbeat": 1}):
+                hb = a.get("last_heartbeat")
+                if isinstance(hb, str):
+                    try:
+                        hb = datetime.fromisoformat(hb)
+                    except ValueError:
+                        continue
+                if hb is not None and hb.tzinfo is None:
+                    hb = hb.replace(tzinfo=timezone.utc)
+                if hb:
+                    hb_ages.append((now - hb).total_seconds())
+            await db.ops_soak_samples.insert_one({
+                "at": now, "rss_mb": _rss_mb(),
+                "workers_alive": alive, "workers_total": total,
+                "hb_age_min_s": round(min(hb_ages)) if hb_ages else None,
+                "hb_age_max_s": round(max(hb_ages)) if hb_ages else None})
+            record_progress("_soak_sampler_loop", processed=1,
+                            started_at=None, interval_sec=INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("soak sampler loop error: %s", e)
