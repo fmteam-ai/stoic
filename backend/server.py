@@ -80,6 +80,17 @@ logger = logging.getLogger("trading-bot")
 app = FastAPI(title="AI Trading Bot API", version="1.1.0")
 
 
+# Root-level liveness probe. The Kubernetes/deployment health check hits
+# GET /health (NO /api prefix). It must return 200 fast and WITHOUT any DB
+# dependency so the pod becomes ready even while startup migrations run and
+# stays alive if Atlas briefly blips. Rich DB-aware checks live under
+# /api/health and /api/health/ready.
+@app.get("/health")
+@app.get("/healthz")
+async def root_health():
+    return {"status": "ok"}
+
+
 @app.middleware("http")
 async def csrf_middleware(request, call_next):
     """CSRF double-submit enforcement for cookie-authenticated mutations
