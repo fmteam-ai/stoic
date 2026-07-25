@@ -16,39 +16,33 @@ from dotenv import load_dotenv
 
 load_dotenv("/app/backend/.env")
 
-VOICE = "onyx"        # deep, authoritative — matches the STOIC brand
+VOICE = "ash"         # energetic, expressive — passionate trailer delivery
 MODEL = "tts-1-hd"
-SPEED = 0.95          # slightly measured cadence
+SPEED = 1.0
 
-NARRATION = """85 percent of retail traders blow up their accounts within twelve months.
-Most trading bots make it worse.
+NARRATION = """Eighty-five percent of retail traders blow up their accounts. Eighty-five percent! And the bots they trusted? They made it happen faster.
 
-You wanted an AI co-pilot. You got a fast Excel macro.
-Bots that fire trades the moment the market gets noisy.
-Bots that don't know what they don't know.
-Bots that keep trading while their own data feed is dying.
+You dreamed of an AI co-pilot. And what did you get? A fast Excel macro! A bot that panics the moment the market gets loud. A bot that keeps firing while its own data feed is dying. That's not intelligence. That's a coin flip with better marketing.
 
-STOIC is different. A multi-agent AI hedge fund that thinks before it trades — and refuses to trade when it can't prove it's safe.
+STOIC is different. This is a multi-agent AI hedge fund in your pocket — a machine that thinks before it trades, and has the discipline to refuse any trade it can't prove is safe. That discipline? Nobody else has it.
 
-Six reasons nothing else comes close.
+Six reasons this changes everything.
 
-One. Calibrated AI probabilities. Real win-rate forecasts — not LLM confidence theater.
+One! Calibrated probabilities. Real, honest win-rate forecasts. No confidence theater. No guessing.
 
-Two. Loss Lab. Every loss gets investigated by AI. Guardrails tighten automatically for next time.
+Two! Loss Lab. Every single loss gets interrogated by AI, and the guardrails tighten themselves. Your bot literally learns from pain.
 
-Three. Fail-closed safety governance. When health drops, STOIC demotes itself — before it hurts you. No other bot does this.
+Three! The one nobody else dares to build: fail-closed safety. When health drops, STOIC demotes itself. It steps back before it ever hurts you. A trading bot with self-control!
 
-Four. Explainable AI. Every trade shows exactly why it entered, why that size, and what could go wrong.
+Four! Explainable AI. Every trade tells you why. Why it entered. Why that size. What could go wrong. No black boxes. Ever.
 
-Five. One-command VPS. Auto-provision a server, or connect your own. Hardened pairing. One terminal, one account, twenty-four seven.
+Five! One command — and your bot lives on a hardened VPS, trading twenty-four seven. One terminal. One account. Zero excuses.
 
-Six. Digital Twin and Research Lab. Strategies improve themselves in the shadows — and go live only when the evidence says so.
+Six! Digital Twin and Research Lab. Your strategies evolve in the shadows — and only the proven ones ever touch real money.
 
-STOIC doesn't promise you the moon.
-It promises a bot that refuses to lose stupidly.
+STOIC won't promise you the moon. It promises something better: a bot that refuses — absolutely refuses — to lose stupidly.
 
-Stop guessing. Start trading like a quant fund.
-STOIC AI Trader.
+Stop gambling. Start trading like a quant fund. STOIC AI Trader. Your edge starts now.
 """
 
 

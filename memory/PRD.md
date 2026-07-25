@@ -1356,3 +1356,7 @@ Rule: user-entered labels = presentation only; broker-verified identity (account
 - broker_intel.score_account + operational_modes promotion evidence carry account_id/account_number/broker_server; label demoted to account_label (display).
 - Tests: test_iter124_identity_rule.py (3). Manifest → 2,869 tests / 271 files.
 - KNOWN (pre-existing): test_iter111_corrections.py::test_promotion_gate_blocks_during_recovery is order-dependent (needs earlier test in same file to seed demotion doc) — passes in file order/CI, fails standalone. Not fixed (out of scope).
+
+## Iter-125 (2026-07-25) — Trailer voice: enthusiastic/passionate rewrite (verified)
+- New 98.28s narration, OpenAI TTS voice "ash" (energetic) @ 1.0 speed, +20% volume boost (max −3.6dB). Emotive script (exclamations, rhetorical stakes, "changes everything") instead of flat feature listing; same 6-pillar structure.
+- Whisper re-anchored: pain 8560, pivot 23400, pillars 39420 (beats 39420/45840/53040/64000/70860/78080), close 86380, END 98280. On-screen copy matched to narration. Beat-sync + CTA verified via browser automation.

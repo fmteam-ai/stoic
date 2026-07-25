@@ -3,69 +3,69 @@ import { useNavigate } from "react-router-dom";
 import "@/styles/intro_trailer.css";
 
 /* Scene-by-scene state machine — timings in ms from t=0, anchored
-   to the ACTUAL trailer.mp3 (85.20s, OpenAI TTS "onyx", word-level
+   to the ACTUAL trailer.mp3 (98.28s, OpenAI TTS "ash", word-level
    Whisper timestamps). Each scene starts/ends on a spoken phrase. */
 const SCENES = [
     {
-        id: "hook", start: 0, end: 7440,
+        id: "hook", start: 0, end: 8560,
         kicker: "Trading is hard",
         render: () => (
             <h1 className="headline">
                 <span className="strike">85%</span> of retail traders blow up<br/>
-                their accounts <em>within 12 months.</em>
+                their accounts. <em>85 percent!</em>
             </h1>
         ),
-        sub: "Most trading bots make it worse.",
+        sub: "And the bots they trusted? They made it happen faster.",
     },
     {
-        id: "pain", start: 7440, end: 22160,
-        kicker: "What you wanted vs what you got",
+        id: "pain", start: 8560, end: 23400,
+        kicker: "What you dreamed vs what you got",
         render: () => (
             <h1 className="headline">
-                You wanted an AI co-pilot.<br/>
+                You dreamed of an AI co-pilot.<br/>
                 <span className="strike">You got a fast Excel macro.</span>
             </h1>
         ),
-        sub: "Bots that fire the moment the market gets noisy. Bots that don't know what they don't know. Bots that keep trading while their own data feed is dying.",
+        sub: "A bot that panics the moment the market gets loud. A bot that keeps firing while its own data feed is dying. That's not intelligence — that's a coin flip with better marketing.",
     },
     {
-        id: "pivot", start: 22160, end: 32460,
+        id: "pivot", start: 23400, end: 39420,
         kicker: "Introducing",
         render: () => (
             <h1 className="headline">
                 <em>STOIC</em> is different.<br/>
-                A multi-agent AI hedge fund<br/>that thinks <em>before</em> it trades.
+                A multi-agent AI hedge fund<br/><em>in your pocket.</em>
             </h1>
         ),
-        sub: "And refuses to trade when it can't prove it's safe. Six reasons nothing else comes close.",
+        sub: "A machine that thinks before it trades — with the discipline to refuse any trade it can't prove is safe. That discipline? Nobody else has it.",
     },
     {
-        id: "pillars", start: 32460, end: 76060,
-        kicker: "Six reasons it's different",
-        /* Per-pillar beat timings anchored to "One.", "Two." ... "Six."
+        id: "pillars", start: 39420, end: 86380,
+        kicker: "Six reasons this changes everything",
+        /* Per-pillar beat timings anchored to "One!", "Two!" ... "Six!"
            spoken in the audio. Pillar lights up the moment its number lands. */
-        pillarBeats: [32460, 38180, 44700, 52140, 57600, 67840],
+        pillarBeats: [39420, 45840, 53040, 64000, 70860, 78080],
         render: (t) => {
-            const beats = [32460, 38180, 44700, 52140, 57600, 67840];
+            const beats = [39420, 45840, 53040, 64000, 70860, 78080];
             const activeBeat = beats.findIndex((s, i) =>
                 t >= s && (i === beats.length - 1 || t < beats[i + 1]));
             return (
                 <>
-                    <h1 className="headline">Six reasons it&apos;s <em>different.</em></h1>
+                    <h1 className="headline">Six reasons this <em>changes everything.</em></h1>
                     <div className="pillar-grid">
                         {[
                             ["01", "Calibrated probabilities",
-                                "Real win-rate forecasts — not LLM confidence theater. Platt-scaled, Brier-score validated."],
+                                "Real, honest win-rate forecasts. No confidence theater. No guessing."],
                             ["02", "Loss Lab",
-                                "Every loss gets investigated by AI. Guardrails tighten automatically for next time."],
-                            ["03", "Fail-closed safety governance",
-                                "When health drops, STOIC demotes itself — before it hurts you. No other bot does this."],
+                                "Every single loss gets interrogated by AI — the guardrails tighten themselves. Your bot literally learns from pain."],
+                            ["03", "Fail-closed safety",
+                                "The one nobody else dares to build: when health drops, STOIC demotes itself — before it ever hurts you. A trading bot with self-control."],
                             ["04", "Explainable AI",
-                                "Every trade shows exactly why it entered, why that size, and what could go wrong."],
+                                "Every trade tells you why. Why it entered. Why that size. What could go wrong. No black boxes. Ever."],
                             ["05", "One-command VPS",
-                                "Auto-provision a server or connect your own. Hardened pairing. One terminal, one account, 24/7."],
+                                "Your bot lives on a hardened VPS, trading 24/7. One terminal. One account. Zero excuses."],
                             ["06", "Digital Twin + Research Lab",
-                                "Strategies improve themselves in the shadows — and go live only when the evidence says so."],
+                                "Strategies evolve in the shadows — and only the proven ones ever touch real money."],
                         ].map(([n, title, body], i) => (
                             <div className={`pillar ${i === activeBeat ? "beat" : i < activeBeat ? "lit" : ""}`}
                                  key={n} data-testid={`pillar-${n}`}>
@@ -80,19 +80,20 @@ const SCENES = [
         },
     },
     {
-        id: "close", start: 76060, end: 85200,
+        id: "close", start: 86380, end: 98280,
         kicker: "The promise",
         render: () => (
             <h1 className="headline">
-                STOIC doesn&apos;t promise you the moon.<br/>
-                It promises a bot that <em>refuses to lose stupidly.</em>
+                STOIC won&apos;t promise you the moon.<br/>
+                It promises a bot that <em>refuses — absolutely refuses —</em><br/>
+                to lose stupidly.
             </h1>
         ),
-        sub: "Stop guessing. Start trading like a quant fund.",
+        sub: "Stop gambling. Start trading like a quant fund. Your edge starts now.",
     },
 ];
 
-const TRAILER_END_MS = 85200;
+const TRAILER_END_MS = 98280;
 
 export default function WelcomeTrailer() {
     const nav = useNavigate();
