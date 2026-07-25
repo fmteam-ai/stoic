@@ -1360,3 +1360,9 @@ Rule: user-entered labels = presentation only; broker-verified identity (account
 ## Iter-125 (2026-07-25) — Trailer voice: enthusiastic/passionate rewrite (verified)
 - New 98.28s narration, OpenAI TTS voice "ash" (energetic) @ 1.0 speed, +20% volume boost (max −3.6dB). Emotive script (exclamations, rhetorical stakes, "changes everything") instead of flat feature listing; same 6-pillar structure.
 - Whisper re-anchored: pain 8560, pivot 23400, pillars 39420 (beats 39420/45840/53040/64000/70860/78080), close 86380, END 98280. On-screen copy matched to narration. Beat-sync + CTA verified via browser automation.
+
+## Iter-126 (2026-07-25) — CI fixes (iteration_102.json 100%, independently confirmed)
+1. ruff F821: entitlements.py missing `from typing import Optional` (from the iter-122 rewrite) — added.
+2. test_iter148_p0_exec_truth: infra_routes.py added to crafted-ValueError allowlist (its detail=str(e) sites are deliberate vps-module messages); the one raw `except Exception → str(e)` (~L365) now returns "invalid request". Hardcoded /app paths in 5 HTTP test files (iter93/105/110/112/114) replaced with __file__-relative _REPO paths.
+3. gitleaks false positive: "api_router. Tests: test_iter110_phase3_4.py" in memory/PRD.md@d3b0657:411 matched generic-api-key — fingerprint added to .gitleaksignore + line reworded.
+LEARNING: iter-148 is a source-policy suite (no detail=str(e) outside allowlist; no literal /app paths in tests) — new routes/tests must comply or CI fails. gitleaks arm64 binary works locally for pre-push checks.
