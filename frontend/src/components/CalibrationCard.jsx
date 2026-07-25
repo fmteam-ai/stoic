@@ -34,7 +34,7 @@ export function CalibrationCard() {
                         </div>
                     </div>
                     <div className="font-mono text-[9px] text-[#3F3F46] mt-1.5">
-                        Weighted across {s.n} closed bot trades. Error ≤5pts = well calibrated.
+                        Mean absolute error across confidence buckets, weighted over {s.n} closed bot trades. ≤5pts = well calibrated.
                     </div>
                     <div className="mt-3 space-y-1.5">
                         {engines.map(([scope, ent]) => (

@@ -195,8 +195,8 @@ async def calibration_card(days: int = 90, user=Depends(get_current_user)):
     """Tier 17 · calibration transparency — stated confidence vs realized
     win rate per engine, with an overall calibration-error headline."""
     from calibration import compute_calibration
-    table = await compute_calibration(get_db(), user["id"],
-                                      days=min(max(int(days), 7), 365))
+    days = min(max(int(days), 7), 365)
+    table = await compute_calibration(get_db(), user["id"], days=days)
     tot_n = 0
     stated_sum = realized_sum = err_sum = 0.0
     for ent in table.values():

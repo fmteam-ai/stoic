@@ -347,6 +347,16 @@ See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 - Tested: curl on both endpoints, UI screenshots, 65 backend regression tests pass.
 - Next: production deployment (user approval pending), Strategy Scoreboard UI (P2).
 
+## Iter-99/100 (2026-07-25) — 20-Tier list: verification + Batch A (T6/T13/T17) DONE
+User re-pasted the full 20-tier list; mapping done — 13 tiers already existed. Built this session:
+- **iter-99 batch verified** (iteration_90.json 100%): T1 Decision DNA (`decision_dna.py`, GET /api/trades/{id}/dna, DnaModal.jsx on Trades), T3 Market State (`market_state.py`, GET /api/bot/market-state, MarketStateStrip.jsx on Dashboard), T16 Release Safety (GET /api/ops/release-safety, X-Metrics-Token or admin cookie). Polish: DNA missing-signal fallback text, liquidity clamp [0,100], market-state 24h freshness filter on broker_intel_scores, manifest-relative path in ops_routes.
+- **Batch A built + verified** (iteration_91.json 100%):
+  - **T6 Digital Twin** — `digital_twin.py::twin_summary` replays gate-rejected ledger decisions (trade_decisions w/ snapshots) against actual M15 bars via ablation.replay_outcome; per-account LIVE vs TWIN (alt_r, alt_pnl_est via median risk_amount) + verdict (GATES PROTECTING / COSTING EDGE / NEUTRAL). GET /api/twin/summary?days= (clamp 1-90). DigitalTwinPanel.jsx on Scoreboard. Live: 7 accounts, ~2000 intercepts, alt −101.8R net (gates protecting).
+  - **T13 Strategy Genetics** — `strategy_genetics.py::lineage` composes governed_changes + auto_guards + improvement_proposals + tuning_proposals events + per-strategy-version performance from `versions.strategy_version`-stamped trades. GET /api/genetics/lineage. GeneticsPanel.jsx on Scoreboard.
+  - **T17 Calibration card** — GET /api/analytics/calibration?days= (n-weighted MAE summary over compute_calibration buckets; echoes clamped days). CalibrationCard.jsx on Analytics. Live: predicted 63.4% vs actual 71.7%, MAE 15pts, n=463.
+- Tests: test_iter100_batch_a.py (6) + test_iter100_http.py (7, by testing agent) + test_iter99_http.py (8). Manifest regenerated → **2,620 tests / 248 files**.
+- **20-Tier mapping** (existing): T2 multi-agent=consensus/orchestrator, T4 research lab=improvement_proposals pipeline, T7 risk commander, T8 portfolio_allocator, T9 execution_intel, T10 broker_intel, T15 metrics/drift, T19 stage+shadow-model promotion, T20 attestation. **Remaining: Batch B = T11 AI Coach cards + T12 Replay Studio UI; Batch C = T14 Chaos drills + T5 Strategy Marketplace.**
+
 ## Iter-129 (2026-07-13) — Deep review of losing session + new session-aware gates
 Session review: gold -2.1% trend day, bot went 14W/18L (+$67). 4 failure patterns found & fixed:
 1. session_trend_gate (payoff_guard.py): vetoes counter-trend entries vs intraday session structure (range≥0.45% gold / 0.9% crypto, pos band + EMA20 slope + swing structure). Would have blocked both counter-trend BUY clusters (-$110).
