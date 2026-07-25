@@ -41,6 +41,24 @@ async def list_operator_actions(user=Depends(get_current_user)):
                         for k, v in ACTIONS.items()]}
 
 
+@router.get("/modes/guardian")
+async def mode_guardian(user=Depends(get_current_user)):
+    """Correction #6 — auto-demotion ladder status + recovery gate."""
+    from auto_demotion import GREEN_HOURS, recovery_status
+    db = get_db()
+    rec = await recovery_status(db, user["id"])
+    demotions = []
+    async for d in db.mode_demotions.find(
+            {"user_id": user["id"]}).sort("at", -1).limit(10):
+        demotions.append({"at": str(d.get("at")),
+                          "reason": d.get("reason"),
+                          "ceiling": d.get("ceiling"),
+                          "health_overall": d.get("health_overall"),
+                          "demotions": d.get("demotions") or []})
+    return {"recovery": rec, "recent_demotions": demotions,
+            "green_hours_required": GREEN_HOURS}
+
+
 @router.get("/risk/realtime")
 async def risk_realtime(user=Depends(get_current_user)):
     """Phase 3.3 — one composite for the operational screen."""

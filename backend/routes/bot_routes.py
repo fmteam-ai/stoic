@@ -829,15 +829,13 @@ async def update_config(payload: BotConfigUpdate,
         update["auto_preset_enabled"] = bool(update["auto_preset_enabled"])
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-    # Ensure the target doc exists, then PATCH.
+    # Ensure the target doc exists, then PATCH atomically (correction #4:
+    # config change + immutable version + pointer + audit as one unit).
     await _get_or_create_config(db, user["id"], account_id)
-    await db.bot_configs.update_one(
-        _config_filter(user["id"], account_id), {"$set": update}
-    )
+    from config_promotion import apply_config_change
+    await apply_config_change(db, user["id"], account_id, update,
+                              label="post-update", source="config_update")
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
-    from config_promotion import record_version
-    await record_version(db, cfg, label="post-update",
-                         source="config_update")
     return _serialize(cfg)
 
 
@@ -1559,7 +1557,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.53"
+    LATEST_EA = "1.54"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:

@@ -66,19 +66,67 @@ async def qualify_account(db, account: dict) -> dict:
         checks["commission_model"] = {"status": "not_reported",
                                       "value": None}
 
-    for k in ("stop_restrictions", "freeze_levels", "symbol_specs",
-              "dst_handling"):
-        checks[k] = {"status": "not_reported", "value": None,
-                     "note": "EA does not report this yet"}
+    # Correction #5 — spec checks from EA-reported evidence (v1.48 specs,
+    # v1.54 full contract specs + broker time / session facts).
+    specs = account.get("symbol_specs") or {}
+
+    def _spec_vals(field):
+        return {s: sp.get(field) for s, sp in specs.items()
+                if isinstance(sp, dict) and sp.get(field) is not None}
+    stops = _spec_vals("stops_level_points")
+    checks["stop_restrictions"] = (
+        {"status": "observed",
+         "value": f"max {max(stops.values()):.0f} pts over "
+                  f"{len(stops)} symbols"}
+        if stops else {"status": "not_reported", "value": None,
+                       "note": "requires EA ≥ v1.48 symbol specs"})
+    freezes = _spec_vals("freeze_level_points")
+    checks["freeze_levels"] = (
+        {"status": "observed",
+         "value": f"max {max(freezes.values()):.0f} pts over "
+                  f"{len(freezes)} symbols"}
+        if freezes else {"status": "not_reported", "value": None,
+                         "note": "requires EA ≥ v1.48 symbol specs"})
+    full_spec = [s for s, sp in specs.items()
+                 if isinstance(sp, dict)
+                 and sp.get("tick_value") is not None
+                 and sp.get("contract_size") is not None]
+    checks["symbol_specs"] = (
+        {"status": "observed",
+         "value": f"{len(specs)} symbols, {len(full_spec)} with full "
+                  f"contract specs"}
+        if full_spec else {"status": "not_reported", "value": None,
+                           "note": "requires EA ≥ v1.54 full contract "
+                                   "specs (tick value, contract size)"})
+    bt = account.get("broker_time_info") or {}
+    off = bt.get("server_gmt_offset_sec")
+    checks["dst_handling"] = (
+        {"status": "observed",
+         "value": f"server GMT{float(off) / 3600:+.1f}h · "
+                  f"{len(bt.get('trade_sessions_today') or [])} trade "
+                  f"session(s) reported"}
+        if off is not None else
+        {"status": "not_reported", "value": None,
+         "note": "requires EA ≥ v1.54 broker time report"})
+
+    SPEC_CHECKS = ("stop_restrictions", "freeze_levels", "symbol_specs",
+                   "dst_handling")
+    missing_specs = [k for k in SPEC_CHECKS
+                     if checks[k]["status"] != "observed"]
 
     score = intel.get("score")
     observed = sum(1 for c in checks.values() if c["status"] == "observed")
     if n_deals < 20 or score is None:
         tier = "PROVISIONAL"
         detail = f"needs ≥20 deals ({n_deals}) and an intel score"
-    elif float(score) >= 80:
+    elif float(score) >= 80 and not missing_specs:
         tier = "CERTIFIED"
         detail = f"intel {score} over {n_deals} deals · {observed}/11 checks observed"
+    elif float(score) >= 80:
+        tier = "ACCEPTABLE"
+        detail = (f"intel {score} — CERTIFIED withheld: spec reporting "
+                  f"incomplete ({', '.join(missing_specs)}) — update EA "
+                  f"to v1.54")
     elif float(score) >= 55:
         tier = "ACCEPTABLE"
         detail = f"intel {score} — adequate, monitor"
@@ -107,5 +155,6 @@ async def qualification_matrix(db, user_id: str) -> dict:
         rows.append(await qualify_account(db, a))
     return {"accounts": rows, "checks": CHECKS,
             "note": ("Certification is evidence-based: only observed "
-                     "behavior counts. 'not_reported' checks require EA "
-                     "spec reporting (backlog).")}
+                     "behavior counts. Full CERTIFIED status requires the "
+                     "EA v1.54 spec report (stop/freeze levels, contract "
+                     "specs, broker time/DST).")}

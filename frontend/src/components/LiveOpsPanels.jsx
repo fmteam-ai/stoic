@@ -130,6 +130,39 @@ export function RealtimeRiskCard() {
     );
 }
 
+export function ModeGuardianCard() {
+    const [g, setG] = useState(null);
+    useEffect(() => {
+        api.get("/modes/guardian").then(({ data }) => setG(data)).catch(() => {});
+    }, []);
+    if (!g) return null;
+    const rec = g.recovery || {};
+    return (
+        <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="mode-guardian-card">
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">
+                MODE GUARDIAN · AUTOMATIC AUTHORITY DEMOTION
+            </div>
+            <div className="font-mono text-[9px] text-[#3F3F46] mb-2">
+                autonomous → supervised (health &lt; 60 sustained) → defensive (&lt; 40) → observe (broker-truth uncertainty). Recovery: {g.green_hours_required}h green + explicit approval.
+            </div>
+            <div className={`font-mono text-[9px] px-2 py-1 border inline-block ${!rec.applicable ? "text-[#00FF41] border-[#00FF41]/40" : rec.eligible ? "text-[#0099FF] border-[#0099FF]/40" : "text-[#FFD700] border-[#FFD700]/40"}`}
+                data-testid="mode-guardian-recovery">
+                {!rec.applicable ? "NO AUTOMATIC DEMOTIONS ON RECORD" : rec.eligible ? "RECOVERY ELIGIBLE — EXPLICIT PROMOTION REQUIRED" : `RECOVERY LOCKED — ${rec.reason}`}
+            </div>
+            {(g.recent_demotions || []).length > 0 && (
+                <div className="mt-2 space-y-1">
+                    {g.recent_demotions.map((d, i) => (
+                        <div key={i} className="font-mono text-[9px] text-[#52525B] border-t border-[#141414] pt-1"
+                            data-testid={`mode-demotion-${i}`}>
+                            <span className="text-[#FF3B30]">→ {d.ceiling}</span> · {d.reason} · health {d.health_overall ?? "—"} · {(d.demotions || []).length} config(s) · {d.at}
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 const ACTION_ICON_CLS = {
     freeze_trading: "text-[#0099FF] border-[#0099FF]/40 hover:bg-[#0099FF]/10",
     reduce_exposure: "text-[#FFD700] border-[#FFD700]/40 hover:bg-[#FFD700]/10",

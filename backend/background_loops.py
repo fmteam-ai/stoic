@@ -330,6 +330,33 @@ async def _stuck_open_sync_loop():
             logger.warning("stuck-open sync loop error: %s", e)
 
 
+async def _mode_guardian_loop():
+    """Correction #6 — every 5 min: health-sample every user running a live
+    mode and auto-demote authority when health deteriorates."""
+    from auto_demotion import sweep_user
+    INTERVAL = int(os.environ.get("MODE_GUARDIAN_INTERVAL_SEC", "300"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
+            db = get_db()
+            users = await db.bot_configs.distinct(
+                "user_id", {"active": True, "operational_mode":
+                            {"$in": ["autonomous_live", "supervised_live"]}})
+            for uid in users:
+                try:
+                    await sweep_user(db, uid)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("mode guardian sweep failed user=%s: %s",
+                                   uid, e)
+            record_progress("_mode_guardian_loop", processed=len(users),
+                            started_at=t0, interval_sec=INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mode guardian loop error: %s", e)
+
+
 def _rss_mb() -> float | None:
     try:
         with open("/proc/self/status") as f:

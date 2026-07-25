@@ -1,0 +1,36 @@
+{
+  "summary": "iter-111 six safety corrections verified end-to-end. Backend: 20/20 unit + 12/12 HTTP pass (shadow health fail-closed shape, per-feed + per-account details, /api/modes/guardian, broker qualification with 4 new spec checks + v1.54 mention, atomic bot config update via PUT /api/bot/config preserving operational_mode, EA v1.54 in /api/bot/health-score context, and liveops regression on capital-stage/subsystems/realtime/operator). Frontend: all required data-testids render live on /shadow-performance (shadow-health-card, shadow-health-gaps with STALE badges, shadow-health-details with per-feed shadow-feed-XAUUSD, PROMOTIONS PAUSED pill), /bot-health (mode-guardian-card + mode-guardian-recovery showing 'NO AUTOMATIC DEMOTIONS ON RECORD', plus regression cards capital-stage, subsystem-health, realtime-risk, operator-console), and /brokers (qualification matrix with 4 new spec checks — stop restrictions, freeze levels, symbol_specs, dst_handling — visible per account, with 'CERTIFIED withheld: … update EA to v1.54' detail). SAFETY respected: no confirm on operator actions, operational_mode of admin never touched, no auto_demotion sweep against admin uid.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Global", "issues": ["Pre-existing wss://.../api/ws 403 handshake errors on every page (from iter-105) — unrelated to iter-111."]},
+      {"screen": "Bot Health (before scroll)", "issues": ["Recharts warning 'width(-1) height(-1)' persists — cosmetic, no visual regression."]},
+      {"screen": "Shadow Performance / Bot Health", "issues": ["Several 401s in console for endpoints reached before the login cookie is set on the first page load — recoverable on refresh; consider gating those fetches on auth ready."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter111_corrections.py",
+    "/app/backend/tests/test_iter111_http_iter96.py",
+    "/app/test_reports/pytest/iter96_iter111.xml",
+    "/app/test_reports/pytest/iter96_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "shadow-health-fail-closed testid only renders when fail_closed=true; in the current preview overall=30 with promotions_paused=true but rendered reason is '<60'. Confirm that when fail_closed becomes true the badge does appear (unit tests confirm the backend flips fail_closed on missing broker_stability, but on this preview overall<60 was driving pause). Not a defect — just note this branch was NOT exercised in preview.",
+    "Broker qualification note field uses human-readable labels ('stop restrictions', 'freeze levels') but the two other checks render as raw snake_case ('symbol_specs', 'dst_handling'). Consider normalising the display labels for consistency.",
+    "Multiple 401s appear in console when React fetches shadow / risk endpoints before the auth cookie is applied on cold nav — same pattern flagged in iter-95; suggest a small auth-ready gate before those useEffect fetches.",
+    "LiveOpsPanels.jsx still silently swallows fetch errors (carried from iter-95) — the empty state is indistinguishable from a failing API."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter111_http_iter96.py"
+  ],
+  "success_rate": {"backend": "100% (32/32)", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — HTTP tests only read admin endpoints; the one mutating call flips loss_cooldown_minutes and restores original. Unit tests use synthetic uuid uids (iter111-*) and self-clean via test_zz_cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Preview state: shadow overall=30, promotions_paused=true (correct & expected per E1 note; EA heartbeats intentionally stale). mode-guardian shows 'NO AUTOMATIC DEMOTIONS ON RECORD' for admin at test time. Broker matrix: 5 broker accounts, most ACCEPTABLE with symbol_specs/dst_handling = n/r → 'CERTIFIED withheld — update EA to v1.54' — expected. EA version rendered = 1.54. Bot config update endpoint = PUT /api/bot/config (not POST); it works and does not modify operational_mode when a benign field is passed.",
+  "rca of the issue": "N/A — no issues found."
+}

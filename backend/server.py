@@ -408,7 +408,8 @@ _scalp_reconcile_task = None
 
 
 from background_loops import (_analytics_loop, _auto_heal_loop,
-                              _eod_flatten_loop, _model_maintenance_loop,
+                              _eod_flatten_loop, _mode_guardian_loop,
+                              _model_maintenance_loop,
                               _nightly_tuning_loop, _optimizer_loop,
                               _protection_guard_loop, _scalp_reconcile_loop,
                               _soak_sampler_loop, _stuck_open_sync_loop)
@@ -446,6 +447,9 @@ async def on_startup():
                                        remigrate_autonomous_to_supervised)
         await migrate_default_modes(get_db())
         await remigrate_autonomous_to_supervised(get_db())
+        # Correction #4 — converge any config change journaled mid-crash.
+        from config_promotion import repair_incomplete_promotions
+        await repair_incomplete_promotions(get_db())
         from seed import dependency_health_check
         await dependency_health_check()
         logger.info("Startup: indexes ensured, admin seeded.")
@@ -474,6 +478,7 @@ async def on_startup():
         _scalp_reconcile_task = asyncio.create_task(_scalp_reconcile_loop())
         _eod_flatten_task = asyncio.create_task(_eod_flatten_loop())
         asyncio.create_task(_soak_sampler_loop())
+        asyncio.create_task(_mode_guardian_loop())
         # Phase F — separated services (in-process mode runs them all)
         global _protection_task, _analytics_task, _model_maint_task
         _protection_task = asyncio.create_task(_protection_guard_loop())

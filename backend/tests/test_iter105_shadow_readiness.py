@@ -103,7 +103,9 @@ def test_health_score_composition_and_pause(db):
             "synchronization"}
         assert out["threshold"] == THRESHOLD
         if out["overall"] is not None:
-            assert out["promotions_paused"] == (out["overall"] < THRESHOLD)
+            expected = (out["overall"] < THRESHOLD
+                        or out.get("fail_closed", False))
+            assert out["promotions_paused"] == expected
     _run(go())
 
 

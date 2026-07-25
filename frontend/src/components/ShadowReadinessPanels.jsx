@@ -26,6 +26,39 @@ export function ShadowHealthCard() {
                     </div>
                 ))}
             </div>
+            {h.fail_closed && (
+                <div className="mt-2 font-mono text-[9px] text-[#FF3B30]" data-testid="shadow-health-fail-closed">
+                    FAIL CLOSED — critical health data missing: {(h.missing_components || []).join(", ")} — autonomous entries blocked, promotions paused
+                </div>
+            )}
+            {((h.missing_components || []).length > 0 || (h.stale_components || []).length > 0) && (
+                <div className="flex flex-wrap gap-1.5 mt-2" data-testid="shadow-health-gaps">
+                    {(h.missing_components || []).map((k) => (
+                        <span key={k} className="font-mono text-[8px] px-1.5 py-0.5 border border-[#FF3B30]/40 text-[#FF3B30]">MISSING: {k.replace(/_/g, " ")}</span>
+                    ))}
+                    {(h.stale_components || []).map((k) => (
+                        <span key={k} className="font-mono text-[8px] px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700]">STALE: {k.replace(/_/g, " ")}</span>
+                    ))}
+                </div>
+            )}
+            {(Object.keys(h.details?.data_freshness_feeds || {}).length > 0 || (h.details?.broker_stability_accounts || []).length > 0) && (
+                <div className="flex flex-wrap gap-1.5 mt-2" data-testid="shadow-health-details">
+                    {Object.entries(h.details?.data_freshness_feeds || {}).map(([sym, f]) => (
+                        <span key={sym} title="required data feed"
+                            className={`font-mono text-[8px] px-1.5 py-0.5 border ${f.score == null || f.score <= 15 ? "border-[#FF3B30]/40 text-[#FF3B30]" : "border-[#27272A] text-[#A1A1AA]"}`}
+                            data-testid={`shadow-feed-${sym}`}>
+                            FEED {sym}: {f.score == null ? "NO DATA" : `${f.score} (${Math.round((f.age_secs || 0) / 60)}m)`}
+                        </span>
+                    ))}
+                    {(h.details?.broker_stability_accounts || []).map((a) => (
+                        <span key={a.account_id} title="per-account heartbeat — worst active account drives broker stability"
+                            className={`font-mono text-[8px] px-1.5 py-0.5 border ${a.score <= 15 ? "border-[#FF3B30]/40 text-[#FF3B30]" : "border-[#27272A] text-[#A1A1AA]"}`}
+                            data-testid={`shadow-acct-${a.account_id}`}>
+                            {a.live ? "LIVE " : ""}{a.label || a.account_id.slice(0, 6)}: hb {a.age_secs == null ? "never" : `${Math.round(a.age_secs / 60)}m`} → {a.score}
+                        </span>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

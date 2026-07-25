@@ -265,6 +265,24 @@ async def promotion_gate(db, user_id: str, account_id: str | None,
                 verdict["allowed"] = False
         except Exception as e:  # noqa: BLE001 — health probe must not crash the gate
             logger.warning("shadow health probe failed: %s", e)
+        # Correction #6 — after an automatic demotion, recovery to a live
+        # mode requires a stable green period. Probe errors fail CLOSED
+        # (this path only ever RAISES authority).
+        try:
+            from auto_demotion import recovery_status
+            rec = await recovery_status(db, user_id)
+            verdict["evidence"]["auto_demotion_recovery"] = rec
+            if rec["applicable"] and not rec["eligible"]:
+                verdict["blockers"].append(
+                    f"auto-demotion recovery: {rec['reason']}")
+                verdict["allowed"] = False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("recovery probe failed — blocking promotion "
+                           "(fail closed): %s", e)
+            verdict["blockers"].append(
+                "auto-demotion recovery status unavailable — promotion "
+                "blocked (fail closed)")
+            verdict["allowed"] = False
     # Phase 2.4 — autonomous authority requires statistical evidence (CIs)
     if target_mode == "autonomous_live":
         try:

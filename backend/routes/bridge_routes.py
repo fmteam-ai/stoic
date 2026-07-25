@@ -97,6 +97,11 @@ async def heartbeat(payload: BridgeHeartbeat):
     # can display the actual account the EA is reading from. We already
     # computed `mismatch` at the top of this function (used to null out
     # balance) — here we just record the values and clear/keep the flag.
+    # EA v1.54+ — broker server time / DST / session facts (correction #5).
+    if payload.broker_time:
+        set_doc["broker_time_info"] = dict(payload.broker_time)
+        set_doc["broker_time_updated_at"] = now_iso
+
     if payload.account_login is not None:
         set_doc["broker_account_id_reported"] = payload.account_login
         set_doc["broker_account_mismatch"] = mismatch

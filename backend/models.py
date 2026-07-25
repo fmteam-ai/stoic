@@ -393,6 +393,13 @@ class BridgeSymbolSpec(BaseModel):
     stops_level_points: float = 0.0
     freeze_level_points: float = 0.0
     trade_mode: Optional[int] = None
+    # EA v1.54+ — full contract specs for broker certification (corr. #5).
+    tick_size: Optional[float] = None
+    tick_value: Optional[float] = None
+    contract_size: Optional[float] = None
+    volume_min: Optional[float] = None
+    volume_max: Optional[float] = None
+    volume_step: Optional[float] = None
 
 
 class BridgeHeartbeat(BaseModel):
@@ -430,6 +437,10 @@ class BridgeHeartbeat(BaseModel):
     # symbol-suffix auto-detector so the bot routes orders with the
     # right name (`XAUUSD.fx`, `XAUUSD.e`, etc.) without manual setup.
     available_symbols: Optional[list[str]] = None
+    # EA v1.54+: broker server time / DST / trading-session facts —
+    # {"server_gmt_offset_sec", "server_time", "symbol",
+    #  "trade_sessions_today": [[from,to],...]} (correction #5).
+    broker_time: Optional[dict] = None
 
 
 class BridgeTradeReport(BaseModel):

@@ -69,9 +69,11 @@ def test_shadow_health_shape(admin_session):
                 "execution_quality", "broker_stability", "worker_health",
                 "synchronization"}
     assert set(d["components"].keys()) == expected, f"got {set(d['components'].keys())}"
-    # If overall is numeric, verify pause flag consistency
+    # If overall is numeric, verify pause flag consistency (fail-closed:
+    # missing critical data also pauses promotions regardless of score)
     if isinstance(d["overall"], (int, float)):
-        assert d["promotions_paused"] == (d["overall"] < 60)
+        expected = d["overall"] < 60 or bool(d.get("fail_closed"))
+        assert d["promotions_paused"] == expected
 
 
 # ─── /api/shadow/benchmark ──────────────────────────────────────

@@ -2027,6 +2027,27 @@ async def _process_user_account_locked(db, cfg: dict):
             _mg = {"mode": "observe", "allow_new": False,
                    "lot_scale": 0.0,
                    "reason": "mode gate error — failing closed to observe"}
+        # Correction #1 — unknown health data fails CLOSED for autonomy:
+        # missing critical components block autonomous entries entirely
+        # (supervised modes keep working — an operator is in the loop).
+        if _mg["allow_new"] and _mg["mode"] == "autonomous_live":
+            try:
+                from shadow_health import fail_closed_status
+                _fc = await fail_closed_status(db, user_id)
+                if _fc["fail_closed"]:
+                    _mg = {"mode": _mg["mode"], "allow_new": False,
+                           "lot_scale": 0.0,
+                           "reason": ("critical health data missing ("
+                                      + ", ".join(_fc["missing"])
+                                      + ") — autonomous entries blocked, "
+                                        "fail closed")}
+            except Exception as e:  # noqa: BLE001
+                logger.error("health fail-closed probe errored — blocking "
+                             "autonomous entry: %s", e)
+                _mg = {"mode": _mg["mode"], "allow_new": False,
+                       "lot_scale": 0.0,
+                       "reason": "health probe failed — autonomous entries "
+                                 "blocked (fail closed)"}
         if not _mg["allow_new"]:
             try:
                 await record_intercept(db, user_id, target_account, signal,

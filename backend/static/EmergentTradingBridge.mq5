@@ -252,17 +252,23 @@
 //|             position and is reported separately as                 |
 //|             position_volume (broker exposure, not attribution).    |
 //|         (c) partial_fill truth = deal volume vs requested within   |
-//|             half a volume step; DONE_PARTIAL is diagnostic only.   |
+//|             half a volume step; DONE_PARTIAL is diagnostic only.  |
+//| v1.54 — Broker certification completeness (correction #5):        |
+//|         (a) symbol_specs now include tick_size, tick_value,       |
+//|             contract_size and volume min/max/step;                |
+//|         (b) heartbeat reports broker_time (server GMT offset,     |
+//|             server time and today's trading sessions for the      |
+//|             chart symbol) so DST/session handling is certifiable. |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.53"
+#property version   "1.54"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.53"
+#define EA_CLIENT_VERSION "1.54"
 
 input string ServerUrl              = "https://stoic-trading.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -1136,12 +1142,22 @@ void AppendSymbolSpec(string &json, string sym, bool &first) {
    long stops   = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
    long freeze  = SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL);
    long tmode   = SymbolInfoInteger(sym, SYMBOL_TRADE_MODE);
+   // v1.54 — full contract specs for broker certification.
+   double tick_size  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+   double tick_value = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+   double contract   = SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE);
+   double vol_min    = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double vol_max    = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   double vol_step   = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
    if (!first) json += ",";
    json += StringFormat(
       "\"%s\":{\"point\":%.8f,\"digits\":%I64d,"
       "\"stops_level_points\":%I64d,\"freeze_level_points\":%I64d,"
-      "\"trade_mode\":%I64d}",
-      sym, point, digits, stops, freeze, tmode);
+      "\"trade_mode\":%I64d,"
+      "\"tick_size\":%.8f,\"tick_value\":%.5f,\"contract_size\":%.2f,"
+      "\"volume_min\":%.4f,\"volume_max\":%.2f,\"volume_step\":%.4f}",
+      sym, point, digits, stops, freeze, tmode,
+      tick_size, tick_value, contract, vol_min, vol_max, vol_step);
    first = false;
 }
 
@@ -1171,6 +1187,29 @@ string BuildSymbolSpecsJson() {
    return out;
 }
 
+
+// v1.54 — broker server time / DST / trading-session facts so the backend
+//          can certify DST handling from observed evidence (correction #5).
+string BuildBrokerTimeJson() {
+   long srv_offset = (long)(TimeTradeServer() - TimeGMT());
+   datetime from_t, to_t;
+   string sessions = "[";
+   bool first = true;
+   MqlDateTime st;
+   TimeToStruct(TimeTradeServer(), st);
+   ENUM_DAY_OF_WEEK dow = (ENUM_DAY_OF_WEEK)st.day_of_week;
+   for (uint sess = 0; sess < 8; sess++) {
+      if (!SymbolInfoSessionTrade(_Symbol, dow, sess, from_t, to_t)) break;
+      if (!first) sessions += ",";
+      sessions += StringFormat("[%I64d,%I64d]", (long)from_t, (long)to_t);
+      first = false;
+   }
+   sessions += "]";
+   return StringFormat(
+      "{\"server_gmt_offset_sec\":%I64d,\"server_time\":%I64d,"
+      "\"symbol\":\"%s\",\"trade_sessions_today\":%s}",
+      srv_offset, (long)TimeTradeServer(), _Symbol, sessions);
+}
 
 void SendHeartbeat() {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -1206,9 +1245,11 @@ void SendHeartbeat() {
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
       "\"positions\":%s,\"client_version\":\"%s\","
       "\"symbol_specs\":%s,"
+      "\"broker_time\":%s,"
       "\"available_symbols\":%s}",
       EffectiveToken, balance, equity, openPos, spreads, login, ccy, positions,
-      EA_CLIENT_VERSION, BuildSymbolSpecsJson(), CACHED_AVAILABLE_SYMBOLS);
+      EA_CLIENT_VERSION, BuildSymbolSpecsJson(), BuildBrokerTimeJson(),
+      CACHED_AVAILABLE_SYMBOLS);
    HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
 }
 
