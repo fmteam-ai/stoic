@@ -1,6 +1,5 @@
 """Infrastructure API — VPS providers, deployments, agent lifecycle,
 MT5 instances, pairing, health + shadow certification."""
-import statistics
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -109,7 +108,9 @@ async def create_deployment_ep(payload: dict,
     from vps_deployments import create_deployment
     dep = await create_deployment(get_db(), user["id"], payload,
                                   idempotency_key)
-    if dep["path"] == "existing_vps" or payload.get("issue_bootstrap"):
+    needs_bootstrap = (dep["path"] == "existing_vps"
+                       or payload.get("issue_bootstrap"))
+    if needs_bootstrap and not dep.get("replayed"):
         from vps_agent import create_bootstrap_token
         dep["bootstrap"] = await create_bootstrap_token(
             get_db(), user["id"], dep["deployment_id"])
@@ -297,7 +298,11 @@ async def create_pairing(payload: dict, user=Depends(get_current_user)):
     try:
         return await create_pairing_code(
             get_db(), user["id"], str(payload.get("account_id") or ""))
-    except Exception as e:  # noqa: BLE001 — bad ObjectId included
+    except ValueError as e:
+        if "not found" in str(e):
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — malformed ObjectId etc.
         raise HTTPException(status_code=400, detail=str(e))
 
 

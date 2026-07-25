@@ -108,7 +108,9 @@ async def create_deployment(db, user_id: str, payload: dict,
     existing = await db.vps_deployments.find_one(
         {"user_id": user_id, "idempotency_key": key})
     if existing:
-        return _serialize(existing)
+        out = _serialize(existing)
+        out["replayed"] = True
+        return out
     now = datetime.now(timezone.utc)
     dep = {
         "deployment_id": f"dep_{uuid.uuid4().hex[:10]}",
