@@ -81,7 +81,18 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("trading-bot")
 
-app = FastAPI(title="AI Trading Bot API", version="1.1.0")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    # on_startup / on_shutdown are defined later in this module — names
+    # resolve at call time, after the module has fully loaded.
+    await on_startup()
+    yield
+    await on_shutdown()
+
+app = FastAPI(title="AI Trading Bot API", version="1.1.0", lifespan=_lifespan)
 
 
 # Root-level liveness probe. The Kubernetes/deployment health check hits
@@ -556,7 +567,6 @@ _ops_alert_task = None
 _portfolio_stop_task = None
 
 
-@app.on_event("startup")
 async def on_startup():
     global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
     # review item 5 — production hard-fails without an explicit trusted
@@ -657,7 +667,6 @@ async def on_startup():
             raise
 
 
-@app.on_event("shutdown")
 async def on_shutdown():
     for task in (_bot_runner_task, _warmer_task, _trade_manager_task,
                  _auto_heal_task, _stuck_sync_task, _optimizer_task,

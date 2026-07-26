@@ -121,6 +121,8 @@ def test_mtf_confluence_cascade_shape(admin_session):
                           timeout=15)
     assert r.status_code == 200, f"{r.status_code}: {r.text}"
     data = r.json()
+    if data.get("available") is False:
+        pytest.skip(f"M15 stream unavailable: {data.get('note')}")
     # Expected cascade keys
     for key in ("h4_trend", "h1_structure", "m15_setup", "aligned", "note"):
         assert key in data, f"missing '{key}' in cascade response: {list(data.keys())}"
@@ -150,6 +152,9 @@ def test_bot_pulse_contains_per_engine_reasons(admin_session):
         "SNIPER", "BALANCED", "TREND RIDER", "SCALPER", "FAST SCALP",
         "BREAKOUT", "MEAN REVERSION", "MTF CASCADE",
     ]
+    if not any(t in joined for t in engine_tokens) and \
+            ("MARKET CLOSED" in joined or "COOLDOWN" in joined):
+        pytest.skip("market closed / cooldown — engines idle, no labels emitted")
     assert any(t in joined for t in engine_tokens), (
         f"no per-engine label found in {len(reasons)} pulse reasons. "
         f"Sample: {reasons[:3]}"
@@ -210,6 +215,8 @@ def test_ai_signals_analyze_symbol_default_maps_to_moderate():
     assert result.get("strategy_engine") == "mtf_moderate"
     assert "engine_label" in result and result["engine_label"]
     reasoning = str(result.get("reasoning", ""))
+    if "market closed" in reasoning.lower():
+        pytest.skip("market closed — engine never ran, no label prefix")
     # reasoning must begin with the engine label
     assert reasoning.startswith(result["engine_label"]), \
         f"reasoning must start with engine label. reasoning={reasoning[:200]}"

@@ -1346,3 +1346,15 @@ LESSON (recurring): any "SomeWord: test_xxx" colon phrasing in memory/*.md near 
 - seed.py: freshly-seeded admin now gets must_change_password=True when APP_ENV=production (or ADMIN_PASSWORD_FILE set). Preview admins unaffected (APP_ENV blank) → test suite unbroken.
 - Full flow already existed: /auth/me exposes must_change_password → Login.jsx redirects to /settings → Settings.jsx banner → /auth/change-password clears flag + revokes all sessions. Verified: prod-simulated seed (APP_ENV=production, strong pw) → must_change_password:True (temp admin cleaned up).
 - Stripe go-live: user guided via support_agent — provide own sk_live_.../sk_test_... as STRIPE_API_KEY in prod deploy env, register webhook https://<prod-domain>/api/webhook/stripe, set STRIPE_WEBHOOK_SECRET=whsec_.... App code already reads both keys from env; webhook signature verification activates once the secret is set.
+
+## Iter-154 (2026-07-26) — CI pipeline fully green (4 failing jobs fixed)
+1. **backend-unit**: ops_console.py leaked `str(e)` in mongo health block (iter-148 source policy) → generic message + logger.warning.
+2. **frontend-build / frontend-e2e**: yarn.lock out of sync with package.json resolutions → regenerated lockfile; also fixed CORRUPTED App.jsx (duplicated trailing `</ErrorBoundary>…export default App` block broke `vite build` — dev server tolerated it); moved Google-Fonts @import above @tailwind in index.css.
+3. **security-scan**: upgraded fastapi 0.116.2→0.140.0 + starlette 0.47.3→1.3.1 — clears ALL 8 starlette PYSECs; ci.yml ignore list trimmed to just PYSEC-2026-1325 (ecdsa, no fix upstream). App verified healthy on starlette 1.x (full suite 3280 passed).
+4. **Missed route**: /admin/brokers was never registered in App.jsx (lost in the corruption) — added; Broker Registry UI verified via screenshot.
+5. Migrated deprecated @app.on_event(startup/shutdown) → FastAPI lifespan (server.py) — removes DeprecationWarnings; unit subset passes with -W error::DeprecationWarning.
+6. Stale-test syncs: iter103/iter125 accept content-addressed /api/artifacts/{sha256} URLs; iter125 signing test uses ED25519_SIGNING_KEY_B64 (was AGENT_SIGNING_KEY); iter136 runbooks now expect supply-chain id; .env.example gained SENDER_NAME/SUPPORT_NOTIFY_EMAIL/ADMIN_MFA_ENFORCED/ED25519_SIGNING_KEY_B64.
+7. Market-dependent tests (iter126/127 MTF, iter98 grandfather) now pytest.skip when market closed / EA offline instead of failing on weekends.
+8. Iteration-139 verification (was pending): /api/admin/brokers, /api/admin/ops-console, /api/artifacts/{sha256} (200 + 404 bad hash) via curl; AdminOps + AdminBrokers UI via screenshots; Playwright e2e 11/11.
+LEARNING: running Playwright + full pytest concurrently against the preview URL trips Cloudflare bot protection (429 + "Just a moment" challenges) → phantom test failures. Re-run serially after ~60s.
+Manifest: 2,973 tests / 285 files (regenerated, --check passes).

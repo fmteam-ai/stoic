@@ -17,6 +17,7 @@ corrections review request. Runs the exact scenarios listed in the review:
 from __future__ import annotations
 
 import os
+import re
 import ssl
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -150,10 +151,14 @@ def test_artifacts_manifest_signed():
     assert sig.get("value"), "manifest signature.value must be non-null"
     names = {a["name"]: a for a in body.get("artifacts", [])}
     assert "stoic-ea" in names
-    assert names["stoic-ea"]["url"] == "/api/ea-script"
+    ea_url = names["stoic-ea"]["url"]
+    assert (ea_url == "/api/ea-script"
+            or re.fullmatch(r"/api/artifacts/[0-9a-f]{64}", ea_url)), ea_url
     assert names["stoic-ea"].get("version") == "1.55"
     assert "stoic-ea-ex5" in names
-    assert names["stoic-ea-ex5"]["url"] == "/api/ea-script.ex5"
+    ex5_url = names["stoic-ea-ex5"]["url"]
+    assert (ex5_url == "/api/ea-script.ex5"
+            or re.fullmatch(r"/api/artifacts/[0-9a-f]{64}", ex5_url)), ex5_url
 
 
 # ─── 4) /api/ea-script.ex5 → 409 ex5_not_published in preview ────

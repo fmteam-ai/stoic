@@ -176,7 +176,7 @@ def test_runbooks_content():
     from runbooks_content import get_runbooks
     out = get_runbooks()
     ids = {r["id"] for r in out["runbooks"]}
-    assert ids == {"incident-response", "backup-restore"}
+    assert ids == {"incident-response", "backup-restore", "supply-chain"}
     joined = " ".join(r["markdown"] for r in out["runbooks"])
     for marker in ("SEV-1", "Secret rotation", "Restore drill",
                    "Platform responsibilities", "audit chain"):

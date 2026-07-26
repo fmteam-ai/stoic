@@ -102,6 +102,7 @@ function App() {
                         <Route path="/admin/affiliates" element={<ProtectedRoute requireAdmin><AdminAffiliates /></ProtectedRoute>} />
                         <Route path="/admin/migration" element={<ProtectedRoute requireAdmin><AdminMigration /></ProtectedRoute>} />
                         <Route path="/admin/ops" element={<ProtectedRoute requireAdmin><AdminOps /></ProtectedRoute>} />
+                        <Route path="/admin/brokers" element={<ProtectedRoute requireAdmin><AdminBrokers /></ProtectedRoute>} />
                         <Route path="/admin/support" element={<ProtectedRoute requireAdmin><AdminSupport /></ProtectedRoute>} />
                         <Route path="/admin/runbooks" element={<ProtectedRoute requireAdmin><AdminRunbooks /></ProtectedRoute>} />
                         <Route path="/help" element={<ProtectedRoute><HelpCenter /></ProtectedRoute>} />
@@ -155,12 +156,6 @@ function App() {
                 </AuthProvider>
             </BrowserRouter>
             </ErrorBoundary>
-        </div>
-    );
-}
-
-export default App;
-  </ErrorBoundary>
         </div>
     );
 }

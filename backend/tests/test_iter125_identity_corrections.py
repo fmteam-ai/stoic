@@ -11,6 +11,7 @@
 """
 import asyncio
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -247,15 +248,23 @@ def test_pairing_claim_prefers_broker_reported(db):
 
 # ─── #3 mandatory artifact signing + EX5 delivery ────────────────────
 def test_manifest_refuses_without_signing_key(monkeypatch):
+    # iter-136 upgraded HMAC (AGENT_SIGNING_KEY) → Ed25519 asymmetric keys.
     from vps_pathb import build_artifact_manifest
-    monkeypatch.delenv("AGENT_SIGNING_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="AGENT_SIGNING_KEY"):
+    monkeypatch.delenv("ED25519_SIGNING_KEY_B64", raising=False)
+    with pytest.raises(RuntimeError, match="ED25519_SIGNING_KEY_B64"):
         build_artifact_manifest()
-    monkeypatch.setenv("AGENT_SIGNING_KEY", "test-key-125")
+    import base64
+    from cryptography.hazmat.primitives import serialization as _s
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey as _EK)
+    key_b64 = base64.b64encode(_EK.generate().private_bytes(
+        _s.Encoding.Raw, _s.PrivateFormat.Raw, _s.NoEncryption())).decode()
+    monkeypatch.setenv("ED25519_SIGNING_KEY_B64", key_b64)
     m = build_artifact_manifest()
     assert m["signature"]["value"]  # never null
     ex5 = next(a for a in m["artifacts"] if a["name"] == "stoic-ea-ex5")
-    assert ex5["url"] == "/api/ea-script.ex5"
+    assert (ex5["url"] == "/api/ea-script.ex5"
+            or re.fullmatch(r"/api/artifacts/[0-9a-f]{64}", ex5["url"]))
 
 
 def test_ex5_endpoint_and_digest_report(db):

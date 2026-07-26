@@ -5,6 +5,7 @@ diagnose issues without logging into a VPS: VPS fleet, agents, MT5/EA
 bridge, deployments, command queue, bots, workers, risk alerts, API
 latency, MongoDB, Stripe webhooks and subscriptions.
 """
+import logging
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -12,6 +13,8 @@ from fastapi import APIRouter, Depends
 
 from auth import get_current_user, require_admin
 from database import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ops-console"])
 
@@ -206,7 +209,8 @@ async def ops_console(user=Depends(get_current_user)):
                         "data_mb": round(stats.get("dataSize", 0) / 1048576, 1),
                         "index_mb": round(stats.get("indexSize", 0) / 1048576, 1)}
     except Exception as e:  # noqa: BLE001
-        out["mongo"] = {"ok": False, "error": str(e)[:200]}
+        logger.warning("ops mongo health check failed: %s", e)
+        out["mongo"] = {"ok": False, "error": "mongo health check failed"}
 
     # ── Stripe webhooks + payments ──────────────────────────────────────
     wh_counts = {}
