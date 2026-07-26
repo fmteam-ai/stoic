@@ -361,6 +361,11 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - Slippage veto fires ONLY on true slippage (EA v1.40+ `requested_price`); legacy signal-vs-fill deltas are latency drift and must never veto.
 - Always use `pip_utils.base_symbol()` for pip math / cap lookups on broker-suffixed symbols (GOLD#, XAUUSD.fx, XAUUSD-ECN).
 
+## Iter-130 (2026-06) — Stripe payment page verified E2E + prod origin allowlist
+- Full frontend flow verified live: /subscription (4 tier cards × 4 durations, feature matrix) → subscribe button → real Stripe Checkout redirect (sandbox, $712.80 trader annual) → /subscription/success polls /api/subscription/poll/{sid}. Backend checkout curl-verified with fresh non-admin user (admin 400s by design; CSRF header required — axios interceptor sends it from csrf_token cookie).
+- `CHECKOUT_ALLOWED_ORIGINS` in backend/.env now includes https://stoicaibot.com + www — production checkout would have 400'd "origin not in approved domain list" without it. USER MUST REDEPLOY for this to reach production.
+- Refund/dispute auto-revoke (iter-129) backend-tested and passing; also needs the redeploy.
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 
