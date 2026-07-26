@@ -202,8 +202,8 @@ async def close_ticket(ticket_id: str, user=Depends(get_current_user)):
 
 @router.get("/admin/tickets")
 async def admin_tickets(status: str = "", user=Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin only")
+    from auth import require_admin
+    require_admin(user)
     db = get_db()
     q = {}
     if status in ("open", "answered", "closed"):

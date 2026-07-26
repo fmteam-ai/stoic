@@ -241,8 +241,8 @@ async def referral_redirect(code: str, request: Request):
 
 # --- Admin endpoints ------------------------------------------------------
 def _admin_only(user):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin only")
+    from auth import require_admin
+    require_admin(user)
 
 
 @router.get("/admin/affiliate/applications")

@@ -350,8 +350,8 @@ async def admin_refund(payload: dict, user=Depends(get_current_user)):
     """Manual refund/chargeback processing (admin): revokes the purchased
     access period and reverses affiliate commissions for the session.
     (The Stripe money movement itself happens in the Stripe dashboard.)"""
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin only")
+    from auth import require_admin
+    require_admin(user)
     session_id = payload.get("session_id")
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id required")

@@ -175,15 +175,19 @@ def test_command_sequence_signed_and_replay_rejected(svc_db):
 
 def test_artifact_manifest_is_signed():
     from vps_pathb import build_artifact_manifest
+    import release_signing
     m = build_artifact_manifest()
     sig = m["signature"]
-    assert sig["alg"] == "HMAC-SHA256" and sig["value"]
-    key = os.environ["AGENT_SIGNING_KEY"]
+    assert sig["alg"] == "Ed25519" and sig["value"]
+    assert sig["key_id"] == release_signing.KEY_ID
     body = json.dumps({k: m[k] for k in sig["signed_fields"]},
                       sort_keys=True, separators=(",", ":"),
                       default=str).encode()
-    expected = hmac_mod.new(key.encode(), body, hashlib.sha256).hexdigest()
-    assert sig["value"] == expected
+    assert release_signing.verify_hex(body, sig["value"],
+                                      sig["public_key_b64"])
+    # tampered body must fail verification
+    assert not release_signing.verify_hex(body + b"x", sig["value"],
+                                          sig["public_key_b64"])
     assert m["update_policy"]["rollback"]
 
 

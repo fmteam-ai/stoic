@@ -23,6 +23,13 @@ async def _account_by_token(token: str) -> dict:
     db = get_db()
     acc = await db.accounts.find_one({"bridge_token": token})
     if not acc:
+        # 15-min grace for the previous token after a rotation, so a live
+        # EA keeps reporting while the operator swaps the new token in.
+        now = datetime.now(timezone.utc).isoformat()
+        acc = await db.accounts.find_one(
+            {"bridge_token_prev": token,
+             "bridge_token_prev_expires": {"$gt": now}})
+    if not acc:
         raise HTTPException(status_code=401, detail="Invalid bridge token")
     return acc
 

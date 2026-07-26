@@ -78,8 +78,8 @@ def _ser(d: dict) -> dict:
 
 
 def _require_admin(user: dict):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    from auth import require_admin
+    require_admin(user)
 
 
 @router.get("/brokers")

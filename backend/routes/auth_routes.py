@@ -229,7 +229,10 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     await clear_failures(db, "login", f"{ip}:{email}")
     await clear_failures(db, "2fa", email)
     await _issue_session_cookies(db, uid, email, response, request)
-    return _user_to_out({**user, "_id": uid})
+    out = _user_to_out({**user, "_id": uid}).model_dump()
+    out["admin_mfa_enforced"] = (
+        os.environ.get("ADMIN_MFA_ENFORCED", "true").lower() == "true")
+    return out
 
 
 @router.post("/logout")
@@ -460,9 +463,12 @@ async def reset_password(payload: ResetPasswordRequest):
             "email": user["email"]}
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me")
 async def me(user=Depends(get_current_user)):
-    return _user_to_out({**user, "_id": user["id"]})
+    out = _user_to_out({**user, "_id": user["id"]}).model_dump()
+    out["admin_mfa_enforced"] = (
+        os.environ.get("ADMIN_MFA_ENFORCED", "true").lower() == "true")
+    return out
 
 
 @router.post("/refresh")

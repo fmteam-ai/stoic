@@ -55,8 +55,8 @@ async def public_terms():
 
 # ─── Guards / helpers ────────────────────────────────────────────────────
 def _admin_only(user):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin only")
+    from auth import require_admin
+    require_admin(user)
 
 
 def _now_iso() -> str:
@@ -66,7 +66,8 @@ def _now_iso() -> str:
 async def _audit(db, *, actor_email: str, action: str, target_kind: str,
                  target_id: str, target_label: str = "", reason: str = "",
                  meta: Optional[dict] = None):
-    await db.admin_audit_log.insert_one({
+    from audit_chain import append_chained
+    await append_chained(db, {
         "actor_email": actor_email,
         "action": action,
         "target_kind": target_kind,         # "user" | "affiliate"
@@ -95,6 +96,21 @@ def _serialize_user(u: dict) -> dict:
         "two_factor_enabled": bool(u.get("two_factor_enabled", False)),
         "referred_by_code": u.get("referred_by_code"),
     }
+
+
+# ─── Admin · Audit chain integrity + runbooks ────────────────────────────
+@router.get("/admin/audit/verify")
+async def admin_audit_verify(user=Depends(get_current_user)):
+    _admin_only(user)
+    from audit_chain import verify_chain
+    return await verify_chain(get_db())
+
+
+@router.get("/admin/runbooks")
+async def admin_runbooks(user=Depends(get_current_user)):
+    _admin_only(user)
+    from runbooks_content import get_runbooks
+    return get_runbooks()
 
 
 # ─── Admin · Platform security settings ─────────────────────────────────

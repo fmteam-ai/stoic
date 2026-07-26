@@ -478,24 +478,19 @@ def build_artifact_manifest() -> dict:
                        "hash/signature verification or health checks",
        }}
     # iter-125 correction #3 — signing is MANDATORY. A manifest without a
-    # signature would let agents install unsigned/compromised artifacts, so
-    # a missing AGENT_SIGNING_KEY is a hard configuration error, never a
-    # silent null signature.
-    import hmac as _hmac
+    # signature would let agents install unsigned/compromised artifacts.
+    # iter-136 — upgraded HMAC-SHA256 → Ed25519 asymmetric signatures:
+    # verifiers pin the public key (GET /api/release-key) and can never
+    # forge signatures even if they hold the verification key.
     import json as _json
-    key = os.environ.get("AGENT_SIGNING_KEY", "")
-    if not key:
-        raise RuntimeError(
-            "AGENT_SIGNING_KEY is not configured — refusing to emit an "
-            "UNSIGNED artifact manifest. Set AGENT_SIGNING_KEY in the "
-            "backend environment.")
+    import release_signing
     body = _json.dumps({k: manifest[k] for k in ("artifacts", "update_policy")},
                        sort_keys=True, separators=(",", ":"),
                        default=str).encode()
     manifest["signature"] = {
-        "alg": "HMAC-SHA256", "key_id": "stoic-server-v1",
-        "value": _hmac.new(key.encode(), body,
-                           hashlib.sha256).hexdigest(),
+        "alg": "Ed25519", "key_id": release_signing.KEY_ID,
+        "value": release_signing.sign_hex(body),
+        "public_key_b64": release_signing.public_key_b64(),
         "signed_fields": ["artifacts", "update_policy"],
     }
     return manifest

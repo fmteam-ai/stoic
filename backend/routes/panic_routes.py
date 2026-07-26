@@ -66,7 +66,7 @@ async def panic_user(request: Request, user=Depends(get_current_user)):
 @router.post("/admin/panic")
 async def panic_global(user=Depends(get_current_user)):
     """Global panic — every user's bot down. Admin role only."""
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    from auth import require_admin
+    require_admin(user)
     reset_rate_limiter()  # clear all rate-limit buckets
     return await _disable_all_bots_and_close_trades({})

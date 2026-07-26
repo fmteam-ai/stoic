@@ -57,6 +57,7 @@ const AdminUsers = lazy(() => import("@/pages/AdminUsers"));
 const AdminAffiliates = lazy(() => import("@/pages/AdminAffiliates"));
 const AdminMigration = lazy(() => import("@/pages/AdminMigration"));
 const AdminSupport = lazy(() => import("@/pages/AdminSupport"));
+const AdminRunbooks = lazy(() => import("@/pages/AdminRunbooks"));
 const HelpCenter = lazy(() => import("@/pages/HelpCenter"));
 const Support = lazy(() => import("@/pages/Support"));
 const StatusPage = lazy(() => import("@/pages/StatusPage"));
@@ -99,6 +100,7 @@ function App() {
                         <Route path="/admin/affiliates" element={<ProtectedRoute requireAdmin><AdminAffiliates /></ProtectedRoute>} />
                         <Route path="/admin/migration" element={<ProtectedRoute requireAdmin><AdminMigration /></ProtectedRoute>} />
                         <Route path="/admin/support" element={<ProtectedRoute requireAdmin><AdminSupport /></ProtectedRoute>} />
+                        <Route path="/admin/runbooks" element={<ProtectedRoute requireAdmin><AdminRunbooks /></ProtectedRoute>} />
                         <Route path="/help" element={<ProtectedRoute><HelpCenter /></ProtectedRoute>} />
                         <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />

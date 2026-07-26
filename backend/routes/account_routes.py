@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
@@ -569,14 +569,21 @@ async def delete_account(account_id: str, force: bool = False,
 @router.post("/{account_id}/rotate-token")
 async def rotate_token(account_id: str, user=Depends(get_current_user)):
     db = get_db()
-    new_token = generate_bridge_token()
-    result = await db.accounts.update_one(
-        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
-        {"$set": {"bridge_token": new_token, "status": "disconnected"}},
-    )
-    if result.matched_count == 0:
+    acc = await db.accounts.find_one(
+        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]})
+    if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
-    return {"bridge_token": new_token}
+    new_token = generate_bridge_token()
+    grace_until = (datetime.now(timezone.utc)
+                   + timedelta(minutes=15)).isoformat()
+    await db.accounts.update_one(
+        {"_id": acc["_id"]},
+        {"$set": {"bridge_token": new_token,
+                  "bridge_token_prev": acc.get("bridge_token"),
+                  "bridge_token_prev_expires": grace_until,
+                  "status": "disconnected"}},
+    )
+    return {"bridge_token": new_token, "prev_token_grace_until": grace_until}
 
 
 @router.post("/{account_id}/request-sync")

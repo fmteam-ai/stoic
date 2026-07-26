@@ -58,8 +58,8 @@ USER_FIELDS_PORTABLE = {
 
 
 def _admin_only(user: dict) -> None:
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin only")
+    from auth import require_admin
+    require_admin(user)
 
 
 def _stringify_oids(doc: dict) -> dict:

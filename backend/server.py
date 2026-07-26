@@ -535,6 +535,16 @@ async def on_startup():
             raise RuntimeError(
                 "APP_ENV=production forbids STEP_UP_BYPASS_TOKEN / "
                 "RATE_LIMIT_BYPASS_TOKEN — unset them before deploying.")
+        # iter-136 — admin MFA enforcement and release signing are mandatory
+        # in production.
+        if os.environ.get("ADMIN_MFA_ENFORCED", "true").lower() != "true":
+            raise RuntimeError(
+                "APP_ENV=production forbids ADMIN_MFA_ENFORCED=false — "
+                "admin accounts must enroll TOTP 2FA.")
+        if not os.environ.get("ED25519_SIGNING_KEY_B64"):
+            raise RuntimeError(
+                "APP_ENV=production requires ED25519_SIGNING_KEY_B64 for "
+                "release manifest signing.")
     try:
         await ensure_indexes()
         await seed_admin()

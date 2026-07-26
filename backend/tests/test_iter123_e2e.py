@@ -228,6 +228,6 @@ def test_artifact_manifest_signed():
     assert r.status_code == 200, r.text
     m = r.json()
     sig = m.get("signature") or {}
-    assert sig.get("alg") == "HMAC-SHA256", sig
+    assert sig.get("alg") == "Ed25519", sig
     assert sig.get("value"), sig
     assert m.get("update_policy", {}).get("rollback") is not None, m

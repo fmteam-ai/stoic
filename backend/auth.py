@@ -75,6 +75,22 @@ def clear_auth_cookies(response):
     response.delete_cookie("csrf_token", path="/")
 
 
+def require_admin(user: dict) -> None:
+    """Admin gate: role check + mandatory TOTP MFA (iter-136).
+    ADMIN_MFA_ENFORCED=false is a preview/CI escape hatch only — server.py
+    refuses it when APP_ENV=production."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin only")
+    if (os.environ.get("ADMIN_MFA_ENFORCED", "true").lower() == "true"
+            and not user.get("two_factor_enabled")):
+        raise HTTPException(status_code=403, detail={
+            "code": "admin_mfa_required",
+            "message": "Admin accounts require authenticator (TOTP) 2FA. "
+                       "Enroll it in Settings → Security to unlock admin "
+                       "functions.",
+        })
+
+
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
     if not token:

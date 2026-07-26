@@ -405,6 +405,16 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - Sidebar LEARN expanded (nav-help/support/status/privacy/risk) + admin nav-admin-support.
 - Testing: testing agent iteration_105.json — 12/12 backend HTTP + frontend flows all pass; unit tests test_iter135_portal_support.py (6) + agent's test_iter135_portal_http.py (12). Manifest → 2,950/282.
 
+## Iter-136 (2026-06) — Security hardening phase (pre-launch checklist)
+- ADMIN MFA MANDATORY: auth.require_admin(user) = role + TOTP-enrolled check (403 {code:"admin_mfa_required"}); wired into ALL admin gates (admin/affiliate/migration/diagnostic/partner/panic/subscription-refund/support-queue). Dropped diagnostic_routes' legacy admin@trading.bot email bypass (was a priv-esc: anyone could register that email). Preview escape hatch ADMIN_MFA_ENFORCED=false in backend/.env (HTTP test suites depend on it); server.py production guard REFUSES it when APP_ENV=production. /auth/me + login responses now include admin_mfa_enforced (me lost response_model=UserOut which stripped the extra key — gotcha). Frontend ProtectedRoute(requireAdmin) renders admin-mfa-gate screen → Settings when enforced & unenrolled.
+- TAMPER-EVIDENT AUDIT LOG: audit_chain.py append_chained/verify_chain — seq + prev_hash + entry_hash=sha256(prev+canonical) on db.admin_audit_log (admin_routes._audit). GET /api/admin/audit/verify; UI button on /admin/runbooks (verified live: chain intact, 3 legacy pre-chain entries counted not verified).
+- BRIDGE TOKEN ROTATION GRACE: rotate endpoint keeps bridge_token_prev valid 15 min (bridge_routes._account_by_token fallback); UI button already existed on Accounts page.
+- ED25519 SIGNED RELEASES: release_signing.py (cryptography, raw-32B key in ED25519_SIGNING_KEY_B64 env — preview key in .env; PRODUCTION MUST SET ITS OWN + APP_ENV=production guard requires it). vps_pathb manifest signature alg Ed25519 + public_key_b64; public pin endpoint GET /api/release-key. Tests iter122c/iter123 updated from HMAC-SHA256 asserts.
+- DEPENDENCY SCAN + FIXES: pip-audit → fastapi 0.110.1→0.116.2 + starlette 0.37.2→0.47.3 (7 PYSECs fixed; 80-test HTTP regression green). yarn audit → axios 1.16→1.18.1, react-router(-dom) 7.15→7.18.1, postcss 8.5.18, form-data 4.0.6 resolution. ACCEPTED RISKS: ecdsa PYSEC-2026-1325 (python-jose transitive, Minerva — we sign HS256 only, no fix released); brace-expansion/js-yaml (eslint dev-only); react-router RSC CSRF (needs v8, app is SPA without RSC — n/a).
+- RUNBOOKS: runbooks_content.py (Incident Response playbook + Backup/Restore runbook incl. platform-responsibilities table mapping every checklist line to an owner) via GET /api/admin/runbooks; page /admin/runbooks (sidebar nav-admin-runbooks) with audit-verify button.
+- Tests: tests/test_iter136_security_hardening.py (8) + updated iter122c/123. Manifest → 2,958/283. Live E2E: enforcement toggled on → admin 403 admin_mfa_required verified over HTTP, then reverted.
+- DEPLOY NOTES FOR USER: set APP_ENV=production, ED25519_SIGNING_KEY_B64 (fresh key), do NOT set ADMIN_MFA_ENFORCED=false in production. After deploy, admin must enroll TOTP in Settings to unlock admin pages.
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 

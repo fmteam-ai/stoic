@@ -30,6 +30,15 @@ async def legal(kind: str):
     return doc
 
 
+@router.get("/release-key")
+async def release_key():
+    """Public Ed25519 verification key for signed release manifests —
+    verifiers should pin this out-of-band."""
+    import release_signing
+    return {"alg": "Ed25519", "key_id": release_signing.KEY_ID,
+            "public_key_b64": release_signing.public_key_b64()}
+
+
 # ---------------------------------------------------------------- status
 
 _STATUS_CACHE = {"at": 0.0, "data": None}

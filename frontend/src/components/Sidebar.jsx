@@ -107,6 +107,7 @@ const ADMIN_SECTION = {
     items: [
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
         { to: "/admin/support", label: "Support Queue", icon: LifeBuoy, testid: "nav-admin-support" },
+        { to: "/admin/runbooks", label: "Runbooks", icon: BookOpen, testid: "nav-admin-runbooks" },
         { to: "/admin/affiliates", label: "Affiliate Mgmt", icon: ShieldAlert, testid: "nav-admin-affiliates" },
         { to: "/admin/migration", label: "Migration", icon: DatabaseBackup, testid: "nav-admin-migration" },
     ],

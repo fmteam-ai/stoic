@@ -41,8 +41,8 @@ _RETCODE_HINTS = {
 
 
 def _admin_only(user) -> None:
-    if user.get("role") != "admin" and user.get("email") != "admin@trading.bot":
-        raise HTTPException(status_code=403, detail="Admin only")
+    from auth import require_admin
+    require_admin(user)
 
 
 def _mk(label: str, status: str, detail: str = "", fix_code: Optional[str] = None,
