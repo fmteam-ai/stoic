@@ -145,6 +145,13 @@ def test_ticket_validation():
         _cleanup([user])
 
 
+def test_support_email_escapes_user_html(monkeypatch):
+    from routes.support_routes import _email_html
+    html = _email_html("t", ['<img src=x onerror=alert(1)>', "ok & fine"], "/support")
+    assert "<img" not in html
+    assert "&lt;img" in html and "&amp; fine" in html
+
+
 def test_onboarding_state_and_risk_apply():
     from routes.portal_routes import onboarding_state, onboarding_update
     from bson import ObjectId

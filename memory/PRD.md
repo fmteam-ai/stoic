@@ -420,6 +420,10 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - Page /admin/ops (AdminOps.jsx): 8-chip stat strip + 9 panels, 30s auto-refresh, testids ops-stat-*/ops-panel-*. Sidebar nav-admin-ops (top of ADMIN group).
 - Tests tests/test_iter137_ops_console.py (4). Manifest → 2,962/284. Verified live: real telemetry rendered (21 offline agents, stale EA hbs, expired tuning worker lease, 1185 active subs).
 
+## Iter-138 (2026-06) — Security audit #3: PASS + all P3s fixed
+- Verdict: PASS, no material issues across iter-135..137 surfaces (tickets IDOR-safe, admin+MFA gates verified, Stripe re-verify intact, onboarding field-allowlisted).
+- Fixed all 3 P3s: (1) support notification emails now html.escape() all user text + subject capped 180 chars (email HTML injection); (2) /api/status single-flight asyncio.Lock (cold-cache stampede); (3) first use of a rotated bridge token retires bridge_token_prev immediately (grace no longer stays open). Tests updated (27 green). Manifest → 2,963/284.
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 

@@ -60,8 +60,9 @@ async def _notify(recipient: str, subject: str, body_html: str) -> None:
 
 
 def _email_html(title: str, lines: list[str], cta_path: str) -> str:
+    from html import escape
     body = "".join(
-        f'<div style="font-size:13px;color:#A1A1AA;line-height:1.6;margin-bottom:8px">{l}</div>'
+        f'<div style="font-size:13px;color:#A1A1AA;line-height:1.6;margin-bottom:8px">{escape(l)}</div>'
         for l in lines)
     return f"""
 <div style="background:#0A0A0A;color:#FAFAFA;font-family:'Courier New',monospace;padding:32px;max-width:560px;margin:auto;border:1px solid #1F1F1F">
@@ -122,7 +123,7 @@ async def create_ticket(payload: dict, request: Request,
     tid = str(r.inserted_id)
     await _notify(
         os.environ.get("SUPPORT_NOTIFY_EMAIL", ""),
-        f"[STOIC support] New {category} ticket: {subject}",
+        f"[STOIC support] New {category} ticket: {subject}"[:180],
         _email_html("New support ticket",
                     [f"From: {user.get('email','')}",
                      f"Category: {category}", f"Subject: {subject}",

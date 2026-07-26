@@ -43,6 +43,7 @@ async def release_key():
 
 _STATUS_CACHE = {"at": 0.0, "data": None}
 _STATUS_TTL = 30.0
+_STATUS_LOCK = None  # created lazily on the running loop
 
 
 def _parse_iso(v):
@@ -62,6 +63,19 @@ async def public_status():
     if _STATUS_CACHE["data"] and now - _STATUS_CACHE["at"] < _STATUS_TTL:
         return _STATUS_CACHE["data"]
 
+    # single-flight: a cold-cache burst computes the status once, not N times
+    global _STATUS_LOCK
+    import asyncio
+    if _STATUS_LOCK is None:
+        _STATUS_LOCK = asyncio.Lock()
+    async with _STATUS_LOCK:
+        now = time.monotonic()
+        if _STATUS_CACHE["data"] and now - _STATUS_CACHE["at"] < _STATUS_TTL:
+            return _STATUS_CACHE["data"]
+        return await _compute_status(now)
+
+
+async def _compute_status(now: float):
     db = get_db()
     utc_now = datetime.now(timezone.utc)
     components = {}

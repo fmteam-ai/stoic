@@ -142,8 +142,20 @@ def test_bridge_token_rotation_grace():
             out = await rotate_token(str(acc_id), user={"id": uid})
             new_tok = out["bridge_token"]
             assert new_tok != "old_tok_136"
-            # both tokens resolve during grace
+            # both tokens resolve during grace (prev lookup first — the
+            # first NEW-token use retires the old one)
+            assert (await _account_by_token("old_tok_136"))["_id"] == acc_id
             assert (await _account_by_token(new_tok))["_id"] == acc_id
+            # new-token use retired the previous token immediately
+            with pytest.raises(HTTPException):
+                await _account_by_token("old_tok_136")
+            # re-arm grace to verify the expiry path too
+            await db.accounts.update_one(
+                {"_id": acc_id},
+                {"$set": {"bridge_token_prev": "old_tok_136",
+                          "bridge_token_prev_expires": (
+                              datetime.now(timezone.utc)
+                              + timedelta(minutes=15)).isoformat()}})
             assert (await _account_by_token("old_tok_136"))["_id"] == acc_id
             # expire the grace → old token dies
             await db.accounts.update_one(
