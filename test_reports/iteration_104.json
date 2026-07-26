@@ -1,0 +1,24 @@
+{
+  "summary": "iter-128 deployment-readiness verification — ALL 5 tests in /app/backend/tests/test_iter128_deploy_readiness.py PASS (3.86s). Verified: (1) Backend pod root GET /health on 127.0.0.1:8001 returns 200 {'status':'ok'} with NO DB dependency (server.root_health source contains no 'get_db'/'db.'); (2) /healthz alias returns 200; (3) /api/health returns 200 with db:'connected' and /api/health/ready returns 200 with all readiness checks ok (unchanged DB-aware path still works); (4) forecast_agent.get_forecast() short-circuits to None when FORECAST_AGENT_ENABLED=false, without loading torch/chronos; (5) ml_ensemble.ml_predict() returns {'p_win':None,'models_used':0,'members':[]} and ml_ensemble.ml_gate() returns None (fail-open, never veto) when ML_ENSEMBLE_ENABLED=false. Bonus lazy-import check: importing forecast_agent + ml_ensemble as fresh modules pulls in ZERO of {torch, chronos, xgboost, lightgbm, catboost} at module load time — confirms heavy deps are lazy inside functions, safe for 1Gi pod boot. Regression: admin@trading.bot/admin123 login via external REACT_APP_BACKEND_URL succeeds and GET /api/auth/me returns admin identity 200.",
+  "pytest_results": {
+    "iter128": "5/5 passed in 3.86s -> /app/test_reports/pytest/iter128.xml"
+  },
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter128_deploy_readiness.py",
+    "/app/test_reports/pytest/iter128.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py still uses deprecated @app.on_event('startup'/'shutdown') — FastAPI recommends lifespan handlers. Not blocking deploy but should be migrated (DeprecationWarning noise in test output).",
+    "emergentintegrations/payments/stripe/checkout.py uses Pydantic V1 @validator — will break on Pydantic V3. Vendor-side but worth tracking."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "skipped per request"},
+  "test_credentials": "admin@trading.bot / admin123 (verified working via cookie-auth login + /api/auth/me on external REACT_APP_BACKEND_URL).",
+  "seed_data_creation": "None. Kill-switch tests use monkeypatch.setenv only — no DB writes.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter-128 deployment-readiness fixes verified end-to-end. Backend pod-direct http://localhost:8001/health + /healthz are 200-OK, no-DB — safe for K8s liveness/readiness probes. Both ML kill-switches default to 'true' (unchanged behavior) and cleanly fail-open to None/no-veto when set to 'false'. No torch/chronos/xgboost/lightgbm/catboost imports at module load — verified via sys.modules diff. External REACT_APP_BACKEND_URL/health intentionally routes to the frontend (returns HTML) per platform ingress — do NOT test it as a backend health signal. Manifest regeneration NOT needed since no new test file was added (test_iter128 was pre-existing from main-agent's work)."
+}

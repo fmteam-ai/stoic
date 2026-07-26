@@ -243,6 +243,13 @@ def blend(members: list) -> float | None:
 
 
 async def ml_predict(db, user_id: str, signal: dict, symbol: str) -> dict:
+    # Deployment kill-switch — set ML_ENSEMBLE_ENABLED=false on
+    # memory-constrained pods to skip loading the GBM zoo (xgboost/
+    # lightgbm/catboost). Returns a neutral prediction (no veto). Default
+    # enabled.
+    import os
+    if os.environ.get("ML_ENSEMBLE_ENABLED", "true").lower() != "true":
+        return {"p_win": None, "models_used": 0, "members": []}
     meta = await get_meta(db, user_id)
     members = []
     if meta.get("status") == "trained":

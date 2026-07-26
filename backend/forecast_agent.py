@@ -78,6 +78,12 @@ def summarize(closes: list, q: list, source: str, horizon: int,
 
 
 async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
+    # Deployment kill-switch — set FORECAST_AGENT_ENABLED=false on
+    # memory-constrained pods to skip loading the Chronos/torch model
+    # entirely (fail-open: no forecast, no veto). Default enabled.
+    import os
+    if os.environ.get("FORECAST_AGENT_ENABLED", "true").lower() != "true":
+        return None
     base = base_symbol(symbol)
     now = time.time()
     hit = _cache.get(base)
