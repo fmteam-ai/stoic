@@ -78,12 +78,31 @@ async def ops_console(user=Depends(get_current_user)):
                                   "provider": d.get("provider")})
     active_dep_states = ("requested", "queued", "provisioning", "installing",
                          "configuring", "pending")
+    success_states = [s for s in dep_states
+                      if any(w in s.lower() for w in ("active", "complete",
+                                                      "succeed", "ready",
+                                                      "running"))]
+
+    async def _dep_rate(hours: int):
+        since = _iso(now - timedelta(hours=hours))
+        done = await db.vps_deployments.count_documents(
+            {"state": {"$in": success_states or ["__none__"]},
+             "created_at": {"$gte": since}})
+        bad = await db.vps_deployments.count_documents(
+            {"state": {"$in": failed_states or ["__none__"]},
+             "created_at": {"$gte": since}})
+        total = done + bad
+        return {"succeeded": done, "failed": bad,
+                "rate_pct": round(done * 100.0 / total, 1) if total else None}
+
     out["deployments"] = {
         "by_state": dep_states,
         "in_progress": sum(v for k, v in dep_states.items()
                            if k.lower() in active_dep_states),
         "failed": sum(dep_states.get(s, 0) for s in failed_states),
         "recent_failed": recent_failed,
+        "success_24h": await _dep_rate(24),
+        "success_7d": await _dep_rate(24 * 7),
     }
 
     # ── Agent command queue ─────────────────────────────────────────────
@@ -223,4 +242,60 @@ async def ops_console(user=Depends(get_current_user)):
          "current_plan_id": {"$nin": [None, "admin_grandfather"]}})
     out["subscriptions"] = {"active": subs_active, "by_plan": by_tier,
                             "expiring_7d": expiring_7d}
+
+    # ── Billing events feed ─────────────────────────────────────────────
+    feed = []
+    async for tx in (db.payment_transactions
+                     .find({"payment_status": {"$in": ["paid", "refunded",
+                                                       "revoked"]}},
+                           {"user_email": 1, "plan_id": 1, "amount_usd": 1,
+                            "payment_status": 1, "created_at": 1})
+                     .sort("_id", -1).limit(8)):
+        feed.append({"email": tx.get("user_email"),
+                     "plan_id": tx.get("plan_id"),
+                     "amount_usd": tx.get("amount_usd"),
+                     "status": tx.get("payment_status"),
+                     "at": tx.get("created_at")})
+    out["billing_feed"] = feed
+
+    # ── Security panel ──────────────────────────────────────────────────
+    failed_logins = 0
+    async for row in db.rate_limits.aggregate(
+            [{"$match": {"_id": {"$regex": "^(login|2fa|email_otp_verify):"}}},
+             {"$group": {"_id": None, "n": {"$sum": "$n"}}}]):
+        failed_logins = row["n"]
+    suspended = await db.users.count_documents({"suspended": True})
+    from audit_chain import verify_chain
+    chain = await verify_chain(db)
+    from login_otp import is_enabled as _otp_enabled
+    import os as _os
+    out["security"] = {
+        "failed_auth_recent": failed_logins,
+        "suspended_users": suspended,
+        "audit_chain_ok": chain["ok"],
+        "audit_chain_entries": chain["chained_entries"],
+        "admin_mfa_enforced": _os.environ.get(
+            "ADMIN_MFA_ENFORCED", "true").lower() == "true",
+        "email_otp_login": await _otp_enabled(db),
+    }
+
+    # ── Host-agent telemetry aggregates ─────────────────────────────────
+    low_disk = 0
+    latencies = []
+    async for a in db.vps_agents.find(
+            {"revoked": {"$ne": True}, "last_metrics": {"$ne": None}},
+            {"last_metrics": 1}).limit(200):
+        m = a.get("last_metrics") or {}
+        pct = m.get("disk_free_pct")
+        if isinstance(pct, (int, float)) and pct < 10:
+            low_disk += 1
+        lat = m.get("broker_latency_ms")
+        if isinstance(lat, (int, float)):
+            latencies.append(lat)
+    out["host_agents"] = {
+        "low_disk_count": low_disk,
+        "avg_broker_latency_ms": (round(sum(latencies) / len(latencies), 1)
+                                  if latencies else None),
+        "reporting_latency": len(latencies),
+    }
     return out

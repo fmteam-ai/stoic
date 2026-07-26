@@ -98,10 +98,55 @@ Store encrypted, off-platform, with 30-day retention minimum.
 """
 
 
+SUPPLY_CHAIN_MD = """# Supply Chain & Host Agent CI Recipe
+
+**Owner:** Platform admin · **Version:** 2026-06
+
+## Enforcement points already live in the app
+- **Ed25519-signed manifests** — every artifact manifest is signed
+  (`GET /api/infra/artifacts/manifest`); public key pinned via `GET /api/release-key`.
+- **Content-addressed artifacts** — `GET /api/artifacts/{sha256}` hashes the
+  file at serve time and refuses to serve anything that doesn't match the
+  requested digest. Manifests pin these immutable URLs; the mutable
+  `/api/ea-script*` links exist for interactive installs only. **Production
+  agents must use the content-addressed URLs.**
+- **Host agent verification** — `docs/host-agent/stoic-host-agent.ps1`
+  verifies manifest signature alg, downloads by digest, re-hashes before
+  swapping files, and installs as a Windows service with restart recovery
+  (sc.exe failure actions 5s/30s/60s).
+
+## Target CI flow (run on YOUR runner — needs your code-signing cert)
+1. **CI Build** — checkout tagged release; run the 2,900+ test suite.
+2. **Signed EX5** — compile `EmergentTradingBridge.mq5` with MetaEditor CLI:
+   `metaeditor64.exe /compile:EmergentTradingBridge.mq5 /log` — the .ex5 is
+   the deployable unit (agents never recompile locally).
+3. **Signed MSI** — package the host agent (WiX or `dotnet msbuild`), then
+   `signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256
+   /f your-codesign.pfx stoic-agent.msi` (requires an OV/EV code-signing
+   certificate — purchase from DigiCert/Sectigo).
+4. **Manifest** — compute `sha256sum` of each artifact; publish them to the
+   backend `static/` dir; the server manifest picks up the hashes and signs
+   with `ED25519_SIGNING_KEY_B64` (CI-held key in production).
+5. **Host Agent Verification** — agents fetch the manifest, check the
+   Ed25519 signature against the pinned key, download
+   `/api/artifacts/{sha256}` and re-verify the digest before installing.
+6. **Deployment** — only after verification; rollback version is in the
+   manifest (`rollback_version`).
+
+## Rules
+- Never point production installers at mutable URLs.
+- Never sign locally-built binaries with the release key — CI only.
+- Rotate `ED25519_SIGNING_KEY_B64` per the Incident Response rotation map;
+  agents re-pin from `/api/release-key` after a signed transition notice.
+"""
+
+
 def get_runbooks() -> dict:
     return {"runbooks": [
         {"id": "incident-response", "title": "Incident Response Playbook",
          "markdown": INCIDENT_RESPONSE_MD},
         {"id": "backup-restore", "title": "Backup & Restore Runbook",
          "markdown": BACKUP_RESTORE_MD},
+        {"id": "supply-chain", "title": "Supply Chain & CI Recipe",
+         "markdown": SUPPLY_CHAIN_MD},
     ]}

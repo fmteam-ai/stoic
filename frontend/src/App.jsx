@@ -58,6 +58,7 @@ const AdminAffiliates = lazy(() => import("@/pages/AdminAffiliates"));
 const AdminMigration = lazy(() => import("@/pages/AdminMigration"));
 const AdminSupport = lazy(() => import("@/pages/AdminSupport"));
 const AdminOps = lazy(() => import("@/pages/AdminOps"));
+const AdminBrokers = lazy(() => import("@/pages/AdminBrokers"));
 const AdminRunbooks = lazy(() => import("@/pages/AdminRunbooks"));
 const HelpCenter = lazy(() => import("@/pages/HelpCenter"));
 const Support = lazy(() => import("@/pages/Support"));
@@ -154,6 +155,12 @@ function App() {
                 </AuthProvider>
             </BrowserRouter>
             </ErrorBoundary>
+        </div>
+    );
+}
+
+export default App;
+  </ErrorBoundary>
         </div>
     );
 }

@@ -460,15 +460,22 @@ def build_artifact_manifest() -> dict:
          "note": "token-personalised script — verify TLS + enrollment "
                  "code binding; signed MSI planned"},
         {"name": "stoic-ea", "type": "mq5", "version": ea_version,
-         "url": "/api/ea-script", "sha256": _sha256_file(ea_path),
+         "url": (f"/api/artifacts/{_sha256_file(ea_path)}"
+                 if _sha256_file(ea_path) else "/api/ea-script"),
+         "mutable_url": "/api/ea-script",
+         "sha256": _sha256_file(ea_path),
          "rollback_version": "1.54"},
         {"name": "stoic-ea-ex5", "type": "ex5", "version": ea_version,
-         "url": "/api/ea-script.ex5",
+         "url": (f"/api/artifacts/{_sha256_file(ea_path.replace('.mq5', '.ex5'))}"
+                 if _sha256_file(ea_path.replace(".mq5", ".ex5"))
+                 else "/api/ea-script.ex5"),
+         "mutable_url": "/api/ea-script.ex5",
          "sha256": _sha256_file(ea_path.replace(".mq5", ".ex5")),
          "rollback_version": "1.54",
          "note": "installers MUST deploy the exact CI-compiled, "
                  "hash-verified .ex5 — never recompile .mq5 locally. "
-                 "Published by the signed release pipeline."},
+                 "Content-addressed URL is the production path; the "
+                 "mutable_url exists for interactive/manual installs only."},
     ], "generated_at": datetime.now(timezone.utc).isoformat(),
        "update_policy": {
            "verify": "agents verify manifest signature + per-artifact "

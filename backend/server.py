@@ -44,6 +44,7 @@ from routes.affiliate_routes import router as affiliate_router
 from routes.support_routes import router as support_router
 from routes.portal_routes import router as portal_router
 from routes.ops_console import router as ops_console_router
+from routes.broker_registry_routes import router as broker_registry_router
 from routes.notification_routes import router as notification_router
 from routes.telegram_routes import router as telegram_router
 from routes.posture_routes import router as posture_router
@@ -222,6 +223,35 @@ async def ea_script():
                         })
 
 
+@api_router.get("/artifacts/{sha256}")
+async def artifact_by_hash(sha256: str):
+    """iter-139 — content-addressed IMMUTABLE artifact delivery. The URL *is*
+    the integrity contract: the file is hashed at serve time and only
+    returned if it matches the requested digest, so a mutable/compromised
+    file can never be served under an old link. Manifest URLs pin these."""
+    import hashlib as _hashlib
+    sha256 = sha256.lower().strip()
+    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+        return JSONResponse(status_code=400, content={"error": "bad_digest"})
+    static_dir = Path(__file__).parent / "static"
+    for fname, media in (("EmergentTradingBridge.ex5", "application/octet-stream"),
+                         ("EmergentTradingBridge.mq5", "text/plain")):
+        path = static_dir / fname
+        if not path.exists():
+            continue
+        h = _hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        if h.hexdigest() == sha256:
+            return FileResponse(path, media_type=media, filename=fname,
+                                headers={"Cache-Control":
+                                         "public, max-age=31536000, immutable",
+                                         "X-Artifact-SHA256": sha256})
+    return JSONResponse(status_code=404, content={"error": "artifact_not_found",
+                        "detail": "no published artifact matches this digest"})
+
+
 _trust_stats_cache = {"at": 0.0, "data": None}
 
 
@@ -322,6 +352,7 @@ api_router.include_router(affiliate_router)
 api_router.include_router(support_router)
 api_router.include_router(portal_router)
 api_router.include_router(ops_console_router)
+api_router.include_router(broker_registry_router)
 api_router.include_router(notification_router)
 api_router.include_router(telegram_router)
 api_router.include_router(posture_router)
@@ -561,6 +592,8 @@ async def on_startup():
         from operational_modes import (migrate_default_modes,
                                        remigrate_autonomous_to_supervised)
         await migrate_default_modes(get_db())
+        from broker_registry import ensure_seed as _seed_brokers
+        await _seed_brokers(get_db())
         await remigrate_autonomous_to_supervised(get_db())
         # Correction #4 — converge any config change journaled mid-crash.
         from config_promotion import repair_incomplete_promotions

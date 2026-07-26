@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Server, Plug, Cpu, AlertTriangle, Activity, Database, CreditCard, Users, ListOrdered } from "lucide-react";
+import { Loader2, RefreshCw, Server, Plug, Cpu, AlertTriangle, Activity, Database, CreditCard, Users, ListOrdered, ShieldCheck, Receipt } from "lucide-react";
 
 const fmtAge = (s) => {
     if (s === null || s === undefined) return "never";
@@ -143,6 +143,16 @@ export default function AdminOps() {
                 <Panel title="Deployments" icon={ListOrdered} testid="ops-panel-deployments">
                     <Row k="In progress" v={d.deployments.in_progress} vCls={d.deployments.in_progress ? tone.warn : "text-white"} />
                     <Row k="Failed" v={d.deployments.failed} vCls={d.deployments.failed ? tone.bad : "text-white"} />
+                    {d.deployments.success_24h && (
+                        <Row k="Success rate (24h)"
+                            v={d.deployments.success_24h.rate_pct != null ? `${d.deployments.success_24h.rate_pct}% (${d.deployments.success_24h.succeeded}/${d.deployments.success_24h.succeeded + d.deployments.success_24h.failed})` : "no deploys"}
+                            vCls={(d.deployments.success_24h.rate_pct ?? 100) >= 90 ? tone.ok : tone.warn} />
+                    )}
+                    {d.deployments.success_7d && (
+                        <Row k="Success rate (7d)"
+                            v={d.deployments.success_7d.rate_pct != null ? `${d.deployments.success_7d.rate_pct}%` : "no deploys"}
+                            vCls={(d.deployments.success_7d.rate_pct ?? 100) >= 90 ? tone.ok : tone.warn} />
+                    )}
                     {Object.entries(d.deployments.by_state).map(([s, n]) => (
                         <Row key={s} k={s} v={n} vCls={tone.dim} />
                     ))}
@@ -203,6 +213,36 @@ export default function AdminOps() {
                     {Object.entries(d.subscriptions.by_plan).map(([p, n]) => (
                         <Row key={p} k={p} v={n} vCls={tone.dim} />
                     ))}
+                </Panel>
+
+                <Panel title="Billing Events" icon={Receipt} testid="ops-panel-billing">
+                    {(d.billing_feed || []).map((b, i) => (
+                        <div key={i} className="flex justify-between text-xs py-1 border-b border-[#141414] last:border-0">
+                            <span className="text-[#71717A] truncate mr-2">{b.email} · {(b.plan_id || "").replace(/_/g, " ")}</span>
+                            <span className={`font-mono flex-shrink-0 ${b.status === "paid" ? tone.ok : tone.bad}`}>
+                                ${b.amount_usd} {b.status.toUpperCase()}
+                            </span>
+                        </div>
+                    ))}
+                    {(!d.billing_feed || d.billing_feed.length === 0) && <div className="text-xs text-[#52525B]">No billing events yet.</div>}
+                </Panel>
+
+                <Panel title="Security" icon={ShieldCheck} testid="ops-panel-security">
+                    <Row k="Failed auth (recent windows)" v={d.security.failed_auth_recent}
+                        vCls={d.security.failed_auth_recent > 50 ? tone.warn : "text-white"} />
+                    <Row k="Suspended users" v={d.security.suspended_users} vCls={tone.dim} />
+                    <Row k="Audit chain" v={d.security.audit_chain_ok ? `INTACT (${d.security.audit_chain_entries})` : "BROKEN"}
+                        vCls={d.security.audit_chain_ok ? tone.ok : tone.bad} />
+                    <Row k="Admin MFA enforced" v={d.security.admin_mfa_enforced ? "YES" : "NO (preview)"}
+                        vCls={d.security.admin_mfa_enforced ? tone.ok : tone.warn} />
+                    <Row k="Email OTP login" v={d.security.email_otp_login ? "ENABLED" : "DISABLED"} vCls={tone.dim} />
+                    {d.host_agents && (
+                        <>
+                            <Row k="Agents low on disk (<10%)" v={d.host_agents.low_disk_count}
+                                vCls={d.host_agents.low_disk_count ? tone.bad : "text-white"} />
+                            <Row k="Avg broker latency" v={d.host_agents.avg_broker_latency_ms != null ? `${d.host_agents.avg_broker_latency_ms}ms` : "not reported"} vCls={tone.dim} />
+                        </>
+                    )}
                 </Panel>
             </div>
         </AppLayout>

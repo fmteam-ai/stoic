@@ -102,7 +102,10 @@ async def agent_heartbeat(db, agent_token: str, metrics: dict) -> dict:
     now = datetime.now(timezone.utc)
     hb = {k: metrics.get(k) for k in (
         "cpu_percent", "ram_percent", "disk_free_gb", "clock_offset_ms",
-        "mt5_processes", "agent_version")}
+        "mt5_processes", "agent_version",
+        # iter-139 host-agent telemetry expansion
+        "disk_free_pct", "broker_latency_ms", "mt5_connected",
+        "ea_attached", "restarts_24h", "service_uptime_sec")}
     await db.vps_agents.update_one(
         {"_id": agent["_id"]},
         {"$set": {"last_heartbeat": now, "last_metrics": hb}})

@@ -255,9 +255,25 @@ class MT5BridgeEngine(ExecutionEngine):
                 return {"blocked": "symbol_not_offered_by_broker",
                         "base_symbol": base_symbol,
                         "available_count": len(available)}
+            # iter-139 · Broker registry tier: when the EA hasn't reported
+            # MarketWatch yet and there's no auto suffix, consult the
+            # curated registry mapping for this broker server.
+            registry_hit = False
+            if not available and not auto_suffix and resolved in (None, base_symbol):
+                try:
+                    from broker_registry import registry_symbol_for
+                    reg_sym = await registry_symbol_for(
+                        account.get("server"), base_symbol)
+                    if reg_sym and reg_sym != base_symbol:
+                        resolved = reg_sym
+                        registry_hit = True
+                except Exception:  # noqa: BLE001
+                    pass
             broker_symbol = resolved or base_symbol
             suffix = broker_symbol[len(base_symbol):] if broker_symbol.upper().startswith(base_symbol) else ""
-            suffix_source = "per_base" if available else ("auto" if auto_suffix else "none")
+            suffix_source = ("registry" if registry_hit
+                             else "per_base" if available
+                             else ("auto" if auto_suffix else "none"))
 
         trade_doc = {
             "user_id": user_id,
