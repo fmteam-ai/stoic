@@ -126,10 +126,10 @@ async def onboarding_state(user=Depends(get_current_user)):
                                    {"onboarding": 1}) or {}
     ob = udoc.get("onboarding")
     if not ob:
-        # Existing users who already trade shouldn't get the wizard.
+        # Existing users who already trade (and admins) shouldn't get the wizard.
         has_account = await db.accounts.count_documents(
             {"user_id": user["id"]}, limit=1)
-        status = "done" if has_account else "pending"
+        status = "done" if (has_account or user.get("role") == "admin") else "pending"
         ob = {"status": status, "step": 0}
         await db.users.update_one({"_id": ObjectId(user["id"])},
                                   {"$set": {"onboarding": ob}})

@@ -396,6 +396,15 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
   - affiliate /r/{code} click attribution now uses security.client_ip (rightmost XFF) instead of spoofable leftmost.
 - test_iter131_email_otp.py → 12 tests. Manifest → 2,933/280. Referral redirect live-verified (307). Prior false positives list still valid (do not re-report).
 
+## Iter-135 (2026-06) — Product polish phase: Help Center, Onboarding Wizard, Support Tickets, Status Page, Legal
+- HELP CENTER (/help, auth): searchable KB — 16 step-by-step articles in src/data/helpArticles.js (5 categories), hub cards → Guide/FAQ/Support/Status, legal quick links, RESTART ONBOARDING WIZARD button. Shared renderMarkdown in src/lib/markdown.js (+DOMPurify).
+- ONBOARDING WIZARD (components/OnboardingWizard.jsx, mounted in AppLayout): full-screen 5-step (welcome → 3-question risk quiz → broker → EA → demo), skippable+resumable via GET/PUT /api/onboarding (users.onboarding {status,step,risk_level}); quiz writes risk_level to default bot_config (account_id null). Auto-"done" for users WITH accounts and for ADMIN role.
+- SUPPORT TICKETS (routes/support_routes.py, db.support_tickets embedded thread): POST/GET /api/support/tickets, /{id}, /{id}/reply, /{id}/close, admin queue GET /api/support/admin/tickets?status= with counts. Rate limits 5 create/h, 30 reply/h. Email notify fail-open: new/user-reply → SUPPORT_NOTIFY_EMAIL (.env, admin@stoicaibot.com), admin reply → ticket owner. Pages: /support (Support.jsx) + /admin/support (AdminSupport.jsx, reuses TicketThread/STATUS_PILL exports).
+- STATUS PAGE (/status public + GET /api/status public, 30s in-memory cache): components api/database/bot_engine(_last_pulse.ts ≤5min on active configs)/ea_bridge(accounts.last_heartbeat ≤10min → else "idle")/payments/email(env presence). Overall operational|degraded|major_outage.
+- LEGAL: legal_content.py (PRIVACY_MD/RISK_MD, versioned drafts — lawyer review advised) via GET /api/legal/{privacy|risk} (public); pages /privacy + /risk-disclosure (Legal.jsx shared).
+- Sidebar LEARN expanded (nav-help/support/status/privacy/risk) + admin nav-admin-support.
+- Testing: testing agent iteration_105.json — 12/12 backend HTTP + frontend flows all pass; unit tests test_iter135_portal_support.py (6) + agent's test_iter135_portal_http.py (12). Manifest → 2,950/282.
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 
