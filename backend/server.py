@@ -41,6 +41,8 @@ from routes.copilot_routes import router as copilot_router
 from routes.bugs_routes import router as bugs_router
 from routes.subscription_routes import router as subscription_router
 from routes.affiliate_routes import router as affiliate_router
+from routes.support_routes import router as support_router
+from routes.portal_routes import router as portal_router
 from routes.notification_routes import router as notification_router
 from routes.telegram_routes import router as telegram_router
 from routes.posture_routes import router as posture_router
@@ -310,6 +312,8 @@ api_router.include_router(copilot_router)
 api_router.include_router(bugs_router)
 api_router.include_router(subscription_router)
 api_router.include_router(affiliate_router)
+api_router.include_router(support_router)
+api_router.include_router(portal_router)
 api_router.include_router(notification_router)
 api_router.include_router(telegram_router)
 api_router.include_router(posture_router)

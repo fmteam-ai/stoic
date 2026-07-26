@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 444 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2458 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2475 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 2933 tests across 280 files.**
+**Total: 2950 tests across 282 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -77,6 +77,8 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter132_trend_day_continuation.py` | http-live | 10 |
 | `backend/tests/test_iter133_quant_review.py` | http-live | 12 |
 | `backend/tests/test_iter134_decision_ledger.py` | http-live | 16 |
+| `backend/tests/test_iter135_portal_http.py` | http-live | 11 |
+| `backend/tests/test_iter135_portal_support.py` | http-live | 6 |
 | `backend/tests/test_iter136_ablation.py` | http-live | 6 |
 | `backend/tests/test_iter136_layer_separation.py` | http-live | 4 |
 | `backend/tests/test_iter137_multi_account.py` | http-live | 12 |

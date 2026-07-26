@@ -56,6 +56,11 @@ const PublicJournal = lazy(() => import("@/pages/PublicJournal"));
 const AdminUsers = lazy(() => import("@/pages/AdminUsers"));
 const AdminAffiliates = lazy(() => import("@/pages/AdminAffiliates"));
 const AdminMigration = lazy(() => import("@/pages/AdminMigration"));
+const AdminSupport = lazy(() => import("@/pages/AdminSupport"));
+const HelpCenter = lazy(() => import("@/pages/HelpCenter"));
+const Support = lazy(() => import("@/pages/Support"));
+const StatusPage = lazy(() => import("@/pages/StatusPage"));
+const Legal = lazy(() => import("@/pages/Legal"));
 
 const RouteFallback = () => (
     <div className="min-h-screen bg-[#050505] flex items-center justify-center"
@@ -79,6 +84,9 @@ function App() {
                         <Route path="/welcome" element={<WelcomeTrailer />} />
                         {/* Public marketing TOS — must be reachable pre-login */}
                         <Route path="/terms" element={<Terms />} />
+                        <Route path="/privacy" element={<Legal kind="privacy" />} />
+                        <Route path="/risk-disclosure" element={<Legal kind="risk" />} />
+                        <Route path="/status" element={<StatusPage />} />
                         {/* Public email-verification landing page */}
                         <Route path="/verify-email" element={<VerifyEmail />} />
                         {/* Public password-reset flow */}
@@ -90,6 +98,9 @@ function App() {
                         <Route path="/admin/users" element={<ProtectedRoute requireAdmin><AdminUsers /></ProtectedRoute>} />
                         <Route path="/admin/affiliates" element={<ProtectedRoute requireAdmin><AdminAffiliates /></ProtectedRoute>} />
                         <Route path="/admin/migration" element={<ProtectedRoute requireAdmin><AdminMigration /></ProtectedRoute>} />
+                        <Route path="/admin/support" element={<ProtectedRoute requireAdmin><AdminSupport /></ProtectedRoute>} />
+                        <Route path="/help" element={<ProtectedRoute><HelpCenter /></ProtectedRoute>} />
+                        <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/signals" element={<ProtectedRoute><Signals /></ProtectedRoute>} />
                         <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />

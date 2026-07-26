@@ -5,6 +5,7 @@ import { TickerTape } from "@/components/TickerTape";
 import { StatusBar } from "@/components/StatusBar";
 import { QuickActionsBar } from "@/components/QuickActionsBar";
 import { OnboardingBanner } from "@/components/OnboardingBanner";
+import OnboardingWizard from "@/components/OnboardingWizard";
 import { StepUpDialog } from "@/components/StepUpDialog";
 
 export function AppLayout({ children }) {
@@ -19,6 +20,7 @@ export function AppLayout({ children }) {
                 <SubscriptionBanner />
                 <div className="px-4 md:px-8 pt-3">
                     <OnboardingBanner />
+                    <OnboardingWizard />
                 </div>
                 {children}
             </main>

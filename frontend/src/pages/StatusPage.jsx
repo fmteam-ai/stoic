@@ -1,0 +1,108 @@
+import { useEffect, useState, useCallback } from "react";
+import axios from "axios";
+import { StoicMark } from "@/components/StoicLogo";
+import {
+    Activity, Database, Cpu, Plug, CreditCard, Mail, RefreshCw, Loader2,
+} from "lucide-react";
+
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
+const COMPONENT_META = [
+    { key: "api", label: "API", icon: Activity, desc: "Application endpoints" },
+    { key: "database", label: "Database", icon: Database, desc: "Primary data store" },
+    { key: "bot_engine", label: "Bot Engine", icon: Cpu, desc: "Signal scanning & execution loop" },
+    { key: "ea_bridge", label: "EA Bridge", icon: Plug, desc: "MT5 terminal connectivity" },
+    { key: "payments", label: "Payments", icon: CreditCard, desc: "Stripe checkout" },
+    { key: "email", label: "Email", icon: Mail, desc: "Transactional delivery" },
+];
+
+const STATUS_STYLE = {
+    operational: { cls: "text-[#00FF41] border-[#00FF41]/40 bg-[#00FF41]/10", label: "OPERATIONAL" },
+    idle: { cls: "text-[#A1A1AA] border-[#1F1F1F] bg-[#0F0F0F]", label: "IDLE" },
+    degraded: { cls: "text-[#FFB000] border-[#FFB000]/40 bg-[#FFB000]/10", label: "DEGRADED" },
+    down: { cls: "text-[#FF3B30] border-[#FF3B30]/40 bg-[#FF3B30]/10", label: "DOWN" },
+    unknown: { cls: "text-[#52525B] border-[#1F1F1F] bg-[#0F0F0F]", label: "UNKNOWN" },
+};
+
+const OVERALL = {
+    operational: { text: "All systems operational", cls: "text-[#00FF41] border-[#00FF41]/40" },
+    degraded: { text: "Partial degradation", cls: "text-[#FFB000] border-[#FFB000]/40" },
+    major_outage: { text: "Major outage", cls: "text-[#FF3B30] border-[#FF3B30]/40" },
+};
+
+export default function StatusPage() {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState(false);
+
+    const load = useCallback(() => {
+        axios.get(`${API}/status`)
+            .then(r => { setData(r.data); setErr(false); })
+            .catch(() => setErr(true));
+    }, []);
+
+    useEffect(() => {
+        load();
+        const t = setInterval(load, 60000);
+        return () => clearInterval(t);
+    }, [load]);
+
+    const overall = err
+        ? { text: "Status service unreachable", cls: "text-[#FF3B30] border-[#FF3B30]/40" }
+        : OVERALL[data?.overall] || null;
+
+    return (
+        <div className="min-h-screen bg-[#050505] text-[#FAFAFA]">
+            <div className="max-w-3xl mx-auto px-4 py-12">
+                <div className="flex items-center gap-3 mb-10">
+                    <StoicMark className="w-8 h-8" />
+                    <div>
+                        <div className="font-display font-bold tracking-widest">STOIC</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SYSTEM STATUS</div>
+                    </div>
+                </div>
+
+                {!data && !err ? (
+                    <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-[#52525B]" /></div>
+                ) : (
+                    <>
+                        {overall && (
+                            <div className={`border px-5 py-4 mb-8 font-display text-lg ${overall.cls}`}
+                                data-testid="status-overall">
+                                {overall.text}
+                            </div>
+                        )}
+                        <div className="space-y-2" data-testid="status-components">
+                            {COMPONENT_META.map(m => {
+                                const comp = data?.components?.[m.key];
+                                const st = STATUS_STYLE[comp?.status] || STATUS_STYLE.unknown;
+                                return (
+                                    <div key={m.key} data-testid={`status-${m.key}`}
+                                        className="flex items-center gap-4 bg-[#0A0A0A] border border-[#1F1F1F] px-4 py-3">
+                                        <m.icon className="w-4 h-4 text-[#52525B]" />
+                                        <div className="flex-1">
+                                            <div className="text-sm">{m.label}</div>
+                                            <div className="text-[11px] text-[#52525B]">{comp?.note || m.desc}</div>
+                                        </div>
+                                        <span className={`px-2 py-0.5 border text-[10px] font-mono tracking-widest ${st.cls}`}>
+                                            {st.label}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="flex items-center justify-between mt-6 text-[10px] font-mono text-[#52525B] tracking-widest">
+                            <span>CHECKED {data?.checked_at ? new Date(data.checked_at).toLocaleTimeString() : "—"} · AUTO-REFRESH 60s</span>
+                            <button onClick={load} data-testid="status-refresh"
+                                className="flex items-center gap-1.5 hover:text-white">
+                                <RefreshCw className="w-3 h-3" /> REFRESH
+                            </button>
+                        </div>
+                        <div className="mt-10 text-[10px] font-mono text-[#52525B] tracking-widest">
+                            NEED HELP? <a href="/support" className="text-[#00FF41] hover:underline">OPEN A SUPPORT TICKET</a>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}

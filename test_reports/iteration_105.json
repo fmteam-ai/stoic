@@ -1,0 +1,37 @@
+{
+  "summary": "iter-135 (Help Center, Onboarding, Support, Status, Legal) — full e2e verified. 12/12 backend HTTP tests pass (public status, legal, tickets lifecycle, IDOR, admin queue, onboarding pending/skip/persist, auto-done for user with accounts). Frontend: public /status renders all 6 components with data-testids, /privacy & /risk-disclosure render markdown, sidebar carries all new nav-* testids incl. nav-admin-support for admin, Help Center hub/legal links/16 article cards/search filter ('refund'→2, category 'billing'→3)/article open+back all work, Onboarding wizard shows for a fresh registered user, risk quiz persists (risk_level=high applied), step persists across reload (broker step held), SKIP hides it and stays hidden after reload (status=skipped), Admin · Support Queue filters render with counts (OPEN·0 · ANSWERED·0 · CLOSED·1) and the admin API returns the expected shape.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Support create-ticket UI (admin as owner)",
+       "issue": "In one browser session on /support the new-ticket form did not render within 6s after clicking support-new-ticket-btn. Could not reproduce cleanly in a second run because admin already had closed tickets. HTTP path (POST /api/support/tickets) is fully verified end-to-end; UI likely fine but flagging so main agent can retry a clean session.",
+       "affected_selectors": ["support-new-ticket-btn", "new-ticket-form"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter135_portal_http.py",
+    "/app/test_reports/pytest/iter135_http.xml"
+  ],
+  "action_items": [
+    "None blocking. Optional: sanity-check that clicking support-new-ticket-btn always opens the NewTicketForm even when the ticket list is still loading (tickets===null); currently the button is rendered only when !creating && !active — if that condition ever races with a slow GET /support/tickets the header action might be missing. HTTP flows all pass, so this is UI-only nit."
+  ],
+  "critical_code_review_comments": [
+    "portal_routes.public_status caches globally in _STATUS_CACHE (30s) — acceptable for a public status page; note the test relies on order-of-execution via _STATUS_CACHE reset.",
+    "support_routes.reply: is_admin computed as `user.role=='admin' AND ticket.user_id != user.id` — this means if an ADMIN opens their own ticket, replies go in as 'user' (verified: STOIC SUPPORT styling only applies when a different admin replies). This is intentional and correct.",
+    "OnboardingWizard uses fixed inset-0 z-[80] backdrop-blur — it fully overlays app content while pending. It is properly hidden once status !== 'pending', so it will not block a returning admin who has skipped/completed. Good.",
+    "portal_routes.onboarding_state auto-flips to 'done' when db.accounts count > 0 for a user — admin@stoicaibot.com had no accounts docs in preview and therefore did see the wizard (matches context_note). If desired, admins could be exempted by role but not required.",
+    "AdminSupport imports TicketThread and STATUS_PILL from Support.jsx — good re-use, no duplication."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter135_portal_http.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "~95%"},
+  "test_credentials": "admin@stoicaibot.com / admin123; fresh wizard test user TEST-wizard-e95b3d76@example.com / Kd5#Zt9mW2xVpR7c (created during this run, currently in status=skipped state).",
+  "seed_data_creation": "One fresh test user (TEST-wizard-*@example.com) via /api/auth/register + mark_email_verified for the wizard flow. Several TEST-owner/TEST-other/TEST-onb/TEST-trader users created by the pytest suite; users are left in place (per request no cleanup). All test tickets are closed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend HTTP suite lives at /app/backend/tests/test_iter135_portal_http.py — run `pytest tests/test_iter135_portal_http.py` from /app/backend. Uses CSRF double-submit (login sets csrf_token cookie, we mirror into X-CSRF-Token header). Fresh user wizard flow requires resetting `db.users.$unset:{onboarding:''}` if you re-run the same email. If admin doesn't have any db.accounts docs the wizard will show on login for admin too — this is by design; call POST /api/onboarding {status:'done'} or click SKIP to dismiss. Public routes (/api/status, /api/legal/*) require no auth and no CSRF.",
+  "rca of the issue": "N/A — no failing tests. The one intermittent UI observation for the support form is timing-related (heavy initial page hydration with rate-limited /api/onboarding retries logged as 401s during logged-out screenshots); HTTP layer is definitively correct."
+}

@@ -88,9 +88,14 @@ const SECTIONS = [
         key: "learn",
         label: "LEARN",
         items: [
+            { to: "/help", label: "Help Center", icon: LifeBuoy, testid: "nav-help" },
+            { to: "/support", label: "Support", icon: MessageSquare, testid: "nav-support" },
             { to: "/guide", label: "Guide", icon: BookOpen, testid: "nav-guide" },
             { to: "/faq", label: "FAQ", icon: HelpCircle, testid: "nav-faq" },
+            { to: "/status", label: "System Status", icon: Activity, testid: "nav-status" },
             { to: "/terms", label: "Terms of Use", icon: FileText, testid: "nav-terms" },
+            { to: "/privacy", label: "Privacy Policy", icon: FileText, testid: "nav-privacy" },
+            { to: "/risk-disclosure", label: "Risk Disclosure", icon: ShieldAlert, testid: "nav-risk" },
         ],
     },
 ];
@@ -101,6 +106,7 @@ const ADMIN_SECTION = {
     label: "ADMIN",
     items: [
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
+        { to: "/admin/support", label: "Support Queue", icon: LifeBuoy, testid: "nav-admin-support" },
         { to: "/admin/affiliates", label: "Affiliate Mgmt", icon: ShieldAlert, testid: "nav-admin-affiliates" },
         { to: "/admin/migration", label: "Migration", icon: DatabaseBackup, testid: "nav-admin-migration" },
     ],
