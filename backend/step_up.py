@@ -77,8 +77,10 @@ async def audit_event(db, user_id: str, action: str, detail: dict = None,
            "step_up_verified": bool(step_up),
            "at": datetime.now(timezone.utc).isoformat()}
     if request is not None:
-        fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-        doc["ip"] = fwd or (request.client.host if request.client else None)
+        # SEC-audit hardening: use the same unspoofable IP derivation as
+        # rate limiting (rightmost trusted hop / CF-Connecting-IP).
+        from security import client_ip
+        doc["ip"] = client_ip(request)
     try:
         await db.audit_log.insert_one(doc)
     except Exception:

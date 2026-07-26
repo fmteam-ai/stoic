@@ -5,6 +5,7 @@ this IP, record an in-app security notification and best-effort email the
 user. Never blocks or fails the login path.
 """
 import asyncio
+import html
 import logging
 from datetime import datetime, timezone
 
@@ -25,6 +26,10 @@ async def is_new_ip(db, user_id: str, ip: str) -> bool:
 
 
 def _alert_html(name: str, ip: str, user_agent: str, when: str) -> str:
+    # header values are attacker-controlled — escape everything interpolated
+    name = html.escape(name)
+    ip = html.escape(ip)
+    user_agent = html.escape(user_agent[:120])
     return f"""
 <div style="background:#0A0A0A;color:#FAFAFA;font-family:'Courier New',monospace;padding:32px;max-width:520px;margin:auto;border:1px solid #1F1F1F">
   <div style="color:#00FF41;font-size:18px;letter-spacing:4px;margin-bottom:16px">STOIC</div>
@@ -33,7 +38,7 @@ def _alert_html(name: str, ip: str, user_agent: str, when: str) -> str:
     Hi {name},<br/>
     Your STOIC account was just accessed from a new location.<br/><br/>
     <b>IP:</b> {ip}<br/>
-    <b>Device:</b> {user_agent[:120]}<br/>
+    <b>Device:</b> {user_agent}<br/>
     <b>Time (UTC):</b> {when}<br/><br/>
     If this was you, no action is needed. If you don't recognize this
     activity, change your password immediately and enable authenticator 2FA
@@ -51,7 +56,8 @@ async def notify_new_login(db, user: dict, ip: str, user_agent: str) -> None:
             "user_id": uid,
             "kind": "security_new_login",
             "title": "New sign-in from an unrecognized IP",
-            "message": f"New sign-in from {ip} · {user_agent[:80]}",
+            "message": f"New sign-in from {html.escape(ip)} · "
+                       f"{html.escape((user_agent or '')[:80])}",
             "severity": "warning",
             "read": False,
             "created_at": now.isoformat(),

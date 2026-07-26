@@ -1372,3 +1372,12 @@ User goal: Cloudflare as full security/edge layer (WAF, DDoS, rate limit, bot mg
 LEARNING (CRITICAL): multiple search_replace calls on the SAME file in one parallel batch can silently drop an edit while reporting success (lost useTurnstile hook in Login.jsx → error boundary crash; lost /auth/turnstile-config endpoint). ALWAYS verify with grep after parallel same-file edits, or edit the same file sequentially.
 LEARNING: repeated e2e/pytest runs against the preview URL trip Cloudflare/ingress rate limits → random blank-page/429 test failures; wait ~90s and re-run to confirm real regressions.
 Manifest: 2,985 tests / 286 files.
+
+## Iter-156 (2026-07-26) — Security audit of deployed app + fixes
+Audit verdict: CONDITIONAL PASS (no Critical/High; core auth/payment controls verified sound; production startup guards airtight). Fixed all findings:
+1. SEC-001 MEDIUM: attacker-controlled User-Agent/IP/name injected unescaped into new-login alert email + in-app notification → html.escape() everywhere in login_alerts.py (unit-verified).
+2. P3: step_up.py audit trail used spoofable LEFTMOST X-Forwarded-For → now reuses security.client_ip() (rightmost/CF-aware).
+3. P3: removed UNUSED python-jose + ecdsa from requirements.txt (runtime JWT is PyJWT) → eliminates accepted-risk PYSEC-2026-1325 entirely; ci.yml pip-audit now runs with ZERO --ignore-vuln flags ("No known vulnerabilities found").
+4. P3: setuptools 70.2.0 → 78.1.1 (fixes PYSEC-2025-49; 83.x blocked by torch<82 constraint — build-time only, not in the CI audit surface).
+Remaining external item: confirm Cloudflare edge Transform-Rule CSP is applied on the HTML in production (docs/CLOUDFLARE_EDGE.md §8) — not repo-observable.
+Regression: 485 unit+policy tests passed, iter155+153 suites 32 passed, pip-audit clean.

@@ -30,7 +30,6 @@ cyclonedx-python-lib==11.11.0
 defusedxml==0.7.1
 distro==1.9.0
 dnspython==2.8.0
-ecdsa==0.19.2
 einops==0.8.2
 elevenlabs==2.54.0
 email-validator==2.3.0
@@ -128,7 +127,6 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
-python-jose==3.5.0
 python-multipart==0.0.32
 pytokens==0.4.1
 PyYAML==6.0.3
