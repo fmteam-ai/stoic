@@ -298,6 +298,13 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="webhook signature invalid") from e
     # Only act on terminal payment events
     et = (getattr(event, "event_type", "") or "").lower()
+    try:  # iter-137 — ops console webhook feed (observability only)
+        from datetime import datetime, timezone
+        await get_db().stripe_webhook_events.insert_one(
+            {"type": et or "unknown",
+             "at": datetime.now(timezone.utc).isoformat()})
+    except Exception:  # noqa: BLE001
+        pass
     signature_verified = bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
     if event.payment_status == "paid" and event.session_id:
         # SEC — NEVER trust the webhook body for granting paid entitlement.

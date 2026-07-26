@@ -105,6 +105,7 @@ const ADMIN_SECTION = {
     key: "admin",
     label: "ADMIN",
     items: [
+        { to: "/admin/ops", label: "Ops Console", icon: Activity, testid: "nav-admin-ops" },
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
         { to: "/admin/support", label: "Support Queue", icon: LifeBuoy, testid: "nav-admin-support" },
         { to: "/admin/runbooks", label: "Runbooks", icon: BookOpen, testid: "nav-admin-runbooks" },

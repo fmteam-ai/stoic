@@ -43,6 +43,7 @@ from routes.subscription_routes import router as subscription_router
 from routes.affiliate_routes import router as affiliate_router
 from routes.support_routes import router as support_router
 from routes.portal_routes import router as portal_router
+from routes.ops_console import router as ops_console_router
 from routes.notification_routes import router as notification_router
 from routes.telegram_routes import router as telegram_router
 from routes.posture_routes import router as posture_router
@@ -122,10 +123,16 @@ async def request_id_middleware(request, call_next):
     response.headers["X-Request-ID"] = rid
     path = request.url.path
     if path.startswith("/api") and path not in ("/api/metrics", "/api/ws"):
+        _dur_ms = round((_t.perf_counter() - t0) * 1000, 1)
+        try:
+            import ops_metrics
+            ops_metrics.record(_dur_ms, response.status_code)
+        except Exception:
+            pass
         logging.getLogger("access").info(_json.dumps({
             "rid": rid, "m": request.method, "p": path,
             "s": response.status_code,
-            "ms": round((_t.perf_counter() - t0) * 1000, 1)}))
+            "ms": _dur_ms}))
     return response
 
 
@@ -314,6 +321,7 @@ api_router.include_router(subscription_router)
 api_router.include_router(affiliate_router)
 api_router.include_router(support_router)
 api_router.include_router(portal_router)
+api_router.include_router(ops_console_router)
 api_router.include_router(notification_router)
 api_router.include_router(telegram_router)
 api_router.include_router(posture_router)

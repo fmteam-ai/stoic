@@ -415,6 +415,11 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - Tests: tests/test_iter136_security_hardening.py (8) + updated iter122c/123. Manifest → 2,958/283. Live E2E: enforcement toggled on → admin 403 admin_mfa_required verified over HTTP, then reverted.
 - DEPLOY NOTES FOR USER: set APP_ENV=production, ED25519_SIGNING_KEY_B64 (fresh key), do NOT set ADMIN_MFA_ENFORCED=false in production. After deploy, admin must enroll TOTP in Settings to unlock admin pages.
 
+## Iter-137 (2026-06) — Ops Console (single pane of glass)
+- GET /api/admin/ops-console (require_admin) aggregates: vps (agents online ≤3m/offline list), deployments (by_state/in_progress/failed/recent_failed), command_queue (depth/failed_24h/oldest age), mt5_bridge (connected ≤3m/stale list/ea_versions/freshest hb age), engine (bots active/pulsing ≤5m + worker_leases alive), alerts (unacked ops_alerts by severity + latest 8), api (ops_metrics.py in-process ring buffer p50/p95/max/5xx% fed by request-id middleware), mongo (ping + dbStats), stripe (NEW db.stripe_webhook_events feed written in webhook handler + paid_24h + stale initiated >1h), subscriptions (active/by_plan/expiring_7d).
+- Page /admin/ops (AdminOps.jsx): 8-chip stat strip + 9 panels, 30s auto-refresh, testids ops-stat-*/ops-panel-*. Sidebar nav-admin-ops (top of ADMIN group).
+- Tests tests/test_iter137_ops_console.py (4). Manifest → 2,962/284. Verified live: real telemetry rendered (21 offline agents, stale EA hbs, expired tuning worker lease, 1185 active subs).
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 
