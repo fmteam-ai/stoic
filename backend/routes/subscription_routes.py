@@ -7,6 +7,8 @@ GET  /api/subscription/poll/{sid}  — poll Stripe status, sync our DB
 POST /api/webhook/stripe           — Stripe webhook receiver
 """
 import os
+import asyncio
+import json as _json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from emergentintegrations.payments.stripe.checkout import (
@@ -189,6 +191,34 @@ async def poll_session(session_id: str, request: Request, user=Depends(get_curre
         return {"payment_status": "expired", "status": status.status}
     return {"payment_status": status.payment_status, "status": status.status}
 
+async def _resolve_session_id_for_revoke(body: bytes) -> str | None:
+    """Charge-level refund/dispute events (charge.refunded,
+    charge.dispute.created, refund.created) carry a payment_intent, not a
+    Checkout session id — the emergentintegrations parser leaves session_id
+    None for them. Map back to the originating Checkout session via the
+    payment_intent so revoke_payment can pull the entitlement/commission."""
+    try:
+        obj = (_json.loads(body).get("data", {}) or {}).get("object", {}) or {}
+    except Exception:  # noqa: BLE001
+        return None
+    pi = obj.get("payment_intent")
+    if not pi:
+        return None
+
+    def _lookup():
+        import stripe as stripe_sdk
+        stripe_sdk.api_key = os.environ["STRIPE_API_KEY"]
+        sessions = stripe_sdk.checkout.Session.list(payment_intent=pi, limit=1)
+        return sessions.data[0].id if sessions.data else None
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _lookup)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("revoke: session lookup failed (pi=%s): %s", pi, e)
+        return None
+
+
 
 @hook_router.post("/stripe")
 async def stripe_webhook(request: Request):
@@ -229,18 +259,26 @@ async def stripe_webhook(request: Request):
                            event.session_id, status.payment_status)
             raise HTTPException(status_code=400,
                                 detail="payment not confirmed by Stripe")
-    elif (event.session_id and ("refund" in et or "dispute" in et
-                                or "charge_failed" in et)):
-        # Revocation from a webhook is honored ONLY when the signature was
-        # cryptographically verified — otherwise a forged refund event could
-        # grief a paying user. Unsigned revokes are ignored; admins revoke
-        # via the authenticated /subscription/admin/refund endpoint.
-        if signature_verified:
-            await revoke_payment(event.session_id, reason=et or "refund")
-        else:
+    elif ("refund" in et or "dispute" in et or "charge_failed" in et):
+        # Revocation is honored ONLY when the signature was cryptographically
+        # verified — a forged refund/dispute could otherwise grief a paying
+        # user. Charge-level events carry no Checkout session id, so resolve
+        # it from the payment_intent before revoking.
+        if not signature_verified:
             logger.warning("Ignoring UNSIGNED revoke webhook (%s) for "
                            "session=%s — no STRIPE_WEBHOOK_SECRET", et,
                            event.session_id)
+        else:
+            sid = event.session_id or await _resolve_session_id_for_revoke(body)
+            if sid:
+                result = await revoke_payment(sid, reason=et or "refund")
+                if result is None:
+                    logger.info("revoke webhook %s: no applied txn for "
+                                "session=%s (already revoked or unknown)",
+                                et, sid)
+            else:
+                logger.warning("revoke webhook %s: could not resolve a "
+                               "Checkout session — no action taken.", et)
     logger.info("Stripe webhook event_type=%s session=%s status=%s",
                 event.event_type, event.session_id, event.payment_status)
     return {"ok": True}
