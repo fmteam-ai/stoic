@@ -1335,3 +1335,9 @@ LESSON (recurring): any "SomeWord: test_xxx" colon phrasing in memory/*.md near 
 - READINESS VERDICT: READY. testing_agent iteration_104: 5/5 pass, backend 100%, no action items. Verified: backend-direct http://localhost:8001/health + /healthz = 200 {"status":"ok"} no-DB; /api/health + /api/health/ready still DB-aware 200; both kill-switches fail-open; admin login + /api/auth/me OK. External REACT_APP_BACKEND_URL/health routes to FRONTEND by design (HTML) — probe targets backend pod directly.
 - Tests: tests/test_iter128_deploy_readiness.py (5). Manifest → 2910 tests / 276 files.
 - Non-blocking notes from testing_agent: server.py uses deprecated @app.on_event startup/shutdown (migrate to lifespan later); emergentintegrations stripe checkout uses Pydantic V1 @validator (vendor, breaks on Pydantic V3).
+
+## Iter-177 (2026-07-25) — Admin email change + prod env guidance
+- Admin default email changed admin@trading.bot → admin@stoicaibot.com (seed.py default + preview .env ADMIN_EMAIL). Preview now seeds admin@stoicaibot.com/admin123 AND retains legacy admin@trading.bot/admin123 (273 test files hardcode the legacy email; NOT renamed to avoid mass breakage). Both log in 200, role=admin, /admin/* accessible. Verified via curl + regression (unit 468 + iter78/iter70/iter128 green).
+- .env.example: documented APP_ENV (blank in preview; "production" in prod), ADMIN_EMAIL default, ADMIN_PASSWORD >=12 prod rule.
+- NOT set in preview .env (would break preview): APP_ENV=production, strong ADMIN_PASSWORD, ML kill-switches. These belong in the PRODUCTION deploy env only. Prod fresh Atlas DB will seed admin@stoicaibot.com with the prod ADMIN_PASSWORD.
+- bugs_routes.py / diagnostic_routes.py still hardcode admin@trading.bot as a special-email fallback, but both also allow role==admin, so the new admin retains privileges (left as-is, minimal change).

@@ -51,7 +51,7 @@ async def dependency_health_check() -> dict:
 
 
 async def seed_admin():
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@trading.bot").lower()
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@stoicaibot.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
     is_prod = os.environ.get("APP_ENV", "").lower() in ("production", "prod")
     # SEC-001 — never ship a known-weak admin in production, and never force
