@@ -1328,3 +1328,10 @@ LESSON (recurring): any "SomeWord: test_xxx" colon phrasing in memory/*.md near 
 - P3: /api/setup/claim-pairing consume made ATOMIC via find_one_and_update({consumed_at:None}) — closes single-use TOCTOU double-redeem.
 - Tests: tests/test_iter127_webhook_forgery.py (4). Manifest → 2905 tests / 275 files.
 - ENV note for user: to also get cryptographic signature verification in production, set STRIPE_WEBHOOK_SECRET (claimed Stripe sandbox provides preview_webhook_secret; live provides whsec_...). The re-verify defense works regardless.
+
+## Iter-176 (2026-07-25) — Deployment readiness health check (testing_agent verified iteration_104)
+- Ran deployment_agent + fixed the one remaining flag (heavy ML deps → OOM risk on 1Gi pods). ML imports (torch/chronos in forecast_agent, xgboost/lightgbm/catboost in ml_ensemble) are already LAZY (inside functions) + fail-open, so they NEVER block pod boot or the /health probe — confirmed by testing_agent sys.modules diff (zero heavy deps at module load).
+- Added reversible env kill-switches: FORECAST_AGENT_ENABLED / ML_ENSEMBLE_ENABLED (default 'true' = unchanged; 'false' = skip model load, fail-open no-veto). Added to .env.example. Lets production run on constrained pods with heavy inference OFF while preview keeps full functionality.
+- READINESS VERDICT: READY. testing_agent iteration_104: 5/5 pass, backend 100%, no action items. Verified: backend-direct http://localhost:8001/health + /healthz = 200 {"status":"ok"} no-DB; /api/health + /api/health/ready still DB-aware 200; both kill-switches fail-open; admin login + /api/auth/me OK. External REACT_APP_BACKEND_URL/health routes to FRONTEND by design (HTML) — probe targets backend pod directly.
+- Tests: tests/test_iter128_deploy_readiness.py (5). Manifest → 2910 tests / 276 files.
+- Non-blocking notes from testing_agent: server.py uses deprecated @app.on_event startup/shutdown (migrate to lifespan later); emergentintegrations stripe checkout uses Pydantic V1 @validator (vendor, breaks on Pydantic V3).
