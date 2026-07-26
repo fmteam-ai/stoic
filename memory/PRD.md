@@ -373,6 +373,14 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - Tests: tests/test_iter130_billing_features.py (4 — email send+dedupe via conftest.run_async, admin skip, preview math, inactive case). Manifest → 2,919 tests / 278 files. 65 regression tests green (incl. test_iter122_billing.py). Verified live via curl + screenshots.
 - GOTCHA: standalone new event loops in tests break motor singleton — use conftest.run_async (shared loop resets database._client).
 
+## Iter-132 (2026-06) — Email OTP login gate (admin toggle) + sender name
+- `login_otp.py`: 6-digit emailed sign-in code required at password login when admin enables platform_state {_id:"login_email_otp"}; 10min TTL, 5 attempts, 30s resend cooldown, sha256(uid:code) in db.login_otps (single-use, replaced per issue). Structured 401 details: email_otp_sent{resend_in}/invalid_email_otp{attempts_left}/email_otp_expired; 502 email_otp_send_failed (fail-closed but retryable).
+- EXEMPTIONS: TOTP-enrolled users (authenticator gate instead) and ADMIN role — live lockout was reproduced (admin blocked when sandbox Resend couldn't deliver, couldn't reach the disable toggle); admins must enroll TOTP.
+- Admin: GET/POST /api/admin/settings/login-otp (+audit log entries); toggle card on /admin/users (testids login-otp-setting-card, login-otp-toggle). LoginRequest.email_otp field added.
+- Frontend Login.jsx: EMAIL CODE step (login-email-otp-block/input/resend) w/ live resend countdown; resend re-posts email+password without code (server-side cooldown authoritative). AuthContext.login gained email_otp arg.
+- Sender name: email_sender._SENDER now "SENDER_NAME <SENDER_EMAIL>"; backend/.env SENDER_NAME=STOIC.
+- Verified: full browser E2E (challenge → wrong/correct code → dashboard), admin toggle UI both directions, tests/test_iter131_email_otp.py (10) + 34 auth-suite regression green. Manifest → 2,929/279. OTP left DISABLED in preview (HTTP test suites depend on plain logins).
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 

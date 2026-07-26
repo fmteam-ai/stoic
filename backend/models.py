@@ -37,6 +37,7 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
     totp_code: Optional[str] = None  # required if user has 2FA enabled
+    email_otp: Optional[str] = None  # required when admin enabled email OTP login
 
 
 class ProfileUpdateRequest(BaseModel):

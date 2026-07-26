@@ -20,9 +20,10 @@ export function AuthProvider({ children }) {
 
     useEffect(() => { refresh(); }, [refresh]);
 
-    const login = useCallback(async (email, password, totp_code) => {
+    const login = useCallback(async (email, password, totp_code, email_otp) => {
         const body = { email, password };
         if (totp_code) body.totp_code = totp_code;
+        if (email_otp) body.email_otp = email_otp;
         const { data } = await api.post("/auth/login", body);
         setUser(data);
         return data;

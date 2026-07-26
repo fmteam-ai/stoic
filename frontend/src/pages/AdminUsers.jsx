@@ -102,6 +102,48 @@ function ModerationModal({ open, onClose, action, target, onConfirm }) {
     );
 }
 
+function LoginOtpToggle() {
+    const [enabled, setEnabled] = useState(null);
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+        api.get("/admin/settings/login-otp")
+            .then(r => setEnabled(r.data.enabled))
+            .catch(() => setEnabled(false));
+    }, []);
+    const toggle = async () => {
+        setBusy(true);
+        try {
+            const { data } = await api.post("/admin/settings/login-otp", { enabled: !enabled });
+            setEnabled(data.enabled);
+            toast.success(`Email OTP login ${data.enabled ? "ENABLED" : "DISABLED"}`);
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    return (
+        <div className="bg-[#0A0A0A] border border-[#1F1F1F] p-4 mb-6 flex flex-wrap items-center gap-4"
+            data-testid="login-otp-setting-card">
+            <ShieldCheck className={`w-5 h-5 ${enabled ? "text-[#00FF41]" : "text-[#52525B]"}`} />
+            <div className="flex-1 min-w-[240px]">
+                <div className="font-display text-sm text-white">Email OTP at login</div>
+                <div className="text-xs text-[#71717A] mt-0.5">
+                    When ON, every password sign-in must be confirmed with a 6-digit code emailed
+                    to the user. Users with authenticator 2FA skip it, and admin accounts are exempt
+                    (enroll authenticator 2FA to protect admin logins). Make sure your email domain
+                    is verified in Resend before enabling — otherwise codes won&apos;t be delivered.
+                </div>
+            </div>
+            <button onClick={toggle} disabled={busy || enabled === null}
+                data-testid="login-otp-toggle"
+                className={`px-4 py-2 text-xs font-mono tracking-widest border transition ${
+                    enabled ? "border-[#00FF41]/50 bg-[#00FF41]/10 text-[#00FF41]"
+                            : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B]"
+                }`}>
+                {enabled === null ? "…" : busy ? "SAVING…" : enabled ? "ENABLED — CLICK TO DISABLE" : "DISABLED — CLICK TO ENABLE"}
+            </button>
+        </div>
+    );
+}
+
 export default function AdminUsers() {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -166,6 +208,7 @@ export default function AdminUsers() {
                     </button>
                 }
             />
+            <LoginOtpToggle />
 
             <div className="bg-[#0A0A0A] border border-[#1F1F1F] mb-4 p-3 flex flex-wrap items-center gap-2">
                 <div className="flex items-center gap-2 bg-[#121212] border border-[#1F1F1F] px-2.5 py-1 flex-1 min-w-[200px]">

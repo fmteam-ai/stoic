@@ -220,6 +220,10 @@ async def login(payload: LoginRequest, request: Request, response: Response):
                 await record_failure(db, "2fa", email, 600)
                 raise HTTPException(status_code=401, detail="Invalid 2FA code")
             await db.users.update_one({"_id": user["_id"]}, {"$set": {"recovery_codes": remaining}})
+    else:
+        # Email OTP gate (admin-toggled) — TOTP-enrolled users skip it.
+        from login_otp import otp_gate
+        await otp_gate(db, user, payload.email_otp)
 
     uid = str(user["_id"])
     await clear_failures(db, "login", f"{ip}:{email}")

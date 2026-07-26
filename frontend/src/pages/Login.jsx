@@ -12,10 +12,24 @@ export default function Login() {
     const [password, setPassword] = useState("");
     const [totpCode, setTotpCode] = useState("");
     const [needs2fa, setNeeds2fa] = useState(false);
+    const [emailOtp, setEmailOtp] = useState("");
+    const [needsEmailOtp, setNeedsEmailOtp] = useState(false);
+    const [otpMessage, setOtpMessage] = useState("");
+    const [otpResendCooldown, setOtpResendCooldown] = useState(0);
     const [error, setError] = useState("");
     const [unverifiedEmail, setUnverifiedEmail] = useState("");
     const [resendCooldown, setResendCooldown] = useState(0);
     const [loading, setLoading] = useState(false);
+
+    const startOtpCooldown = (secs) => {
+        setOtpResendCooldown(secs);
+        const t = setInterval(() => {
+            setOtpResendCooldown(c => {
+                if (c <= 1) { clearInterval(t); return 0; }
+                return c - 1;
+            });
+        }, 1000);
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -23,7 +37,9 @@ export default function Login() {
         setUnverifiedEmail("");
         setLoading(true);
         try {
-            const u = await login(email, password, needs2fa ? totpCode : undefined);
+            const u = await login(email, password,
+                needs2fa ? totpCode : undefined,
+                needsEmailOtp ? emailOtp : undefined);
             navigate(u?.must_change_password ? "/settings" : "/");
         } catch (err) {
             const detail = err?.response?.data?.detail;
@@ -31,6 +47,28 @@ export default function Login() {
             if (detail?.code === "account_unverified") {
                 setUnverifiedEmail(detail.email || email);
                 setError("");
+                return;
+            }
+            // Email OTP challenge issued (or still pending)
+            if (detail?.code === "email_otp_sent") {
+                setNeedsEmailOtp(true);
+                setOtpMessage(detail.message || "Enter the 6-digit code we emailed you.");
+                setError("");
+                if (detail.resend_in) startOtpCooldown(detail.resend_in);
+                return;
+            }
+            if (detail?.code === "invalid_email_otp") {
+                setError(`${detail.message}${detail.attempts_left ? ` (${detail.attempts_left} attempts left)` : ""}`);
+                return;
+            }
+            if (detail?.code === "email_otp_expired") {
+                setEmailOtp("");
+                setError(detail.message || "Code expired. Request a new one.");
+                setOtpResendCooldown(0);
+                return;
+            }
+            if (detail?.code === "email_otp_send_failed") {
+                setError(detail.message);
                 return;
             }
             const msg = formatApiError(err);
@@ -60,6 +98,22 @@ export default function Login() {
             if (detail?.code === "rate_limited") {
                 const m = (detail.message || "").match(/(\d+)s/);
                 if (m) setResendCooldown(parseInt(m[1], 10));
+            }
+        }
+    };
+
+    const handleOtpResend = async () => {
+        if (otpResendCooldown > 0) return;
+        setError("");
+        try {
+            await login(email, password, undefined, undefined);
+        } catch (err) {
+            const detail = err?.response?.data?.detail;
+            if (detail?.code === "email_otp_sent") {
+                setOtpMessage("A new code is on its way. Check your inbox.");
+                if (detail.resend_in) startOtpCooldown(detail.resend_in);
+            } else {
+                setError(formatApiError(err));
             }
         }
     };
@@ -167,6 +221,41 @@ export default function Login() {
                                 />
                                 <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-1.5">
                                     ENTER THE CODE FROM YOUR AUTHENTICATOR APP
+                                </div>
+                            </div>
+                        )}
+
+                        {needsEmailOtp && (
+                            <div data-testid="login-email-otp-block">
+                                <label className="font-mono text-[10px] text-[#00FF41] tracking-widest block mb-2 flex items-center gap-1.5">
+                                    <EnvelopeSimple className="w-3 h-3" /> EMAIL CODE
+                                </label>
+                                <input
+                                    type="text"
+                                    value={emailOtp}
+                                    onChange={e => setEmailOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                                    inputMode="numeric"
+                                    autoComplete="one-time-code"
+                                    autoFocus
+                                    required
+                                    data-testid="login-email-otp-input"
+                                    placeholder="123456"
+                                    className="w-full bg-[#0A0A0A] border border-[#00FF41]/40 focus:border-[#00FF41] outline-none px-3 py-3 text-lg font-mono tracking-[0.3em] transition-colors duration-150"
+                                />
+                                <div className="flex items-center justify-between mt-1.5">
+                                    <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                                        {otpMessage || "ENTER THE 6-DIGIT CODE WE EMAILED YOU"}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleOtpResend}
+                                        disabled={otpResendCooldown > 0}
+                                        data-testid="login-email-otp-resend"
+                                        className="font-mono text-[10px] tracking-widest text-[#00FF41] disabled:text-[#52525B] hover:underline flex items-center gap-1 flex-shrink-0 ml-2"
+                                    >
+                                        <RefreshCw className="w-3 h-3" />
+                                        {otpResendCooldown > 0 ? `RESEND IN ${otpResendCooldown}s` : "RESEND CODE"}
+                                    </button>
                                 </div>
                             </div>
                         )}

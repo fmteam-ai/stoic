@@ -97,6 +97,28 @@ def _serialize_user(u: dict) -> dict:
     }
 
 
+# ─── Admin · Platform security settings ─────────────────────────────────
+@router.get("/admin/settings/login-otp")
+async def admin_get_login_otp(user=Depends(get_current_user)):
+    _admin_only(user)
+    from login_otp import is_enabled
+    db = get_db()
+    return {"enabled": await is_enabled(db)}
+
+
+@router.post("/admin/settings/login-otp")
+async def admin_set_login_otp(payload: dict, user=Depends(get_current_user)):
+    _admin_only(user)
+    from login_otp import set_enabled, is_enabled
+    db = get_db()
+    enabled = bool(payload.get("enabled"))
+    await set_enabled(db, enabled, actor_email=user.get("email", ""))
+    await _audit(db, actor_email=user.get("email", ""),
+                 action="login_otp_" + ("enabled" if enabled else "disabled"),
+                 target_kind="platform", target_id="login_email_otp")
+    return {"enabled": await is_enabled(db)}
+
+
 # ─── Admin · Users ───────────────────────────────────────────────────────
 @router.get("/admin/users")
 async def admin_list_users(status: str = "", q: str = "",

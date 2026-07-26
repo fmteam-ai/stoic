@@ -16,7 +16,9 @@ logger = logging.getLogger("email_sender")
 
 # Configure once on module import.
 _API_KEY = os.environ.get("RESEND_API_KEY", "")
-_SENDER = os.environ.get("SENDER_EMAIL") or "onboarding@resend.dev"
+_SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or "onboarding@resend.dev"
+_SENDER_NAME = (os.environ.get("SENDER_NAME") or "").strip()
+_SENDER = f"{_SENDER_NAME} <{_SENDER_EMAIL}>" if _SENDER_NAME else _SENDER_EMAIL
 if _API_KEY:
     resend.api_key = _API_KEY
 
