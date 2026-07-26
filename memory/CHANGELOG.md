@@ -1341,3 +1341,8 @@ LESSON (recurring): any "SomeWord: test_xxx" colon phrasing in memory/*.md near 
 - .env.example: documented APP_ENV (blank in preview; "production" in prod), ADMIN_EMAIL default, ADMIN_PASSWORD >=12 prod rule.
 - NOT set in preview .env (would break preview): APP_ENV=production, strong ADMIN_PASSWORD, ML kill-switches. These belong in the PRODUCTION deploy env only. Prod fresh Atlas DB will seed admin@stoicaibot.com with the prod ADMIN_PASSWORD.
 - bugs_routes.py / diagnostic_routes.py still hardcode admin@trading.bot as a special-email fallback, but both also allow role==admin, so the new admin retains privileges (left as-is, minimal change).
+
+## Iter-178 (2026-07-25) — Forced first-login password rotation for prod admin
+- seed.py: freshly-seeded admin now gets must_change_password=True when APP_ENV=production (or ADMIN_PASSWORD_FILE set). Preview admins unaffected (APP_ENV blank) → test suite unbroken.
+- Full flow already existed: /auth/me exposes must_change_password → Login.jsx redirects to /settings → Settings.jsx banner → /auth/change-password clears flag + revokes all sessions. Verified: prod-simulated seed (APP_ENV=production, strong pw) → must_change_password:True (temp admin cleaned up).
+- Stripe go-live: user guided via support_agent — provide own sk_live_.../sk_test_... as STRIPE_API_KEY in prod deploy env, register webhook https://<prod-domain>/api/webhook/stripe, set STRIPE_WEBHOOK_SECRET=whsec_.... App code already reads both keys from env; webhook signature verification activates once the secret is set.
