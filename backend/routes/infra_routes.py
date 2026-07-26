@@ -323,6 +323,17 @@ async def agent_heartbeat_ep(payload: dict):
         raise HTTPException(status_code=401, detail=str(e))
 
 
+@router.post("/agent/renew-token")
+async def agent_renew_token_ep(payload: dict):
+    """iter-157 — agent-initiated token rotation (presents current token)."""
+    from vps_agent import rotate_agent_token
+    try:
+        return await rotate_agent_token(get_db(),
+                                        str(payload.get("agent_token") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
 @router.post("/agent/hardening")
 async def agent_hardening_ep(payload: dict):
     from vps_agent import report_hardening

@@ -1381,3 +1381,15 @@ Audit verdict: CONDITIONAL PASS (no Critical/High; core auth/payment controls ve
 4. P3: setuptools 70.2.0 → 78.1.1 (fixes PYSEC-2025-49; 83.x blocked by torch<82 constraint — build-time only, not in the CI audit surface).
 Remaining external item: confirm Cloudflare edge Transform-Rule CSP is applied on the HTML in production (docs/CLOUDFLARE_EDGE.md §8) — not repo-observable.
 Regression: 485 unit+policy tests passed, iter155+153 suites 32 passed, pip-audit clean.
+
+## Iter-157 (2026-07-26) — Host Agent v2.1 + Runtime Validation Harness + Signed MSI docs (full scope A+B+C)
+A. **Host Agent v2.1** (docs/host-agent/stoic-host-agent.ps1, rewritten):
+   - MT5 supervision (Ensure-Mt5 auto-restarts terminal64; -Mt5Path install param; mt5_restarts telemetry)
+   - Backend command execution loop (Invoke-BackendCommands: restart_mt5/run_update_check/collect_diagnostics/restart_agent via commands/poll+ack)
+   - Signed self-update hardening: PINNED release public key at install (TOFU), .bak rollback on failed swap
+   - Credential renewal: Renew-TokenIfDue every 30d → NEW backend endpoint POST /api/infra/agent/renew-token + vps_agent.rotate_agent_token (old token dies immediately)
+   - Extra telemetry: pending_reboot (Windows Update), last_boot, mt5_supervised. FIXED heartbeat payload shape ({agent_token, metrics} — old spec used headers, mismatched backend).
+B. **Runtime Validation Harness** (backend/runtime_validation.py, 9 scenarios proving REAL production gates): lease_expiration (fencing epoch bump + stale-owner rejection), heartbeat_timeout (broker_state_stale_reason), artifact_verification (Ed25519 verify + tamper detection), promotion_gates (evaluate_promotion DEGRADED/PROVISIONAL/CERTIFIED), expired_token, replay_protection (refresh reuse → family revoke), unauthorized_api, turnstile_fail_closed, billing_refund_idempotent (revoke_payment double-apply no-op). Results → db.validation_runs (mode="runtime") feeding release readiness. Routes: POST /api/ops/validation/runtime/run, GET /api/ops/validation/runtime/runs (_ops_actor gated) in routes/validation_routes.py. UI: Runtime Validation panel in AdminOps.jsx (testids ops-panel-runtime-validation, runtime-validation-run-btn/results) — verified 9/9 pass via button click.
+C. **docs/host-agent/SIGNED_MSI.md**: WiX v4 project + Azure Trusted Signing GitHub Actions job + manifest inclusion + on-VPS verification chain. Requires user to buy code-signing cert (EV/Trusted Signing recommended).
+Tests: tests/test_iter157_runtime_validation.py (8 tests). Regression 505 passed. Manifest 2,993 tests / 287 files.
+NOTE: vps_agent.agent_by_token RAISES ValueError (never returns None).

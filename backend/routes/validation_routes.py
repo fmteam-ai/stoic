@@ -100,6 +100,38 @@ class RunIn(BaseModel):
     record: bool = True
 
 
+class RuntimeRunIn(BaseModel):
+    scenarios: list[str] | None = None
+
+
+@router.post("/ops/validation/runtime/run")
+async def run_runtime_validation_ep(payload: RuntimeRunIn, request: Request):
+    """iter-157 — security/infra/billing runtime proofs against the REAL
+    production gates (lease fencing, replay protection, signed artifacts,
+    promotion rules, refund idempotency…). Results feed release readiness."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from runtime_validation import run_runtime_validation
+    return await run_runtime_validation(get_db(), scenarios=payload.scenarios,
+                                        actor=actor or "admin")
+
+
+@router.get("/ops/validation/runtime/runs")
+async def list_runtime_validation_runs(request: Request):
+    allowed, _ = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from runtime_validation import SCENARIOS
+    db = get_db()
+    runs = await db.validation_runs.find(
+        {"mode": "runtime"}, {"_id": 0}, sort=[("at", -1)]).limit(10).to_list(10)
+    for r in runs:
+        if isinstance(r.get("at"), datetime):
+            r["at"] = r["at"].isoformat()
+    return {"scenarios": list(SCENARIOS), "runs": runs}
+
+
 @router.post("/ops/validation/run")
 async def run_validation_campaign(payload: RunIn, request: Request):
     """Automated simulated-EA campaign — exercises the real bridge endpoints

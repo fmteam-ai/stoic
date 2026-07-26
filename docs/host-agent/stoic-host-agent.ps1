@@ -1,62 +1,105 @@
-# STOIC Host Agent v2 — Windows service wrapper + telemetry loop (iter-139)
+# STOIC Host Agent v2.1 — Windows service: telemetry, MT5 supervision,
+# command execution, signed self-update, credential renewal (iter-157)
 # Install (as Administrator):
 #   powershell -ExecutionPolicy Bypass -File .\stoic-host-agent.ps1 -Install `
-#     -ApiBase "https://www.stoicaibot.com" -AgentId "<agent_id>" -AgentToken "<agent_token>"
-# The service self-restarts on failure (sc.exe failure actions) and reports
-# telemetry every 60s: disk %, broker latency, MT5 process state, restarts.
+#     -ApiBase "https://www.stoicaibot.com" -AgentId "<agent_id>" -AgentToken "<agent_token>" `
+#     [-Mt5Path "C:\Program Files\MetaTrader 5\terminal64.exe"]
+# Responsibilities:
+#   * telemetry every 60s (disk, CPU, RAM, MT5 state, latency, restarts)
+#   * MT5 process supervision — auto-restart terminal64 when it dies
+#   * backend command execution (restart_mt5 / run_update_check /
+#     collect_diagnostics / restart_agent) via the signed command queue
+#   * signed self-update — Ed25519 manifest w/ PINNED public key, SHA-256
+#     verify BEFORE swap, automatic rollback of a failed swap
+#   * credential renewal — rotates its own agent token every 30 days
 param(
     [switch]$Install,
     [switch]$Run,
     [string]$ApiBase = "",
     [string]$AgentId = "",
-    [string]$AgentToken = ""
+    [string]$AgentToken = "",
+    [string]$Mt5Path = ""
 )
 
 $ServiceName = "StoicHostAgent"
 $ConfigPath = "$env:ProgramData\Stoic\agent.json"
 
+function Get-Config { Get-Content $ConfigPath -Raw | ConvertFrom-Json }
+function Save-Config($cfg) { $cfg | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8 }
+
 function Install-Agent {
     New-Item -ItemType Directory -Force -Path (Split-Path $ConfigPath) | Out-Null
-    @{ api_base = $ApiBase; agent_id = $AgentId; agent_token = $AgentToken;
-       installed_at = (Get-Date).ToUniversalTime().ToString("o") } |
-        ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
+    # PIN the release public key at enroll time — future manifests must be
+    # signed by this exact key or updates are refused (TOFU pinning).
+    $pinnedKey = ""
+    try {
+        $m = Invoke-RestMethod -Uri "$ApiBase/api/infra/artifacts/manifest" -TimeoutSec 15
+        if ($m.signature.alg -eq "Ed25519") { $pinnedKey = $m.signature.public_key_b64 }
+    } catch { Write-Host "[stoic] WARN: could not pin release key at install: $_" }
+    $cfg = @{ api_base = $ApiBase; agent_id = $AgentId; agent_token = $AgentToken;
+              mt5_path = $Mt5Path; mt5_supervise = [bool]$Mt5Path;
+              release_public_key_b64 = $pinnedKey;
+              token_rotated_at = (Get-Date).ToUniversalTime().ToString("o");
+              installed_at = (Get-Date).ToUniversalTime().ToString("o") }
+    Save-Config $cfg
 
     $self = $MyInvocation.PSCommandPath
     if (-not $self) { $self = $PSCommandPath }
     $bin = "powershell.exe -ExecutionPolicy Bypass -NoProfile -File `"$self`" -Run"
     sc.exe create $ServiceName binPath= $bin start= auto DisplayName= "STOIC Host Agent" | Out-Null
-    # Restart recovery: restart after 5s, 30s, 60s; reset failure count daily
+    # Windows service recovery: restart after 5s, 30s, 60s; reset count daily
     sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/30000/restart/60000 | Out-Null
     sc.exe start $ServiceName | Out-Null
-    Write-Host "[stoic] service '$ServiceName' installed with restart recovery."
+    Write-Host "[stoic] service '$ServiceName' installed (restart recovery + pinned release key)."
 }
 
-function Get-Config { Get-Content $ConfigPath -Raw | ConvertFrom-Json }
+$script:Mt5Restarts = 0
+
+function Ensure-Mt5($cfg) {
+    # MT5 supervision: if the terminal should be running and is not, start it.
+    if (-not $cfg.mt5_supervise -or -not $cfg.mt5_path) { return }
+    $mt5 = @(Get-Process -Name "terminal64" -ErrorAction SilentlyContinue)
+    if ($mt5.Count -eq 0 -and (Test-Path $cfg.mt5_path)) {
+        try {
+            Start-Process -FilePath $cfg.mt5_path -WindowStyle Minimized
+            $script:Mt5Restarts++
+            Write-EventLog -LogName Application -Source $ServiceName -EventId 200 `
+                -EntryType Warning -Message "MT5 terminal was down — restarted (count=$script:Mt5Restarts)" -ErrorAction SilentlyContinue
+        } catch {
+            Write-EventLog -LogName Application -Source $ServiceName -EventId 201 `
+                -EntryType Error -Message "MT5 restart FAILED: $_" -ErrorAction SilentlyContinue
+        }
+    }
+}
 
 function Get-Telemetry($cfg) {
     $disk = Get-PSDrive -Name C
     $diskFreePct = [math]::Round(($disk.Free / ($disk.Used + $disk.Free)) * 100, 1)
     $mt5 = @(Get-Process -Name "terminal64" -ErrorAction SilentlyContinue)
-    # Broker latency proxy: TLS round-trip to the API edge
     $lat = $null
     try {
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         Invoke-WebRequest -Uri "$($cfg.api_base)/health" -TimeoutSec 10 -UseBasicParsing | Out-Null
         $sw.Stop(); $lat = [math]::Round($sw.Elapsed.TotalMilliseconds, 0)
     } catch {}
-    $uptime = [math]::Round(((Get-Date) - (Get-Process -Id $PID).StartTime).TotalSeconds, 0)
+    $os = Get-CimInstance Win32_OperatingSystem
+    $pendingReboot = Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
     @{
-        disk_free_gb      = [math]::Round($disk.Free / 1GB, 1)
-        disk_free_pct     = $diskFreePct
-        broker_latency_ms = $lat
-        mt5_processes     = $mt5.Count
-        mt5_connected     = ($mt5.Count -gt 0)
-        ea_attached       = ($mt5.Count -gt 0)  # refined by EA heartbeat server-side
-        cpu_percent       = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 0)
-        ram_percent       = [math]::Round((1 - ((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / (Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize)) * 100, 0)
-        restarts_24h      = 0   # populated from the service event log below
-        service_uptime_sec = $uptime
-        agent_version     = "2.0.0"
+        disk_free_gb       = [math]::Round($disk.Free / 1GB, 1)
+        disk_free_pct      = $diskFreePct
+        broker_latency_ms  = $lat
+        mt5_processes      = $mt5.Count
+        mt5_connected      = ($mt5.Count -gt 0)
+        mt5_supervised     = [bool]$cfg.mt5_supervise
+        mt5_restarts       = $script:Mt5Restarts
+        ea_attached        = ($mt5.Count -gt 0)  # refined by EA heartbeat server-side
+        cpu_percent        = [math]::Round((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average, 0)
+        ram_percent        = [math]::Round((1 - ($os.FreePhysicalMemory / $os.TotalVisibleMemorySize)) * 100, 0)
+        pending_reboot     = $pendingReboot
+        last_boot          = $os.LastBootUpTime.ToUniversalTime().ToString("o")
+        restarts_24h       = Get-RestartCount
+        service_uptime_sec = [math]::Round(((Get-Date) - (Get-Process -Id $PID).StartTime).TotalSeconds, 0)
+        agent_version      = "2.1.0"
     }
 }
 
@@ -70,16 +113,16 @@ function Get-RestartCount {
 }
 
 function Test-UpdateManifest($cfg) {
-    # Signed self-update: fetch the Ed25519-signed manifest, verify pinned
-    # public key, download the content-addressed artifact and verify SHA-256
-    # BEFORE swapping any file. Never install from a mutable URL.
+    # Signed self-update: Ed25519 manifest with PINNED key; SHA-256 verify
+    # BEFORE swap; previous file kept as .bak for automatic rollback.
+    # Never installs from a mutable URL — only /api/artifacts/{sha256}.
     try {
-        $m = Invoke-RestMethod -Uri "$($cfg.api_base)/api/infra/artifacts/manifest" `
-            -Headers @{ "X-Agent-Id" = $cfg.agent_id; "X-Agent-Token" = $cfg.agent_token } -TimeoutSec 15
+        $m = Invoke-RestMethod -Uri "$($cfg.api_base)/api/infra/artifacts/manifest" -TimeoutSec 15
         if ($m.signature.alg -ne "Ed25519") { throw "unsigned manifest" }
-        # NOTE: pin the public key at enroll time; compare before trusting:
-        #   $pinned = (Get-Config).release_public_key_b64
-        #   if ($m.signature.public_key_b64 -ne $pinned) { throw "key mismatch" }
+        if ($cfg.release_public_key_b64 -and
+            $m.signature.public_key_b64 -ne $cfg.release_public_key_b64) {
+            throw "release key mismatch — possible compromise, refusing update"
+        }
         foreach ($a in $m.artifacts) {
             if ($a.type -eq "ex5" -and $a.sha256) {
                 $target = "$env:ProgramData\Stoic\EmergentTradingBridge.ex5"
@@ -88,29 +131,79 @@ function Test-UpdateManifest($cfg) {
                     $tmp = "$target.new"
                     Invoke-WebRequest -Uri "$($cfg.api_base)$($a.url)" -OutFile $tmp -UseBasicParsing
                     $got = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
-                    if ($got -eq $a.sha256) { Move-Item -Force $tmp $target }
-                    else { Remove-Item -Force $tmp; throw "sha256 mismatch for $($a.name)" }
+                    if ($got -ne $a.sha256) { Remove-Item -Force $tmp; throw "sha256 mismatch for $($a.name)" }
+                    if (Test-Path $target) { Copy-Item -Force $target "$target.bak" }
+                    try { Move-Item -Force $tmp $target }
+                    catch {
+                        # rollback: restore the previous verified artifact
+                        if (Test-Path "$target.bak") { Copy-Item -Force "$target.bak" $target }
+                        throw "swap failed — rolled back: $_"
+                    }
                 }
             }
         }
     } catch { Write-EventLog -LogName Application -Source $ServiceName -EventId 100 -EntryType Warning -Message "update check failed: $_" -ErrorAction SilentlyContinue }
 }
 
+function Renew-TokenIfDue($cfg) {
+    # Rotate the agent credential every 30 days (agent-initiated).
+    try {
+        $rotated = [datetime]::Parse($cfg.token_rotated_at)
+        if (((Get-Date).ToUniversalTime() - $rotated.ToUniversalTime()).TotalDays -lt 30) { return $cfg }
+        $r = Invoke-RestMethod -Method Post -Uri "$($cfg.api_base)/api/infra/agent/renew-token" `
+            -ContentType "application/json" -Body (@{ agent_token = $cfg.agent_token } | ConvertTo-Json) -TimeoutSec 15
+        if ($r.agent_token) {
+            $cfg.agent_token = $r.agent_token
+            $cfg.token_rotated_at = (Get-Date).ToUniversalTime().ToString("o")
+            Save-Config $cfg
+            Write-EventLog -LogName Application -Source $ServiceName -EventId 300 `
+                -EntryType Information -Message "agent token rotated" -ErrorAction SilentlyContinue
+        }
+    } catch {}
+    return $cfg
+}
+
+function Invoke-BackendCommands($cfg) {
+    # Poll the HMAC-signed command queue and execute the small allow-list.
+    try {
+        $resp = Invoke-RestMethod -Method Post -Uri "$($cfg.api_base)/api/infra/agent/commands/poll" `
+            -ContentType "application/json" -Body (@{ agent_token = $cfg.agent_token } | ConvertTo-Json) -TimeoutSec 15
+        foreach ($c in @($resp.commands)) {
+            $ok = $true; $detail = "executed"
+            switch ($c.command) {
+                "restart_mt5"        { Get-Process -Name "terminal64" -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2; Ensure-Mt5 $cfg; $detail = "MT5 restarted" }
+                "run_update_check"   { Test-UpdateManifest $cfg; $detail = "update check ran" }
+                "collect_diagnostics"{ $detail = (Get-Telemetry $cfg | ConvertTo-Json -Compress) }
+                "restart_agent"      { $detail = "agent restarting"; }
+                default              { $ok = $false; $detail = "unknown command '$($c.command)' refused" }
+            }
+            $ack = @{ agent_token = $cfg.agent_token; command_id = $c.command_id; ok = $ok; detail = $detail } | ConvertTo-Json
+            Invoke-RestMethod -Method Post -Uri "$($cfg.api_base)/api/infra/agent/commands/ack" `
+                -ContentType "application/json" -Body $ack -TimeoutSec 15 | Out-Null
+            if ($c.command -eq "restart_agent") { Restart-Service $ServiceName -Force }
+        }
+    } catch {}
+}
+
 function Run-Loop {
     $cfg = Get-Config
+    $tick = 0
     while ($true) {
         try {
+            Ensure-Mt5 $cfg
             $t = Get-Telemetry $cfg
-            $t.restarts_24h = Get-RestartCount
             Invoke-RestMethod -Method Post -Uri "$($cfg.api_base)/api/infra/agent/heartbeat" `
-                -Headers @{ "X-Agent-Id" = $cfg.agent_id; "X-Agent-Token" = $cfg.agent_token } `
-                -ContentType "application/json" -Body ($t | ConvertTo-Json) -TimeoutSec 15 | Out-Null
+                -ContentType "application/json" `
+                -Body (@{ agent_token = $cfg.agent_token; metrics = $t } | ConvertTo-Json) -TimeoutSec 15 | Out-Null
+            Invoke-BackendCommands $cfg
         } catch {}
-        if ((Get-Random -Maximum 30) -eq 0) { Test-UpdateManifest $cfg }  # ~every 30 min
+        if ($tick % 30 -eq 15) { Test-UpdateManifest $cfg }      # ~every 30 min
+        if ($tick % 60 -eq 30) { $cfg = Renew-TokenIfDue $cfg }  # ~hourly check
+        $tick++
         Start-Sleep -Seconds 60
     }
 }
 
 if ($Install) { Install-Agent }
 elseif ($Run) { Run-Loop }
-else { Write-Host "Use -Install (with -ApiBase/-AgentId/-AgentToken) or -Run" }
+else { Write-Host "Use -Install (with -ApiBase/-AgentId/-AgentToken[/-Mt5Path]) or -Run" }

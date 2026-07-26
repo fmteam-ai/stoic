@@ -112,6 +112,24 @@ async def agent_heartbeat(db, agent_token: str, metrics: dict) -> dict:
     return {"ok": True, "next_heartbeat_sec": 60}
 
 
+async def rotate_agent_token(db, agent_token: str) -> dict:
+    """iter-157 — agent-initiated credential renewal. The agent presents its
+    CURRENT valid token and receives a fresh one; the old token dies
+    immediately. Long-lived static credentials never accumulate."""
+    agent = await agent_by_token(db, agent_token)
+    if not agent:
+        raise ValueError("unknown or revoked agent token")
+    new_token = f"agt_tok_{secrets.token_urlsafe(32)}"
+    now = datetime.now(timezone.utc).isoformat()
+    await db.vps_agents.update_one(
+        {"agent_id": agent["agent_id"]},
+        {"$set": {"agent_token": new_token, "token_rotated_at": now}})
+    return {"agent_id": agent["agent_id"], "agent_token": new_token,
+            "rotated_at": now,
+            "note": "old token revoked immediately — persist the new one "
+                    "before your next heartbeat"}
+
+
 async def report_hardening(db, agent_token: str, checklist: dict) -> dict:
     agent = await agent_by_token(db, agent_token)
     status = {k: bool(checklist.get(k)) for k in HARDENING_CHECKLIST}
