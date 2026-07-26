@@ -381,6 +381,14 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - Sender name: email_sender._SENDER now "SENDER_NAME <SENDER_EMAIL>"; backend/.env SENDER_NAME=STOIC.
 - Verified: full browser E2E (challenge → wrong/correct code → dashboard), admin toggle UI both directions, tests/test_iter131_email_otp.py (10) + 34 auth-suite regression green. Manifest → 2,929/279. OTP left DISABLED in preview (HTTP test suites depend on plain logins).
 
+## Iter-133 (2026-06) — Production Cloudflare 520 on Subscribe: torch stack removed AGAIN
+- User hit "origin returned invalid/incomplete response" (Cloudflare) clicking Subscribe on stoicaibot.com. Root cause: a blind `pip freeze` had RE-ADDED torch==2.12.1+cpu, transformers, accelerate, chronos-forecasting, nvidia-nccl-cu12 + pytorch extra-index to requirements.txt (2nd recurrence of iter-127e) — 1Gi prod pod gets OOM-killed mid-request → connection reset → CF 520.
+- Fixed: 5 packages + extra-index line removed (forecast_agent lazy-imports & degrades; preview keeps torch installed locally). NEW CI guard `tests/test_iter132_requirements_guard.py` fails if they ever return. Manifest → 2,931/280.
+- CORS_ORIGINS in backend/.env now also lists https://stoicaibot.com + www (cannot be "*": credentialed cookies + CSRF origin enforcement need concrete origins).
+- deployment_agent re-scan: PASS, zero findings (GBM libs sklearn/xgb/lgbm/catboost acceptable — lazy + ML_ENSEMBLE_ENABLED kill-switch). Preview checkout re-verified post-change.
+- OUTSTANDING: if Subscribe still fails on production after redeploy, suspect production STRIPE_API_KEY (user rolled the leaked live key — deployment env must carry the NEW key).
+- RULE (3rd enforcement): NEVER `pip freeze > requirements.txt` in this repo — preview has torch installed; hand-edit or freeze-and-strip.
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 
