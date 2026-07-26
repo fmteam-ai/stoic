@@ -8,6 +8,7 @@ Storage: db.login_otps — one doc per user, replaced on each issue:
   {user_id, code_hash, expires_at, attempts, last_sent_at, created_at}
 """
 import hashlib
+import hmac
 import logging
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -122,6 +123,10 @@ async def otp_gate(db, user: dict, provided: str | None) -> None:
 
     provided = (provided or "").strip()
     if provided:
+        from security import check_failure_limit, record_failure
+        await check_failure_limit(
+            db, "email_otp_verify", uid, 10, 900,
+            "Too many code attempts. Try again in a few minutes.")
         if not _valid(doc):
             await db.login_otps.delete_many({"user_id": uid})
             raise HTTPException(status_code=401, detail={
@@ -129,7 +134,9 @@ async def otp_gate(db, user: dict, provided: str | None) -> None:
                 "message": "That code expired or had too many wrong attempts. "
                            "Request a new one.",
             })
-        if _hash(uid, provided) != doc["code_hash"]:
+        if not hmac.compare_digest(_hash(uid, provided),
+                                   doc.get("code_hash") or ""):
+            await record_failure(db, "email_otp_verify", uid, 900)
             attempts = doc.get("attempts", 0) + 1
             if attempts >= OTP_MAX_ATTEMPTS:
                 await db.login_otps.delete_many({"user_id": uid})
@@ -161,7 +168,14 @@ async def otp_gate(db, user: dict, provided: str | None) -> None:
                 "message": "Enter the 6-digit code we emailed you.",
                 "resend_in": int(OTP_RESEND_COOLDOWN_SECONDS - elapsed),
             })
+    # Volume cap: max 6 emailed codes per account per 15 min (SEC-001).
+    from security import check_failure_limit
+    await check_failure_limit(
+        db, "email_otp_issue", uid, 6, 900,
+        "Too many sign-in codes requested. Try again in a few minutes.")
     await _issue(db, user)
+    from security import record_failure
+    await record_failure(db, "email_otp_issue", uid, 900)
     raise HTTPException(status_code=401, detail={
         "code": "email_otp_sent",
         "message": "We emailed you a 6-digit sign-in code. Enter it below.",

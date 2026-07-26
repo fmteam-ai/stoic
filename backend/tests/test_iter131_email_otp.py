@@ -172,6 +172,40 @@ def test_email_failure_blocks_with_502(otp_env, monkeypatch):
     _run(_t())
 
 
+def test_issue_volume_cap(otp_env):
+    db, user, lo = otp_env["db"], otp_env["user"], otp_env["lo"]
+
+    async def _t():
+        for _ in range(6):
+            with pytest.raises(HTTPException) as e:
+                await lo.otp_gate(db, user, None)
+            assert e.value.detail["code"] == "email_otp_sent"
+            await db.login_otps.update_one(
+                {"user_id": str(user["_id"])},
+                {"$set": {"last_sent_at": (
+                    datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()}})
+        with pytest.raises(HTTPException) as e:
+            await lo.otp_gate(db, user, None)
+        assert e.value.status_code == 429
+    _run(_t())
+
+
+def test_verify_volume_cap(otp_env):
+    db, user, lo = otp_env["db"], otp_env["user"], otp_env["lo"]
+
+    async def _t():
+        for _round in range(2):  # 2 codes × 5 wrong = 10 recorded failures
+            with pytest.raises(HTTPException):
+                await lo.otp_gate(db, user, None)  # issue
+            for _ in range(5):
+                with pytest.raises(HTTPException):
+                    await lo.otp_gate(db, user, "999999")
+        with pytest.raises(HTTPException) as e:
+            await lo.otp_gate(db, user, "999999")
+        assert e.value.status_code == 429
+    _run(_t())
+
+
 def test_admin_role_exempt(otp_env):
     db, lo = otp_env["db"], otp_env["lo"]
     from bson import ObjectId

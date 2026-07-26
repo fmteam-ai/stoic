@@ -6,6 +6,7 @@ from fastapi.responses import RedirectResponse
 
 from auth import get_current_user
 from database import get_db
+from security import client_ip
 from bson import ObjectId
 from datetime import datetime, timezone
 from subscription_service import is_active as subscription_active
@@ -210,9 +211,7 @@ async def referral_redirect(code: str, request: Request):
     """Public unauthenticated redirect that records the click + sets the
     attribution cookie. Lands the visitor on the marketing/register page.
     """
-    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
-    if ip and "," in ip:
-        ip = ip.split(",")[0].strip()
+    ip = client_ip(request)
     user_agent = request.headers.get("user-agent", "")
     referrer = request.headers.get("referer", "")
     affiliate = await record_click(code=code, ip=ip, user_agent=user_agent, referrer=referrer)

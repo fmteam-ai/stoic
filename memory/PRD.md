@@ -389,6 +389,13 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - OUTSTANDING: if Subscribe still fails on production after redeploy, suspect production STRIPE_API_KEY (user rolled the leaked live key — deployment env must carry the NEW key).
 - RULE (3rd enforcement): NEVER `pip freeze > requirements.txt` in this repo — preview has torch installed; hand-edit or freeze-and-strip.
 
+## Iter-134 (2026-06) — Security audit #2 (CONDITIONAL PASS) + P3 hardening applied
+- Audit verdict: NO exploitable path to account takeover, payment forgery, entitlement escalation, IDOR or injection. Only P3 defense-in-depth items, all fixed:
+  - SEC-001: email OTP now volume-capped via security.check_failure_limit — max 6 issued codes / account / 15min (429), max 10 wrong verify attempts / account / 15min (429). Tests test_issue_volume_cap / test_verify_volume_cap.
+  - OTP hash compare → hmac.compare_digest (login_otp.py).
+  - affiliate /r/{code} click attribution now uses security.client_ip (rightmost XFF) instead of spoofable leftmost.
+- test_iter131_email_otp.py → 12 tests. Manifest → 2,933/280. Referral redirect live-verified (307). Prior false positives list still valid (do not re-report).
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 
