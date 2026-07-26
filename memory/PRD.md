@@ -366,6 +366,13 @@ User rejected the confusing overlap of 5 execution modes and chose **Option A: M
 - `CHECKOUT_ALLOWED_ORIGINS` in backend/.env now includes https://stoicaibot.com + www — production checkout would have 400'd "origin not in approved domain list" without it. USER MUST REDEPLOY for this to reach production.
 - Refund/dispute auto-revoke (iter-129) backend-tested and passing; also needs the redeploy.
 
+## Iter-131 (2026-06) — Billing History UI + Renewal Reminder Emails + Upgrade Proration UI
+- Billing history: /subscription page now renders payment table (date/plan/amount/status badges) from existing GET /api/subscription/transactions (testids billing-history, billing-row-{i}).
+- Renewal reminder EMAIL: `background_loops.renewal_reminder_sweep(db)` (extracted from _billing_loop, hourly) now sends a branded Resend email alongside the in-app notification at 7d + 1d before valid_until; deduped per valid_until via reminder_{7d,1d}_for flags; skips admin_grandfather. NOTE: Resend sender is sandbox `onboarding@resend.dev` — production delivery to arbitrary users needs a verified domain in Resend.
+- Upgrade proration UI: NEW GET /api/subscription/upgrade-preview returns per-plan {kind: new|extend|upgrade|downgrade_scheduled, credited_days, starts_at, new_valid_until} mirroring apply_successful_payment logic (which ALREADY prorated upgrades). Tier cards show hints: "+N days credited" (upgrade), "Starts <date> — after current plan" (downgrade), "Extends to <date>" (same tier); testid proration-hint-{tier}.
+- Tests: tests/test_iter130_billing_features.py (4 — email send+dedupe via conftest.run_async, admin skip, preview math, inactive case). Manifest → 2,919 tests / 278 files. 65 regression tests green (incl. test_iter122_billing.py). Verified live via curl + screenshots.
+- GOTCHA: standalone new event loops in tests break motor singleton — use conftest.run_async (shared loop resets database._client).
+
 ## Test credentials
 See `/app/memory/test_credentials.md` (admin: admin@trading.bot / admin123).
 

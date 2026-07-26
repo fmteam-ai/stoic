@@ -86,6 +86,67 @@ async def list_transactions(user=Depends(get_current_user), limit: int = 50):
 
 
 
+@sub_router.get("/upgrade-preview")
+async def upgrade_preview(user=Depends(get_current_user)):
+    """Per-plan proration preview: what happens to the user's remaining
+    prepaid time if they buy each plan right now. Mirrors the logic in
+    subscription_service.apply_successful_payment."""
+    from datetime import datetime, timezone, timedelta
+    from dateutil.relativedelta import relativedelta
+    from subscription_plans import (
+        all_plans_public, TIER_RANK, TIER_BASE_CENTS, canonical_tier,
+    )
+    from subscription_service import get_subscription
+
+    sub = await get_subscription(user["id"])
+    now = datetime.now(timezone.utc)
+    current_vu = None
+    if sub.get("valid_until"):
+        try:
+            current_vu = datetime.fromisoformat(
+                sub["valid_until"].replace("Z", "+00:00"))
+        except ValueError:
+            current_vu = None
+    active_remaining = current_vu is not None and current_vu > now
+    cur_plan = get_plan(sub.get("current_plan_id") or "")
+
+    previews = {}
+    for p in all_plans_public():
+        plan = get_plan(p["id"])
+        if not plan:
+            continue
+        if not active_remaining or not cur_plan:
+            new_vu = now + relativedelta(months=plan.duration_months)
+            previews[plan.id] = {"kind": "new",
+                                 "new_valid_until": new_vu.isoformat()}
+            continue
+        if cur_plan.tier == plan.tier:
+            new_vu = current_vu + relativedelta(months=plan.duration_months)
+            previews[plan.id] = {"kind": "extend",
+                                 "new_valid_until": new_vu.isoformat()}
+            continue
+        cur_rank = TIER_RANK[canonical_tier(cur_plan.tier)]
+        new_rank = TIER_RANK[canonical_tier(plan.tier)]
+        if new_rank > cur_rank:
+            remaining_days = (current_vu - now).total_seconds() / 86400.0
+            credit_days = remaining_days * (
+                TIER_BASE_CENTS[cur_plan.tier] / TIER_BASE_CENTS[plan.tier])
+            new_vu = (now + relativedelta(months=plan.duration_months)
+                      + timedelta(days=credit_days))
+            previews[plan.id] = {"kind": "upgrade",
+                                 "credited_days": round(credit_days, 1),
+                                 "new_valid_until": new_vu.isoformat()}
+        else:
+            sched_vu = current_vu + relativedelta(months=plan.duration_months)
+            previews[plan.id] = {"kind": "downgrade_scheduled",
+                                 "starts_at": current_vu.isoformat(),
+                                 "new_valid_until": sched_vu.isoformat()}
+    return {"active": active_remaining,
+            "current_plan_id": sub.get("current_plan_id"),
+            "valid_until": sub.get("valid_until"),
+            "previews": previews}
+
+
 @sub_router.post("/checkout")
 async def create_checkout(payload: dict, request: Request, user=Depends(get_current_user)):
     # Admin grandfather is permanent — block them from accidentally subscribing.

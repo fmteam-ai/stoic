@@ -368,42 +368,95 @@ def _rss_mb() -> float | None:
     return None
 
 
+def _renewal_email_html(name: str, plan_label: str, ends_on: str, days: int) -> str:
+    day_word = f"{days} day{'s' if days > 1 else ''}"
+    return f"""
+<div style="background:#0A0A0A;color:#FAFAFA;font-family:'Courier New',monospace;padding:32px;max-width:560px;margin:auto;border:1px solid #1F1F1F">
+  <div style="color:#00FF41;font-size:20px;font-weight:bold;letter-spacing:4px;margin-bottom:24px">STOIC</div>
+  <div style="font-size:16px;margin-bottom:16px">Hi {name},</div>
+  <div style="font-size:14px;color:#A1A1AA;line-height:1.6;margin-bottom:16px">
+    Your prepaid <span style="color:#FAFAFA">{plan_label}</span> access pass ends in
+    <span style="color:#FFB000;font-weight:bold">{day_word}</span> — on {ends_on}.
+  </div>
+  <div style="font-size:14px;color:#A1A1AA;line-height:1.6;margin-bottom:24px">
+    When it lapses, live trading pauses (paper trading keeps working).
+    We never auto-charge you — renew any time from the Subscription page.
+  </div>
+  <a href="https://stoicaibot.com/subscription"
+     style="display:inline-block;background:#00FF41;color:#000;padding:10px 24px;font-size:13px;letter-spacing:2px;text-decoration:none;font-weight:bold">RENEW MY PLAN</a>
+  <div style="font-size:11px;color:#52525B;margin-top:24px">
+    STOIC is software, not a broker. Your funds stay with your broker.
+  </div>
+</div>"""
+
+
+async def renewal_reminder_sweep(db, now=None):
+    """Send prepaid renewal reminders 7 days and 1 day before a pass lapses:
+    in-app notification + Resend email, both deduped per valid_until."""
+    now = now or datetime.now(timezone.utc)
+    sent = 0
+    for days, flag in ((7, "reminder_7d_for"), (1, "reminder_1d_for")):
+        horizon = (now + timedelta(days=days)).isoformat()
+        cursor = db.subscriptions.find({
+            "valid_until": {"$gt": now.isoformat(), "$lt": horizon},
+            "current_plan_id": {"$nin": [None, "admin_grandfather"]},
+        })
+        async for sub in cursor:
+            vu = sub.get("valid_until")
+            if sub.get(flag) == vu:
+                continue  # already reminded for this expiry
+            await db.notifications.insert_one({
+                "user_id": sub["user_id"],
+                "type": "renewal_reminder",
+                "title": f"Your STOIC plan lapses in {days} day{'s' if days > 1 else ''}",
+                "message": ("Your prepaid access pass "
+                            f"({sub.get('current_plan_id')}) ends on "
+                            f"{vu[:10]}. Renew from the Subscription "
+                            "page to keep the bot trading — we never "
+                            "auto-charge you."),
+                "read": False,
+                "created_at": now.isoformat(),
+            })
+            try:
+                import email_sender
+                if email_sender.is_configured():
+                    from bson import ObjectId
+                    try:
+                        u = await db.users.find_one(
+                            {"_id": ObjectId(sub["user_id"])},
+                            {"email": 1, "name": 1})
+                    except Exception:
+                        u = None
+                    if u and u.get("email"):
+                        plan_label = (sub.get("current_plan_id") or "plan").replace("_", " ").title()
+                        await email_sender.send_email(
+                            recipient=u["email"],
+                            subject=f"Your STOIC plan ends in {days} day{'s' if days > 1 else ''} — renew to keep trading",
+                            html=_renewal_email_html(
+                                u.get("name") or "trader", plan_label,
+                                (vu or "")[:10], days),
+                        )
+            except Exception:
+                logger.warning("renewal reminder email failed for user=%s",
+                               sub.get("user_id"))
+            await db.subscriptions.update_one(
+                {"_id": sub["_id"]}, {"$set": {flag: vu}})
+            sent += 1
+    return sent
+
+
 async def _billing_loop():
     """iter-122 — billing correctness daemon: retries pending affiliate
     commission outbox entries and sends prepaid renewal reminders 7 days
-    and 1 day before a pass lapses (in-app notification, deduped per
-    valid_until)."""
+    and 1 day before a pass lapses (in-app notification + email, deduped
+    per valid_until)."""
     await asyncio.sleep(45)
     while True:
         try:
             db = get_db()
             from affiliate_service import process_affiliate_outbox
             await process_affiliate_outbox(db)
-            now = datetime.now(timezone.utc)
-            for days, flag in ((7, "reminder_7d_for"), (1, "reminder_1d_for")):
-                horizon = (now + timedelta(days=days)).isoformat()
-                cursor = db.subscriptions.find({
-                    "valid_until": {"$gt": now.isoformat(), "$lt": horizon},
-                    "current_plan_id": {"$nin": [None, "admin_grandfather"]},
-                })
-                async for sub in cursor:
-                    vu = sub.get("valid_until")
-                    if sub.get(flag) == vu:
-                        continue  # already reminded for this expiry
-                    await db.notifications.insert_one({
-                        "user_id": sub["user_id"],
-                        "type": "renewal_reminder",
-                        "title": f"Your STOIC plan lapses in {days} day{'s' if days > 1 else ''}",
-                        "message": ("Your prepaid access pass "
-                                    f"({sub.get('current_plan_id')}) ends on "
-                                    f"{vu[:10]}. Renew from the Subscription "
-                                    "page to keep the bot trading — we never "
-                                    "auto-charge you."),
-                        "read": False,
-                        "created_at": now.isoformat(),
-                    })
-                    await db.subscriptions.update_one(
-                        {"_id": sub["_id"]}, {"$set": {flag: vu}})
+            await renewal_reminder_sweep(db)
         except Exception:
             logger.exception("billing loop iteration failed")
         await asyncio.sleep(3600)

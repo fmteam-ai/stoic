@@ -91,20 +91,26 @@ export default function Subscription() {
     const [creating, setCreating] = useState(null);
     const [err, setErr] = useState("");
     const [duration, setDuration] = useState("annual");
+    const [preview, setPreview] = useState(null);
+    const [transactions, setTransactions] = useState([]);
 
     useEffect(() => {
         let cancel = false;
         (async () => {
             try {
-                const [pRes, sRes, tRes] = await Promise.all([
+                const [pRes, sRes, tRes, upRes, txRes] = await Promise.all([
                     api.get("/subscription/plans"),
                     api.get("/subscription/status"),
                     api.get("/entitlements/tiers"),
+                    api.get("/subscription/upgrade-preview").catch(() => null),
+                    api.get("/subscription/transactions").catch(() => null),
                 ]);
                 if (cancel) return;
                 setPlans(pRes.data);
                 setStatus(sRes.data);
                 setTierMatrix(tRes.data);
+                if (upRes) setPreview(upRes.data);
+                if (txRes) setTransactions(txRes.data);
             } catch (e) {
                 setErr(formatApiError(e));
             } finally { if (!cancel) setLoading(false); }
@@ -226,6 +232,30 @@ export default function Subscription() {
                                  : `Subscribe — $${plan.amount_usd}`}
                             </button>
 
+                            {(() => {
+                                const p = preview?.active ? preview?.previews?.[plan.id] : null;
+                                if (!p || isCurrent) return null;
+                                if (p.kind === "upgrade" && p.credited_days >= 1) return (
+                                    <div data-testid={`proration-hint-${tierId}`}
+                                        className="text-[10px] font-mono text-[#00FF41] -mt-2 mb-4">
+                                        +{Math.round(p.credited_days)} days credited from your current plan
+                                    </div>
+                                );
+                                if (p.kind === "downgrade_scheduled") return (
+                                    <div data-testid={`proration-hint-${tierId}`}
+                                        className="text-[10px] font-mono text-[#FFB000] -mt-2 mb-4">
+                                        Starts {new Date(p.starts_at).toLocaleDateString()} — after your current plan ends
+                                    </div>
+                                );
+                                if (p.kind === "extend") return (
+                                    <div data-testid={`proration-hint-${tierId}`}
+                                        className="text-[10px] font-mono text-[#A1A1AA] -mt-2 mb-4">
+                                        Extends your plan to {new Date(p.new_valid_until).toLocaleDateString()}
+                                    </div>
+                                );
+                                return null;
+                            })()}
+
                             {/* Per-tier highlights */}
                             <div className="space-y-1.5 text-xs">
                                 {(tierMatrix[tierId] ? FEATURE_ROWS.slice(0, 8) : []).map(row => {
@@ -300,6 +330,52 @@ export default function Subscription() {
                 <span className="text-[#A1A1AA]"> &ldquo;valid until&rdquo;</span> date and we&apos;ll email you before it lapses.
                 Cancel any time = simply don&apos;t renew.
             </div>
+
+            {/* Billing history */}
+            {transactions.length > 0 && (
+                <div className="border border-[#1F1F1F] rounded-lg overflow-hidden mt-10"
+                    data-testid="billing-history">
+                    <div className="bg-[#0F0F0F] px-4 py-3 font-display text-sm">Billing history</div>
+                    <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                        <thead className="bg-[#0A0A0A] text-[#52525B]">
+                            <tr>
+                                <th className="text-left px-4 py-2 font-mono">DATE</th>
+                                <th className="text-left px-4 py-2 font-mono">PLAN</th>
+                                <th className="text-right px-4 py-2 font-mono">AMOUNT</th>
+                                <th className="text-left px-4 py-2 font-mono">STATUS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {transactions.map((tx, i) => (
+                                <tr key={tx.id} data-testid={`billing-row-${i}`}
+                                    className={i % 2 === 0 ? "bg-[#0A0A0A]" : "bg-[#0F0F0F]"}>
+                                    <td className="px-4 py-2 text-[#A1A1AA] font-mono">
+                                        {tx.created_at ? new Date(tx.created_at).toLocaleString() : "—"}
+                                    </td>
+                                    <td className="px-4 py-2 text-[#FAFAFA] font-mono">
+                                        {(tx.plan_id || "—").replace(/_/g, " ")}
+                                    </td>
+                                    <td className="px-4 py-2 text-right text-[#FAFAFA] font-mono">
+                                        ${tx.amount_usd.toFixed(2)} {tx.currency}
+                                    </td>
+                                    <td className="px-4 py-2">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase ${
+                                            tx.payment_status === "paid" ? "bg-[#00FF41]/10 text-[#00FF41]"
+                                            : tx.payment_status === "refunded" ? "bg-[#FF3B30]/10 text-[#FF3B30]"
+                                            : tx.payment_status === "expired" ? "bg-[#52525B]/10 text-[#52525B]"
+                                            : "bg-[#FFB000]/10 text-[#FFB000]"
+                                        }`}>
+                                            {tx.payment_status}
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    </div>
+                </div>
+            )}
         </AppLayout>
     );
 }
