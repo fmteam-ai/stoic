@@ -14,6 +14,7 @@ class RegisterRequest(BaseModel):
     name: Optional[str] = None
     terms_agreed: bool = False
     terms_version: Optional[str] = None
+    turnstile_token: Optional[str] = None  # required when Turnstile enabled
 
 
 class VerifyEmailRequest(BaseModel):
@@ -26,6 +27,7 @@ class ResendActivationRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+    turnstile_token: Optional[str] = None  # required when Turnstile enabled
 
 
 class ResetPasswordRequest(BaseModel):
@@ -38,6 +40,7 @@ class LoginRequest(BaseModel):
     password: str
     totp_code: Optional[str] = None  # required if user has 2FA enabled
     email_otp: Optional[str] = None  # required when admin enabled email OTP login
+    turnstile_token: Optional[str] = None  # required when Turnstile enabled
 
 
 class ProfileUpdateRequest(BaseModel):

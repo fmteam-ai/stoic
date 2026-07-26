@@ -135,6 +135,35 @@ async def admin_set_login_otp(payload: dict, user=Depends(get_current_user)):
     return {"enabled": await is_enabled(db)}
 
 
+@router.get("/admin/settings/turnstile")
+async def admin_get_turnstile(user=Depends(get_current_user)):
+    _admin_only(user)
+    from turnstile_gate import is_enabled, secret_key, site_key
+    db = get_db()
+    return {"enabled": await is_enabled(db),
+            "configured": bool(secret_key() and site_key())}
+
+
+@router.post("/admin/settings/turnstile")
+async def admin_set_turnstile(payload: dict, user=Depends(get_current_user)):
+    _admin_only(user)
+    from turnstile_gate import set_enabled, is_enabled, secret_key, site_key
+    db = get_db()
+    enabled = bool(payload.get("enabled"))
+    if enabled and not (secret_key() and site_key()):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "turnstile_not_configured",
+                    "message": "Set TURNSTILE_SITE_KEY and "
+                               "TURNSTILE_SECRET_KEY before enabling."})
+    await set_enabled(db, enabled, actor_email=user.get("email", ""))
+    await _audit(db, actor_email=user.get("email", ""),
+                 action="turnstile_" + ("enabled" if enabled else "disabled"),
+                 target_kind="platform", target_id="turnstile")
+    return {"enabled": await is_enabled(db),
+            "configured": bool(secret_key() and site_key())}
+
+
 # ─── Admin · Users ───────────────────────────────────────────────────────
 @router.get("/admin/users")
 async def admin_list_users(status: str = "", q: str = "",

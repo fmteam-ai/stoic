@@ -102,6 +102,51 @@ function ModerationModal({ open, onClose, action, target, onConfirm }) {
     );
 }
 
+function TurnstileToggle() {
+    const [state, setState] = useState(null); // {enabled, configured}
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+        api.get("/admin/settings/turnstile")
+            .then(r => setState(r.data))
+            .catch(() => setState({ enabled: false, configured: false }));
+    }, []);
+    const toggle = async () => {
+        setBusy(true);
+        try {
+            const { data } = await api.post("/admin/settings/turnstile", { enabled: !state?.enabled });
+            setState(data);
+            toast.success(`Turnstile ${data.enabled ? "ENABLED" : "DISABLED"}`);
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    return (
+        <div className="bg-[#0A0A0A] border border-[#1F1F1F] p-4 mb-6 flex flex-wrap items-center gap-4"
+            data-testid="turnstile-setting-card">
+            <ShieldCheck className={`w-5 h-5 ${state?.enabled ? "text-[#00FF41]" : "text-[#52525B]"}`} />
+            <div className="flex-1 min-w-[240px]">
+                <div className="font-display text-sm text-white">Cloudflare Turnstile (bot protection)</div>
+                <div className="text-xs text-[#71717A] mt-0.5">
+                    When ON, sign-in, registration and password-reset require completing a
+                    Cloudflare human-verification challenge — blocks credential stuffing and
+                    automated abuse. Requires TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY and the
+                    app hostname added to the widget in the Cloudflare dashboard.
+                    {state && !state.configured && (
+                        <span className="text-[#FF3B30]"> Keys not configured — set them before enabling.</span>
+                    )}
+                </div>
+            </div>
+            <button onClick={toggle} disabled={busy || state === null || (!state?.configured && !state?.enabled)}
+                data-testid="turnstile-toggle"
+                className={`px-4 py-2 text-xs font-mono tracking-widest border transition ${
+                    state?.enabled ? "border-[#00FF41]/50 bg-[#00FF41]/10 text-[#00FF41]"
+                            : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B]"
+                }`}>
+                {state === null ? "…" : busy ? "SAVING…" : state.enabled ? "ENABLED — CLICK TO DISABLE" : "DISABLED — CLICK TO ENABLE"}
+            </button>
+        </div>
+    );
+}
+
 function LoginOtpToggle() {
     const [enabled, setEnabled] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -209,6 +254,7 @@ export default function AdminUsers() {
                 }
             />
             <LoginOtpToggle />
+            <TurnstileToggle />
 
             <div className="bg-[#0A0A0A] border border-[#1F1F1F] mb-4 p-3 flex flex-wrap items-center gap-2">
                 <div className="flex items-center gap-2 bg-[#121212] border border-[#1F1F1F] px-2.5 py-1 flex-1 min-w-[200px]">

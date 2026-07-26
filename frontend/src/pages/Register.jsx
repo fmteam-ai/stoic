@@ -4,6 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
 import { StoicMark } from "@/components/StoicLogo";
 import { MailCheck, RefreshCw, Loader2 } from "lucide-react";
+import { TurnstileWidget, useTurnstile, resetTurnstile } from "@/components/TurnstileWidget";
 
 export default function Register() {
     const navigate = useNavigate();
@@ -18,6 +19,7 @@ export default function Register() {
     // Post-registration "check your inbox" state
     const [registered, setRegistered] = useState(null); // { email, activationLinkDevOnly? }
     const [resendCooldown, setResendCooldown] = useState(0);
+    const turnstile = useTurnstile();
     const [resending, setResending] = useState(false);
 
     const handleSubmit = async (e) => {
@@ -27,13 +29,19 @@ export default function Register() {
         if (!termsAgreed) { setError("You must accept the Terms of Use to continue."); return; }
         setLoading(true);
         try {
-            const data = await register(email, password, name || undefined, { terms_agreed: true });
+            const data = await register(email, password, name || undefined,
+                { terms_agreed: true, ...(turnstile.enabled && turnstile.token ? { turnstile_token: turnstile.token } : {}) });
             setRegistered({
                 email,
                 activationLinkDevOnly: data?.activation_link_dev_only || null,
                 emailDeliveryError: !data?.activation_email_sent ? (data?.activation_email_error || null) : null,
             });
         } catch (err) {
+            const detail = err?.response?.data?.detail;
+            if (detail?.code === "turnstile_required") {
+                resetTurnstile();
+                turnstile.setToken("");
+            }
             setError(formatApiError(err));
         } finally { setLoading(false); }
     };
@@ -198,8 +206,12 @@ export default function Register() {
                         </div>
                     )}
 
+                    {turnstile.enabled && (
+                        <TurnstileWidget siteKey={turnstile.siteKey} onToken={turnstile.setToken} />
+                    )}
+
                     <button
-                        type="submit" disabled={loading || !termsAgreed} data-testid="register-submit-button"
+                        type="submit" disabled={loading || !termsAgreed || (turnstile.enabled && !turnstile.token)} data-testid="register-submit-button"
                         className="w-full bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-40 disabled:cursor-not-allowed text-black font-medium py-3 text-sm transition-colors duration-150"
                     >
                         {loading ? "CREATING..." : "CREATE ACCOUNT →"}

@@ -517,6 +517,31 @@ async def _invalid_id_handler(_request: Request, _exc: InvalidId):
     return JSONResponse(status_code=404, content={"detail": "Resource not found"})
 
 
+# Security headers (iter-155) — defense-in-depth on every API response.
+# The browser-facing HTML gets its headers from the Cloudflare edge
+# (Transform Rules — see docs/CLOUDFLARE_EDGE.md); these cover direct API
+# access and act as a backstop if edge rules are ever misconfigured.
+_SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=(), "
+                          "payment=(), usb=()",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-site",
+}
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for k, v in _SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    return response
+
+
 # CORS — credentialed cookies must NEVER be paired with a wildcard origin.
 # Either: explicit allowlist with credentials, OR wildcard WITHOUT credentials.
 # If CORS_ORIGINS is unset/wildcard, we strip credentials so a malicious site

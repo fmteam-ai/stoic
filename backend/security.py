@@ -98,9 +98,16 @@ async def clear_failures(db, scope: str, identifier: str) -> None:
 
 
 def client_ip(request: Request) -> str:
-    """Client IP for rate-limit keying. Uses the RIGHTMOST X-Forwarded-For
-    entry — the hop appended by our trusted ingress — so attackers cannot
-    rotate lockout keys by spoofing the leftmost value (SEC-002)."""
+    """Client IP for rate-limit keying. When TRUST_CF_CONNECTING_IP=true
+    (origin reachable only via Cloudflare — e.g. behind cloudflared Tunnel),
+    CF-Connecting-IP is authoritative and unspoofable. Otherwise uses the
+    RIGHTMOST X-Forwarded-For entry — the hop appended by our trusted
+    ingress — so attackers cannot rotate lockout keys by spoofing the
+    leftmost value (SEC-002)."""
+    if os.environ.get("TRUST_CF_CONNECTING_IP", "false").lower() == "true":
+        cf = request.headers.get("cf-connecting-ip", "")
+        if cf:
+            return cf.strip()
     fwd = request.headers.get("x-forwarded-for", "")
     if fwd:
         return fwd.split(",")[-1].strip()
@@ -211,6 +218,28 @@ async def consume_and_rotate(db, payload: dict, presented_token: str,
     sess = await db.auth_sessions.find_one({"jti": jti})
     if sess is None or sess.get("revoked"):
         raise HTTPException(status_code=401, detail="Session revoked")
+    # Idle timeout — a session unused for longer than the window is dead.
+    idle_min = int(os.environ.get("SESSION_IDLE_TIMEOUT_MINUTES", "10080"))
+    last_used = sess.get("last_used_at") or sess.get("created_at")
+    if idle_min > 0 and last_used:
+        try:
+            last_dt = datetime.fromisoformat(
+                str(last_used).replace("Z", "+00:00"))
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            idle = (datetime.now(timezone.utc) - last_dt).total_seconds() / 60
+            if idle > idle_min:
+                await revoke_family(db, sess["family"],
+                                    reason="session_idle_timeout")
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": "session_idle_timeout",
+                            "message": "Session expired due to inactivity. "
+                                       "Please sign in again."})
+        except HTTPException:
+            raise
+        except (ValueError, TypeError):
+            pass
     if sess.get("consumed"):
         await revoke_family(db, sess["family"], reason="refresh_token_reuse")
         raise HTTPException(status_code=401,

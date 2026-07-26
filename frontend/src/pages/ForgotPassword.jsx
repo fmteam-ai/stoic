@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { StoicMark } from "@/components/StoicLogo";
 import { Mail as EnvelopeSimple, MailCheck, Loader2, ArrowLeft } from "lucide-react";
+import { TurnstileWidget, useTurnstile, resetTurnstile } from "@/components/TurnstileWidget";
 
 export default function ForgotPassword() {
     const [email, setEmail] = useState("");
@@ -10,15 +11,24 @@ export default function ForgotPassword() {
     const [sent, setSent] = useState(false);
     const [error, setError] = useState("");
     const [cooldown, setCooldown] = useState(0);
+    const turnstile = useTurnstile();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError(""); setSubmitting(true);
         try {
-            await api.post("/auth/forgot-password", { email });
+            await api.post("/auth/forgot-password",
+                { email, ...(turnstile.enabled && turnstile.token ? { turnstile_token: turnstile.token } : {}) });
             setSent(true);
         } catch (err) {
             const detail = err?.response?.data?.detail;
+            if (detail?.code === "turnstile_required") {
+                setError(detail.message || "Please complete the human verification challenge.");
+                resetTurnstile();
+                turnstile.setToken("");
+                setSubmitting(false);
+                return;
+            }
             if (detail?.code === "rate_limited") {
                 const m = (detail.message || "").match(/(\d+)s/);
                 const remaining = m ? parseInt(m[1], 10) : 60;
@@ -103,8 +113,12 @@ export default function ForgotPassword() {
                                 </div>
                             )}
 
+                            {turnstile.enabled && (
+                                <TurnstileWidget siteKey={turnstile.siteKey} onToken={turnstile.setToken} />
+                            )}
+
                             <button
-                                type="submit" disabled={submitting || !email}
+                                type="submit" disabled={submitting || !email || (turnstile.enabled && !turnstile.token)}
                                 data-testid="forgot-submit-btn"
                                 className="w-full bg-[#FFD700] hover:bg-[#E5C200] disabled:opacity-50 text-black font-medium py-3 text-sm transition-colors flex items-center justify-center gap-2"
                             >

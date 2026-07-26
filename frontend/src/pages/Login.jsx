@@ -4,6 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
 import { Mail as EnvelopeSimple, Lock as LockKey, ShieldCheck, MailWarning, RefreshCw } from "lucide-react";
 import { StoicMark } from "@/components/StoicLogo";
+import { TurnstileWidget, useTurnstile, resetTurnstile } from "@/components/TurnstileWidget";
 
 export default function Login() {
     const navigate = useNavigate();
@@ -20,6 +21,7 @@ export default function Login() {
     const [unverifiedEmail, setUnverifiedEmail] = useState("");
     const [resendCooldown, setResendCooldown] = useState(0);
     const [loading, setLoading] = useState(false);
+    const turnstile = useTurnstile();
 
     const startOtpCooldown = (secs) => {
         setOtpResendCooldown(secs);
@@ -39,10 +41,17 @@ export default function Login() {
         try {
             const u = await login(email, password,
                 needs2fa ? totpCode : undefined,
-                needsEmailOtp ? emailOtp : undefined);
+                needsEmailOtp ? emailOtp : undefined,
+                turnstile.enabled ? turnstile.token : undefined);
             navigate(u?.must_change_password ? "/settings" : "/");
         } catch (err) {
             const detail = err?.response?.data?.detail;
+            if (detail?.code === "turnstile_required") {
+                setError(detail.message || "Please complete the human verification challenge.");
+                resetTurnstile();
+                turnstile.setToken("");
+                return;
+            }
             // Unverified account: surface friendly UI with resend link
             if (detail?.code === "account_unverified") {
                 setUnverifiedEmail(detail.email || email);
@@ -288,9 +297,13 @@ export default function Login() {
                             </div>
                         )}
 
+                        {turnstile.enabled && (
+                            <TurnstileWidget siteKey={turnstile.siteKey} onToken={turnstile.setToken} />
+                        )}
+
                         <button
                             type="submit"
-                            disabled={loading}
+                            disabled={loading || (turnstile.enabled && !turnstile.token)}
                             data-testid="login-submit-button"
                             className="w-full bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium py-3 text-sm transition-colors duration-150"
                         >

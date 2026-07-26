@@ -1358,3 +1358,17 @@ LESSON (recurring): any "SomeWord: test_xxx" colon phrasing in memory/*.md near 
 8. Iteration-139 verification (was pending): /api/admin/brokers, /api/admin/ops-console, /api/artifacts/{sha256} (200 + 404 bad hash) via curl; AdminOps + AdminBrokers UI via screenshots; Playwright e2e 11/11.
 LEARNING: running Playwright + full pytest concurrently against the preview URL trips Cloudflare bot protection (429 + "Just a moment" challenges) → phantom test failures. Re-run serially after ~60s.
 Manifest: 2,973 tests / 285 files (regenerated, --check passes).
+
+## Iter-155 (2026-07-26) — Cloudflare edge security platform (in-app half + runbook)
+User goal: Cloudflare as full security/edge layer (WAF, DDoS, rate limit, bot mgmt, Turnstile, Access, Tunnel). Plan tier: FREE. Real Turnstile keys provided (backend/.env TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY, hostname stoicaibot.com).
+**In-app (implemented + tested, 12/12 backend tests in test_iter155_cloudflare_edge.py):**
+1. Turnstile gate (`turnstile_gate.py`): admin-toggled (db.platform_state {_id:"turnstile"}, endpoints GET/POST /api/admin/settings/turnstile, public GET /api/auth/turnstile-config). Enforced on login/register/forgot-password via `turnstile_token` field. Fail-CLOSED on invalid/missing token (403 code=turnstile_required); fail-OPEN only on Cloudflare siteverify outage or secret misconfig (logged). **KEEP TOGGLE OFF IN PREVIEW** — test suites log in constantly; enable only in prod after adding hostname to widget.
+2. Security headers middleware (server.py): HSTS/nosniff/XFO DENY/Referrer-Policy/Permissions-Policy/CSP default-src 'none'/COOP/CORP on every API response.
+3. `security.client_ip`: CF-Connecting-IP honored when TRUST_CF_CONNECTING_IP=true (prod-behind-Tunnel only; preview false).
+4. Session idle timeout in consume_and_rotate (SESSION_IDLE_TIMEOUT_MINUTES, default 10080; 401 code=session_idle_timeout + family revoke).
+5. New-IP login alerts (`login_alerts.py`): db.notifications kind=security_new_login + best-effort email; computed pre-session-insert, fire-and-forget.
+**Frontend:** TurnstileWidget.jsx (+useTurnstile hook fetching /auth/turnstile-config) wired into Login/Register/ForgotPassword (widget + submit gating + turnstile_required error handling); AdminUsers TurnstileToggle card (testids turnstile-setting-card/turnstile-toggle/turnstile-widget).
+**Runbook:** docs/CLOUDFLARE_EDGE.md — Free-plan config: DNS proxy+Full(strict), Free Managed WAF + 5 custom rules, 1 rate-limit rule (API flood 50/10s), Bot Fight Mode, Turnstile enablement, Zero Trust Access on /admin*, cloudflared Tunnel config, edge Transform-Rule headers + Observatory validation, DDoS, Access Service Tokens as free API-Shield alternative, rollout order.
+LEARNING (CRITICAL): multiple search_replace calls on the SAME file in one parallel batch can silently drop an edit while reporting success (lost useTurnstile hook in Login.jsx → error boundary crash; lost /auth/turnstile-config endpoint). ALWAYS verify with grep after parallel same-file edits, or edit the same file sequentially.
+LEARNING: repeated e2e/pytest runs against the preview URL trip Cloudflare/ingress rate limits → random blank-page/429 test failures; wait ~90s and re-run to confirm real regressions.
+Manifest: 2,985 tests / 286 files.

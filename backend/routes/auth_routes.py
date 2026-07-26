@@ -41,6 +41,15 @@ from security import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+@router.get("/turnstile-config")
+async def turnstile_config():
+    """Public widget config — site key only, never the secret."""
+    from turnstile_gate import is_enabled, site_key, secret_key
+    db = get_db()
+    enabled = bool(await is_enabled(db) and secret_key() and site_key())
+    return {"enabled": enabled, "site_key": site_key() if enabled else None}
+
+
 async def _issue_session_cookies(db, uid: str, email: str, response,
                                  request: Request | None = None):
     """Access token + session-tracked (revocable, rotating) refresh token."""
@@ -68,6 +77,9 @@ def _user_to_out(user_doc: dict) -> UserOut:
 async def register(payload: RegisterRequest, request: Request, response: Response):
     db = get_db()
     email = payload.email.lower()
+    from turnstile_gate import require_turnstile
+    await require_turnstile(db, payload.turnstile_token, client_ip(request),
+                            action="register")
     await rate_limit(db, "register", client_ip(request),
                      int(os.environ.get("REGISTER_RATE_MAX_PER_HOUR", "30")),
                      3600,
@@ -162,6 +174,8 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     db = get_db()
     email = payload.email.lower()
     ip = client_ip(request)
+    from turnstile_gate import require_turnstile
+    await require_turnstile(db, payload.turnstile_token, ip, action="login")
     # Failed-attempt lockout: 5 wrong passwords per ip+email per 10 min.
     # Successful logins never count toward the limit.
     await check_failure_limit(db, "login", f"{ip}:{email}", 5, 600,
@@ -228,7 +242,13 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     uid = str(user["_id"])
     await clear_failures(db, "login", f"{ip}:{email}")
     await clear_failures(db, "2fa", email)
+    # New-IP login alert — computed BEFORE the new session is written.
+    from login_alerts import is_new_ip, schedule_new_login_alert
+    alert_new_ip = await is_new_ip(db, uid, ip)
     await _issue_session_cookies(db, uid, email, response, request)
+    if alert_new_ip:
+        schedule_new_login_alert(db, user, ip,
+                                 request.headers.get("user-agent", ""))
     out = _user_to_out({**user, "_id": uid}).model_dump()
     out["admin_mfa_enforced"] = (
         os.environ.get("ADMIN_MFA_ENFORCED", "true").lower() == "true")
@@ -366,6 +386,9 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request):
         "message": "If an account exists for that email, a reset link has been sent.",
     }
     db = get_db()
+    from turnstile_gate import require_turnstile
+    await require_turnstile(db, payload.turnstile_token, client_ip(request),
+                            action="password_reset")
     await rate_limit(db, "pwreset", client_ip(request),
                      int(os.environ.get("PWRESET_RATE_MAX_PER_HOUR", "20")),
                      3600, "Too many reset requests. Try later.",
