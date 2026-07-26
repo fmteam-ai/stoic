@@ -107,13 +107,44 @@ _CACHE: dict = {}
 _CACHE_TTL = 300.0
 
 
+# iter-158 — broker capability profiles: engines consult these instead of
+# hard-coded assumptions. Registry entries may override any subset.
+DEFAULT_CAPABILITIES = {
+    "position_mode": "hedging",      # hedging | netting
+    "fill_policy": "IOC",            # IOC | FOK | RETURN
+    "partial_fills": True,
+    "max_pending_orders": 200,
+    "min_lot": 0.01,
+    "lot_step": 0.01,
+    "supports_stop_limit": True,
+    "trailing_stops_server_side": False,
+}
+
+
+def merged_capabilities(entry: dict | None) -> dict:
+    caps = dict(DEFAULT_CAPABILITIES)
+    if entry:
+        overrides = entry.get("capabilities") or {}
+        caps.update({k: v for k, v in overrides.items()
+                     if k in DEFAULT_CAPABILITIES})
+    return caps
+
+
+async def capabilities_for(db, server_name: str | None) -> dict:
+    """Full capability profile for a broker server (defaults when unknown)."""
+    entry = await resolve_registry(db, server_name)
+    return merged_capabilities(entry)
+
+
 def invalidate_cache() -> None:
     _CACHE.clear()
 
 
 async def resolve_registry(db, server_name: str | None) -> dict | None:
     """Match a reported/configured broker server to a registry entry via
-    normalized alias comparison (exact, then prefix)."""
+    normalized alias comparison (exact, then prefix). The returned entry
+    always carries a full `capabilities` block (registry overrides merged
+    over defaults) so callers never hard-code broker assumptions."""
     if not server_name:
         return None
     key = normalize_server(server_name)
@@ -130,6 +161,7 @@ async def resolve_registry(db, server_name: str | None) -> dict | None:
     if entry:
         entry = dict(entry)
         entry["id"] = str(entry.pop("_id"))
+        entry["capabilities"] = merged_capabilities(entry)
     _CACHE[key] = (time.monotonic(), entry)
     return entry
 
@@ -143,3 +175,4 @@ async def registry_symbol_for(server_name: str | None,
         return None
     mapped = (entry.get("symbol_map") or {}).get(base_symbol)
     return mapped or None
+

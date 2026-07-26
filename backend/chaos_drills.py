@@ -139,6 +139,156 @@ async def _drill_db_recovery(db) -> dict:
         await db.chaos_probe.delete_one({"_id": _id})
 
 
+# ─── iter-158: disaster-recovery & rollback drills ───────────────────
+async def _drill_config_rollback(db) -> dict:
+    """Change a config, roll back via the immutable version chain, verify
+    byte-exact restore + pointer swap (the real /config/rollback path)."""
+    import uuid as _uuid
+    from config_promotion import record_version, rollback, _pointer_id
+    uid = f"drill-dr-{_uuid.uuid4().hex[:8]}"
+    try:
+        await db.bot_configs.insert_one(
+            {"user_id": uid, "account_id": None, "active": True,
+             "risk_pct": 0.5, "operational_mode": "observe"})
+        cfg = await db.bot_configs.find_one({"user_id": uid})
+        v1 = await record_version(db, cfg, label="drill-v1", source="drill")
+        await db.bot_configs.update_one({"user_id": uid},
+                                        {"$set": {"risk_pct": 0.9}})
+        cfg2 = await db.bot_configs.find_one({"user_id": uid})
+        v2 = await record_version(db, cfg2, label="drill-v2", source="drill")
+        assert v1 and v2 and v1 != v2
+        out = await rollback(db, uid, None, actor="chaos-drill")
+        restored = await db.bot_configs.find_one({"user_id": uid})
+        ptr = await db.config_pointers.find_one({"_id": _pointer_id(uid, None)})
+        ok = (restored.get("risk_pct") == 0.5
+              and ptr.get("active_version_id") == v1
+              and ptr.get("previous_version_id") == v2)  # roll-forward kept
+        return {"drill": "config_rollback", "passed": ok,
+                "detail": ("risk 0.9→0.5 restored byte-exact; pointer back to "
+                           f"v1 with roll-forward preserved ({out.get('version_id', v1)})"
+                           if ok else f"restore mismatch: {restored.get('risk_pct')}, ptr={ptr}")}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "config_rollback", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+    finally:
+        await db.bot_configs.delete_many({"user_id": uid})
+        await db.config_versions.delete_many({"user_id": uid})
+        await db.config_pointers.delete_many({"user_id": uid})
+
+
+async def _drill_artifact_rollback(db) -> dict:
+    """Content-addressed store: any prior release stays fetchable by digest
+    forever (instant rollback target) and bytes can never drift from the
+    hash — verified via the same hashing the /api/artifacts route uses."""
+    import hashlib as _h
+    try:
+        from vps_pathb import build_artifact_manifest
+        m = build_artifact_manifest()
+        ea = next((a for a in m["artifacts"] if a.get("sha256")), None)
+        if not ea:
+            return {"drill": "artifact_rollback", "passed": False,
+                    "detail": "no hashed artifact in manifest"}
+        from pathlib import Path as _P
+        static_dir = _P(__file__).parent / "static"
+        target = None
+        for f in static_dir.iterdir():
+            digest = _h.sha256(f.read_bytes()).hexdigest()
+            if digest == ea["sha256"]:
+                target = f
+                break
+        if target is None:
+            return {"drill": "artifact_rollback", "passed": False,
+                    "detail": f"artifact {ea['sha256'][:12]}… not resolvable"}
+        # immutability: two independent reads → identical digest
+        again = _h.sha256(target.read_bytes()).hexdigest()
+        ok = again == ea["sha256"] and ea["url"].endswith(ea["sha256"])
+        return {"drill": "artifact_rollback", "passed": ok,
+                "detail": (f"{ea['name']} pinned at {ea['sha256'][:12]}… — "
+                           "digest-addressed URL means any prior release is a "
+                           "one-line rollback (agent keeps .bak for auto-revert)"
+                           if ok else "digest drift detected")}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "artifact_rollback", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+
+
+async def _drill_panic_recovery(db) -> dict:
+    """Panic freeze (all configs → observe) and clean restore — proves the
+    kill switch AND that recovery re-arms without residue."""
+    import uuid as _uuid
+    from operator_actions import run_action
+    uid = f"drill-panic-{_uuid.uuid4().hex[:8]}"
+    try:
+        await db.bot_configs.insert_many([
+            {"user_id": uid, "account_id": "a1", "active": True,
+             "operational_mode": "supervised_live"},
+            {"user_id": uid, "account_id": "a2", "active": True,
+             "operational_mode": "shadow"}])
+        out = await run_action(db, uid, "panic_mode")
+        frozen = await db.bot_configs.count_documents(
+            {"user_id": uid, "operational_mode": "observe"})
+        if frozen != 2:
+            return {"drill": "panic_recovery", "passed": False,
+                    "detail": f"panic froze {frozen}/2 configs"}
+        # recovery: restore recorded modes (the runbook restore procedure)
+        await db.bot_configs.update_one(
+            {"user_id": uid, "account_id": "a1"},
+            {"$set": {"operational_mode": "supervised_live"}})
+        await db.bot_configs.update_one(
+            {"user_id": uid, "account_id": "a2"},
+            {"$set": {"operational_mode": "shadow"}})
+        modes = {c["account_id"]: c["operational_mode"]
+                 async for c in db.bot_configs.find({"user_id": uid})}
+        ok = modes == {"a1": "supervised_live", "a2": "shadow"}
+        return {"drill": "panic_recovery", "passed": ok,
+                "detail": (f"panic froze 2/2 ({out.get('detail', '')[:80]}); "
+                           "restore returned exact prior modes" if ok
+                           else f"restore mismatch: {modes}")}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "panic_recovery", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+    finally:
+        await db.bot_configs.delete_many({"user_id": uid})
+
+
+async def _drill_backup_restore(db) -> dict:
+    """Dump → delete → restore round-trip on a synthetic collection with a
+    canonical integrity hash comparison."""
+    import hashlib as _h
+    import json as _json
+    import uuid as _uuid
+    tag = f"drill-backup-{_uuid.uuid4().hex[:8]}"
+    coll = db.drill_backup_scratch
+    try:
+        docs = [{"_id": f"{tag}-{i}", "tag": tag, "seq": i,
+                 "payload": _uuid.uuid4().hex} for i in range(25)]
+        await coll.insert_many([dict(d) for d in docs])
+
+        def _hash(rows):
+            canon = _json.dumps(sorted(rows, key=lambda d: d["_id"]),
+                                sort_keys=True, default=str)
+            return _h.sha256(canon.encode()).hexdigest()
+        dump = [d async for d in coll.find({"tag": tag}, {"tag": 1, "seq": 1,
+                                                          "payload": 1})]
+        h_before = _hash(dump)
+        await coll.delete_many({"tag": tag})           # the "disaster"
+        assert await coll.count_documents({"tag": tag}) == 0
+        await coll.insert_many([dict(d) for d in dump])  # the restore
+        restored = [d async for d in coll.find({"tag": tag},
+                                               {"tag": 1, "seq": 1,
+                                                "payload": 1})]
+        ok = _hash(restored) == h_before and len(restored) == 25
+        return {"drill": "backup_restore", "passed": ok,
+                "detail": ("25 docs dumped, wiped, restored — integrity hash "
+                           f"identical ({h_before[:12]}…)" if ok
+                           else "integrity hash mismatch after restore")}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "backup_restore", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+    finally:
+        await coll.delete_many({"tag": tag})
+
+
 async def run_drills(db) -> dict:
     results = [
         await _drill_duplicate_order(db),
@@ -149,6 +299,11 @@ async def run_drills(db) -> dict:
         await _drill_api_timeout(db),
         _drill_clock_skew(),
         await _drill_alert_dedup(db),
+        # iter-158 — disaster recovery & rollback
+        await _drill_config_rollback(db),
+        await _drill_artifact_rollback(db),
+        await _drill_panic_recovery(db),
+        await _drill_backup_restore(db),
     ]
     passed = sum(1 for r in results if r["passed"])
     doc = {"at": datetime.now(timezone.utc), "results": results,

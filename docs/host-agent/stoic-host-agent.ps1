@@ -116,6 +116,7 @@ function Test-UpdateManifest($cfg) {
     # Signed self-update: Ed25519 manifest with PINNED key; SHA-256 verify
     # BEFORE swap; previous file kept as .bak for automatic rollback.
     # Never installs from a mutable URL — only /api/artifacts/{sha256}.
+    $deployed = @()
     try {
         $m = Invoke-RestMethod -Uri "$($cfg.api_base)/api/infra/artifacts/manifest" -TimeoutSec 15
         if ($m.signature.alg -ne "Ed25519") { throw "unsigned manifest" }
@@ -133,7 +134,7 @@ function Test-UpdateManifest($cfg) {
                     $got = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
                     if ($got -ne $a.sha256) { Remove-Item -Force $tmp; throw "sha256 mismatch for $($a.name)" }
                     if (Test-Path $target) { Copy-Item -Force $target "$target.bak" }
-                    try { Move-Item -Force $tmp $target }
+                    try { Move-Item -Force $tmp $target; $deployed += $a.name }
                     catch {
                         # rollback: restore the previous verified artifact
                         if (Test-Path "$target.bak") { Copy-Item -Force "$target.bak" $target }
@@ -142,7 +143,24 @@ function Test-UpdateManifest($cfg) {
                 }
             }
         }
-    } catch { Write-EventLog -LogName Application -Source $ServiceName -EventId 100 -EntryType Warning -Message "update check failed: $_" -ErrorAction SilentlyContinue }
+        foreach ($name in $deployed) {
+            Report-DeployStatus $cfg $true $name "installed + hash-verified"
+        }
+    } catch {
+        Report-DeployStatus $cfg $false "update" "$_"
+        Write-EventLog -LogName Application -Source $ServiceName -EventId 100 -EntryType Warning -Message "update check failed: $_" -ErrorAction SilentlyContinue
+    }
+}
+
+function Report-DeployStatus($cfg, $ok, $artifact, $detail) {
+    # Deployment auditability: every attempt lands in the backend; failures
+    # raise a centralized ops alert (deployment_failed).
+    try {
+        $body = @{ agent_token = $cfg.agent_token; ok = $ok; artifact = $artifact;
+                   detail = "$detail"; agent_version = "2.1.0" } | ConvertTo-Json
+        Invoke-RestMethod -Method Post -Uri "$($cfg.api_base)/api/infra/agent/deploy-status" `
+            -ContentType "application/json" -Body $body -TimeoutSec 15 | Out-Null
+    } catch {}
 }
 
 function Renew-TokenIfDue($cfg) {

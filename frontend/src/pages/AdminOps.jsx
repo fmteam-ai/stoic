@@ -2,7 +2,102 @@ import { useEffect, useState, useCallback } from "react";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Server, Plug, Cpu, AlertTriangle, Activity, Database, CreditCard, Users, ListOrdered, ShieldCheck, Receipt, FlaskConical, Play } from "lucide-react";
+import { Loader2, RefreshCw, Server, Plug, Cpu, AlertTriangle, Activity, Database, CreditCard, Users, ListOrdered, ShieldCheck, Receipt, FlaskConical, Play, TrendingDown, Gauge } from "lucide-react";
+
+function StressTest() {
+    const [data, setData] = useState(null);
+    const [severity, setSeverity] = useState("moderate");
+    const [running, setRunning] = useState(false);
+    const load = useCallback(async () => {
+        try { setData((await api.get("/ops/stress-test/runs")).data); }
+        catch { setData({ runs: [], severities: [] }); }
+    }, []);
+    useEffect(() => { load(); }, [load]);
+    const run = async () => {
+        setRunning(true);
+        try {
+            const { data: r } = await api.post(`/ops/stress-test/run?severity=${severity}`);
+            toast[r.verdict === "STAYED_CALM" ? "success" : "error"](
+                `Stress test (${severity}): ${r.verdict === "STAYED_CALM" ? "bot stayed calm" : "bot PANICKED"} — ${r.passed}/${r.passed + r.failed} layers held`);
+            await load();
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setRunning(false); }
+    };
+    const last = data?.runs?.[0];
+    return (
+        <Panel title="Stress Test — flash crash" icon={TrendingDown} testid="ops-panel-stress-test">
+            <div className="flex items-center justify-between mb-2 gap-2">
+                <select value={severity} onChange={e => setSeverity(e.target.value)}
+                    data-testid="stress-test-severity"
+                    className="bg-[#0A0A0A] border border-[#1F1F1F] text-xs text-[#A1A1AA] px-2 py-1.5 font-mono">
+                    <option value="mild">MILD −3%</option>
+                    <option value="moderate">MODERATE −8%</option>
+                    <option value="severe">SEVERE −15%</option>
+                </select>
+                <button onClick={run} disabled={running} data-testid="stress-test-run-btn"
+                    className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 flex items-center gap-1.5 shrink-0">
+                    {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                    {running ? "CRASHING…" : "SIMULATE CRASH"}
+                </button>
+            </div>
+            <div className="text-xs text-[#71717A] mb-2">
+                Replays a sudden market drop through the real defense layers —
+                does the bot stay calm under pressure?
+            </div>
+            {!last && <div className="text-xs text-[#52525B]" data-testid="stress-test-empty">No stress tests yet.</div>}
+            {last && (
+                <div data-testid="stress-test-results">
+                    <div className={`text-xs font-mono mb-1.5 ${last.verdict === "STAYED_CALM" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
+                        {last.verdict === "STAYED_CALM" ? "✓ STAYED CALM" : "✗ PANICKED"} · {last.severity} ({last.params?.drop_pct}% drop) · {new Date(last.at).toLocaleString()}
+                    </div>
+                    {last.checks.map(c => (
+                        <div key={c.layer} className="flex items-start gap-2 py-0.5 text-xs" title={c.detail}>
+                            <span className={`shrink-0 font-mono ${c.status === "pass" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
+                                {c.status === "pass" ? "CALM" : "FAIL"}
+                            </span>
+                            <span className="text-[#A1A1AA]">{c.layer.replaceAll("_", " ")}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </Panel>
+    );
+}
+
+function SloPanel() {
+    const [slos, setSlos] = useState(null);
+    useEffect(() => {
+        api.get("/ops/slo").then(r => setSlos(r.data.slos)).catch(() => setSlos({}));
+        const t = setInterval(() => {
+            api.get("/ops/slo").then(r => setSlos(r.data.slos)).catch(() => {});
+        }, 30000);
+        return () => clearInterval(t);
+    }, []);
+    const toneFor = (s) => s?.status === "ok" ? "text-[#00FF41]"
+        : s?.status === "at_risk" ? "text-[#FFD700]"
+        : s?.status === "breached" ? "text-[#FF3B30]" : "text-[#52525B]";
+    return (
+        <Panel title="SLOs & Error Budgets" icon={Gauge} testid="ops-panel-slo">
+            {!slos && <Loader2 className="w-4 h-4 animate-spin text-[#52525B]" />}
+            {slos && Object.entries(slos).map(([k, s]) => (
+                <div key={k} className="py-1 border-b border-[#141414] last:border-0" data-testid={`slo-${k}`}>
+                    <div className="flex justify-between text-xs">
+                        <span className="text-[#A1A1AA]">{s.title}</span>
+                        <span className={`font-mono ${toneFor(s)}`}>
+                            {s.compliance_pct != null ? `${s.compliance_pct}%` : "no data"}
+                        </span>
+                    </div>
+                    <div className="flex justify-between text-[10px] text-[#52525B] font-mono">
+                        <span>target {s.target_pct}% · {s.window}</span>
+                        <span className={toneFor(s)}>
+                            {s.budget_consumed_pct != null ? `budget ${s.budget_consumed_pct}% used` : "—"}
+                        </span>
+                    </div>
+                </div>
+            ))}
+        </Panel>
+    );
+}
 
 function RuntimeValidation() {
     const [data, setData] = useState(null);
@@ -298,6 +393,8 @@ export default function AdminOps() {
                 </Panel>
 
                 <RuntimeValidation />
+                <StressTest />
+                <SloPanel />
             </div>
         </AppLayout>
     );

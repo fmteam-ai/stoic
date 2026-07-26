@@ -334,6 +334,36 @@ async def agent_renew_token_ep(payload: dict):
         raise HTTPException(status_code=401, detail=str(e))
 
 
+@router.post("/agent/deploy-status")
+async def agent_deploy_status_ep(payload: dict):
+    """iter-158 — agents report each update attempt; failures raise a
+    centralized ops alert so a broken rollout is visible immediately."""
+    from vps_agent import agent_by_token
+    db = get_db()
+    try:
+        agent = await agent_by_token(db, str(payload.get("agent_token") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    status = "success" if payload.get("ok") else "failure"
+    doc = {"agent_id": agent["agent_id"],
+           "artifact": str(payload.get("artifact") or "")[:80],
+           "sha256": str(payload.get("sha256") or "")[:64],
+           "status": status,
+           "detail": str(payload.get("detail") or "")[:400],
+           "agent_version": str(payload.get("agent_version") or "")[:20],
+           "at": datetime.now(timezone.utc).isoformat()}
+    await db.agent_deployments.insert_one(dict(doc))
+    if status == "failure":
+        from alerting import raise_alert
+        await raise_alert(
+            db, kind="deployment_failed", severity="critical",
+            message=(f"agent {agent['agent_id']} failed to deploy "
+                     f"{doc['artifact'] or 'artifact'}: {doc['detail'][:160]}"),
+            dedup_key=f"deploy_fail:{agent['agent_id']}:{doc['artifact']}")
+    doc.pop("_id", None)
+    return {"recorded": True, **doc}
+
+
 @router.post("/agent/hardening")
 async def agent_hardening_ep(payload: dict):
     from vps_agent import report_hardening

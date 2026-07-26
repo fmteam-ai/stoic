@@ -123,6 +123,11 @@ def _supervise(name: str, loop_name: str, factory, stats: dict):
             started = asyncio.get_event_loop().time()
             stats[loop_name]["last_started_at"] = datetime.now(timezone.utc)
             try:
+                from correlation import new_correlation_id
+                new_correlation_id(prefix=f"wrk-{loop_name}-")
+            except Exception:  # noqa: BLE001
+                pass
+            try:
                 await factory()
                 raise RuntimeError("loop coroutine returned unexpectedly")
             except asyncio.CancelledError:

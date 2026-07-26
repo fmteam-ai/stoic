@@ -346,6 +346,49 @@ async def chaos_run(request: Request):
     return await run_drills(get_db())
 
 
+@router.post("/ops/stress-test/run")
+async def stress_test_run(request: Request, severity: str = "moderate"):
+    """iter-158 — flash-crash simulator: replays a sudden market drop through
+    the real defense layers and scores whether the bot stays calm."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from stress_test import run_stress_test, SEVERITIES
+    if severity not in SEVERITIES:
+        return JSONResponse(status_code=400,
+                            content={"detail": f"severity must be one of "
+                                               f"{sorted(SEVERITIES)}"})
+    out = await run_stress_test(get_db(), severity=severity,
+                                actor=actor or "admin")
+    out["at"] = out["at"].isoformat()
+    return out
+
+
+@router.get("/ops/stress-test/runs")
+async def stress_test_runs(request: Request):
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from stress_test import SEVERITIES
+    db = get_db()
+    runs = await db.stress_tests.find({}, {"_id": 0},
+                                      sort=[("at", -1)]).limit(10).to_list(10)
+    for r in runs:
+        if hasattr(r.get("at"), "isoformat"):
+            r["at"] = r["at"].isoformat()
+    return {"severities": sorted(SEVERITIES), "runs": runs}
+
+
+@router.get("/ops/slo")
+async def slo_status(request: Request):
+    """iter-158 — SLO compliance + error-budget consumption."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from slo import compute_slos
+    return {"slos": await compute_slos(get_db())}
+
+
 @router.get("/ops/alerts")
 async def list_alerts(request: Request, include_acked: bool = False,
                       limit: int = 100):

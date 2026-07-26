@@ -81,6 +81,10 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("trading-bot")
 
+# iter-158 — correlation ids on every log record (API + workers)
+from correlation import install as _install_correlation, set_correlation_id
+_install_correlation()
+
 from contextlib import asynccontextmanager
 
 
@@ -130,6 +134,7 @@ async def request_id_middleware(request, call_next):
     import time as _t
     import json as _json
     rid = (request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16])[:64]
+    set_correlation_id(rid)
     t0 = _t.perf_counter()
     response = await call_next(request)
     response.headers["X-Request-ID"] = rid

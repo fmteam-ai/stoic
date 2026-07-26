@@ -1393,3 +1393,14 @@ B. **Runtime Validation Harness** (backend/runtime_validation.py, 9 scenarios pr
 C. **docs/host-agent/SIGNED_MSI.md**: WiX v4 project + Azure Trusted Signing GitHub Actions job + manifest inclusion + on-VPS verification chain. Requires user to buy code-signing cert (EV/Trusted Signing recommended).
 Tests: tests/test_iter157_runtime_validation.py (8 tests). Regression 505 passed. Manifest 2,993 tests / 287 files.
 NOTE: vps_agent.agent_by_token RAISES ValueError (never returns None).
+
+## Iter-158 (2026-07-26) — DR drills, Stress Test mode, SLOs, correlation IDs, capabilities, deploy alerts
+User approved full scope (#1,#2,#3,#4,#6,#7; OTel deferred — correlation IDs chosen instead).
+1. **DR/rollback drills** added to chaos campaign (now 12 drills, all pass): config_rollback (real config_promotion.rollback + pointer swap), artifact_rollback (content-addressed digest immutability), panic_recovery (operator panic freeze + mode restore), backup_restore (dump/wipe/restore + integrity hash).
+2. **Stress Test mode** (`stress_test.py` + POST /api/ops/stress-test/run?severity=mild|moderate|severe, GET .../runs; AdminOps "Stress Test — flash crash" panel, testids ops-panel-stress-test, stress-test-run-btn/severity/results): synth crash bars through REAL gates — abnormal_market_check block, dynamic_spread_limit veto, drawdown_check 3% breaker, compute_position_size floor, post-crash recovery. Verdict STAYED_CALM/PANICKED → db.stress_tests. All severities STAYED_CALM (backend + UI verified).
+3. **Correlation IDs** (`correlation.py`): contextvar + logging filter installed in server.py (format now includes [%(rid)s]); middleware sets rid; workers/base._supervise sets wrk-{loop}-{id} per loop start. X-Request-ID echo already existed (iter-152).
+4. **SLOs/error budgets** (`slo.py` + GET /api/ops/slo; AdminOps SloPanel testid ops-panel-slo, slo-{key}): api_latency(<800ms 99%), api_availability(5xx<1%), heartbeat_freshness(95%), deployment_success(95%/30d from db.agent_deployments).
+5. **Broker capability profiles**: broker_registry DEFAULT_CAPABILITIES + merged_capabilities/capabilities_for; resolve_registry now returns merged capabilities; admin broker PUT/POST accepts whitelisted capability overrides (PUT is keyed by broker_id slug, NOT mongo id).
+6. **Deployment auditability/alerts**: POST /api/infra/agent/deploy-status (agent token) → db.agent_deployments + raise_alert severity=critical (alerting.SEVERITIES only allows info/warning/critical!) dedup deploy_fail:{agent}:{artifact}; ps1 Report-DeployStatus wired into Test-UpdateManifest.
+Tests: tests/test_iter158_resilience.py (11 passed). Regression 487 passed. Manifest 3,006 tests / 288 files.
+LEARNING (repeat): NEVER put two search_replace edits to the SAME file in one parallel batch — corrupted broker_registry.py again (garbage duplicate block + lost edit). One edit per file per batch, verify with grep/python -c import after.

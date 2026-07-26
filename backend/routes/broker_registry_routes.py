@@ -61,6 +61,13 @@ def _validate(payload: dict) -> dict:
     if not isinstance(sessions, list):
         raise HTTPException(status_code=400, detail="sessions must be a list")
     out["sessions"] = sessions[:10]
+    # iter-158 — capability overrides (unknown keys dropped)
+    caps = payload.get("capabilities") or {}
+    if not isinstance(caps, dict):
+        raise HTTPException(status_code=400, detail="capabilities must be an object")
+    from broker_registry import DEFAULT_CAPABILITIES
+    out["capabilities"] = {k: v for k, v in caps.items()
+                           if k in DEFAULT_CAPABILITIES}
     out["updated_at"] = datetime.now(timezone.utc).isoformat()
     return out
 
