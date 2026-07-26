@@ -650,7 +650,10 @@ async def report_artifact_digest(payload: dict):
     db = get_db()
     reporter = None
     if token:
-        agent = await agent_by_token(db, token)
+        try:
+            agent = await agent_by_token(db, token)
+        except ValueError:
+            raise HTTPException(status_code=401, detail="unknown agent token")
         reporter = {"kind": "agent", "agent_id": str(agent["_id"])}
     elif bridge_token:
         acc = await db.accounts.find_one({"bridge_token": bridge_token})

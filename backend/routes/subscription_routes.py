@@ -33,7 +33,16 @@ hook_router = APIRouter(prefix="/webhook")
 def _stripe_client(host_url: str) -> StripeCheckout:
     key = os.environ["STRIPE_API_KEY"]
     webhook_url = f"{host_url.rstrip('/')}/api/webhook/stripe"
-    return StripeCheckout(api_key=key, webhook_url=webhook_url)
+    # When a signing secret is configured (production / claimed sandbox),
+    # emergentintegrations verifies the Stripe-Signature via
+    # stripe.Webhook.construct_event. In the shared preview sandbox no secret
+    # exists, so we ALSO re-verify every grant against Stripe directly
+    # (see stripe_webhook) — forged events can never fabricate a paid status.
+    return StripeCheckout(
+        api_key=key,
+        webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET") or None,
+        webhook_url=webhook_url,
+    )
 
 
 @sub_router.get("/plans")
@@ -198,11 +207,40 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="webhook signature invalid") from e
     # Only act on terminal payment events
     et = (getattr(event, "event_type", "") or "").lower()
+    signature_verified = bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
     if event.payment_status == "paid" and event.session_id:
-        await apply_successful_payment(event.session_id, source="webhook")
-    elif event.session_id and ("refund" in et or "dispute" in et
-                               or "charge_failed" in et):
-        await revoke_payment(event.session_id, reason=et or "refund")
+        # SEC — NEVER trust the webhook body for granting paid entitlement.
+        # Independently re-confirm with Stripe (works even when no signing
+        # secret is configured), so a forged/unsigned event cannot fabricate
+        # a paid subscription or affiliate commission.
+        try:
+            status = await stripe.get_checkout_status(event.session_id)
+        except Exception as e:
+            logger.warning("Stripe re-verify failed for session=%s: %s: %s",
+                           event.session_id, type(e).__name__, e)
+            raise HTTPException(
+                status_code=502,
+                detail="Could not verify payment with Stripe.") from e
+        if status.payment_status == "paid":
+            await apply_successful_payment(event.session_id, source="webhook")
+        else:
+            logger.warning("Webhook 'paid' for session=%s rejected — Stripe "
+                           "reports payment_status=%s (possible forgery)",
+                           event.session_id, status.payment_status)
+            raise HTTPException(status_code=400,
+                                detail="payment not confirmed by Stripe")
+    elif (event.session_id and ("refund" in et or "dispute" in et
+                                or "charge_failed" in et)):
+        # Revocation from a webhook is honored ONLY when the signature was
+        # cryptographically verified — otherwise a forged refund event could
+        # grief a paying user. Unsigned revokes are ignored; admins revoke
+        # via the authenticated /subscription/admin/refund endpoint.
+        if signature_verified:
+            await revoke_payment(event.session_id, reason=et or "refund")
+        else:
+            logger.warning("Ignoring UNSIGNED revoke webhook (%s) for "
+                           "session=%s — no STRIPE_WEBHOOK_SECRET", et,
+                           event.session_id)
     logger.info("Stripe webhook event_type=%s session=%s status=%s",
                 event.event_type, event.session_id, event.payment_status)
     return {"ok": True}

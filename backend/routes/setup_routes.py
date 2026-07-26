@@ -160,10 +160,13 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
     if not account:
         raise HTTPException(status_code=410, detail="Linked account no longer exists")
 
-    # Consume — single-use.
+    # Consume — single-use, ATOMIC. The conditional update on consumed_at=None
+    # closes the check-then-act TOCTOU window so two concurrent installers can
+    # never both redeem the same token.
     client_host = request.client.host if request.client else None
-    await db.pairing_tokens.update_one(
-        {"_id": pairing["_id"]},
+    claimed = await db.pairing_tokens.find_one_and_update(
+        {"_id": pairing["_id"],
+         "$or": [{"consumed_at": None}, {"consumed_at": {"$exists": False}}]},
         {"$set": {
             "consumed_at": datetime.now(timezone.utc).isoformat(),
             "consumed_by_hostname": payload.hostname,
@@ -171,6 +174,12 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
             "installer_version": payload.installer_version,
         }},
     )
+    if not claimed:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "already_used",
+                    "message": "This pairing token was already redeemed."},
+        )
 
     # Also mark on the account so the user sees "installer paired at X" in UI.
     await db.accounts.update_one(
