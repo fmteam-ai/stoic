@@ -484,12 +484,39 @@ async def deployment_health_status(request: Request):
     st = await db.platform_state.find_one({"_id": "release_state"}) or {}
     last_auto = await db.release_history.find_one(
         {"event": "auto_rollback"}, {"_id": 0}, sort=[("at", -1)])
+    trusted_uids = await dh._trusted_user_ids(db)
+    trusted_health = await dh.score_fleet(
+        db, dh._trusted_agent_filter(trusted_uids))
     return {"health": await dh.score_fleet(db),
+            "trusted_health": trusted_health,
+            "release_trust": {
+                "configured": bool(trusted_uids),
+                "trusted_tenants": len(trusted_uids),
+                "auto_rollback_enabled": bool(trusted_uids)
+                                         or trusted_health["fleet_size"] > 0},
             "watch": st.get("deploy_watch"),
             "last_auto_rollback": last_auto,
             "policy": {"bake_hours": dh.BAKE_HOURS,
                        "min_score": dh.MIN_SCORE,
-                       "max_drop": dh.MAX_DROP}}
+                       "max_drop": dh.MAX_DROP,
+                       "min_fail_tenants": dh.MIN_FAIL_TENANTS}}
+
+
+@router.post("/ops/agents/{agent_id}/release-trust")
+async def set_agent_release_trust(agent_id: str, payload: dict,
+                                  request: Request):
+    """4th-audit hardening — designate/undesignate an agent as release-trusted.
+    ONLY release-trusted agents' telemetry can trigger an automatic rollback,
+    so tenant-controlled agents can never move fleet release state."""
+    allowed, actor = await _ops_admin_step_up(request, "release_trust")
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    trusted = bool(payload.get("trusted", True))
+    r = await get_db().vps_agents.update_one(
+        {"agent_id": agent_id}, {"$set": {"release_trusted": trusted}})
+    if r.matched_count == 0:
+        return JSONResponse(status_code=404, content={"detail": "agent not found"})
+    return {"agent_id": agent_id, "release_trusted": trusted, "by": actor}
 
 
 @router.post("/ops/deployment-health/check")

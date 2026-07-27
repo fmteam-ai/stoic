@@ -26,16 +26,45 @@ MIN_FAIL_TENANTS = int(os.environ.get("DEPLOY_MIN_FAIL_TENANTS",
 MIN_FAIL_AGENTS = MIN_FAIL_TENANTS  # back-compat alias
 
 
-async def distinct_fail_tenants(db, since_iso, digests=None) -> int:
+async def _trusted_user_ids(db) -> set:
+    """Operator-designated release-trust tenants (env RELEASE_TRUST_USER_IDS)
+    plus any agent explicitly flagged release_trusted=True by an admin. Only
+    these move release state automatically — tenant-controlled telemetry
+    (SEC-001/002, 4th audit) is display-only and never triggers rollback."""
+    ids = {u.strip() for u in
+           (os.environ.get("RELEASE_TRUST_USER_IDS") or "").split(",")
+           if u.strip()}
+    async for a in db.vps_agents.find(
+            {"release_trusted": True, "revoked": {"$ne": True}},
+            {"user_id": 1}):
+        if a.get("user_id"):
+            ids.add(str(a["user_id"]))
+    return ids
+
+
+def _trusted_agent_filter(trusted_user_ids: set) -> dict:
+    """Mongo filter for release-trusted agents."""
+    ors = [{"release_trusted": True}]
+    if trusted_user_ids:
+        ors.append({"user_id": {"$in": list(trusted_user_ids)}})
+    return {"revoked": {"$ne": True}, "$or": ors}
+
+
+async def distinct_fail_tenants(db, since_iso, digests=None,
+                                only_user_ids=None) -> int:
     """Number of DISTINCT owning tenants (meta.user_id) that raised a fleet
     deployment_failed alert since `since_iso`, optionally scoped to a set of
-    release `digests` (meta.sha256). Counting tenants — not agent_ids —
-    defeats a single customer minting many agents to fake corroboration."""
+    release `digests` (meta.sha256) and to a trusted `only_user_ids` set.
+    Counting tenants — not agent_ids — defeats a single customer minting many
+    agents; restricting to trusted tenants defeats fake-account corroboration."""
     q = {"kind": "deployment_failed", "created_at": {"$gte": since_iso}}
     if digests:
         q["meta.sha256"] = {"$in": list(digests)}
     ids = await db.ops_alerts.distinct("meta.user_id", q)
-    return len([i for i in ids if i])
+    ids = [i for i in ids if i]
+    if only_user_ids is not None:
+        ids = [i for i in ids if str(i) in only_user_ids]
+    return len(ids)
 
 
 # Legacy name kept for callers/tests that scoped by agent (now tenant-based).
@@ -57,14 +86,16 @@ def _aware(v):
         return None
 
 
-async def score_fleet(db) -> dict:
+async def score_fleet(db, agent_filter=None) -> dict:
     """Weighted health score: 40% heartbeat freshness, 30% MT5 connectivity,
-    20% deploy-failure alerts, 10% command-failure alerts (last 2h)."""
+    20% deploy-failure alerts, 10% command-failure alerts (last 2h).
+    `agent_filter` restricts which agents are aggregated (e.g. trusted-only
+    for the auto-rollback decision)."""
     now = _now()
     total = fresh = mt5_ok = mt5_reporting = 0
+    q = agent_filter if agent_filter is not None else {"revoked": {"$ne": True}}
     async for a in db.vps_agents.find(
-            {"revoked": {"$ne": True}},
-            {"last_heartbeat": 1, "last_metrics": 1}).limit(500):
+            q, {"last_heartbeat": 1, "last_metrics": 1}).limit(500):
         total += 1
         hb = _aware(a.get("last_heartbeat"))
         if hb and (now - hb).total_seconds() <= HB_FRESH_SEC:
@@ -130,22 +161,29 @@ async def watch_deployment(db) -> dict | None:
     started = _aware(watch.get("started_at"))
     bake = float(watch.get("bake_hours") or BAKE_HOURS)
     baseline = float(watch.get("baseline_score") or 100)
-    health = await score_fleet(db)
-    # Only failures reported for THIS release's artifact digests count, and
-    # only DISTINCT tenants corroborate (a single customer's agents == 1).
+    # Full-fleet score is display-only. The auto-rollback DECISION trusts ONLY
+    # operator-designated agents/tenants so tenant-controlled telemetry can't
+    # force a rollback of a healthy release (4th audit SEC-001/SEC-002).
+    trusted_uids = await _trusted_user_ids(db)
+    trusted_health = await score_fleet(db, _trusted_agent_filter(trusted_uids))
+    display_health = await score_fleet(db)
     watch_digests = set((watch.get("artifacts") or {}).values())
     fail_tenants = 0
     if started:
-        fail_tenants = await distinct_fail_tenants(db, started, watch_digests)
-    corroborated = fail_tenants >= MIN_FAIL_TENANTS
-    degraded = (health["fleet_size"] > 0
-                and (health["score"] < MIN_SCORE
-                     or baseline - health["score"] >= MAX_DROP))
+        fail_tenants = await distinct_fail_tenants(
+            db, started, watch_digests, only_user_ids=trusted_uids)
+    have_trust = bool(trusted_uids) or trusted_health["fleet_size"] > 0
+    corroborated = have_trust and fail_tenants >= MIN_FAIL_TENANTS
+    degraded = (have_trust and trusted_health["fleet_size"] > 0
+                and (trusted_health["score"] < MIN_SCORE
+                     or baseline - trusted_health["score"] >= MAX_DROP))
     if corroborated or degraded:
-        reason = (f"{fail_tenants} distinct tenants reported deploy failure "
+        health = trusted_health
+        reason = (f"{fail_tenants} trusted tenants reported deploy failure "
                   f"during bake" if corroborated
-                  else (f"fleet health {health['score']} vs baseline "
-                        f"{baseline} (floor {MIN_SCORE}, max drop {MAX_DROP})"))
+                  else (f"trusted-fleet health {trusted_health['score']} vs "
+                        f"baseline {baseline} (floor {MIN_SCORE}, max drop "
+                        f"{MAX_DROP})"))
         from release_channels import _history, rollback
         try:
             await rollback(db, actor="auto-health")
@@ -165,12 +203,27 @@ async def watch_deployment(db) -> dict | None:
         logger.error("AUTO-ROLLBACK: %s (%s)", reason, outcome)
         return {"status": "auto_rollback", "reason": reason,
                 "outcome": outcome, "health": health}
+    # No trusted-fleet signal but the FULL fleet looks degraded → surface a
+    # warning for manual operator review; never auto-rollback on untrusted
+    # telemetry alone (fail-safe against tenant-driven false positives).
+    if not have_trust and display_health["fleet_size"] > 0 and (
+            display_health["score"] < MIN_SCORE
+            or baseline - display_health["score"] >= MAX_DROP):
+        from alerting import raise_alert
+        await raise_alert(
+            db, "deployment_review_needed", "warning",
+            f"Full-fleet health {display_health['score']} degraded during bake "
+            f"but no release-trusted agents are configured — manual review "
+            f"required (auto-rollback suppressed).",
+            dedup_key=f"deploy_review_{watch.get('started_at')}")
     if started and _now() - started >= timedelta(hours=bake):
         await _clear_watch(db)
         from release_channels import _history
         await _history(db, "bake_complete",
-                       {"health": health, "baseline": baseline})
-        logger.info("deploy bake complete — health %.1f", health["score"])
-        return {"status": "bake_complete", "health": health}
-    return {"status": "baking", "health": health, "baseline": baseline,
+                       {"health": display_health, "baseline": baseline})
+        logger.info("deploy bake complete — health %.1f",
+                    display_health["score"])
+        return {"status": "bake_complete", "health": display_health}
+    return {"status": "baking", "health": display_health,
+            "trusted_health": trusted_health, "baseline": baseline,
             "started_at": watch.get("started_at"), "bake_hours": bake}

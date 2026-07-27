@@ -13,6 +13,7 @@ const ACTION_LABELS = {
     release_rollback: "Roll back the fleet release",
     agent_config_push: "Push config to a host agent",
     canary_set: "Set canary rollout agents",
+    release_trust: "Designate a release-trusted agent",
 };
 
 export function StepUpDialog() {

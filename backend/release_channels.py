@@ -137,14 +137,17 @@ async def maybe_promote(db) -> dict | None:
     hours = float(st.get("promote_after_hours") or DEFAULT_SOAK_HOURS)
     if _now() - since_dt < timedelta(hours=hours):
         return None
-    # SEC (3rd audit) — hold auto-promotion only on CORROBORATED failures
-    # from distinct TENANTS reporting the CANDIDATE's own digests. A single
-    # customer (any number of agents) can't freeze the fleet pipeline.
-    from deployment_health import MIN_FAIL_TENANTS, distinct_fail_tenants
+    # SEC (3rd/4th audit) — hold auto-promotion only on CORROBORATED failures
+    # from distinct TRUSTED tenants reporting the CANDIDATE's own digests.
+    # Untrusted tenant telemetry can't freeze the release pipeline.
+    from deployment_health import (MIN_FAIL_TENANTS, _trusted_user_ids,
+                                   distinct_fail_tenants)
     cand_digests = set(cand.values())
-    fail_tenants = await distinct_fail_tenants(db, since, cand_digests)
-    if fail_tenants >= MIN_FAIL_TENANTS:
-        logger.warning("candidate promotion HELD: %s distinct tenants "
+    trusted_uids = await _trusted_user_ids(db)
+    fail_tenants = await distinct_fail_tenants(
+        db, since, cand_digests, only_user_ids=trusted_uids)
+    if trusted_uids and fail_tenants >= MIN_FAIL_TENANTS:
+        logger.warning("candidate promotion HELD: %s trusted tenants "
                        "reported deploy failure during soak", fail_tenants)
         return None
     return await promote(db, actor="auto-soak")

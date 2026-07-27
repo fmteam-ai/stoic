@@ -93,6 +93,13 @@ def test_auto_rollback_and_bake_complete():
                                   "artifacts": {marker: sha},
                                   "bake_hours": 4}},
                 upsert=True)
+            # tenantA/B must be RELEASE-TRUSTED for corroboration to count
+            # (4th audit — only operator-trusted tenants move release state)
+            await db.vps_agents.insert_many([
+                {"agent_id": f"{marker}-tA", "user_id": f"{marker}-tenantA",
+                 "release_trusted": True, "revoked": False},
+                {"agent_id": f"{marker}-tB", "user_id": f"{marker}-tenantB",
+                 "release_trusted": True, "revoked": False}])
             await db.ops_alerts.insert_many([
                 {"kind": "deployment_failed", "severity": "critical",
                  "message": "iter161 synthetic a", "dedup_key": f"{marker}-a",
@@ -111,20 +118,21 @@ def test_auto_rollback_and_bake_complete():
             # can't fake a degradation
             await db.ops_alerts.delete_many(
                 {"dedup_key": {"$in": [f"{marker}-a", f"{marker}-b"]}})
-            from deployment_health import score_fleet
-            live = await score_fleet(db)
+            from deployment_health import (_trusted_agent_filter,
+                                            _trusted_user_ids, score_fleet)
+            # make the trusted agents healthy so the clean bake completes
+            await db.vps_agents.update_many(
+                {"agent_id": {"$in": [f"{marker}-tA", f"{marker}-tB"]}},
+                {"$set": {"last_heartbeat": now,
+                          "last_metrics": {"mt5_connected": True}}})
+            tu = await _trusted_user_ids(db)
+            tlive = await score_fleet(db, _trusted_agent_filter(tu))
             await db.platform_state.update_one(
                 {"_id": "release_state"},
                 {"$set": {"deploy_watch": {
                     "started_at": (now - timedelta(hours=9)).isoformat(),
-                    "baseline_score": live["score"], "bake_hours": 4}}})
-            import deployment_health as dh
-            old_min = dh.MIN_SCORE
-            dh.MIN_SCORE = 0  # live fleet may legitimately sit at the floor
-            try:
-                second = await watch_deployment(db)
-            finally:
-                dh.MIN_SCORE = old_min
+                    "baseline_score": tlive["score"], "bake_hours": 4}}})
+            second = await watch_deployment(db)
             st2 = await db.platform_state.find_one({"_id": "release_state"})
             return first, st, second, st2
         finally:
@@ -143,6 +151,8 @@ def test_auto_rollback_and_bake_complete():
                                    "bake_complete"]},
                  "at": {"$gte": now.isoformat()}})
             (STORE_DIR / sha).unlink(missing_ok=True)
+            await db.vps_agents.delete_many(
+                {"agent_id": {"$in": [f"{marker}-tA", f"{marker}-tB"]}})
 
     first, st, second, st2 = _run(scenario())
     assert first["status"] == "auto_rollback", first
@@ -160,7 +170,9 @@ def test_deployment_health_endpoint():
     assert r.status_code == 200, r.text
     body = r.json()
     assert "score" in body["health"]
-    assert set(body["policy"]) == {"bake_hours", "min_score", "max_drop"}
+    assert set(body["policy"]) == {"bake_hours", "min_score", "max_drop",
+                                   "min_fail_tenants"}
+    assert "release_trust" in body
     # unauthenticated blocked
     r = requests.get(f"{API}/ops/deployment-health", timeout=TIMEOUT)
     assert r.status_code == 403
