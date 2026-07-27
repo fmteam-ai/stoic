@@ -100,6 +100,14 @@ async def scheduled_drill_loop():
                     logger.info("canary candidate auto-promoted to stable")
             except Exception as e:  # noqa: BLE001
                 logger.warning("release promotion check error: %s", e)
+            try:
+                from deployment_health import watch_deployment
+                w = await watch_deployment(db)
+                if w and w.get("status") == "auto_rollback":
+                    logger.error("deployment auto-rollback executed: %s",
+                                 w.get("reason"))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("deployment health watch error: %s", e)
             if await _due(db):
                 try:
                     from correlation import new_correlation_id

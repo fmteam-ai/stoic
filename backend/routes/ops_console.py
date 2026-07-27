@@ -326,4 +326,9 @@ async def ops_console(user=Depends(get_current_user)):
         "reporting_latency": len(latencies),
         "fleet": fleet,
     }
+    try:
+        from deployment_health import score_fleet
+        out["deployment_health"] = await score_fleet(db)
+    except Exception:  # noqa: BLE001
+        out["deployment_health"] = None
     return out

@@ -134,10 +134,16 @@ async def request_id_middleware(request, call_next):
     import time as _t
     import json as _json
     rid = (request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16])[:64]
+    tid = (request.headers.get("X-Trace-ID") or rid)[:64]
     set_correlation_id(rid)
+    from correlation import reset_log_fields, set_log_fields
+    reset_log_fields()
+    if tid != rid:
+        set_log_fields(trace=tid)
     t0 = _t.perf_counter()
     response = await call_next(request)
     response.headers["X-Request-ID"] = rid
+    response.headers["X-Trace-ID"] = tid
     path = request.url.path
     if path.startswith("/api") and path not in ("/api/metrics", "/api/ws"):
         _dur_ms = round((_t.perf_counter() - t0) * 1000, 1)
@@ -147,7 +153,7 @@ async def request_id_middleware(request, call_next):
         except Exception:
             pass
         logging.getLogger("access").info(_json.dumps({
-            "rid": rid, "m": request.method, "p": path,
+            "rid": rid, "trace": tid, "m": request.method, "p": path,
             "s": response.status_code,
             "ms": _dur_ms}))
     return response

@@ -161,6 +161,11 @@ async def promote(db, actor: str = "admin") -> dict:
     await _history(db, "promoted", {"artifacts": cand, "by": actor,
                                     "previous": prev})
     logger.info("release promoted to stable by %s", actor)
+    try:
+        from deployment_health import start_watch
+        await start_watch(db, cand, actor)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("deploy health watch start failed: %s", e)
     return await _state(db)
 
 

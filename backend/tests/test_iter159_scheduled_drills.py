@@ -40,7 +40,7 @@ def test_nightly_suite_runs_all_three_and_is_green():
     from scheduled_drills import run_nightly_suite
     out = _run(run_nightly_suite(_db(), actor="pytest"))
     assert out["ok"] is True, f"failures: {out['failures']}"
-    assert out["chaos"]["total"] == 12 and out["chaos"]["failed"] == 0
+    assert out["chaos"]["total"] == 16 and out["chaos"]["failed"] == 0
     assert out["runtime"]["total"] == 9 and out["runtime"]["failed"] == 0
     assert out["stress"]["verdict"] == "STAYED_CALM"
 
@@ -87,7 +87,7 @@ def test_scheduled_drills_endpoints():
     r = s.get(f"{API}/ops/scheduled-drills", timeout=TIMEOUT)
     assert r.status_code == 200
     runs = r.json()["runs"]
-    assert runs and runs[0]["chaos"]["total"] == 12
+    assert runs and runs[0]["chaos"]["total"] == 16
 
 
 def test_scheduled_drill_task_is_running():

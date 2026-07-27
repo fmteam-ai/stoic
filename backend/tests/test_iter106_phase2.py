@@ -37,7 +37,7 @@ UID = f"iter106-{uuid.uuid4().hex[:8]}"
 def test_chaos_now_runs_eight_drills(db):
     async def go():
         out = await run_drills(db)
-        assert out["total"] == 8
+        assert out["total"] == 16  # 8 + 4 DR (iter-158) + 4 security (iter-161)
         names = {r["drill"] for r in out["results"]}
         assert {"api_outage", "clock_skew", "alert_storm_dedup"} <= names
         by = {r["drill"]: r for r in out["results"]}

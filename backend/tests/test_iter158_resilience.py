@@ -46,7 +46,7 @@ def test_chaos_campaign_includes_dr_drills_and_passes():
         assert expected in names, f"missing DR drill {expected}"
     failed = [r for r in out["results"] if not r["passed"]]
     assert not failed, f"chaos/DR drill failures: {failed}"
-    assert out["total"] == 12
+    assert out["total"] == 16  # 12 + 4 security drills (iter-161)
 
 
 # ─── stress test mode ────────────────────────────────────────────────

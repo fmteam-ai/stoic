@@ -279,10 +279,11 @@ async def queue_command(db, user_id: str, agent_id: str, command: str,
             agent["command_key"].encode(),
             f"{agent_id}|{command_id}|{seq}|{command}".encode(),
             hashlib.sha256).hexdigest()
+    from correlation import get_correlation_id
     cmd = {"command_id": command_id,
            "agent_id": agent_id, "user_id": user_id,
            "command": command, "params": params or {},
-           "seq": seq, "sig": sig,
+           "seq": seq, "sig": sig, "trace_id": get_correlation_id(),
            "issued_by": issued_by, "status": "queued",
            "created_at": datetime.now(timezone.utc)}
     await db.agent_commands.insert_one(cmd)
@@ -302,7 +303,8 @@ async def poll_commands(db, agent_token: str) -> list:
             {"$set": {"status": "delivered", "delivered_at": now}})
         out.append({"command_id": c["command_id"],
                     "command": c["command"], "params": c["params"],
-                    "seq": c.get("seq"), "sig": c.get("sig")})
+                    "seq": c.get("seq"), "sig": c.get("sig"),
+                    "trace_id": c.get("trace_id")})
     return out
 
 

@@ -149,6 +149,47 @@ function ReleasesPanel() {
     );
 }
 
+function DeploymentHealthPanel() {
+    const [data, setData] = useState(null);
+    useEffect(() => {
+        const load = () => api.get("/ops/deployment-health").then(r => setData(r.data)).catch(() => setData(null));
+        load();
+        const t = setInterval(load, 60000);
+        return () => clearInterval(t);
+    }, []);
+    const h = data?.health;
+    const scoreCls = h ? (h.score >= 80 ? tone.ok : h.score >= 60 ? tone.warn : tone.bad) : tone.dim;
+    return (
+        <Panel title="Deployment Health — auto-rollback" icon={Gauge} testid="ops-panel-deploy-health">
+            {!data && <div className="text-xs text-[#52525B]">loading…</div>}
+            {data && (
+                <>
+                    <Row k="Fleet health score" v={h ? `${h.score}/100` : "—"} vCls={scoreCls} />
+                    <Row k="Fleet size" v={h?.fleet_size ?? "—"} vCls={tone.dim} />
+                    {h?.components && (
+                        <>
+                            <Row k="Fresh heartbeats" v={h.components.heartbeat_fresh} vCls={tone.dim} />
+                            <Row k="MT5 connected" v={h.components.mt5_connected} vCls={tone.dim} />
+                            <Row k="Deploy failures (2h)" v={h.components.deployment_failed_2h}
+                                vCls={h.components.deployment_failed_2h ? tone.bad : "text-white"} />
+                        </>
+                    )}
+                    <Row k="Bake watch" v={data.watch
+                        ? `BAKING since ${new Date(data.watch.started_at).toLocaleString()} (baseline ${data.watch.baseline_score})`
+                        : "idle — no deployment in bake window"}
+                        vCls={data.watch ? "text-[#FFD700]" : tone.dim} />
+                    <Row k="Policy" v={`floor ${data.policy.min_score} · max drop ${data.policy.max_drop} · bake ${data.policy.bake_hours}h`} vCls={tone.dim} />
+                    {data.last_auto_rollback && (
+                        <div className="mt-1 text-[10px] font-mono text-[#FF3B30]" data-testid="deploy-health-last-auto-rollback">
+                            last auto-rollback {new Date(data.last_auto_rollback.at).toLocaleString()} — {data.last_auto_rollback.detail?.reason}
+                        </div>
+                    )}
+                </>
+            )}
+        </Panel>
+    );
+}
+
 function TradeLookup() {
     const [tid, setTid] = useState("");
     const [tl, setTl] = useState(null);
@@ -573,6 +614,7 @@ export default function AdminOps() {
                 <SloPanel />
                 <NightlyDrills />
                 <ReleasesPanel />
+                <DeploymentHealthPanel />
                 <TradeLookup />
             </div>
         </AppLayout>

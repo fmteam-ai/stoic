@@ -447,6 +447,65 @@ async def releases_rollback(request: Request):
     return st
 
 
+@router.get("/ops/deployment-health")
+async def deployment_health_status(request: Request):
+    """iter-161 — fleet health score, active bake watch, last auto-rollback
+    and the auto-rollback policy."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    import deployment_health as dh
+    db = get_db()
+    st = await db.platform_state.find_one({"_id": "release_state"}) or {}
+    last_auto = await db.release_history.find_one(
+        {"event": "auto_rollback"}, {"_id": 0}, sort=[("at", -1)])
+    return {"health": await dh.score_fleet(db),
+            "watch": st.get("deploy_watch"),
+            "last_auto_rollback": last_auto,
+            "policy": {"bake_hours": dh.BAKE_HOURS,
+                       "min_score": dh.MIN_SCORE,
+                       "max_drop": dh.MAX_DROP}}
+
+
+@router.post("/ops/deployment-health/check")
+async def deployment_health_check(request: Request):
+    """Run the bake-window evaluation immediately (same code the scheduler
+    runs every 30 min)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from deployment_health import watch_deployment
+    return {"result": await watch_deployment(get_db())}
+
+
+@router.get("/ops/model-version")
+async def model_version_status(request: Request):
+    """iter-161 — current AI model version + registry of versions seen."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from model_lineage import model_version
+    rows = await get_db().model_code_versions.find(
+        {}).sort("first_seen", -1).limit(10).to_list(10)
+    registry = [{"version": r.pop("_id"), **r} for r in rows]
+    return {"current": model_version(), "registry": registry}
+
+
+@router.post("/ops/signals/{signal_id}/replay-validate")
+async def signal_replay_validate(signal_id: str, request: Request):
+    """iter-161 — prove a historical AI decision is reproducible against
+    the current model (version, feature lineage, explanation)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from model_lineage import replay_validate
+    out = await replay_validate(get_db(), signal_id)
+    if out is None:
+        return JSONResponse(status_code=404,
+                            content={"detail": "signal not found"})
+    return out
+
+
 @router.post("/ops/agents/{agent_id}/config")
 async def set_agent_desired_config(agent_id: str, payload: dict,
                                    request: Request):

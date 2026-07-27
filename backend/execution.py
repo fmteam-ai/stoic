@@ -332,6 +332,8 @@ class MT5BridgeEngine(ExecutionEngine):
             )
         except Exception as _sw:  # noqa: BLE001
             record_swallow("execution", "execute", _sw)  # explanation is informational — never block a trade
+        from correlation import get_correlation_id
+        trade_doc.setdefault("trace_id", get_correlation_id())
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
@@ -408,6 +410,8 @@ class PaperEngine(ExecutionEngine):
             "risk_pct": (signal.get("risk_pct")
                          or (signal.get("adaptive_sizing") or {}).get("risk_pct")),
         }
+        from correlation import get_correlation_id
+        trade_doc.setdefault("trace_id", get_correlation_id())
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)

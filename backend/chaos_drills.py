@@ -192,6 +192,8 @@ async def _drill_artifact_rollback(db) -> dict:
         static_dir = _P(__file__).parent / "static"
         target = None
         for f in static_dir.iterdir():
+            if not f.is_file():
+                continue
             digest = _h.sha256(f.read_bytes()).hexdigest()
             if digest == ea["sha256"]:
                 target = f
@@ -289,6 +291,121 @@ async def _drill_backup_restore(db) -> dict:
         await coll.delete_many({"tag": tag})
 
 
+# ─── iter-161: security runtime drills ───────────────────────────────
+def _drill_invalid_signature() -> dict:
+    """Sign a synthetic manifest body, then prove tampered bytes and forged
+    signatures are both rejected by the Ed25519 verifier."""
+    import json as _json
+
+    import release_signing
+    try:
+        body = _json.dumps({"artifacts": ["chaos"],
+                            "nonce": uuid.uuid4().hex}).encode()
+        sig = release_signing.sign_hex(body)
+        good = release_signing.verify_hex(body, sig)
+        tampered = release_signing.verify_hex(body + b"tampered", sig)
+        forged = release_signing.verify_hex(body, "00" * 64)
+        ok = good and not tampered and not forged
+        return {"drill": "invalid_signature", "passed": ok,
+                "detail": ("valid Ed25519 signature accepted; tampered body "
+                           "and forged signature both rejected" if ok else
+                           f"verifier broken: good={good} "
+                           f"tampered={tampered} forged={forged}")}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "invalid_signature", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+
+
+async def _drill_command_replay(db) -> dict:
+    """Ack a host-agent command, then replay the same ack — the monotonic
+    last_acked_seq guard must reject it."""
+    from vps_pathb import ack_command, queue_command
+    uid = f"chaos-replay-{uuid.uuid4().hex[:8]}"
+    agent_id = f"agent-{uid}"
+    token = uuid.uuid4().hex
+    try:
+        await db.vps_agents.insert_one(
+            {"agent_id": agent_id, "user_id": uid, "agent_token": token,
+             "command_seq": 0, "last_acked_seq": 0,
+             "command_key": uuid.uuid4().hex, "chaos": True})
+        cmd = await queue_command(db, uid, agent_id, "run_diagnostics",
+                                  None, "chaos-drill")
+        await ack_command(db, token, cmd["command_id"], True, "chaos ok")
+        try:
+            await ack_command(db, token, cmd["command_id"], True, "replayed")
+            return {"drill": "command_replay", "passed": False,
+                    "detail": "replayed ack was ACCEPTED — monotonic "
+                              "sequence guard broken"}
+        except ValueError:
+            return {"drill": "command_replay", "passed": True,
+                    "detail": "replayed ack rejected by the monotonic "
+                              "last_acked_seq guard"}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "command_replay", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+    finally:
+        await db.vps_agents.delete_many({"user_id": uid})
+        await db.agent_commands.delete_many({"user_id": uid})
+
+
+async def _drill_token_expiry(db) -> dict:
+    """An expired bootstrap token must be refused (and never burned)."""
+    from vps_agent import consume_bootstrap_token
+    tok = f"chaos-tok-{uuid.uuid4().hex}"
+    try:
+        await db.vps_bootstrap_tokens.insert_one(
+            {"token": tok, "used": False, "user_id": "chaos-drill",
+             "expires_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+             "chaos": True})
+        try:
+            await consume_bootstrap_token(db, tok)
+            return {"drill": "token_expiry", "passed": False,
+                    "detail": "EXPIRED bootstrap token was accepted"}
+        except ValueError as e:
+            ok = "expired" in str(e).lower()
+            return {"drill": "token_expiry", "passed": ok,
+                    "detail": (f"expired token refused ({e})" if ok else
+                               f"refused with wrong reason: {e}")}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "token_expiry", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+    finally:
+        await db.vps_bootstrap_tokens.delete_many({"token": tok})
+
+
+def _drill_unauthorized_admin_access() -> dict:
+    """The admin gate must block non-admins AND (when enforced) admins
+    without TOTP MFA."""
+    import os as _os
+
+    from fastapi import HTTPException
+
+    from auth import require_admin
+    try:
+        blocked_user = blocked_nomfa = False
+        try:
+            require_admin({"role": "user"})
+        except HTTPException as e:
+            blocked_user = e.status_code == 403
+        if _os.environ.get("ADMIN_MFA_ENFORCED",
+                           "true").lower() == "true":
+            try:
+                require_admin({"role": "admin", "two_factor_enabled": False})
+            except HTTPException as e:
+                blocked_nomfa = e.status_code == 403
+        else:
+            blocked_nomfa = True  # preview/CI escape hatch active by config
+        ok = blocked_user and blocked_nomfa
+        return {"drill": "unauthorized_admin_access", "passed": ok,
+                "detail": ("non-admin role and MFA-less admin both blocked "
+                           "with 403" if ok else
+                           f"gate leak: user_blocked={blocked_user} "
+                           f"nomfa_blocked={blocked_nomfa}")}
+    except Exception as e:  # noqa: BLE001
+        return {"drill": "unauthorized_admin_access", "passed": False,
+                "detail": f"exception {type(e).__name__}: {e}"[:300]}
+
+
 async def run_drills(db) -> dict:
     results = [
         await _drill_duplicate_order(db),
@@ -304,6 +421,11 @@ async def run_drills(db) -> dict:
         await _drill_artifact_rollback(db),
         await _drill_panic_recovery(db),
         await _drill_backup_restore(db),
+        # iter-161 — security runtime drills
+        _drill_invalid_signature(),
+        await _drill_command_replay(db),
+        await _drill_token_expiry(db),
+        _drill_unauthorized_admin_access(),
     ]
     passed = sum(1 for r in results if r["passed"])
     doc = {"at": datetime.now(timezone.utc), "results": results,

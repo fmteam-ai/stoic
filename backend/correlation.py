@@ -11,6 +11,26 @@ import uuid
 
 _current: contextvars.ContextVar = contextvars.ContextVar(
     "correlation_id", default="-")
+_fields: contextvars.ContextVar = contextvars.ContextVar(
+    "log_fields", default=None)
+
+
+def set_log_fields(**kw) -> None:
+    """iter-161 — structured log context (trace/user/installation/deployment
+    ids) attached to every record emitted in this task."""
+    cur = dict(_fields.get() or {})
+    for k, v in kw.items():
+        if v is not None:
+            cur[str(k)[:32]] = str(v)[:64]
+    _fields.set(cur)
+
+
+def reset_log_fields() -> None:
+    _fields.set({})
+
+
+def get_log_fields() -> dict:
+    return dict(_fields.get() or {})
 
 
 def set_correlation_id(rid: str) -> None:
@@ -32,6 +52,8 @@ class CorrelationFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.rid = _current.get()
+        f = _fields.get() or {}
+        record.ctx = "".join(f" {k}={v}" for k, v in f.items())
         return True
 
 
@@ -39,7 +61,7 @@ def install(fmt: str | None = None) -> None:
     """Attach the filter to the root handlers and switch the format to one
     that includes the correlation id."""
     fmt = fmt or ("%(asctime)s - %(name)s - %(levelname)s - "
-                  "[%(rid)s] %(message)s")
+                  "[%(rid)s]%(ctx)s %(message)s")
     root = logging.getLogger()
     filt = CorrelationFilter()
     for h in root.handlers:

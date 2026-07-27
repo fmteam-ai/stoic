@@ -1350,6 +1350,14 @@ async def _process_user_account_locked(db, cfg: dict):
                 "selected": cfg.get("_auto_preset_source"),
                 "active_preset": cfg.get("active_preset"),
             }
+        # iter-161 · model versioning + feature lineage + trace propagation
+        try:
+            from correlation import get_correlation_id
+            from model_lineage import stamp_lineage
+            signal["trace_id"] = get_correlation_id()
+            await stamp_lineage(db, signal)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("model lineage skipped: %s", e)
         result = await db.signals.insert_one(signal)
         signal_id = str(result.inserted_id)
         broadcast_payload = {**signal, "id": signal_id}
