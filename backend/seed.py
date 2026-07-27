@@ -168,6 +168,14 @@ async def ensure_indexes():
     await db.ops_alerts.create_index("acked_at", expireAfterSeconds=2592000)
     await db.validation_evidence.create_index([("scenario", 1), ("recorded_at", 1)])
     await _migrate_iso_strings_to_bson_dates(db)
+    # iter-163 — audit_log.at must be ISO strings everywhere: mixed BSON
+    # dates sorted ABOVE strings in Mongo type order, hiding newer entries
+    # from the /auth/audit view. Idempotent (0 matches after first run).
+    await db.audit_log.update_many(
+        {"at": {"$type": "date"}},
+        [{"$set": {"at": {"$dateToString": {
+            "date": "$at", "format": "%Y-%m-%dT%H:%M:%S.%L+00:00"}}}}])
+    await db.audit_log.create_index([("user_id", 1), ("at", -1)])
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])

@@ -32,6 +32,31 @@ async def _ops_actor(request: Request):
     return False, None
 
 
+async def _ops_admin_step_up(request: Request, action: str):
+    """iter-163 — like _ops_actor but human admin sessions must also carry a
+    fresh step-up (TOTP) token for `action`. METRICS_TOKEN (deploy scripts)
+    keeps its machine path. Raises 403 step_up_required / mfa_enrollment_
+    required for admins without a fresh token."""
+    try:
+        if _authorized(request):
+            return True, "metrics-token"
+    except Exception:
+        pass
+    try:
+        from auth import get_current_user
+        u = await get_current_user(request)
+    except Exception:
+        return False, None
+    if (u or {}).get("role") != "admin":
+        return False, None
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    await require_step_up(db, u, request, action)
+    await audit_event(db, u["id"], action, {"path": str(request.url.path)},
+                      request, step_up=True)
+    return True, u.get("email") or "admin"
+
+
 def _as_dt(v):
     """BSON datetime or legacy ISO string → aware datetime (None on junk)."""
     if isinstance(v, datetime):
@@ -421,7 +446,7 @@ async def releases_set_canary(payload: dict, request: Request):
 
 @router.post("/ops/releases/promote")
 async def releases_promote(request: Request):
-    allowed, actor = await _ops_actor(request)
+    allowed, actor = await _ops_admin_step_up(request, "release_promote")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     from release_channels import promote
@@ -435,7 +460,7 @@ async def releases_promote(request: Request):
 
 @router.post("/ops/releases/rollback")
 async def releases_rollback(request: Request):
-    allowed, actor = await _ops_actor(request)
+    allowed, actor = await _ops_admin_step_up(request, "release_rollback")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     from release_channels import rollback
@@ -510,7 +535,7 @@ async def signal_replay_validate(signal_id: str, request: Request):
 async def set_agent_desired_config(agent_id: str, payload: dict,
                                    request: Request):
     """iter-160 — central config sync: agents apply this on next heartbeat."""
-    allowed, actor = await _ops_actor(request)
+    allowed, actor = await _ops_admin_step_up(request, "agent_config_push")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     ALLOWED = {"mt5_supervise", "mt5_path", "telemetry_interval_sec",

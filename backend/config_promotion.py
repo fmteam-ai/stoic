@@ -100,7 +100,9 @@ async def _apply(db, user_id, account_id, update, label, source,
         "detail": {"account_id": account_id,
                    "fields": sorted(update.keys()), "version_id": vid,
                    **(audit_detail or {})},
-        "step_up_verified": False, "at": now}, session=session)
+        "step_up_verified": False, "at": (now.isoformat()
+                                          if hasattr(now, "isoformat")
+                                          else now)}, session=session)
     return vid
 
 
@@ -201,7 +203,7 @@ async def rollback(db, user_id: str, account_id: str | None,
         "detail": {"account_id": account_id, "rolled_back_to": prev_id,
                    "config_hash": ver.get("config_hash"),
                    "mode_guard_applied": mode_guard},
-        "step_up_verified": True, "at": now})
+        "step_up_verified": True, "at": now.isoformat()})
     logger.warning("config rollback user=%s account=%s → version %s "
                    "(mode_guard=%s)", user_id, account_id, prev_id,
                    mode_guard)

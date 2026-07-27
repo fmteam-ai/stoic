@@ -111,7 +111,7 @@ async def migrate_default_modes(db) -> dict:
                        "reason": "no migrated config silently obtains "
                                  "autonomous authority — explicit promotion "
                                  "required for autonomous_live"},
-            "step_up_verified": False, "at": now})
+            "step_up_verified": False, "at": now.isoformat()})
         logger.warning("operational-mode migration: %d active→supervised_live"
                        ", %d inactive→observe", r_active.modified_count,
                        r_inactive.modified_count)
@@ -161,7 +161,7 @@ async def remigrate_autonomous_to_supervised(db) -> dict:
                        "reason": "grandfathered autonomous_live withdrawn — "
                                  "explicit certification-gated promotion "
                                  "required for full autonomy"},
-            "step_up_verified": False, "at": now})
+            "step_up_verified": False, "at": now.isoformat()})
         try:
             from alerting import raise_alert
             await raise_alert(

@@ -13,7 +13,9 @@ from fastapi import HTTPException
 
 STEP_UP_TTL_SECONDS = 300
 STEP_UP_HEADER = "X-Step-Up-Token"
-STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_create"}
+STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_create",
+                   # iter-163 — ops release/fleet controls (audit hardening)
+                   "release_promote", "release_rollback", "agent_config_push"}
 
 
 def _hash_token(token: str) -> str:

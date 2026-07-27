@@ -419,7 +419,7 @@ async def check_unreachable(db, user_id: str) -> list:
                 "detail": {"agent_id": a["agent_id"],
                            "reason": "unreachable — heartbeat "
                                      f"> {UNREACHABLE_AFTER_SEC}s"},
-                "step_up_verified": False, "at": now})
+                "step_up_verified": False, "at": now.isoformat()})
             try:
                 from alerting import raise_alert
                 await raise_alert(

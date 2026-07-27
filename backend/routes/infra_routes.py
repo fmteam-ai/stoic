@@ -200,7 +200,7 @@ async def server_action(deployment_id: str, payload: dict,
     await db.audit_log.insert_one({
         "user_id": user["id"], "action": f"vps_{action}",
         "detail": {"deployment_id": deployment_id},
-        "step_up_verified": False, "at": now})
+        "step_up_verified": False, "at": now.isoformat()})
     return {"ok": True, "action": action, "result": res}
 
 

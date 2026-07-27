@@ -9,6 +9,9 @@ const ACTION_LABELS = {
     risk_raise: "Raise risk limits",
     panic_release: "Release panic lock",
     api_key_create: "Create an API key",
+    release_promote: "Promote release to stable fleet",
+    release_rollback: "Roll back the fleet release",
+    agent_config_push: "Push config to a host agent",
 };
 
 export function StepUpDialog() {

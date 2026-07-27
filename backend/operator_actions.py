@@ -70,5 +70,5 @@ async def run_action(db, user_id: str, action: str,
     await db.audit_log.insert_one({
         "user_id": user_id, "action": f"operator_action:{action}",
         "detail": {"params": params, "result": detail},
-        "step_up_verified": False, "at": now})
+        "step_up_verified": False, "at": now.isoformat()})
     return {"action": action, "detail": detail, "at": now.isoformat()}

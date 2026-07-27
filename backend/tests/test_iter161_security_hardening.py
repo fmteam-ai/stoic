@@ -215,6 +215,36 @@ def test_model_version_and_replay_endpoints():
     assert r.status_code == 404
 
 
+# ─── admin step-up on ops release/fleet controls (iter-163) ──────────
+def test_ops_release_controls_require_step_up():
+    """Admin sessions WITHOUT a fresh step-up token are refused on promote /
+    rollback / agent config push; the CI bypass restores access."""
+    s = _admin()
+    s.headers["X-Step-Up-Bypass"] = ""  # disable conftest auto-bypass
+    for path in ("/ops/releases/promote", "/ops/releases/rollback",
+                 "/ops/agents/no-such-agent/config"):
+        r = s.post(f"{API}{path}", json={"mt5_supervise": True},
+                   timeout=TIMEOUT)
+        assert r.status_code == 403, f"{path}: {r.status_code} {r.text}"
+        code = (r.json().get("detail") or {}).get("code")
+        assert code in ("step_up_required", "mfa_enrollment_required"), r.text
+    # bypass (CI) path still reaches the endpoint logic
+    s2 = _admin()
+    r = s2.post(f"{API}/ops/agents/no-such-agent/config",
+                json={"mt5_supervise": True}, timeout=TIMEOUT)
+    assert r.status_code == 404, r.text  # past the gate → agent lookup
+    # unauthenticated remains blocked
+    r = requests.post(f"{API}/ops/releases/promote",
+                      headers={"X-Step-Up-Bypass": ""}, timeout=TIMEOUT)
+    assert r.status_code in (401, 403)
+
+
+def test_step_up_issue_accepts_new_ops_actions():
+    from step_up import STEP_UP_ACTIONS
+    for a in ("release_promote", "release_rollback", "agent_config_push"):
+        assert a in STEP_UP_ACTIONS
+
+
 # ─── trace propagation ───────────────────────────────────────────────
 def test_trace_id_header_roundtrip():
     r = requests.get(f"{API}/health",

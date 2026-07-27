@@ -98,7 +98,7 @@ async def sweep_user(db, user_id: str) -> dict:
                 "user_id": user_id, "action": "auto_mode_demotion",
                 "detail": {"reason": verdict["reason"],
                            "demotions": demotions},
-                "step_up_verified": False, "at": now})
+                "step_up_verified": False, "at": now.isoformat()})
             try:
                 from alerting import raise_alert
                 await raise_alert(
