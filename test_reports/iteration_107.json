@@ -1,0 +1,35 @@
+{
+  "summary": "Verified SEC-001 5th-audit fix: release promotion-hold now fires correctly with BSON-Date created_at even when maybe_promote passes an ISO-string cutoff. Ran pytest suites test_iter167_release_trust.py + test_iter165_reaudit_fixes.py (13/13 PASS). Verified ops endpoints via HTTPS against the public preview URL: GET /api/ops/deployment-health returns the required fields; POST /api/ops/agents/{id}/release-trust is gated (unauth 403) and reaches handler (404 agent not found) with admin session + CSRF + X-Step-Up-Bypass. No app code changed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "scenario_results": [
+    {"scenario": "maybe_promote holds on real BSON-Date alerts (>=2 trusted tenants, digest scoped)", "result": "PASS (test_maybe_promote_holds_on_real_bson_date_alerts)"},
+    {"scenario": "distinct_fail_tenants accepts ISO string cutoff and matches BSON-Date alerts", "result": "PASS (test_distinct_fail_tenants_accepts_iso_string_cutoff, returns 2 for 2 distinct trusted tenants)"},
+    {"scenario": "Non-trusted tenants do not influence rollback/hold", "result": "PASS (test_untrusted_tenant_corroboration_does_not_rollback, test_untrusted_health_degradation_warns_not_rollback)"},
+    {"scenario": "Trusted tenants corroboration triggers rollback", "result": "PASS (test_trusted_tenant_corroboration_does_rollback)"},
+    {"scenario": "GET /api/ops/deployment-health (admin) returns 200 with health, trusted_health, release_trust{configured,trusted_tenants,auto_rollback_enabled}, policy{bake_hours,min_score,max_drop,min_fail_tenants}", "result": "PASS (HTTP 200, all fields present; policy = bake_hours:4.0, min_score:60.0, max_drop:25.0, min_fail_tenants:2)"},
+    {"scenario": "GET /api/ops/deployment-health unauthenticated blocked", "result": "PASS (HTTP 403)"},
+    {"scenario": "POST /api/ops/agents/{id}/release-trust unauthenticated blocked", "result": "PASS (HTTP 403)"},
+    {"scenario": "POST /api/ops/agents/{id}/release-trust admin+CSRF+step-up-bypass reaches handler on nonexistent agent", "result": "PASS (HTTP 404 'agent not found')"}
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iter167_release_trust.py",
+    "/app/backend/tests/test_iter165_reaudit_fixes.py",
+    "/app/test_reports/pytest/iter167_165.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "distinct_fail_tenants coerces since to aware datetime via _aware() — resolves the SEC-001 String-vs-BSON-Date $gte mismatch. Both call sites (watch_deployment: datetime; maybe_promote: ISO string) now query BSON-Date created_at correctly.",
+    "Ops release-trust endpoint correctly requires CSRF + admin session + step-up (bypassable in preview via X-Step-Up-Bypass), returns 404 for unknown agent as expected."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@trading.bot / admin123 (worked). Step-up bypass: X-Step-Up-Bypass header with STEP_UP_BYPASS_TOKEN from backend/.env. CSRF: GET /api/auth/csrf then send X-CSRF-Token header.",
+  "seed_data_creation": "None (unit tests use in-memory fake db; HTTPS smoke used existing admin).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "SEC-001 promotion-hold BSON-Date/ISO-string fix verified. 13/13 pytest pass. Ops endpoints verified over public URL with admin session + CSRF + step-up bypass. Preview keeps ADMIN_MFA_ENFORCED=false and step-up bypass token intentionally."
+}
