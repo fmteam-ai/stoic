@@ -178,7 +178,80 @@ def test_trusted_tenant_corroboration_does_rollback():
     assert st["pinned"] is True
 
 
-def test_release_trust_endpoint():
+def test_maybe_promote_holds_on_real_bson_date_alerts():
+    """5th-audit SEC-001 regression: maybe_promote passes candidate_since as a
+    raw ISO STRING; alerts store created_at as a BSON Date. The hold must
+    still fire (helper coerces the cutoff) — a broken candidate with trusted
+    failure reports must NOT auto-promote."""
+    from alerting import raise_alert
+    from release_channels import STATE_ID, maybe_promote
+    db = _db()
+    now = datetime.now(timezone.utc)
+    marker = f"iter167d-{os.urandom(3).hex()}"
+    sha = hashlib.sha256(marker.encode()).hexdigest()
+
+    async def scenario():
+        orig = await db.platform_state.find_one({"_id": STATE_ID})
+        try:
+            # candidate older than the soak window (default 24h)
+            await db.platform_state.replace_one(
+                {"_id": STATE_ID},
+                {"_id": STATE_ID,
+                 "stable": {marker: "old-sha"},
+                 "candidate": {marker: sha},
+                 "candidate_since": (now - timedelta(hours=48)).isoformat(),
+                 "promote_after_hours": 24, "pinned": False},
+                upsert=True)
+            await db.vps_agents.insert_many([
+                {"agent_id": f"{marker}-t{t}", "user_id": f"{marker}-tenant{t}",
+                 "release_trusted": True, "revoked": False} for t in range(2)])
+            # REAL alerts via raise_alert → created_at is a BSON Date
+            for t in range(2):
+                await raise_alert(
+                    db, "deployment_failed", "critical",
+                    f"{marker} soak failure {t}",
+                    dedup_key=f"{marker}-{t}",
+                    meta={"user_id": f"{marker}-tenant{t}", "sha256": sha})
+            held = await maybe_promote(db)
+            st = await db.platform_state.find_one({"_id": STATE_ID})
+            return held, st
+        finally:
+            if orig:
+                await db.platform_state.replace_one(
+                    {"_id": STATE_ID}, orig, upsert=True)
+            else:
+                await db.platform_state.delete_one({"_id": STATE_ID})
+            await db.ops_alerts.delete_many({"dedup_key": {"$regex": marker}})
+            await db.vps_agents.delete_many({"agent_id": {"$regex": marker}})
+            await db.release_history.delete_many(
+                {"at": {"$gte": now.isoformat()}})
+    held, st = _run(scenario())
+    assert held is None, f"promotion should be HELD, got {held}"
+    assert st.get("candidate") == {marker: sha}, "candidate was promoted away"
+
+
+def test_distinct_fail_tenants_accepts_iso_string_cutoff():
+    """The helper must match BSON-Date alerts even when handed an ISO string."""
+    from alerting import raise_alert
+    from deployment_health import distinct_fail_tenants
+    db = _db()
+    now = datetime.now(timezone.utc)
+    marker = f"iter167e-{os.urandom(3).hex()}"
+    sha = hashlib.sha256(marker.encode()).hexdigest()
+
+    async def scenario():
+        try:
+            for t in range(2):
+                await raise_alert(
+                    db, "deployment_failed", "critical", f"{marker} {t}",
+                    dedup_key=f"{marker}-{t}",
+                    meta={"user_id": f"{marker}-tn{t}", "sha256": sha})
+            since_str = (now - timedelta(hours=1)).isoformat()
+            return await distinct_fail_tenants(db, since_str, {sha})
+        finally:
+            await db.ops_alerts.delete_many({"dedup_key": {"$regex": marker}})
+    assert _run(scenario()) == 2
+
     s = _admin()
     r = s.post(f"{API}/ops/agents/no-such-agent/release-trust",
                json={"trusted": True}, timeout=TIMEOUT)

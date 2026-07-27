@@ -57,7 +57,12 @@ async def distinct_fail_tenants(db, since_iso, digests=None,
     release `digests` (meta.sha256) and to a trusted `only_user_ids` set.
     Counting tenants — not agent_ids — defeats a single customer minting many
     agents; restricting to trusted tenants defeats fake-account corroboration."""
-    q = {"kind": "deployment_failed", "created_at": {"$gte": since_iso}}
+    # created_at is stored as a BSON Date (alerting.raise_alert). Coerce the
+    # cutoff to a datetime so a raw ISO-string caller (maybe_promote) doesn't
+    # silently match nothing via Mongo Date-vs-string type bracketing (5th
+    # audit SEC-001). _aware handles both datetime and ISO-string inputs.
+    since = _aware(since_iso) or since_iso
+    q = {"kind": "deployment_failed", "created_at": {"$gte": since}}
     if digests:
         q["meta.sha256"] = {"$in": list(digests)}
     ids = await db.ops_alerts.distinct("meta.user_id", q)
