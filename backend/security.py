@@ -36,8 +36,9 @@ async def rate_limit(db, scope: str, identifier: str, max_attempts: int,
     if request is not None:
         bypass = os.environ.get("RATE_LIMIT_BYPASS_TOKEN") or ""
         hdr = request.headers.get("x-ratelimit-bypass") or ""
+        from app_env import is_production
         if (bypass and hdr
-                and os.environ.get("APP_ENV", "").lower() != "production"
+                and not is_production()
                 and secrets.compare_digest(bypass, hdr)):
             return
     if scope in ("register", "pwreset"):

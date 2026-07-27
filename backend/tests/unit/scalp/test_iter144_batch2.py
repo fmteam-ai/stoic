@@ -229,7 +229,7 @@ class TestStartupFailureReadiness:
     def test_production_startup_reraises(self):
         src = _server_src()
         seg = src[src.index("Startup error"):]
-        assert '"APP_ENV", "").lower() == "production"' in seg[:600]
+        assert "is_production():" in seg[:600]
         assert "raise" in seg[:600]
 
     def test_readiness_fails_on_startup_error(self):

@@ -137,11 +137,14 @@ async def maybe_promote(db) -> dict | None:
     hours = float(st.get("promote_after_hours") or DEFAULT_SOAK_HOURS)
     if _now() - since_dt < timedelta(hours=hours):
         return None
-    failures = await db.ops_alerts.count_documents(
-        {"kind": "deployment_failed", "created_at": {"$gte": since}})
-    if failures:
-        logger.warning("candidate promotion HELD: %s deploy failures "
-                       "during soak", failures)
+    # SEC-002 — hold auto-promotion only on CORROBORATED deploy failures
+    # (>= MIN_FAIL_AGENTS distinct agents on the candidate). A single tenant
+    # agent's failure report can't freeze the whole fleet's release pipeline.
+    from deployment_health import MIN_FAIL_AGENTS, distinct_fail_agents
+    fail_agents = await distinct_fail_agents(db, since)
+    if fail_agents >= MIN_FAIL_AGENTS:
+        logger.warning("candidate promotion HELD: %s distinct agents "
+                       "reported deploy failure during soak", fail_agents)
         return None
     return await promote(db, actor="auto-soak")
 

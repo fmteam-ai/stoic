@@ -168,28 +168,46 @@ def test_deploy_status_records_and_alerts_on_failure():
     async def seed():
         await db.vps_agents.insert_one(
             {"agent_id": agent_id, "agent_token": token, "revoked": False})
-    _run(seed())
+        # SEC-002 — a fleet deployment_failed alert only fires for a digest
+        # the agent's channel actually serves. Grab a real stable digest.
+        from release_channels import channel_for_agent
+        _ch, shas = await channel_for_agent(db, agent_id)
+        return next(iter(shas.values()), None)
+    real_sha = _run(seed())
+    assert real_sha, "no stable artifact digest to test against"
     try:
         r = requests.post(f"{API}/infra/agent/deploy-status",
                           json={"agent_token": token, "ok": True,
-                                "artifact": "stoic-ea", "sha256": "a" * 64,
+                                "artifact": "stoic-ea", "sha256": real_sha,
                                 "detail": "installed"}, timeout=TIMEOUT)
         assert r.status_code == 200 and r.json()["status"] == "success"
+        # failure on the ASSIGNED digest → fleet-critical deployment_failed
         r = requests.post(f"{API}/infra/agent/deploy-status",
                           json={"agent_token": token, "ok": False,
-                                "artifact": "stoic-ea",
+                                "artifact": "stoic-ea", "sha256": real_sha,
                                 "detail": "sha mismatch"}, timeout=TIMEOUT)
+        assert r.status_code == 200 and r.json()["status"] == "failure"
+        # failure on an UNASSIGNED digest → anomaly only (no fleet alert)
+        bogus = "b" * 64
+        r = requests.post(f"{API}/infra/agent/deploy-status",
+                          json={"agent_token": token, "ok": False,
+                                "artifact": "evil", "sha256": bogus,
+                                "detail": "rogue"}, timeout=TIMEOUT)
         assert r.status_code == 200 and r.json()["status"] == "failure"
 
         async def verify():
             n = await db.agent_deployments.count_documents(
                 {"agent_id": agent_id})
             alert = await db.ops_alerts.find_one(
-                {"dedup_key": f"deploy_fail:{agent_id}:stoic-ea"})
-            return n, alert
-        n, alert = _run(verify())
-        assert n == 2
+                {"dedup_key": f"deploy_fail:{agent_id}:{real_sha}"})
+            anomaly = await db.ops_alerts.find_one(
+                {"dedup_key": f"deploy_anom:{agent_id}:{bogus}"})
+            return n, alert, anomaly
+        n, alert, anomaly = _run(verify())
+        assert n == 3
         assert alert and alert["severity"] == "critical"
+        assert alert.get("meta", {}).get("agent_id") == agent_id
+        assert anomaly and anomaly["severity"] == "warning"
         # bad token rejected
         r = requests.post(f"{API}/infra/agent/deploy-status",
                           json={"agent_token": "agt_tok_bogus", "ok": True},
@@ -200,7 +218,7 @@ def test_deploy_status_records_and_alerts_on_failure():
             await db.vps_agents.delete_one({"agent_id": agent_id})
             await db.agent_deployments.delete_many({"agent_id": agent_id})
             await db.ops_alerts.delete_many(
-                {"dedup_key": f"deploy_fail:{agent_id}:stoic-ea"})
+                {"dedup_key": {"$regex": agent_id}})
         _run(cleanup())
 
 

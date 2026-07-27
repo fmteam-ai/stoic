@@ -109,8 +109,8 @@ class TestEngineWiring:
 class TestProductionOriginFailFast:
     def test_startup_guard_present(self):
         src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
-        assert 'os.environ.get("APP_ENV", "").lower() == "production"' in src
+        assert "if is_production():" in src
         assert "CSRF_ENFORCE_ORIGIN" in src
         assert "RuntimeError" in src
         # guard must run before any service starts
-        assert src.index("APP_ENV") < src.index("await ensure_indexes()")
+        assert src.index("is_production()") < src.index("await ensure_indexes()")

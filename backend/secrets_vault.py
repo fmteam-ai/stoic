@@ -46,7 +46,8 @@ def _aesgcm() -> AESGCM:
     # key from JWT_SECRET only so the bot boots locally.
     master = os.environ.get("KEY_VAULT_MASTER")
     if not master:
-        is_prod = os.environ.get("APP_ENV", "").lower() in ("production", "prod")
+        from app_env import is_production
+        is_prod = is_production()
         if is_prod:
             raise RuntimeError(
                 "KEY_VAULT_MASTER is required in production (must be distinct "

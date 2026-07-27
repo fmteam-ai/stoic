@@ -44,8 +44,9 @@ async def require_step_up(db, user, request, action: str) -> None:
     # secret, refused outright when APP_ENV=production (SEC-001).
     bypass = os.environ.get("STEP_UP_BYPASS_TOKEN") or ""
     hdr = (request.headers.get("X-Step-Up-Bypass") or "")
+    from app_env import is_production
     if (bypass and hdr
-            and os.environ.get("APP_ENV", "").lower() != "production"
+            and not is_production()
             and secrets.compare_digest(bypass, hdr)):
         return
     full = await db.users.find_one({"_id": ObjectId(user["id"])},

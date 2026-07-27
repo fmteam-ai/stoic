@@ -355,11 +355,33 @@ async def agent_deploy_status_ep(payload: dict):
     await db.agent_deployments.insert_one(dict(doc))
     if status == "failure":
         from alerting import raise_alert
-        await raise_alert(
-            db, kind="deployment_failed", severity="critical",
-            message=(f"agent {agent['agent_id']} failed to deploy "
-                     f"{doc['artifact'] or 'artifact'}: {doc['detail'][:160]}"),
-            dedup_key=f"deploy_fail:{agent['agent_id']}:{doc['artifact']}")
+        # SEC-002 — a tenant agent must not be able to move FLEET release
+        # state by reporting a failure for an artifact it was never assigned.
+        # Only a failure whose digest matches the digest THIS agent's channel
+        # actually serves counts as a fleet deployment_failed (the trigger for
+        # auto-rollback / promotion-hold). Anything else is recorded as an
+        # agent-local anomaly (warning, no release impact).
+        from release_channels import channel_for_agent
+        channel, shas = await channel_for_agent(db, agent["agent_id"])
+        assigned = doc["sha256"] and doc["sha256"] in set(shas.values())
+        if assigned:
+            await raise_alert(
+                db, kind="deployment_failed", severity="critical",
+                message=(f"agent {agent['agent_id']} failed to deploy "
+                         f"{doc['artifact'] or 'artifact'} on {channel}: "
+                         f"{doc['detail'][:160]}"),
+                dedup_key=f"deploy_fail:{agent['agent_id']}:{doc['sha256']}",
+                meta={"agent_id": agent["agent_id"], "channel": channel,
+                      "sha256": doc["sha256"]})
+        else:
+            await raise_alert(
+                db, kind="agent_deploy_anomaly", severity="warning",
+                message=(f"agent {agent['agent_id']} reported a deploy "
+                         f"failure for an unassigned artifact "
+                         f"{doc['sha256'][:12] or doc['artifact']} — ignored "
+                         f"for fleet release state"),
+                dedup_key=f"deploy_anom:{agent['agent_id']}:{doc['sha256']}",
+                meta={"agent_id": agent["agent_id"], "sha256": doc["sha256"]})
     doc.pop("_id", None)
     return {"recorded": True, **doc}
 

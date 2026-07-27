@@ -15,6 +15,7 @@ from starlette.middleware.cors import CORSMiddleware
 from bson import ObjectId
 
 from database import close_client, get_db
+from app_env import is_production
 from seed import seed_admin, ensure_indexes
 from auth import decode_token
 from ws_manager import manager as ws_manager
@@ -617,7 +618,7 @@ async def on_startup():
     global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
     # review item 5 — production hard-fails without an explicit trusted
     # Origin allowlist: CSRF_ENFORCE_ORIGIN=true + concrete CORS_ORIGINS.
-    if os.environ.get("APP_ENV", "").lower() == "production":
+    if is_production():
         from security import _allowed_origins
         if (os.environ.get("CSRF_ENFORCE_ORIGIN", "false").lower() != "true"
                 or not _allowed_origins()):
@@ -712,7 +713,7 @@ async def on_startup():
         # reports it (503) and production terminates outright.
         global _startup_error
         _startup_error = f"{type(e).__name__}"
-        if os.environ.get("APP_ENV", "").lower() == "production":
+        if is_production():
             raise
 
 

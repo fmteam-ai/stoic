@@ -23,7 +23,7 @@ def _now():
 
 
 async def raise_alert(db, kind: str, severity: str, message: str,
-                      dedup_key: str | None = None):
+                      dedup_key: str | None = None, meta: dict | None = None):
     """Insert an alert unless an unacked one with the same dedup_key is open."""
     dedup_key = dedup_key or kind
     now = _now()
@@ -40,6 +40,7 @@ async def raise_alert(db, kind: str, severity: str, message: str,
         "severity": severity if severity in SEVERITIES else "warning",
         "message": message,
         "dedup_key": dedup_key,
+        "meta": meta or {},
         "created_at": now,
         "last_seen_at": now,
         "occurrences": 1,

@@ -92,16 +92,22 @@ def test_auto_rollback_and_bake_complete():
                                   "baseline_score": 100.0,
                                   "bake_hours": 4}},
                 upsert=True)
-            await db.ops_alerts.insert_one(
+            await db.ops_alerts.insert_many([
                 {"kind": "deployment_failed", "severity": "critical",
-                 "message": "iter161 synthetic", "dedup_key": marker,
-                 "acked_at": None, "created_at": now})
+                 "message": "iter161 synthetic a", "dedup_key": f"{marker}-a",
+                 "meta": {"agent_id": f"{marker}-agentA"},
+                 "acked_at": None, "created_at": now},
+                {"kind": "deployment_failed", "severity": "critical",
+                 "message": "iter161 synthetic b", "dedup_key": f"{marker}-b",
+                 "meta": {"agent_id": f"{marker}-agentB"},
+                 "acked_at": None, "created_at": now}])
             first = await watch_deployment(db)
             st = await db.platform_state.find_one({"_id": "release_state"})
             # clean bake: watch older than bake_hours, no new failures —
             # baseline pinned to the CURRENT live score so real fleet state
             # can't fake a degradation
-            await db.ops_alerts.delete_many({"dedup_key": marker})
+            await db.ops_alerts.delete_many(
+                {"dedup_key": {"$in": [f"{marker}-a", f"{marker}-b"]}})
             from deployment_health import score_fleet
             live = await score_fleet(db)
             await db.platform_state.update_one(
@@ -124,7 +130,8 @@ def test_auto_rollback_and_bake_complete():
                     {"_id": "release_state"}, original, upsert=True)
             else:
                 await db.platform_state.delete_one({"_id": "release_state"})
-            await db.ops_alerts.delete_many({"dedup_key": marker})
+            await db.ops_alerts.delete_many(
+                {"dedup_key": {"$in": [f"{marker}-a", f"{marker}-b"]}})
             await db.ops_alerts.delete_many(
                 {"kind": "deployment_auto_rollback",
                  "created_at": {"$gte": now}})
