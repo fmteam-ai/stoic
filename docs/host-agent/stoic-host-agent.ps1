@@ -118,7 +118,7 @@ function Test-UpdateManifest($cfg) {
     # Never installs from a mutable URL — only /api/artifacts/{sha256}.
     $deployed = @()
     try {
-        $m = Invoke-RestMethod -Uri "$($cfg.api_base)/api/infra/artifacts/manifest" -TimeoutSec 15
+        $m = Invoke-RestMethod -Uri "$($cfg.api_base)/api/infra/artifacts/manifest?agent_id=$($cfg.agent_id)" -TimeoutSec 15
         if ($m.signature.alg -ne "Ed25519") { throw "unsigned manifest" }
         if ($cfg.release_public_key_b64 -and
             $m.signature.public_key_b64 -ne $cfg.release_public_key_b64) {
@@ -210,15 +210,33 @@ function Run-Loop {
         try {
             Ensure-Mt5 $cfg
             $t = Get-Telemetry $cfg
-            Invoke-RestMethod -Method Post -Uri "$($cfg.api_base)/api/infra/agent/heartbeat" `
+            $hb = Invoke-RestMethod -Method Post -Uri "$($cfg.api_base)/api/infra/agent/heartbeat" `
                 -ContentType "application/json" `
-                -Body (@{ agent_token = $cfg.agent_token; metrics = $t } | ConvertTo-Json) -TimeoutSec 15 | Out-Null
+                -Body (@{ agent_token = $cfg.agent_token; metrics = $t } | ConvertTo-Json) -TimeoutSec 15
+            # iter-160 — central config sync: apply desired config from backend
+            if ($hb.desired_config) {
+                $changed = $false
+                foreach ($k in @("mt5_supervise", "mt5_path", "telemetry_interval_sec", "update_checks_enabled")) {
+                    $v = $hb.desired_config.$k
+                    if ($null -ne $v -and ($cfg.PSObject.Properties[$k] -eq $null -or $cfg.$k -ne $v)) {
+                        $cfg | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force
+                        $changed = $true
+                    }
+                }
+                if ($changed) {
+                    Save-Config $cfg
+                    Write-EventLog -LogName Application -Source $ServiceName -EventId 400 `
+                        -EntryType Information -Message "desired config applied from backend" -ErrorAction SilentlyContinue
+                }
+            }
             Invoke-BackendCommands $cfg
         } catch {}
-        if ($tick % 30 -eq 15) { Test-UpdateManifest $cfg }      # ~every 30 min
+        $interval = 60
+        if ($cfg.telemetry_interval_sec) { $interval = [int]$cfg.telemetry_interval_sec }
+        if ($tick % 30 -eq 15 -and ($cfg.update_checks_enabled -ne $false)) { Test-UpdateManifest $cfg }  # ~every 30 min
         if ($tick % 60 -eq 30) { $cfg = Renew-TokenIfDue $cfg }  # ~hourly check
         $tick++
-        Start-Sleep -Seconds 60
+        Start-Sleep -Seconds $interval
     }
 }
 

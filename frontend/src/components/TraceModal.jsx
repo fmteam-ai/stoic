@@ -62,7 +62,7 @@ export const TraceModal = ({ trade, onClose }) => {
                                 <div className="font-mono text-[9px] tracking-widest text-[#38BDF8]">DECISION TIMELINE</div>
                                 <div className="flex items-center gap-1 flex-wrap mt-1.5">
                                     {tl.stages.map((s, i) => (
-                                        <span key={s.stage} className="flex items-center gap-1" title={s.detail}>
+                                        <span key={s.stage} className="flex items-center gap-1" title={s.summary || ""}>
                                             <span data-testid={`timeline-stage-${s.stage}`}
                                                 className={`font-mono text-[8px] tracking-widest px-1.5 py-0.5 border ${s.status === "complete"
                                                     ? "border-[#00FF41]/40 text-[#00FF41]"

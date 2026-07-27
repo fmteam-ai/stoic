@@ -109,7 +109,11 @@ async def agent_heartbeat(db, agent_token: str, metrics: dict) -> dict:
     await db.vps_agents.update_one(
         {"_id": agent["_id"]},
         {"$set": {"last_heartbeat": now, "last_metrics": hb}})
-    return {"ok": True, "next_heartbeat_sec": 60}
+    out = {"ok": True, "next_heartbeat_sec": 60}
+    # iter-160 — central config sync: ship desired config with the ack
+    if agent.get("desired_config"):
+        out["desired_config"] = agent["desired_config"]
+    return out
 
 
 async def rotate_agent_token(db, agent_token: str) -> dict:

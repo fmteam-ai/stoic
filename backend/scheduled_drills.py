@@ -93,6 +93,13 @@ async def scheduled_drill_loop():
         try:
             await asyncio.sleep(CHECK_INTERVAL_SEC)
             db = get_db()
+            try:
+                from release_channels import maybe_promote
+                promoted = await maybe_promote(db)
+                if promoted:
+                    logger.info("canary candidate auto-promoted to stable")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("release promotion check error: %s", e)
             if await _due(db):
                 try:
                     from correlation import new_correlation_id

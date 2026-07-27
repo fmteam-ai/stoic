@@ -671,10 +671,12 @@ async def agent_health(agent_id: str, user=Depends(get_current_user)):
 
 # ── artifacts + broker profiles + failure matrix ────────────────
 @router.get("/artifacts/manifest")
-async def artifacts_manifest():
-    from vps_pathb import build_artifact_manifest
+async def artifacts_manifest(agent_id: str | None = None):
+    """Cohort-aware since iter-160: canary agents receive the candidate
+    channel; everyone else gets stable. Always Ed25519-signed."""
     try:
-        return build_artifact_manifest()
+        from release_channels import manifest_for_agent
+        return await manifest_for_agent(get_db(), agent_id)
     except RuntimeError as e:
         # iter-125 correction #3 — unsigned manifests are refused outright.
         raise HTTPException(status_code=503, detail=str(e))

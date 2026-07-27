@@ -1457,3 +1457,10 @@ Rule: user-entered labels = presentation only; broker-verified identity (account
 2. test_iter148_p0_exec_truth: infra_routes.py added to crafted-ValueError allowlist (its detail=str(e) sites are deliberate vps-module messages); the one raw `except Exception → str(e)` (~L365) now returns "invalid request". Hardcoded /app paths in 5 HTTP test files (iter93/105/110/112/114) replaced with __file__-relative _REPO paths.
 3. gitleaks false positive: "api_router. Tests: test_iter110_phase3_4.py" in memory/PRD.md@d3b0657:411 matched generic-api-key — fingerprint added to .gitleaksignore + line reworded.
 LEARNING: iter-148 is a source-policy suite (no detail=str(e) outside allowlist; no literal /app paths in tests) — new routes/tests must comply or CI fails. gitleaks arm64 binary works locally for pre-push checks.
+
+## Iter-161 (2026-06) — Trade Timeline admin audit access (test_iter160 green)
+- GET /api/trades/{id}/timeline rewired from operator_tools.decision_timeline to trade_timeline.assemble_timeline (iter-160 lifecycle audit: signal→validation→risk→execution→confirmation→monitoring→close[+analytics]).
+- AuthZ: owner OR role=admin (ops support cross-user audit); non-owner non-admin → 403; unknown id → 404. Lookup accepts ObjectId, trade_id, or mt5_ticket.
+- assemble_timeline stages now carry status complete/pending + top-level `complete` count (TraceModal stepper compat); TraceModal title uses s.summary.
+- decision_timeline kept in operator_tools (unit tests iter94 still cover it). Manifest regenerated → 3,021 tests / 290 files.
+- Verified: pytest test_iter160_release_ops.py 8/8 + iter93/94/phaseG regression 13/13 + live curl e2e (admin fetched another user's trade timeline, all stages present).

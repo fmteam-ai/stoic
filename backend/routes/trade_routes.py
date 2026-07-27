@@ -710,15 +710,17 @@ async def trade_replay_route(trade_id: str, user=Depends(get_current_user)):
 
 @router.get("/{trade_id}/timeline")
 async def trade_timeline_route(trade_id: str, user=Depends(get_current_user)):
-    """Phase 7 — canonical 8-stage decision timeline
-    (signal→risk→order_check→broker→deal→protection→reconciliation→journal)."""
-    from operator_tools import decision_timeline
+    """iter-160 — full order-lifecycle audit timeline
+    (signal→validation→risk→execution→confirmation→monitoring→close).
+    Owners see their own trades; admins may audit any trade (ops support)."""
+    from trade_timeline import assemble_timeline
     db = get_db()
-    trade = await db.trades.find_one(
-        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]})
-    if not trade:
+    tl = await assemble_timeline(db, trade_id)
+    if not tl:
         raise HTTPException(status_code=404, detail="Trade not found")
-    return await decision_timeline(db, trade)
+    if user.get("role") != "admin" and tl.get("user_id") != str(user["id"]):
+        raise HTTPException(status_code=403, detail="Not your trade")
+    return tl
 
 
 class WhatIfIn(BaseModel):

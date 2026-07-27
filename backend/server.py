@@ -250,8 +250,13 @@ async def artifact_by_hash(sha256: str):
     if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
         return JSONResponse(status_code=400, content={"error": "bad_digest"})
     static_dir = Path(__file__).parent / "static"
-    for fname, media in (("EmergentTradingBridge.ex5", "application/octet-stream"),
-                         ("EmergentTradingBridge.mq5", "text/plain")):
+    # iter-160 — immutable release store: filename IS the digest
+    store_hit = static_dir / "artifacts" / sha256
+    candidates = ([("artifacts/" + sha256, "application/octet-stream")]
+                  if store_hit.exists() else [])
+    candidates += [("EmergentTradingBridge.ex5", "application/octet-stream"),
+                   ("EmergentTradingBridge.mq5", "text/plain")]
+    for fname, media in candidates:
         path = static_dir / fname
         if not path.exists():
             continue

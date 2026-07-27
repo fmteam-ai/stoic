@@ -99,6 +99,128 @@ function SloPanel() {
     );
 }
 
+function ReleasesPanel() {
+    const [data, setData] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const load = useCallback(async () => {
+        try { setData((await api.get("/ops/releases")).data); }
+        catch { setData(null); }
+    }, []);
+    useEffect(() => { load(); }, [load]);
+    const act = async (path, okMsg) => {
+        setBusy(true);
+        try { await api.post(path); toast.success(okMsg); await load(); }
+        catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    const st = data?.state;
+    const short = (m) => Object.entries(m || {}).map(([k, v]) => `${k}@${String(v).slice(0, 10)}`).join(" · ") || "—";
+    return (
+        <Panel title="Releases — canary rollout" icon={ListOrdered} testid="ops-panel-releases">
+            {!st && <div className="text-xs text-[#52525B]">loading…</div>}
+            {st && (
+                <>
+                    <Row k="Stable (fleet)" v={short(st.stable)} vCls="text-[#00FF41]" />
+                    <Row k="Candidate (canary)" v={st.candidate ? short(st.candidate) : "none — fleet on stable"} vCls={st.candidate ? "text-[#FFD700]" : tone.dim} />
+                    <Row k="Canary agents" v={(st.canary_agents || []).join(", ") || "none set"} vCls={tone.dim} />
+                    <Row k="Auto-promotion" v={st.pinned ? "PINNED (rollback active)" : `after ${st.promote_after_hours || 24}h clean soak`} vCls={st.pinned ? "text-[#FF3B30]" : tone.dim} />
+                    <div className="flex gap-2 mt-2">
+                        <button onClick={() => act("/ops/releases/promote", "Candidate promoted to stable")}
+                            disabled={busy || !st.candidate} data-testid="release-promote-btn"
+                            className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 disabled:opacity-40">
+                            PROMOTE NOW
+                        </button>
+                        <button onClick={() => act("/ops/releases/rollback", "Rolled back to previous stable (pinned)")}
+                            disabled={busy || !st.previous_stable} data-testid="release-rollback-btn"
+                            className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 disabled:opacity-40">
+                            ROLLBACK
+                        </button>
+                    </div>
+                    <div className="mt-2 max-h-24 overflow-y-auto">
+                        {(data.history || []).map(h => (
+                            <div key={h.event_id} className="text-[10px] font-mono text-[#52525B] py-0.5">
+                                {new Date(h.at).toLocaleString()} · {h.event}
+                            </div>
+                        ))}
+                    </div>
+                </>
+            )}
+        </Panel>
+    );
+}
+
+function TradeLookup() {
+    const [tid, setTid] = useState("");
+    const [tl, setTl] = useState(null);
+    const [err, setErr] = useState("");
+    const lookup = async () => {
+        setErr(""); setTl(null);
+        try { setTl((await api.get(`/trades/${encodeURIComponent(tid.trim())}/timeline`)).data); }
+        catch (e) { setErr(formatApiError(e)); }
+    };
+    return (
+        <Panel title="Trade Lifecycle Lookup" icon={ListOrdered} testid="ops-panel-trade-lookup">
+            <div className="flex gap-2 mb-2">
+                <input value={tid} onChange={e => setTid(e.target.value)}
+                    placeholder="trade id / MT5 ticket"
+                    data-testid="trade-lookup-input"
+                    className="flex-1 bg-[#050505] border border-[#1F1F1F] text-xs text-white px-2 py-1.5 font-mono" />
+                <button onClick={lookup} disabled={!tid.trim()} data-testid="trade-lookup-btn"
+                    className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B]">
+                    TRACE
+                </button>
+            </div>
+            {err && <div className="text-xs text-[#FF3B30]" data-testid="trade-lookup-error">{err}</div>}
+            {tl && (
+                <div data-testid="trade-lookup-results">
+                    <div className="text-xs font-mono text-white mb-1">
+                        {tl.symbol} · {tl.status} · {tl.trade_id.slice(0, 10)}…
+                    </div>
+                    {tl.stages.map((s, i) => (
+                        <div key={i} className="flex items-start gap-2 py-0.5 text-xs" title={JSON.stringify(s.detail).slice(0, 300)}>
+                            <span className="shrink-0 font-mono text-[#00FF41] w-24 uppercase">{s.stage}</span>
+                            <span className="text-[#A1A1AA]">{s.summary}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </Panel>
+    );
+}
+
+function FleetTable({ fleet }) {
+    if (!fleet?.length) return <div className="text-xs text-[#52525B]" data-testid="fleet-empty">No host agents reporting yet.</div>;
+    return (
+        <div className="overflow-x-auto" data-testid="fleet-table">
+            <table className="w-full text-[10px] font-mono">
+                <thead><tr className="text-[#52525B] text-left">
+                    <th className="pr-2">AGENT</th><th className="pr-2">VER</th><th className="pr-2">HB</th>
+                    <th className="pr-2">CPU</th><th className="pr-2">RAM</th><th className="pr-2">DISK</th>
+                    <th className="pr-2">MT5</th><th className="pr-2">RST</th><th>REBOOT?</th>
+                </tr></thead>
+                <tbody>
+                    {fleet.map(a => (
+                        <tr key={a.agent_id} className="text-[#A1A1AA] border-t border-[#141414]">
+                            <td className="pr-2">{a.agent_id?.slice(0, 14)}</td>
+                            <td className="pr-2">{a.agent_version || "—"}</td>
+                            <td className={`pr-2 ${a.heartbeat_age_sec > 180 ? "text-[#FF3B30]" : "text-[#00FF41]"}`}>
+                                {a.heartbeat_age_sec != null ? `${a.heartbeat_age_sec}s` : "—"}</td>
+                            <td className="pr-2">{a.cpu_percent != null ? `${a.cpu_percent}%` : "—"}</td>
+                            <td className="pr-2">{a.ram_percent != null ? `${a.ram_percent}%` : "—"}</td>
+                            <td className={`pr-2 ${a.disk_free_pct < 10 ? "text-[#FF3B30]" : ""}`}>
+                                {a.disk_free_pct != null ? `${a.disk_free_pct}%` : "—"}</td>
+                            <td className={`pr-2 ${a.mt5_connected ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
+                                {a.mt5_connected ? "UP" : "DOWN"}</td>
+                            <td className="pr-2">{a.mt5_restarts ?? "—"}</td>
+                            <td className={a.pending_reboot ? "text-[#FFD700]" : ""}>{a.pending_reboot ? "YES" : "no"}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
 function NightlyDrills() {
     const [data, setData] = useState(null);
     const [running, setRunning] = useState(false);
@@ -441,6 +563,7 @@ export default function AdminOps() {
                             <Row k="Agents low on disk (<10%)" v={d.host_agents.low_disk_count}
                                 vCls={d.host_agents.low_disk_count ? tone.bad : "text-white"} />
                             <Row k="Avg broker latency" v={d.host_agents.avg_broker_latency_ms != null ? `${d.host_agents.avg_broker_latency_ms}ms` : "not reported"} vCls={tone.dim} />
+                            <div className="mt-2"><FleetTable fleet={d.host_agents.fleet} /></div>
                         </>
                     )}
                 </Panel>
@@ -449,6 +572,8 @@ export default function AdminOps() {
                 <StressTest />
                 <SloPanel />
                 <NightlyDrills />
+                <ReleasesPanel />
+                <TradeLookup />
             </div>
         </AppLayout>
     );

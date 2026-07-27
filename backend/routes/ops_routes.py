@@ -389,6 +389,103 @@ async def slo_status(request: Request):
     return {"slos": await compute_slos(get_db())}
 
 
+@router.get("/ops/releases")
+async def releases_state(request: Request):
+    """iter-160 — canary/staged rollout state + deployment history."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from release_channels import sync_channels
+    db = get_db()
+    st = await sync_channels(db)
+    st.pop("_id", None)
+    history = await db.release_history.find(
+        {}, {"_id": 0}, sort=[("at", -1)]).limit(10).to_list(10)
+    return {"state": st, "history": history}
+
+
+@router.post("/ops/releases/canary")
+async def releases_set_canary(payload: dict, request: Request):
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from release_channels import set_canary_agents
+    ids = payload.get("agent_ids") or []
+    if not isinstance(ids, list):
+        return JSONResponse(status_code=400,
+                            content={"detail": "agent_ids must be a list"})
+    st = await set_canary_agents(get_db(), ids, actor=actor or "admin")
+    st.pop("_id", None)
+    return st
+
+
+@router.post("/ops/releases/promote")
+async def releases_promote(request: Request):
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from release_channels import promote
+    try:
+        st = await promote(get_db(), actor=actor or "admin")
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"detail": str(e)})
+    st.pop("_id", None)
+    return st
+
+
+@router.post("/ops/releases/rollback")
+async def releases_rollback(request: Request):
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from release_channels import rollback
+    try:
+        st = await rollback(get_db(), actor=actor or "admin")
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"detail": str(e)})
+    st.pop("_id", None)
+    return st
+
+
+@router.post("/ops/agents/{agent_id}/config")
+async def set_agent_desired_config(agent_id: str, payload: dict,
+                                   request: Request):
+    """iter-160 — central config sync: agents apply this on next heartbeat."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    ALLOWED = {"mt5_supervise", "mt5_path", "telemetry_interval_sec",
+               "update_checks_enabled"}
+    cfg = {k: v for k, v in (payload or {}).items() if k in ALLOWED}
+    if not cfg:
+        return JSONResponse(status_code=400,
+                            content={"detail": f"allowed keys: {sorted(ALLOWED)}"})
+    db = get_db()
+    r = await db.vps_agents.update_one(
+        {"agent_id": agent_id},
+        {"$set": {"desired_config": cfg,
+                  "desired_config_by": actor or "admin"}})
+    if r.matched_count == 0:
+        return JSONResponse(status_code=404, content={"detail": "agent not found"})
+    return {"agent_id": agent_id, "desired_config": cfg}
+
+
+@router.get("/trades/{trade_id}/timeline")
+async def trade_timeline_ep(trade_id: str, request: Request):
+    """iter-160 — full order-lifecycle audit for one trade. Owners see their
+    own trades; ops actors can inspect any trade."""
+    from auth import get_current_user
+    user = await get_current_user(request)
+    from trade_timeline import assemble_timeline
+    db = get_db()
+    tl = await assemble_timeline(db, trade_id)
+    if not tl:
+        return JSONResponse(status_code=404, content={"detail": "trade not found"})
+    if tl["user_id"] != user["id"] and user.get("role") != "admin":
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    return tl
+
+
 @router.get("/ops/scheduled-drills")
 async def scheduled_drills_status(request: Request):
     """iter-159 — nightly resilience suite history."""

@@ -286,9 +286,11 @@ async def ops_console(user=Depends(get_current_user)):
     # ── Host-agent telemetry aggregates ─────────────────────────────────
     low_disk = 0
     latencies = []
+    fleet = []
     async for a in db.vps_agents.find(
             {"revoked": {"$ne": True}, "last_metrics": {"$ne": None}},
-            {"last_metrics": 1}).limit(200):
+            {"last_metrics": 1, "agent_id": 1,
+             "last_heartbeat": 1}).limit(200):
         m = a.get("last_metrics") or {}
         pct = m.get("disk_free_pct")
         if isinstance(pct, (int, float)) and pct < 10:
@@ -296,10 +298,32 @@ async def ops_console(user=Depends(get_current_user)):
         lat = m.get("broker_latency_ms")
         if isinstance(lat, (int, float)):
             latencies.append(lat)
+        if len(fleet) < 20:
+            hb = a.get("last_heartbeat")
+            age = None
+            if hb is not None:
+                if isinstance(hb, str):
+                    hb = datetime.fromisoformat(hb.replace("Z", "+00:00"))
+                if hb.tzinfo is None:
+                    hb = hb.replace(tzinfo=timezone.utc)
+                age = round((datetime.now(timezone.utc) - hb).total_seconds())
+            fleet.append({
+                "agent_id": a.get("agent_id"),
+                "heartbeat_age_sec": age,
+                "agent_version": m.get("agent_version"),
+                "cpu_percent": m.get("cpu_percent"),
+                "ram_percent": m.get("ram_percent"),
+                "disk_free_pct": m.get("disk_free_pct"),
+                "mt5_connected": m.get("mt5_connected"),
+                "mt5_restarts": m.get("mt5_restarts"),
+                "pending_reboot": m.get("pending_reboot"),
+                "broker_latency_ms": m.get("broker_latency_ms"),
+            })
     out["host_agents"] = {
         "low_disk_count": low_disk,
         "avg_broker_latency_ms": (round(sum(latencies) / len(latencies), 1)
                                   if latencies else None),
         "reporting_latency": len(latencies),
+        "fleet": fleet,
     }
     return out
