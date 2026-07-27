@@ -5,6 +5,7 @@ import "@/App.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { SiteFooter } from "@/components/SiteFooter";
 
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
@@ -152,6 +153,7 @@ function App() {
                         <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                     </Suspense>
+                    <SiteFooter />
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>
             </BrowserRouter>
