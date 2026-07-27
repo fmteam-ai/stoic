@@ -1,0 +1,25 @@
+{
+  "summary": "Frontend-only verification of CI e2e admin-email fix. All 5 requested flows PASS against preview URL. admin@stoicaibot.com/admin123 logs in and dashboard-header renders; /accounts and /trades render successfully; /settings shows profile-section, password-section, twofa-section with 0 must-change-password-banner; wrong current password is rejected with visible error 'Current password is incorrect'. site-footer present once on /settings and does not overlap interactive controls. Fix confirmed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard/global", "issues": ["Recharts warnings: 'width(-1) and height(-1) of chart should be greater than 0' — a container is briefly rendered with 0 dimensions before data loads. Cosmetic console noise only."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Recharts ResponsiveContainer warning suggests parent container lacks explicit min height/width when chart mounts pre-data; consider setting minHeight to avoid noisy console warnings.",
+    "Multiple 401s appear in console before login completes (likely /api/auth/me probe on public /login route). Consider gating the auth-probe on unauthenticated routes to reduce log noise."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100% (5/5)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (preview)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "CI e2e admin email default change (admin@stoicaibot.com) is verified working in preview. Both admin@stoicaibot.com and admin@trading.bot exist in preview DB with admin123. Do not enroll 2FA on admin@trading.bot. Preview keeps ADMIN_MFA_ENFORCED=false, must-change-password false. Recharts container warning is pre-existing cosmetic noise unrelated to this fix.",
+  "rca of the issue": "Original CI failure: e2e/tests/helpers.ts defaulted ADMIN_EMAIL to admin@trading.bot but backend seed_admin() defaults to admin@stoicaibot.com when ADMIN_EMAIL env unset (CI case), so fresh CI DB rejected the login. Fix (helpers.ts default → admin@stoicaibot.com) confirmed via live login in preview reaching dashboard-header."
+}
