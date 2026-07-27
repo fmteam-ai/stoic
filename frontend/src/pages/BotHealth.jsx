@@ -11,6 +11,7 @@ import {
 import { ExecutionHealthPanel } from "../components/ExecutionHealthPanel";
 import { ReadinessCard } from "../components/ReadinessCard";
 import { ChaosDrillsCard } from "../components/ChaosDrillsCard";
+import { StressTestCard } from "../components/StressTestCard";
 import { SoakReportCard } from "../components/DemoReadinessPanels";
 import { CapitalStageCard, SubsystemHealthCard, RealtimeRiskCard, OperatorConsole, ModeGuardianCard } from "../components/LiveOpsPanels";
 import { AlertsCard } from "../components/AlertsCard";
@@ -549,6 +550,7 @@ export default function BotHealth() {
 
                 <ReadinessCard />
                 <ChaosDrillsCard />
+                <StressTestCard />
                 <SoakReportCard />
                 <CapitalStageCard />
                 <SubsystemHealthCard />

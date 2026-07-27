@@ -99,6 +99,59 @@ function SloPanel() {
     );
 }
 
+function NightlyDrills() {
+    const [data, setData] = useState(null);
+    const [running, setRunning] = useState(false);
+    const load = useCallback(async () => {
+        try { setData((await api.get("/ops/scheduled-drills")).data); }
+        catch { setData({ runs: [] }); }
+    }, []);
+    useEffect(() => { load(); }, [load]);
+    const runNow = async () => {
+        setRunning(true);
+        try {
+            const { data: r } = await api.post("/ops/scheduled-drills/run");
+            toast[r.ok ? "success" : "error"](r.ok
+                ? "Nightly suite: all green"
+                : `Nightly suite FAILED: ${r.failures?.slice(0, 3).join(", ")}`);
+            await load();
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setRunning(false); }
+    };
+    return (
+        <Panel title="Nightly Drills" icon={FlaskConical} testid="ops-panel-nightly-drills">
+            <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-[#71717A]">
+                    Chaos (12) + runtime validation (9) + severe stress test run
+                    automatically every night — failures raise a CRITICAL alert.
+                </span>
+                <button onClick={runNow} disabled={running} data-testid="nightly-drills-run-btn"
+                    className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 flex items-center gap-1.5 shrink-0">
+                    {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                    {running ? "RUNNING" : "RUN NOW"}
+                </button>
+            </div>
+            {data?.runs?.length === 0 && (
+                <div className="text-xs text-[#52525B]" data-testid="nightly-drills-empty">
+                    No runs recorded yet — first run happens automatically tonight.
+                </div>
+            )}
+            {(data?.runs || []).map(r => (
+                <div key={r.run_id} className="flex items-center gap-2 py-0.5 text-xs font-mono"
+                    title={(r.failures || []).join(", ")}>
+                    <span className={r.ok ? "text-[#00FF41]" : "text-[#FF3B30]"}>
+                        {r.ok ? "GREEN" : "FAIL"}
+                    </span>
+                    <span className="text-[#A1A1AA]">{new Date(r.at).toLocaleString()}</span>
+                    <span className="text-[#52525B]">
+                        chaos {r.chaos?.passed}/{r.chaos?.total} · runtime {r.runtime?.passed}/{r.runtime?.total} · stress {r.stress?.verdict}
+                    </span>
+                </div>
+            ))}
+        </Panel>
+    );
+}
+
 function RuntimeValidation() {
     const [data, setData] = useState(null);
     const [running, setRunning] = useState(false);
@@ -395,6 +448,7 @@ export default function AdminOps() {
                 <RuntimeValidation />
                 <StressTest />
                 <SloPanel />
+                <NightlyDrills />
             </div>
         </AppLayout>
     );

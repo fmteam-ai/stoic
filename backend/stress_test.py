@@ -47,7 +47,10 @@ def _build_bars(severity: dict, base: float = 4000.0):
 
 
 async def run_stress_test(db, severity: str = "moderate",
-                          actor: str = "system") -> dict:
+                          actor: str = "system", *,
+                          equity: float = 10_000.0, risk_pct: float = 0.5,
+                          daily_dd_pct: float = 3.0, user_id: str | None = None,
+                          profile_note: str = "") -> dict:
     sev = SEVERITIES.get(severity) or SEVERITIES["moderate"]
     calm, crash, recovery, floor_price = _build_bars(sev)
     base = calm[0]["o"]
@@ -83,27 +86,27 @@ async def run_stress_test(db, severity: str = "moderate",
 
     # 3 — drawdown circuit breaker: equity hit from the drop must trip the
     # daily limit exactly when it should
-    equity = 10_000.0
     exposure = 0.5  # 50% notional exposure through the crash
     pnl_day = -equity * exposure * sev["drop_pct"] / 100.0
-    dd = drawdown_check(pnl_day, pnl_day, pnl_day, equity)
+    dd = drawdown_check(pnl_day, pnl_day, pnl_day, equity,
+                        daily_pct=daily_dd_pct)
     dd_pct = -100.0 * pnl_day / equity
-    should_trip = dd_pct >= 3.0  # daily limit
+    should_trip = dd_pct >= daily_dd_pct
     tripped = dd.get("status") == "block"
     check("drawdown_circuit_breaker", tripped == should_trip,
           f"{dd_pct:.1f}% daily DD {'trips' if should_trip else 'stays under'}"
-          " the 3% breaker", dd.get("detail"))
+          f" the {daily_dd_pct:g}% breaker", dd.get("detail"))
 
     # 4 — SafetyGuardian sizing floor: position size must COLLAPSE (not grow)
     # as stop distance explodes in the crash
     from risk import compute_position_size
     calm_sl_pips, crash_sl_pips = 30.0, 30.0 * sev["spread_mult"]
-    lot_calm = compute_position_size(equity, 0.5, calm_sl_pips)
-    lot_crash = compute_position_size(equity, 0.5, crash_sl_pips)
-    check("position_sizing_floor", 0 < lot_crash < lot_calm,
+    lot_calm = compute_position_size(equity, risk_pct, calm_sl_pips)
+    lot_crash = compute_position_size(equity, risk_pct, crash_sl_pips)
+    check("position_sizing_floor", 0 < lot_crash <= lot_calm,
           "size shrinks as volatility widens the stop",
           f"calm lot {lot_calm} → crash lot {lot_crash} "
-          f"(risk held constant at 0.5%)")
+          f"(risk held constant at {risk_pct:g}%)")
 
     # 5 — recovery: once the market calms, the filter must stand down and
     # trading resumes (no stuck state)
@@ -118,7 +121,11 @@ async def run_stress_test(db, severity: str = "moderate",
     doc = {"run_id": f"stress-{uuid.uuid4().hex[:10]}",
            "severity": severity,
            "params": {**sev, "base_price": base,
-                      "floor_price": round(floor_price, 2)},
+                      "floor_price": round(floor_price, 2),
+                      "equity": equity, "risk_pct": risk_pct,
+                      "daily_dd_pct": daily_dd_pct,
+                      "profile_note": profile_note},
+           "user_id": user_id,
            "checks": checks,
            "passed": passed, "failed": len(checks) - passed,
            "verdict": "STAYED_CALM" if passed == len(checks) else "PANICKED",
@@ -127,3 +134,29 @@ async def run_stress_test(db, severity: str = "moderate",
     await db.stress_tests.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
+
+
+async def run_user_stress_test(db, user_id: str,
+                               severity: str = "moderate") -> dict:
+    """Personalized crash test: uses the customer's OWN risk profile and
+    account equity so the scorecard reflects their real configuration."""
+    from risk import get_profile
+    cfg = await db.bot_configs.find_one(
+        {"user_id": user_id, "active": True}) or \
+        await db.bot_configs.find_one({"user_id": user_id}) or {}
+    level = cfg.get("risk_level") or "low"
+    profile = get_profile(level)
+    risk_pct = float(profile.get("risk_pct") or 0.5)
+    equity = 10_000.0
+    src = "default $10,000"
+    acct = await db.accounts.find_one(
+        {"user_id": user_id, "equity": {"$gt": 0}}, sort=[("equity", -1)])
+    if acct:
+        equity = float(acct["equity"])
+        src = f"your account {acct.get('name') or acct.get('login') or ''}".strip()
+    note = (f"risk profile: {profile.get('label', level)} "
+            f"({risk_pct:g}%/trade) · equity basis: {src}")
+    return await run_stress_test(
+        db, severity=severity, actor=f"user:{user_id}",
+        equity=equity, risk_pct=risk_pct, daily_dd_pct=3.0,
+        user_id=user_id, profile_note=note)

@@ -595,6 +595,7 @@ _analytics_task = None
 _model_maint_task = None
 _ops_alert_task = None
 _portfolio_stop_task = None
+_scheduled_drills_task = None
 
 
 async def on_startup():
@@ -686,6 +687,9 @@ async def on_startup():
         from broker_intel import _broker_intel_loop
         global _broker_intel_task
         _broker_intel_task = asyncio.create_task(_broker_intel_loop())
+        from scheduled_drills import scheduled_drill_loop
+        global _scheduled_drills_task
+        _scheduled_drills_task = asyncio.create_task(scheduled_drill_loop())
         logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
     except Exception as e:
         logger.exception("Startup error: %s", e)
@@ -702,7 +706,8 @@ async def on_shutdown():
                  _auto_heal_task, _stuck_sync_task, _optimizer_task,
                  _nightly_tuner_task, _scalp_reconcile_task,
                  _protection_task, _analytics_task, _model_maint_task,
-                 _ops_alert_task, _portfolio_stop_task):
+                 _ops_alert_task, _portfolio_stop_task,
+                 _scheduled_drills_task):
         if task and not task.done():
             task.cancel()
             try:

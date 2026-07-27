@@ -389,6 +389,67 @@ async def slo_status(request: Request):
     return {"slos": await compute_slos(get_db())}
 
 
+@router.get("/ops/scheduled-drills")
+async def scheduled_drills_status(request: Request):
+    """iter-159 — nightly resilience suite history."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    runs = await db.scheduled_drill_runs.find(
+        {}, {"_id": 0}, sort=[("at", -1)]).limit(7).to_list(7)
+    for r in runs:
+        if hasattr(r.get("at"), "isoformat"):
+            r["at"] = r["at"].isoformat()
+    return {"runs": runs}
+
+
+@router.post("/ops/scheduled-drills/run")
+async def scheduled_drills_run_now(request: Request):
+    """Manual trigger of the full nightly suite (admin)."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from scheduled_drills import run_nightly_suite
+    out = await run_nightly_suite(get_db(), actor=actor or "admin")
+    out["at"] = out["at"].isoformat()
+    return out
+
+
+@router.post("/stress-test/run")
+async def user_stress_test_run(request: Request, severity: str = "moderate"):
+    """iter-159 — customer-facing crash test against THEIR own config."""
+    from auth import get_current_user
+    user = await get_current_user(request)
+    from stress_test import run_user_stress_test, SEVERITIES
+    if severity not in SEVERITIES:
+        return JSONResponse(status_code=400,
+                            content={"detail": f"severity must be one of "
+                                               f"{sorted(SEVERITIES)}"})
+    db = get_db()
+    from security import rate_limit
+    await rate_limit(db, "user_stress_test", user["id"], 10, 3600,
+                     message="Stress-test limit reached — try again later.",
+                     request=request)
+    out = await run_user_stress_test(db, user["id"], severity=severity)
+    out["at"] = out["at"].isoformat()
+    return out
+
+
+@router.get("/stress-test/runs")
+async def user_stress_test_runs(request: Request):
+    from auth import get_current_user
+    user = await get_current_user(request)
+    db = get_db()
+    runs = await db.stress_tests.find(
+        {"user_id": user["id"]}, {"_id": 0},
+        sort=[("at", -1)]).limit(5).to_list(5)
+    for r in runs:
+        if hasattr(r.get("at"), "isoformat"):
+            r["at"] = r["at"].isoformat()
+    return {"runs": runs}
+
+
 @router.get("/ops/alerts")
 async def list_alerts(request: Request, include_acked: bool = False,
                       limit: int = 100):
