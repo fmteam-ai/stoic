@@ -210,7 +210,10 @@ def test_rotate_and_revoke_endpoints(svc_db):
     body = r.json()
     assert body["agent_token"] != old_token and body["command_key"] != "old"
     doc = db.vps_agents.find_one({"agent_id": agent_id})
-    assert doc["agent_token"] == body["agent_token"]
+    # iter-170 — token stored HASHED at rest, plaintext dropped
+    from vps_agent import hash_agent_token
+    assert "agent_token" not in doc
+    assert doc["agent_token_hash"] == hash_agent_token(body["agent_token"])
     # installation revocation kills lease + rotates the bridge token
     from bson import ObjectId
     aid = db.accounts.insert_one({

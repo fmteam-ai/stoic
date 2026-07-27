@@ -5,6 +5,7 @@ import secrets
 import string
 import uuid
 import os
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 from identity_model import (authoritative_account_number,
@@ -12,6 +13,14 @@ from identity_model import (authoritative_account_number,
 
 BOOTSTRAP_TTL_MIN = 20
 PAIRING_TTL_MIN = 10
+
+
+def hash_agent_token(token: str) -> str:
+    """iter-170 — agent tokens are stored HASHED at rest so DB read access
+    alone can't yield live credentials. Tokens are 256-bit random
+    (secrets.token_urlsafe(32)), so a plain SHA-256 is unbrute-forceable —
+    no salt/bcrypt needed (same model as API-key/PAT storage)."""
+    return hashlib.sha256((token or "").encode()).hexdigest()
 
 HARDENING_CHECKLIST = [
     "firewall_enabled", "inbound_restricted", "unnecessary_services_off",
@@ -75,7 +84,7 @@ async def register_agent(db, token: str, facts: dict) -> dict:
     agent_id = f"agt_{uuid.uuid4().hex[:12]}"
     agent_token = f"agt_tok_{secrets.token_urlsafe(32)}"
     await db.vps_agents.insert_one({
-        "agent_id": agent_id, "agent_token": agent_token,
+        "agent_id": agent_id, "agent_token_hash": hash_agent_token(agent_token),
         "command_key": secrets.token_hex(32),   # iter-122 P3: HMAC key for signed commands
         "command_seq": 0, "last_acked_seq": 0,
         "user_id": boot["user_id"],
@@ -98,8 +107,15 @@ async def register_agent(db, token: str, facts: dict) -> dict:
 
 
 async def agent_by_token(db, agent_token: str) -> dict:
+    # Primary lookup is by token HASH (plaintext is never stored). A legacy
+    # plaintext fallback keeps any not-yet-migrated agent authenticating
+    # during rollout; the startup migration removes all plaintext in prod.
     agent = await db.vps_agents.find_one(
-        {"agent_token": agent_token, "revoked": {"$ne": True}})
+        {"agent_token_hash": hash_agent_token(agent_token),
+         "revoked": {"$ne": True}})
+    if not agent:
+        agent = await db.vps_agents.find_one(
+            {"agent_token": agent_token, "revoked": {"$ne": True}})
     if not agent:
         raise ValueError("unknown or revoked agent token")
     return agent
@@ -137,7 +153,9 @@ async def rotate_agent_token(db, agent_token: str) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     await db.vps_agents.update_one(
         {"agent_id": agent["agent_id"]},
-        {"$set": {"agent_token": new_token, "token_rotated_at": now}})
+        {"$set": {"agent_token_hash": hash_agent_token(new_token),
+                  "token_rotated_at": now},
+         "$unset": {"agent_token": ""}})
     return {"agent_id": agent["agent_id"], "agent_token": new_token,
             "rotated_at": now,
             "note": "old token revoked immediately — persist the new one "

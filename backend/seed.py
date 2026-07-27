@@ -177,6 +177,19 @@ async def ensure_indexes():
         [{"$set": {"at": {"$dateToString": {
             "date": "$at", "format": "%Y-%m-%dT%H:%M:%S.%L+00:00"}}}}])
     await db.audit_log.create_index([("user_id", 1), ("at", -1)])
+    # iter-170 — agent tokens hashed at rest. Migrate any legacy plaintext
+    # agent_token → agent_token_hash and DROP the plaintext (idempotent), so a
+    # DB read alone can't yield live agent credentials. Index the hash for O(1)
+    # auth lookups.
+    async for a in db.vps_agents.find(
+            {"agent_token": {"$exists": True}},
+            {"agent_token": 1}):
+        from vps_agent import hash_agent_token
+        await db.vps_agents.update_one(
+            {"_id": a["_id"]},
+            {"$set": {"agent_token_hash": hash_agent_token(a["agent_token"])},
+             "$unset": {"agent_token": ""}})
+    await db.vps_agents.create_index("agent_token_hash")
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])

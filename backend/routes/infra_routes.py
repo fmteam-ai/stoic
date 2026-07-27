@@ -602,10 +602,13 @@ async def rotate_agent_credentials(agent_id: str,
         q["user_id"] = user["id"]
     new_token = f"agt_tok_{_secrets.token_urlsafe(32)}"
     new_key = _secrets.token_hex(32)
+    from vps_agent import hash_agent_token
     r = await db.vps_agents.update_one(
-        q, {"$set": {"agent_token": new_token, "command_key": new_key,
+        q, {"$set": {"agent_token_hash": hash_agent_token(new_token),
+                     "command_key": new_key,
                      "credentials_rotated_at":
-                         datetime.now(timezone.utc).isoformat()}})
+                         datetime.now(timezone.utc).isoformat()},
+            "$unset": {"agent_token": ""}})
     if r.matched_count != 1:
         raise HTTPException(status_code=404, detail="agent not found")
     return {"agent_id": agent_id, "agent_token": new_token,
