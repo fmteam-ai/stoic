@@ -42,10 +42,10 @@ def test_step_up_bypass_refused_under_prod_shorthand(monkeypatch):
     import step_up
     db = _db()
     monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("STEP_UP_BYPASS_TOKEN", "iter165-bypass")
+    monkeypatch.setenv("STEP_UP_BYPASS_TOKEN", "dummy-fixture-value-a")
 
     class _Req:
-        headers = {"X-Step-Up-Bypass": "iter165-bypass"}
+        headers = {"X-Step-Up-Bypass": "dummy-fixture-value-a"}
 
     async def scenario():
         u = await db.users.find_one({"role": "admin"}, {"_id": 1})
@@ -69,10 +69,10 @@ def test_rate_limit_bypass_refused_under_prod_shorthand(monkeypatch):
     import security
     db = _db()
     monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("RATE_LIMIT_BYPASS_TOKEN", "iter165-rl")
+    monkeypatch.setenv("RATE_LIMIT_BYPASS_TOKEN", "dummy-fixture-value-b")
 
     class _Req:
-        headers = {"x-ratelimit-bypass": "iter165-rl"}
+        headers = {"x-ratelimit-bypass": "dummy-fixture-value-b"}
 
     async def scenario():
         scope = f"iter165-{os.urandom(3).hex()}"
