@@ -9,7 +9,14 @@ def get_client():
     if _client is None:
         # lazy import (H7): pure-logic unit tests must not require motor
         from motor.motor_asyncio import AsyncIOMotorClient
-        _client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+        listeners = []
+        try:  # iter-171 (#9): slow-query monitoring
+            from query_perf import SlowQueryListener
+            listeners = [SlowQueryListener()]
+        except Exception:  # noqa: BLE001
+            pass
+        _client = AsyncIOMotorClient(os.environ["MONGO_URL"],
+                                     event_listeners=listeners)
     return _client
 
 

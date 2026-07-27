@@ -190,6 +190,10 @@ async def ensure_indexes():
             {"$set": {"agent_token_hash": hash_agent_token(a["agent_token"])},
              "$unset": {"agent_token": ""}})
     await db.vps_agents.create_index("agent_token_hash")
+    # iter-171 (#10) — single-use order authorizations: unique nonce + TTL GC
+    await db.order_authorizations.create_index("nonce", unique=True)
+    await db.order_authorizations.create_index("issued_at")
+    await db.audit_anchors.create_index("seq", unique=True)
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])

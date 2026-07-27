@@ -24,6 +24,10 @@ async def test_mt5_engine_blocks_when_cap_reached(monkeypatch):
     fake_db.trades.count_documents = AsyncMock(return_value=5)  # already at cap
     fake_db.trades.insert_one = AsyncMock()
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    monkeypatch.setattr("execution.authorize_order",
+                        AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                "signature": "s",
+                                                "authorized_at": "t"}))
     async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
         return None
     monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
@@ -62,6 +66,10 @@ async def test_mt5_engine_allows_when_below_cap(monkeypatch):
     fake_inserted.inserted_id = "fakeid"
     fake_db.trades.insert_one = AsyncMock(return_value=fake_inserted)
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    monkeypatch.setattr("execution.authorize_order",
+                        AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                "signature": "s",
+                                                "authorized_at": "t"}))
     async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
         return None
     monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
@@ -106,6 +114,10 @@ async def test_mt5_engine_no_cap_arg_allows(monkeypatch):
     fake_inserted.inserted_id = "fakeid"
     fake_db.trades.insert_one = AsyncMock(return_value=fake_inserted)
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    monkeypatch.setattr("execution.authorize_order",
+                        AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                "signature": "s",
+                                                "authorized_at": "t"}))
     async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
         return None
     monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)

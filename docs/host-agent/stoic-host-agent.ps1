@@ -24,21 +24,33 @@ param(
 $ServiceName = "StoicHostAgent"
 $ConfigPath = "$env:ProgramData\Stoic\agent.json"
 
+# iter-171 (#4) — PINNED release verification key, COMPILED INTO the agent.
+# Manifests/updates are accepted ONLY if signed by this exact Ed25519 key, so a
+# compromised API can never hand the agent a rogue signing key (no trust-on-
+# first-use). Replace with the PRODUCTION release public key before signing the
+# MSI. Obtain via: GET /api/infra/artifacts/manifest -> .signature.public_key_b64
+$PinnedReleaseKey = "shsQu1qBIZRAX1sUkxn4v7sU9IbRFLLSA88T9+5Q7TY="
+
 function Get-Config { Get-Content $ConfigPath -Raw | ConvertFrom-Json }
 function Save-Config($cfg) { $cfg | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8 }
 
 function Install-Agent {
     New-Item -ItemType Directory -Force -Path (Split-Path $ConfigPath) | Out-Null
-    # PIN the release public key at enroll time — future manifests must be
-    # signed by this exact key or updates are refused (TOFU pinning).
-    $pinnedKey = ""
+    # Enforce the HARDCODED pin: if the server's manifest key differs, REFUSE
+    # to install rather than trust whatever the API returns.
     try {
         $m = Invoke-RestMethod -Uri "$ApiBase/api/infra/artifacts/manifest" -TimeoutSec 15
-        if ($m.signature.alg -eq "Ed25519") { $pinnedKey = $m.signature.public_key_b64 }
-    } catch { Write-Host "[stoic] WARN: could not pin release key at install: $_" }
+        if ($m.signature.alg -eq "Ed25519" -and
+            $m.signature.public_key_b64 -ne $PinnedReleaseKey) {
+            throw "release key mismatch: server key '$($m.signature.public_key_b64)' != pinned key — refusing to enroll"
+        }
+    } catch {
+        if ("$_" -like "*mismatch*") { throw }
+        Write-Host "[stoic] WARN: could not pre-check release key at install: $_"
+    }
     $cfg = @{ api_base = $ApiBase; agent_id = $AgentId; agent_token = $AgentToken;
               mt5_path = $Mt5Path; mt5_supervise = [bool]$Mt5Path;
-              release_public_key_b64 = $pinnedKey;
+              release_public_key_b64 = $PinnedReleaseKey;
               token_rotated_at = (Get-Date).ToUniversalTime().ToString("o");
               installed_at = (Get-Date).ToUniversalTime().ToString("o") }
     Save-Config $cfg

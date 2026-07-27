@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from database import get_db
 from market import get_quote
 from safety_guardian import audit_pre_trade
+from order_authorization import authorize_order
 from ws_manager import manager as ws_manager
 from silent_failures import record_swallow
 
@@ -332,8 +333,24 @@ class MT5BridgeEngine(ExecutionEngine):
             )
         except Exception as _sw:  # noqa: BLE001
             record_swallow("execution", "execute", _sw)  # explanation is informational — never block a trade
+        # SIGNED SINGLE-USE ORDER AUTHORIZATION (iter-171 #10) — every live
+        # order carries a server-minted, HMAC-signed, single-use, atomically-
+        # consumed authorization bound to (user, account, symbol, side).
+        _acct_id = str(account.get("_id") or account.get("account_id")
+                       or cfg_account_id or "")
+        _side = str(signal.get("action") or signal.get("side") or "").upper()
+        order_auth = await authorize_order(
+            db, user_id=user_id, account_id=_acct_id,
+            symbol=signal["symbol"], side=_side)
+        if not order_auth.get("ok"):
+            logger.warning("MT5 execute blocked — order authorization failed "
+                           "user=%s sym=%s: %s", user_id,
+                           signal.get("symbol"), order_auth.get("reason"))
+            return {"blocked": "order_authorization_failed",
+                    "reason": order_auth.get("reason")}
         from correlation import get_correlation_id
         trade_doc.setdefault("trace_id", get_correlation_id())
+        trade_doc["order_authorization"] = order_auth
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)

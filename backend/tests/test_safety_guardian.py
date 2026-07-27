@@ -198,6 +198,10 @@ async def test_mt5_engine_calls_guardian_and_blocks_on_failure(monkeypatch):
     fake_db.trades.insert_one = AsyncMock()
     fake_db.safety_blocks.insert_one = AsyncMock()
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    monkeypatch.setattr("execution.authorize_order",
+                        AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                "signature": "s",
+                                                "authorized_at": "t"}))
     async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
         return None
     monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
@@ -236,6 +240,10 @@ async def test_mt5_engine_stamps_safety_audit_on_good_trade(monkeypatch):
     inserted.inserted_id = "tid"
     fake_db.trades.insert_one = AsyncMock(return_value=inserted)
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
+    monkeypatch.setattr("execution.authorize_order",
+                        AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                "signature": "s",
+                                                "authorized_at": "t"}))
     async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
         return None
     monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)

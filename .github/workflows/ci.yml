@@ -139,6 +139,10 @@ jobs:
         run: |
           pip install -r backend/requirements.txt
           pip install --no-deps emergentintegrations==0.2.0 --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+      - name: Generate random CI admin credentials
+        run: |
+          echo "ADMIN_PASSWORD=Ci9!$(python -c "import secrets; print(secrets.token_urlsafe(24))")" >> "$GITHUB_ENV"
+          echo "ADMIN_EMAIL=admin@stoicaibot.com" >> "$GITHUB_ENV"
       - name: Start backend
         run: |
           cd backend
@@ -172,7 +176,8 @@ jobs:
       - name: Run Playwright UI tests
         run: |
           cd e2e
-          E2E_BASE_URL=http://127.0.0.1:3000 npx playwright test
+          E2E_ADMIN_EMAIL="$ADMIN_EMAIL" E2E_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+            E2E_BASE_URL=http://127.0.0.1:3000 npx playwright test
       - name: Backend log on failure
         if: failure()
         run: tail -100 /tmp/backend.log || true

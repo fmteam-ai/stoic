@@ -108,6 +108,11 @@ async def scheduled_drill_loop():
                                  w.get("reason"))
             except Exception as e:  # noqa: BLE001
                 logger.warning("deployment health watch error: %s", e)
+            try:  # iter-171 (#8) — periodically anchor the audit chain head
+                from audit_anchor import create_anchor
+                await create_anchor(db)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("audit anchor error: %s", e)
             if await _due(db):
                 try:
                     from correlation import new_correlation_id

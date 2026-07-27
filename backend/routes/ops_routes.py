@@ -502,6 +502,40 @@ async def deployment_health_status(request: Request):
                        "min_fail_tenants": dh.MIN_FAIL_TENANTS}}
 
 
+@router.get("/ops/audit-anchor")
+async def audit_anchor_status(request: Request):
+    """iter-171 (#8) — verify the latest signed audit-chain anchor."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from audit_anchor import verify_latest
+    return await verify_latest(get_db())
+
+
+@router.post("/ops/audit-anchor")
+async def audit_anchor_create(request: Request):
+    """Create a signed anchor of the current audit-chain head on demand."""
+    allowed, actor = await _ops_admin_step_up(request, "audit_anchor")
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from audit_anchor import create_anchor
+    doc = await create_anchor(get_db())
+    if not doc:
+        return {"anchored": False, "detail": "no audit-chain entries yet"}
+    return {"anchored": True, **doc, "by": actor}
+
+
+@router.get("/ops/query-perf")
+async def query_perf_status(request: Request):
+    """iter-171 (#9) — slow-query monitoring counters for this API process."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from query_perf import query_perf_stats
+    return query_perf_stats()
+
+
+
 @router.post("/ops/agents/{agent_id}/release-trust")
 async def set_agent_release_trust(agent_id: str, payload: dict,
                                   request: Request):
