@@ -28,3 +28,6 @@ e15a88c1b2c7901a5cc18ffa71c4f96e63eee3a1:memory/PRD.md:generic-api-key:1367
 3aebb9d5f3dfa76270e17bd19a15e03b4203c765:backend/release_signing.py:generic-api-key:2
 84ecbc4bce07774690d8db2938a14d23aa2ccf3c:.gitleaksignore:generic-api-key:21
 84ecbc4bce07774690d8db2938a14d23aa2ccf3c:memory/CHANGELOG.md:generic-api-key:1315
+# False positive (2026-06): step-up bypass test fixture literal in an
+# earlier commit blob; current file uses neutral dummy values.
+e9264f93692b47cd8ba9d891fb39c90e7d463ccb:backend/tests/test_iter165_reaudit_fixes.py:generic-api-key:45
