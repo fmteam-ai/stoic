@@ -90,16 +90,19 @@ def test_auto_rollback_and_bake_complete():
                  "previous_stable": {marker: sha},
                  "deploy_watch": {"started_at": now.isoformat(),
                                   "baseline_score": 100.0,
+                                  "artifacts": {marker: sha},
                                   "bake_hours": 4}},
                 upsert=True)
             await db.ops_alerts.insert_many([
                 {"kind": "deployment_failed", "severity": "critical",
                  "message": "iter161 synthetic a", "dedup_key": f"{marker}-a",
-                 "meta": {"agent_id": f"{marker}-agentA"},
+                 "meta": {"agent_id": f"{marker}-agentA",
+                          "user_id": f"{marker}-tenantA", "sha256": sha},
                  "acked_at": None, "created_at": now},
                 {"kind": "deployment_failed", "severity": "critical",
                  "message": "iter161 synthetic b", "dedup_key": f"{marker}-b",
-                 "meta": {"agent_id": f"{marker}-agentB"},
+                 "meta": {"agent_id": f"{marker}-agentB",
+                          "user_id": f"{marker}-tenantB", "sha256": sha},
                  "acked_at": None, "created_at": now}])
             first = await watch_deployment(db)
             st = await db.platform_state.find_one({"_id": "release_state"})

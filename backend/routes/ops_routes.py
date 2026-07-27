@@ -431,7 +431,7 @@ async def releases_state(request: Request):
 
 @router.post("/ops/releases/canary")
 async def releases_set_canary(payload: dict, request: Request):
-    allowed, actor = await _ops_actor(request)
+    allowed, actor = await _ops_admin_step_up(request, "canary_set")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     from release_channels import set_canary_agents

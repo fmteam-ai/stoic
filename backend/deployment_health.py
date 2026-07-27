@@ -17,19 +17,30 @@ BAKE_HOURS = float(os.environ.get("DEPLOY_BAKE_HOURS", "4"))
 MIN_SCORE = float(os.environ.get("DEPLOY_MIN_HEALTH", "60"))
 MAX_DROP = float(os.environ.get("DEPLOY_MAX_HEALTH_DROP", "25"))
 HB_FRESH_SEC = 300
-# SEC-002 — auto-rollback only fires after independent corroboration: a
-# single (possibly rogue) tenant agent's failure report must not move fleet
-# release state. Counts DISTINCT agents among deployment_failed alerts.
-MIN_FAIL_AGENTS = int(os.environ.get("DEPLOY_MIN_FAIL_AGENTS", "2"))
+# SEC (3rd audit) — auto-rollback only fires after INDEPENDENT corroboration
+# from distinct TENANTS (not tenant-controlled agent_ids, which one customer
+# can mint without limit) AND only for the exact release digest under
+# evaluation. A single tenant — however many agents it spins up — counts once.
+MIN_FAIL_TENANTS = int(os.environ.get("DEPLOY_MIN_FAIL_TENANTS",
+                       os.environ.get("DEPLOY_MIN_FAIL_AGENTS", "2")))
+MIN_FAIL_AGENTS = MIN_FAIL_TENANTS  # back-compat alias
 
 
-async def distinct_fail_agents(db, since_iso) -> int:
-    """Number of DISTINCT agents that raised a fleet deployment_failed alert
-    since `since_iso` (rogue single-agent reports can't reach the threshold)."""
-    ids = await db.ops_alerts.distinct(
-        "meta.agent_id",
-        {"kind": "deployment_failed", "created_at": {"$gte": since_iso}})
+async def distinct_fail_tenants(db, since_iso, digests=None) -> int:
+    """Number of DISTINCT owning tenants (meta.user_id) that raised a fleet
+    deployment_failed alert since `since_iso`, optionally scoped to a set of
+    release `digests` (meta.sha256). Counting tenants — not agent_ids —
+    defeats a single customer minting many agents to fake corroboration."""
+    q = {"kind": "deployment_failed", "created_at": {"$gte": since_iso}}
+    if digests:
+        q["meta.sha256"] = {"$in": list(digests)}
+    ids = await db.ops_alerts.distinct("meta.user_id", q)
     return len([i for i in ids if i])
+
+
+# Legacy name kept for callers/tests that scoped by agent (now tenant-based).
+async def distinct_fail_agents(db, since_iso, digests=None) -> int:
+    return await distinct_fail_tenants(db, since_iso, digests)
 
 
 def _now():
@@ -120,18 +131,18 @@ async def watch_deployment(db) -> dict | None:
     bake = float(watch.get("bake_hours") or BAKE_HOURS)
     baseline = float(watch.get("baseline_score") or 100)
     health = await score_fleet(db)
-    fail_agents = 0
+    # Only failures reported for THIS release's artifact digests count, and
+    # only DISTINCT tenants corroborate (a single customer's agents == 1).
+    watch_digests = set((watch.get("artifacts") or {}).values())
+    fail_tenants = 0
     if started:
-        fail_agents = await distinct_fail_agents(db, started)
-    # Corroborated deploy failures (>= MIN_FAIL_AGENTS distinct agents) OR a
-    # genuine fleet-health collapse trigger the rollback. A lone agent's
-    # report (fail_agents < threshold) is NOT sufficient (SEC-002).
-    corroborated = fail_agents >= MIN_FAIL_AGENTS
+        fail_tenants = await distinct_fail_tenants(db, started, watch_digests)
+    corroborated = fail_tenants >= MIN_FAIL_TENANTS
     degraded = (health["fleet_size"] > 0
                 and (health["score"] < MIN_SCORE
                      or baseline - health["score"] >= MAX_DROP))
     if corroborated or degraded:
-        reason = (f"{fail_agents} distinct agents reported deploy failure "
+        reason = (f"{fail_tenants} distinct tenants reported deploy failure "
                   f"during bake" if corroborated
                   else (f"fleet health {health['score']} vs baseline "
                         f"{baseline} (floor {MIN_SCORE}, max drop {MAX_DROP})"))

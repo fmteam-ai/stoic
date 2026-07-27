@@ -122,22 +122,100 @@ def test_unassigned_agent_failure_does_not_raise_fleet_alert():
 
 
 def test_single_agent_failure_below_corroboration_threshold():
-    """distinct_fail_agents must not reach the auto-rollback threshold from a
-    single agent's report."""
-    from deployment_health import MIN_FAIL_AGENTS, distinct_fail_agents
+    """distinct_fail_tenants must not reach the auto-rollback threshold from a
+    single tenant, no matter how many agents that tenant spins up."""
+    from deployment_health import (MIN_FAIL_TENANTS, distinct_fail_tenants)
+    db = _db()
+    now = datetime.now(timezone.utc)
+    tag = f"iter165-{os.urandom(3).hex()}"
+    sha = "c" * 64
+
+    async def scenario():
+        # ONE tenant, MANY agents, all reporting failure for the same digest.
+        await db.ops_alerts.insert_many([
+            {"kind": "deployment_failed", "severity": "critical",
+             "dedup_key": f"{tag}-{i}",
+             "meta": {"agent_id": f"{tag}-agent{i}", "user_id": f"{tag}-tenant",
+                      "sha256": sha},
+             "acked_at": None, "created_at": now} for i in range(5)])
+        try:
+            scoped = await distinct_fail_tenants(db, now, {sha})
+            unscoped = await distinct_fail_tenants(db, now)
+            return scoped, unscoped
+        finally:
+            await db.ops_alerts.delete_many(
+                {"dedup_key": {"$regex": tag}})
+    scoped, unscoped = _run(scenario())
+    assert scoped == 1, "5 agents of one tenant must count as ONE tenant"
+    assert unscoped == 1
+    assert scoped < MIN_FAIL_TENANTS, "one tenant must not reach the threshold"
+
+
+def test_two_distinct_tenants_reach_threshold():
+    from deployment_health import (MIN_FAIL_TENANTS, distinct_fail_tenants)
+    db = _db()
+    now = datetime.now(timezone.utc)
+    tag = f"iter165-{os.urandom(3).hex()}"
+    sha = "d" * 64
+
+    async def scenario():
+        await db.ops_alerts.insert_many([
+            {"kind": "deployment_failed", "severity": "critical",
+             "dedup_key": f"{tag}-{t}",
+             "meta": {"agent_id": f"{tag}-a{t}", "user_id": f"{tag}-tenant{t}",
+                      "sha256": sha},
+             "acked_at": None, "created_at": now} for t in range(2)])
+        try:
+            return await distinct_fail_tenants(db, now, {sha})
+        finally:
+            await db.ops_alerts.delete_many({"dedup_key": {"$regex": tag}})
+    n = _run(scenario())
+    assert n >= MIN_FAIL_TENANTS
+
+
+def test_digest_scoping_ignores_other_releases():
+    """Failures for a DIFFERENT digest than the one under evaluation must not
+    count toward corroboration."""
+    from deployment_health import distinct_fail_tenants
     db = _db()
     now = datetime.now(timezone.utc)
     tag = f"iter165-{os.urandom(3).hex()}"
 
     async def scenario():
-        await db.ops_alerts.insert_one(
+        await db.ops_alerts.insert_many([
             {"kind": "deployment_failed", "severity": "critical",
-             "dedup_key": f"{tag}-solo", "meta": {"agent_id": f"{tag}-only"},
-             "acked_at": None, "created_at": now})
+             "dedup_key": f"{tag}-{t}",
+             "meta": {"user_id": f"{tag}-tenant{t}", "sha256": "e" * 64},
+             "acked_at": None, "created_at": now} for t in range(3)])
         try:
-            return await distinct_fail_agents(db, now)
+            return await distinct_fail_tenants(db, now, {"f" * 64})
         finally:
-            await db.ops_alerts.delete_many({"dedup_key": f"{tag}-solo"})
-    n = _run(scenario())
-    assert n == 1
-    assert n < MIN_FAIL_AGENTS, "threshold too low to resist a single agent"
+            await db.ops_alerts.delete_many({"dedup_key": {"$regex": tag}})
+    assert _run(scenario()) == 0
+
+
+def test_agent_registration_quota_per_tenant(monkeypatch):
+    from vps_agent import create_bootstrap_token, register_agent
+    db = _db()
+    monkeypatch.setenv("VPS_MAX_AGENTS_PER_USER", "2")
+    uid = f"iter165-quota-{os.urandom(4).hex()}"
+
+    async def scenario():
+        try:
+            for _ in range(2):
+                bt = await create_bootstrap_token(db, uid, f"dep-{uid}")
+                await register_agent(db, bt["token"],
+                                     {"machine_fingerprint": os.urandom(4).hex()})
+            # 3rd registration must be refused by the quota
+            bt = await create_bootstrap_token(db, uid, f"dep-{uid}")
+            try:
+                await register_agent(db, bt["token"],
+                                     {"machine_fingerprint": "x"})
+                return "allowed"
+            except ValueError as e:
+                return str(e)
+        finally:
+            await db.vps_agents.delete_many({"user_id": uid})
+            await db.vps_bootstrap_tokens.delete_many({"user_id": uid})
+    out = _run(scenario())
+    assert "limit reached" in out, out

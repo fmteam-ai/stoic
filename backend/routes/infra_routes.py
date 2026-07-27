@@ -345,12 +345,17 @@ async def agent_deploy_status_ep(payload: dict):
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
     status = "success" if payload.get("ok") else "failure"
+    # SEC (P3) — attacker-controlled fields flow into alert log lines; strip
+    # control chars (CR/LF) to prevent log-line forging (CWE-117).
+    import re as _re
+    _noctl = lambda v, n: _re.sub(r"[\x00-\x1f\x7f]", "", str(v or ""))[:n]  # noqa: E731
     doc = {"agent_id": agent["agent_id"],
-           "artifact": str(payload.get("artifact") or "")[:80],
-           "sha256": str(payload.get("sha256") or "")[:64],
+           "artifact": _noctl(payload.get("artifact"), 80),
+           "sha256": _re.sub(r"[^A-Fa-f0-9]", "",
+                             str(payload.get("sha256") or ""))[:64],
            "status": status,
-           "detail": str(payload.get("detail") or "")[:400],
-           "agent_version": str(payload.get("agent_version") or "")[:20],
+           "detail": _noctl(payload.get("detail"), 400),
+           "agent_version": _noctl(payload.get("agent_version"), 20),
            "at": datetime.now(timezone.utc).isoformat()}
     await db.agent_deployments.insert_one(dict(doc))
     if status == "failure":
@@ -364,6 +369,7 @@ async def agent_deploy_status_ep(payload: dict):
         from release_channels import channel_for_agent
         channel, shas = await channel_for_agent(db, agent["agent_id"])
         assigned = doc["sha256"] and doc["sha256"] in set(shas.values())
+        owner = agent.get("user_id")
         if assigned:
             await raise_alert(
                 db, kind="deployment_failed", severity="critical",
@@ -371,8 +377,8 @@ async def agent_deploy_status_ep(payload: dict):
                          f"{doc['artifact'] or 'artifact'} on {channel}: "
                          f"{doc['detail'][:160]}"),
                 dedup_key=f"deploy_fail:{agent['agent_id']}:{doc['sha256']}",
-                meta={"agent_id": agent["agent_id"], "channel": channel,
-                      "sha256": doc["sha256"]})
+                meta={"agent_id": agent["agent_id"], "user_id": owner,
+                      "channel": channel, "sha256": doc["sha256"]})
         else:
             await raise_alert(
                 db, kind="agent_deploy_anomaly", severity="warning",
@@ -381,7 +387,8 @@ async def agent_deploy_status_ep(payload: dict):
                          f"{doc['sha256'][:12] or doc['artifact']} — ignored "
                          f"for fleet release state"),
                 dedup_key=f"deploy_anom:{agent['agent_id']}:{doc['sha256']}",
-                meta={"agent_id": agent["agent_id"], "sha256": doc["sha256"]})
+                meta={"agent_id": agent["agent_id"], "user_id": owner,
+                      "sha256": doc["sha256"]})
     doc.pop("_id", None)
     return {"recorded": True, **doc}
 

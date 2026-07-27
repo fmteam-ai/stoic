@@ -4,6 +4,7 @@ and EA pairing codes (infra spec steps 9-20)."""
 import secrets
 import string
 import uuid
+import os
 from datetime import datetime, timedelta, timezone
 
 from identity_model import (authoritative_account_number,
@@ -62,6 +63,15 @@ async def register_agent(db, token: str, facts: dict) -> dict:
     (fingerprint-bound). The bootstrap token is revoked here (step 11)."""
     boot = await consume_bootstrap_token(db, token)
     now = datetime.now(timezone.utc)
+    # SEC (3rd audit) — per-tenant agent cap: an unbounded agent count would
+    # let one customer manufacture fake corroboration / exhaust resources.
+    max_agents = int(os.environ.get("VPS_MAX_AGENTS_PER_USER", "25"))
+    active = await db.vps_agents.count_documents(
+        {"user_id": boot["user_id"], "revoked": {"$ne": True}})
+    if active >= max_agents:
+        raise ValueError(
+            f"agent limit reached for this account ({max_agents}); revoke an "
+            "existing agent before registering another")
     agent_id = f"agt_{uuid.uuid4().hex[:12]}"
     agent_token = f"agt_tok_{secrets.token_urlsafe(32)}"
     await db.vps_agents.insert_one({
