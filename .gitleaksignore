@@ -18,7 +18,13 @@ c833b9c35e1df0c4174b604b6ded969b51eb98df:backend/tests/test_iter35_crypto_routes
 b958d104ebf1788456461b796771f29091c1bdef:backend/tests/test_iter85_budget_http.py:generic-api-key:32
 e32e5bdb1c9bbb33bb906c5b0b0e3586aee0ffd9:backend/tests/test_iter84_risk_layers.py:generic-api-key:94
 d3b065786f2d457337ec5d6e5d22d48f569227f9:memory/PRD.md:generic-api-key:411
-# False positives (2026-07-25): PRD.md changelog text "API router. Tests: test_iter110_phase3_4.py"
-# matched generic-api-key in two history blobs; current file reworded to "Tests —".
+# False positives (2026-07-25): PRD changelog prose (router description followed
+# by a test filename) matched generic-api-key in two history blobs; current file reworded.
 e15a88c1b2c7901a5cc18ffa71c4f96e63eee3a1:memory/PRD.md:generic-api-key:1367
 3cb4447b74f84f8374c0ed4ba4b513207ba64fd7:memory/PRD.md:generic-api-key:411
+# False positives (2026-06): env-var NAME in a docstring (release_signing.py),
+# plus history blobs of this file and CHANGELOG.md that quoted the flagged prose
+# verbatim (both reworded in current tree).
+3aebb9d5f3dfa76270e17bd19a15e03b4203c765:backend/release_signing.py:generic-api-key:2
+84ecbc4bce07774690d8db2938a14d23aa2ccf3c:.gitleaksignore:generic-api-key:21
+84ecbc4bce07774690d8db2938a14d23aa2ccf3c:memory/CHANGELOG.md:generic-api-key:1315

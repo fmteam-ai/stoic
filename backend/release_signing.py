@@ -1,5 +1,6 @@
 """Ed25519 release signing (iter-136) — replaces HMAC artifact-manifest
-signing. Private key: ED25519_SIGNING_KEY_B64 (base64 raw 32 bytes).
+signing. Private key comes from the ED25519_SIGNING_KEY_B64 env var
+(base64 raw 32 bytes).
 Public key is published via GET /api/release-key for verifier pinning.
 """
 import base64

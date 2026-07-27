@@ -1312,7 +1312,7 @@ LESSON: after upgrading any package in-place, ALWAYS re-run a fresh-venv `pip in
 
 ## Iter-173 (2026-07-25) — GitHub CI red fixes
 1. backend-unit: test_iter103_identity_regression.py (added by testing agent) had hardcoded /app/frontend/.env + /app/backend/.env paths → violated test_no_hardcoded_app_paths_in_test_code guard. Fixed with dynamic __file__-relative resolution. Exact CI command now: 474 passed.
-2. security-scan: gitleaks flagged 2 false positives — PRD.md changelog text "API router. Tests: test_iter110_phase3_4.py" matched generic-api-key in 2 history blobs (e15a88c:1367, 3cb4447:411). Fingerprints added to .gitleaksignore + current PRD.md line reworded ("Tests —") to prevent re-flagging. gitleaks local scan: 624 commits, no leaks found.
+2. security-scan: gitleaks flagged 2 false positives — PRD.md changelog text router-prose + test filename matched generic-api-key in 2 history blobs (e15a88c:1367, 3cb4447:411). Fingerprints added to .gitleaksignore + current PRD.md line reworded ("Tests —") to prevent re-flagging. gitleaks local scan: 624 commits, no leaks found.
 LESSON (recurring): any "SomeWord: test_xxx" colon phrasing in memory/*.md near high-entropy tokens can trip gitleaks generic-api-key — prefer em-dash. Testing-agent test files must never hardcode /app paths.
 
 ## Iter-174 (2026-07-25) — Production deploy fix: /health probe 404
