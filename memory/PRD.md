@@ -1473,3 +1473,7 @@ LEARNING: iter-148 is a source-policy suite (no detail=str(e) outside allowlist;
 - FIXED pre-existing bug: _drill_artifact_rollback lacked is_file() guard → IsADirectoryError once static/artifacts/ exists.
 - Updated drill-count asserts 12→16 in test_iter106/158/159. Tests: test_iter161_security_hardening.py (8). FULL local suite: 3321 passed (4 transient net errors re-ran green). Manifest → 3,029 tests / 291 files. UI verified via screenshot (panel + nightly chaos 16/16 GREEN).
 LEARNING: db.model_versions is owned by learning_pipeline (ObjectId docs) — code-version registry must use model_code_versions.
+
+## Iter-163 (2026-06) — Security audit run (verdict FAIL→actions) + SEC-003 fix
+- security_audit_agent findings: SEC-001 CRITICAL (preview .env: admin123 + ADMIN_MFA_ENFORCED=false + APP_ENV unset — INTENTIONAL preview config; server.py:616+ startup guardrail blocks all of it when APP_ENV=production. USER ACTION: verify prod deploy env sets APP_ENV=production, strong ADMIN_PASSWORD, ADMIN_MFA_ENFORCED=true), SEC-002 MEDIUM (bypass tokens — same guardrail forbids in prod; USER ACTION: unset in prod env), SEC-003 LOW (log forging via X-Request-ID/X-Trace-ID).
+- FIXED SEC-003: server.py middleware now strips non [A-Za-z0-9_-] from both headers before logging/echoing. Test: test_trace_id_header_sanitized (test_iter161, now 9 tests). Manifest → 3,030/291.

@@ -131,10 +131,14 @@ async def csrf_middleware(request, call_next):
 async def request_id_middleware(request, call_next):
     """Iter-152 · distributed request IDs + structured JSON access logs."""
     import uuid
+    import re as _re
     import time as _t
     import json as _json
-    rid = (request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16])[:64]
-    tid = (request.headers.get("X-Trace-ID") or rid)[:64]
+    # SEC-003 — attacker-controlled ids are restricted to [A-Za-z0-9_-]
+    # before they reach logs/headers (log-forging / CWE-117 defense).
+    _clean = lambda v: _re.sub(r"[^A-Za-z0-9_-]", "", v or "")[:64]  # noqa: E731
+    rid = _clean(request.headers.get("X-Request-ID")) or uuid.uuid4().hex[:16]
+    tid = _clean(request.headers.get("X-Trace-ID")) or rid
     set_correlation_id(rid)
     from correlation import reset_log_fields, set_log_fields
     reset_log_fields()

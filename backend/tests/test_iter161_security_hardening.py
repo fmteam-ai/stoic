@@ -225,6 +225,17 @@ def test_trace_id_header_roundtrip():
     assert r.headers.get("X-Trace-ID") == r.headers.get("X-Request-ID")
 
 
+def test_trace_id_header_sanitized():
+    """SEC-003 — control chars / non [A-Za-z0-9_-] stripped from
+    attacker-controlled ids before logging/echoing (log forging)."""
+    r = requests.get(f"{API}/health",
+                     headers={"X-Trace-ID": "evil\tid rn{injected}!",
+                              "X-Request-ID": "bad id\t{x}"},
+                     timeout=TIMEOUT)
+    assert r.headers.get("X-Trace-ID") == "evilidrninjected"
+    assert r.headers.get("X-Request-ID") == "badidx"
+
+
 def test_command_queue_stamps_trace_id():
     from correlation import new_correlation_id
     from vps_pathb import queue_command
