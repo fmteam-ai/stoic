@@ -15,7 +15,7 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
-                          "https://stoic-trading.preview.emergentagent.com").rstrip("/")
+                          "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
 ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 

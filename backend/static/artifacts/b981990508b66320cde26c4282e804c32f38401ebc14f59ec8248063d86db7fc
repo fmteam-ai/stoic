@@ -6,10 +6,10 @@
 //| 1. Copy this file to: <MT5 Data Folder>/MQL5/Experts/             |
 //| 2. In MT5: Tools > Options > Expert Advisors                     |
 //|       - Tick: "Allow WebRequest for listed URL"                  |
-//|       - Add your server URL (e.g. https://stoic-trading.preview.emergentagent.com)
+//|       - Add your server URL (e.g. https://stoic-trading-bot.preview.emergentagent.com)
 //| 3. Compile in MetaEditor (F7) and attach to ANY chart            |
 //| 4. Inputs:                                                       |
-//|       ServerUrl   = https://stoic-trading.preview.emergentagent.com   |
+//|       ServerUrl   = https://stoic-trading-bot.preview.emergentagent.com   |
 //|       BridgeToken = (paste from the dashboard > Accounts)         |
 //|       PollSeconds = 5                                             |
 //|                                                                  |
@@ -270,7 +270,7 @@
 // though MT5 itself loads the new binary.
 #define EA_CLIENT_VERSION "1.55"
 
-input string ServerUrl              = "https://stoic-trading.preview.emergentagent.com";
+input string ServerUrl              = "https://stoic-trading-bot.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
 input string InstallationId         = "";  // v1.55 — issued by pairing claim; auto-loaded from STOIC-Installation.txt when blank
 input string TrackedSymbols         = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat

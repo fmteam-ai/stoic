@@ -28,7 +28,7 @@ from bot_doctor import (
 )
 
 
-BASE_URL = "https://stoic-trading.preview.emergentagent.com"
+BASE_URL = "https://stoic-trading-bot.preview.emergentagent.com"
 try:
     with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
         for line in f:

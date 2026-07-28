@@ -15,7 +15,7 @@ from range_forecast import build_range_forecast, range_gate  # noqa: E402
 from fed_tone import fed_tone_gate  # noqa: E402
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
 
 
 def bar(o, h, l, c, t=0, v=100):

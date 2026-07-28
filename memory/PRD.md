@@ -753,7 +753,7 @@ UNRESOLVED (client-side, verified by troubleshoot agent):
 - Post-stop cleanup: bumped remaining EA version constants (diagnostic_routes.py, bot_routes.py, setup_routes.py) to 1.47 — all version tests pass. Final suite state: only 2 failures remain (test_iter126 mtf_confluence_cascade_shape, test_iter127 mtf_confluence_endpoint_ok) and both are LIVE-DATA dependent: they require fresh M15 candles which cannot arrive while the user's terminals are offline. Not code defects.
 
 ## Session 2026-07-16 (cont.) — RESOLVED: split-brain preview URL + fix verified
-- THE missing piece: user's browser AND EAs were pointed at the OLD pod (https://stoic-trading.preview.emergentagent.com) from the previous job — none of this session's fixes were visible to them. Current app = https://stoic-trading.preview.emergentagent.com (REACT_APP_BACKEND_URL). User migrated: OnEquity demo + Tauro now connected here with EA v1.47, heartbeating.
+- THE missing piece: user's browser AND EAs were pointed at the OLD pod (https://stoic-trading-bot.preview.emergentagent.com) from the previous job — none of this session's fixes were visible to them. Current app = https://stoic-trading-bot.preview.emergentagent.com (REACT_APP_BACKEND_URL). User migrated: OnEquity demo + Tauro now connected here with EA v1.47, heartbeating.
 - Confirmed live: BTCUSD candles restored via v1.47 multi-symbol feed (src BTCUSD.fx from Tauro), EURUSD# candles landing in EURUSD doc.
 - testing_agent iteration_44: 10/10 PASS — suffixed-symbol scalp pipeline verified end-to-end (new permanent test file /app/backend/tests/test_iter44_suffixed_symbol_scalp.py).
 - EA .mq5 default TickStreamEnabled changed false → true (MT5 resets inputs on version load; this kept silently disabling the stream).

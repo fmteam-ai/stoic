@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv(pathlib.Path(__file__).resolve().parents[1] / ".env")
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
-                          "https://stoic-trading.preview.emergentagent.com").rstrip("/")
+                          "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
 METRICS_TOKEN = os.environ.get("METRICS_TOKEN")
 RL_BYPASS = os.environ.get("RATE_LIMIT_BYPASS_TOKEN")
 

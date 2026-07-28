@@ -32,7 +32,7 @@ import websockets
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://stoic-trading.preview.emergentagent.com",
+    "https://stoic-trading-bot.preview.emergentagent.com",
 ).rstrip("/")
 WS_URL = BASE_URL.replace("https://", "wss://").replace("http://", "ws://") + "/api/ws"
 

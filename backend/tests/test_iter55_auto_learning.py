@@ -12,7 +12,7 @@ from loss_advisor import (  # noqa: E402
     _qualifies, live_guard_block, AUTO_APPLY_MIN_NET, AUTO_APPLY_RATIO,
 )
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASSWORD = "admin123"
 

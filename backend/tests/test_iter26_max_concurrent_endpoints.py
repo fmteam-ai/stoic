@@ -22,7 +22,7 @@ def _market_always_open(monkeypatch):
     monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
-                          "https://stoic-trading.preview.emergentagent.com").rstrip("/")
+                          "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASS = "admin123"
 
