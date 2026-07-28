@@ -28,16 +28,36 @@ def _now():
 
 
 async def _get_ca(db):
-    """Load the issuing CA from env, else get-or-create a persisted dev CA."""
+    """Load the issuing CA. Preference order:
+      1. AGENT_CA_KEY_PEM / AGENT_CA_CERT_PEM from env (KMS/secret store) — prod.
+      2. Persisted CA in platform_state, with the private key ENCRYPTED at
+         rest via secrets_vault (SEC-004). A stolen DB read alone no longer
+         yields the CA signing key.
+    Legacy plaintext key_pem is read once, re-encrypted, and the plaintext
+    dropped (idempotent migration)."""
+    import secrets_vault
     key_pem = os.environ.get("AGENT_CA_KEY_PEM")
     cert_pem = os.environ.get("AGENT_CA_CERT_PEM")
     if key_pem and cert_pem:
         return (serialization.load_pem_private_key(key_pem.encode(), None),
                 x509.load_pem_x509_certificate(cert_pem.encode()))
     st = await db.platform_state.find_one({"_id": "agent_ca"})
-    if st and st.get("key_pem") and st.get("cert_pem"):
-        return (serialization.load_pem_private_key(st["key_pem"].encode(), None),
-                x509.load_pem_x509_certificate(st["cert_pem"].encode()))
+    if st and st.get("cert_pem"):
+        if st.get("key_pem_enc"):
+            key_pem = secrets_vault.decrypt(st["key_pem_enc"],
+                                            associated_data=b"agent_ca")
+        elif st.get("key_pem"):  # legacy plaintext → migrate in place
+            key_pem = st["key_pem"]
+            await db.platform_state.update_one(
+                {"_id": "agent_ca"},
+                {"$set": {"key_pem_enc": secrets_vault.encrypt(
+                    key_pem, associated_data=b"agent_ca")},
+                 "$unset": {"key_pem": ""}})
+        else:
+            key_pem = None
+        if key_pem:
+            return (serialization.load_pem_private_key(key_pem.encode(), None),
+                    x509.load_pem_x509_certificate(st["cert_pem"].encode()))
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, "STOIC Host-Agent Dev CA"),
@@ -56,10 +76,16 @@ async def _get_ca(db):
     cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
     await db.platform_state.update_one(
         {"_id": "agent_ca"},
-        {"$setOnInsert": {"key_pem": key_pem, "cert_pem": cert_pem,
-                          "created_at": _now().isoformat()}}, upsert=True)
+        {"$setOnInsert": {
+            "key_pem_enc": secrets_vault.encrypt(
+                key_pem, associated_data=b"agent_ca"),
+            "cert_pem": cert_pem, "created_at": _now().isoformat()}},
+        upsert=True)
     st = await db.platform_state.find_one({"_id": "agent_ca"})
-    return (serialization.load_pem_private_key(st["key_pem"].encode(), None),
+    stored = (secrets_vault.decrypt(st["key_pem_enc"],
+                                    associated_data=b"agent_ca")
+              if st.get("key_pem_enc") else st.get("key_pem"))
+    return (serialization.load_pem_private_key(stored.encode(), None),
             x509.load_pem_x509_certificate(st["cert_pem"].encode()))
 
 
@@ -105,10 +131,21 @@ async def issue_from_csr(db, agent: dict, csr_pem: str) -> dict:
 
 
 async def enforce_mtls(db, agent: dict, fingerprint: str) -> None:
-    """Gate for agent API calls. Once an agent has an enrolled client cert
-    (or AGENT_MTLS_REQUIRED=true globally), every request must present the
-    matching cert fingerprint (forwarded by the mTLS-terminating ingress in
-    the X-Client-Cert-Fingerprint header). Raises ValueError on rejection."""
+    """Gate for agent API calls (SEC-004 — honest posture).
+
+    SECURITY MODEL: today the ingress does NOT terminate client-cert mTLS, so
+    the fingerprint arrives as a plain X-Client-Cert-Fingerprint header. This
+    is therefore a DEFENCE-IN-DEPTH layer, not cryptographic proof of
+    possession: the pinned fingerprint acts as a SECOND per-installation
+    secret on top of the bearer agent_token (a stolen token alone no longer
+    suffices — the attacker also needs the enrolled cert's fingerprint).
+    For true proof-of-possession, terminate client-cert mTLS at the edge and
+    have the ingress inject a TRUSTED fingerprint header (strip any
+    client-supplied one), then set AGENT_MTLS_REQUIRED=true.
+
+    Behaviour: once an agent has an enrolled cert (or AGENT_MTLS_REQUIRED=true
+    globally), every request must present the matching fingerprint. Raises
+    ValueError on rejection."""
     required = os.environ.get("AGENT_MTLS_REQUIRED", "").strip().lower() in (
         "1", "true", "yes")
     if not (agent or {}).get("mtls"):

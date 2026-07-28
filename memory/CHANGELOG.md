@@ -1448,3 +1448,10 @@ Tests: tests/test_iter159_scheduled_drills.py (9 passed, incl. failure-alert pat
   • Boot RSS: 865MB → ~300MB. Guard test asserts NO heavy lib in sys.modules after `import server` (tests/test_iter173_ml_oom_guard.py, 9 tests).
 - Full suite: 3402 passed (3 rate-limit flakes pass in isolation). Manifest regenerated (3086 tests / 299 files).
 - REQUIRES REDEPLOY. In prod, ml_ensembles docs will show status=disabled_low_memory; GET /api/release-key `signer` field confirms new build.
+
+## iter-174 (2026-07-28) — Security audit remediation
+- Ran security audit on deployed app. Findings + resolution:
+  • SEC-001/002/003 (CRITICAL/HIGH): default admin admin123 usable, prod guardrails inert, bypass tokens live — ALL conditional on APP_ENV being unset in the DEPLOY env. Code already hard-fails correctly WHEN APP_ENV=production (seed.py:62-68 refuses admin123 + <12char; server.py on_startup refuses ADMIN_MFA_ENFORCED=false, bypass tokens, missing signing key). These are DEPLOY-ENV actions for the user, NOT code bugs. .gitignore:107 confirms Emergent auto-overrides .env in prod. USER MUST: set APP_ENV=production in deploy env, provide strong ADMIN_PASSWORD/JWT_SECRET/KEY_VAULT_MASTER/ED25519_SIGNING_KEY_B64/METRICS_TOKEN/AGENT_SIGNING_KEY/RESEND_API_KEY/TURNSTILE_SECRET_KEY overrides, and rotate the shipped preview values.
+  • SEC-004 (MEDIUM): FIXED in code — agent_mtls._get_ca now stores the issuing CA private key ENCRYPTED at rest (secrets_vault AES-GCM, AAD=b"agent_ca") in platform_state instead of plaintext key_pem; idempotent migration re-encrypts + drops any legacy plaintext. Honest enforce_mtls docstring: fingerprint header is defence-in-depth (2nd secret), NOT proof-of-possession until ingress terminates client-cert mTLS + injects a trusted header. Tests: test_iter174_ca_key_at_rest.py (3). 
+  • Hardening P3 (keep-alive slowloris): note only — bound max connections at the edge.
+- Tests: 14 mTLS/CA + 7 supplementary pass. Manifest → 3089 tests / 300 files.
