@@ -154,7 +154,8 @@ def test_artifacts_manifest_signed():
     ea_url = names["stoic-ea"]["url"]
     assert (ea_url == "/api/ea-script"
             or re.fullmatch(r"/api/artifacts/[0-9a-f]{64}", ea_url)), ea_url
-    assert names["stoic-ea"].get("version") == "1.55"
+    from ea_version import current_ea_version
+    assert names["stoic-ea"].get("version") == current_ea_version()
     assert "stoic-ea-ex5" in names
     ex5_url = names["stoic-ea-ex5"]["url"]
     assert (ex5_url == "/api/ea-script.ex5"
@@ -254,8 +255,9 @@ def test_ea_script_has_v155_markers():
     r = requests.get(f"{BASE_URL}/api/ea-script", timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     src = r.text
-    assert '#define EA_CLIENT_VERSION "1.55"' in src or \
-        'EA_CLIENT_VERSION "1.55"' in src
+    from ea_version import current_ea_version
+    v = current_ea_version()
+    assert f'#define EA_CLIENT_VERSION "{v}"' in src
     assert "installation_id" in src
     assert "ResolveInstallationId" in src
     assert "STOIC-Installation.txt" in src

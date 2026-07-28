@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnostic", tags=["diagnostic"])
 
-LATEST_EA = "1.55"
+LATEST_EA = "1.56"
 HEARTBEAT_FRESH_SEC = 300
 
 # Retcode → human explanation

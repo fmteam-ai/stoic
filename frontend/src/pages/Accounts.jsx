@@ -9,7 +9,7 @@ import MultiAccountOverview from "@/components/MultiAccountOverview";
 // Used in the download URL so the filename changes per release (e.g.
 // `EmergentTradingBridge_v1.35.mq5`) — defeats aggressive browser caching
 // of the prior .mq5, which otherwise re-downloads stale source.
-const LATEST_EA_VERSION = "1.55";
+const LATEST_EA_VERSION = "1.56";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning } from "lucide-react";
 const Warning = AlertTriangle;
