@@ -1,0 +1,50 @@
+{
+  "summary": "Independent e2e verification of iter-172 (#1 KMS/external release-signing abstraction and #5 per-installation mTLS client certificates for VPS Host Agents). Ran the existing test_iter172_kms_mtls.py (11/11 PASS) and added test_iter172_supplementary.py (6/7 PASS) that exercises additional edge cases explicitly listed in the review. Found ONE CRITICAL security bug: two agent endpoints listed in the review (POST /api/infra/agent/deploy-status and POST /api/infra/agent/discovery) do NOT enforce the enrolled per-installation mTLS client cert — a stolen agent_token alone can still hit them after enrollment. All other flows (enroll, rotation-requires-current-cert, revoke, re-enroll, /release-key signer schema, error branches) verified working.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/infra/agent/deploy-status",
+        "issue": "Missing mTLS gate. After an agent enrolls its client cert, this endpoint still accepts requests with just the agent_token and no X-Client-Cert-Fingerprint header (observed status: 200 with missing header AND with wrong 'ff'*32 header, expected 401). Because deploy-status feeds fleet 'deployment_failed' alerts that trigger auto-rollback / promotion-hold, a stolen bearer token can move FLEET release state — exactly the risk iter-172 (#5) was meant to close. Fix: add `cert_fp: str = _FP_HEADER` parameter and `await _mtls_gate(db, str(payload.get('agent_token') or ''), cert_fp)` at the top of `agent_deploy_status_ep` (routes/infra_routes.py:403), matching the pattern used by /agent/heartbeat / /agent/hardening.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/infra/agent/discovery",
+        "issue": "Missing mTLS gate. Same class of bug: `agent_discovery_ep` at routes/infra_routes.py:596 uses only `agent_by_token` and does NOT call `_mtls_gate`, so post-enrollment the endpoint accepts requests with no client-cert fingerprint (observed 200 miss / 200 bad, expected 401). A stolen agent_token can inject fake terminal/broker discovery data attributed to a legitimate installation. Fix: add `cert_fp: str = _FP_HEADER` and `await _mtls_gate(db, str(payload.get('agent_token') or ''), cert_fp)`.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/infra/mt5/instances (and similar)",
+        "issue": "Business-logic ValueError from `register_mt5_instance` is caught by the same `except ValueError → 401` block as the mTLS ValueError, so payload-validation failures surface as HTTP 401 instead of 400. Not a security issue but misleading for callers. Consider catching the mTLS-gate error separately (e.g. re-raise as HTTPException inside _mtls_gate) so downstream business errors get the proper status code."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter172_kms_mtls.py",
+    "/app/backend/tests/test_iter172_supplementary.py",
+    "/app/test_reports/pytest/iter172_kms_mtls.xml",
+    "/app/test_reports/pytest/iter172_full.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Add mTLS gate to /api/infra/agent/deploy-status (routes/infra_routes.py line ~403). Add `cert_fp: str = _FP_HEADER` parameter and `await _mtls_gate(db, agent_token, cert_fp)` before agent_by_token, matching /agent/heartbeat.",
+    "CRITICAL: Add mTLS gate to /api/infra/agent/discovery (routes/infra_routes.py line ~596). Same pattern.",
+    "After fix, re-run tests/test_iter172_supplementary.py::test_all_agent_endpoints_gated_by_enrolled_cert to confirm all 9 endpoints show `miss=401 bad=401` when a cert is enrolled.",
+    "MINOR: Refactor _mtls_gate to raise HTTPException(401) directly (or catch its ValueError separately) so downstream business ValueErrors return 400/etc. instead of being masked as 401 by the shared except block."
+  ],
+  "critical_code_review_comments": [
+    "The mTLS enforcement design is centralised and correct (agent_mtls.enforce_mtls + verify_agent_cert), but its APPLICATION is by-hand at each route — this pattern is fragile and already caused two endpoints in the security-critical list to slip through without the gate (deploy-status, discovery). Strongly recommend a FastAPI dependency `agent_authed(payload, cert_fp)` that returns the resolved+gated agent doc, then convert every agent-token route to `agent=Depends(agent_authed)`. That would make new endpoints secure-by-default.",
+    "release_signing.signer_status() is nicely wired into GET /release-key; consider adding a lightweight admin endpoint to view mTLS enrollment status per agent (mtls.fingerprint, not_after, revoked) so ops can audit rollout progress before flipping AGENT_MTLS_REQUIRED=true globally.",
+    "The dev CA is persisted in platform_state with no rotation policy — fine for preview but document (and probably fail-loud) the requirement to set AGENT_CA_KEY_PEM / AGENT_CA_CERT_PEM in production."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter172_supplementary.py (NEW — 7 additional e2e tests)"
+  ],
+  "success_rate": {"backend": "94% (17/18 tests; 2 endpoints missing mTLS gate)", "frontend": "n/a (backend-only scope)"},
+  "seed_data_creation": "Tests create ephemeral db.vps_agents docs with user_id 'iter172s-*' and users with email 'iter172s-*@example.com', all cleaned up in test finally blocks. No persistent seed data required.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Full iter-172 verification file is /app/backend/tests/test_iter172_supplementary.py. It gates all 9 agent-token endpoints listed in the review (heartbeat, commands/poll, hardening, deploy-status, discovery, renew-token, mt5/instances, ea-deploy/progress, commands/ack). After main agent adds `_FP_HEADER` + `_mtls_gate` to /agent/deploy-status and /agent/discovery, run: `cd /app/backend && python -m pytest tests/test_iter172_supplementary.py tests/test_iter172_kms_mtls.py -v` — all 18 must pass. NB: the preview host sporadically ReadTimeouts on /auth/register calls (~5% of runs) — flaky, not a real regression; retry once.",
+  "rca of the issue": "Root cause: mTLS enforcement is bolted on per-route by manually adding `cert_fp: str = _FP_HEADER` + `await _mtls_gate(...)` at the top of each endpoint. Two endpoints (agent_deploy_status_ep line 403, agent_discovery_ep line 596) were missed during the iter-172 refactor — they still only call `agent_by_token(db, token)` and jump straight to business logic. Reproduction: (1) insert vps_agents doc with agent_token; (2) POST /api/infra/agent/cert/enroll → fingerprint pinned; (3) POST /api/infra/agent/deploy-status with just agent_token and no X-Client-Cert-Fingerprint header → 200 (should be 401). Same for /agent/discovery. Mitigation (short-term): patch the two endpoints as described in action_items. Mitigation (long-term): convert to a FastAPI Depends(agent_authed) so every future agent-token endpoint is gated by default. Impact: a stolen bearer token still enables fake fleet deployment_failed alerts (auto-rollback trigger) and terminal-discovery injection — this is the exact attack the per-installation mTLS certs were meant to prevent."
+}

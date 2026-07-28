@@ -17,6 +17,19 @@ def _aware(dt):
     return dt
 
 
+async def _mtls_gate(db, agent_token: str, fingerprint: str) -> dict:
+    """iter-172 (#5) — resolve the agent by token, then enforce its enrolled
+    per-installation mTLS client cert (raises ValueError → 401)."""
+    from agent_mtls import enforce_mtls
+    from vps_agent import agent_by_token
+    agent = await agent_by_token(db, agent_token)
+    await enforce_mtls(db, agent, fingerprint)
+    return agent
+
+
+_FP_HEADER = Header(default="", alias="X-Client-Cert-Fingerprint")
+
+
 # ── providers ───────────────────────────────────────────────────
 @router.get("/providers")
 async def list_providers(user=Depends(get_current_user)):
@@ -307,13 +320,64 @@ async def agent_register(payload: dict):
         raise HTTPException(status_code=401, detail=str(e))
 
 
+@router.post("/agent/cert/enroll")
+async def agent_cert_enroll(payload: dict, cert_fp: str = _FP_HEADER):
+    """iter-172 (#5) — per-installation mTLS: the agent proves possession of
+    its agent_token, submits a CSR and receives a short-lived client cert
+    bound to its agent_id. Once a cert is enrolled, ROTATION requires
+    presenting the CURRENT cert (a stolen bearer token alone can no longer
+    re-key the installation)."""
+    import agent_mtls
+    from vps_agent import agent_by_token
+    db = get_db()
+    try:
+        agent = await agent_by_token(db, str(payload.get("agent_token") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    m = agent.get("mtls") or {}
+    if m and not m.get("revoked"):
+        chk = await agent_mtls.verify_agent_cert(db, agent["agent_id"], cert_fp)
+        if not chk["ok"] and chk["reason"] != "expired":
+            raise HTTPException(status_code=401, detail=(
+                "cert already enrolled — rotation requires the current "
+                f"client certificate ({chk['reason']})"))
+    csr_pem = str(payload.get("csr_pem") or "")
+    if not csr_pem:
+        raise HTTPException(status_code=400, detail="csr_pem required")
+    try:
+        return await agent_mtls.issue_from_csr(db, agent, csr_pem)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/agents/{agent_id}/mtls/revoke")
+async def revoke_agent_mtls(agent_id: str, payload: dict = None,
+                            user=Depends(get_current_user)):
+    """Owner/admin revokes an installation's client cert (lost VPS,
+    compromise). The agent must re-enroll via its agent_token."""
+    from agent_mtls import revoke_agent_cert
+    db = get_db()
+    q = {"agent_id": agent_id}
+    if user.get("role") != "admin":
+        q["user_id"] = user["id"]
+    if not await db.vps_agents.find_one(q):
+        raise HTTPException(status_code=404, detail="agent not found")
+    ok = await revoke_agent_cert(db, agent_id,
+                                 str((payload or {}).get("reason") or ""))
+    if not ok:
+        raise HTTPException(status_code=404,
+                            detail="no certificate enrolled for this agent")
+    return {"ok": True, "agent_id": agent_id, "mtls_revoked": True}
+
+
 @router.post("/agent/heartbeat")
-async def agent_heartbeat_ep(payload: dict):
+async def agent_heartbeat_ep(payload: dict, cert_fp: str = _FP_HEADER):
     from vps_agent import agent_by_token, agent_heartbeat
     from vps_pathb import apply_health_policies
     db = get_db()
     token = str(payload.get("agent_token") or "")
     try:
+        await _mtls_gate(db, token, cert_fp)
         out = await agent_heartbeat(db, token, payload.get("metrics") or {})
         agent = await agent_by_token(db, token)
         out["policy_actions"] = await apply_health_policies(
@@ -324,11 +388,13 @@ async def agent_heartbeat_ep(payload: dict):
 
 
 @router.post("/agent/renew-token")
-async def agent_renew_token_ep(payload: dict):
+async def agent_renew_token_ep(payload: dict, cert_fp: str = _FP_HEADER):
     """iter-157 — agent-initiated token rotation (presents current token)."""
     from vps_agent import rotate_agent_token
+    db = get_db()
     try:
-        return await rotate_agent_token(get_db(),
+        await _mtls_gate(db, str(payload.get("agent_token") or ""), cert_fp)
+        return await rotate_agent_token(db,
                                         str(payload.get("agent_token") or ""))
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -394,10 +460,12 @@ async def agent_deploy_status_ep(payload: dict):
 
 
 @router.post("/agent/hardening")
-async def agent_hardening_ep(payload: dict):
+async def agent_hardening_ep(payload: dict, cert_fp: str = _FP_HEADER):
     from vps_agent import report_hardening
+    db = get_db()
     try:
-        return await report_hardening(get_db(),
+        await _mtls_gate(db, str(payload.get("agent_token") or ""), cert_fp)
+        return await report_hardening(db,
                                       str(payload.get("agent_token") or ""),
                                       payload.get("checklist") or {})
     except ValueError as e:
@@ -405,11 +473,13 @@ async def agent_hardening_ep(payload: dict):
 
 
 @router.post("/mt5/instances")
-async def mt5_instance_ep(payload: dict):
+async def mt5_instance_ep(payload: dict, cert_fp: str = _FP_HEADER):
     from vps_agent import register_mt5_instance
+    db = get_db()
     try:
+        await _mtls_gate(db, str(payload.get("agent_token") or ""), cert_fp)
         return await register_mt5_instance(
-            get_db(), str(payload.get("agent_token") or ""), payload)
+            db, str(payload.get("agent_token") or ""), payload)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
 
@@ -475,15 +545,14 @@ async def list_ea_deployments(user=Depends(get_current_user)):
 
 
 @router.post("/ea-deploy/progress")
-async def ea_deploy_progress(payload: dict):
+async def ea_deploy_progress(payload: dict, cert_fp: str = _FP_HEADER):
     """Agent-reported install progress (HOST_INSPECTED, ARTIFACT_VERIFIED,
     EA_INSTALLED, FAILED). Heartbeat-driven states are backend-only."""
-    from vps_agent import (AGENT_PROGRESS_STATES, advance_ea_deployment,
-                           agent_by_token)
+    from vps_agent import AGENT_PROGRESS_STATES, advance_ea_deployment
     db = get_db()
     try:
-        agent = await agent_by_token(
-            db, str(payload.get("agent_token") or ""))
+        agent = await _mtls_gate(
+            db, str(payload.get("agent_token") or ""), cert_fp)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
     state = str(payload.get("state") or "")
@@ -649,10 +718,12 @@ async def revoke_installation(installation_id: str,
 
 
 @router.post("/agent/commands/poll")
-async def poll_agent_commands(payload: dict):
+async def poll_agent_commands(payload: dict, cert_fp: str = _FP_HEADER):
     from vps_pathb import poll_commands
+    db = get_db()
     try:
-        cmds = await poll_commands(get_db(),
+        await _mtls_gate(db, str(payload.get("agent_token") or ""), cert_fp)
+        cmds = await poll_commands(db,
                                    str(payload.get("agent_token") or ""))
         return {"commands": cmds}
     except ValueError as e:
@@ -660,16 +731,19 @@ async def poll_agent_commands(payload: dict):
 
 
 @router.post("/agent/commands/ack")
-async def ack_agent_command(payload: dict):
+async def ack_agent_command(payload: dict, cert_fp: str = _FP_HEADER):
     from vps_pathb import ack_command
+    db = get_db()
     try:
-        return await ack_command(get_db(),
+        await _mtls_gate(db, str(payload.get("agent_token") or ""), cert_fp)
+        return await ack_command(db,
                                  str(payload.get("agent_token") or ""),
                                  str(payload.get("command_id") or ""),
                                  bool(payload.get("ok")),
                                  str(payload.get("detail") or ""))
     except ValueError as e:
-        raise HTTPException(status_code=401 if "agent" in str(e)
+        raise HTTPException(status_code=401 if ("agent" in str(e)
+                                                or "mtls" in str(e))
                             else 404, detail=str(e))
 
 

@@ -36,7 +36,8 @@ async def release_key():
     verifiers should pin this out-of-band."""
     import release_signing
     return {"alg": "Ed25519", "key_id": release_signing.KEY_ID,
-            "public_key_b64": release_signing.public_key_b64()}
+            "public_key_b64": release_signing.public_key_b64(),
+            "signer": release_signing.signer_status()}
 
 
 # ---------------------------------------------------------------- status

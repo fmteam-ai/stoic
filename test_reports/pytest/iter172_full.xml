@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="18" time="38.787" timestamp="2026-07-28T05:54:04.737435+00:00" hostname="agent-env-34fef4ff-dc7d-4b0a-81b8-dfdc61d3971e"><testcase classname="tests.test_iter172_supplementary" name="test_release_key_signer_schema" time="0.415" /><testcase classname="tests.test_iter172_supplementary" name="test_enroll_missing_csr_returns_400" time="0.212" /><testcase classname="tests.test_iter172_supplementary" name="test_enroll_malformed_csr_returns_400" time="0.119" /><testcase classname="tests.test_iter172_supplementary" name="test_revoke_agent_with_no_cert_enrolled_returns_404" time="1.095" /><testcase classname="tests.test_iter172_supplementary" name="test_revoke_unknown_agent_returns_404" time="1.016" /><testcase classname="tests.test_iter172_supplementary" name="test_all_agent_endpoints_gated_by_enrolled_cert" time="2.851"><failure message="AssertionError: /infra/agent/deploy-status missing-fp=200 (NOT GATED)&#10;  /infra/agent/deploy-status bad-fp=200 (NOT GATED)&#10;  /infra/agent/discovery missing-fp=200 (NOT GATED)&#10;  /infra/agent/discovery bad-fp=200 (NOT GATED)&#10;assert not ['/infra/agent/deploy-status missing-fp=200 (NOT GATED)', '/infra/agent/deploy-status bad-fp=200 (NOT GATED)', '/infra/agent/discovery missing-fp=200 (NOT GATED)', '/infra/agent/discovery bad-fp=200 (NOT GATED)']">tests/test_iter172_supplementary.py:179: in test_all_agent_endpoints_gated_by_enrolled_cert
+    assert not failures, "\n".join(failures)
+E   AssertionError: /infra/agent/deploy-status missing-fp=200 (NOT GATED)
+E     /infra/agent/deploy-status bad-fp=200 (NOT GATED)
+E     /infra/agent/discovery missing-fp=200 (NOT GATED)
+E     /infra/agent/discovery bad-fp=200 (NOT GATED)
+E   assert not ['/infra/agent/deploy-status missing-fp=200 (NOT GATED)', '/infra/agent/deploy-status bad-fp=200 (NOT GATED)', '/infra/agent/discovery missing-fp=200 (NOT GATED)', '/infra/agent/discovery bad-fp=200 (NOT GATED)']</failure></testcase><testcase classname="tests.test_iter172_supplementary" name="test_signer_status_matches_module_state" time="0.096" /><testcase classname="tests.test_iter172_kms_mtls" name="test_local_sign_verify_roundtrip" time="0.001" /><testcase classname="tests.test_iter172_kms_mtls" name="test_external_mode_requires_config" time="0.000" /><testcase classname="tests.test_iter172_kms_mtls" name="test_external_signer_delegates_and_verifies" time="0.001" /><testcase classname="tests.test_iter172_kms_mtls" name="test_external_signer_bad_signature_rejected" time="0.001" /><testcase classname="tests.test_iter172_kms_mtls" name="test_local_signing_forbidden_in_production" time="0.001" /><testcase classname="tests.test_iter172_kms_mtls" name="test_signer_status_exposed_on_release_key" time="0.108" /><testcase classname="tests.test_iter172_kms_mtls" name="test_enroll_issues_cert_and_pins_fingerprint" time="0.192" /><testcase classname="tests.test_iter172_kms_mtls" name="test_heartbeat_enforces_enrolled_cert" time="0.716" /><testcase classname="tests.test_iter172_kms_mtls" name="test_reenrollment_requires_current_cert" time="0.302" /><testcase classname="tests.test_iter172_kms_mtls" name="test_owner_revoke_blocks_agent_until_reenroll" time="31.398"><failure message="requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='stoic-trading.preview.emergentagent.com', port=443): Read timed out. (read timeout=30)">/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:534: in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:571: in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/http/client.py:1415: in getresponse
+    response.begin()
+/usr/local/lib/python3.11/http/client.py:330: in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/http/client.py:291: in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/socket.py:718: in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/ssl.py:1314: in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/ssl.py:1166: in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TimeoutError: The read operation timed out
+
+The above exception was the direct cause of the following exception:
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:696: in send
+    resp = conn.urlopen(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:842: in urlopen
+    retries = retries.increment(
+/root/.venv/lib/python3.11/site-packages/urllib3/util/retry.py:498: in increment
+    raise reraise(type(error), error, _stacktrace)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/urllib3/util/util.py:39: in reraise
+    raise value
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:788: in urlopen
+    response = self._make_request(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:536: in _make_request
+    self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:367: in _raise_timeout
+    raise ReadTimeoutError(
+E   urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host='stoic-trading.preview.emergentagent.com', port=443): Read timed out. (read timeout=30)
+
+During handling of the above exception, another exception occurred:
+tests/test_iter172_kms_mtls.py:288: in test_owner_revoke_blocks_agent_until_reenroll
+    s2 = register_and_login(email2)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/helpers.py:63: in register_and_login
+    r = s.post(f"{api}/auth/register",
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:712: in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:179: in patched
+    return original(self, method, url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:651: in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:784: in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:742: in send
+    raise ReadTimeout(e, request=request)
+E   requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='stoic-trading.preview.emergentagent.com', port=443): Read timed out. (read timeout=30)</failure></testcase><testcase classname="tests.test_iter172_kms_mtls" name="test_global_required_mode_blocks_unenrolled" time="0.009" /></testsuite></testsuites>

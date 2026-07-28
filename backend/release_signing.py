@@ -29,10 +29,74 @@ def _private_key() -> Ed25519PrivateKey:
 
 
 def sign_hex(data: bytes) -> str:
+    """Sign `data` and return a hex Ed25519 signature.
+
+    iter-171 (#1) — pluggable signer so the private key can live OUTSIDE the
+    API. RELEASE_SIGNER selects the backend:
+      • 'local'    (default) — key from ED25519_SIGNING_KEY_B64 in this process
+      • 'external' — POST to an isolated signing service / KMS proxy
+                     (RELEASE_SIGNER_URL); the private key never touches the API.
+    """
+    mode = os.environ.get("RELEASE_SIGNER", "local").strip().lower()
+    if mode == "external":
+        return _external_sign(data)
+    from app_env import is_production
+    if (is_production()
+            and os.environ.get("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
+                               "").strip().lower() not in ("1", "true", "yes")):
+        raise RuntimeError(
+            "RELEASE_SIGNER=local is forbidden in production — the private "
+            "signing key must NOT live in the API. Set RELEASE_SIGNER="
+            "external + RELEASE_SIGNER_URL/RELEASE_SIGNER_TOKEN (KMS/HSM "
+            "proxy), or explicitly set RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD="
+            "true to accept the risk.")
     return _private_key().sign(data).hex()
 
 
+def signer_status() -> dict:
+    """Operational visibility for the release-signing backend (#1 KMS)."""
+    mode = os.environ.get("RELEASE_SIGNER", "local").strip().lower()
+    return {"mode": mode,
+            "external_configured": bool(
+                os.environ.get("RELEASE_SIGNER_URL")
+                and os.environ.get("RELEASE_SIGNER_TOKEN")),
+            "public_key_pinned": bool(
+                os.environ.get("RELEASE_PUBLIC_KEY_B64")),
+            "key_id": KEY_ID}
+
+
+def _external_sign(data: bytes) -> str:
+    """Delegate signing to an isolated service. Contract:
+    POST {url}/sign  Authorization: Bearer <RELEASE_SIGNER_TOKEN>
+    body {"key_id": KEY_ID, "data_hex": "<hex>"} → {"signature_hex": "<hex>"}."""
+    import requests
+    url = os.environ.get("RELEASE_SIGNER_URL")
+    token = os.environ.get("RELEASE_SIGNER_TOKEN")
+    if not url or not token:
+        raise RuntimeError(
+            "RELEASE_SIGNER=external requires RELEASE_SIGNER_URL and "
+            "RELEASE_SIGNER_TOKEN (the API must NOT hold the private key)")
+    r = requests.post(
+        f"{url.rstrip('/')}/sign",
+        json={"key_id": KEY_ID, "data_hex": data.hex()},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=float(os.environ.get("RELEASE_SIGNER_TIMEOUT", "10")))
+    r.raise_for_status()
+    sig = r.json().get("signature_hex")
+    if not sig:
+        raise RuntimeError("external signer returned no signature_hex")
+    # defence-in-depth: verify the returned signature against the pinned pubkey
+    if not verify_hex(data, sig):
+        raise RuntimeError("external signer signature failed local verification")
+    return sig
+
+
 def public_key_b64() -> str:
+    # In external mode the API never sees the private key; the public key is
+    # provided out-of-band via RELEASE_PUBLIC_KEY_B64 (or the signer service).
+    pinned = os.environ.get("RELEASE_PUBLIC_KEY_B64")
+    if pinned:
+        return pinned.strip()
     pub = _private_key().public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     return base64.b64encode(pub).decode()
