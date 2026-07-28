@@ -1486,3 +1486,9 @@ User gap-analysis vs recommendations: HSM/KMS abstraction, immutable logs, mTLS+
 - Tests: test_iter177_webauthn_passkeys.py (6, incl. FULL ceremony with a hand-rolled P-256 software authenticator → step-up token → real POST /ops/audit-anchor 200; tampered-signature 401; challenge single-use; action binding; foreign-origin RP scoping). testing_agent iteration_110.json: 100% backend (14/14 contract/authz) + 100% frontend UI checks. Manifest → 3,119/304.
 ### PROD NOTES
 - For www.stoicaibot.com optionally set WEBAUTHN_RP_ID=stoicaibot.com (apex+www share passkeys). Passkeys enrolled on preview will NOT work on prod (RP-scoped, by design).
+
+## Iter-178 (2026-06) — Fix CI break: emergentintegrations leaked into requirements.txt
+- ROOT CAUSE: agent ran `pip freeze > backend/requirements.txt`, capturing emergentintegrations==0.2.0 (private cloudfront index — NOT on PyPI) and pod-local ML pins (torch+cpu, transformers, accelerate, chronos-forecasting, nvidia-nccl-cu12). Every CI job's `pip install -r` failed with "No matching distribution found for emergentintegrations==0.2.0".
+- FIX: restored the CURATED requirements.txt from git (7f982fa: keeps the 2-line NOTE header, excludes emergentintegrations + local ML stack) and re-added only the 3 new public deps: cbor2==6.1.3, pyOpenSSL==26.3.0, webauthn==3.0.0.
+- RULE FOR FUTURE AGENTS: NEVER `pip freeze > requirements.txt` in this repo. requirements.txt is hand-curated: emergentintegrations installs separately (`--no-deps --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/` in ci.yml/release.yml/Dockerfile.backend), torch/transformers stack is pod-local only. Add new deps by inserting a single pinned line alphabetically.
+- VERIFIED (testing_agent iteration_111.json, 100%): CI grep+pip --dry-run exit 0; pip-audit --no-deps --strict exit 0 (no vulns); /api/health 200; webauthn tests 6/6; admin login 200.
