@@ -1545,3 +1545,10 @@ REMAINING (next): #1 signing-key external-signer abstraction, #5 per-installatio
 - New admin diag: GET /api/ops/turnstile-diag (secret_check probe + last-20 rejection error-codes). turnstile_gate logs exact Cloudflare error-codes.
 - APP_ENV=preview added to backend/.env so the prod Secrets tab can override it to `production`.
 - USER: redeploy prod, set APP_ENV=production in Secrets tab, verify /api/ops/turnstile-diag shows secret_ok.
+
+## Iter-176/177 (2026-06) — Security batch complete
+- Dependency vuln scanning: Dependabot + weekly audit workflow + blocking frontend audit-ci gate in CI (react-router RSC CVE allowlisted w/ justification — CSR-only app).
+- Cert rotation policy (ops alerts + GET /api/ops/agent-certs) and host-agent command_key encrypted at rest (secrets_vault, startup migration done).
+- WebAuthn passkeys for admins as additional step-up factor (Settings → SECTION 04; StepUpDialog "USE PASSKEY INSTEAD"). RP ID from origin or WEBAUTHN_RP_ID env.
+- All tested: 16 new pytest + testing_agent iteration_110.json 100%.
+- Remaining security backlog: attach real HSM/KMS signer in prod (ops), terminate true client-cert mTLS at edge + AGENT_MTLS_REQUIRED=true, S3 Object-Lock for audit anchors (ops).

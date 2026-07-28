@@ -1464,3 +1464,25 @@ Tests: tests/test_iter159_scheduled_drills.py (9 passed, incl. failure-alert pat
 - APP_ENV=preview added to backend/.env (user support flow: key must exist in .env so the prod Secrets tab can override it to `production` — engages startup guardrails per iter-169 audit P3).
 - Tests: test_iter175_turnstile_diag.py (4 passed) + iter-155 suite regression (12 passed). Manifest → 3,093/301. Frontend builds clean.
 - USER ACTIONS (prod): redeploy; set APP_ENV=production in publish panel Secrets tab; after deploy hit /api/ops/turnstile-diag as admin — if secret_check=INVALID_SECRET, copy site+secret keys from the SAME Cloudflare widget and ensure stoicaibot.com + www.stoicaibot.com are in the widget's allowed hostnames.
+
+## Iter-176/177 (2026-06) — Security maturity batch (user's remaining recommendations)
+User gap-analysis vs recommendations: HSM/KMS abstraction, immutable logs, mTLS+per-install certs already DONE (iter-171/172). Implemented the 3 real gaps in order 2→3→1:
+### (2) Automatic dependency vulnerability scanning
+- .github/dependabot.yml (NEW): weekly update PRs for backend pip, frontend npm, e2e npm, github-actions.
+- .github/workflows/dependency-audit.yml (NEW): weekly (Mon 06:00 UTC) + manual pip-audit & frontend audit-ci sweep — catches CVEs disclosed between pushes.
+- ci.yml security-scan: added BLOCKING frontend audit step `npx audit-ci@^7 --config audit-ci.jsonc`.
+- frontend/audit-ci.jsonc (NEW): allowlists GHSA-qwww-vcr4-c8h2 (react-router RSC-mode CSRF, patched only in v8.3.0 major) with documented justification — app is a pure CSR Vite SPA, never uses unstable RSC APIs. Gate verified PASSING locally.
+### (3) Cert rotation policy + command_key vaulting (iter-176)
+- agent_mtls.certs_expiring/check_cert_expiry: fleet posture (expired / expiring within AGENT_CERT_RENEW_WINDOW_DAYS=14), ops alert agent_cert_rotation_due (critical if expired) each drill-loop tick. GET /api/ops/agent-certs.
+- command_key (HMAC command-signing key) now ENCRYPTED AT REST via secrets_vault (associated_data=b"agent_command_key"): vps_agent.encrypt_command_key/agent_command_key (legacy plaintext fallback), register_agent + rotate-credentials store command_key_enc + $unset plaintext, chaos_drills inserts encrypted, seed.ensure_indexes idempotent migration (verified in preview: 64 migrated, 0 plaintext).
+- Tests: test_iter176_cert_rotation_cmdkey.py (6) + regressions iter122c/170/172/159/161 all green.
+### (1) WebAuthn passkeys for administrators (iter-177)
+- ADDITIONAL step-up factor alongside TOTP (user did not choose replace; safe default). py_webauthn 3.0.0 (cryptography kept at 49.0.0 — soft-webauthn dep was REMOVED because it downgraded cryptography to 44).
+- backend/webauthn_mfa.py: ceremonies; RP ID = origin hostname (www-stripped) or WEBAUTHN_RP_ID env pin; single-use TTL challenges (db.webauthn_challenges, TTL index); credentials in db.webauthn_credentials (COSE pubkey b64u, sign_count cloned-authenticator tracking, unique user+credential index in seed.py).
+- routes/webauthn_routes.py (ADMIN-ONLY, prefix /api/auth/webauthn): GET /credentials, POST /register/begin|complete, DELETE /credentials/{id}, POST /step-up/begin|complete (mints the SAME issue_step_up_token as TOTP path; failure rate-limit webauthn_stepup 5/600s; audit events passkey_enrolled/removed, step_up_verified method=webauthn). Mounted in server.py.
+- IMPORTANT quirk: preview edge proxy REWRITES the Origin header → begin endpoints accept client-declared {origin} in body (safe: credentials are RP-scoped; challenge pins rp_id+origin). Frontend sends window.location.origin.
+- step_up.require_step_up: passkey enrollment now satisfies the MFA-enrollment gate (webauthn_mfa.has_passkey).
+- Frontend: lib/webauthnClient.js (b64u helpers, createPasskey/getPasskeyAssertion), components/PasskeySection.jsx (Settings SECTION 04, admin-only, testids passkey-*), StepUpDialog "USE PASSKEY INSTEAD" button (step-up-passkey-button) shown when admin has enrolled keys.
+- Tests: test_iter177_webauthn_passkeys.py (6, incl. FULL ceremony with a hand-rolled P-256 software authenticator → step-up token → real POST /ops/audit-anchor 200; tampered-signature 401; challenge single-use; action binding; foreign-origin RP scoping). testing_agent iteration_110.json: 100% backend (14/14 contract/authz) + 100% frontend UI checks. Manifest → 3,119/304.
+### PROD NOTES
+- For www.stoicaibot.com optionally set WEBAUTHN_RP_ID=stoicaibot.com (apex+www share passkeys). Passkeys enrolled on preview will NOT work on prod (RP-scoped, by design).
