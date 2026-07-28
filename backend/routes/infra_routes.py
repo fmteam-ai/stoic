@@ -19,11 +19,15 @@ def _aware(dt):
 
 async def _mtls_gate(db, agent_token: str, fingerprint: str) -> dict:
     """iter-172 (#5) — resolve the agent by token, then enforce its enrolled
-    per-installation mTLS client cert (raises ValueError → 401)."""
+    per-installation mTLS client cert. Raises HTTPException(401) directly so
+    downstream business ValueErrors keep their own status codes."""
     from agent_mtls import enforce_mtls
     from vps_agent import agent_by_token
-    agent = await agent_by_token(db, agent_token)
-    await enforce_mtls(db, agent, fingerprint)
+    try:
+        agent = await agent_by_token(db, agent_token)
+        await enforce_mtls(db, agent, fingerprint)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
     return agent
 
 
@@ -401,15 +405,12 @@ async def agent_renew_token_ep(payload: dict, cert_fp: str = _FP_HEADER):
 
 
 @router.post("/agent/deploy-status")
-async def agent_deploy_status_ep(payload: dict):
+async def agent_deploy_status_ep(payload: dict, cert_fp: str = _FP_HEADER):
     """iter-158 — agents report each update attempt; failures raise a
     centralized ops alert so a broken rollout is visible immediately."""
-    from vps_agent import agent_by_token
     db = get_db()
-    try:
-        agent = await agent_by_token(db, str(payload.get("agent_token") or ""))
-    except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+    agent = await _mtls_gate(db, str(payload.get("agent_token") or ""),
+                             cert_fp)
     status = "success" if payload.get("ok") else "failure"
     # SEC (P3) — attacker-controlled fields flow into alert log lines; strip
     # control chars (CR/LF) to prevent log-line forging (CWE-117).
@@ -594,11 +595,13 @@ async def pathb_status_ep(deployment_id: str,
 
 
 @router.post("/agent/discovery")
-async def agent_discovery_ep(payload: dict):
+async def agent_discovery_ep(payload: dict, cert_fp: str = _FP_HEADER):
     from vps_pathb import ingest_discovery
+    db = get_db()
+    await _mtls_gate(db, str(payload.get("agent_token") or ""), cert_fp)
     try:
         return await ingest_discovery(
-            get_db(), str(payload.get("agent_token") or ""),
+            db, str(payload.get("agent_token") or ""),
             payload.get("terminals") or [])
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))

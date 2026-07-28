@@ -19,5 +19,8 @@
 - ~~P1 Demo Certification Campaign~~ DONE 2026-07-25 (24/24 scenario runs pass, ledger complete; remaining supervised-live blockers are runtime health gates that clear when terminals reconnect).
 - **P1** CI EX5 release pipeline — build EmergentTradingBridge.ex5 in CI, publish to backend/static so /api/ea-script.ex5 serves the signed binary (endpoint + installer verification already live).
 - **P2** Real Forex VPS provider sandbox integration (replace provisioning stubs).
+- **P1** Distributed Redis rate limiting for enterprise API (priority #6).
+- **P0** Implement HOST_AGENT_MSI_SPEC.md (#3) and DOCKER_IMAGE_SPLIT_SPEC.md (#7) when approved.
+- **P2** Distributed tracing / OpenTelemetry.
 - **P2** Asymmetric artifact signing — HMAC → Ed25519/ECDSA with CI private release keys + rotation.
 - **NOTE** Live trading now REQUIRES EA v1.55 + paired installation (identity gate). Existing v1.54 terminals keep sending telemetry but cannot dispatch live trades until re-paired via installer/dashboard.
