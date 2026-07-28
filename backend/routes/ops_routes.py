@@ -525,6 +525,16 @@ async def audit_anchor_create(request: Request):
     return {"anchored": True, **doc, "by": actor}
 
 
+@router.get("/ops/turnstile-diag")
+async def turnstile_diag(request: Request):
+    """Turnstile health: secret-key validity probe + recent rejection codes."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    import turnstile_gate
+    return await turnstile_gate.diagnose(get_db())
+
+
 @router.get("/ops/query-perf")
 async def query_perf_status(request: Request):
     """iter-171 (#9) — slow-query monitoring counters for this API process."""

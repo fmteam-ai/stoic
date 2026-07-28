@@ -22,10 +22,13 @@ export default function ForgotPassword() {
             setSent(true);
         } catch (err) {
             const detail = err?.response?.data?.detail;
-            if (detail?.code === "turnstile_required") {
-                setError(detail.message || "Please complete the human verification challenge.");
+            // Single-use token was consumed by the failed attempt — reset.
+            if (turnstile.enabled) {
                 resetTurnstile();
                 turnstile.setToken("");
+            }
+            if (detail?.code === "turnstile_required") {
+                setError(detail.message || "Please complete the human verification challenge.");
                 setSubmitting(false);
                 return;
             }

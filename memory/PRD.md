@@ -1539,3 +1539,9 @@ REMAINING (next): #1 signing-key external-signer abstraction, #5 per-installatio
 - Production 520 saga (www.stoicaibot.com): (a) uvicorn keep-alive 5s→650s in-process fix (server.py _extend_uvicorn_keepalive + Dockerfile.backend); (b) ROOT CAUSE = OOM crash-loop on 1Gi prod pod: boot-time xgboost/sklearn import via learned_meta + in-request GBM auto-retraining. Fixed with ml_runtime.py memory-budget gate (see CHANGELOG iter-173d). Boot RSS 865MB→300MB.
 - Scalp UX: candle-feed self-diagnosing warm-up warning (scalp/permissions.py); EA v1.56 streams candles for TickStreamSymbol (fixes EURUSD scalp on GOLD chart).
 - PENDING USER ACTIONS: redeploy to production; pair both live terminals (Accounts → Quick Install); delete stoic-probe-*@mailinator.com probe accounts; optionally contact Emergent support for a larger deployment if full in-API ML (GBM/torch) is wanted in production.
+
+## Iter-175 (2026-06, fork) — Turnstile login fix + diagnostics
+- Root cause of prod "Human verification failed": single-use Turnstile token reused across retries (esp. email-OTP two-step login). Frontend now resets the widget on EVERY failed auth attempt (Login/Register/ForgotPassword).
+- New admin diag: GET /api/ops/turnstile-diag (secret_check probe + last-20 rejection error-codes). turnstile_gate logs exact Cloudflare error-codes.
+- APP_ENV=preview added to backend/.env so the prod Secrets tab can override it to `production`.
+- USER: redeploy prod, set APP_ENV=production in Secrets tab, verify /api/ops/turnstile-diag shows secret_ok.

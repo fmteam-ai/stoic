@@ -12,6 +12,7 @@ HIBP fail-open precedent so a Cloudflare outage can never lock users out.
 import logging
 import os
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 
 import httpx
@@ -29,6 +30,10 @@ _CLIENT_FAULT_CODES = {
     "missing-input-response", "invalid-input-response",
     "timeout-or-duplicate", "invalid-widget-id", "bad-request",
 }
+
+# In-memory ring of the most recent rejections for the /ops/turnstile-diag
+# endpoint — lets an admin see the exact Cloudflare error-codes in prod.
+_RECENT_REJECTIONS: deque = deque(maxlen=20)
 
 
 def secret_key() -> str:
@@ -101,6 +106,14 @@ async def require_turnstile(db, token: str | None, remote_ip: str | None,
         logger.warning("turnstile outage — failing OPEN for %s (%s)",
                        action, result["error_codes"])
         return
+    logger.warning("turnstile REJECTED %s: error-codes=%s ip=%s",
+                   action, result["error_codes"], remote_ip)
+    _RECENT_REJECTIONS.append({
+        "at": datetime.now(timezone.utc).isoformat(),
+        "action": action,
+        "error_codes": result["error_codes"],
+        "ip": remote_ip,
+    })
     raise HTTPException(
         status_code=403,
         detail={
@@ -109,3 +122,35 @@ async def require_turnstile(db, token: str | None, remote_ip: str | None,
                        "challenge and try again.",
         },
     )
+
+
+async def diagnose(db) -> dict:
+    """Admin diagnostics: is the secret key valid, and why were recent
+    tokens rejected? Probes siteverify with a dummy token — Cloudflare
+    answers invalid-input-response when the SECRET is fine, or
+    invalid-input-secret when the secret itself is wrong/mismatched."""
+    sk = secret_key()
+    out = {
+        "enabled": await is_enabled(db),
+        "site_key_set": bool(site_key()),
+        "site_key_prefix": site_key()[:14] if site_key() else None,
+        "secret_key_set": bool(sk),
+        "recent_rejections": list(_RECENT_REJECTIONS),
+    }
+    if not sk:
+        out["secret_check"] = "not_configured"
+        return out
+    probe = await verify_token("diagnostic-probe-token")
+    codes = probe["error_codes"]
+    out["probe_error_codes"] = codes
+    if any(c in ("missing-input-secret", "invalid-input-secret") for c in codes):
+        out["secret_check"] = "INVALID_SECRET"
+        out["hint"] = ("TURNSTILE_SECRET_KEY is wrong or belongs to a "
+                       "different widget than TURNSTILE_SITE_KEY. Copy both "
+                       "keys from the SAME widget in the Cloudflare "
+                       "Turnstile dashboard.")
+    elif probe["outage"]:
+        out["secret_check"] = "cloudflare_unreachable"
+    else:
+        out["secret_check"] = "secret_ok"
+    return out

@@ -46,10 +46,15 @@ export default function Login() {
             navigate(u?.must_change_password ? "/settings" : "/");
         } catch (err) {
             const detail = err?.response?.data?.detail;
-            if (detail?.code === "turnstile_required") {
-                setError(detail.message || "Please complete the human verification challenge.");
+            // Turnstile tokens are single-use: the failed attempt consumed
+            // this one server-side, so always issue a fresh token before the
+            // next submit (wrong password, OTP challenge, 2FA, etc.).
+            if (turnstile.enabled) {
                 resetTurnstile();
                 turnstile.setToken("");
+            }
+            if (detail?.code === "turnstile_required") {
+                setError(detail.message || "Please complete the human verification challenge.");
                 return;
             }
             // Unverified account: surface friendly UI with resend link

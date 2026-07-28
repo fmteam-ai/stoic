@@ -37,8 +37,8 @@ export default function Register() {
                 emailDeliveryError: !data?.activation_email_sent ? (data?.activation_email_error || null) : null,
             });
         } catch (err) {
-            const detail = err?.response?.data?.detail;
-            if (detail?.code === "turnstile_required") {
+            // Single-use token was consumed by the failed attempt — reset.
+            if (turnstile.enabled) {
                 resetTurnstile();
                 turnstile.setToken("");
             }
