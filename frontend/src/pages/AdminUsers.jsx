@@ -105,6 +105,8 @@ function ModerationModal({ open, onClose, action, target, onConfirm }) {
 function TurnstileToggle() {
     const [state, setState] = useState(null); // {enabled, configured}
     const [busy, setBusy] = useState(false);
+    const [diag, setDiag] = useState(null);
+    const [diagBusy, setDiagBusy] = useState(false);
     useEffect(() => {
         api.get("/admin/settings/turnstile")
             .then(r => setState(r.data))
@@ -119,30 +121,78 @@ function TurnstileToggle() {
         } catch (e) { toast.error(formatApiError(e)); }
         finally { setBusy(false); }
     };
+    const runDiag = async () => {
+        setDiagBusy(true);
+        setDiag(null);
+        try {
+            const { data } = await api.get("/ops/turnstile-diag");
+            setDiag(data);
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setDiagBusy(false); }
+    };
+    const secretLabel = {
+        secret_ok: ["SECRET KEY VALID", "text-[#00FF41]"],
+        INVALID_SECRET: ["SECRET KEY INVALID / WIDGET MISMATCH", "text-[#FF3B30]"],
+        cloudflare_unreachable: ["CLOUDFLARE UNREACHABLE", "text-[#FFB000]"],
+        not_configured: ["SECRET KEY NOT CONFIGURED", "text-[#FFB000]"],
+    }[diag?.secret_check] || ["UNKNOWN", "text-[#A1A1AA]"];
     return (
-        <div className="bg-[#0A0A0A] border border-[#1F1F1F] p-4 mb-6 flex flex-wrap items-center gap-4"
+        <div className="bg-[#0A0A0A] border border-[#1F1F1F] p-4 mb-6"
             data-testid="turnstile-setting-card">
-            <ShieldCheck className={`w-5 h-5 ${state?.enabled ? "text-[#00FF41]" : "text-[#52525B]"}`} />
-            <div className="flex-1 min-w-[240px]">
-                <div className="font-display text-sm text-white">Cloudflare Turnstile (bot protection)</div>
-                <div className="text-xs text-[#71717A] mt-0.5">
-                    When ON, sign-in, registration and password-reset require completing a
-                    Cloudflare human-verification challenge — blocks credential stuffing and
-                    automated abuse. Requires TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY and the
-                    app hostname added to the widget in the Cloudflare dashboard.
-                    {state && !state.configured && (
-                        <span className="text-[#FF3B30]"> Keys not configured — set them before enabling.</span>
+            <div className="flex flex-wrap items-center gap-4">
+                <ShieldCheck className={`w-5 h-5 ${state?.enabled ? "text-[#00FF41]" : "text-[#52525B]"}`} />
+                <div className="flex-1 min-w-[240px]">
+                    <div className="font-display text-sm text-white">Cloudflare Turnstile (bot protection)</div>
+                    <div className="text-xs text-[#71717A] mt-0.5">
+                        When ON, sign-in, registration and password-reset require completing a
+                        Cloudflare human-verification challenge — blocks credential stuffing and
+                        automated abuse. Requires TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY and the
+                        app hostname added to the widget in the Cloudflare dashboard.
+                        {state && !state.configured && (
+                            <span className="text-[#FF3B30]"> Keys not configured — set them before enabling.</span>
+                        )}
+                    </div>
+                </div>
+                <button onClick={runDiag} disabled={diagBusy}
+                    data-testid="turnstile-diag-button"
+                    className="px-4 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B] hover:text-white transition disabled:opacity-50">
+                    {diagBusy ? "CHECKING…" : "RUN DIAGNOSTICS"}
+                </button>
+                <button onClick={toggle} disabled={busy || state === null || (!state?.configured && !state?.enabled)}
+                    data-testid="turnstile-toggle"
+                    className={`px-4 py-2 text-xs font-mono tracking-widest border transition ${
+                        state?.enabled ? "border-[#00FF41]/50 bg-[#00FF41]/10 text-[#00FF41]"
+                                : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B]"
+                    }`}>
+                    {state === null ? "…" : busy ? "SAVING…" : state.enabled ? "ENABLED — CLICK TO DISABLE" : "DISABLED — CLICK TO ENABLE"}
+                </button>
+            </div>
+            {diag && (
+                <div className="mt-3 border-t border-[#1F1F1F] pt-3 space-y-1.5 font-mono text-[11px]"
+                    data-testid="turnstile-diag-results">
+                    <div>
+                        <span className="text-[#52525B]">SECRET CHECK · </span>
+                        <span className={secretLabel[1]} data-testid="turnstile-diag-secret-status">{secretLabel[0]}</span>
+                    </div>
+                    <div className="text-[#71717A]">
+                        widget enabled: <span className="text-white">{String(diag.enabled)}</span>
+                        {" · "}site key: <span className="text-white">{diag.site_key_prefix || "not set"}…</span>
+                    </div>
+                    {diag.hint && <div className="text-[#FFB000]" data-testid="turnstile-diag-hint">{diag.hint}</div>}
+                    {(diag.recent_rejections || []).length > 0 ? (
+                        <div data-testid="turnstile-diag-rejections">
+                            <span className="text-[#52525B]">RECENT REJECTIONS (since last restart):</span>
+                            {diag.recent_rejections.slice(-5).reverse().map((r, i) => (
+                                <div key={i} className="text-[#FF3B30]">
+                                    {r.at?.slice(0, 19)} · {r.action} · {(r.error_codes || []).join(", ")}
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="text-[#52525B]">No token rejections recorded since the last restart.</div>
                     )}
                 </div>
-            </div>
-            <button onClick={toggle} disabled={busy || state === null || (!state?.configured && !state?.enabled)}
-                data-testid="turnstile-toggle"
-                className={`px-4 py-2 text-xs font-mono tracking-widest border transition ${
-                    state?.enabled ? "border-[#00FF41]/50 bg-[#00FF41]/10 text-[#00FF41]"
-                            : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B]"
-                }`}>
-                {state === null ? "…" : busy ? "SAVING…" : state.enabled ? "ENABLED — CLICK TO DISABLE" : "DISABLED — CLICK TO ENABLE"}
-            </button>
+            )}
         </div>
     );
 }

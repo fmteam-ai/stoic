@@ -540,7 +540,10 @@ async def turnstile_diag(request: Request):
     """Turnstile health: secret-key validity probe + recent rejection codes."""
     allowed, _actor = await _ops_actor(request)
     if not allowed:
-        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+        return JSONResponse(status_code=403, content={"detail": (
+            "Admin session required — sign in as an admin and use the "
+            "'Run diagnostics' button on Admin → Users (Turnstile card), "
+            "or send a valid METRICS_TOKEN bearer.")})
     import turnstile_gate
     return await turnstile_gate.diagnose(get_db())
 
