@@ -1,0 +1,16 @@
+{
+  "summary": "Verified bug fix for GitHub Actions backend-unit failure on test_no_raw_exception_strings_in_route_responses. Ran exact CI selection (474 passed, 0 failed). Confirmed both raises at routes/webauthn_routes.py:47 and :97 carry '# deliberate ValueError message' inline marker inside `except ValueError` blocks per the sanctioned pattern. Regression suite for WebAuthn (test_iter177_webauthn_passkeys.py + test_iter177_review_endpoints.py) 20/20 passing. Backend preview boots cleanly with new .env keys: GET /api/health -> 200 {status:ok,db:connected}; POST /api/auth/login (admin@stoicaibot.com/admin123) -> 200. CSRF_ENFORCE_ORIGIN=false confirmed not blocking cross-origin-less curl POSTs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_iter148_p0_exec_truth.py", "/app/backend/tests/test_iter177_webauthn_passkeys.py", "/app/backend/tests/test_iter177_review_endpoints.py"],
+  "action_items": [],
+  "critical_code_review_comments": ["Fix pattern is correct and minimal: inline '# deliberate ValueError message' marker + `except ValueError` scope satisfies the P0 line-based rule without leaking raw exception strings from broader except blocks. Note: /register/complete (line 61-63) uses broader `except Exception` with an f-string embedding the exception — this is allowed by the current rule (no bare `detail=str(e)`), but consider narrowing to except ValueError for consistency with the other two handlers to reduce info-leak surface."],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (from /app/memory/test_credentials.md) - verified working",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "CI backend-unit selection is green (474 passed). WebAuthn regression 20/20. Preview backend healthy with new .env keys (APP_ENV=preview, CSRF_ENFORCE_ORIGIN=false, RELEASE_SIGNER=local, RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=false). Production APP_ENV=production guardrail is config-only and not testable from the preview pod — main agent handles via user Secrets.",
+  "rca of the issue": "test_no_raw_exception_strings_in_route_responses scans route files line-by-line and flags any `detail=str(e)` unless the SAME line contains 'ValueError' (either as an inline comment marker or in an except clause context recognized by the rule). Fix: added `# deliberate ValueError message` on the two flagged lines (47, 97), both already scoped inside `except ValueError as e:` blocks. Verified by rerunning the exact CI selection: 474 passed / 0 failed (was 1 failed / 472 passed)."
+}

@@ -44,7 +44,7 @@ async def register_begin(request: Request, payload: dict | None = None,
         return await begin_registration(get_db(), user,
                                         _origin(request, payload))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))  # deliberate ValueError message
 
 
 @router.post("/register/complete")
@@ -94,7 +94,7 @@ async def step_up_begin(payload: dict, request: Request,
         return await begin_step_up(get_db(), user, _origin(request, payload),
                                    action)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))  # deliberate ValueError message
 
 
 @router.post("/step-up/complete")
