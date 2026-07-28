@@ -93,9 +93,33 @@ from contextlib import asynccontextmanager
 async def _lifespan(_app):
     # on_startup / on_shutdown are defined later in this module — names
     # resolve at call time, after the module has fully loaded.
+    _extend_uvicorn_keepalive()
     await on_startup()
     yield
     await on_shutdown()
+
+
+def _extend_uvicorn_keepalive():
+    """Fix intermittent Cloudflare 520s in production: uvicorn's default
+    5s keep-alive closes idle connections faster than the upstream proxies
+    (GFE/Cloudflare hold backend connections ~600s), so a request can land
+    on a just-closed socket → connection reset → 520 'unparseable response'.
+    The launch command isn't ours to change in the deploy environment, so
+    raise the running server's Config in-process (per GCP LB guidance the
+    backend timeout must exceed 600s; default 650)."""
+    try:
+        import gc
+        import uvicorn
+        target = int(os.environ.get("UVICORN_KEEPALIVE_SECONDS", "650"))
+        for obj in gc.get_objects():
+            if isinstance(obj, uvicorn.Config) and \
+                    obj.timeout_keep_alive < target:
+                obj.timeout_keep_alive = target
+                logging.getLogger("server").info(
+                    "uvicorn timeout_keep_alive raised to %ss", target)
+    except Exception:  # noqa: BLE001 — never block startup for this
+        logging.getLogger("server").warning(
+            "could not extend uvicorn keep-alive", exc_info=True)
 
 app = FastAPI(title="AI Trading Bot API", version="1.1.0", lifespan=_lifespan)
 
