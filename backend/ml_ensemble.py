@@ -37,6 +37,10 @@ FEATURE_NAMES = [
 
 _models_cache: dict = {}    # {uid: (mtime, {name: model})}
 
+# iter-173 — shared OOM guard (see ml_runtime.py). Re-exported here because
+# learning_pipeline and tests import it from ml_ensemble.
+from ml_runtime import _memory_budget_gb, ml_runtime_enabled  # noqa: E402,F401
+
 
 def featurize(action, symbol, sig, when=None) -> list:
     sig = sig or {}
@@ -143,6 +147,16 @@ async def train_ensemble(db, user_id: str) -> dict:
     import asyncio
     from bson import ObjectId
     from datetime import timedelta
+    if not ml_runtime_enabled():
+        meta = {"user_id": user_id, "status": "disabled_low_memory",
+                "note": (f"container memory budget "
+                         f"{_memory_budget_gb():.1f}GB is below the GBM-zoo "
+                         "requirement — training skipped (set "
+                         "ML_ENSEMBLE_ENABLED=true to force)"),
+                "trained_at": datetime.now(timezone.utc).isoformat()}
+        await db.ml_ensembles.update_one({"user_id": user_id},
+                                         {"$set": meta}, upsert=True)
+        return meta
     since = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
     trades = await db.trades.find({
         "user_id": user_id, "status": "closed", "pnl": {"$ne": None},
@@ -202,6 +216,9 @@ async def get_meta(db, user_id: str) -> dict:
                 return doc
         except (KeyError, ValueError):
             pass
+    if not ml_runtime_enabled():
+        # never auto-retrain in-request on a memory-constrained pod
+        return doc or {"status": "disabled_low_memory"}
     return await train_ensemble(db, user_id)
 
 
@@ -243,16 +260,14 @@ def blend(members: list) -> float | None:
 
 
 async def ml_predict(db, user_id: str, signal: dict, symbol: str) -> dict:
-    # Deployment kill-switch — set ML_ENSEMBLE_ENABLED=false on
-    # memory-constrained pods to skip loading the GBM zoo (xgboost/
-    # lightgbm/catboost). Returns a neutral prediction (no veto). Default
-    # enabled.
-    import os
-    if os.environ.get("ML_ENSEMBLE_ENABLED", "true").lower() != "true":
-        return {"p_win": None, "models_used": 0, "members": []}
-    meta = await get_meta(db, user_id)
+    # OOM guard (iter-173): on memory-constrained pods skip ONLY the trained
+    # GBM zoo (heavy imports); the light members (transformer / RL /
+    # Bayesian) still vote — see ml_runtime_enabled().
+    gbm_enabled = ml_runtime_enabled()
+    meta = await get_meta(db, user_id) if gbm_enabled else {
+        "status": "disabled_low_memory"}
     members = []
-    if meta.get("status") == "trained":
+    if gbm_enabled and meta.get("status") == "trained":
         models = _load_models(user_id)
         if models:
             x = featurize(signal.get("action"), symbol, signal)

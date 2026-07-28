@@ -1532,3 +1532,10 @@ User approved: do #2,#4,#8,#9,#10 now → then #1,#5 abstractions → then specs
 - #2 CI RANDOM ADMIN CREDS (.github/workflows/ci.yml frontend-e2e): 'Generate random CI admin credentials' step sets random ADMIN_PASSWORD (Ci9!+token) + ADMIN_EMAIL via $GITHUB_ENV; backend seeds them; Playwright gets E2E_ADMIN_PASSWORD/E2E_ADMIN_EMAIL. Preview keeps admin123 for local dev.
 - Tests: test_iter171_hardening_batch.py (5) + patched test_safety_guardian/test_max_concurrent_race (mock execution.authorize_order). Manifest → 3,054/295.
 REMAINING (next): #1 signing-key external-signer abstraction, #5 per-installation mTLS; then specs for #3 (MSI/service) & #7 (image split).
+
+## Iter-172/173 (2026-07-28, fork) — Security abstractions + production stabilization
+- #1 KMS/external release signing (RELEASE_SIGNER=external, local forbidden in prod w/o override; scripts/release_signer_service.py reference; signer status on /api/release-key).
+- #5 Per-installation mTLS for host agents (/api/infra/agent/cert/enroll, fingerprint pinning on ALL 9 agent endpoints via X-Client-Cert-Fingerprint, owner/admin revoke, rotation requires current cert). Specs delivered: docs/specs/HOST_AGENT_MSI_SPEC.md (#3), docs/specs/DOCKER_IMAGE_SPLIT_SPEC.md (#7).
+- Production 520 saga (www.stoicaibot.com): (a) uvicorn keep-alive 5s→650s in-process fix (server.py _extend_uvicorn_keepalive + Dockerfile.backend); (b) ROOT CAUSE = OOM crash-loop on 1Gi prod pod: boot-time xgboost/sklearn import via learned_meta + in-request GBM auto-retraining. Fixed with ml_runtime.py memory-budget gate (see CHANGELOG iter-173d). Boot RSS 865MB→300MB.
+- Scalp UX: candle-feed self-diagnosing warm-up warning (scalp/permissions.py); EA v1.56 streams candles for TickStreamSymbol (fixes EURUSD scalp on GOLD chart).
+- PENDING USER ACTIONS: redeploy to production; pair both live terminals (Accounts → Quick Install); delete stoic-probe-*@mailinator.com probe accounts; optionally contact Emergent support for a larger deployment if full in-API ML (GBM/torch) is wanted in production.

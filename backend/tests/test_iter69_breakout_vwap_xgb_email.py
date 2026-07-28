@@ -7,7 +7,10 @@ import pytest
 
 from breakout_scalper import compute_breakout_scalper
 from vwap_pullback import compute_vwap_pullback
-from learned_meta import _fit_artifact, _XGB_AVAILABLE, MIN_SAMPLES_XGB
+from learned_meta import _fit_artifact, _xgb, MIN_SAMPLES_XGB
+
+# iter-173 — _XGB_AVAILABLE replaced by the lazy, memory-gated _xgb()
+_XGB_AVAILABLE = _xgb() is not None
 
 
 def _ohlc(closes, vol=1000.0):

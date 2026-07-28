@@ -148,7 +148,10 @@ def _holdout_auc_sync(X_train, y_train, X_hold, y_hold, uid: str) -> dict:
 async def staged_ml_retrain(db, user_id: str) -> dict:
     """replay → shadow → validation → approval → production for the GBMs."""
     import asyncio
-    from ml_ensemble import LOOKBACK_DAYS, MIN_TRADES, train_ensemble
+    from ml_ensemble import (LOOKBACK_DAYS, MIN_TRADES, ml_runtime_enabled,
+                             train_ensemble)
+    if not ml_runtime_enabled():
+        return {"stage": "replay", "status": "disabled_low_memory"}
     since = (_now() - timedelta(days=LOOKBACK_DAYS)).isoformat()
     trades = await db.trades.find({
         "user_id": user_id, "status": "closed", "pnl": {"$ne": None},

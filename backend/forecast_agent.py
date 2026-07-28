@@ -30,6 +30,12 @@ def _load_model():
     global _model, _model_failed
     if _model is not None or _model_failed:
         return _model
+    from ml_runtime import ml_runtime_enabled
+    if not ml_runtime_enabled():
+        logger.info("Chronos forecast model skipped — heavy ML disabled "
+                    "(container memory budget)")
+        _model_failed = True
+        return None
     try:
         import torch
         from chronos import BaseChronosPipeline

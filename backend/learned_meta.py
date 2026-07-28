@@ -29,11 +29,18 @@ from typing import Optional
 from bson import ObjectId
 import numpy as np
 
-try:
-    import xgboost as xgb
-    _XGB_AVAILABLE = True
-except ImportError:  # pragma: no cover — only when xgboost not installed
-    _XGB_AVAILABLE = False
+def _xgb():
+    """iter-173 — lazy, memory-gated XGBoost import. The old module-level
+    import loaded xgboost+sklearn into EVERY API boot (~400MB), OOM-killing
+    1Gi production pods. Returns the module or None."""
+    from ml_runtime import ml_runtime_enabled
+    if not ml_runtime_enabled():
+        return None
+    try:
+        import xgboost
+        return xgboost
+    except ImportError:  # pragma: no cover — only when xgboost not installed
+        return None
 
 from database import get_db
 from probability_calibrator import fit_platt, apply_platt, brier_score
@@ -247,6 +254,9 @@ def _train_xgb(X: np.ndarray, y: np.ndarray,
     neg = float((y == 0).sum())
     spw = (neg / pos) if pos > 0 else 1.0
 
+    xgb = _xgb()
+    if xgb is None:
+        raise RuntimeError("xgboost unavailable (heavy ML disabled)")
     if sample_w is not None and len(sample_w) == n:
         dmat = xgb.DMatrix(X, label=y, weight=sample_w)
     else:
@@ -276,6 +286,9 @@ def _train_xgb(X: np.ndarray, y: np.ndarray,
 
 def _xgb_predict_proba(model_bytes: bytes, X: np.ndarray) -> np.ndarray:
     """Reconstitute a saved XGBoost booster and predict probabilities."""
+    xgb = _xgb()
+    if xgb is None:
+        raise RuntimeError("xgboost unavailable (heavy ML disabled)")
     booster = xgb.Booster()
     booster.load_model(bytearray(model_bytes))
     dmat = xgb.DMatrix(X)
@@ -327,7 +340,7 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
     to care about the SIZE of wins/losses, not just their count.
     """
     n = len(y)
-    use_xgb = _XGB_AVAILABLE and n >= MIN_SAMPLES_XGB
+    use_xgb = _xgb() is not None and n >= MIN_SAMPLES_XGB
 
     if use_xgb:
         model_bytes, p_train, auc = _train_xgb(X, y, sample_w)
@@ -503,7 +516,7 @@ async def predict_p_win(signal: dict) -> Optional[dict]:
         x_row = np.array(feats, dtype=float).reshape(1, -1)
         backend = art.get("backend", "logreg")
 
-        if backend == "xgboost" and _XGB_AVAILABLE:
+        if backend == "xgboost" and _xgb() is not None:
             model_bytes = _b64decode_bytes(art["xgb_model_b64"])
             p = float(_xgb_predict_proba(model_bytes, x_row)[0])
         else:

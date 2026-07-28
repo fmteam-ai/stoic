@@ -1433,3 +1433,18 @@ Tests: tests/test_iter159_scheduled_drills.py (9 passed, incl. failure-alert pat
 - User's terminals printed "no InstallationId ... Heartbeats UNVERIFIED" → terminals were set up manually, never paired. Guidance: Accounts → Quick Install panel → generate pairing token → run STOIC-Installer.ps1 on the MT5 host (writes STOIC-Installation.txt + fresh STOIC-Token.txt, whitelists WebRequest URL). NOTE: claiming rotates the bridge token by design.
 - REAL root cause of EURUSD 0/12 M15 bars found: EA `SendCandles` only streamed chart symbol + TrackedSymbols (default "XAUUSD,BTCUSD"); user's EA sits on a GOLD# chart → EURUSD candles never sent despite EURUSD tick stream. **EA v1.56**: SendCandles now always includes the resolved TickStreamSymbol.
 - Version bump propagated: EA #property/EA_CLIENT_VERSION, LATEST_EA (bot_routes, diagnostic_routes), ea_latest_version (setup_routes), LATEST_EA_VERSION (Accounts.jsx, EaVersionStrip.jsx). Stale "1.55" test pins in test_iter103 converted to current_ea_version() coherence checks. 138 related tests pass; manifest regenerated.
+
+## iter-173d (2026-07-28) — Production OOM crash-loop fixed (root cause of ALL 520s)
+- Prod went fully down (/api/health 520, backend crash-looping ~100s down/brief up). RCA chain:
+  1. Emergent prod containers = 1Gi memory. Backend serving process measured 865MB at BOOT in preview with catboost/lightgbm/xgboost/sklearn/torch resident.
+  2. Boot-time import chain: server.py → routes/analytics_routes.py:9 → learned_meta.py module-level `import xgboost` (pulls xgboost.sklearn → sklearn, ~400MB).
+  3. Runtime: ml_predict → get_meta AUTO-RETRAINS stale models in-request (GBM zoo training ≈1GB, observed 997MB spawn child) — triggered as soon as the user enabled live trading → OOM-kill → restart → still stale → retrain → crash-loop.
+- Fixes:
+  • NEW `/app/backend/ml_runtime.py` — `ml_runtime_enabled()`: explicit ML_ENSEMBLE_ENABLED wins, else auto-disable heavy ML when cgroup memory budget < ML_MIN_MEMORY_GB (default 2GB). Preview (8GB) stays enabled; prod 1Gi auto-disables.
+  • `learned_meta.py` — xgboost import now lazy + gated (`_xgb()`); `_XGB_AVAILABLE` removed (test_iter69 updated).
+  • `ml_ensemble.py` — train_ensemble/get_meta/ml_predict gated; when disabled, light members (transformer/RL/bayes) STILL vote; never auto-retrains in-request.
+  • `learning_pipeline.staged_ml_retrain` gated.
+  • `forecast_agent._load_model` (torch/Chronos) gated.
+  • Boot RSS: 865MB → ~300MB. Guard test asserts NO heavy lib in sys.modules after `import server` (tests/test_iter173_ml_oom_guard.py, 9 tests).
+- Full suite: 3402 passed (3 rate-limit flakes pass in isolation). Manifest regenerated (3086 tests / 299 files).
+- REQUIRES REDEPLOY. In prod, ml_ensembles docs will show status=disabled_low_memory; GET /api/release-key `signer` field confirms new build.
