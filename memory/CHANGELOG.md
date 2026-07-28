@@ -1423,3 +1423,8 @@ Tests: tests/test_iter159_scheduled_drills.py (9 passed, incl. failure-alert pat
 - Fix: `server.py::_extend_uvicorn_keepalive()` (called in lifespan) raises the RUNNING uvicorn Config's timeout_keep_alive to `UVICORN_KEEPALIVE_SECONDS` (default 650s, > GCP LB 600s guidance) via gc lookup — works even though the deploy launch command isn't repo-controlled. Also added `--timeout-keep-alive 650` to Dockerfile.backend CMD.
 - Verified: raw-socket test — connection survives 8s idle (would be closed at 5s before); startup log line "uvicorn timeout_keep_alive raised to 650s". REQUIRES REDEPLOY to take effect in production.
 - Note: 3 probe accounts stoic-probe-*@mailinator.com left on prod DB (user informed, deletable via Admin→Users).
+
+## iter-173b (2026-07-28) — Scalp warm-up warning now self-diagnosing
+- Prod report: Fast Scalp on 2 live accounts stuck at "REGIME UNKNOWN · insufficient M15 history (0/12)"; one terminal also TICK STREAM OFFLINE (Ticks 0 → EA not streaming from that terminal, config-side).
+- RCA (VT terminal, ticks OK but no candles): EA `SendCandlesFor` silently returns when `CopyRates` has <10 local bars (fresh VPS terminals lack M15 history until a chart is opened). Old warning just said "wait for warm-up".
+- Fix: `scalp/permissions.py::_candle_feed_diagnosis()` — enriches regime_reason using `candle_feed_health`: never-received (→ tells user to open an M15 chart to force history download), rejected payloads (surfaces last_error), feed stopped (age > 15 min), or arriving-but-short. Tests: tests/test_iter173_scalp_candle_diag.py (5) + updated unit mock in test_iter140_permissions_news.py. 436 scalp tests pass; manifest regenerated (3077 tests / 298 files).

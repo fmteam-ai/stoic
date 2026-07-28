@@ -17,6 +17,7 @@ def _db_with_bars(n=24):
     bars = [{"c": 1.10 + i * 0.0001} for i in range(n)]
     db = MagicMock()
     db.intraday_candles.find_one = AsyncMock(return_value={"bars": bars})
+    db.candle_feed_health.find_one = AsyncMock(return_value=None)
     return db
 
 

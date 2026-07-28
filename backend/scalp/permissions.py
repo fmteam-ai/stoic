@@ -20,6 +20,39 @@ def _key(user_id: str, symbol: str) -> str:
     return f"{user_id}:{symbol}"
 
 
+async def _candle_feed_diagnosis(db, user_id: str, symbol: str,
+                                 have: int) -> str:
+    """iter-173 — pinpoint WHY M15 history is missing using the per-stage
+    candle_feed_health doc, instead of a generic 'wait for warm-up'."""
+    head = f"insufficient M15 history ({have}/12 bars)"
+    fh = await db.candle_feed_health.find_one(
+        {"user_id": user_id, "symbol": symbol, "timeframe": "M15"})
+    if not fh or not fh.get("last_received_at"):
+        return (f"{head} — no candle payloads have reached STOIC from any of "
+                f"your terminals yet. The EA posts M15 candles every 5 min; "
+                f"if this persists, open a {symbol} M15 chart in that MT5 "
+                "once (forces history download — the EA skips sending when "
+                "the terminal has <10 local bars) and check the Experts log")
+    try:
+        age = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(str(fh["last_received_at"]))
+               ).total_seconds()
+    except ValueError:
+        age = None
+    if fh.get("last_error"):
+        return (f"{head} — last candle payload was rejected "
+                f"({fh['last_error']}); check the EA version (v1.42+) and "
+                "Experts log")
+    if age is not None and age > 900:
+        return (f"{head} — last candle payload arrived {int(age // 60)} min "
+                "ago and then stopped; verify the terminal is still running "
+                "with the EA attached")
+    return (f"{head} — candle payloads are arriving "
+            f"(last {int(age)}s ago, {fh.get('valid_bars') or 0} bars) but "
+            "history is still short; wait for warm-up" if age is not None
+            else f"{head} — EA streams candles every 5 min; wait for warm-up")
+
+
 async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
     perms = {"long_enabled": False, "short_enabled": False, "reasons": [],
              "regime": "UNKNOWN", "regime_reason": None,
@@ -36,9 +69,8 @@ async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
             {"bars": {"$slice": -24}})
         bars = (doc or {}).get("bars") or []
         if len(bars) < 12:
-            perms["regime_reason"] = (
-                f"insufficient M15 history ({len(bars)}/12 bars) — "
-                "EA streams candles every 5 min; wait for warm-up")
+            perms["regime_reason"] = await _candle_feed_diagnosis(
+                db, user_id, symbol, len(bars))
         else:
             rd = regime_mod.classify(bars, cfg.pip_size)
             perms["regime_detail"] = rd
