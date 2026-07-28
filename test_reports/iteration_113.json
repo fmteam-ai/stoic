@@ -1,0 +1,21 @@
+{
+  "summary": "Verified production startup guardrails and preview regression for STOIC AI bot. All 3 simulations produced the expected outcomes (crash with correct RuntimeError for missing CSRF/ORIGINS, crash for weak ADMIN_PASSWORD, clean boot + 200 health with full checklist). Preview backend on port 8001 remained healthy and admin login with admin@stoicaibot.com/admin123 still returns 200 (seed_admin is idempotent). No stray processes left on 8061-8063.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/tmp/sim1_8061.log", "/tmp/sim2_8062.log", "/tmp/sim3_8063.log"],
+  "action_items": [
+    "Production rollout: set the full env checklist on the origin server before restart — APP_ENV=production, CSRF_ENFORCE_ORIGIN=true, CORS_ORIGINS='https://stoicaibot.com,https://www.stoicaibot.com', a strong ADMIN_PASSWORD (default admin123 is refused), and (if used) STEP_UP_BYPASS_TOKEN/RATE_LIMIT_BYPASS_TOKEN empty or set. Missing any of these crash-loops uvicorn and Cloudflare shows 'empty response'."
+  ],
+  "critical_code_review_comments": [
+    "Guardrails in server.py on_startup work as designed (fail-fast with clear RuntimeError messages).",
+    "seed_admin is correctly idempotent — preview admin password admin123 was NOT reset after 3 production-config boots against the same Mongo."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (preview)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Simulation evidence captured:\n- SIM1 (port 8061, no CSRF_ENFORCE_ORIGIN): exited with 'RuntimeError: APP_ENV=production requires CSRF_ENFORCE_ORIGIN=true and an explicit CORS_ORIGINS allowlist (not empty, not \\'*\\').' ✓\n- SIM2 (port 8062, weak password): exited with 'RuntimeError: APP_ENV=production requires a strong ADMIN_PASSWORD (the default \\'admin123\\' is refused).' ✓\n- SIM3 (port 8063, full checklist + ADMIN_PASSWORD=Xk9!agentTest2026#Zq): 'Application startup complete.' and GET /api/health → 200 {\"status\":\"ok\",\"db\":\"connected\"} ✓ (process killed afterwards).\n- Preview regression (supervisor backend, REACT_APP_BACKEND_URL): /api/health 200, POST /api/auth/login admin@stoicaibot.com/admin123 → 200 with role=admin.\n- Cleanup: no stray uvicorns on 8061-8063.\nNo code or .env changes were made this iteration.",
+  "rca of the issue": "Cloudflare 'origin sent an empty response' at www.stoicaibot.com/login was caused by the production uvicorn process crash-looping during startup because APP_ENV=production was set without the accompanying required env vars (CSRF_ENFORCE_ORIGIN, CORS_ORIGINS, strong ADMIN_PASSWORD). nginx therefore had no upstream, so Cloudflare received an empty/malformed response. Reproduced deterministically in SIM1 & SIM2; fixed deterministically in SIM3 by setting the full checklist. Mitigation: apply the production secrets checklist listed in action_items on the origin host and restart the backend service."
+}
