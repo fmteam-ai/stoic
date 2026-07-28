@@ -53,10 +53,15 @@ async def require_step_up(db, user, request, action: str) -> None:
     full = await db.users.find_one({"_id": ObjectId(user["id"])},
                                    {"two_factor_enabled": 1})
     if not (full or {}).get("two_factor_enabled"):
-        raise HTTPException(status_code=403, detail={
-            "code": "mfa_enrollment_required", "action": action,
-            "message": "Two-factor authentication must be enabled before this "
-                       "action. Enroll under Settings → Security first."})
+        # iter-177 — an enrolled passkey (WebAuthn) also satisfies MFA
+        # enrollment; the step-up token itself proves whichever factor
+        # was used to mint it.
+        from webauthn_mfa import has_passkey
+        if not await has_passkey(db, user["id"]):
+            raise HTTPException(status_code=403, detail={
+                "code": "mfa_enrollment_required", "action": action,
+                "message": "Two-factor authentication must be enabled before this "
+                           "action. Enroll under Settings → Security first."})
     token = (request.headers.get(STEP_UP_HEADER) or "").strip()
     if not token:
         raise HTTPException(status_code=403, detail={

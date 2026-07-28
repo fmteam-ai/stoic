@@ -1,0 +1,23 @@
+{
+  "summary": "iter-177 review — verified WebAuthn passkey endpoints (authz + negative paths), /ops/agent-certs, /ops/turnstile-diag, and /infra rotate-credentials. Backend: 14/14 pytest cases passing. Frontend: admin login OK, /settings renders SECTION 04 · ADMIN PASSKEYS with all expected data-testids, 2FA section still present, dashboard-header renders after login.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter177_review_endpoints.py",
+    "/app/test_reports/pytest/iter177_review.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "webauthn_routes._require_admin uses 403 for admin gating which is correct; get_current_user itself raises 401 when unauthenticated — anonymous callers see 401 which our tests already accept.",
+    "rotate-credentials: correctly clears legacy plaintext fields ($unset agent_token/command_key) and stores hashed token + encrypted command_key; plaintext returned only in HTTP response (once). Good.",
+    "Non-admin passkey sub-case skipped per instructions: register requires terms_agreed + email verification which blocks fresh-login testing without DB manipulation.",
+    "Optional CDP virtual-authenticator end-to-end passkey registration not exercised (out of scope for negative/contract testing per request). Positive path is already covered by tests/test_iter177_webauthn_passkeys.py (6/6)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter177_review_endpoints.py"],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (all UI checks pass)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (used); admin@trading.bot / admin123 (legacy) also valid",
+  "seed_data_creation": "One synthetic vps_agents doc (TEST_agt_*) inserted and deleted within test_admin_rotate_new_token_and_key.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend endpoints /api/auth/webauthn/* (6 endpoints), /api/ops/agent-certs, /api/ops/turnstile-diag, and /api/infra/agents/{id}/rotate-credentials verified in tests/test_iter177_review_endpoints.py. If enrolling admin passkeys via CDP virtual authenticator, note that _origin() prefers body.origin over the Origin header (edge-proxy rewrites)."
+}

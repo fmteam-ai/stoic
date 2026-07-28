@@ -113,6 +113,11 @@ async def scheduled_drill_loop():
                 await create_anchor(db)
             except Exception as e:  # noqa: BLE001
                 logger.warning("audit anchor error: %s", e)
+            try:  # iter-176 — mTLS cert rotation policy (expiry watch)
+                from agent_mtls import check_cert_expiry
+                await check_cert_expiry(db)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("agent cert expiry check error: %s", e)
             if await _due(db):
                 try:
                     from correlation import new_correlation_id

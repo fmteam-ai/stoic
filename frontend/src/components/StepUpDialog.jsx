@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { registerStepUpHandler } from "@/lib/stepUp";
-import { ShieldCheck, KeyRound } from "lucide-react";
+import { getPasskeyAssertion, webauthnSupported } from "@/lib/webauthnClient";
+import { Fingerprint, ShieldCheck, KeyRound } from "lucide-react";
 
 const ACTION_LABELS = {
     live_activation: "Activate live trading",
@@ -21,6 +22,7 @@ export function StepUpDialog() {
     const [code, setCode] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
+    const [hasPasskey, setHasPasskey] = useState(false);
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -31,6 +33,13 @@ export function StepUpDialog() {
         }));
         return () => registerStepUpHandler(null);
     }, []);
+
+    useEffect(() => {
+        if (!pending) return;
+        api.get("/auth/webauthn/credentials")
+            .then((r) => setHasPasskey((r.data.credentials || []).length > 0))
+            .catch(() => setHasPasskey(false));
+    }, [pending]);
 
     if (!pending) return null;
     const { detail } = pending;
@@ -54,6 +63,27 @@ export function StepUpDialog() {
             setPending(null);
         } catch (e2) {
             setErr(formatApiError(e2));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const usePasskey = async () => {
+        if (busy) return;
+        setBusy(true);
+        setErr("");
+        try {
+            const { data } = await api.post("/auth/webauthn/step-up/begin",
+                { action: detail.action, origin: window.location.origin });
+            const credential = await getPasskeyAssertion(data.options);
+            const { data: out } = await api.post("/auth/webauthn/step-up/complete",
+                { challenge_id: data.challenge_id, action: detail.action, credential });
+            pending.resolve(out.step_up_token);
+            setPending(null);
+        } catch (e2) {
+            setErr(e2?.name === "NotAllowedError"
+                ? "Passkey prompt was cancelled or timed out."
+                : formatApiError(e2));
         } finally {
             setBusy(false);
         }
@@ -122,6 +152,13 @@ export function StepUpDialog() {
                         <p className="text-[10px] text-[#555] font-mono">
                             Token is single-use and expires in 5 minutes.
                         </p>
+                        {hasPasskey && webauthnSupported() && (
+                            <button type="button" onClick={usePasskey} disabled={busy}
+                                data-testid="step-up-passkey-button"
+                                className="w-full py-2 border border-[#00FF41]/40 text-[#00FF41] font-display font-bold text-xs tracking-widest hover:bg-[#00FF41]/10 disabled:opacity-40 flex items-center justify-center gap-2 transition-colors">
+                                <Fingerprint className="w-4 h-4" /> USE PASSKEY INSTEAD
+                            </button>
+                        )}
                     </form>
                 )}
             </div>

@@ -67,6 +67,22 @@ async def consume_bootstrap_token(db, token: str) -> dict:
     return doc
 
 
+def encrypt_command_key(plain: str) -> dict:
+    """iter-176 — HMAC command keys are encrypted at rest (secrets_vault)."""
+    import secrets_vault
+    return secrets_vault.encrypt(plain, associated_data=b"agent_command_key")
+
+
+def agent_command_key(agent: dict) -> str | None:
+    """Decrypt the agent's command-signing key. Legacy plaintext fallback
+    keeps pre-migration agents working until the startup migration runs."""
+    if (agent or {}).get("command_key_enc"):
+        import secrets_vault
+        return secrets_vault.decrypt(agent["command_key_enc"],
+                                     associated_data=b"agent_command_key")
+    return (agent or {}).get("command_key")
+
+
 async def register_agent(db, token: str, facts: dict) -> dict:
     """Bootstrap token → unique agent id + scoped revocable agent token
     (fingerprint-bound). The bootstrap token is revoked here (step 11)."""
@@ -83,9 +99,10 @@ async def register_agent(db, token: str, facts: dict) -> dict:
             "existing agent before registering another")
     agent_id = f"agt_{uuid.uuid4().hex[:12]}"
     agent_token = f"agt_tok_{secrets.token_urlsafe(32)}"
+    command_key = secrets.token_hex(32)  # iter-122 P3: HMAC key for signed commands
     await db.vps_agents.insert_one({
         "agent_id": agent_id, "agent_token_hash": hash_agent_token(agent_token),
-        "command_key": secrets.token_hex(32),   # iter-122 P3: HMAC key for signed commands
+        "command_key_enc": encrypt_command_key(command_key),  # iter-176: encrypted at rest
         "command_seq": 0, "last_acked_seq": 0,
         "user_id": boot["user_id"],
         "deployment_id": boot["deployment_id"],
@@ -96,8 +113,7 @@ async def register_agent(db, token: str, facts: dict) -> dict:
         "hardening": {}, "revoked": False,
         "registered_at": now, "last_heartbeat": None})
     return {"agent_id": agent_id, "agent_token": agent_token,
-            "command_key": (await db.vps_agents.find_one(
-                {"agent_id": agent_id}))["command_key"],
+            "command_key": command_key,
             "heartbeat_interval_sec": 60,
             "capabilities": ["heartbeat", "hardening", "mt5_install",
                              "ea_install", "health_check"],

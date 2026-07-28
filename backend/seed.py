@@ -190,10 +190,25 @@ async def ensure_indexes():
             {"$set": {"agent_token_hash": hash_agent_token(a["agent_token"])},
              "$unset": {"agent_token": ""}})
     await db.vps_agents.create_index("agent_token_hash")
+    # iter-176 — command_key (HMAC command-signing key) encrypted at rest via
+    # secrets_vault. Migrate legacy plaintext and DROP it (idempotent).
+    from vps_agent import encrypt_command_key
+    async for a in db.vps_agents.find(
+            {"command_key": {"$exists": True}}, {"command_key": 1}):
+        await db.vps_agents.update_one(
+            {"_id": a["_id"]},
+            {"$set": {"command_key_enc": encrypt_command_key(a["command_key"])},
+             "$unset": {"command_key": ""}})
     # iter-171 (#10) — single-use order authorizations: unique nonce + TTL GC
     await db.order_authorizations.create_index("nonce", unique=True)
     await db.order_authorizations.create_index("issued_at")
     await db.audit_anchors.create_index("seq", unique=True)
+    # iter-177 — WebAuthn: single-use challenges auto-expire via TTL;
+    # credential ids unique per user.
+    await db.webauthn_challenges.create_index("expires_at",
+                                              expireAfterSeconds=0)
+    await db.webauthn_credentials.create_index(
+        [("user_id", 1), ("credential_id", 1)], unique=True)
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])

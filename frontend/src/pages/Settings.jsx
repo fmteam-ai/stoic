@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { useAuth } from "@/context/AuthContext";
+import { PasskeySection } from "@/components/PasskeySection";
 import {
     User, Mail, Save as FloppyDisk, KeyRound, Shield, ShieldCheck, ShieldOff,
     QrCode, Copy, CheckCircle2, AlertTriangle,
@@ -350,6 +351,9 @@ export default function Settings() {
                         )}
                     </div>
                 </section>
+
+                {/* Passkeys — admin step-up factor (iter-177) */}
+                {user.role === "admin" && <PasskeySection />}
             </div>
         </AppLayout>
     );

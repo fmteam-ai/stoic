@@ -324,10 +324,12 @@ async def _drill_command_replay(db) -> dict:
     agent_id = f"agent-{uid}"
     token = uuid.uuid4().hex
     try:
+        from vps_agent import encrypt_command_key
         await db.vps_agents.insert_one(
             {"agent_id": agent_id, "user_id": uid, "agent_token": token,
              "command_seq": 0, "last_acked_seq": 0,
-             "command_key": uuid.uuid4().hex, "chaos": True})
+             "command_key_enc": encrypt_command_key(uuid.uuid4().hex),
+             "chaos": True})
         cmd = await queue_command(db, uid, agent_id, "run_diagnostics",
                                   None, "chaos-drill")
         await ack_command(db, token, cmd["command_id"], True, "chaos ok")

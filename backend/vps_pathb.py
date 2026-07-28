@@ -273,10 +273,12 @@ async def queue_command(db, user_id: str, agent_id: str, command: str,
     seq = int((bumped or {}).get("command_seq") or 1)
     command_id = f"cmd_{uuid.uuid4().hex[:10]}"
     sig = None
-    if agent.get("command_key"):
+    from vps_agent import agent_command_key
+    cmd_key = agent_command_key(agent)
+    if cmd_key:
         import hmac as _hmac
         sig = _hmac.new(
-            agent["command_key"].encode(),
+            cmd_key.encode(),
             f"{agent_id}|{command_id}|{seq}|{command}".encode(),
             hashlib.sha256).hexdigest()
     from correlation import get_correlation_id

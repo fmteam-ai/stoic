@@ -525,6 +525,16 @@ async def audit_anchor_create(request: Request):
     return {"anchored": True, **doc, "by": actor}
 
 
+@router.get("/ops/agent-certs")
+async def agent_cert_posture(request: Request):
+    """iter-176 — mTLS cert-expiry posture (rotation policy visibility)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from agent_mtls import certs_expiring
+    return await certs_expiring(get_db())
+
+
 @router.get("/ops/turnstile-diag")
 async def turnstile_diag(request: Request):
     """Turnstile health: secret-key validity probe + recent rejection codes."""

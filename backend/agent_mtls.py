@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 CERT_DAYS = int(os.environ.get("AGENT_CERT_DAYS", "90"))
+RENEW_WINDOW_DAYS = int(os.environ.get("AGENT_CERT_RENEW_WINDOW_DAYS", "14"))
 
 
 def _now():
@@ -183,3 +184,47 @@ async def verify_agent_cert(db, agent_id: str, fingerprint: str) -> dict:
     except (KeyError, ValueError):
         pass
     return {"ok": True, "agent_id": agent_id}
+
+
+async def certs_expiring(db) -> dict:
+    """iter-176 — fleet cert-expiry posture: expired + entering the renewal
+    window. Agents rotate by re-running /agent/cert/enroll (requires their
+    current cert fingerprint)."""
+    now = _now()
+    window = now + _dt.timedelta(days=RENEW_WINDOW_DAYS)
+    expired, expiring = [], []
+    async for a in db.vps_agents.find(
+            {"mtls": {"$exists": True}, "revoked": {"$ne": True},
+             "mtls.revoked": {"$ne": True}},
+            {"agent_id": 1, "user_id": 1, "mtls.not_after": 1}):
+        try:
+            na = _dt.datetime.fromisoformat(a["mtls"]["not_after"])
+        except (KeyError, ValueError):
+            continue
+        item = {"agent_id": a["agent_id"], "user_id": a.get("user_id"),
+                "not_after": a["mtls"]["not_after"]}
+        if na <= now:
+            expired.append(item)
+        elif na <= window:
+            expiring.append(item)
+    return {"renew_window_days": RENEW_WINDOW_DAYS,
+            "expired": expired, "expiring_soon": expiring}
+
+
+async def check_cert_expiry(db) -> dict:
+    """Scheduled rotation policy: raise an ops alert when enrolled agent
+    certs are expired or due for rotation."""
+    posture = await certs_expiring(db)
+    n_exp, n_soon = len(posture["expired"]), len(posture["expiring_soon"])
+    if n_exp or n_soon:
+        from alerting import raise_alert
+        ids = [i["agent_id"] for i in
+               (posture["expired"] + posture["expiring_soon"])][:8]
+        await raise_alert(
+            db, kind="agent_cert_rotation_due",
+            severity="critical" if n_exp else "warning",
+            message=(f"host-agent mTLS certs need rotation: {n_exp} expired, "
+                     f"{n_soon} expiring within {RENEW_WINDOW_DAYS}d "
+                     f"({', '.join(ids)})"),
+            dedup_key=f"agent_cert_rotation:{_now().strftime('%Y-%m-%d')}")
+    return posture

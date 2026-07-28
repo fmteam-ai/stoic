@@ -1,0 +1,13 @@
+{
+  "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
+  "high": true,
+  "skip-dev": true,
+  "allowlist": [
+    // GHSA-qwww-vcr4-c8h2 — react-router "RSC Mode CSRF" (fixed only in the
+    // v8.3.0 major). NOT APPLICABLE here: this app is a pure client-side
+    // Vite SPA using declarative <BrowserRouter>; it never uses the unstable
+    // RSC APIs the advisory requires ("This only affects your application if
+    // you are using the unstable RSC APIs"). Re-evaluate on the v8 upgrade.
+    "GHSA-qwww-vcr4-c8h2"
+  ]
+}
