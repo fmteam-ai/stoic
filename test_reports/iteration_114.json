@@ -1,0 +1,24 @@
+{
+  "summary": "Verified iter-181 fix: production now boots WITHOUT the 3 missing Secrets keys (CSRF_ENFORCE_ORIGIN, CORS_ORIGINS override, RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD). All requested tests pass end-to-end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter181_deploy_preflight.py",
+    "/tmp/sim_8065.log",
+    "/tmp/sim_8066.log"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "security.csrf_origin_enforced() correctly auto-enforces in production without env var.",
+    "_allowed_origins() prod filtering of localhost/preview entries works as designed; only stoicaibot.com origins remain, satisfying the >=1 real origin guardrail.",
+    "RELEASE_SIGNER local mode correctly downgraded from FAIL to WARN in preflight (does not block boot)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (preview)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Evidence captured:\n1) PRIMARY (port 8065, no CSRF_ENFORCE_ORIGIN / CORS_ORIGINS override / RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD; APP_ENV=production, strong ADMIN_PASSWORD): 'Application startup complete.' + GET /api/health -> 200 {'status':'ok','db':'connected'}. Killed cleanly.\n2) GUARDRAIL (port 8066, CORS_ORIGINS='http://localhost:3000'): exited with RuntimeError containing 'APP_ENV=production requires CORS_ORIGINS to contain at least one real production origin (localhost/preview entries are ignored in production).' ✓\n3) PYTEST: `python -m pytest tests/test_iter181_deploy_preflight.py -q` -> 8 passed in 0.93s.\n4) PREVIEW REGRESSION (main backend on preview URL): GET /api/health 200; POST /api/auth/login admin@stoicaibot.com/admin123 -> 200 role=admin; GET /api/auth/me (cookie only, no Origin header) -> 200; POST /api/auth/logout with double-submit CSRF token (still no Origin header) -> 200 {'ok':true} — proves preview does not enforce Origin.\n5) FRONTEND /admin/preflight rendered:\n   - preflight-check-csrf: PASS ('auto-enforced in production (env: false) · required: enforced')\n   - preflight-check-cors: PASS ('https://stoicaibot.com, https://www.stoicaibot.com (localhost/preview entries auto-ignored in production)')\n   - preflight-check-release_signer: WARN ('local (no override)' — 'Does NOT block boot')\n   - Verdict banner: 'DEPLOY WILL BOUNCE · ENV: PREVIEW · 4 FAIL · 2 WARN' — FAILs are only ADMIN_PASSWORD (default admin123), STEP_UP_BYPASS_TOKEN, RATE_LIMIT_BYPASS_TOKEN, ADMIN_MFA_ENFORCED (all preview .env values, exactly as expected).\n6) CLEANUP verified: `ss -tlnp | grep :806[56]` returns nothing.\nMinor nit: verdict banner shows the info but does not expose data-testid='preflight-verdict-banner'/'preflight-fail-count'/'preflight-warn-count' — cosmetic, not required by review request (spec only mentioned csrf/cors/release_signer rows which DO have testids and PASS/WARN as required).",
+  "rca of the issue": "N/A — this iteration verified the fix. Original bug: Secrets panel parser silently skipped 3 keys the user was told to configure, causing prod boot to crash-loop. Fix removes the requirement by (a) auto-enforcing CSRF Origin when APP_ENV=production, (b) auto-filtering localhost/preview origins so .env-shipped stoicaibot.com list is prod-safe as-is, (c) downgrading local release-signer to WARN. Verified deterministically with sim boots and pytest."
+}

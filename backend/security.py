@@ -134,12 +134,29 @@ def set_csrf_cookie(response, token: str | None = None) -> str:
     return token
 
 
+def csrf_origin_enforced() -> bool:
+    """Origin allowlist enforcement: opt-in via env in preview, ALWAYS ON in
+    production (iter-182 — no CSRF_ENFORCE_ORIGIN deploy secret needed)."""
+    if os.environ.get("CSRF_ENFORCE_ORIGIN", "").lower() == "true":
+        return True
+    from app_env import is_production
+    return is_production()
+
+
 def _allowed_origins() -> set:
     raw = (os.environ.get("CORS_ORIGINS") or "").strip().strip('"').strip("'")
     if not raw or raw == "*":
         return set()
-    return {o.strip().strip('"').strip("'").rstrip("/")
-            for o in raw.split(",") if o.strip()}
+    origins = {o.strip().strip('"').strip("'").rstrip("/")
+               for o in raw.split(",") if o.strip()}
+    from app_env import is_production
+    if is_production():
+        # iter-182 — dev entries are ignored automatically in production so
+        # the same CORS_ORIGINS value is safe in both environments.
+        origins = {o for o in origins
+                   if "localhost" not in o and "127.0.0.1" not in o
+                   and ".preview.emergentagent.com" not in o}
+    return origins
 
 
 def csrf_check(request: Request) -> str | None:
@@ -154,10 +171,10 @@ def csrf_check(request: Request) -> str | None:
                            or request.cookies.get("refresh_token"))
     if not has_cookie_auth:
         return None                       # bearer/public callers: CORS-bound
-    # Origin allowlist is OPT-IN (CSRF_ENFORCE_ORIGIN=true): reverse proxies
-    # and ingress layers can rewrite Origin to internal hostnames, so the
-    # double-submit token below remains the primary CSRF defense.
-    if (os.environ.get("CSRF_ENFORCE_ORIGIN", "false").lower() == "true"):
+    # Origin allowlist: opt-in via CSRF_ENFORCE_ORIGIN=true, automatic in
+    # production (reverse proxies can rewrite Origin to internal hostnames,
+    # so the double-submit token below remains the primary CSRF defense).
+    if csrf_origin_enforced():
         allowed = _allowed_origins()
         origin = (request.headers.get("origin") or "").rstrip("/")
         if allowed and origin and origin not in allowed:

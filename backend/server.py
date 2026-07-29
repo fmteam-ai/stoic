@@ -642,15 +642,16 @@ _scheduled_drills_task = None
 
 async def on_startup():
     global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
-    # review item 5 — production hard-fails without an explicit trusted
-    # Origin allowlist: CSRF_ENFORCE_ORIGIN=true + concrete CORS_ORIGINS.
+    # review item 5 / iter-182 — Origin enforcement is AUTOMATIC in
+    # production (no CSRF_ENFORCE_ORIGIN secret needed) and localhost /
+    # preview entries are filtered out of CORS_ORIGINS automatically.
     if is_production():
         from security import _allowed_origins
-        if (os.environ.get("CSRF_ENFORCE_ORIGIN", "false").lower() != "true"
-                or not _allowed_origins()):
+        if not _allowed_origins():
             raise RuntimeError(
-                "APP_ENV=production requires CSRF_ENFORCE_ORIGIN=true and an "
-                "explicit CORS_ORIGINS allowlist (not empty, not '*').")
+                "APP_ENV=production requires CORS_ORIGINS to contain at "
+                "least one real production origin (localhost/preview "
+                "entries are ignored in production).")
         # SEC-001 — test bypass secrets must never exist in production.
         if (os.environ.get("STEP_UP_BYPASS_TOKEN")
                 or os.environ.get("RATE_LIMIT_BYPASS_TOKEN")):

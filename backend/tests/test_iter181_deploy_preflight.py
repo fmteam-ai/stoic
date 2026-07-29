@@ -56,7 +56,6 @@ def test_preflight_all_good_is_ready(monkeypatch):
 def test_preflight_flags_each_boot_blocker(monkeypatch):
     from deploy_preflight import run_preflight
     cases = {
-        "csrf": {"CSRF_ENFORCE_ORIGIN": "false"},
         "cors": {"CORS_ORIGINS": ""},
         "step_up_bypass_token": {"STEP_UP_BYPASS_TOKEN": "leaked"},
         "rate_limit_bypass_token": {"RATE_LIMIT_BYPASS_TOKEN": "leaked"},
@@ -70,6 +69,51 @@ def test_preflight_flags_each_boot_blocker(monkeypatch):
         out = run_preflight()
         assert out["verdict"] == "will_crash", cid
         assert _by_id(out)[cid]["status"] == "fail", cid
+
+
+def test_preflight_csrf_and_cors_need_no_secret(monkeypatch):
+    """iter-182: CSRF is auto-enforced in prod; CORS dev entries auto-filter."""
+    from deploy_preflight import run_preflight
+    _apply(monkeypatch, {
+        "CSRF_ENFORCE_ORIGIN": None,
+        "CORS_ORIGINS": "http://localhost:3000,"
+                        "https://x.preview.emergentagent.com,"
+                        "https://stoicaibot.com"})
+    out = run_preflight()
+    assert _by_id(out)["csrf"]["status"] == "pass"
+    assert _by_id(out)["cors"]["status"] == "pass"
+    assert "stoicaibot.com" in _by_id(out)["cors"]["current"]
+    assert "localhost" not in _by_id(out)["cors"]["current"].split(" (")[0]
+    # localhost/preview-only list has no real prod origin → boot refused
+    _apply(monkeypatch, {"CORS_ORIGINS": "http://localhost:3000"})
+    out = run_preflight()
+    assert _by_id(out)["cors"]["status"] == "fail"
+    assert out["verdict"] == "will_crash"
+
+
+def test_preflight_local_signer_never_blocks_boot(monkeypatch):
+    from deploy_preflight import run_preflight
+    _apply(monkeypatch, {"RELEASE_SIGNER": "local",
+                         "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": None})
+    out = run_preflight()
+    assert _by_id(out)["release_signer"]["status"] == "warn"
+    assert out["verdict"] != "will_crash"
+
+
+def test_csrf_origin_auto_enforced_in_production(monkeypatch):
+    from security import _allowed_origins, csrf_origin_enforced
+    monkeypatch.delenv("CSRF_ENFORCE_ORIGIN", raising=False)
+    monkeypatch.setenv("APP_ENV", "preview")
+    assert csrf_origin_enforced() is False
+    monkeypatch.setenv("APP_ENV", "production")
+    assert csrf_origin_enforced() is True
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,https://a.preview.emergentagent.com,"
+        "https://stoicaibot.com")
+    assert _allowed_origins() == {"https://stoicaibot.com"}
+    monkeypatch.setenv("APP_ENV", "preview")
+    assert len(_allowed_origins()) == 3
 
 
 def test_preflight_short_admin_password_fails(monkeypatch):

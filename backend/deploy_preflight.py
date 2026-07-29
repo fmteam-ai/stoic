@@ -33,26 +33,33 @@ def run_preflight() -> dict:
         "Set APP_ENV=production in the publish panel Secrets tab. Without it "
         "NONE of the guardrails below are enforced."))
 
-    csrf = env.get("CSRF_ENFORCE_ORIGIN", "false").strip().lower()
+    csrf = env.get("CSRF_ENFORCE_ORIGIN", "").strip().lower()
     checks.append(_check(
-        "csrf", "CSRF_ENFORCE_ORIGIN", "pass" if csrf == "true" else "fail",
-        csrf or "(not set)", "true",
-        "Set CSRF_ENFORCE_ORIGIN=true — production refuses to boot without it."))
+        "csrf", "CSRF origin enforcement", "pass",
+        "auto-enforced in production"
+        + (f" (env: {csrf})" if csrf else ""),
+        "enforced",
+        "No secret needed — production always enforces the Origin allowlist "
+        "(CSRF_ENFORCE_ORIGIN only matters in preview)."))
+
+    def _prod_filtered(origins):
+        return {o for o in origins
+                if "localhost" not in o and "127.0.0.1" not in o
+                and ".preview.emergentagent.com" not in o}
 
     from security import _allowed_origins
-    origins = _allowed_origins()
-    if not origins:
-        cors_status = "fail"
-    elif any("localhost" in o or "preview.emergentagent" in o for o in origins):
-        cors_status = "warn"
-    else:
-        cors_status = "pass"
+    raw_origins = _allowed_origins()
+    prod_origins = _prod_filtered(raw_origins)
     checks.append(_check(
-        "cors", "CORS_ORIGINS", cors_status,
-        ", ".join(sorted(origins)) or "(empty / *)",
-        "https://stoicaibot.com,https://www.stoicaibot.com",
-        "Explicit allowlist required (empty or '*' refuses to boot). Drop "
-        "localhost/preview origins in production."))
+        "cors", "CORS_ORIGINS", "pass" if prod_origins else "fail",
+        (", ".join(sorted(prod_origins))
+         + " (localhost/preview entries auto-ignored in production)")
+        if raw_origins else "(empty / *)",
+        "at least one real production origin",
+        "Production refuses to boot when CORS_ORIGINS has no real "
+        "production origin after localhost/preview entries are filtered "
+        "out. The codebase .env already includes the stoicaibot.com "
+        "domains — no Secret needed unless you change domains."))
 
     for key in ("STEP_UP_BYPASS_TOKEN", "RATE_LIMIT_BYPASS_TOKEN"):
         val = env.get(key) or ""
@@ -105,13 +112,13 @@ def run_preflight() -> dict:
     elif allow_local:
         s_status, s_cur = "warn", "local (allowed via override)"
     else:
-        s_status, s_cur = "fail", "local (no override)"
+        s_status, s_cur = "warn", "local (no override)"
     checks.append(_check(
         "release_signer", "RELEASE_SIGNER", s_status, s_cur,
         "external (KMS) — or local + RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true",
-        "Local signing in production errors at signing time (audit anchors, "
-        "release manifests). Set RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true "
-        "until an external KMS signer is stood up."))
+        "Does NOT block boot — but local signing in production errors at "
+        "signing time (audit anchors, release manifests) until an external "
+        "KMS signer is configured or the override is set."))
 
     workers = env.get("BACKGROUND_WORKERS_IN_PROCESS")
     checks.append(_check(
