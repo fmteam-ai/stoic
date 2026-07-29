@@ -9,7 +9,7 @@ import {
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers, BadgeCheck,
-    FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound, Store, Server,
+    FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound, Store, Server, Rocket,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -106,6 +106,7 @@ const ADMIN_SECTION = {
     label: "ADMIN",
     items: [
         { to: "/admin/ops", label: "Ops Console", icon: Activity, testid: "nav-admin-ops" },
+        { to: "/admin/preflight", label: "Deploy Preflight", icon: Rocket, testid: "nav-admin-preflight" },
         { to: "/admin/brokers", label: "Broker Registry", icon: Store, testid: "nav-admin-brokers" },
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
         { to: "/admin/support", label: "Support Queue", icon: LifeBuoy, testid: "nav-admin-support" },

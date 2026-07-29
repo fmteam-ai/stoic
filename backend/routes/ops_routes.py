@@ -525,6 +525,16 @@ async def audit_anchor_create(request: Request):
     return {"anchored": True, **doc, "by": actor}
 
 
+@router.get("/ops/deploy-preflight")
+async def deploy_preflight(request: Request):
+    """iter-181 — production guardrail preflight (deploys never bounce)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from deploy_preflight import run_preflight
+    return run_preflight()
+
+
 @router.get("/ops/agent-certs")
 async def agent_cert_posture(request: Request):
     """iter-176 — mTLS cert-expiry posture (rotation policy visibility)."""
