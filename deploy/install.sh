@@ -150,7 +150,7 @@ fi
 if [ "${MODE}" = "--production" ]; then
   set_kv backend/.env APP_ENV production
   set_kv backend/.env CSRF_ENFORCE_ORIGIN true
-  set_kv backend/.env CORS_ORIGINS "https://${DOMAIN}"
+  set_kv backend/.env CORS_ORIGINS "https://${DOMAIN},https://www.${DOMAIN}"
 else
   grep -q "^APP_ENV=production" backend/.env && {
     echo "ERROR: backend/.env says APP_ENV=production but you ran --dev."

@@ -1529,3 +1529,7 @@ User gap-analysis vs recommendations: HSM/KMS abstraction, immutable logs, mTLS+
   - forecast_agent._forecast_sync: torch import moved AFTER the ML gate (was importing torch even when disabled).
 - VERIFIED testing_agent iteration_115.json 100% (pytest 4/4; double-restart archived 2 entries w/ stacks; UI card renders). NOTE: boot itself blocks loop 9-13s even in preview (expected, drops after ~60s).
 - HOW TO DIAGNOSE PROD AFTER USER REDEPLOYS: reproduce crash → log back in → Admin → Ops Console → Runtime Health → read restart entries: ended_rss ~1000MB ⇒ OOM (ask support to raise memory limit); blockage stack present ⇒ code blocker identified by stack.
+
+## Iter-184 (2026-06) — Self-hosting migration guide + www fixes
+- NEW /app/docs/SELF_HOSTING_GUIDE.md: full migration playbook (Emergent → own server) for stoicaibot.com — server specs, Save-to-GitHub → clone, deploy/install.sh --production, integrations table, data options (fresh vs support-provided mongodump + deploy/backup.sh restore), Cloudflare DNS cutover w/ instant rollback, EA continuity (same domain), verification, day-2 ops, ML auto-enable ≥2GB note.
+- FIXED while verifying: deploy/install.sh now sets CORS_ORIGINS to apex+www (was apex only — www would be origin-rejected since prod auto-enforces Origin); deploy/Caddyfile now serves `{$DOMAIN} www.{$DOMAIN}` (was apex only — www had no cert/route). Validated: compose yaml + bash -n.
