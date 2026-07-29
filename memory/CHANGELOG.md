@@ -1519,3 +1519,13 @@ User gap-analysis vs recommendations: HSM/KMS abstraction, immutable logs, mTLS+
   - .env: unquoted CORS_ORIGINS / ADMIN_EMAIL / ADMIN_PASSWORD (panel parser may skip quoted values).
 - MINIMAL PROD SECRETS now: APP_ENV=production, ADMIN_PASSWORD (strong ≥12), ADMIN_MFA_ENFORCED=true, STEP_UP_BYPASS_TOKEN + RATE_LIMIT_BYPASS_TOKEN cleared. All of these ARE visible in the user's Secrets tab.
 - VERIFIED (testing_agent iteration_114.json 100%): prod-boot sim WITHOUT the 3 keys → health 200; localhost-only CORS still refused with new message; pytest iter181 8/8 + iter155 12/12; preview CSRF stays opt-in (no-Origin mutating requests fine); /admin/preflight shows csrf PASS auto-enforced, cors PASS filtered, release_signer WARN. Manifest regenerated.
+
+## Iter-183 (2026-06) — Prod crash-cycle forensics (user: login works, dies minutes later, 520, auto-recovers)
+- LIVE PROD FINDINGS (probed www.stoicaibot.com + stoic-trading.emergent.host from pod): backend flaps rapidly (200 → curl timeouts → 520 → 200 within ~90s); static always fine; user's Cloudflare NOT at fault (520 page is emergent.cloud's). Prod METRICS_TOKEN was rotated (preview token → 403), so no remote ops reads. Prod-sim in preview stable at ~440MB/6min → crash is prod-load-specific (OOM under real EA/user traffic OR event-loop blockage killing liveness).
+- FIX SHIPPED — self-documenting crash forensics:
+  - runtime_watchdog.py: asyncio heartbeat + RSS sampling (persist db.runtime_health every 30s); OS sentinel thread captures MAIN-THREAD STACK while loop blocked >5s (WATCHDOG_BLOCK_SEC); on boot archives previous run's final heartbeat → db.runtime_crash_log (last 25) with ended_rss/max_rss/last_blockage. faulthandler enabled. Started first thing in on_startup.
+  - GET /api/ops/runtime-stats (admin or METRICS_TOKEN): pid/uptime/rss/max_rss/loop_lag/samples/last_blockage/restarts.
+  - AdminOps "Runtime Health" card (testids runtime-health-card/-rss, runtime-last-blockage, runtime-restarts) with expandable blockage stacks.
+  - forecast_agent._forecast_sync: torch import moved AFTER the ML gate (was importing torch even when disabled).
+- VERIFIED testing_agent iteration_115.json 100% (pytest 4/4; double-restart archived 2 entries w/ stacks; UI card renders). NOTE: boot itself blocks loop 9-13s even in preview (expected, drops after ~60s).
+- HOW TO DIAGNOSE PROD AFTER USER REDEPLOYS: reproduce crash → log back in → Admin → Ops Console → Runtime Health → read restart entries: ended_rss ~1000MB ⇒ OOM (ask support to raise memory limit); blockage stack present ⇒ code blocker identified by stack.
