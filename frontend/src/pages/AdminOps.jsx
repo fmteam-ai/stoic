@@ -410,6 +410,51 @@ const Row = ({ k, v, vCls = "text-white" }) => (
     </div>
 );
 
+function RuntimeHealth() {
+    const [d, setD] = useState(null);
+    const load = useCallback(async () => {
+        try { setD((await api.get("/ops/runtime-stats")).data); } catch { /* ignore */ }
+    }, []);
+    useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+    if (!d) return null;
+    const upMin = Math.floor(d.uptime_s / 60);
+    const lagBad = d.loop_lag_s > 3;
+    return (
+        <div className="bg-[#0A0A0A] border border-[#1F1F1F] p-4 mb-4" data-testid="runtime-health-card">
+            <div className="flex flex-wrap items-center gap-4 mb-2">
+                <div className="font-display text-sm text-white">Runtime Health · crash forensics</div>
+                <div className="font-mono text-[11px] text-[#71717A]" data-testid="runtime-health-rss">
+                    UPTIME <span className="text-white">{upMin >= 60 ? `${Math.floor(upMin / 60)}h ${upMin % 60}m` : `${upMin}m`}</span>
+                    {" · "}RSS <span className="text-white">{d.rss_mb} MB</span> (peak {d.max_rss_mb} MB)
+                    {" · "}LOOP LAG <span className={lagBad ? "text-[#FF3B30]" : "text-[#00FF41]"}>{d.loop_lag_s}s</span>
+                    {" · "}RESTARTS LOGGED <span className="text-white">{(d.restarts || []).length}</span>
+                </div>
+            </div>
+            {d.last_blockage && (
+                <details className="border border-[#FFB000]/30 bg-[#FFB000]/5 p-2 mb-2" data-testid="runtime-last-blockage">
+                    <summary className="font-mono text-[11px] text-[#FFB000] cursor-pointer">
+                        EVENT LOOP BLOCKED {d.last_blockage.blocked_for_s}s at {d.last_blockage.at?.slice(0, 19)} (rss {d.last_blockage.rss_mb} MB) — stack
+                    </summary>
+                    <pre className="text-[10px] text-[#A1A1AA] overflow-x-auto whitespace-pre-wrap mt-2">{d.last_blockage.stack}</pre>
+                </details>
+            )}
+            {(d.restarts || []).length > 0 && (
+                <div className="space-y-1" data-testid="runtime-restarts">
+                    {(d.restarts || []).slice(0, 5).map((r, i) => (
+                        <details key={i} className="border border-[#1F1F1F] p-2">
+                            <summary className="font-mono text-[10px] text-[#71717A] cursor-pointer">
+                                RUN ENDED {r.last_seen?.slice(0, 19)} · ended rss {r.ended_rss_mb} MB (peak {r.max_rss_mb} MB)
+                                {r.last_blockage ? ` · LOOP WAS BLOCKED ${r.last_blockage.blocked_for_s}s before death` : " · no blockage captured"}
+                            </summary>
+                            {r.last_blockage && <pre className="text-[10px] text-[#A1A1AA] overflow-x-auto whitespace-pre-wrap mt-2">{r.last_blockage.stack}</pre>}
+                        </details>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function AdminOps() {
     const [d, setD] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
@@ -610,6 +655,7 @@ export default function AdminOps() {
                 </Panel>
 
                 <RuntimeValidation />
+                <RuntimeHealth />
                 <StressTest />
                 <SloPanel />
                 <NightlyDrills />

@@ -668,6 +668,10 @@ async def on_startup():
             raise RuntimeError(
                 "APP_ENV=production requires ED25519_SIGNING_KEY_B64 for "
                 "release manifest signing.")
+    # iter-183 — runtime watchdog & crash forensics (RSS, loop-blockage
+    # stacks, restart history) — must start before anything heavy.
+    from runtime_watchdog import start_watchdog
+    start_watchdog()
     try:
         await ensure_indexes()
         await seed_admin()

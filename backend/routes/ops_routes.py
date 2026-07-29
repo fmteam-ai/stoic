@@ -525,6 +525,16 @@ async def audit_anchor_create(request: Request):
     return {"anchored": True, **doc, "by": actor}
 
 
+@router.get("/ops/runtime-stats")
+async def runtime_stats(request: Request):
+    """iter-183 — live process forensics: RSS, loop lag, restart history."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from runtime_watchdog import full_stats
+    return await full_stats(get_db())
+
+
 @router.get("/ops/deploy-preflight")
 async def deploy_preflight(request: Request):
     """iter-181 — production guardrail preflight (deploys never bounce)."""

@@ -49,10 +49,10 @@ def _load_model():
 
 
 def _forecast_sync(closes: list, horizon: int):
-    import torch
     pipe = _load_model()
     if pipe is None:
         return None
+    import torch  # after the gate: never import torch when ML is disabled
     ctx = torch.tensor(closes[-512:], dtype=torch.float32)
     quantiles, _ = pipe.predict_quantiles(
         inputs=ctx, prediction_length=horizon, quantile_levels=QUANTILE_LEVELS)
