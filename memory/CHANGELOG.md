@@ -1509,3 +1509,13 @@ User gap-analysis vs recommendations: HSM/KMS abstraction, immutable logs, mTLS+
 - GET /api/ops/deploy-preflight (admin/_ops_actor gated) in ops_routes.py.
 - Frontend: pages/DeployPreflight.jsx at /admin/preflight (route in App.jsx, Sidebar "Deploy Preflight" w/ Rocket icon, testids preflight-verdict/-check-{id}/-status-{id}/-refresh-button). Verdict banner + per-check PASS/FAIL/WARN with current vs required + fix text. Note: PageHeader takes `action` (singular) prop, no icon prop.
 - Tested: test_iter181_deploy_preflight.py 5/5 (all-good ready, each boot-blocker flips will_crash, short password, no secret leak, endpoint authz) + screenshot verified page renders (preview correctly shows WILL BOUNCE, 12 checks). Manifest → 3,124/305.
+
+## Iter-182 (2026-06) — Secrets-tab invisible keys: prod no longer needs them
+- USER BUG: Secrets tab doesn't list RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD / CSRF_ENFORCE_ORIGIN / CORS_ORIGINS (support: panel may skip quoted values; keys register at publish time). FIX — removed the need entirely:
+  - security.csrf_origin_enforced(): Origin allowlist AUTO-ENFORCED when is_production() (opt-in env only matters in preview). csrf_check uses it.
+  - security._allowed_origins(): in production auto-filters localhost/127.0.0.1/.preview.emergentagent.com entries → the shared .env CORS list (already has stoicaibot.com domains) is prod-safe as-is.
+  - server.py guardrail: CSRF env requirement REMOVED; now only requires ≥1 real prod origin after filtering ("at least one real production origin").
+  - deploy_preflight: csrf always pass ("auto-enforced in production"), cors evaluates prod-filtered list, release_signer local-no-override = WARN (never blocked boot).
+  - .env: unquoted CORS_ORIGINS / ADMIN_EMAIL / ADMIN_PASSWORD (panel parser may skip quoted values).
+- MINIMAL PROD SECRETS now: APP_ENV=production, ADMIN_PASSWORD (strong ≥12), ADMIN_MFA_ENFORCED=true, STEP_UP_BYPASS_TOKEN + RATE_LIMIT_BYPASS_TOKEN cleared. All of these ARE visible in the user's Secrets tab.
+- VERIFIED (testing_agent iteration_114.json 100%): prod-boot sim WITHOUT the 3 keys → health 200; localhost-only CORS still refused with new message; pytest iter181 8/8 + iter155 12/12; preview CSRF stays opt-in (no-Origin mutating requests fine); /admin/preflight shows csrf PASS auto-enforced, cors PASS filtered, release_signer WARN. Manifest regenerated.
