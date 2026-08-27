@@ -1574,3 +1574,9 @@ USER CHOICES: sandbox broker first (real broker later via same interface), Mongo
 - FRONTEND (PammPanels.jsx): VerdictTester (verdict-risk-input/check/result + factor chips), OpStateControl (badge+select+apply, confirm on locked), ChangeRequestsPanel (approve/reject, own-request banner); RiskPanel save handles pending_approval warning toast.
 - Tests: tests/test_iter189_pamm_verdict_states_dualauth.py (9) + iter186 drawdown test updated for dual-auth (2nd admin approves). 57/57 PAMM tests pass. Manifest → 3,188/312. testing_agent iteration_119.json 100% both stacks.
 - Review Batches 2-3 + strategic items added to ROADMAP.
+
+## Iter-190 (2026-06) — CI security-scan fix (dependency CVEs)
+- GH CI security-scan failed: pip-audit flagged aiohttp 3.14.1 (PYSEC-2026-3545/3546/3547) + cryptography 49.0.0 (PYSEC-2026-3552).
+- Upgraded: aiohttp==3.14.3, cryptography==50.0.0, pyOpenSSL==26.4.0 (26.3.0 pinned cryptography<50). requirements.txt updated via targeted sed (NOT pip freeze — file has header comments + torch +cpu pins CI grep-strips).
+- Verified: pip-audit clean, frontend audit-ci exit 0, pip check no cryptography conflict (pre-existing emergentintegrations/openai pin mismatch is known + unrelated), backend healthy, 27 crypto-dependent tests (vault rekey, cert rotation cmdkey, webauthn) + 9 PAMM iter189 pass.
+- Note: gitleaks binary is x64-only, can't run on this ARM pod — unchanged config, no new secrets.
