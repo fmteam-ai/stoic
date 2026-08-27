@@ -389,3 +389,7 @@ class TestAccessControl:
         r = requests.post(f"{API}/pamm/programs/pgm_x/risk-check",
                           timeout=TIMEOUT)
         assert r.status_code in (401, 403)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

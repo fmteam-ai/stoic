@@ -104,3 +104,7 @@ def test_router_symbol_only_ok(attacker):
     assert r.status_code == 200, r.text
     j = r.json()
     assert "market_state" in j
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

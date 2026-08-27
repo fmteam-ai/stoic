@@ -60,3 +60,7 @@ def test_10016_hint_mentions_ea_update():
     src = _src(os.path.join(BACKEND, "routes", "bot_routes.py"))
     m = re.search(r'if "10016" in err:\s+retcode_hint = \((.+?)\)', src, re.S)
     assert m and "v1.38" in m.group(1)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

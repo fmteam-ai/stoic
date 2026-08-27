@@ -255,3 +255,7 @@ def test_heartbeat_persists_auto_suffix():
             await db.accounts.delete_one({"_id": acct_id})
             client.close()
     asyncio.run(_scenario())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

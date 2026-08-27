@@ -233,3 +233,7 @@ def test_resend_activation_generates_new_token_after_cooldown(cleanup):
 
     new_token = db.users.find_one({"_id": uid})["activation_token"]
     assert new_token != original_token
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

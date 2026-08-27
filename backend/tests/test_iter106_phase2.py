@@ -123,3 +123,7 @@ def test_soak_sampler_rss_probe():
     from background_loops import _rss_mb
     rss = _rss_mb()
     assert rss is None or rss > 10
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

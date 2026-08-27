@@ -138,3 +138,7 @@ class TestQuickActions:
         })
         body = admin_session.get(f"{API}/bot/quick-actions", timeout=10).json()
         assert body["open_trades"] == db_count
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

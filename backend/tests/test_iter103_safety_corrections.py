@@ -113,3 +113,7 @@ def test_record_swallow_counts_and_logs():
     record_swallow("testcomp", "testfn", ValueError("boom"))
     record_swallow("testcomp", "testfn", ValueError("boom2"))
     assert swallow_counters()["testcomp.testfn"] == before + 2
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

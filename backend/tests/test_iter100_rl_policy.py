@@ -132,3 +132,7 @@ class TestWiring:
     def test_config_model_has_mode(self):
         src = open(os.path.join(BACKEND, "models.py")).read()
         assert 'rl_policy_mode: str = "advisory"' in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

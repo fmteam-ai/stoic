@@ -122,3 +122,7 @@ def test_version_153():
     v = current_ea_version()
     assert v >= "1.53"
     assert f'#property version   "{v}"' in _src(EA_PATH)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

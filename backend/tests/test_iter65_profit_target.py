@@ -136,3 +136,7 @@ def test_profit_target_action_rejects_invalid(session):
         f"{BASE_URL}/api/bot/config",
         json={"daily_profit_target_r": 0}, timeout=15,
     )
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

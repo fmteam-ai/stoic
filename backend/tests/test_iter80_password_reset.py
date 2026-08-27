@@ -222,3 +222,7 @@ def test_reset_password_min_length_enforced(cleanup):
                       json={"token": token, "new_password": "abc"},
                       timeout=TIMEOUT)
     assert r.status_code == 422  # Pydantic min_length=6 violation
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

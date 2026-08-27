@@ -98,3 +98,7 @@ def test_e2e_canary_promote_starts_at_5_and_rollback(admin_session, seeded_shado
 
     cfg = _run(db.bot_configs.find_one({"user_id": uid, "active": True}))
     assert "engine_params_canary" not in cfg or not cfg.get("engine_params_canary", {}).get("trend")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

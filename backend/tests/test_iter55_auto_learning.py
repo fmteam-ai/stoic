@@ -140,3 +140,7 @@ class TestGuardsAPI:
         r = session.get(f"{BASE_URL}/api/postmortem/reviews", timeout=10)
         assert r.status_code == 200
         assert isinstance(r.json().get("reviews"), list)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

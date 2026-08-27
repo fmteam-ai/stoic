@@ -289,3 +289,7 @@ class TestReleaseSignerHatchRemoved:
         check = next(c for c in out["checks"]
                      if c["id"] == "release_signer")
         assert check["status"] == "fail"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

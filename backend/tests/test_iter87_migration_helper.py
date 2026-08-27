@@ -171,3 +171,7 @@ def test_import_state_new_account_lands_in_admin_collection():
 
     # Cleanup
     db.accounts.delete_one({"_id": ObjectId(fake_oid)})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

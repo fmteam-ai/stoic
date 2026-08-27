@@ -102,3 +102,7 @@ class TestWiring:
         assert 'consensus_gate_mode: str = "enforce"' in src
         assert "consensus_threshold: int = Field(default=55" in src
         assert DEFAULT_THRESHOLD == 55
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

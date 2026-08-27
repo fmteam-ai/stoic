@@ -327,3 +327,7 @@ def test_live_test_trade_identity_gate(fresh_user):
             (body2.get("context") or {}).get("blocked"))
         assert code2 != "identity", (
             f"identity gate still blocks after seeding: {body2}")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

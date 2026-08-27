@@ -39,3 +39,7 @@ def test_no_pytorch_extra_index():
     assert "download.pytorch.org" not in content, (
         "pytorch extra-index-url present — only needed when torch is listed, "
         "which is forbidden for deployment.")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

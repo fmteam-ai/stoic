@@ -232,3 +232,7 @@ class TestPortfolioBrain:
             10_000)
         assert out["dominant_factor"]["factor"] in ("USD", "EUR", "GBP")
         assert out["total_risk_usd"] > 0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

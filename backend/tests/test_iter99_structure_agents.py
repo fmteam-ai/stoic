@@ -195,3 +195,7 @@ class TestWiring:
         assert f'#define EA_CLIENT_VERSION "{v}"' in src
         assert "void SendCandles()" in src and "/api/bridge/candles" in src
         assert "input int    CandlesSeconds" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

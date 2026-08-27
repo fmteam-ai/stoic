@@ -140,3 +140,7 @@ def test_health_score_does_not_ack_live_account_ghost():
         db.trades.delete_one({"_id": trade_id})
         db.accounts.delete_one({"_id": ObjectId(real_account_id)})
         db.users.delete_one({"_id": ObjectId(uid)})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

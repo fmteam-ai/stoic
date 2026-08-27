@@ -101,3 +101,7 @@ def test_mtf_strict_boolean_coercion():
     assert bool({"mtf_strict": 0}.get("mtf_strict")) is False
     assert bool({"mtf_strict": 1}.get("mtf_strict")) is True
     assert bool({"mtf_strict": None}.get("mtf_strict")) is False
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

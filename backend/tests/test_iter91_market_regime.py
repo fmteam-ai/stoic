@@ -172,3 +172,7 @@ def test_regime_gate_end_to_end(db):
         assert gate3["allowed"] is True
         await _cleanup(db)
     _run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

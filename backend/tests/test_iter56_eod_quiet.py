@@ -126,3 +126,7 @@ class TestBackendWiring:
         assert f'"ea_latest_version": "{v}"' in open(os.path.join(BACKEND, "routes", "setup_routes.py")).read()
         assert f'LATEST_EA_VERSION = "{v}"' in open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read()
         assert f'LATEST_EA_VERSION = "{v}"' in open(_os.path.join(_REPO_DIR, "frontend", "src/components/EaVersionStrip.jsx")).read()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

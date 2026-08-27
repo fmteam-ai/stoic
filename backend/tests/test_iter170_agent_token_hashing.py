@@ -122,3 +122,7 @@ def test_legacy_plaintext_fallback_authenticates():
         finally:
             await db.vps_agents.delete_many({"agent_id": aid})
     assert _run(scenario()) == aid
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

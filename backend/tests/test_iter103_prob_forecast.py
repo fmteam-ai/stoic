@@ -92,3 +92,7 @@ class TestWiring:
     def test_forecast_payload_has_distribution(self):
         src = open(os.path.join(BACKEND, "forecast_agent.py")).read()
         assert "QUANTILE_LEVELS" in src and "scenario_table" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -28,3 +28,7 @@ def test_combos_empty_and_cap():
     many = [{"active_preset": "scalper", "symbols": [f"SYM{i}"]}
             for i in range(20)]
     assert len(combos_from_configs(many)[:MAX_RUNS_PER_USER]) == MAX_RUNS_PER_USER
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

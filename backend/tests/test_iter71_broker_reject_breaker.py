@@ -409,3 +409,7 @@ def test_unblocked_at_still_trips_on_fresh_failures():
         assert verdict["retcode"] == "10013"
     finally:
         asyncio.run(_with_db(_cleanup))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

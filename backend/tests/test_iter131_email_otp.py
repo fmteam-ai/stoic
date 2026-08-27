@@ -255,3 +255,7 @@ def test_admin_toggle_roundtrip():
         finally:
             await lo.set_enabled(db, before)
     _run(_t())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

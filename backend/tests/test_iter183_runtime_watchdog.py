@@ -90,3 +90,7 @@ def test_runtime_stats_endpoint():
                      headers={"Authorization": f"Bearer {tok}"},
                      timeout=TIMEOUT)
     assert r.status_code == 200
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

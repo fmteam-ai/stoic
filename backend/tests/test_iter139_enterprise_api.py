@@ -299,3 +299,7 @@ class TestRateLimit:
             time.sleep(0.05)
         assert statuses[:5] == [200, 200, 200, 200, 200], statuses
         assert statuses[5] == 429, statuses
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

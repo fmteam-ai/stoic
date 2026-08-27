@@ -146,3 +146,7 @@ def test_authority_and_intents_admin_endpoints(cleanup):
     r3 = sess.get(f"{BASE_URL}/api/execution/intents?limit=5",
                   timeout=TIMEOUT)
     assert r3.status_code == 200, r3.text
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

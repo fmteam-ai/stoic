@@ -238,3 +238,7 @@ def test_reconcile_user_pending_close_via_count_fallback(db, seeded):
     )
     result = _arun(reconcile_user(seeded["user_id"]))
     assert result["total_closed"] == 3
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

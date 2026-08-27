@@ -223,3 +223,7 @@ def test_liquidity_layer_reports_gate_mode(db):
         assert "DOM" in liq["detail"]
         await _cleanup(db)
     _run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

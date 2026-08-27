@@ -125,3 +125,7 @@ def test_no_unwrapped_object_id_calls_in_user_input_paths():
             assert not (is_user_input and not has_try), \
                 f"{f}: line {src[:start].count(chr(10)) + 1} has unwrapped ObjectId() " \
                 f"on user input: {line.strip()}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

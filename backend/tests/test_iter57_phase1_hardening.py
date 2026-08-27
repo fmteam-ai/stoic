@@ -313,3 +313,7 @@ class TestPasswordChangeRevokesSessions:
             timeout=10,
         )
         assert r.status_code == 401, f"session 2 refresh should 401 after pw change, got {r.status_code}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

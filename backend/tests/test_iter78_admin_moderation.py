@@ -309,3 +309,7 @@ def test_admin_user_listing_filters_status():
     assert "users" in body
     for u in body["users"]:
         assert (u.get("status") or "active") == "active"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

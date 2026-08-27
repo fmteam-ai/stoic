@@ -392,3 +392,7 @@ def test_zz_cleanup():
         client.close()
 
     asyncio.get_event_loop().run_until_complete(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

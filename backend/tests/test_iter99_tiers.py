@@ -128,3 +128,7 @@ def test_portfolio_trip_demotes_to_defensive(db):
         await db.bot_configs.delete_many({"user_id": uid})
         await db.governed_changes.delete_many({"user_id": uid})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

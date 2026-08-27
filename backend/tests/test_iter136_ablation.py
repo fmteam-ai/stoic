@@ -40,3 +40,7 @@ class TestReplayOutcome:
     def test_degenerate_inputs(self):
         assert replay_outcome("BUY", 4000, 4000, 4015, bars([4001])) is None
         assert replay_outcome("BUY", 4000, 3990, 4015, []) is None
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

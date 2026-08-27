@@ -63,3 +63,7 @@ class TestBrokerStats:
         r = requests.get(f"{BASE_URL}/api/scalp/broker-stats?broker=OnEquity",
                          timeout=15)
         assert r.status_code in (401, 403), r.status_code
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

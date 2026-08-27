@@ -228,3 +228,7 @@ def test_research_proposals_list_still_works(session):
     body = r.json()
     assert "pending" in body
     assert "history" in body
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

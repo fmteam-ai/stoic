@@ -149,3 +149,7 @@ def test_exhaustion_signals_fire():
     assert ex["score"] >= 60
     r = trend_report(bars, symbol="XAUUSD")
     assert r["exhausted"] is True
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

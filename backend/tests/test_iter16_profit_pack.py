@@ -248,3 +248,7 @@ def test_new_counters_registered():
     from intelligence_counters import CATEGORIES
     assert "sl_cooldown_block" in CATEGORIES
     assert "pre_news_protect" in CATEGORIES
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

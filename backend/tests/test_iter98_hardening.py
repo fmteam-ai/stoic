@@ -150,3 +150,7 @@ def test_snapshot_config_immutable_version(db):
         await db.bot_configs.delete_many({"user_id": uid})
         await db.config_versions.delete_many({"user_id": uid})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

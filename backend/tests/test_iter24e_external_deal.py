@@ -209,3 +209,7 @@ class TestExternalDeal:
             assert mongo_db.trades.count_documents({"mt5_ticket": ticket}) == 1
         finally:
             _cleanup(mongo_db, ticket=ticket, deal_ids=[deal_id])
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

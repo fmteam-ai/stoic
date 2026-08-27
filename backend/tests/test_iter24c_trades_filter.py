@@ -110,3 +110,7 @@ class TestTradesByAccount:
         assert r.status_code == 200
         for t in r.json():
             assert t.get("account_id") == acc_id
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -279,3 +279,7 @@ class TestLiveActivationGate:
         from routes.bot_routes import _activation_readiness
         problems = asyncio.run(_activation_readiness(None, self._account(None)))
         assert any("EA version unknown" in p for p in problems)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

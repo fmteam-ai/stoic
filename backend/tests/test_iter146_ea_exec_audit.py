@@ -191,3 +191,7 @@ class TestBackendAckModelRound5:
 
     def test_terminal_error_recorded(self):
         assert 'update["mod_terminal_error"] = payload.error' in _br()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -432,3 +432,7 @@ class TestCopilotSmoke:
         )
         assert r2.status_code == 200, r2.text
         assert r2.json()["session_id"] == sid
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -105,3 +105,7 @@ def test_connection_unknown_account_404():
             assert False, "expected HTTPException"
         except HTTPException as e:
             assert e.status_code == 404
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

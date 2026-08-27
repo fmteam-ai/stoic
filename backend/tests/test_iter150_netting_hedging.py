@@ -213,3 +213,7 @@ class TestBackendScenarios:
                 await db.trades.delete_one({"_id": ins.inserted_id})
                 await db.trade_events.delete_many({"trade_id": tid})
         asyncio.run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

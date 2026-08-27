@@ -110,3 +110,7 @@ def test_ops_turnstile_diag_endpoint_admin_only():
                                     "INVALID_SECRET")
     secret = os.environ.get("TURNSTILE_SECRET_KEY", "")
     assert secret and secret not in r.text
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

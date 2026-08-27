@@ -289,3 +289,7 @@ class TestHeldOutCalibration:
 def lm_feature_count():
     return ["confidence_norm", "is_buy", "kalman_vel_norm", "cot_against",
             "cot_with", "tips_aligned", "mtf_aligned", "macro_event_24h"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

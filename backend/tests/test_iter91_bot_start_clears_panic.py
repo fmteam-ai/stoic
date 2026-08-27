@@ -160,3 +160,7 @@ def test_seed_admin_autoheal_clears_stale_flags_on_active_bots():
     finally:
         db.bot_configs.delete_many({"_id": {"$in": [cfg_id, inactive_id]}})
         db.users.delete_one({"_id": ObjectId(uid)})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

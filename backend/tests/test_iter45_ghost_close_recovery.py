@@ -48,3 +48,7 @@ def test_heartbeat_stamps_live_pnl():
     # estimated exits must remain overwritable by the real broker deal
     assert "real_exit_known" in src
     assert 'update["pnl_estimated"] = False' in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

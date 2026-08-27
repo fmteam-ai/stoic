@@ -314,3 +314,7 @@ def test_checkout_rejects_unlisted_origin():
                 json={"plan_id": "starter_monthly", "origin": good}, timeout=30)
     assert r2.status_code == 200, r2.text
     assert r2.json()["plan"]["amount_usd"] == 39.0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -66,3 +66,7 @@ def test_webhook_reverifies_paid_before_apply():
     assert "apply_successful_payment" in src
     # Unsigned revoke events must be guarded by signature verification.
     assert "signature_verified" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

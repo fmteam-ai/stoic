@@ -269,3 +269,7 @@ class TestRegression:
     def test_sweep_status(self, admin_session):
         r = admin_session.get(f"{API}/pamm/sweep-status", timeout=TIMEOUT)
         assert r.status_code == 200, r.text
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -207,3 +207,7 @@ def test_onboarding_existing_trader_auto_done():
             await db.accounts.delete_many({"user_id": user["id"]})
         _run(_clean())
         _cleanup([user])
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

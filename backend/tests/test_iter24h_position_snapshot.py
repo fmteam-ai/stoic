@@ -164,3 +164,7 @@ class TestPositionSnapshotBackfill:
             assert b["external_open"] is False
         finally:
             _cleanup(mongo_db, external + bot)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -208,3 +208,7 @@ def test_loss_lab_worker_gate(svc_db):
         assert await db.loss_postmortems.count_documents(
             {"trade_id": str(res.inserted_id)}) == 0
     _run(inner())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

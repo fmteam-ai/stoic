@@ -198,3 +198,7 @@ class TestUnitLayer:
         sat = dt.datetime(2025, 12, 27, 12, 0, 0, tzinfo=dt.timezone.utc)
         for sym in ("BTCUSD", "ETHUSD", "BTC/USDT", "SOLUSD"):
             assert is_market_closed(sym, now=sat) is None, f"crypto must bypass: {sym}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

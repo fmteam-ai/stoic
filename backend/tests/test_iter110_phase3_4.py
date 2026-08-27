@@ -244,3 +244,7 @@ def test_zz_cleanup(db):
         await db.bot_configs.delete_many({"user_id": {"$regex": f"^{UID}"}})
         await db.audit_log.delete_many({"user_id": {"$regex": f"^{UID}"}})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

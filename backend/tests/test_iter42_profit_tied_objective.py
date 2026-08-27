@@ -114,3 +114,7 @@ class TestProfitWeightedTraining:
         y = (X[:, 0] > 0).astype(float)
         w, mu, sd, auc = _train_logreg(X, y)
         assert w.shape == (9,) and 0 <= auc <= 1
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

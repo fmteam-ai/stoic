@@ -277,3 +277,7 @@ class TestAutoSweep:
     def test_sweep_status_requires_manager(self):
         r = requests.get(f"{API}/pamm/sweep-status", timeout=TIMEOUT)
         assert r.status_code in (401, 403)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

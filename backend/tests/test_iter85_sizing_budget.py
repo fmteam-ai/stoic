@@ -119,3 +119,7 @@ class TestRiskBudget:
             finally:
                 await db.trades.delete_many({"_id": {"$in": ids}})
         _run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

@@ -179,3 +179,7 @@ def test_calibration_summary_math(db):
         assert err == round(abs(66.7 - 70.0), 1)
         await db.trades.delete_many({"user_id": uid})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

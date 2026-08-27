@@ -278,3 +278,7 @@ def test_notify_account_blocked_includes_label():
         assert any("10013" in str(line) for line in lines)
     finally:
         asyncio.run(_with_db(_cleanup))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

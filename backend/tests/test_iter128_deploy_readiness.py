@@ -57,3 +57,7 @@ def test_ml_ensemble_kill_switch_disables(monkeypatch):
     assert pred["p_win"] is None and pred["models_used"] == 0
     # a disabled prediction must never veto
     assert ml_ensemble.ml_gate(pred) is None
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -92,3 +92,7 @@ class TestTrendRideCap:
         dist = min(abs(tp - entry) * mult, cap)
         widened = entry + dist
         assert price_to_pips("XAUUSD", widened - entry) <= MTF_TP3_MAX_PIPS
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

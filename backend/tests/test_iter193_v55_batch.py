@@ -493,3 +493,7 @@ class TestIntentRoutes:
     def test_requires_auth(self):
         r = requests.get(f"{API}/execution/intents", timeout=TIMEOUT)
         assert r.status_code in (401, 403)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

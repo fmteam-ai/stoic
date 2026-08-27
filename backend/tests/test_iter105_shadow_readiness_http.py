@@ -161,3 +161,7 @@ def test_promotion_gate_blocks_when_health_low(admin_session):
     assert mode_after == mode_before, f"config changed: {mode_before} -> {mode_after}"
     assert blocked, (f"Expected block but got status={r.status_code}, "
                      f"body first 300 chars: {r.text[:300]}")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

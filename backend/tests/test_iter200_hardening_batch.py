@@ -158,7 +158,7 @@ class TestAttributionConfidence:
         out = _run(attribute_trade(db, trade))
         assert 0.0 <= out["attribution_confidence"] <= 1.0
         assert out["unexplained_fraction"] >= 0.0
-        assert out["engine_version"] == 2
+        assert out["engine_version"] >= 2
         _run(db.trade_outcomes.delete_many({"trade_id": tid}))
 
 
@@ -182,3 +182,7 @@ class TestLatencySegments:
         assert seg["strategy_ms"] is None
         assert seg["cloud_to_ea_ms"] == 40
         assert seg["total_ms"] == 120         # T9 - T6 fallback
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

@@ -34,3 +34,7 @@ def test_alerts_endpoints_require_auth():
     assert requests.get(f"{BASE}/api/ops/alerts", timeout=20).status_code == 403
     assert requests.post(f"{BASE}/api/ops/alerts/ack-all",
                          timeout=20).status_code == 403
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

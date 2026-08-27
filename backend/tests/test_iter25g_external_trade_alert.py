@@ -133,3 +133,7 @@ def test_is_plausible_trade_rejects_id_not_in_db():
             "mt5_ticket": 696483514,
         })
     assert asyncio.run(_run()) is False
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

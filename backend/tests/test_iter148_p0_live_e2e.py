@@ -177,3 +177,7 @@ def test_bridge_report_v152_partial_fill_and_ticket_separation():
         finally:
             await d.trades.delete_one({"_id": ins.inserted_id})
     asyncio.run(_run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

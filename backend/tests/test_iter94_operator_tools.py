@@ -183,3 +183,7 @@ def test_what_if_no_trades(db):
         res = await what_if(db, f"ghost-{uuid.uuid4().hex[:6]}", risk_pct=0.5)
         assert res["error"]
     _run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

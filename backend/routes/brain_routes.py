@@ -192,3 +192,57 @@ async def twin_recent_ep(limit: int = 20,
     lim = max(1, min(int(limit), 100))
     return {"verdicts": [d async for d in db.pretrade_twin
             .find(q, {"_id": 0}).sort("at", -1).limit(lim)]}
+
+
+# ───────────────── iter-211 — intelligence scopes & reporting ────────────
+
+@router.get("/health")
+async def intel_health_ep(scope: str = Query("global"),
+                          account_id: str | None = None,
+                          user=Depends(get_current_user)):
+    """Intelligence health at global / regional / account scope."""
+    from intel_scopes import account_health, global_health, regional_health
+    db = get_db()
+    if scope == "account":
+        if not account_id:
+            raise HTTPException(status_code=400,
+                                detail="account_id required for "
+                                       "scope=account")
+        acc = await _owned_account(db, user, account_id)
+        return await account_health(db, acc)
+    if scope == "regional":
+        uid = None if user.get("role") == "admin" else user["id"]
+        return await regional_health(db, user_id=uid)
+    if scope != "global":
+        raise HTTPException(status_code=400,
+                            detail="scope must be global|regional|account")
+    return await global_health(db, admin=user.get("role") == "admin")
+
+
+@router.get("/report")
+async def trade_intelligence_report_ep(days: int = Query(30, ge=1, le=90),
+                                       user=Depends(get_current_user)):
+    """Unified Trade Intelligence Report — decisions → execution →
+    outcomes → learning health for the calling user."""
+    from trade_intelligence import report
+    return await report(get_db(), user["id"], days=days)
+
+
+@router.get("/interventions")
+async def interventions_ep(days: int = Query(30, ge=1, le=90),
+                           user=Depends(get_current_user)):
+    from intervention_metrics import effectiveness
+    return await effectiveness(get_db(), user["id"], days=days)
+
+
+@router.get("/coverage")
+async def conformal_coverage_ep(symbol: str | None = None,
+                                scope: str | None = None,
+                                user=Depends(get_current_user)):
+    """Realized conformal coverage of the uncertainty engine."""
+    from uncertainty_engine import _sample_r, realized_coverage
+    rs = await _sample_r(get_db(), user["id"], scope, symbol)
+    if len(rs) < 20:
+        return {"evaluated": 0, "coverage": None, "ok": True,
+                "note": f"only {len(rs)} comparable trades"}
+    return realized_coverage(list(reversed(rs)))

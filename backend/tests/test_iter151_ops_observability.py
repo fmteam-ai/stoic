@@ -105,3 +105,7 @@ def test_ea_structural_ci_script_passes():
         ["python", _os.path.join(_REPO_DIR, "scripts", "check_ea_structure.py")],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

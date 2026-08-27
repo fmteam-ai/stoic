@@ -85,3 +85,7 @@ class TestAutoPresetRegimeTable:
     def test_mapped_presets_all_exist(self):
         for preset in REGIME_TO_PRESET.values():
             assert preset in PRESETS, preset
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -219,3 +219,7 @@ def test_agent_registration_quota_per_tenant(monkeypatch):
             await db.vps_bootstrap_tokens.delete_many({"user_id": uid})
     out = _run(scenario())
     assert "limit reached" in out, out
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

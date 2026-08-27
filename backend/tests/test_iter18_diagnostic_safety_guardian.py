@@ -98,3 +98,7 @@ def test_diagnostic_run_admin_returns_safety_guardian_checks(admin_session):
 def test_diagnostic_run_non_admin_returns_403(user_session):
     r = user_session.get(f"{BASE_URL}/api/diagnostic/run", timeout=15)
     assert r.status_code == 403, f"expected 403, got {r.status_code} {r.text[:200]}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -71,3 +71,7 @@ def test_admin_mark_paid_valid_hex_no_crash():
     r = s.post(f"{API}/admin/affiliate/commissions/507f1f77bcf86cd799439011/mark-paid",
                timeout=10)
     assert r.status_code in (200, 404, 400), f"Got {r.status_code}: {r.text}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

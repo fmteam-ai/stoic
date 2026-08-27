@@ -231,3 +231,7 @@ def test_artifact_manifest_signed():
     assert sig.get("alg") == "Ed25519", sig
     assert sig.get("value"), sig
     assert m.get("update_policy", {}).get("rollback") is not None, m
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

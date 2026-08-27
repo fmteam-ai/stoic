@@ -316,3 +316,7 @@ class TestRefreshRotation:
         # rounding — but almost always changes because jti / iat differ.
         # We assert only the refresh rotation, which is the security-critical
         # property.
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

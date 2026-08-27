@@ -181,3 +181,7 @@ def test_metrics_endpoint_ok():
     assert r.status_code == 200, r.text
     # Prometheus text format
     assert "stoic_" in r.text or "process_" in r.text or "python_" in r.text
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

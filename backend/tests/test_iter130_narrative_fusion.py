@@ -95,3 +95,7 @@ class TestWiring:
                        '"news_bias_applied"', '"news_size_trim"',
                        'signal.get("news_size_scale")'):
             assert needle in src, needle
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

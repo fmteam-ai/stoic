@@ -184,3 +184,7 @@ class TestAttributionApi:
         r = s.post(f"{API}/attribution/backfill", timeout=60)
         assert r.status_code == 200
         assert "attributed" in r.json()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

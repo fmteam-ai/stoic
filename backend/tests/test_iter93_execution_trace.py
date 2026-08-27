@@ -142,3 +142,7 @@ def test_new_event_types_registered():
         assert et in EVENT_TYPES
         ev = build(et, user_id=UID, trade_id="t1", payload={"detail": "x"})
         assert ev["event_type"] == et and ev["payload"]["detail"] == "x"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

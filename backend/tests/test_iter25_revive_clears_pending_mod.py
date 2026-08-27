@@ -134,3 +134,7 @@ class TestReviveClearsPendingModification:
             assert "pending_modification" in kinds
         finally:
             mongo_db.trades.delete_one({"_id": tid})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

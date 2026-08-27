@@ -88,3 +88,7 @@ def test_promotion_blocked_on_deep_drawdown():
                 "gross_loss_r": 25.0, "max_dd": 30.0},
                {"total_r": 5.0})
     assert not promotion_status(m)["ready"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

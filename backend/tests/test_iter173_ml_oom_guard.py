@@ -114,3 +114,7 @@ def test_no_heavy_ml_imported_at_server_boot():
     assert "HEAVY:" in r.stdout, r.stderr[-500:]
     heavy = r.stdout.split("HEAVY:")[-1].strip()
     assert heavy == "", f"heavy ML imported at boot: {heavy}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

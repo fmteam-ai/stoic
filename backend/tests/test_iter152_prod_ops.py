@@ -133,3 +133,7 @@ def test_ci_has_extended_jobs():
                 "security-scan", "static-analysis", "container-build"):
         assert f"  {job}:" in ci, f"ci.yml missing job {job}"
     assert "sbom-action" in ci
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

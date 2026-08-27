@@ -112,3 +112,7 @@ def test_target_weights_negative_corr_not_penalized():
     vols = {"A": 1.0, "B": 1.0}
     tw = target_weights(vols, {"A": {"B": -0.8}, "B": {"A": -0.8}})
     assert tw["A"] == pytest.approx(0.5, abs=0.01)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

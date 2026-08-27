@@ -93,10 +93,60 @@ async def latency_summary(db, days: int = 7,
                "trades": g["_n"]}
         for s in SEGMENTS:
             row[s] = {"p50": _pct(g[s], 0.5), "p95": _pct(g[s], 0.95),
-                      "n": len(g[s])}
+                      "p99": _pct(g[s], 0.99),
+                      "max": max(g[s]) if g[s] else None,
+                      "n": len(g[s]),
+                      "unknown_rate": round(1 - len(g[s]) / g["_n"], 3)
+                      if g["_n"] else None}
         rows.append(row)
     rows.sort(key=lambda r: -r["trades"])
-    return {"days": days, "traced_trades": total, "groups": rows}
+    # UNKNOWN rate — trades in the window with NO complete trace at all
+    q_all = dict(q)
+    q_all.pop("latency_trace.t9_ms", None)
+    q_all["status"] = {"$in": ["open", "closed"]}
+    all_n = await db.trades.count_documents(q_all)
+    unknown_rate = round(1 - total / all_n, 3) if all_n else None
+    return {"days": days, "traced_trades": total,
+            "total_trades": all_n, "unknown_rate": unknown_rate,
+            "groups": rows}
+
+
+async def clock_skew(db, user_id: str | None = None,
+                     days: int = 7) -> dict:
+    """Explicit clock-skew monitoring across cloud → Host Agent/EA →
+    broker. cloud_to_ea (t7−t6) can never be negative on synchronized
+    clocks; a negative minimum bounds the EA/Host clock offset."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max(1, min(int(days), 30)))).isoformat()
+    q = {"latency_trace.t6_ms": {"$exists": True},
+         "latency_trace.t7_ms": {"$exists": True},
+         "opened_at": {"$gte": cutoff}}
+    if user_id:
+        q["user_id"] = user_id
+    per_acct: dict = {}
+    async for t in db.trades.find(
+            q, {"latency_trace": 1, "account_id": 1}).limit(3000):
+        lt = t["latency_trace"]
+        d = int(lt["t7_ms"]) - int(lt["t6_ms"])
+        per_acct.setdefault(str(t.get("account_id")), []).append(d)
+    accounts = []
+    for acc, ds in per_acct.items():
+        mn, med = min(ds), sorted(ds)[len(ds) // 2]
+        # negative min = EA clock behind cloud by at least |mn| ms
+        skew_bound = min(0, mn)
+        status = ("SKEW_SUSPECTED" if skew_bound < -250
+                  or med > 60_000 else "OK")
+        accounts.append({"account_id": acc, "n": len(ds),
+                         "cloud_to_ea_min_ms": mn,
+                         "cloud_to_ea_median_ms": med,
+                         "skew_bound_ms": skew_bound, "status": status})
+    accounts.sort(key=lambda a: a["skew_bound_ms"])
+    return {"days": days, "accounts": accounts,
+            "suspected": [a["account_id"] for a in accounts
+                          if a["status"] != "OK"],
+            "note": "t7−t6 spans network + queueing; a NEGATIVE minimum "
+                    "is impossible on synchronized clocks and lower-bounds"
+                    " the Host Agent/EA clock offset vs cloud"}
 
 
 async def recent_traces(db, limit: int = 30,

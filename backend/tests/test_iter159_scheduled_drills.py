@@ -152,3 +152,7 @@ def test_user_stress_equity_personalization():
     assert out["params"]["equity"] == 50_000.0
     assert out["params"]["risk_pct"] == 2.5  # high profile
     assert out["verdict"] == "STAYED_CALM"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

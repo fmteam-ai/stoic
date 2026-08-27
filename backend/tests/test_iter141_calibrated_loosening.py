@@ -86,3 +86,7 @@ class TestTypicalDayRange:
         f = compute_intraday_features(bars)
         assert f is not None
         assert f["typical_day_range_pct"] is None
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -199,3 +199,7 @@ class TestModificationAckTelegram:
             assert doc.get("last_modification_error") == "Trade context busy"
         finally:
             mongo_db.trades.delete_one({"_id": tid})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

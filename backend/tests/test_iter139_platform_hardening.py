@@ -166,3 +166,7 @@ def test_runbooks_include_supply_chain():
     from runbooks_content import get_runbooks
     ids = {r["id"] for r in get_runbooks()["runbooks"]}
     assert "supply-chain" in ids
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

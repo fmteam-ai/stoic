@@ -286,3 +286,7 @@ class TestOptimizerOwnership:
         r = session.post(f"{API}/optimizer/analyze?account_id={other_account_id}",
                          timeout=30)
         assert r.status_code == 404, r.status_code
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

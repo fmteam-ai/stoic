@@ -311,3 +311,7 @@ def test_command_queue_stamps_trace_id():
             await db.agent_commands.delete_many({"user_id": uid})
     doc = _run(scenario())
     assert str(doc.get("trace_id", "")).startswith("iter161-")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

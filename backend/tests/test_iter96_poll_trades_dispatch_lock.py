@@ -144,3 +144,7 @@ def test_poll_trades_re_dispatches_after_lock_expires():
             await client.drop_database(test_db_name)
             client.close()
     _run(_body())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

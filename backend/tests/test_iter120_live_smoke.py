@@ -150,3 +150,7 @@ def test_flatten_failed_banner_via_mongo_toggle(admin_a, program_id):
         r2 = admin_a.get(f"{BASE}/api/pamm/programs/{program_id}", timeout=30)
         p2 = r2.json().get("program", r2.json())
         assert not p2.get("flatten_failed"), "flatten_failed not cleaned up"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

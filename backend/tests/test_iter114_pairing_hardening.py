@@ -264,3 +264,7 @@ def test_zz_cleanup(db):
                      "execution_leases", "ea_pairing_codes"):
             await db[coll].delete_many({"account_id": {"$in": aids}})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

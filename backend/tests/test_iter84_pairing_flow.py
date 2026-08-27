@@ -278,3 +278,7 @@ def test_installer_ps1_endpoint_serves_script():
     assert "Install-Stoic" in body
     assert "claim-pairing" in body
     assert "MetaQuotes" in body
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -205,3 +205,7 @@ class TestOpenTicketsDerivedFromPositions:
 
         doc = mongo_db.accounts.find_one({"_id": fresh_account["_id"]})
         assert set(doc["open_tickets"]) == {700030001, 700030002}
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

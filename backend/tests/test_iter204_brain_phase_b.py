@@ -221,3 +221,7 @@ def test_replay_r_log_records_series():
     # _book itself doesn't log (replay does) — verify state math intact
     assert st["trades"] == 2 and st["losses"] == 1 and st["wins"] == 1
     assert isinstance(st["_r_log"], list)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

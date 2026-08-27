@@ -165,3 +165,7 @@ def test_slippage_veto_path_does_not_namerror():
     if "now_iso" in referenced:
         assert "now_iso" in assigned, \
             "report_trade references now_iso without assigning it"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

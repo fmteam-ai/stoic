@@ -150,3 +150,7 @@ def test_preflight_endpoint_admin_only():
     ids = {c["id"] for c in body["checks"]}
     assert {"csrf", "cors", "admin_password", "ed25519",
             "release_signer"} <= ids
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

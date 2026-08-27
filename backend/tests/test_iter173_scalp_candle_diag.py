@@ -91,3 +91,7 @@ def test_compute_uses_diagnosis():
     perms = _run(_compute(db, uid, "EURUSD", cfg))
     assert perms["regime"] == "UNKNOWN"
     assert "no candle payloads have reached STOIC" in perms["regime_reason"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

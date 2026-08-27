@@ -135,3 +135,7 @@ class TestHotPathRegression:
         assert r.status_code == 200, r.text
         d = r.json()
         assert "layers" in d and len(d["layers"]) == 12
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

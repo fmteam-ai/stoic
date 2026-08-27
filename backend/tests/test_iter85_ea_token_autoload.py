@@ -167,3 +167,7 @@ def test_claim_pairing_advertises_v136():
     with open(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py")) as f:
         src = f.read()
     assert f'"ea_latest_version": "{EXPECTED_VERSION}"' in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

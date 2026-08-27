@@ -139,3 +139,7 @@ class TestImportPositions:
                  "volume": 0, "price_open": 1.0},
             ]}, timeout=10)
         assert r.status_code == 422
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

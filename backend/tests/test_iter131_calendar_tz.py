@@ -36,3 +36,7 @@ class TestParseEventTime:
 
     def test_bad_input(self):
         assert _parse_event_time("garbage", "8:30am") is None
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

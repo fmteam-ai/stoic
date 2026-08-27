@@ -468,3 +468,7 @@ class TestUnifiedReservationRelease:
         assert k2 == k1, f"transition_keys mutated on replay: {k1} -> {k2}"
         assert doc2.get("state") == "RELEASED"
         assert doc2.get("active") is False
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

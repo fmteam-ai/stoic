@@ -75,3 +75,7 @@ class TestEaV139:
         assert f'const LATEST_EA_VERSION = "{current_ea_version()}"' in fe
         assert "request-sync" in fe
         assert "broker_sync_complete" in fe
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

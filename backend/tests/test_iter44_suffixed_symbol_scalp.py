@@ -306,3 +306,7 @@ def test_unapproved_suffixed_symbol_still_ignored(ctx):
     assert r.status_code == 200
     body = r.json()
     assert body.get("status") == "ignored", f"USDCAD# unexpectedly accepted: {body}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

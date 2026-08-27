@@ -156,3 +156,7 @@ def test_pipeline_status_shape(db):
         assert isinstance(st["recent_runs"][0]["at"], str)  # serializable
         await _cleanup(db)
     _run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

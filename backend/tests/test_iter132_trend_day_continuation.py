@@ -77,3 +77,7 @@ class TestEma20Continuation:
              "ema20_slope_pct_2h": 0.04, "day_range_pct": 0.5, "vwap_dist_pct": 0.25}
         action, reason = hf_scalp_signal(f, fast=True)
         assert "trend-day continuation" not in (reason or "")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

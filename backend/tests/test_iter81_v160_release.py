@@ -255,3 +255,7 @@ class TestRegressionSmoke:
         body = r.json()
         # Accepts list or dict wrapper
         assert isinstance(body, (list, dict))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

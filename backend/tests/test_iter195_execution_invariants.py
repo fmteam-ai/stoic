@@ -285,3 +285,7 @@ class TestExecutionInvariants:
             _cleanup(intent_ids=[it["intent_id"]])
             from bson import ObjectId
             _run(db.trades.delete_many({"user_id": "invariant-test"}))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

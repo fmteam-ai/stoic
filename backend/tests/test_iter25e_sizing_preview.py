@@ -72,3 +72,7 @@ class TestSizingPreview:
         body = r.json()
         assert body["scenario"]["entry_price"] == 62000.0
         assert body["scenario"]["stop_loss"] == 61500.0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

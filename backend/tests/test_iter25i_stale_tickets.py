@@ -191,3 +191,7 @@ class TestStaleTicketsDetection:
         # Ghost revived (broker has it open) — orphan closed (broker doesn't)
         assert mongo_db.trades.find_one({"_id": ghost})["status"] == "open"
         assert mongo_db.trades.find_one({"_id": orphan})["status"] == "closed"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

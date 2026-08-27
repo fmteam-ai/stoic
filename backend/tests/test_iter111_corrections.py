@@ -351,3 +351,7 @@ def test_zz_cleanup(db):
         await db.ops_alerts.delete_many(
             {"dedup_key": {"$regex": f"^auto_demotion_{UID}"}})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

@@ -252,3 +252,7 @@ def test_new_ip_login_writes_notification(monkeypatch):
         await db.notifications.delete_many({"user_id": str(user["_id"])})
     _run(go())
     assert sent == ["iter155-notify@example.com"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

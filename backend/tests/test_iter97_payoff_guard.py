@@ -145,3 +145,7 @@ class TestWiring:
         assert '"session_trend_veto"' in src
         assert '"exhaustion_chase_veto"' in src
         assert '"trend_ride_applied"' in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

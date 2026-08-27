@@ -145,3 +145,7 @@ class TestAuditLog:
             # step_up_verified may or may not be set; if present, boolean
             if "step_up_verified" in e:
                 assert isinstance(e["step_up_verified"], bool)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

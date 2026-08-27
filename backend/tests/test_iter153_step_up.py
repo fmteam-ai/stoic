@@ -226,3 +226,7 @@ def test_safety_status_new_fields():
     assert "capital_at_risk" in body
     assert "reconciliation_delay_sec" in body
     assert "panic_active" in body
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

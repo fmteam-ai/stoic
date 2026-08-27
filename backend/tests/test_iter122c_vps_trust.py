@@ -237,3 +237,7 @@ def test_rotate_and_revoke_endpoints(svc_db):
     # second revoke → 404 (idempotent surface)
     assert s.post(f"{API}/infra/installations/{inst_id}/revoke",
                   timeout=15).status_code == 404
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

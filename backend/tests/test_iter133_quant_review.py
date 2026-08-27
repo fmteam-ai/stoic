@@ -152,3 +152,7 @@ class TestPositionLedger:
         assert any("EOD_SETTLEMENT" in f.note for f in res.fills
                    if f.action == "CLOSE")
         assert not eng.positions  # H1: nothing left unrealized after run()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

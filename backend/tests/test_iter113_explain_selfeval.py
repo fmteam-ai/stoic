@@ -151,3 +151,7 @@ def test_evaluate_trade_end_to_end():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

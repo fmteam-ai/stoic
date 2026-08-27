@@ -166,3 +166,7 @@ def test_external_deal_manual_trades_still_create_fresh():
             client.close()
 
     _run(_body())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

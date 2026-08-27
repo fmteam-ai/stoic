@@ -103,3 +103,7 @@ def test_handles_non_string_entries_gracefully():
 
 def test_case_insensitive_match():
     assert resolve_broker_symbol("xauusd", ["XAUUSD.fx", "EURUSD.fx"], suffix_fallback="") == "XAUUSD.fx"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

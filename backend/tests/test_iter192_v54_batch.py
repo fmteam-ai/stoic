@@ -235,3 +235,7 @@ class TestCertificationSuite:
         s = _login()
         r = s.post(f"{API}/pamm/partners/prt_nope/certify", timeout=TIMEOUT)
         assert r.status_code == 404
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

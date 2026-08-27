@@ -81,3 +81,7 @@ def test_brain_portfolio(session):
     assert "currency_exposure" in data
     assert "stress" in data
     assert "limits" in data
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

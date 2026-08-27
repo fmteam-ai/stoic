@@ -159,3 +159,7 @@ def test_regime_buckets_disjoint_and_well_formed():
     assert "CAUTIOUS_WAIT" in CHOPPY_REGIMES
     assert "TRENDING" in TRENDING_REGIMES
     assert "AGGRESSIVE" in TRENDING_REGIMES
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -517,3 +517,7 @@ def test_protection_resolves_only_with_confirmed_stop_loss(ctx_c):
         # Always clean up so the server's protection sweep does not
         # keep processing this trade.
         db.trades.delete_one({"_id": _oid(tid)})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

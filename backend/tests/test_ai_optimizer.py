@@ -84,3 +84,7 @@ def test_max_four_recommendations():
     raw2 = [{"type": "config_change", "field": "trade_of_day_cap", "to": i + 2, "reason": "r"}
             for i in range(6)]
     assert len(validate_recommendations(raw2, cfg)) <= 4
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

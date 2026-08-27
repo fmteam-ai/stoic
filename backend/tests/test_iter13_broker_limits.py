@@ -235,3 +235,7 @@ class TestRegression:
         me = s.get(f"{API}/auth/me", timeout=10)
         assert me.status_code == 200
         assert me.json()["email"] == ADMIN_EMAIL
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

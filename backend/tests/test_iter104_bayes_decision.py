@@ -114,3 +114,7 @@ class TestWiring:
     def test_config_mode(self):
         assert 'bayes_gate_mode: str = "advisory"' in \
             open(os.path.join(BACKEND, "models.py")).read()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

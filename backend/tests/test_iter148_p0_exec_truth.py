@@ -207,3 +207,7 @@ def test_no_hardcoded_app_paths_in_test_code():
                 if re.search(r'["\']/app/(backend|frontend)', s):
                     bad.append(f"{_os.path.join(root, f)}:{i}")
     assert not bad, f"hardcoded /app paths remain in test code: {bad[:10]}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

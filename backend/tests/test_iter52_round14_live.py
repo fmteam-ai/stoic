@@ -293,3 +293,7 @@ class TestP0SnapshotPropagation:
         stale = enabled_runner.get("broker_state_stale")
         assert stale is None or stale == "", (
             f"enabled runner has broker_state_stale reason: {stale!r}")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

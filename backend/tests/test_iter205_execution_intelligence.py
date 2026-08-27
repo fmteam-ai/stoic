@@ -161,7 +161,8 @@ def test_router_health_multiplier_ordering():
     from strategy_router import HEALTH_ROUTER_MULT
     assert HEALTH_ROUTER_MULT["DISABLED"] < HEALTH_ROUTER_MULT["DEGRADED"] \
         < HEALTH_ROUTER_MULT["HEALTHY"]
-    assert HEALTH_ROUTER_MULT["DISABLED"] >= 0.5   # router floors, never 0
+    # iter-211 correction: DISABLED means ZERO live allocation
+    assert HEALTH_ROUTER_MULT["DISABLED"] == 0.0
 
 
 # ───────────────────── Uncertainty 2.0 — conformal ─────────────────────
@@ -174,3 +175,7 @@ def test_conformal_interval_coverage_shape():
     assert lo <= ci["median_r"] <= hi
     inside = sum(1 for r in rs if lo <= r <= hi) / len(rs)
     assert inside >= 0.85   # ~90% coverage by construction
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -9,6 +9,13 @@ from datetime import datetime, timezone
 logger = logging.getLogger("decision.context")
 
 MAX_STAGES = 40
+# DecisionEvents are CANONICAL lifecycle events, not unlimited diagnostics:
+# only these stages may ever be appended to a decision's event stream.
+CANONICAL_STAGES = frozenset({
+    "minted", "meta_decision", "market_memory", "portfolio_brain",
+    "pretrade_twin", "execution_alpha", "risk_check", "authorized",
+    "dispatched", "executed", "rejected", "blocked", "cancelled",
+    "closed", "outcome"})
 
 
 def new_decision_id() -> str:
@@ -80,8 +87,12 @@ async def record_stage(db, decision_id: str | None, stage: str,
                        payload: dict | None = None) -> None:
     """Append-only DecisionEvent — the snapshot itself is never mutated.
     Defence-in-depth: events per decision are capped at MAX_STAGES even
-    though writers are internal pipeline stages."""
+    though writers are internal pipeline stages. Non-canonical stage
+    names are dropped — the event stream is a lifecycle, not a log."""
     if not decision_id:
+        return
+    if stage not in CANONICAL_STAGES:
+        logger.debug("record_stage: non-canonical stage %r dropped", stage)
         return
     try:
         n = await db.decision_events.count_documents(

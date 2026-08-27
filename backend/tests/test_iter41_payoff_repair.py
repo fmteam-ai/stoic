@@ -104,3 +104,7 @@ def test_var_cap_prefers_worst_loser_source():
                             "portfolio", "risk_manager.py")).read()
     seg = src[src.index('triggers.append("var_cap")'):]
     assert "live_pnl" in seg[:1200], "var_cap must prefer culling the worst loser"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

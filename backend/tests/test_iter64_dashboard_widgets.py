@@ -109,3 +109,7 @@ def test_weekly_digest_clamps_invalid_window(session):
     r = session.get(f"{BASE_URL}/api/insights/weekly-digest?days=500", timeout=15)
     assert r.status_code == 200
     assert r.json()["window_days"] == 30
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

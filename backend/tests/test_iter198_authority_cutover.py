@@ -207,3 +207,7 @@ class TestTimeoutClassification:
         finally:
             _run(db.execution_intents.delete_many({"dedupe_key": key}))
             _run(db.trades.delete_many({"user_id": "cutover-test"}))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

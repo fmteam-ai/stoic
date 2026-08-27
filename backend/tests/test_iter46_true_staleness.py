@@ -93,3 +93,7 @@ class TestTrueStalenessStillRejected:
         with pytest.raises(RuntimeError, match="account risk persist fenced out"):
             asyncio.run(r.persist_risk_now(db))
         _lease_epoch.pop("accSTL4", None)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

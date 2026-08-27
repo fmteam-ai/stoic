@@ -139,3 +139,7 @@ class TestBackfillTimestamps:
     def test_history_mode_applies_status_filter(self):
         fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Trades.jsx")).read()
         assert "historySummary && filter && !CLIENT_ONLY_FILTERS.includes(filter) && t.status !== filter" in fe
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -123,3 +123,7 @@ class TestEaVersionPropagation:
         ours = next((a for a in accs if a["id"] == str(fresh_account["_id"])), None)
         assert ours is not None, "test account missing from /accounts response"
         assert ours.get("ea_version") == "1.26"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

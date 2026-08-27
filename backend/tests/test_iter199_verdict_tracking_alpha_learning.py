@@ -219,3 +219,7 @@ class TestAlphaCleanLearning:
         doc = _run(db.learning_quality.find_one({"_id": "last"}))
         assert doc is not None
         assert "accepted" in doc and "excluded_noise" in doc
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

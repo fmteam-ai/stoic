@@ -276,3 +276,7 @@ def test_step_up_enrollment_satisfied_by_passkey():
     finally:
         _run(db.webauthn_credentials.delete_many(
             {"credential_id": fake_cred["credential_id"]}))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

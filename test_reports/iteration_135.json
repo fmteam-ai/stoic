@@ -1,0 +1,34 @@
+{
+  "summary": "iter-211 end-to-end HTTP verification of the 10 architectural corrections. Created /app/backend/tests/test_iter211_http_endpoints.py with 25 tests covering all 6 new/changed endpoints (latency/summary, latency/clock-skew, brain/health, brain/report, brain/interventions, brain/coverage) plus 401 auth guards, BOLA scenarios, non-admin last_error stripping, tenant isolation, and data-backed report/interventions assertions with seeded closed trades + meta_decisions. All 25 tests PASS against the live preview backend and real Mongo. Existing iter-211 offline suite (test_iter211_corrections.py) also unchanged and green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter211_http_endpoints.py",
+    "/app/test_reports/pytest/iter211_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "brain_routes.py — the auth guard on /brain/health BOLA path correctly returns 404 (not 403) via _owned_account helper, which is the right anti-enumeration behaviour; verified end-to-end that user A hitting user B's account_id gets 404.",
+    "intel_scopes.regional_health — passes user_id filter through to latency_summary correctly; tenant isolation of regional_health verified (TestBrokerA visible to user A, TestBrokerB never leaks).",
+    "trade_intelligence.report — meta counts, TRADE/REDUCE cohorts, and saved_on_losers_usd all populate correctly from seeded data; note the `total_trades` key from latency_summary is also included in execution though the request statement only lists traced_trades/unknown_rate/worst_groups — matches the underlying model.",
+    "uncertainty_engine.realized_coverage insufficient-history branch returns coverage=None + ok=True + note; contract validated for a brand-new user via /api/brain/coverage.",
+    "intervention_metrics — skips.note explicitly says 'no observable counterfactual' (honest accounting) — verified in test."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter211_http_endpoints.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (25/25)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@trading.bot / admin123 (legacy admin) — used for admin-only shape checks. Fresh non-admin users created per-run with pattern test_iter211_<uuid>@example.com and passwords Iter211-<uuid>-Zx (avoids the HIBP breached-password check). email_verified flipped directly in Mongo per /app/memory/test_credentials.md guidance.",
+  "seed_data_creation": "For the data-backed report assertion, the seeded_user fixture inserts 4 decision_contexts + 4 meta_decisions (2 TRADE, 1 REDUCE mult=0.5, 1 SKIP hard-gated) + 3 closed trades (winner, loser, REDUCE loser) directly in Mongo, and tears them down at module teardown. Test-broker accounts (broker=TestBrokerA/TestBrokerB) inserted with unique bridge_token to satisfy the unique index. All docs cleaned up in fixture teardown; no orphan test data left in preview DB.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter211_http_endpoints.py is the canonical HTTP regression for the 6 new brain/latency endpoints. Key gotchas: (1) emails are lowercased on register — do NOT use uppercase prefixes; (2) HIBP breached-password check blocks common passwords like 'Password-123' — use UUID-derived randomness; (3) accounts collection has a unique index on bridge_token (null triggers dup key) — always seed a unique bridge_token when directly inserting an account doc.",
+  "rca of the issue": "N/A — no bugs found. Initial test-file failures were self-inflicted (uppercase email prefix vs lowercase persistence, breached password, missing bridge_token) and were fixed inside the test file; no product code change required."
+}

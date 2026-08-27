@@ -407,3 +407,7 @@ def _cleanup_iter209():
         asyncio.new_event_loop().run_until_complete(_c())
     except Exception:
         pass
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

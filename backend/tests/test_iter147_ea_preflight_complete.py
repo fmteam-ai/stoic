@@ -90,3 +90,7 @@ def test_execution_health_endpoint_exists():
                 "scalp_submission_slots", "lifecycle_state",
                 "stuck_pending", "costs"):
         assert key in br, f"execution-health missing {key}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

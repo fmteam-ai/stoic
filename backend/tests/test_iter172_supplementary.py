@@ -191,3 +191,7 @@ def test_signer_status_matches_module_state():
     assert r["signer"]["key_id"] == st["key_id"]
     assert r["signer"]["external_configured"] == st["external_configured"]
     assert r["signer"]["public_key_pinned"] == st["public_key_pinned"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

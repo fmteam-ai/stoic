@@ -123,3 +123,7 @@ def test_quorum_stats_reads_ledger(db):
         assert out["agreement_rate"] == 100.0
         await db.trade_decisions.delete_many({"user_id": uid})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

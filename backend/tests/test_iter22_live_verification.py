@@ -153,3 +153,7 @@ def test_trades_execute_with_garbage_params_returns_404(admin_session):
                            params={"signal_id": "garbage",
                                    "account_id": "alsogarbage"}, timeout=10)
     assert r.status_code in (400, 404), f"Got {r.status_code}: {r.text}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

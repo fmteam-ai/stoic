@@ -95,3 +95,7 @@ def test_liveops_requires_auth():
                  "/api/operator/actions", "/api/risk/realtime"):
         r = requests.get(f"{BASE_URL}{path}", timeout=30)
         assert r.status_code in (401, 403), f"{path} → {r.status_code}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

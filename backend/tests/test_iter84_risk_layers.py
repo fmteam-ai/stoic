@@ -135,3 +135,7 @@ def test_evaluate_layers_returns_all_twelve(loop=None):
             assert l["status"] in ("armed", "tripped", "degraded", "error")
             assert l["detail"]
     asyncio.get_event_loop().run_until_complete(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

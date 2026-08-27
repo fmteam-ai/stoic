@@ -170,3 +170,7 @@ def test_marketplace_empty_user(db):
         assert len(out["strategies"]) >= 6
         assert all(c["performance"] is None for c in out["strategies"])
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

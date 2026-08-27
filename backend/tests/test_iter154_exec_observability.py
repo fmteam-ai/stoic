@@ -115,3 +115,7 @@ class TestStepUpMFARegression:
         detail = r.json().get("detail")
         assert isinstance(detail, dict)
         assert detail.get("code") == "mfa_enrollment_required"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

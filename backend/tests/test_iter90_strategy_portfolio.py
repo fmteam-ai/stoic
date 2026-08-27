@@ -154,3 +154,7 @@ def test_budget_status_uses_dynamic_allocation(db):
         assert trend2["allocation_pct"] == 35.0  # static base share
         await _cleanup(db)
     _run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

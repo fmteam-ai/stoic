@@ -268,3 +268,7 @@ class TestPipUtilsFoundation:
 
     def test_eurusd_100_pips_is_0_01(self):
         assert pips_to_price("EURUSD", 100) == pytest.approx(0.01, abs=1e-9)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

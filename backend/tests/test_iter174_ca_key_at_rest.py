@@ -120,3 +120,7 @@ def test_enrollment_still_works_after_encryption():
     finally:
         _run(db.vps_agents.delete_many({"agent_id": agent_id}))
         _reset_ca(db)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

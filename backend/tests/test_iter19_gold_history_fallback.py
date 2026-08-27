@@ -151,3 +151,7 @@ def test_get_history_raises_only_when_mongo_is_also_empty():
             assert False, "expected RuntimeError"
         except RuntimeError as e:
             assert "XAUUSD" in str(e) or "Failed" in str(e) or "failed" in str(e)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

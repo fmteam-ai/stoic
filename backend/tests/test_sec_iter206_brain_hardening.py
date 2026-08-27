@@ -104,3 +104,7 @@ def test_degraded_scrub_logic():
         sub.pop("last_error", None)
     assert all("last_error" not in s for s in out["subsystems"].values())
     assert out["subsystems"]["meta_decision"]["failing"] is True
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

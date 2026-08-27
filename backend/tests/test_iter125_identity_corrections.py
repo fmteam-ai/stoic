@@ -423,3 +423,7 @@ def test_heartbeat_persists_verified_identity():
     assert 'set_doc["verified_identity"]' in src
     # v1.55+ heartbeat without installation_id → explicitly unverified
     assert "missing installation_id" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

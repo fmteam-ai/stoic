@@ -234,3 +234,7 @@ def test_orchestrator_logs_full_pipeline():
     assert "execution_optimizer" in agent_names
     assert inserted[0]["final_action"] == "BUY"
     assert inserted[0]["final_confidence"] == 78.0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

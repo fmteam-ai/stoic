@@ -1838,3 +1838,22 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
   race-free (adequate for internal writers).
 - Audit clean on: decision events tenant reads, degraded Redis keys (constants only), strategy_decay
   writes, PammGuide, CI workflows, .gitleaksignore (dummy verified inert).
+
+## The 10 recommended corrections (iter-211, June 2026 — DONE, 1627/1627 offline + 25/25 HTTP, report iteration_135.json)
+1. Latency stats: p50/p95/p99/max/n/unknown_rate per T0→T9 segment + window-level UNKNOWN rate (latency_profiler.latency_summary).
+2. Explicit clock-skew monitoring: latency_profiler.clock_skew (negative t7−t6 minimum lower-bounds EA/Host offset; SKEW_SUSPECTED < −250ms or median > 60s) → GET /api/latency/clock-skew.
+3. Router semantics: HEALTH_ROUTER_MULT["DISABLED"]=0.0; DISABLED families exempt from W_MIN floor → truly ZERO live allocation (strategy_router.route).
+4. Realized conformal coverage: uncertainty_engine.realized_coverage (rolling one-step-ahead, prior-trades-only intervals); coverage < target−0.05 adds COVERAGE_PENALTY_U=0.15 to uncertainty in assess(); exposed at GET /api/brain/coverage and inside assess output (conformal_coverage, components.coverage_penalty).
+5. Intelligence health scopes: intel_scopes.py — global (degraded subsystems, last_error admin-only), regional (per broker: connectivity + worst p95 latency, RED/YELLOW/GREEN), account (agent link + clock skew + strategy decay) → GET /api/brain/health?scope=global|regional|account&account_id= (400 bad scope/missing id, 404 BOLA).
+6. Unified Trade Intelligence Report: trade_intelligence.report — funnel → outcomes → execution → uncertainty calibration → interventions → learning health → GET /api/brain/report?days=1..90.
+7. BOLA authorization matrix: backend/security_matrix.py (55+ sensitive routes declared with mechanism); tests/test_iter211_corrections.py enumerates app.openapi() and FAILS on undeclared account_id/bot_id routes; docs/BOLA_MATRIX.md generated via `python security_matrix.py`.
+8. Formal test markers: /app/memory/apply_markers.py marked 255 unmarked files (unit 1181 / integration 446 / http 3354 selected via -m).
+9. Canonical DecisionEvents: decision_context.CANONICAL_STAGES (15 lifecycle stages); record_stage DROPS non-canonical names; MAX_STAGES=40 cap retained.
+10. AI intervention effectiveness: intervention_metrics.effectiveness — meta/twin/alpha counts, hard gates, REDUCE cohort vs TRADE cohort avg R, saved_on_losers_usd / forgone_on_winners_usd / net_usd; SKIPs reported as counts only (no invented counterfactual) → GET /api/brain/interventions.
+- Also fixed pre-existing: heavy ML deps (torch/transformers/chronos/accelerate/nvidia-*) removed from requirements.txt again (prod 1Gi OOM guard; preview keeps them installed; CI torch index line harmless); 3 outdated test assertions updated (DISABLED mult, canonical stage cap test, attribution engine_version>=2).
+- New tests: tests/test_iter211_corrections.py (14 offline), tests/test_iter211_http_endpoints.py (25 HTTP, by testing agent). TEST_MANIFEST regenerated (3476 tests / 343 files).
+
+### Next (unchanged backlog)
+- P1 STOIC v61 Production Proof: signed Host Agent (MSI/Windows service), real PAMM broker certification micro-pilot, chaos/load testing (tenant isolation, 5000+ bots).
+- P2 Command Center dashboard (single GREEN/YELLOW/RED screen — /api/brain/health scopes now provide the data source).
+- P2 Investor monthly statements (PAMM).

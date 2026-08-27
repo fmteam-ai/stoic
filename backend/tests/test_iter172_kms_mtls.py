@@ -301,3 +301,7 @@ def test_global_required_mode_blocks_unenrolled(monkeypatch):
         _run(enforce_mtls(get_db(), {"agent_id": "agt_x"}, ""))
     monkeypatch.setenv("AGENT_MTLS_REQUIRED", "false")
     _run(enforce_mtls(get_db(), {"agent_id": "agt_x"}, ""))  # no raise
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

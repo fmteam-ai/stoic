@@ -304,3 +304,7 @@ def test_ops_runtime_stats_admin_regression():
     s = _admin()
     r = s.get(f"{API}/ops/runtime-stats", timeout=TIMEOUT)
     assert r.status_code == 200
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

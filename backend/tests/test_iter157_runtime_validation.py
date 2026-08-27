@@ -134,3 +134,7 @@ def test_signed_msi_doc_present():
     for marker in ("signtool", "wix", "SHA256", "Authenticode",
                    "/api/artifacts/{sha256}"):
         assert marker in src, f"MSI doc missing {marker}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

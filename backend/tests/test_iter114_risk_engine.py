@@ -107,3 +107,7 @@ def test_stale_feed_blocks_on_weekdays_only():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

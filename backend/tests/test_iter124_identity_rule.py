@@ -98,3 +98,7 @@ def test_promotion_evidence_carries_broker_identity(svc_db):
         assert c["account"] == "87654321"       # operational key = broker number
         assert c["account_label"] == "Renamed Later"  # display only
     _run(inner())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

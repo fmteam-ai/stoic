@@ -255,3 +255,7 @@ def test_manage_exits_wiring(db):
             if tid:
                 await db.trades.delete_one({"_id": tid})
     _run(run())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

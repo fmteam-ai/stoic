@@ -357,3 +357,7 @@ def test_modification_ack_failure_sets_protection_unknown(ctx):
         f"stop_loss should remain None on failure ack: {fresh.get('stop_loss')}"
 
     db.trades.delete_one({"_id": _oid(tid)})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

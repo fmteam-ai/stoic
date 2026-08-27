@@ -85,3 +85,7 @@ def test_webhook_handler_wires_resolver_and_signature_guard():
     assert "_resolve_session_id_for_revoke" in src
     assert "signature_verified" in src
     assert "revoke_payment" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

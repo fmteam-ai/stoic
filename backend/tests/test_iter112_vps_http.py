@@ -366,3 +366,7 @@ def test_zz_cleanup(sess, created_ids):
     db.vps_provider_creds.delete_many(
         {"provider": "vultr", "api_key_masked": {"$exists": True}})
     cli.close()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

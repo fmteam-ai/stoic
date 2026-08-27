@@ -204,3 +204,7 @@ class TestBridgeCandlesEndpoint:
                   "bars": [{"t": 1, "o": 1, "h": 1, "l": 1, "c": 1}]},
             timeout=15)
         assert r.status_code == 401, r.text
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

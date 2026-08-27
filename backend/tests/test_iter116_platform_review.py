@@ -492,3 +492,7 @@ class TestSubscription:
         if r.status_code == 200:
             body = r.json()
             assert "checkout_url" in body and body["checkout_url"].startswith("http")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -234,3 +234,7 @@ def test_degraded_report_consults_shared_store_on_unknown_ok():
     assert u["$set"]["ok"] is True
     assert u["$set"]["consecutive_failures"] == 0
     _mem.pop("meta_decision", None)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

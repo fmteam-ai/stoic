@@ -161,3 +161,7 @@ def test_create_kraken_account_routes_to_kraken(session):
     msg = detail.get("message", "") if isinstance(detail, dict) else str(detail)
     assert "Kraken" in msg, body
     assert "Binance" not in msg, body
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

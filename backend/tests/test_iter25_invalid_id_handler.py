@@ -69,3 +69,7 @@ def test_invalid_id_handler_does_not_affect_valid_oid():
     r = client.get("/probe/6a3ad0ef17f40ac1dd3eb3ef")
     assert r.status_code == 200
     assert r.json()["oid"] == "6a3ad0ef17f40ac1dd3eb3ef"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

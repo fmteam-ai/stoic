@@ -55,3 +55,7 @@ def test_stripe_webhook_feed_write_is_wired():
     from routes import subscription_routes
     src = inspect.getsource(subscription_routes.stripe_webhook)
     assert "stripe_webhook_events" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

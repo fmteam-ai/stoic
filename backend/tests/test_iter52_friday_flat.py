@@ -96,3 +96,7 @@ class TestWiring:
         assert "friday_flat_enabled" in fe
         assert "friday-flat-mode" in fe
         assert "friday_flat_minutes_before" in fe
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

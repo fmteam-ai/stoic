@@ -137,3 +137,7 @@ class TestWrongTerminalDetection:
             "balance": 1000.0, "equity": 1000.0, "open_positions": 0,
         }, timeout=10)
         assert r.status_code == 200
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

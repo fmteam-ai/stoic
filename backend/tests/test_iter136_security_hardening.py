@@ -181,3 +181,7 @@ def test_runbooks_content():
     for marker in ("SEV-1", "Secret rotation", "Restore drill",
                    "Platform responsibilities", "audit chain"):
         assert marker.lower() in joined.lower(), marker
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

@@ -131,3 +131,7 @@ def test_trade_dna_real_trade(admin_session, mongo):
         mongo.trades.delete_one({"_id": tid})
         mongo.signals.delete_one({"_id": sid})
         mongo.trade_evaluations.delete_many({"trade_id": str(tid)})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

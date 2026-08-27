@@ -62,3 +62,7 @@ def test_entry_waits_for_breakout():
                                  live_price=4200.0, atr15=6.0)  # below swing
     if rep["m15_setup"] and rep["m15_setup"]["ready"]:
         assert not rep["entry_trigger"] and not rep["aligned"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

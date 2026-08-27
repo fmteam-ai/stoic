@@ -193,3 +193,7 @@ def test_regression_trade_explain_endpoint_exists(admin_session):
     # If route were missing, FastAPI would 404 with {"detail":"Not Found"}; that's still
     # an acceptable signal here, but we additionally verify the body shape isn't an HTML 500.
     assert "Internal Server Error" not in r.text
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -330,3 +330,7 @@ class TestDualAuthorization:
                 "enabled", True) is True
         finally:
             _cleanup(pid)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

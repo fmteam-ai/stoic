@@ -266,3 +266,7 @@ def test_distinct_fail_tenants_accepts_iso_string_cutoff():
     body = r.json()
     assert "release_trust" in body and "trusted_health" in body
     assert "auto_rollback_enabled" in body["release_trust"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

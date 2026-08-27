@@ -156,3 +156,7 @@ def test_upgrade_preview_no_active_sub():
         assert all(p["kind"] == "new" for p in out["previews"].values())
     finally:
         _cleanup_user(uid)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

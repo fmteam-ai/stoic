@@ -241,3 +241,7 @@ def test_unknown_symbol_defaults_conservative_fx_pip():
              _bar(1, 1.10, 1.101, 1.099, 1.10, sym="EURNZD")],
             _one_shot("EURNZD"))
     assert eng.result.fills[0].fill_price == pytest.approx(1.10 + 0.0001, abs=1e-9)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

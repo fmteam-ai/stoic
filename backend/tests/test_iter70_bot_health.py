@@ -166,3 +166,7 @@ def test_old_ghost_trades_auto_acknowledged(admin_session):
         assert recent.get("ghost_acknowledged") is not True
     finally:
         asyncio.run(_with_db(_cleanup))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

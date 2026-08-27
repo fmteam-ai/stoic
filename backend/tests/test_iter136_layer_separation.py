@@ -69,3 +69,7 @@ class TestLayerSeparation:
         app_root = os.path.dirname(BACKEND)
         assert os.path.exists(os.path.join(app_root, "docs", "ARCHITECTURE_LAYERS.md"))
         assert os.path.exists(os.path.join(app_root, "docs", "PROMOTION_CRITERIA.md"))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

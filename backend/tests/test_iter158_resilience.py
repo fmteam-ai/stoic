@@ -228,3 +228,7 @@ def test_host_agent_reports_deploy_status():
     with open(path, encoding="utf-8") as f:
         src = f.read()
     assert "Report-DeployStatus" in src and "deploy-status" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

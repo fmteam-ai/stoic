@@ -215,3 +215,7 @@ def test_reconciliation_detects_allocation_drift():
     finally:
         _run(db.pamm_events.delete_many({"data.program_id": pid}))
         _cleanup(pid)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

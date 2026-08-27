@@ -114,3 +114,7 @@ class TestAccountAwareLotSizing:
         )
         assert out["lot_size"] == 0.0
         assert out["sizing_valid"] is False
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

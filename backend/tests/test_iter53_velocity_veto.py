@@ -85,3 +85,7 @@ class TestWiring:
         src = open(os.path.join(BACKEND, "bot_runner.py")).read()
         assert "velocity_veto(signal, cfg)" in src
         assert '"velocity_veto"' in src  # intel counter
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -146,3 +146,7 @@ def test_consensus_includes_liquidity_vote():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -203,7 +203,8 @@ def test_decision_events_capped_at_max_stages():
         assert dec_id
         try:
             for i in range(45):
-                await record_stage(db, dec_id, f"stage_{i}", {"i": i})
+                # iter-211: stages must be CANONICAL to be recorded
+                await record_stage(db, dec_id, "outcome", {"i": i})
             n = await db.decision_events.count_documents(
                 {"decision_id": dec_id})
             assert n == MAX_STAGES == 40, \
@@ -225,3 +226,7 @@ def _cleanup_users():
                                                USER_B_EMAIL.lower()]}})
     except Exception:
         pass
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

@@ -114,3 +114,7 @@ def test_calibration_shape_and_math(admin_session):
             assert abs(round(stated_sum / tot_n, 1) - s["predicted"]) <= 0.2
             assert abs(round(realized_sum / tot_n, 1) - s["actual"]) <= 0.2
             assert abs(round(err_sum / tot_n, 1) - s["calibration_error"]) <= 0.2
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

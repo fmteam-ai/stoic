@@ -166,3 +166,7 @@ def test_fast_scalp_preset_present(session):
     fs = next((p for p in items if isinstance(p, dict) and (p.get("key") == "fast_scalp" or p.get("id") == "fast_scalp")), None)
     assert fs is not None
     assert (fs.get("label") or "").lower().startswith("fast"), f"label unexpected: {fs.get('label')}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

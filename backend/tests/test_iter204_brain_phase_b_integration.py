@@ -307,3 +307,7 @@ def _cleanup_test_data():
         _run(_c())
     except Exception:
         pass
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

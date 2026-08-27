@@ -180,3 +180,7 @@ class TestPerAccountBotConfig:
         cfgs = admin_session.get(f"{API}/bot/configs", timeout=10).json()
         account_ids = {c["account_id"] for c in cfgs}
         assert acc_id not in account_ids
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

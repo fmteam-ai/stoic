@@ -86,3 +86,7 @@ def test_rate_limiter_uses_mongo_backend(seeded_admin_key):
     db = get_db()
     docs = _run(db.rate_buckets.find({}).to_list(length=10))
     assert len(docs) >= 1, "expected rate_buckets doc after request"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

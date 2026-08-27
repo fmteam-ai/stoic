@@ -76,3 +76,7 @@ def test_watch_status_hold_streak_non_negative(session):
     r = session.get(f"{BASE_URL}/api/signals/watch-status", timeout=10)
     body = r.json()
     assert body["hold_streak"] >= 0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

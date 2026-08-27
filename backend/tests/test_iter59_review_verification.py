@@ -239,3 +239,7 @@ class TestEngineLifecycleEmits:
         src = (REPO / "backend/protection_guard.py").read_text()
         assert "\"ProtectionPlaced\"" in src
         assert "from trade_events import build, append" in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

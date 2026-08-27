@@ -168,3 +168,7 @@ def test_feature_evidence_review_on_negative_timing(db):
         await db.accounts.delete_many({"user_id": uid})
         await db.execution_timing_stats.delete_many({"account_id": acc_id})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

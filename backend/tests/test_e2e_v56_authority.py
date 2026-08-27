@@ -201,3 +201,7 @@ class TestRegressions:
         s = _login()
         r = s.get(f"{API}/auth/me", timeout=TIMEOUT)
         assert r.status_code == 200
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

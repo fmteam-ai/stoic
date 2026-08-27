@@ -140,3 +140,7 @@ def test_no_eod_flatten_tracebacks_in_recent_logs():
             if "eod_flatten" in window:
                 hits += 1
     assert hits == 0, f"found {hits} eod_flatten tracebacks in recent logs"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

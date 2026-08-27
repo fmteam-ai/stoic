@@ -185,3 +185,7 @@ def test_alignment_counts_sum_at_most_three():
     assert 0 <= a["buy_support"] <= 3
     assert 0 <= a["sell_support"] <= 3
     assert a["buy_support"] + a["sell_support"] <= 3
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

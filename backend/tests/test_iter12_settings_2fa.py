@@ -293,3 +293,7 @@ class TestAdminNo2FA:
         me = s.get(f"{API}/auth/me", timeout=10).json()
         assert me["email"] == ADMIN_EMAIL
         assert me.get("two_factor_enabled") in (False, None)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

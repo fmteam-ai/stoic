@@ -217,3 +217,7 @@ class TestHeartbeatTicketRevive:
         doc = mongo_db.trades.find_one({"_id": tid})
         assert doc["status"] == "closed", "must not revive a legitimately-closed trade"
         assert doc["exit_price"] == 4045.0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

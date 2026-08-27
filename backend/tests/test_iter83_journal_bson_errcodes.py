@@ -347,3 +347,7 @@ class TestRegressionSmoke:
         r = admin_session.get(f"{BASE_URL}/api/auth/me", timeout=15)
         assert r.status_code == 200
         assert r.json().get("email") == "admin@trading.bot"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -170,3 +170,7 @@ def test_proposal_id_stable_and_distinct():
     assert a == proposal_id_of("hf_scalp", {"slope_min": 0.1})
     assert a != proposal_id_of("hf_scalp", {"slope_min": 0.11})
     assert a.startswith("hf_scalp~")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

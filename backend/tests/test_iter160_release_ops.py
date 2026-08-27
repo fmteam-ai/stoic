@@ -219,3 +219,7 @@ def test_benchmark_script_smoke():
         capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stdout + p.stderr
     assert '"rps"' in p.stdout and "/api/health" in p.stdout
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -168,3 +168,7 @@ def test_ops_agent_certs_endpoint_admin_only():
     assert r.status_code == 200, r.text
     body = r.json()
     assert {"renew_window_days", "expired", "expiring_soon"} <= set(body)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

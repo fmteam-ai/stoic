@@ -225,3 +225,7 @@ def test_test_trade_404_for_unknown_account(cleanup):
     bogus = str(ObjectId())
     r = sess.post(f"{BASE_URL}/api/accounts/{bogus}/test-trade", timeout=TIMEOUT)
     assert r.status_code == 404
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

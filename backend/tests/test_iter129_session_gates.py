@@ -132,3 +132,7 @@ class TestWiring:
         src = open(os.path.join(self.BACKEND, "execution.py")).read()
         assert '"scope": signal.get("scope")' in src
         assert '"trend_ride": signal.get("trend_ride")' in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

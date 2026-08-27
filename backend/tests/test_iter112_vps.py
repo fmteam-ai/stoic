@@ -258,3 +258,7 @@ def test_zz_cleanup(db):
                      "audit_log"):
             await db[coll].delete_many({"user_id": rx})
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

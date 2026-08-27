@@ -400,3 +400,7 @@ class TestBotConfigWeeklyFields:
         assert cfg2.get("weekly_drawdown_enabled") is False
         # pct unchanged
         assert cfg2.get("weekly_drawdown_pct") == 9.5
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

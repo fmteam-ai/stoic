@@ -250,3 +250,7 @@ class TestDistributedRateLimit:
                                     limit_per_minute=2))
         assert ok is True
         _run(db.rate_buckets.delete_many({"_id": {"$regex": key}}))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

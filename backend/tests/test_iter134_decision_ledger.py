@@ -167,3 +167,7 @@ class TestDecisionLedger:
         assert '"versions": signal.get("versions")' in src
         src2 = open(os.path.join(BACKEND, "bot_runner.py")).read()
         assert "version_stamp(signal.get" in src2
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

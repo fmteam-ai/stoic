@@ -162,3 +162,7 @@ def test_reconcile_account_skips_freshly_opened_trade_within_grace_window():
         db.trades.delete_one({"_id": trade_id})
         db.accounts.delete_one({"_id": ObjectId(aid)})
         db.users.delete_one({"_id": ObjectId(uid)})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

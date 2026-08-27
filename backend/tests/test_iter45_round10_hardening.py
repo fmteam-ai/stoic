@@ -442,3 +442,7 @@ def test_suffixed_symbol_tick_regression(ctx):
 def _oid(hex_or_str):
     from bson import ObjectId
     return ObjectId(hex_or_str)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

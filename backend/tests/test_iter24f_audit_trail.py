@@ -164,3 +164,7 @@ class TestTradeAudit:
         )
         # 404 Not Found from FastAPI when the route doesn't exist
         assert r.status_code in (404, 405)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

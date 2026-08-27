@@ -177,3 +177,7 @@ class TestAuditBrokerError:
         assert "execution_summary" in j
         es = j["execution_summary"]
         assert "broker_error" in es, f"broker_error missing from execution_summary: {list(es.keys())}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

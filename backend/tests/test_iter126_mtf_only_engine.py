@@ -224,3 +224,7 @@ def test_ai_signals_analyze_symbol_default_maps_to_moderate():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "--tb=short"]))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

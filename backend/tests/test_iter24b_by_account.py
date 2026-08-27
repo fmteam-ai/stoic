@@ -85,3 +85,7 @@ class TestByAccountAnalytics:
     def test_unauthenticated_blocked(self):
         r = requests.get(f"{API}/analytics/by-account", timeout=10)
         assert r.status_code == 401
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

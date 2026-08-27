@@ -13,7 +13,7 @@ SHRINK_N = 25          # trades needed for full trust in a cell
 LOOKBACK_DAYS = 90
 RECENCY_HALF_LIFE_DAYS = 21
 HEALTH_ROUTER_MULT = {"HEALTHY": 1.0, "WATCH": 1.0, "DEGRADED": 0.8,
-                      "DECAYING": 0.6, "DISABLED": 0.5}
+                      "DECAYING": 0.6, "DISABLED": 0.0}
 
 
 def _family_of(scope: str | None) -> str:
@@ -106,17 +106,23 @@ async def route(db, user_id: str, fingerprint_key: str) -> dict:
         raw[fam] = {"score": score, "n": n, "avg_r": round(avg_r, 3),
                     "trust": round(trust, 2), "health": health[fam]}
     total = sum(v["score"] for v in raw.values()) or 1.0
-    weights = {f: max(W_MIN, v["score"] / total) for f, v in raw.items()}
+    # DISABLED means ZERO live allocation — exempt from the W_MIN floor
+    disabled = {f for f, v in raw.items() if v["health"] == "DISABLED"}
+    live = [f for f in raw if f not in disabled] or list(raw)
+    weights = {f: (0.0 if f in disabled else max(W_MIN, raw[f]["score"]
+                                                 / total))
+               for f in raw}
     # hard bounds — the router allocates, it never silences or dominates;
-    # cap-and-redistribute keeps every weight inside [W_MIN, W_MAX]
+    # cap-and-redistribute keeps every LIVE weight inside [W_MIN, W_MAX]
     for _ in range(4):
-        s = sum(weights.values())
-        weights = {f: w / s for f, w in weights.items()}
-        over = {f for f, w in weights.items() if w > W_MAX + 1e-9}
+        s = sum(weights[f] for f in live) or 1.0
+        for f in live:
+            weights[f] = weights[f] / s
+        over = {f for f in live if weights[f] > W_MAX + 1e-9}
         if not over:
             break
         excess = sum(weights[f] - W_MAX for f in over)
-        under = [f for f in weights if f not in over]
+        under = [f for f in live if f not in over]
         for f in over:
             weights[f] = W_MAX
         for f in under:

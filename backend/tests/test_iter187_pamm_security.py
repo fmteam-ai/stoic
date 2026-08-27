@@ -260,3 +260,7 @@ class TestAuditTrail:
             _run(_db().audit_log.delete_many(
                 {"detail.program_id": pid}))
             _cleanup(pid)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

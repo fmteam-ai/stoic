@@ -113,3 +113,7 @@ def test_rollback_without_history_raises(db):
         with pytest.raises(ValueError):
             await rollback(db, f"nobody-{UID}", ACC)
     _run(go())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

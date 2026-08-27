@@ -166,3 +166,7 @@ class TestRotateAgentCredentials:
         r = admin.post(
             f"{BASE_URL}/api/infra/agents/does-not-exist-zzz/rotate-credentials")
         assert r.status_code in (403, 404), r.text[:200]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

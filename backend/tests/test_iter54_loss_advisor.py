@@ -118,3 +118,7 @@ class TestWiring:
         assert "live_guard_block" in src
         runner = open(os.path.join(BACKEND, "bot_runner.py")).read()
         assert "live_guard_block" in runner and "auto_guard_block" in runner
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -266,3 +266,7 @@ def test_13_install_ea_with_terminal_queued(sess, agent):
     assert r.status_code == 200, r.text
     assert r.json().get("status") in ("queued", "ok") or \
         r.json().get("command_id")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

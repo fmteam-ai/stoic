@@ -128,3 +128,7 @@ def test_query_perf_endpoint():
     assert body["total"] >= 1  # this very request was observed
     r = requests.get(f"{API}/ops/query-perf", timeout=TIMEOUT)
     assert r.status_code == 403
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

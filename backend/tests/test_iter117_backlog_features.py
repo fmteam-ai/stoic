@@ -282,3 +282,7 @@ class TestRegression:
         if r.status_code == 307:
             r = admin_sess.get(f"{API}/accounts", timeout=15)
         assert r.status_code == 200
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

@@ -91,3 +91,7 @@ class TestMaxLotAsKellyPeak:
         )
         # $500 × 2.4% = $12. lots = $12 / (150 × $10) ≈ 0.008 → floored to 0.01
         assert lot <= 0.05, lot
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

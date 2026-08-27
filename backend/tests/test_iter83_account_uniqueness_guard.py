@@ -227,3 +227,7 @@ def test_paper_accounts_not_subject_to_duplicate_check(cleanup):
     assert r2.status_code in (200, 403), r2.text
     if r2.status_code == 200:
         cleanup["account_ids"].append(ObjectId(r2.json()["id"]))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

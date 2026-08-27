@@ -157,3 +157,7 @@ def test_rollback_with_bypass_token_reaches_endpoint(admin_session):
         cfg = admin_session.get(f"{BASE_URL}/api/bot/config", timeout=20).json()
         mode = cfg.get("operational_mode") or (cfg.get("config") or {}).get("operational_mode")
         assert mode == "supervised_live", f"mode changed after paired rollback! {mode}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http
