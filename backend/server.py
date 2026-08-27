@@ -29,6 +29,7 @@ from routes.migration_routes import router as migration_router
 from routes.setup_routes import router as setup_router
 from routes.auth_routes import router as auth_router
 from routes.webauthn_routes import router as webauthn_router
+from modules.pamm.api import router as pamm_router
 from routes.market_routes import router as market_router
 from routes.bot_routes import router as bot_router
 from routes.signal_routes import router as signal_router
@@ -393,6 +394,7 @@ api_router.include_router(migration_router)
 api_router.include_router(setup_router)
 api_router.include_router(auth_router)
 api_router.include_router(webauthn_router)
+api_router.include_router(pamm_router)
 api_router.include_router(market_router)
 api_router.include_router(bot_router)
 api_router.include_router(signal_router)
@@ -674,6 +676,8 @@ async def on_startup():
     start_watchdog()
     try:
         await ensure_indexes()
+        from modules.pamm.models import ensure_pamm_setup
+        await ensure_pamm_setup(get_db())
         await seed_admin()
         # Safety review — DEFAULT_MODE is observe; grandfather migration
         # stamps pre-existing configs explicitly (idempotent, audited).

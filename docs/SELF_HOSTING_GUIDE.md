@@ -24,6 +24,24 @@ sudo usermod -aG docker $USER && newgrp docker
 docker compose version   # must print v2.x
 ```
 
+### AlmaLinux / RHEL 8 notes
+Fully supported — everything runs in containers. Setup differs slightly:
+```bash
+sudo dnf -y install dnf-utils git
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER && newgrp docker
+# firewalld is on by default — open the web ports:
+sudo firewall-cmd --permanent --add-service=http --add-service=https && sudo firewall-cmd --reload
+```
+- **SELinux (enforcing by default)**: the compose file bind-mounts
+  `deploy/Caddyfile`, `deploy/mongo-init.js` and `./secrets/*`. If containers
+  hit "permission denied" on those, relabel once:
+  `sudo chcon -Rt container_file_t deploy/ secrets/`
+- **AVX**: MongoDB 7 requires an AVX-capable CPU
+  (`grep -o avx /proc/cpuinfo | head -1`) — any Xeon/Core from ~2012+ has it.
+
 ## 2. Get the code onto the server
 
 1. In the Emergent chat, use **“Save to GitHub”** to push the current

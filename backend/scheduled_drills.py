@@ -118,6 +118,11 @@ async def scheduled_drill_loop():
                 await check_cert_expiry(db)
             except Exception as e:  # noqa: BLE001
                 logger.warning("agent cert expiry check error: %s", e)
+            try:  # iter-185 — PAMM broker reconciliation (every ~3 min)
+                from modules.pamm.reconciliation import scheduled_reconcile
+                await scheduled_reconcile(db)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pamm reconciliation error: %s", e)
             if await _due(db):
                 try:
                     from correlation import new_correlation_id

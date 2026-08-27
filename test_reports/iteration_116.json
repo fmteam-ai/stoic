@@ -1,0 +1,26 @@
+{
+  "summary": "ITER-185 PAMM Milestone 1 backend fully verified. Existing suite: 5/5 pass (test_iter185_pamm_m1.py — lifecycle e2e, event stream, permissions, webhook signature/replay/idempotency, drift detection). Extended suite added: 13/13 pass (test_iter185_pamm_m1_extended.py) covering API contract (create/list/investor/alloc/nav/master/detail), reconciliation history, risk gates (pause→trading_allowed false w/ 'paus' reason; resume; emergency-stop→resume 409; admin clear-emergency-stop→resume 200), authz (anon 401/403, non-manager 403, non-admin cannot create programs even after manager grant→403, admin grants → GET programs 200 empty), webhook negatives (missing sig headers→401, garbage JSON w/ valid sig→400, unknown partner→400 not 500), input validation (empty name→400, amount 0/negative→400), regressions (/api/health 200, /api/ops/runtime-stats admin 200). Backend logs show no 'pamm reconciliation error' repeats. Both admin emails (stoicaibot.com & trading.bot) accepted per creds file. Test cleanup helpers used — no residual pamm_programs/sandbox_broker_* docs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter185_pamm_m1.py",
+    "/app/backend/tests/test_iter185_pamm_m1_extended.py",
+    "/app/test_reports/pytest/iter185_ext.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py mounts pamm router and ensure_pamm_setup at startup — sandbox partner seeded idempotently, webhook secret encrypted via secrets_vault. Good.",
+    "api/__init__.py: pause_ep uses `payload: dict | None = None` as body param — FastAPI can accept this but the parameter ordering (Request before user Depends and payload after) is unusual. Works, but readability could improve by moving Request/user to consistent positions.",
+    "webhook_ep converts headers to lowercase and delegates to handle_webhook which correctly returns 401 (PermissionError) for missing/bad sig/replay and 400 (ValueError) for parse errors. Unknown partner_id also flows through PermissionError→401 or ValueError→400, never 500 (verified).",
+    "investor amount validation lives in service layer via ValueError → mapped to 400. Confirmed empty name and non-positive amount both return 400."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter185_pamm_m1_extended.py (new)"
+  ],
+  "success_rate": {"backend": "100% (18/18: 5 existing + 13 extended)", "frontend": "N/A (skipped per request — no PAMM UI yet, Milestone 3)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (primary); admin@trading.bot / admin123 (legacy) — both work.",
+  "seed_data_creation": "Sandbox partner prt_sandbox is auto-seeded by ensure_pamm_setup at startup. Test-created programs (pgm_*) and sandbox_broker_* docs are cleaned up via _cleanup helper. One transient test user (iter185x-*@test.io) is deleted at test end.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PAMM M1 backend is fully green. When Milestone 3 (frontend) lands, add Playwright coverage over the same endpoints. NAV random-walks slightly on every read by design (sandbox drift). New non-admin users must be flipped to email_verified=true & status=active in DB before login. `pause` reason must return trading_block_reason containing 'paus' — implementation uses 'paused'. `emergency-stop` requires payload with `reason`; `clear-emergency-stop` is admin-only. Webhook idempotency key format: 'prt_sandbox:{event_id}' in pamm_events.event_key."
+}
