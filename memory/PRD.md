@@ -1788,3 +1788,16 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
 - PRODUCTION LIVE at https://www.stoicaibot.com (user deployed). Preview remains the dev env.
 - Production env guidance given: APP_ENV=production + strong ADMIN_PASSWORD (≥12), ADMIN_MFA_ENFORCED=true,
   ED25519_SIGNING_KEY_B64, KEY_VAULT_MASTER, no bypass tokens. Verify via GET /api/ops/deploy-preflight.
+
+## PAMM documentation (iter-208, June 2026 — DONE, self-tested via screenshot)
+- /app/docs/PAMM.md — full technical reference: design philosophy (broker owns money), roles &
+  permissions matrix, 16+ collections data model, program lifecycle, risk engine (default limits +
+  curves + verdict math), 7-state emergency ladder, flatten-and-verify + escalation ladder, position
+  truth, dual authorization (12 critical kinds, 48h expiry, different-admin rule), marketplace
+  funnel, partner adapters/certification/webhooks, sweep, events, complete API reference (~40 routes
+  with auth legend), production path.
+- In-app guide: /pamm-guide (ProtectedRoute, all logged-in users) — frontend/src/pages/PammGuide.jsx
+  with 9 plain-language sections (custody, roles, joining, protections table, safety ladder,
+  position truth, two-person rule, manager guide, help links). Sidebar link under LEARN
+  (nav-pamm-guide — hidden in Simple Mode by design, like other LEARN links).
+- Verified: page renders with all sections behind login (screenshot).

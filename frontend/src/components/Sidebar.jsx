@@ -101,6 +101,7 @@ const SECTIONS = [
             { to: "/help", label: "Help Center", icon: LifeBuoy, testid: "nav-help" },
             { to: "/support", label: "Support", icon: MessageSquare, testid: "nav-support" },
             { to: "/guide", label: "Guide", icon: BookOpen, testid: "nav-guide" },
+            { to: "/pamm-guide", label: "PAMM Guide", icon: Briefcase, testid: "nav-pamm-guide" },
             { to: "/faq", label: "FAQ", icon: HelpCircle, testid: "nav-faq" },
             { to: "/status", label: "System Status", icon: Activity, testid: "nav-status" },
             { to: "/terms", label: "Terms of Use", icon: FileText, testid: "nav-terms" },
