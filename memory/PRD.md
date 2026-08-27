@@ -1748,3 +1748,20 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
 - v61 — Production Proof: signed Host Agent (Windows service+MSI), PAMM broker certification &
   micro-pilot, load/stress/chaos testing, automated tenant-isolation CI gate, soak/DR/SLOs,
   Command Center dashboard.
+
+## Security audit iter-206 (June 2026 — DONE, CONDITIONAL PASS → all findings fixed, 528/528 tests)
+- Audit scope: v59/v60 brain surface. Positive: tenant isolation on all new /api/brain endpoints,
+  non-spoofable DB-sourced admin role, SEC-001(BOLA) regression intact, fail-closed limiter correct,
+  global CSRF on qualify POST.
+- SEC-001 (MEDIUM, fixed): qualify replay DoS → per-user sliding window (3/600s in
+  champion_challenger2._rate_check, QualifyRateLimited → HTTP 429 + retry_in_s), fresh-scorecard
+  reuse (<600s → cached:true, no quota consumed), CPU work via asyncio.to_thread. NOTE: window is
+  per-process in-memory — needs distributed backing if scaled horizontally (flagged for v61).
+- SEC-002 (LOW, fixed): /api/brain/degraded strips last_error for non-admins (denylist pop; consider
+  allowlist if more fields added). Verified with seeded SECRET string: hidden for user, visible admin.
+- SEC-003 (LOW, fixed): re.escape(symbol[:6]) in transaction_costs._median_slippage_r/_latency_r;
+  regex payloads on /api/brain/costs return 200.
+- Tests: tests/test_sec_iter206_brain_hardening.py (5 unit) +
+  tests/test_sec_iter206_brain_hardening_http.py (9 HTTP, by testing agent); broker-matrix
+  integration test made session-stable (seed pinned to 10:00 UTC). Report iteration_131.json.
+  Manifest regenerated.

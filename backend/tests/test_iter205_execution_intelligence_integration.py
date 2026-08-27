@@ -69,7 +69,10 @@ def test_broker_matrix_ranks_good_above_bad():
              "server": "Bad-Server",
              "bridge_token": f"TEST_iter205_tok_bad_{os.getpid()}"},
         ])
-        now = datetime.now(timezone.utc)
+        # Pin all timestamps inside ONE session window (london 07-12 UTC)
+        # so fills and rejects always land in the same matrix cell.
+        now = datetime.now(timezone.utc).replace(
+            hour=10, minute=0, second=0, microsecond=0)
         docs = []
         # 10 closed 'auto' trades on GOOD account (tight slip, low latency)
         for i in range(10):

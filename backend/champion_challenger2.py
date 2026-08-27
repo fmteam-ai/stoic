@@ -3,8 +3,11 @@ scorecard in FRONT of the canary ladder: purged walk-forward, embargo,
 CPCV, Monte Carlo robustness, plus expectancy/sortino/PF/ES/max-DD,
 regime stability and transaction-cost & slippage sensitivity. A
 challenger must show robust risk-adjusted behavior, not just profit."""
+import asyncio
 import logging
 import random
+import time
+from collections import deque
 from datetime import datetime, timezone
 from itertools import combinations
 
@@ -21,6 +24,29 @@ PBO_MAX = 0.35
 MC_P_PROFIT_MIN = 0.75
 COST_SHOCK_R = 0.05
 SLIPPAGE_SHOCK_R = 0.10
+# SEC-001 — qualification replays are CPU-heavy: per-user sliding window
+# + fresh-scorecard reuse keep the endpoint from becoming a DoS vector.
+QUALIFY_MAX_PER_WINDOW = 3
+QUALIFY_WINDOW_S = 600
+SCORECARD_FRESH_S = 600
+_qualify_calls: dict = {}
+
+
+class QualifyRateLimited(Exception):
+    def __init__(self, retry_in_s: float):
+        self.retry_in_s = retry_in_s
+        super().__init__(f"qualification rate limit — retry in "
+                         f"{retry_in_s:.0f}s")
+
+
+def _rate_check(user_id: str) -> None:
+    now = time.time()
+    dq = _qualify_calls.setdefault(user_id, deque())
+    while dq and now - dq[0] > QUALIFY_WINDOW_S:
+        dq.popleft()
+    if len(dq) >= QUALIFY_MAX_PER_WINDOW:
+        raise QualifyRateLimited(QUALIFY_WINDOW_S - (now - dq[0]))
+    dq.append(now)
 
 
 def _now() -> str:
@@ -170,6 +196,17 @@ async def qualify(db, user_id: str, model_id: str) -> dict:
         {"_id": ObjectId(str(model_id)), "user_id": user_id})
     if not m:
         raise ValueError("shadow model not found")
+    # fresh scorecard reuse — never recompute inside the freshness window
+    prev = m.get("qualification2") or {}
+    try:
+        prev_at = datetime.fromisoformat(str(prev.get("at")))
+        age = (datetime.now(timezone.utc) - prev_at).total_seconds()
+    except (TypeError, ValueError):
+        age = None
+    if age is not None and age < SCORECARD_FRESH_S:
+        return {"model_id": str(m["_id"]), "version": m.get("version"),
+                "engine": m.get("engine"), "cached": True, **prev}
+    _rate_check(user_id)
     doc = await db.intraday_candles.find_one(
         {"user_id": user_id, "symbol": m["symbol"], "timeframe": "M15"},
         {"bars": 1}) or await db.intraday_candles.find_one(
@@ -182,18 +219,20 @@ async def qualify(db, user_id: str, model_id: str) -> dict:
                              f"qualification replay — ladder gates apply",
                      "at": _now()}
     else:
-        feats = precompute_features(bars)
-        st = new_replay_state()
-        st["_r_log"] = []
-        replay(m["engine"], bars, feats, m["params"], state=st)
-        rs = [x["r"] for x in st["_r_log"]]
-        if len(rs) < MIN_TRADES:
-            scorecard = {"qualified": None, "advisory": True,
-                         "note": f"only {len(rs)} replay trades "
-                                 f"(<{MIN_TRADES}) — ladder gates apply",
-                         "at": _now()}
-        else:
-            scorecard = build_scorecard(rs)
+        def _cpu_work():
+            # SEC-001 — replay + Monte Carlo run off the event loop
+            feats = precompute_features(bars)
+            st = new_replay_state()
+            st["_r_log"] = []
+            replay(m["engine"], bars, feats, m["params"], state=st)
+            rs = [x["r"] for x in st["_r_log"]]
+            if len(rs) < MIN_TRADES:
+                return {"qualified": None, "advisory": True,
+                        "note": f"only {len(rs)} replay trades "
+                                f"(<{MIN_TRADES}) — ladder gates apply",
+                        "at": _now()}
+            return build_scorecard(rs)
+        scorecard = await asyncio.to_thread(_cpu_work)
     await db.shadow_models.update_one(
         {"_id": m["_id"]}, {"$set": {"qualification2": scorecard}})
     return {"model_id": str(m["_id"]), "version": m.get("version"),

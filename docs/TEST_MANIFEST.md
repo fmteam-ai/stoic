@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 444 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2944 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2957 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 3419 tests across 337 files.**
+**Total: 3432 tests across 339 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -318,6 +318,8 @@ fails when this file drifts from the tree.
 | `backend/tests/test_regime_dispatch.py` | http-live | 9 |
 | `backend/tests/test_safety_guardian.py` | http-live | 11 |
 | `backend/tests/test_sec001_brain_bola.py` | http-live | 7 |
+| `backend/tests/test_sec_iter206_brain_hardening.py` | http-live | 5 |
+| `backend/tests/test_sec_iter206_brain_hardening_http.py` | http-live | 8 |
 | `backend/tests/integration/scalp/test_iter56_ta_capacity_integrity.py` | integration | 1 |
 | `backend/tests/integration/scalp/test_iter63_db_roundtrips.py` | integration | 3 |
 | `backend/tests/integration/scalp/test_phaseA_lifecycle_db.py` | integration | 3 |

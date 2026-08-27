@@ -34,11 +34,13 @@ def spread_r_of(signal: dict | None, symbol: str) -> tuple[float, str]:
 
 
 async def _median_slippage_r(db, user_id: str, symbol: str):
+    import re
     since = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
     vals = []
     async for o in db.trade_outcomes.find(
-            {"user_id": user_id, "symbol": {"$regex": f"^{symbol[:6]}",
-                                            "$options": "i"},
+            {"user_id": user_id,
+             "symbol": {"$regex": f"^{re.escape(symbol[:6])}",
+                        "$options": "i"},
              "closed_at": {"$gte": since}},
             {"signals.slippage_ratio": 1}).sort(
             "closed_at", -1).limit(150):
@@ -52,11 +54,13 @@ async def _median_slippage_r(db, user_id: str, symbol: str):
 
 
 async def _latency_r(db, user_id: str, symbol: str):
+    import re
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     totals = []
     async for t in db.trades.find(
-            {"user_id": user_id, "symbol": {"$regex": f"^{symbol[:6]}",
-                                            "$options": "i"},
+            {"user_id": user_id,
+             "symbol": {"$regex": f"^{re.escape(symbol[:6])}",
+                        "$options": "i"},
              "status": "closed", "closed_at": {"$gte": since}},
             {"latency_trace": 1}).limit(150):
         lt = t.get("latency_trace") or {}

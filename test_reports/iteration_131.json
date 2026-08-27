@@ -1,0 +1,34 @@
+{
+  "summary": "iter-206 security-audit verification (SEC-001/002/003) on preview URL. Full regression suite: 528/528 pytest passed (519 spec regression + 9 new HTTP-level tests in test_sec_iter206_brain_hardening_http.py). SEC-003: GET /api/brain/costs with regex metacharacter payloads ((XAU[, .*, .*([) all return 200 with cost_r >= 0.03 — no 500s, re.escape confirmed in transaction_costs._median_slippage_r + _latency_r. SEC-002: registered fresh throwaway non-admin user (email_verified flipped in mongo db.users), seeded db.intelligence_health {_id:'meta_decision', ok:false, consecutive_failures:2, last_error:'SECRET-internal-detail-xyz', last_failure_at now}; NON-ADMIN GET /api/brain/degraded → payload contains meta_decision with ok/policy/failing but ZERO last_error keys anywhere, response text does NOT contain the SECRET-internal-detail-xyz string; ADMIN GET /api/brain/degraded → last_error IS present carrying the seeded secret. SEC-001: POST /api/brain/challenger/<valid-but-nonexistent-ObjectId>/qualify → HTTP 404 (not 500). POST /api/brain/challenger/not-an-objectid/qualify → 4xx (not 500). 429 wiring verified by code review at /app/backend/routes/brain_routes.py L147-153 (QualifyRateLimited caught, returns 429 with detail.retry_in_s) and by pure-window unit test test_qualify_rate_window_blocks_fourth_call (passing). Tenant isolation regression: non-admin GET /api/brain/decisions returns caller-scoped list; seeded meta_decisions doc owned by admin, non-admin fetch by decision_id → 404. All seeded docs (test user, intelligence_health, meta_decisions) cleaned up by fixture teardowns.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_sec_iter206_brain_hardening.py (5/5 — unit)",
+    "/app/backend/tests/test_sec_iter206_brain_hardening_http.py (NEW — 9/9 HTTP verification)",
+    "/app/test_reports/pytest/iter131_sec206.xml"
+  ],
+  "action_items": [
+    "Test manifest regeneration recommended: run scripts/generate_test_manifest.py to include the new /app/backend/tests/test_sec_iter206_brain_hardening_http.py file (per agent-to-agent note)."
+  ],
+  "critical_code_review_comments": [
+    "brain_routes.qualify_challenger_ep: exception ladder is clean — QualifyRateLimited→429 (with retry_in_s), ValueError→404, generic Exception→400. Good defensive shape but the broad `except Exception` could mask genuine 500s (e.g. mongo connectivity) as 400 — consider logging with exc_info=True inside the handler to preserve debuggability.",
+    "brain_routes.degraded_ep: scrub is correct (sub.pop('last_error', None) for non-admins). Note: only 'last_error' is stripped — if future fields carry sensitive internal detail (e.g. 'last_stack_trace', 'traceback'), extend the scrub list. Consider an allowlist ({'ok','failing','policy','consecutive_failures','last_failure_at'}) instead of a denylist for defense-in-depth.",
+    "transaction_costs._median_slippage_r + _latency_r: re.escape(symbol[:6]) correctly neutralizes regex metacharacters AND caps symbol length to 6 chars — good ReDoS mitigation. Confirmed via test_costs_symbol_regex_is_escaped (unit) and 3 live HTTP calls (SEC-003).",
+    "champion_challenger2._rate_check: sliding window is per-user-in-memory (module dict _qualify_calls); horizontally-scaled deploys would need distributed backing (Redis/Mongo) to prevent bypass by hitting different pods. Not a security issue in current single-instance deploy, but flag for scale-out.",
+    "champion_challenger2 qualify: asyncio.to_thread offloads the CPU work — correct. SCORECARD_FRESH_S=600s reuse via cached:true does NOT consume the per-user window quota, which is the correct trade-off (already documented in the review request).",
+    "test_sec_iter206_brain_hardening_http.py fixture: register endpoint lowercases emails on persist — matched by using email.lower() when looking up/cleaning db.users."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_sec_iter206_brain_hardening_http.py (NEW — 9 HTTP-level tests, all passing)"
+  ],
+  "success_rate": {
+    "backend": "100% (528/528 pytest — 519 spec regression + 9 new HTTP SEC-001/002/003 verification, plus live confirmation on preview URL)",
+    "frontend": "not tested (backend-only per review request)"
+  },
+  "test_credentials": "admin@stoicaibot.com / admin123; throwaway non-admin user TEST_sec206_<epoch>@example.com auto-created & torn down by test_user fixture.",
+  "seed_data_creation": "Per test module: (1) throwaway user in db.users with email_verified flipped true; (2) db.intelligence_health {_id:'meta_decision',...,last_error:'SECRET-internal-detail-xyz'} used by both SEC-002 tests; (3) one db.meta_decisions row with decision_id=TEST_sec206_admin_dec_<epoch> for tenant isolation. ALL cleaned up by fixture teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "SEC-001/002/003 are green. Two gotchas: (1) DB_NAME on preview is 'ai_trading_bot' (not 'test_database'), (2) /api/auth/register lowercases email on persist — always look up db.users with email.lower(). Rate-limit HTTP simulation via distinct fresh shadow_models was not exercised (spec-permitted fallback to unit-level window test + code-review of 429 handler). If a future iteration wants full 429 HTTP coverage, seed 4+ separate db.shadow_models docs (status='testing', user_id=test_user id, unique per POST) and DELETE db.qualification2 between calls so the cached-scorecard path doesn't short-circuit the window.",
+  "rca of the issue": "N/A — all three security fixes verified working end-to-end on the preview URL. SEC-003 regex escaping proven live; SEC-002 error-string scrub proven with a seeded distinctive SECRET string that is present for admins and stripped for non-admins; SEC-001 rate-limit window + 404 handler wired correctly (429 branch verified by code + unit test)."
+}

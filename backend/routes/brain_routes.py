@@ -120,7 +120,13 @@ async def strategy_health_ep(user=Depends(get_current_user)):
 @router.get("/degraded")
 async def degraded_ep(user=Depends(get_current_user)):
     from degraded_intelligence import status
-    return await status(get_db())
+    out = await status(get_db())
+    # SEC-002 — internal error strings are admin-only; regular users get
+    # the mode + per-subsystem booleans and fallback policy only.
+    if user.get("role") != "admin":
+        for sub in out.get("subsystems", {}).values():
+            sub.pop("last_error", None)
+    return out
 
 
 @router.get("/costs")
@@ -135,9 +141,16 @@ async def costs_ep(symbol: str = Query("XAUUSD"),
 @router.post("/challenger/{model_id}/qualify")
 async def qualify_challenger_ep(model_id: str,
                                 user=Depends(get_current_user)):
-    from champion_challenger2 import qualify
+    from champion_challenger2 import QualifyRateLimited, qualify
     try:
         return await qualify(get_db(), user["id"], model_id)
+    except QualifyRateLimited as e:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "rate_limited",
+                    "message": "Qualification replays are CPU-intensive"
+                               " — please retry shortly",
+                    "retry_in_s": round(e.retry_in_s)})
     except ValueError:
         raise HTTPException(status_code=404,
                             detail="shadow model not found")
