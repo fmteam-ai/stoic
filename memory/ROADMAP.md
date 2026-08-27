@@ -35,3 +35,10 @@
 - **P1** Manager role UX: open /managed to users with pamm_manager=true (backend already supports; route currently admin-only per user choice)
 - **P2** Real broker adapter (MT5 Manager API) implementing BrokerAdapter incl. close_all_positions
 - **P2** Event bus Mongo → Redis Streams after self-hosting migration
+
+### External review v52 backlog (post iter-189)
+- ~~Batch 1: REDUCE verdict, op-state hierarchy, dual authorization~~ DONE iter-189
+- **P1 Batch 2 (AI learning)**: broker rejection taxonomy (MT5 retcodes → strategy/execution/infrastructure/broker-degradation classes); canonical TradeOutcome object (strategy/execution/broker/slippage/latency/regime results) so AI learns from failure CAUSE
+- **P1 Batch 3 (DevEx/Ops)**: ./scripts/test-scalp.sh self-contained runner (venv, ephemeral Mongo, migrations, unit+integration, JUnit/coverage); frontend package scripts lint/typecheck/test/test:e2e/build mandatory in CI; unified command center (single GREEN/YELLOW/ORANGE/RED "safe to trade?" aggregating cloud/DB/workers/broker/EA/risk/PAMM)
+- **P2 Strategic**: Opportunity Engine above strategies (§23), Strategy Capital Allocator (§24), champion/challenger promotion (§26, extends existing shadow), Broker Intelligence scoring per strategy/symbol (§27, extends broker_intel), requirements split per service (§21, spec exists), final-execution-gate consolidation audit (§6 — verify no path bypasses order_authorization)
+- **P2 Verdict tuning**: per-program SOFT_ZONE/MIN_FACTOR knobs; ChangeRequestsPanel expiry countdown

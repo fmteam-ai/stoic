@@ -91,6 +91,12 @@ async def pause_ep(program_id: str, request: Request,
     program = await _program_or_404(db, program_id)
     await require_program_access(db, user, program)
     await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.risk import op_state_of, set_op_state
+    from modules.pamm.risk.states import severity
+    if severity(op_state_of(program)) < severity("new_trades_paused"):
+        return await set_op_state(
+            db, program, "new_trades_paused", user["id"],
+            reason=str((payload or {}).get("reason") or ""), source="human")
     from services.broker_gateway.manager_api import pause_program
     return await pause_program(db, program, user["id"],
                                str((payload or {}).get("reason") or ""))
@@ -102,15 +108,23 @@ async def resume_ep(program_id: str, request: Request,
     db = get_db()
     program = await _program_or_404(db, program_id)
     await require_program_access(db, user, program)
-    if program.get("emergency_stop"):
-        raise HTTPException(status_code=409,
-                            detail="Emergency stop engaged — admin must clear it")
+    from modules.pamm.risk import op_state_of, set_op_state
+    from modules.pamm.risk.states import severity
+    if program.get("emergency_stop") or severity(
+            op_state_of(program)) > severity("new_trades_paused"):
+        raise HTTPException(
+            status_code=409,
+            detail="Emergency state engaged — de-escalate via op-state "
+                   "(admin) first")
     await _rl(db, request, user["id"], "pamm_mutate")
     # resume RE-ENABLES trading → risk-increasing → fresh MFA required
     await _step_up(db, user, request, "pamm_resume",
                    {"program_id": program_id})
-    from services.broker_gateway.manager_api import resume_program
-    return await resume_program(db, program, user["id"])
+    try:
+        return await set_op_state(db, program, "running", user["id"],
+                                  source="human", allow_deescalate=True)
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/programs/{program_id}/emergency-stop")
@@ -130,14 +144,26 @@ async def clear_estop_ep(program_id: str, request: Request,
                          user=Depends(get_current_user)):
     db = get_db()
     require_admin(user)
-    await _program_or_404(db, program_id)
+    program = await _program_or_404(db, program_id)
     await _rl(db, request, user["id"], "pamm_mutate")
     # clearing an e-stop re-arms trading → fresh MFA required
     await _step_up(db, user, request, "pamm_clear_emergency_stop",
                    {"program_id": program_id})
-    await db.pamm_programs.update_one({"program_id": program_id},
-                                      {"$set": {"emergency_stop": False}})
-    return {"program_id": program_id, "emergency_stop": False}
+    from modules.pamm.risk import op_state_of, set_op_state
+    from modules.pamm.risk.states import severity
+    try:
+        if severity(op_state_of(program)) > severity("new_trades_paused"):
+            await set_op_state(db, program, "new_trades_paused", user["id"],
+                               reason="clear emergency stop",
+                               source="human", allow_deescalate=True)
+        else:
+            await db.pamm_programs.update_one(
+                {"program_id": program_id},
+                {"$set": {"emergency_stop": False}})
+    except PermissionError as e:  # LOCKED → dual authorization only
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"program_id": program_id, "emergency_stop": False,
+            "op_state": "new_trades_paused"}
 
 
 @router.post("/programs/{program_id}/investors")
@@ -269,6 +295,21 @@ async def put_risk_limits_ep(program_id: str, payload: dict, request: Request,
     await _step_up(db, user, request, "pamm_risk_limits_update",
                    {"program_id": program_id, "patch": clean})
     merged = get_limits(program)
+    # LOOSENING any protection needs a SECOND admin (dual authorization)
+    from modules.pamm.dualauth import create_change_request, is_loosening
+    loosened = is_loosening(merged, clean)
+    if loosened:
+        try:
+            req = await create_change_request(
+                db, program, "risk_limits_increase",
+                {"risk_limits_patch": clean}, user["id"],
+                reason=f"loosens: {', '.join(loosened)}")
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"program_id": program_id, "pending_approval": True,
+                "change_id": req["change_id"], "loosens": loosened,
+                "message": "This change weakens protection — a SECOND "
+                           "admin must approve it before it takes effect."}
     for k, v in clean.items():
         merged[k].update(v)
     await db.pamm_programs.update_one(
@@ -428,6 +469,98 @@ async def decide_join_ep(request_id: str, decision: str, request: Request,
         logger.warning("pamm join decision failed on %s: %s", request_id, e)
         raise HTTPException(status_code=409,
                             detail="Request already decided or unavailable")
+
+
+@router.post("/programs/{program_id}/op-state")
+async def op_state_ep(program_id: str, payload: dict, request: Request,
+                      user=Depends(get_current_user)):
+    """Move a program along the emergency hierarchy. Escalation = instant;
+    de-escalation = human + step-up MFA; leaving LOCKED = dual auth only."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.risk import op_state_of, set_op_state
+    from modules.pamm.risk.states import OP_STATES, severity
+    target = str(payload.get("state") or "")
+    if target not in OP_STATES:
+        raise HTTPException(status_code=400,
+                            detail=f"state must be one of {OP_STATES}")
+    if severity(target) < severity(op_state_of(program)):
+        await _step_up(db, user, request, "pamm_op_state_deescalate",
+                       {"program_id": program_id, "to": target})
+    try:
+        return await set_op_state(db, program, target, user["id"],
+                                  reason=str(payload.get("reason") or ""),
+                                  source="human", allow_deescalate=True)
+    except PermissionError as e:  # LOCKED → dual authorization only
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/programs/{program_id}/trade-verdict")
+async def trade_verdict_ep(program_id: str, payload: dict,
+                           user=Depends(get_current_user)):
+    """APPROVE / REDUCE / REJECT a candidate trade's risk request."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.risk import trade_verdict
+    try:
+        return await trade_verdict(
+            db, program, float(payload.get("requested_risk_pct") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail="requested_risk_pct must be positive")
+
+
+@router.get("/programs/{program_id}/change-requests")
+async def change_requests_ep(program_id: str,
+                             user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.dualauth import list_change_requests
+    return {"requests": await list_change_requests(db, program_id)}
+
+
+@router.post("/programs/{program_id}/change-requests")
+async def create_change_ep(program_id: str, payload: dict, request: Request,
+                           user=Depends(get_current_user)):
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    await _step_up(db, user, request, "pamm_change_request",
+                   {"program_id": program_id,
+                    "kind": payload.get("kind")})
+    from modules.pamm.dualauth import create_change_request
+    try:
+        return await create_change_request(
+            db, program, str(payload.get("kind") or ""),
+            dict(payload.get("payload") or {}), user["id"],
+            reason=str(payload.get("reason") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/change-requests/{change_id}/{decision}")
+async def decide_change_ep(change_id: str, decision: str, request: Request,
+                           user=Depends(get_current_user)):
+    if decision not in ("approve", "reject"):
+        raise HTTPException(status_code=404, detail="Not found")
+    db = get_db()
+    require_admin(user)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    await _step_up(db, user, request, "pamm_change_decide",
+                   {"change_id": change_id, "decision": decision})
+    from modules.pamm.dualauth import decide_change_request
+    try:
+        return await decide_change_request(db, change_id,
+                                           decision == "approve", user["id"])
+    except PermissionError as e:  # same-admin approval attempt
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.get("/sweep-status")

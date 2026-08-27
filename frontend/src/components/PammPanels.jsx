@@ -92,8 +92,12 @@ export function RiskPanel({ programId, riskStatus, limits, breach, onChanged, is
         if (!draft) return;
         setBusy(true);
         try {
-            await api.put(`/pamm/programs/${programId}/risk-limits`, draft);
-            toast.success("Risk limits saved");
+            const r = await api.put(`/pamm/programs/${programId}/risk-limits`, draft);
+            if (r.data.pending_approval) {
+                toast.warning("Weakens protection — a SECOND admin must approve this change", { duration: 6000 });
+            } else {
+                toast.success("Risk limits saved");
+            }
             setDraft(null);
             onChanged();
         } catch (e) { toast.error(formatApiError(e)); }
@@ -316,6 +320,148 @@ export function SweepChip({ sweep }) {
             title={`Programs checked: ${sweep.programs_checked} · breaches enforced: ${sweep.breaches?.length || 0}`}>
             AUTO-SWEEP {ageS}s AGO · {sweep.programs_checked} CHECKED
         </span>
+    );
+}
+
+export function VerdictTester({ programId }) {
+    const [risk, setRisk] = useState("0.30");
+    const [result, setResult] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const check = async () => {
+        setBusy(true);
+        try {
+            setResult((await api.post(`/pamm/programs/${programId}/trade-verdict`,
+                { requested_risk_pct: parseFloat(risk) })).data);
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    const tone = { APPROVE: "border-[#00FF41]/40 text-[#00FF41]", REDUCE: "border-[#FFB000]/40 text-[#FFB000]", REJECT: "border-[#FF3B30]/40 text-[#FF3B30]" };
+    return (
+        <div className={`${box} p-4`} data-testid="pamm-verdict-tester">
+            <div className={`${label} mb-2`}>TRADE VERDICT — APPROVE / REDUCE / REJECT</div>
+            <div className="flex items-center gap-2">
+                <input type="number" step="0.05" value={risk} onChange={e => setRisk(e.target.value)}
+                    data-testid="verdict-risk-input"
+                    className="w-24 bg-[#050505] border border-[#1F1F1F] px-2 py-1.5 font-mono text-xs text-white" />
+                <span className="font-mono text-[10px] text-[#52525B]">% requested risk</span>
+                <button onClick={check} disabled={busy || !(parseFloat(risk) > 0)} data-testid="verdict-check-button"
+                    className={`${btn} border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B] hover:text-white`}>
+                    {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : "CHECK"}
+                </button>
+                {result && (
+                    <span className={`px-2 py-1 font-mono text-[10px] tracking-widest border ${tone[result.verdict]}`}
+                        data-testid="verdict-result">
+                        {result.verdict}{result.verdict !== "REJECT" ? ` → ${result.approved_risk_pct}%` : ` (${result.reason})`}
+                    </span>
+                )}
+            </div>
+            {result?.factors?.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                    {result.factors.map(f => (
+                        <span key={f.limit} className="font-mono text-[9px] px-1.5 py-0.5 border border-[#1F1F1F] text-[#52525B]">
+                            {LIMIT_LABELS[f.limit] || f.limit} ×{f.factor}
+                        </span>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+const CHG_KIND_LABELS = {
+    risk_limits_increase: "Loosen risk limits", unlock: "Unlock program",
+    master_account_change: "Change master account", broker_change: "Change broker",
+};
+
+export function ChangeRequestsPanel({ requests, meId, onChanged }) {
+    const [busy, setBusy] = useState(null);
+    const decide = async (cid, decision) => {
+        setBusy(cid);
+        try {
+            await api.post(`/pamm/change-requests/${cid}/${decision}`);
+            toast.success(decision === "approve" ? "Change approved and applied" : "Change rejected");
+            onChanged();
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(null); }
+    };
+    const pending = (requests || []).filter(r => r.status === "pending");
+    if (!(requests || []).length) return null;
+    return (
+        <div className={box} data-testid="pamm-change-requests-panel">
+            <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center justify-between">
+                <span className={label}>DUAL AUTHORIZATION — CRITICAL CHANGES</span>
+                {pending.length > 0 && <span className="font-mono text-[10px] px-1.5 py-0.5 border border-[#FFB000]/40 text-[#FFB000]">{pending.length} PENDING</span>}
+            </div>
+            {(requests || []).slice(0, 8).map(r => (
+                <div key={r.change_id} className="px-4 py-2.5 border-b border-[#141414] last:border-b-0" data-testid={`change-request-${r.change_id}`}>
+                    <div className="flex justify-between text-xs">
+                        <span className="text-white">{CHG_KIND_LABELS[r.kind] || r.kind}</span>
+                        <span className={`font-mono text-[9px] px-1.5 py-0.5 border tracking-widest ${
+                            r.status === "pending" ? "border-[#FFB000]/40 text-[#FFB000]"
+                            : r.status === "approved" ? "border-[#00FF41]/40 text-[#00FF41]"
+                            : "border-[#FF3B30]/40 text-[#FF3B30]"}`}>{r.status.toUpperCase()}</span>
+                    </div>
+                    {r.reason && <div className="font-mono text-[10px] text-[#52525B] mt-0.5 truncate">{r.reason}</div>}
+                    {r.status === "pending" && (
+                        r.requested_by === meId ? (
+                            <div className="font-mono text-[10px] text-[#FFB000] mt-1.5" data-testid={`change-own-${r.change_id}`}>
+                                Your request — awaiting a SECOND admin
+                            </div>
+                        ) : (
+                            <div className="flex gap-2 mt-2">
+                                <button onClick={() => decide(r.change_id, "approve")} disabled={busy === r.change_id}
+                                    data-testid={`change-approve-${r.change_id}`}
+                                    className={`${btn} flex-1 border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10`}>APPROVE</button>
+                                <button onClick={() => decide(r.change_id, "reject")} disabled={busy === r.change_id}
+                                    data-testid={`change-reject-${r.change_id}`}
+                                    className={`${btn} flex-1 border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10`}>REJECT</button>
+                            </div>
+                        )
+                    )}
+                </div>
+            ))}
+        </div>
+    );
+}
+
+const OP_STATES = ["running", "risk_reduced", "new_trades_paused", "close_risk_only", "emergency_flatten", "locked"];
+const OP_TONE = {
+    running: "border-[#00FF41]/40 text-[#00FF41]", risk_reduced: "border-[#FFB000]/40 text-[#FFB000]",
+    new_trades_paused: "border-[#FFB000]/40 text-[#FFB000]", close_risk_only: "border-[#FF8800]/40 text-[#FF8800]",
+    emergency_flatten: "border-[#FF3B30]/40 text-[#FF3B30]", locked: "border-[#FF3B30] text-[#FF3B30] bg-[#FF3B30]/10",
+};
+
+export function OpStateControl({ program, onChanged }) {
+    const [target, setTarget] = useState("");
+    const [busy, setBusy] = useState(false);
+    const current = program.op_state || "running";
+    const apply = async () => {
+        if (target === "locked" && !window.confirm(
+            "LOCK this program? Leaving LOCKED requires DUAL AUTHORIZATION (two different admins). Continue?")) return;
+        setBusy(true);
+        try {
+            await api.post(`/pamm/programs/${program.program_id}/op-state`, { state: target, reason: "dashboard" });
+            toast.success(`Op-state → ${target.toUpperCase()}`);
+            setTarget("");
+            onChanged();
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    return (
+        <div className="flex items-center gap-2" data-testid="pamm-op-state-control">
+            <span className={`px-2 py-1 font-mono text-[10px] tracking-widest border ${OP_TONE[current]}`} data-testid="pamm-op-state-badge">
+                {current.toUpperCase().replace(/_/g, " ")}
+            </span>
+            <select value={target} onChange={e => setTarget(e.target.value)} data-testid="pamm-op-state-select"
+                className="bg-[#050505] border border-[#1F1F1F] px-2 py-1 font-mono text-[10px] text-[#A1A1AA]">
+                <option value="">SET STATE…</option>
+                {OP_STATES.filter(s => s !== current).map(s => <option key={s} value={s}>{s.toUpperCase().replace(/_/g, " ")}</option>)}
+            </select>
+            {target && (
+                <button onClick={apply} disabled={busy} data-testid="pamm-op-state-apply"
+                    className={`${btn} border-[#FFB000]/40 text-[#FFB000] hover:bg-[#FFB000]/10`}>APPLY</button>
+            )}
+        </div>
     );
 }
 

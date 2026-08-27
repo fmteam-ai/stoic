@@ -174,27 +174,32 @@ async def run_risk_check(db, program: dict,
     if not breached or program.get("risk_breach"):
         return result
 
-    action = ("flatten" if any(c["action"] == "flatten" for c in breached)
-              else "halt")
-    flattened = 0
-    if action == "flatten":
-        try:
-            from services.broker_gateway.pamm_api import get_adapter
-            adapter = await get_adapter(db, program["partner_id"])
-            closed = await adapter.close_all_positions(
-                program["broker_program_id"])
-            flattened = int(closed.get("closed", 0))
-            await emit_event(db, "PositionsFlattened",
-                             {"program_id": program["program_id"],
-                              "closed": flattened, "actor": actor})
-        except Exception as e:
-            logger.error("PAMM flatten failed on %s: %s",
-                         program["program_id"], e)
-
     names = [c["limit"] for c in breached]
     reason = f"RISK: {', '.join(names)}"
-    from services.broker_gateway.manager_api import pause_program
-    await pause_program(db, program, actor, reason=reason)
+    action = ("flatten" if any(c["action"] == "flatten" for c in breached)
+              else "halt")
+    # escalate op-state (automation may only move to a SAFER state);
+    # set_op_state pauses the broker and, for emergency_flatten, flattens.
+    from modules.pamm.risk.states import (op_state_of, set_op_state,
+                                          severity)
+    target = "emergency_flatten" if action == "flatten" else "new_trades_paused"
+    flattened = 0
+    if severity(target) > severity(op_state_of(program)):
+        if action == "flatten":
+            positions_before = 0
+            try:
+                from services.broker_gateway.pamm_api import get_adapter
+                adapter = await get_adapter(db, program["partner_id"])
+                positions_before = len(await adapter.get_positions(
+                    program["broker_program_id"]))
+            except Exception:
+                pass
+            flattened = positions_before
+        await set_op_state(db, program, target, actor,
+                           reason=reason, source="risk-engine")
+    else:
+        from services.broker_gateway.manager_api import pause_program
+        await pause_program(db, program, actor, reason=reason)
     breach_doc = {"limits": names, "action": action, "at": _now(),
                   "actor": actor, "flattened": flattened,
                   "details": [{k: c[k] for k in

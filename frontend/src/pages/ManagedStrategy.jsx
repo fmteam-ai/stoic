@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { BrokerHealthWidget, EventsFeed, InvestorsPanel, JoinRequestsPanel, KpiTile, NavChart, RiskPanel, SweepChip } from "@/components/PammPanels";
+import { BrokerHealthWidget, ChangeRequestsPanel, EventsFeed, InvestorsPanel, JoinRequestsPanel, KpiTile, NavChart, OpStateControl, RiskPanel, SweepChip, VerdictTester } from "@/components/PammPanels";
 import { Globe, Loader2, OctagonAlert, Pause, Play, Plus, RefreshCw } from "lucide-react";
 
 const btn = "px-3 py-1.5 text-[10px] font-mono tracking-widest border transition disabled:opacity-40 flex items-center gap-1.5";
@@ -80,6 +80,7 @@ export default function ManagedStrategy() {
     const [health, setHealth] = useState([]);
     const [events, setEvents] = useState([]);
     const [joinRequests, setJoinRequests] = useState([]);
+    const [changeRequests, setChangeRequests] = useState([]);
     const [sweep, setSweep] = useState(null);
     const [busy, setBusy] = useState(false);
     const [pinging, setPinging] = useState(false);
@@ -95,7 +96,7 @@ export default function ManagedStrategy() {
     const loadDetail = useCallback(async (pid) => {
         if (!pid) return;
         try {
-            const [d, n, a, rs, rl, ev, jr] = await Promise.all([
+            const [d, n, a, rs, rl, ev, jr, cr] = await Promise.all([
                 api.get(`/pamm/programs/${pid}`),
                 api.get(`/pamm/programs/${pid}/nav`),
                 api.get(`/pamm/programs/${pid}/allocations`),
@@ -103,12 +104,14 @@ export default function ManagedStrategy() {
                 api.get(`/pamm/programs/${pid}/risk-limits`),
                 api.get(`/pamm/events?program_id=${pid}`),
                 api.get(`/pamm/programs/${pid}/join-requests`),
+                api.get(`/pamm/programs/${pid}/change-requests`),
             ]);
             setDetail(d.data); setNav(n.data.nav || []);
             setAllocations(a.data.allocations || []);
             setRiskStatus(rs.data); setLimits(rl.data.risk_limits);
             setEvents(ev.data.events || []);
             setJoinRequests(jr.data.requests || []);
+            setChangeRequests(cr.data.requests || []);
         } catch (e) { toast.error(formatApiError(e)); }
     }, []);
 
@@ -181,6 +184,7 @@ export default function ManagedStrategy() {
                 {p && (<>
                     <div className="flex flex-wrap items-center gap-2">
                         <Controls program={p} allowed={detail.trading_allowed} reason={detail.trading_block_reason} act={act} busy={busy} publish={publish} />
+                        <OpStateControl program={p} onChanged={() => loadDetail(selected)} />
                         <SweepChip sweep={sweep} />
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -195,11 +199,13 @@ export default function ManagedStrategy() {
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                         <div className="lg:col-span-2 space-y-4">
                             <NavChart nav={nav} />
+                            <VerdictTester programId={selected} />
                             <RiskPanel programId={selected} riskStatus={riskStatus} limits={limits}
                                 breach={p.risk_breach || riskStatus?.risk_breach}
                                 onChanged={() => loadDetail(selected)} isAdmin={user?.role === "admin"} />
                         </div>
                         <div className="space-y-4">
+                            <ChangeRequestsPanel requests={changeRequests} meId={user?.id} onChanged={() => loadDetail(selected)} />
                             <BrokerHealthWidget partners={health} onPing={ping} pinging={pinging} />
                             <JoinRequestsPanel programId={selected} requests={joinRequests} onChanged={() => loadDetail(selected)} />
                             <InvestorsPanel programId={selected} allocations={allocations} onChanged={() => loadDetail(selected)} />

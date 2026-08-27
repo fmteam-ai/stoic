@@ -169,7 +169,8 @@ class TestRiskEvaluation:
                  "symbol": "EURUSD", "volume": 1.0, "exposure_usd": 1000}
                 for i in range(2)]))
             now = datetime.now(timezone.utc)
-            # disable loss caps so ONLY drawdown (action=flatten) fires
+            # disable loss caps so ONLY drawdown (action=flatten) fires.
+            # Loosening now requires DUAL AUTH → second admin approves.
             r = s.put(f"{API}/pamm/programs/{pid}/risk-limits",
                       json={"daily_loss_pct": {"enabled": False},
                             "weekly_loss_pct": {"enabled": False},
@@ -177,6 +178,16 @@ class TestRiskEvaluation:
                             "max_drawdown_pct": {"threshold": 10.0}},
                       timeout=TIMEOUT)
             assert r.status_code == 200, r.text
+            assert r.json().get("pending_approval") is True
+            change_id = r.json()["change_id"]
+            s2 = requests.Session()  # SECOND admin approves
+            r2 = s2.post(f"{API}/auth/login",
+                         json={"email": "admin@stoicaibot.com",
+                               "password": "admin123"}, timeout=TIMEOUT)
+            assert r2.status_code == 200, r2.text
+            r2 = s2.post(f"{API}/pamm/change-requests/{change_id}/approve",
+                         timeout=TIMEOUT)
+            assert r2.status_code == 200, r2.text
             _seed_navs(pid, [(100000, now - timedelta(days=40)),
                              (85000, now)])  # 15% dd from peak
             r = s.post(f"{API}/pamm/programs/{pid}/risk-check",
@@ -194,6 +205,7 @@ class TestRiskEvaluation:
         finally:
             _run(db.pamm_events.delete_many({"data.program_id": pid}))
             _run(db.pamm_notifications.delete_many({"program_id": pid}))
+            _run(db.pamm_change_requests.delete_many({"program_id": pid}))
             _cleanup(pid)
 
     def test_exposure_and_correlation_checks(self):
