@@ -35,7 +35,7 @@ einops==0.8.2
 elevenlabs==2.54.0
 email-validator==2.3.0
 emergentintegrations==0.2.0
-fastapi==0.140.0
+fastapi==0.141.1
 fastuuid==0.14.0
 filelock==3.29.4
 flake8==7.3.0
