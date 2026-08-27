@@ -191,6 +191,103 @@ async def set_manager_ep(payload: dict, user=Depends(get_current_user)):
     return {"user_id": str(oid), "pamm_manager": bool(payload.get("grant"))}
 
 
+@router.get("/programs/{program_id}/risk-limits")
+async def get_risk_limits_ep(program_id: str,
+                             user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.risk import get_limits
+    return {"program_id": program_id, "risk_limits": get_limits(program),
+            "risk_breach": program.get("risk_breach")}
+
+
+@router.put("/programs/{program_id}/risk-limits")
+async def put_risk_limits_ep(program_id: str, payload: dict,
+                             user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.risk import get_limits, validate_limits_patch
+    try:
+        clean = validate_limits_patch(payload)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))  # deliberate ValueError message
+    merged = get_limits(program)
+    for k, v in clean.items():
+        merged[k].update(v)
+    await db.pamm_programs.update_one(
+        {"program_id": program_id}, {"$set": {"risk_limits": merged}})
+    return {"program_id": program_id, "risk_limits": merged}
+
+
+@router.get("/programs/{program_id}/risk-status")
+async def risk_status_ep(program_id: str, user=Depends(get_current_user)):
+    """Pure evaluation — no enforcement side-effects."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.risk import (evaluate_program, get_limits,
+                                   news_blackout_status, trading_allowed)
+    result = await evaluate_program(db, program)
+    result["news"] = await news_blackout_status(
+        db, get_limits(program)["news_filter"])
+    allowed, reason = await trading_allowed(db, program)
+    result["trading_allowed"] = allowed
+    result["trading_block_reason"] = reason
+    result["risk_breach"] = program.get("risk_breach")
+    return result
+
+
+@router.post("/programs/{program_id}/risk-check")
+async def risk_check_ep(program_id: str, user=Depends(get_current_user)):
+    """Evaluate AND enforce (halt/flatten on breach)."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.risk import run_risk_check
+    return await run_risk_check(db, program, actor=user["id"])
+
+
+@router.post("/programs/{program_id}/clear-risk-breach")
+async def clear_risk_breach_ep(program_id: str,
+                               user=Depends(get_current_user)):
+    db = get_db()
+    require_admin(user)
+    await _program_or_404(db, program_id)
+    await db.pamm_programs.update_one(
+        {"program_id": program_id}, {"$unset": {"risk_breach": ""}})
+    return {"program_id": program_id, "risk_breach": None}
+
+
+@router.get("/news")
+async def news_ep(user=Depends(get_current_user)):
+    db = get_db()
+    await require_manager(db, user)
+    from modules.pamm.risk import get_calendar
+    cal = await get_calendar(db)
+    high = [e for e in cal["events"] if e["impact"] == "high"]
+    return {"source": cal["source"], "fetched_at": cal.get("fetched_at"),
+            "error": cal.get("error"), "total_events": len(cal["events"]),
+            "high_impact": high[:100]}
+
+
+@router.get("/health")
+async def broker_health_ep(user=Depends(get_current_user)):
+    db = get_db()
+    await require_manager(db, user)
+    from services.broker_gateway.health import health_overview
+    return {"partners": await health_overview(db)}
+
+
+@router.post("/health/check")
+async def broker_health_check_ep(user=Depends(get_current_user)):
+    db = get_db()
+    await require_manager(db, user)
+    from services.broker_gateway.health import heartbeat_all
+    return {"results": await heartbeat_all(db)}
+
+
 @router.post("/webhooks/{partner_id}")
 async def webhook_ep(partner_id: str, request: Request):
     """Broker → STOIC signed webhooks (HMAC + replay window + idempotency)."""

@@ -10,6 +10,7 @@ EVENT_TYPES = {
     "HeartbeatLost", "StrategyPaused", "StrategyResumed", "EmergencyStop",
     "BrokerDisconnected", "VersionUpdated", "ProgramCreated",
     "InvestorCreated", "ReconciliationDrift",
+    "RiskLimitBreached", "PositionsFlattened", "BrokerHealthDegraded",
 }
 
 

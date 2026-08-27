@@ -24,3 +24,14 @@
 - **P2** Distributed tracing / OpenTelemetry.
 - **P2** Asymmetric artifact signing — HMAC → Ed25519/ECDSA with CI private release keys + rotation.
 - **NOTE** Live trading now REQUIRES EA v1.55 + paired installation (identity gate). Existing v1.54 terminals keep sending telemetry but cannot dispatch live trades until re-paired via installer/dashboard.
+
+### PAMM roadmap status (post iter-186, 2026-06)
+- ~~P0 Phase 9 Risk Engine (loss caps, drawdown, exposure, correlation, news filter)~~ DONE iter-186
+- ~~P0 Phase 10 Broker Health Monitor (heartbeat, latency, 0-100 score)~~ DONE iter-186
+- ~~P0 Phase 6 Manager Dashboard (/managed, admin-only)~~ DONE iter-186
+- ~~P0 Phase 4 Product Navigation (PRODUCTS sidebar: Bot/Managed/Marketplace/VPS/Analytics)~~ DONE iter-186
+- **P1** PAMM Phase 7-8: Strategy Marketplace (public program listings, investor onboarding funnel)
+- **P1** Periodic background risk-check + heartbeat loop (currently on-demand via API/dashboard buttons)
+- **P1** Manager role UX: open /managed to users with pamm_manager=true (backend already supports; route currently admin-only per user choice)
+- **P2** Real broker adapter (MT5 Manager API) implementing BrokerAdapter incl. close_all_positions
+- **P2** Event bus Mongo → Redis Streams after self-hosting migration

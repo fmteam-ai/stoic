@@ -97,6 +97,12 @@ class SandboxAdapter(BrokerAdapter):
         return [p async for p in self.db.sandbox_broker_positions.find(
             {"program_id": program_id}, {"_id": 0})]
 
+    async def close_all_positions(self, program_id: str) -> dict:
+        await self._program(program_id)
+        r = await self.db.sandbox_broker_positions.delete_many(
+            {"program_id": program_id})
+        return {"program_id": program_id, "closed": r.deleted_count}
+
     async def pause_trading(self, program_id: str) -> dict:
         await self._program(program_id)
         await self.db.sandbox_broker_programs.update_one(

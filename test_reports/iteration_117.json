@@ -1,0 +1,30 @@
+{
+  "summary": "ITER-186 PAMM Phase 9 Risk Engine + Phase 10 Broker Health Monitor + Phase 6 Manager Dashboard + Phase 4 Product Navigation — full stack verified end-to-end. Backend: re-ran /app/backend/tests/test_iter186_pamm_risk_health.py = 14/14 PASS in 7s (risk-limits GET/PUT defaults+validation, risk-status pure-eval exposure+correlation, risk-check daily-loss halt with breach/event/notification, drawdown flatten closes sandbox positions + PositionsFlattened event, clear-risk-breach + resume, healthy program no-breach, news blackout math incl. min_impact + disabled filter, /pamm/news endpoint, heartbeat_and_score, health overview never leaks webhook_secret_enc, score/status formulas, HeartbeatLost event on broken partner, access-control 401/403 for anon on health/news/risk). Frontend E2E via Playwright on external URL: admin login OK, sidebar PRODUCTS section renders all 5 nav testids (bot/managed/marketplace/vps/analytics); Managed Strategy nav visible to admin; /managed page shows all 6 KPI tiles + program-bar + controls + risk panel + broker-health + investors + events feed; RUN RISK CHECK works; edit daily_loss threshold → SAVE LIMITS button appears (draft mode) and persists 200; PING broker health returns score 100 status HEALTHY for prt_sandbox; reconcile 2x pulls NAV snapshots (chart container renders with pamm-nav-chart testid, sandbox drift keeps early NAV flat until multiple snapshots build history); investor add succeeds (allocation POST 200, form clears) — KPI investors reflects update only after next reconcile as designed; pause→BLOCKED: paused pill, resume→TRADING ALLOWED pill; /vps route renders ComingSoon component with testid vps-page. Route /managed is admin-protected via <ProtectedRoute requireAdmin>. No 500s in console. Minor Recharts warning about container width during initial NAV chart mount is cosmetic (empty-state branch swaps in a text placeholder before chart mounts).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/managed initial NAV chart", "issues": ["Recharts logs width(-1) height(-1) warnings on first render before empty-state placeholder replaces the chart — cosmetic, no user impact"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter186_pamm_risk_health.py",
+    "/app/test_reports/pytest/iter186_retest.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ManagedStrategy.jsx loads 6 endpoints in parallel via Promise.all on every program change — good. Any single failure aborts the whole load (toast shown once). Consider Promise.allSettled so a transient risk-status failure doesn't blank the whole dashboard.",
+    "PammPanels RiskPanel: cfgFor falls back to {} when no draft or limits — the threshold input's `value={cfg.threshold}` will pass `undefined` before limits load, producing an uncontrolled→controlled input React warning. Guard with `?? ''` for safety.",
+    "InvestorsPanel: KPI investors is tied to `p.investor_count` which is only updated after RECONCILE, not immediately after POST /investors. This is the documented behavior but might confuse users — consider optimistic increment or a subtle 'reconcile to update KPI' hint on the panel.",
+    "Sidebar: PRODUCTS section duplicates entries that already exist in TRADING/INSIGHTS/AUTOMATION (Analytics, Marketplace). Two navlinks with the same `to` will both highlight active — mild UX inconsistency. Consider whether the legacy sections should hide their duplicate now that PRODUCTS is authoritative."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (14/14 pytest)", "frontend": "100% (all 22 required data-testids present and functional; pause/resume/reconcile/risk-check/save-limits/ping/investor-add/nav-managed/nav-vps all pass)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 used successfully",
+  "seed_data_creation": "Reused existing 'Alpha Managed Fund' program per main-agent note. Cleaned up TEST_alice investor doc from pamm_investors.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PAMM iter-186 fully green (backend + frontend). Sidebar has admin-only nav-product-managed; /managed and /vps routes wired; ComingSoon uses testid=vps-page. When adding new PAMM UI, follow the existing data-testid naming (pamm-*, risk-*, broker-health-*, kpi-*, investor-*). Note ForexFactory feed may be 'source=unavailable' from the pod — endpoint still 200s gracefully. Sandbox broker adapter injects NAV drift on read — first two reconciles are needed to make the chart render (chart shows placeholder text if <2 snapshots).",
+  "rca of the issue": "N/A — no bugs found this iteration."
+}

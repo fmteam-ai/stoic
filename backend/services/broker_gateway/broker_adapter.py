@@ -37,6 +37,11 @@ class BrokerAdapter(ABC):
     @abstractmethod
     async def resume_trading(self, program_id: str) -> dict: ...
 
+    async def close_all_positions(self, program_id: str) -> dict:
+        """Flatten the master account (risk-engine action). Optional."""
+        raise NotImplementedError(
+            f"adapter {self.partner.get('adapter')} cannot flatten")
+
 
 _REGISTRY: dict = {}
 

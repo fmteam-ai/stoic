@@ -10,6 +10,7 @@ import {
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers, BadgeCheck,
     FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound, Store, Server, Rocket,
+    Bot, Briefcase,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -23,6 +24,17 @@ const SIMPLE_MODE_ROUTES = new Set([
 // Grouped sidebar layout (Pro Mode). Each section is collapsible.
 // Order optimised for usage frequency — Trading first, Account/Learn last.
 const SECTIONS = [
+    {
+        key: "products",
+        label: "PRODUCTS",
+        items: [
+            { to: "/", label: "AI Trading Bot", icon: Bot, testid: "nav-product-bot" },
+            { to: "/managed", label: "Managed Strategy", icon: Briefcase, testid: "nav-product-managed", adminOnly: true },
+            { to: "/marketplace", label: "Marketplace", icon: Store, testid: "nav-product-marketplace" },
+            { to: "/vps", label: "VPS", icon: Server, testid: "nav-product-vps" },
+            { to: "/analytics", label: "Analytics", icon: BarChart3, testid: "nav-product-analytics" },
+        ],
+    },
     {
         key: "trading",
         label: "TRADING",
@@ -117,7 +129,7 @@ const ADMIN_SECTION = {
 };
 
 // Default-open: TRADING + INSIGHTS (the daily-use sections).
-const DEFAULT_OPEN = new Set(["trading", "insights"]);
+const DEFAULT_OPEN = new Set(["products", "trading", "insights"]);
 
 function SectionGroup({ section, openMap, toggle, onNavigate }) {
     const open = openMap[section.key] !== false;  // open unless explicitly closed
@@ -202,7 +214,8 @@ export function Sidebar({ onNavigate }) {
             items: SECTIONS.flatMap(s => s.items).filter(it => SIMPLE_MODE_ROUTES.has(it.to))
                 .sort((a, b) => [...SIMPLE_MODE_ROUTES].indexOf(a.to) - [...SIMPLE_MODE_ROUTES].indexOf(b.to)),
           }]
-        : (user?.role === "admin" ? [...SECTIONS, ADMIN_SECTION] : SECTIONS);
+        : (user?.role === "admin" ? [...SECTIONS, ADMIN_SECTION] : SECTIONS)
+            .map(s => ({ ...s, items: s.items.filter(it => !it.adminOnly || user?.role === "admin") }));
 
     return (
         <aside className="w-full md:w-60 md:h-screen bg-[#0A0A0A] border-r border-[#1F1F1F] flex md:flex-col flex-row md:fixed md:left-0 md:top-0 z-30">
