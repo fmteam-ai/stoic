@@ -152,7 +152,8 @@ def test_expected_cost_r_realized_deals_source():
         await db.bot_configs.delete_many({"user_id": USR_COSTS})
         await db.broker_deals.delete_many({"account_id": ACC_ID})
         now = datetime.now(timezone.utc)
-        docs = [{"account_id": ACC_ID, "symbol": SYMBOL,
+        docs = [{"account_id": ACC_ID, "user_id": USR_COSTS,
+                 "symbol": SYMBOL,
                  "deal_id": f"{TAG}_deal_{i}",
                  "commission": -7.0, "swap": -2.0, "lots": 1.0,
                  "deal_time": (now - timedelta(hours=i)).isoformat()}
@@ -187,30 +188,46 @@ def test_costs_endpoint_reflects_account_config(admin_session):
         assert admin
         aid = str(admin["_id"]) if not isinstance(admin.get("id"), str) \
             else admin["id"]
-        # try both possible primary-key shapes
         aid_alt = admin.get("id") or str(admin["_id"])
+        # iter-210: /api/brain/costs now enforces account ownership via
+        # _owned_account — we must seed a real accounts doc whose _id is
+        # a valid ObjectId (admin bypass still requires the account to exist).
+        from bson import ObjectId
+        acc_oid = ObjectId()
+        acc_id_str = str(acc_oid)
+        await db.accounts.insert_one({
+            "_id": acc_oid, "user_id": aid_alt,
+            "name": f"{TAG}_ep_acc", "broker": "TEST",
+            "equity": 10000.0, "balance": 10000.0,
+            "created_at": datetime.now(timezone.utc).isoformat()})
         await db.bot_configs.delete_many(
-            {"user_id": {"$in": [aid, aid_alt]}, "account_id": ACC_ID})
-        # single insert per distinct user_id (aid may equal aid_alt)
+            {"user_id": {"$in": [aid, aid_alt]},
+             "account_id": acc_id_str})
         seen = set()
         for u in (aid, aid_alt):
             if u in seen:
                 continue
             seen.add(u)
             await db.bot_configs.insert_one(
-                {"user_id": u, "account_id": ACC_ID,
+                {"user_id": u, "account_id": acc_id_str,
                  "commission_usd_per_lot_side": 3.5})
-        return aid, aid_alt
-    aid, aid_alt = _run(_seed())
-    r = admin_session.get(
-        f"{BASE_URL}/api/brain/costs",
-        params={"symbol": SYMBOL, "account_id": ACC_ID}, timeout=10)
-    assert r.status_code == 200, r.text[:200]
-    body = r.json()
-    assert body["basis"]["account_id"] == ACC_ID
-    # NOTE: the endpoint doesn't get a live signal, so commission_source
-    # cannot resolve via account_config (needs risk_per_lot from signal).
-    # Verify shape + basis fields are present and account_id was threaded.
+        return aid_alt, acc_id_str
+    aid_alt, acc_id_str = _run(_seed())
+    try:
+        r = admin_session.get(
+            f"{BASE_URL}/api/brain/costs",
+            params={"symbol": SYMBOL, "account_id": acc_id_str},
+            timeout=10)
+        assert r.status_code == 200, r.text[:200]
+        body = r.json()
+        assert body["basis"]["account_id"] == acc_id_str
+    finally:
+        # use sync pymongo since get_db() is bound to a different event loop
+        from pymongo import MongoClient
+        from bson import ObjectId
+        sync = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+        sync.accounts.delete_one({"_id": ObjectId(acc_id_str)})
+        sync.bot_configs.delete_many({"account_id": acc_id_str})
     assert "commission_source" in body["basis"]
     assert "swap_source" in body["basis"]
     # inline cleanup omitted — module fixture removes the seeded configs

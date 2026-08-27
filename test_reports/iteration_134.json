@@ -1,0 +1,34 @@
+{
+  "summary": "iter-210 SEC (BOLA on /api/brain/costs) verified end-to-end. Wrote /app/backend/tests/test_sec_iter210_costs_bola.py covering all 7 scenarios from the review request: (a) attacker→404 on victim's account_id, (b) owner→200 with basis.account_id set, (c) admin→200 bypass, (d) attacker+random ObjectId→404, (e) no account_id regression→200, defence-in-depth on transaction_costs._realized_deal_cost_r user_id scoping (attacker cannot see B's realized_deals), and decision_events cap==40. All 7 pass. Regression suite (unit + iter209/204/205/206/181 + sec001 + iter210) = 554/554 passing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "internal", "issue": "test_iter209_live_integration.py had 2 tests that broke due to iter-210 defence-in-depth (user_id scoping on _realized_deal_cost_r + _owned_account gate on costs_ep). Fixed the tests to seed user_id on broker_deals and to seed a real accounts doc with a valid ObjectId. Business logic is correct — only test-data was incompatible."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_sec_iter210_costs_bola.py",
+    "/app/test_reports/pytest/iter210_pytest.xml"
+  ],
+  "action_items": [
+    "None blocking. iter-210 BOLA fix verified: non-owner returns 404 with no payload leakage; owner and admin get 200; defence-in-depth confirmed (attacker cannot obtain realized_deals commission from victim's broker_deals); decision_events cap enforced at 40."
+  ],
+  "critical_code_review_comments": [
+    "brain_routes.py::_owned_account correctly enforces {user_id: caller} for non-admins and bypasses for admin — matches the pattern used by portfolio_ep/regime_ep.",
+    "transaction_costs._realized_deal_cost_r accepts user_id kwarg and both call sites in expected_cost_r pass it — defence-in-depth is complete.",
+    "decision_context.record_stage uses count_documents({...}, limit=MAX_STAGES) — efficient bounded check, not a race-free hard cap but adequate for defence-in-depth against internal writer misuse.",
+    "Minor: costs_ep passes account_id string to expected_cost_r after _owned_account verified it — good; note that the endpoint has no live signal so risk_per_lot is None → realized_deals branch never resolves via this route (only via account_config which also needs risk_per_lot). This means the endpoint always falls back to default commission when there's no live signal. Not a bug for iter-210, but worth remembering."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_sec_iter210_costs_bola.py (new)",
+    "/app/backend/tests/test_iter209_live_integration.py (seeded user_id on broker_deals in realized_deals test; seeded real accounts doc with valid ObjectId + sync-pymongo cleanup in test_costs_endpoint_reflects_account_config so it survives the new _owned_account gate)"
+  ],
+  "success_rate": {"backend": "100% (554/554 on requested suite; 7/7 on iter-210 new tests)", "frontend": "skipped"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "iter-210 tests self-seed: 2 throwaway users (TEST_iter210_*-a@qa.example.com, -b@...), 1 accounts doc for B (omits bridge_token to skip the partial unique index), 6 broker_deals for B, 1 decision_contexts + 40 decision_events for cap test. All cleaned up by module autouse fixture + inline try/finally.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-210 changes had ripple effect on two iter-209 tests — I fixed them (test-only, not code). If future agents run these on a machine where broker_deals for a test account_id lack user_id, the realized_deals branch will silently return default — that's the intended defence-in-depth behaviour. The costs endpoint alone can never resolve realized_deals without a live signal (no risk_per_lot) — this is a known property, not a bug. Full backend suite (~560 tests) was not fully re-run due to 120s bash timeout — but the targeted 554 all pass, and one flaky order-dependent failure (test_iter111_corrections::test_worst_active_account_drives_stability) is unrelated to iter-210 and passes in isolation.",
+  "rca of the issue": "Original BOLA: costs_ep did not enforce account ownership → any authenticated user could pass another user's 24-hex account_id and receive median commission/swap per lot + trade-activity samples for that account. Fix confirmed: brain_routes.costs_ep now calls _owned_account(db, user, account_id) which restricts non-admins to {_id: <oid>, user_id: caller.id} in db.accounts and raises 404 otherwise. Defence-in-depth: transaction_costs._realized_deal_cost_r now also scopes db.broker_deals queries by user_id, so even if the route check were bypassed the aggregation would return no data. Reproduction: as user A GET /api/brain/costs?symbol=XAUUSD&account_id=<B's oid> → 404 (verified). Owner (B) → 200. Admin → 200 (intentional bypass, consistent with portfolio/regime endpoints)."
+}

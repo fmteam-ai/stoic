@@ -22,7 +22,7 @@ GOOD_ENV = {
     "STEP_UP_BYPASS_TOKEN": "",
     "RATE_LIMIT_BYPASS_TOKEN": "",
     "ADMIN_MFA_ENFORCED": "true",
-    "ADMIN_PASSWORD": "Xk9!strongProd2026#Zq",
+    "ADMIN_PASSWORD": "TestDummy-Pass-2026-NotReal",  # dummy, not a credential
     "ED25519_SIGNING_KEY_B64": "testkey-testkey-testkey",  # dummy, not a key
     "KEY_VAULT_MASTER": "vault-master-material",
     "RELEASE_SIGNER": "external",

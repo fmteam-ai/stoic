@@ -78,10 +78,16 @@ def _trim(payload) -> dict:
 
 async def record_stage(db, decision_id: str | None, stage: str,
                        payload: dict | None = None) -> None:
-    """Append-only DecisionEvent — the snapshot itself is never mutated."""
+    """Append-only DecisionEvent — the snapshot itself is never mutated.
+    Defence-in-depth: events per decision are capped at MAX_STAGES even
+    though writers are internal pipeline stages."""
     if not decision_id:
         return
     try:
+        n = await db.decision_events.count_documents(
+            {"decision_id": decision_id}, limit=MAX_STAGES)
+        if n >= MAX_STAGES:
+            return
         await db.decision_events.insert_one(
             {"decision_id": decision_id, "stage": stage, "at": _now(),
              "detail": _trim(payload or {})})

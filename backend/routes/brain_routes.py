@@ -135,7 +135,11 @@ async def costs_ep(symbol: str = Query("XAUUSD"),
                    account_id: str | None = None,
                    user=Depends(get_current_user)):
     from transaction_costs import expected_cost_r
-    return await expected_cost_r(get_db(), user["id"], symbol,
+    db = get_db()
+    if account_id:
+        # SEC (iter-210) — BOLA: account_id must belong to the caller
+        await _owned_account(db, user, account_id)
+    return await expected_cost_r(db, user["id"], symbol,
                                  scope=scope, account_id=account_id)
 
 

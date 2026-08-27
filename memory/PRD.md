@@ -1823,3 +1823,18 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
    state/raw_state/better_streak.
 - Tests: tests/test_iter209_corrections.py (12) + tests/test_iter209_live_integration.py (11, by
   testing agent). Backlog note: optional one-time migration of legacy embedded stages → decision_events.
+
+## Security audit iter-210 (June 2026 — DONE, CONDITIONAL PASS → fixed & verified, report iteration_134.json)
+- SEC-001 (MEDIUM, fixed): BOLA on GET /api/brain/costs — no account ownership check + broker_deals
+  query unscoped by user_id → any authed user could read another account's median commission/swap
+  per lot + activity counts by supplying its account ObjectId. Fix: costs_ep calls _owned_account
+  (404 for non-owned; admin bypass intended) + _realized_deal_cost_r scoped by user_id
+  (defence-in-depth). Verified 7/7 HTTP scenarios (tests/test_sec_iter210_costs_bola.py); 554/554
+  regression.
+- Hardening: decision_events capped at MAX_STAGES(40)/decision via count_documents guard;
+  test fixture ADMIN_PASSWORD literal replaced with labelled dummy.
+- Known properties (not bugs): /api/brain/costs alone never resolves realized/account-config
+  commission (no live signal → risk_per_lot None) — live bot path does; record_stage cap is not
+  race-free (adequate for internal writers).
+- Audit clean on: decision events tenant reads, degraded Redis keys (constants only), strategy_decay
+  writes, PammGuide, CI workflows, .gitleaksignore (dummy verified inert).

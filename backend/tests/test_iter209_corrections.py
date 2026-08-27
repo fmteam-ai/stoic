@@ -27,6 +27,10 @@ class _InsertCapture:
     def __init__(self):
         self.docs = []
 
+    async def count_documents(self, q, **k):
+        return len([d for d in self.docs
+                    if d["decision_id"] == q.get("decision_id")])
+
     async def insert_one(self, doc):
         self.docs.append(doc)
 

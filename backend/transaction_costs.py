@@ -101,18 +101,22 @@ async def _configured_commission_r(db, user_id: str, account_id,
 
 
 async def _realized_deal_cost_r(db, account_id, symbol: str, field: str,
-                                risk_per_lot):
-    """Median realized |commission|/|swap| per lot from broker deals."""
+                                risk_per_lot, user_id: str | None = None):
+    """Median realized |commission|/|swap| per lot from broker deals.
+    Scoped to the caller's own trade evidence (defence-in-depth on top of
+    the route-level account ownership check)."""
     import re
     if not account_id or not risk_per_lot:
         return None, 0
+    q = {"account_id": str(account_id),
+         "symbol": {"$regex": f"^{re.escape(symbol[:6])}",
+                    "$options": "i"},
+         field: {"$nin": [None, 0]}}
+    if user_id:
+        q["user_id"] = user_id
     vals = []
     async for d in db.broker_deals.find(
-            {"account_id": str(account_id),
-             "symbol": {"$regex": f"^{re.escape(symbol[:6])}",
-                        "$options": "i"},
-             field: {"$nin": [None, 0]}},
-            {field: 1, "lots": 1}).sort("deal_time", -1).limit(200):
+            q, {field: 1, "lots": 1}).sort("deal_time", -1).limit(200):
         lots = float(d.get("lots") or 0)
         if lots > 0:
             vals.append(abs(float(d[field])) / lots)
@@ -145,7 +149,8 @@ async def expected_cost_r(db, user_id: str, symbol: str,
     if commission_r is None:
         try:
             commission_r, comm_n = await _realized_deal_cost_r(
-                db, account_id, symbol, "commission", risk_per_lot)
+                db, account_id, symbol, "commission", risk_per_lot,
+                user_id=user_id)
             if commission_r is not None:
                 commission_source = "realized_deals"
         except Exception:  # noqa: BLE001
@@ -157,7 +162,8 @@ async def expected_cost_r(db, user_id: str, symbol: str,
     is_swing = "swing" in str(scope or "").lower()
     try:
         swap_r, swap_n = await _realized_deal_cost_r(
-            db, account_id, symbol, "swap", risk_per_lot)
+            db, account_id, symbol, "swap", risk_per_lot,
+            user_id=user_id)
         if swap_r is not None:
             swap_source = "realized_deals"
             if not is_swing:
