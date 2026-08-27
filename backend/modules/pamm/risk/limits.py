@@ -7,19 +7,23 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger("pamm.risk")
 
 DEFAULT_LIMITS = {
-    "daily_loss_pct": {"enabled": True, "threshold": 5.0, "action": "halt"},
-    "weekly_loss_pct": {"enabled": True, "threshold": 10.0, "action": "halt"},
-    "monthly_loss_pct": {"enabled": True, "threshold": 15.0, "action": "halt"},
+    "daily_loss_pct": {"enabled": True, "threshold": 5.0, "action": "halt",
+                       "curve": "linear"},
+    "weekly_loss_pct": {"enabled": True, "threshold": 10.0, "action": "halt",
+                        "curve": "linear"},
+    "monthly_loss_pct": {"enabled": True, "threshold": 15.0,
+                         "action": "halt", "curve": "linear"},
     "max_drawdown_pct": {"enabled": True, "threshold": 20.0,
-                         "action": "flatten"},
+                         "action": "flatten", "curve": "exponential"},
     "max_exposure_pct": {"enabled": True, "threshold": 200.0,
-                         "action": "halt"},
+                         "action": "halt", "curve": "logistic"},
     "max_correlated_positions": {"enabled": True, "threshold": 3,
-                                 "action": "halt"},
+                                 "action": "halt", "curve": "step"},
     "news_filter": {"enabled": True, "blackout_before_min": 30,
                     "blackout_after_min": 15, "min_impact": "high"},
 }
 ACTIONS = {"halt", "flatten"}
+CURVES = {"linear", "exponential", "step", "logistic", "hard"}
 LOSS_PERIODS = (("daily_loss_pct", "daily"), ("weekly_loss_pct", "weekly"),
                 ("monthly_loss_pct", "monthly"))
 
@@ -49,6 +53,10 @@ def validate_limits_patch(patch: dict) -> dict:
             if v["action"] not in ACTIONS:
                 raise ValueError(f"action must be one of {sorted(ACTIONS)}")
             entry["action"] = v["action"]
+        if "curve" in v:
+            if k == "news_filter" or v["curve"] not in CURVES:
+                raise ValueError(f"curve must be one of {sorted(CURVES)}")
+            entry["curve"] = v["curve"]
         if "threshold" in v:
             t = float(v["threshold"])
             if t <= 0:
@@ -94,7 +102,8 @@ def _check(limit: str, cfg: dict, value, note: str = "") -> dict:
                 and float(value) >= float(cfg["threshold"]))
     return {"limit": limit, "enabled": bool(cfg.get("enabled")),
             "value": value, "threshold": cfg["threshold"],
-            "action": cfg.get("action", "halt"), "breached": breached,
+            "action": cfg.get("action", "halt"),
+            "curve": cfg.get("curve", "linear"), "breached": breached,
             "note": note}
 
 

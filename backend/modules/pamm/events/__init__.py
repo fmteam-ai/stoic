@@ -13,6 +13,7 @@ EVENT_TYPES = {
     "RiskLimitBreached", "PositionsFlattened", "BrokerHealthDegraded",
     "JoinRequested", "JoinApproved", "JoinRejected",
     "OpStateChanged", "ChangeRequested", "ChangeApproved", "ChangeRejected",
+    "FlattenFailed", "FlattenResolved",
 }
 
 

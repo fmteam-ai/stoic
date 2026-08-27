@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { BrokerHealthWidget, ChangeRequestsPanel, EventsFeed, InvestorsPanel, JoinRequestsPanel, KpiTile, NavChart, OpStateControl, RiskPanel, SweepChip, VerdictTester } from "@/components/PammPanels";
+import { BrokerHealthWidget, ChangeRequestsPanel, EventsFeed, FlattenFailedBanner, InvestorsPanel, JoinRequestsPanel, KpiTile, NavChart, OpStateControl, RiskPanel, SweepChip, VerdictTester } from "@/components/PammPanels";
 import { Globe, Loader2, OctagonAlert, Pause, Play, Plus, RefreshCw } from "lucide-react";
 
 const btn = "px-3 py-1.5 text-[10px] font-mono tracking-widest border transition disabled:opacity-40 flex items-center gap-1.5";
@@ -182,6 +182,7 @@ export default function ManagedStrategy() {
                     Create your first managed program above — it will be provisioned on the sandbox broker.
                 </div>}
                 {p && (<>
+                    <FlattenFailedBanner incident={p.flatten_failed} />
                     <div className="flex flex-wrap items-center gap-2">
                         <Controls program={p} allowed={detail.trading_allowed} reason={detail.trading_block_reason} act={act} busy={busy} publish={publish} />
                         <OpStateControl program={p} onChanged={() => loadDetail(selected)} />

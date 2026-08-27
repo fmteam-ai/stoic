@@ -43,7 +43,9 @@ def _xgb():
         return None
 
 from database import get_db
-from probability_calibrator import fit_platt, apply_platt, brier_score
+from probability_calibrator import (fit_platt, apply_platt, brier_score,
+                                    expected_calibration_error,
+                                    holdout_tail_indices)
 
 logger = logging.getLogger("learned_meta")
 
@@ -372,9 +374,32 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
         cal_source = "walk_forward_oos"
         oos_auc = round(_auc(y_eval, p_eval), 4)
     else:
-        p_eval, y_eval = p_final, y
-        cal_source = "in_sample_fallback"
-        oos_auc = None
+        # iter-191 · TRUE held-out (chronological tail) once n ≥ 100 —
+        # resolves the long-standing calibrator TODO. Model is refit on the
+        # head only so tail scores are genuinely out-of-sample.
+        tail = holdout_tail_indices(n)
+        head_ok = (tail is not None
+                   and len(set(y[:tail[0]].tolist())) == 2)
+        if head_ok:
+            lo = int(tail[0])
+            swh = sample_w[:lo] if (sample_w is not None
+                                    and len(sample_w) == n) else None
+            if use_xgb:
+                mb, _, _ = _train_xgb(X[:lo], y[:lo], swh)
+                p_eval = _xgb_predict_proba(mb, X[tail])
+            else:
+                wh, muh, sdh, _ = _train_logreg(X[:lo], y[:lo], swh)
+                p_eval = _sigmoid(np.hstack(
+                    [(X[tail] - muh) / sdh,
+                     np.ones((len(tail), 1))]) @ wh)
+            y_eval = y[tail]
+            cal_source = "holdout_tail"
+            oos_auc = (round(_auc(y_eval, p_eval), 4)
+                       if len(set(y_eval.tolist())) == 2 else None)
+        else:
+            p_eval, y_eval = p_final, y
+            cal_source = "in_sample_fallback"
+            oos_auc = None
 
     # Calibrate threshold: lowest p_win below which precision_of_rejection >= 0.6
     threshold = 0.45
@@ -394,6 +419,8 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
         brier_cal = brier_score(p_cal, y_eval)
         platt["brier_raw"] = round(brier_raw, 4)
         platt["brier_calibrated"] = round(brier_cal, 4)
+        platt["ece_raw"] = expected_calibration_error(p_eval, y_eval)
+        platt["ece_calibrated"] = expected_calibration_error(p_cal, y_eval)
 
     return {
         "key": key,
@@ -427,6 +454,20 @@ def _b64decode_bytes(s: str) -> bytes:
     return base64.b64decode(s.encode("ascii"))
 
 
+async def _record_calibration_history(db, doc: dict) -> None:
+    """iter-191 · track calibration error over time (review v53 §18)."""
+    cal = doc.get("calibration") or {}
+    await db.calibration_history.insert_one(
+        {"key": doc["key"], "at": doc["trained_at"],
+         "source": doc.get("calibration_source"),
+         "n": cal.get("n"), "skipped": bool(cal.get("skipped")),
+         "brier_raw": cal.get("brier_raw"),
+         "brier_calibrated": cal.get("brier_calibrated"),
+         "ece_raw": cal.get("ece_raw"),
+         "ece_calibrated": cal.get("ece_calibrated"),
+         "oos_auc": doc.get("oos_auc")})
+
+
 async def retrain() -> dict:
     """Pull closed-trade dataset, train global + per-session models. Persist artifacts."""
     db = get_db()
@@ -444,6 +485,7 @@ async def retrain() -> dict:
     await db.learned_meta_artifacts.update_one(
         {"key": ARTIFACT_KEY}, {"$set": global_doc}, upsert=True
     )
+    await _record_calibration_history(db, global_doc)
 
     # 2. Per-session artifacts — only trained when each bucket has enough data
     sessions_arr = np.array(sessions)
@@ -459,6 +501,7 @@ async def retrain() -> dict:
             await db.learned_meta_artifacts.update_one(
                 {"key": key}, {"$set": doc}, upsert=True
             )
+            await _record_calibration_history(db, doc)
             per_session[label] = {
                 "trained": True, "n_samples": n_s, "n_wins": wins_s,
                 "train_auc": doc["train_auc"], "threshold": doc["threshold"],

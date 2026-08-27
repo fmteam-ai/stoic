@@ -54,7 +54,7 @@ const LIMIT_LABELS = {
 function LimitRow({ check, cfg, onCfg }) {
     return (
         <div className="grid grid-cols-12 items-center gap-2 px-3 py-2 border-b border-[#141414] text-xs" data-testid={`risk-limit-row-${check.limit}`}>
-            <div className="col-span-4 text-[#A1A1AA]">{LIMIT_LABELS[check.limit] || check.limit}</div>
+            <div className="col-span-3 text-[#A1A1AA]">{LIMIT_LABELS[check.limit] || check.limit}</div>
             <div className={`col-span-2 font-mono ${check.breached ? "text-[#FF3B30]" : "text-white"}`} data-testid={`risk-value-${check.limit}`}>
                 {check.value === null || check.value === undefined ? "—" : check.value}
             </div>
@@ -72,7 +72,16 @@ function LimitRow({ check, cfg, onCfg }) {
                     <option value="flatten">FLATTEN</option>
                 </select>
             </div>
-            <div className="col-span-2 flex justify-end">
+            <div className="col-span-2">
+                <select value={cfg.curve || "linear"} onChange={e => onCfg({ curve: e.target.value })}
+                    data-testid={`risk-curve-${check.limit}`}
+                    className="w-full bg-[#050505] border border-[#1F1F1F] px-1 py-1 font-mono text-[10px] text-[#A1A1AA]">
+                    {["linear", "exponential", "step", "logistic", "hard"].map(c => (
+                        <option key={c} value={c}>{c.toUpperCase()}</option>
+                    ))}
+                </select>
+            </div>
+            <div className="col-span-1 flex justify-end">
                 <button onClick={() => onCfg({ enabled: !cfg.enabled })}
                     data-testid={`risk-toggle-${check.limit}`}
                     className={`${btn} ${cfg.enabled ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#1F1F1F] text-[#52525B]"}`}>
@@ -148,8 +157,8 @@ export function RiskPanel({ programId, riskStatus, limits, breach, onChanged, is
                 </div>
             )}
             <div className="grid grid-cols-12 gap-2 px-3 py-2 border-b border-[#141414]">
-                {["LIMIT", "CURRENT", "THRESHOLD", "ON BREACH", ""].map((h, i) => (
-                    <div key={h + i} className={`${label} ${[4, 2, 2, 2, 2][i] === 4 ? "col-span-4" : "col-span-2"} ${i === 4 ? "text-right" : ""}`}>{h}</div>
+                {[["LIMIT", "col-span-3"], ["CURRENT", "col-span-2"], ["THRESHOLD", "col-span-2"], ["ON BREACH", "col-span-2"], ["CURVE", "col-span-2"], ["", "col-span-1 text-right"]].map(([h, cls], i) => (
+                    <div key={h + i} className={`${label} ${cls}`}>{h}</div>
                 ))}
             </div>
             {(riskStatus?.checks || []).map(c => (
@@ -461,6 +470,20 @@ export function OpStateControl({ program, onChanged }) {
                 <button onClick={apply} disabled={busy} data-testid="pamm-op-state-apply"
                     className={`${btn} border-[#FFB000]/40 text-[#FFB000] hover:bg-[#FFB000]/10`}>APPLY</button>
             )}
+        </div>
+    );
+}
+
+export function FlattenFailedBanner({ incident }) {
+    if (!incident) return null;
+    return (
+        <div className="border border-[#FF3B30] bg-[#FF3B30]/10 px-4 py-3 flex items-center gap-3" data-testid="pamm-flatten-failed-banner">
+            <AlertTriangle className="w-5 h-5 text-[#FF3B30] shrink-0 animate-pulse" />
+            <div className="text-xs font-mono text-[#FF3B30]">
+                CRITICAL — EMERGENCY FLATTEN UNVERIFIED: {incident.remaining ?? "?"} position(s) may remain open
+                (attempt {incident.attempts}{incident.error ? ` · ${incident.error}` : ""}).
+                Auto-retrying every sweep. Verify manually at the broker NOW.
+            </div>
         </div>
     );
 }

@@ -18,6 +18,18 @@ async def sweep_once(db) -> dict:
 
     started = _now()
     heartbeats = await heartbeat_all(db)
+    # retry unresolved FLATTEN_FAILED incidents first (critical invariant)
+    flatten_retries = 0
+    async for p in db.pamm_programs.find(
+            {"flatten_failed": {"$exists": True}}, {"_id": 0}):
+        from modules.pamm.risk.states import _flatten_and_verify
+        attempt = int((p.get("flatten_failed") or {}).get("attempts", 1)) + 1
+        try:
+            await _flatten_and_verify(db, p, "auto-sweep", attempt=attempt)
+        except Exception as e:
+            logger.error("sweep flatten retry failed on %s: %s",
+                         p.get("program_id"), e)
+        flatten_retries += 1
     checked, breaches = 0, []
     async for p in db.pamm_programs.find({"status": "active"}, {"_id": 0}):
         try:
@@ -36,6 +48,7 @@ async def sweep_once(db) -> dict:
     await db.pamm_health.delete_many({"at": {"$lt": cutoff}})
     doc = {"_id": "last", "at": started, "finished_at": _now(),
            "programs_checked": checked, "breaches": breaches,
+           "flatten_retries": flatten_retries,
            "heartbeats": [{k: h.get(k) for k in
                            ("partner_id", "ok", "score", "status",
                             "latency_ms")} for h in heartbeats]}

@@ -1,18 +1,38 @@
 """PAMM trade verdict engine (review §10) — APPROVE / REDUCE / REJECT with
 a scaled approved risk instead of a boolean gate.
 
-Scaling: each enabled limit contributes a factor from its remaining
-headroom. Utilization below SOFT_ZONE costs nothing; above it the factor
-falls linearly to 0 at the threshold. REJECT below MIN_FACTOR."""
-from modules.pamm.risk.states import (RISK_REDUCED_FACTOR, op_state_of)
+Each risk dimension scales through its own configurable CURVE (review v53
+§3): LINEAR, EXPONENTIAL (steeper near the boundary), STEP (discrete
+tiers), LOGISTIC (steep sigmoid) or HARD (all-or-nothing). Utilization
+below SOFT_ZONE costs nothing on continuous curves."""
+import math
 
-SOFT_ZONE = 0.5   # start reducing once a limit is >50% utilized
+from modules.pamm.risk.states import RISK_REDUCED_FACTOR, op_state_of
+
+SOFT_ZONE = 0.5   # continuous curves start reducing above 50% utilization
 MIN_FACTOR = 0.1  # below 10% of requested risk → outright REJECT
 
 
-def _factor(value: float, threshold: float) -> float:
-    headroom = max(0.0, 1.0 - float(value) / float(threshold))
-    return max(0.0, min(1.0, headroom / SOFT_ZONE))
+def curve_factor(value: float, threshold: float,
+                 curve: str = "linear") -> float:
+    """Scaling factor in [0,1] from utilization of one limit."""
+    u = max(0.0, float(value) / float(threshold))
+    if curve == "hard":
+        return 1.0 if u < 1.0 else 0.0
+    if curve == "step":
+        if u < 0.5:
+            return 1.0
+        if u < 0.75:
+            return 0.5
+        if u < 0.9:
+            return 0.25
+        return 0.0
+    if curve == "logistic":  # ≈1 below soft zone, 0.5 at 75%, ≈0 near cap
+        return round(1.0 / (1.0 + math.exp(12.0 * (u - 0.75))), 6)
+    lin = max(0.0, min(1.0, (1.0 - u) / SOFT_ZONE))
+    if curve == "exponential":  # increasingly conservative near the cap
+        return lin ** 2
+    return lin  # linear
 
 
 async def trade_verdict(db, program: dict,
@@ -36,15 +56,17 @@ async def trade_verdict(db, program: dict,
     for c in ev["checks"]:
         if not c["enabled"] or c["value"] is None:
             continue
-        f = _factor(c["value"], c["threshold"])
+        f = curve_factor(c["value"], c["threshold"],
+                         c.get("curve", "linear"))
         factors.append({"limit": c["limit"], "value": c["value"],
                         "threshold": c["threshold"],
+                        "curve": c.get("curve", "linear"),
                         "factor": round(f, 3)})
     scale = min([f["factor"] for f in factors], default=1.0)
     if op_state_of(program) == "risk_reduced":
         scale *= RISK_REDUCED_FACTOR
         factors.append({"limit": "op_state:risk_reduced",
-                        "factor": RISK_REDUCED_FACTOR})
+                        "curve": "fixed", "factor": RISK_REDUCED_FACTOR})
 
     approved = round(requested * min(scale, 1.0), 4)
     if scale <= MIN_FACTOR:

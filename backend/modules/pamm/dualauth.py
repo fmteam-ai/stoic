@@ -8,7 +8,11 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger("pamm.dualauth")
 
 CRITICAL_KINDS = {"risk_limits_increase", "unlock",
-                  "master_account_change", "broker_change"}
+                  "master_account_change", "broker_change",
+                  "strategy_replacement", "strategy_version_promotion",
+                  "leverage_cap_increase", "max_aum_increase",
+                  "fee_change", "withdrawal_rules_change",
+                  "allocation_method_change"}
 EXPIRY_HOURS = 48
 
 
@@ -76,13 +80,19 @@ async def _apply(db, req: dict) -> None:
                            str(payload.get("target") or "new_trades_paused"),
                            actor=req["requested_by"], reason="dual-auth unlock",
                            source="dual_auth", allow_deescalate=True)
-    else:  # master_account_change / broker_change — record the new value
-        field = ("master_login_override" if kind == "master_account_change"
-                 else "partner_id")
-        if payload.get("value"):
+    else:  # governance parameter changes — record the approved value
+        field = {"master_account_change": "master_login_override",
+                 "broker_change": "partner_id"}.get(kind)
+        if field and payload.get("value"):
             await db.pamm_programs.update_one(
                 {"program_id": program["program_id"]},
                 {"$set": {field: str(payload["value"])[:120]}})
+        else:
+            await db.pamm_programs.update_one(
+                {"program_id": program["program_id"]},
+                {"$set": {f"governance.{kind}": {
+                    "payload": payload, "applied_at": _now(),
+                    "requested_by": req["requested_by"]}}})
 
 
 async def decide_change_request(db, change_id: str, approve: bool,

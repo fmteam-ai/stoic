@@ -11,11 +11,14 @@ probabilities.
 Algorithm
 =========
 1. After training the base model, compute predicted scores p_i on a
-   held-out fold (we use the same training data for now since data is
-   tiny — TODO upgrade to true held-out when sample count >= 100).
+   TRUE held-out set: walk-forward out-of-sample folds when available,
+   else a chronological tail holdout once n ≥ HOLDOUT_MIN_N (iter-191 —
+   resolves the long-standing TODO), else in-sample as a last resort for
+   tiny datasets (flagged as such in the artifact).
 2. Compute logits z_i = logit(p_i).
 3. Fit `p_cal = 1 / (1 + exp(A*z + B))` by minimising NLL via GD.
-4. Persist (A, B) alongside the artifact.
+4. Persist (A, B) alongside the artifact, plus Brier + ECE so calibration
+   error is TRACKED over time (db.calibration_history).
 
 At inference, calibrated p_win = sigmoid(-(A*z + B)).
 
@@ -34,6 +37,38 @@ import numpy as np
 logger = logging.getLogger("probability_calibrator")
 
 _EPS = 1e-12
+HOLDOUT_MIN_N = 100      # chronological-tail holdout kicks in at this size
+HOLDOUT_FRACTION = 0.3   # last 30% of samples reserved for calibration
+
+
+def holdout_tail_indices(n: int) -> np.ndarray | None:
+    """Chronological tail indices for true held-out calibration, or None
+    when the dataset is too small (< HOLDOUT_MIN_N)."""
+    if n < HOLDOUT_MIN_N:
+        return None
+    start = int(n * (1.0 - HOLDOUT_FRACTION))
+    return np.arange(start, n)
+
+
+def expected_calibration_error(scores: np.ndarray, labels: np.ndarray,
+                               bins: int = 10) -> float:
+    """ECE — mean |predicted − observed| across probability bins, weighted
+    by bin population. 0 = perfectly calibrated."""
+    scores = np.asarray(scores, dtype=float)
+    labels = np.asarray(labels, dtype=float)
+    if len(labels) == 0:
+        return 0.0
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    ece = 0.0
+    for i in range(bins):
+        mask = (scores >= edges[i]) & (scores < edges[i + 1] if i < bins - 1
+                                       else scores <= edges[i + 1])
+        if not mask.any():
+            continue
+        ece += (mask.mean()
+                * abs(float(scores[mask].mean())
+                      - float(labels[mask].mean())))
+    return round(float(ece), 4)
 
 
 def _logit(p: float | np.ndarray) -> float | np.ndarray:
