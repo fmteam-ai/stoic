@@ -62,8 +62,9 @@ jobs:
       - name: Run classified suite from the archive (unit + truth + integration)
         run: |
           cd /tmp/release
-          pip install -r backend/requirements.txt
-          pip install --no-deps emergentintegrations==0.2.0 --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+          # requirements.txt pins emergentintegrations (internal wheel) — resolve it
+          # from the Emergent index while everything else comes from PyPI.
+          pip install -r backend/requirements.txt --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
           cd backend
           python -m pytest tests/unit \
             tests/test_iter148_p0_exec_truth.py \

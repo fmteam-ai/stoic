@@ -1,0 +1,37 @@
+{
+  "summary": "CI/workflow fix (emergentintegrations resolvable in CI) verified end-to-end. Static YAML checks and pip-audit reproduction all pass. Index sanity confirmed (emergentintegrations-0.2.0-py3-none-any.whl listed at Emergent index). backend-integration CI job content passes cleanly (22/22, real MongoDB). Backend smoke (login/portfolio/regime — SEC-001) fully healthy on the preview URL. HOWEVER: the exact backend-unit CI command reproduces a pre-existing failure unrelated to the CI fix — the guard test `test_no_hardcoded_app_paths_in_test_code` in tests/test_iter148_p0_exec_truth.py flags a hardcoded '/app/frontend/.env' path in tests/test_iter202_brain_api.py:8, so backend-unit will FAIL in CI on this commit (473 passed, 1 failed).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "CI backend-unit job", "issue": "test_iter148_p0_exec_truth.py::test_no_hardcoded_app_paths_in_test_code fails because tests/test_iter202_brain_api.py:8 uses open('/app/frontend/.env'). Pre-existing (file dated 2025-08-27) but blocks the backend-unit job the CI-fix task claims to be greening. Fix: replace the hardcoded open with reading REACT_APP_BACKEND_URL via env var only (fallback to reading frontend/.env using an env-relative or __file__-based path).", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_iter148_p0_exec_truth.py", "/app/backend/tests/test_iter202_brain_api.py"],
+  "action_items": [
+    "Fix tests/test_iter202_brain_api.py line 8 to remove hardcoded '/app/frontend/.env' path — use env var only, or compute path via pathlib relative to the repo root. After edit, run scripts/generate_test_manifest.py to refresh the manifest.",
+    "Re-run backend-unit locally: `cd /app/backend && python -m pytest tests/unit tests/test_iter148_p0_exec_truth.py tests/test_iter149_netting_truth.py 'tests/test_iter150_netting_hedging.py::TestEaSourceScenarios' -q` — must show 0 failed."
+  ],
+  "critical_code_review_comments": [
+    "CI YAML changes are correct and complete: 3 extra-index-url invocations in ci.yml (backend-unit, backend-integration, frontend-e2e install-backend), 1 in release.yml (suite-from-archive), matching all `pip install -r backend/requirements.txt` call sites. No stale `pip install --no-deps emergentintegrations` remnants.",
+    "pip-audit filters in both ci.yml (security-scan) and dependency-audit.yml correctly exclude '^emergentintegrations' as an anchored regex — safe against partial-name collisions.",
+    "backend/requirements.txt line 37 emergentintegrations==0.2.0 preserved (required for Emergent deploy).",
+    "Index endpoint https://d33sy5i8bnduwe.cloudfront.net/simple/emergentintegrations/ serves emergentintegrations-0.2.0-py3-none-any.whl — CI will resolve the pin.",
+    "SEC-001 BOLA fix in brain_routes.py/portfolio_risk.py has NOT regressed: admin GET /api/brain/portfolio and /api/brain/regime return 200 with correct payloads.",
+    "The hardcoded-path guard in test_iter148 is a good policy test; the offending file (test_iter202_brain_api.py) is a duplicate of the older test_iter202_brain_phase_a.py — recommend either fixing the path or deleting the duplicate."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "static_ci_checks": "100% (YAML valid, 3+1 extra-index-url, no leftover no-deps line, both pip-audit filters correct)",
+    "backend_unit_ci_reproduction": "99.8% (473 passed / 1 failed — pre-existing hardcoded path guard)",
+    "backend_integration_ci_reproduction": "100% (22/22)",
+    "pip_audit_reproduction": "100% (No known vulnerabilities)",
+    "backend_smoke": "100% (health/login/portfolio/regime all 200 with correct data)"
+  },
+  "test_credentials": "admin@stoicaibot.com / admin123 (cookie-based session auth — /api/auth/login sets a session cookie; no bearer token is returned in the login body).",
+  "seed_data_creation": "None (used existing admin account).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "CI workflow fix itself is 100% correct. The only remaining blocker for backend-unit is the hardcoded /app/frontend/.env path in tests/test_iter202_brain_api.py:8. It's pre-existing (2025-08-27) and unrelated to the emergentintegrations CI fix, but it will still fail the backend-unit job because tests/test_iter148_p0_exec_truth.py::test_no_hardcoded_app_paths_in_test_code walks the entire tests/ tree. Note for auth: /api/auth/login uses HttpOnly session cookies (no bearer token in body) — use `curl -c/-b cookiejar` in reproduction.",
+  "rca of the issue": "CI fix verification: workflows now install backend deps with --extra-index-url pointing at the Emergent index for all four call sites, resolving the emergentintegrations==0.2.0 wheel that PyPI does not host. Reproduction of the two backend jobs and the pip-audit job all succeed independently of the fix. The single unit-test failure surfaced is orthogonal: a guard test (introduced in iter148) forbids hardcoded '/app/...' paths in the tests tree; test_iter202_brain_api.py violates that by directly opening '/app/frontend/.env' to derive BASE_URL. Mitigation: rely on REACT_APP_BACKEND_URL env only (as done by test_iter202_brain_phase_a.py which passes cleanly), or resolve the path via pathlib(__file__).parents[2] / 'frontend' / '.env'."
+}

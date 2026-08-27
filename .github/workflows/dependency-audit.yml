@@ -18,7 +18,7 @@ jobs:
       - name: pip-audit (BLOCKING)
         run: |
           pip install pip-audit
-          grep -vE '^--|^#|\+cpu' backend/requirements.txt > /tmp/audit-reqs.txt
+          grep -vE '^--|^#|\+cpu|^emergentintegrations' backend/requirements.txt > /tmp/audit-reqs.txt
           pip-audit -r /tmp/audit-reqs.txt --no-deps --strict
 
   frontend-yarn-audit:

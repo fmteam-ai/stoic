@@ -4,11 +4,16 @@ import requests
 import pytest
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/") or "http://localhost:3000"
-# Backend actually uses REACT_APP_BACKEND_URL from frontend/.env
-with open("/app/frontend/.env") as f:
-    for line in f:
-        if line.startswith("REACT_APP_BACKEND_URL"):
-            BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
+# Backend actually uses REACT_APP_BACKEND_URL from frontend/.env (repo-relative path)
+_FRONTEND_ENV = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "frontend", ".env",
+)
+if os.path.exists(_FRONTEND_ENV):
+    with open(_FRONTEND_ENV) as f:
+        for line in f:
+            if line.startswith("REACT_APP_BACKEND_URL"):
+                BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
 
 ADMIN = {"email": "admin@stoicaibot.com", "password": "admin123"}
 

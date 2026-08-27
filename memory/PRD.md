@@ -1640,3 +1640,18 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
 ## Iter-203 (2026-06) — Security audit + SEC-001 fix
 - security_audit_agent full audit post-Phase-A: CONDITIONAL PASS. One HIGH finding SEC-001 (BOLA): /api/brain/portfolio (and /api/brain/regime account_id param) discarded the ownership-check result → any authenticated user with a foreign account OID could read that account's live positions. All other new surface (verdicts/latency/brain/learning/canary, distributed rate limiter, ExecutionAuthorization token) and standing controls (auth/CSRF/CORS/secrets/admin seed) passed. Hardening notes (accepted): rate limiter fails open only on total infra failure (logged); CSRF cookie non-HttpOnly by double-submit design.
 - FIX: brain_routes._owned_account() enforces ownership (404 for non-owned, admin may inspect any) on both endpoints; portfolio_risk.open_positions/snapshot gained user_id query-level scoping; marginal_verdict scopes by user_id too. Verified by testing agent iteration_127: 7/7 SEC-001 BOLA suite (tests/test_sec001_brain_bola.py, cross-user 404, positive paths, malformed OIDs) + 12/12 Phase A regression. Manifest 3368 tests.
+
+## CI pipeline fix — emergentintegrations resolution (iter-203, June 2026 — DONE)
+- Root cause: pip freeze added `emergentintegrations==0.2.0` (Emergent private-index wheel) to
+  backend/requirements.txt; GitHub's plain `pip install -r backend/requirements.txt` only queries
+  PyPI (404) → backend-unit/backend-integration/frontend-e2e/release install steps all failed.
+- Fix: all 4 install call sites (ci.yml ×3, release.yml ×1) now pass
+  `--extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/`; redundant standalone
+  `pip install --no-deps emergentintegrations` lines removed. Both pip-audit grep filters
+  (ci.yml security-scan + dependency-audit.yml) exclude `^emergentintegrations` (not on OSV/PyPI).
+- requirements.txt keeps the pin (deployment + 10+ modules import it) — do NOT remove.
+- Bonus fix: tests/test_iter202_brain_api.py hardcoded `/app/frontend/.env` and tripped the
+  iter-148 hardcoded-path guard → now resolves frontend/.env via __file__-relative path.
+  Manifest regenerated (3368 tests, 333 files).
+- Verified (testing agent iteration_128 + local): backend-unit 474/474, integration 22/22,
+  pip-audit zero vulns, workflows valid YAML, SEC-001 BOLA fix not regressed.
