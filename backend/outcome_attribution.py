@@ -14,11 +14,11 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("outcome.attribution")
 
-ENGINE_VERSION = 1
+ENGINE_VERSION = 2
 CATEGORIES = ["ALPHA_ERROR", "REGIME_ERROR", "TIMING_ERROR",
               "SIZING_ERROR", "EXECUTION_ERROR", "BROKER_ERROR",
               "INFRASTRUCTURE_ERROR", "NEWS_SHOCK", "CORRELATION_ERROR",
-              "NORMAL_VARIANCE"]
+              "NORMAL_VARIANCE", "UNEXPLAINED"]
 
 
 def _now() -> str:
@@ -140,7 +140,7 @@ async def _signals(db, trade: dict) -> dict:
     return s
 
 
-def _weights(sig: dict, r: float) -> dict:
+def _weights(sig: dict, r: float, r_source: str = "price") -> dict:
     raw = {}
     if sig["slippage_ratio"]:
         raw["EXECUTION_ERROR"] = min(0.5, 0.1 + sig["slippage_ratio"])
@@ -165,20 +165,30 @@ def _weights(sig: dict, r: float) -> dict:
     if sig["session_shift"] and r < 0:
         raw["REGIME_ERROR"] = 0.15
     total = sum(raw.values())
+    # v2 — real outcomes are often ambiguous: an explicit UNEXPLAINED
+    # share replaces artificial certainty. Weak result data (no price-based
+    # R) widens the unexplained share.
+    weak = r_source != "price"
     if r < 0:  # loss — residual blame stays with the signal itself
         cap = 0.85
         if total > cap:
             raw = {k: v * cap / total for k, v in raw.items()}
             total = cap
-        alpha = max(0.0, round(0.9 - total, 3))
-        out = {**raw, "ALPHA_ERROR": alpha,
-               "NORMAL_VARIANCE": max(0.0, round(1 - alpha - total, 3))}
+        residual = max(0.0, 0.9 - total)
+        unexplained = round(residual * (0.4 if weak else 0.2), 3)
+        alpha = max(0.0, round(residual - unexplained, 3))
+        out = {**raw, "ALPHA_ERROR": alpha, "UNEXPLAINED": unexplained,
+               "NORMAL_VARIANCE": max(0.0, round(1 - total - alpha
+                                                 - unexplained, 3))}
     else:  # win/flat — anomalies noted, rest is normal variance
         cap = 0.4
         if total > cap:
             raw = {k: v * cap / total for k, v in raw.items()}
             total = cap
-        out = {**raw, "NORMAL_VARIANCE": max(0.0, round(1 - total, 3))}
+        unexplained = round((1 - total) * (0.25 if weak else 0.1), 3)
+        out = {**raw, "UNEXPLAINED": unexplained,
+               "NORMAL_VARIANCE": max(0.0, round(1 - total
+                                                 - unexplained, 3))}
     return {k: round(v, 3) for k, v in out.items() if round(v, 3) > 0}
 
 
@@ -187,11 +197,16 @@ async def attribute_trade(db, trade: dict) -> dict:
     trade_id = str(trade.get("_id") or trade.get("id"))
     r, r_source = result_r(trade)
     sig = await _signals(db, trade)
-    attribution = _weights(sig, r)
+    attribution = _weights(sig, r, r_source)
     primary = max(attribution, key=attribution.get)
     noise = sum(attribution.get(c, 0) for c in
                 ("EXECUTION_ERROR", "BROKER_ERROR",
                  "INFRASTRUCTURE_ERROR", "NEWS_SHOCK"))
+    unexplained = float(attribution.get("UNEXPLAINED", 0.0))
+    data_penalty = 0.0 if r_source == "price" else (
+        0.15 if r_source == "pnl_sign" else 0.3)
+    confidence = round(max(0.0, min(1.0, 1.0 - unexplained
+                                    - data_penalty)), 2)
     outcome = {"outcome_id": f"out_{uuid.uuid4().hex[:10]}",
                "trade_id": trade_id, "user_id": trade.get("user_id"),
                "account_id": trade.get("account_id"),
@@ -202,6 +217,8 @@ async def attribute_trade(db, trade: dict) -> dict:
                "pnl": float(trade.get("pnl") or 0),
                "closed_at": trade.get("closed_at"),
                "attribution": attribution, "primary_category": primary,
+               "attribution_confidence": confidence,
+               "unexplained_fraction": round(unexplained, 3),
                "alpha_clean": noise <= 0.3, "signals": sig,
                "engine_version": ENGINE_VERSION, "at": _now()}
     await db.trade_outcomes.update_one(
@@ -212,6 +229,7 @@ async def attribute_trade(db, trade: dict) -> dict:
             {"_id": ObjectId(trade_id)},
             {"$set": {"attribution": attribution,
                       "attribution_primary": primary,
+                      "attribution_confidence": confidence,
                       "alpha_clean": outcome["alpha_clean"]}})
     except Exception:
         pass
@@ -245,7 +263,6 @@ async def attribute_missing(db, limit: int = 100,
         except Exception as e:
             logger.warning("attribution failed for trade %s: %s",
                            trade.get("_id"), e)
-            from bson import ObjectId as _O
             await db.trades.update_one(
                 {"_id": trade["_id"]},
                 {"$set": {"attribution": {"NORMAL_VARIANCE": 1.0},

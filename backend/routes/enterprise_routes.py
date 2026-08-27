@@ -6,15 +6,16 @@ Two routers:
 
 Key model (irretrievable): full key `stoic_live_<43 urlsafe chars>` shown ONCE at
 creation; DB stores only sha256 hash + display prefix. Scopes: read:accounts,
-read:trades, read:portfolio. Simple per-key in-memory sliding-window rate limit.
+read:trades, read:portfolio. Distributed token-bucket rate limit
+(Redis via REDIS_URL, atomic Mongo fallback) keyed by API key + tenant +
+endpoint class.
 """
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 
@@ -36,8 +37,8 @@ VALID_SCOPES = {"read:accounts", "read:trades", "read:portfolio"}
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-# In-memory sliding window: {key_id: [timestamps]} — best-effort, single process.
-_rate_windows: dict = {}
+# Legacy in-memory sliding window removed — distributed token bucket in
+# distributed_rate_limit.py (Redis, Mongo fallback) is the enforcement.
 
 
 def _hash_key(full_key: str) -> str:
@@ -129,7 +130,8 @@ async def revoke_api_key(key_id: str, user=Depends(get_current_user)):
 
 # ---------------------------------------------------------------- key auth
 
-async def authenticate_api_key(x_api_key: Optional[str] = Security(api_key_header)) -> dict:
+async def authenticate_api_key(request: Request,
+                               x_api_key: Optional[str] = Security(api_key_header)) -> dict:
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing X-API-Key header")
     db = get_db()
@@ -148,15 +150,26 @@ async def authenticate_api_key(x_api_key: Optional[str] = Security(api_key_heade
             detail={"error": "feature_locked", "feature": "api_access",
                     "message": "API access requires the Professional plan or higher."})
 
-    # Sliding-window rate limit (per key, per process, 60s window)
+    # Distributed token bucket (Redis, Mongo fallback) keyed by
+    # API key + tenant + endpoint class — multi-process correct,
+    # replaces the single-process in-memory sliding window.
     now = datetime.now(timezone.utc)
     kid = str(doc["_id"])
-    window = [t for t in _rate_windows.get(kid, []) if (now - t).total_seconds() < 60]
-    limit = doc.get("rate_limit_per_minute") or 120
-    if len(window) >= limit:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded for this API key")
-    window.append(now)
-    _rate_windows[kid] = window
+    limit = int(doc.get("rate_limit_per_minute") or 120)
+    endpoint_class = ("read" if request.method in ("GET", "HEAD", "OPTIONS")
+                      else "write")
+    class_limit = limit if endpoint_class == "read" else max(1, limit // 4)
+    from distributed_rate_limit import allow_request
+    allowed, meta = await allow_request(
+        db, key_id=kid, tenant=str(doc["user_id"]),
+        endpoint_class=endpoint_class, limit_per_minute=class_limit)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "rate_limited",
+                    "message": "Rate limit exceeded for this API key",
+                    "endpoint_class": endpoint_class,
+                    "limit_per_minute": meta.get("limit_per_minute")})
 
     await db.api_keys.update_one(
         {"_id": doc["_id"]},

@@ -13,6 +13,7 @@ const CAT_LABEL = {
     NEWS_SHOCK: "NEWS SHOCK",
     CORRELATION_ERROR: "CORRELATION",
     NORMAL_VARIANCE: "NORMAL VARIANCE",
+    UNEXPLAINED: "UNEXPLAINED",
 };
 const CAT_COLOR = {
     ALPHA_ERROR: "#FF3B30", REGIME_ERROR: "#FF8C00",
@@ -20,6 +21,7 @@ const CAT_COLOR = {
     EXECUTION_ERROR: "#0099FF", BROKER_ERROR: "#A855F7",
     INFRASTRUCTURE_ERROR: "#EC4899", NEWS_SHOCK: "#F59E0B",
     CORRELATION_ERROR: "#22D3EE", NORMAL_VARIANCE: "#52525B",
+    UNEXPLAINED: "#6B7280",
 };
 
 export function AttributionPanel() {
@@ -54,13 +56,20 @@ export function AttributionPanel() {
                     ))}
                 </div>
             </div>
-            <div className="px-4 py-3 grid grid-cols-2 md:grid-cols-4 gap-3 border-b border-[#141414]">
+            <div className="px-4 py-3 grid grid-cols-2 md:grid-cols-5 gap-3 border-b border-[#141414]">
                 <div><div className="font-mono text-[9px] text-[#52525B]">ATTRIBUTED TRADES</div>
                     <div className="font-mono text-sm text-white" data-testid="attribution-total">{data.total}</div></div>
                 <div><div className="font-mono text-[9px] text-[#52525B]">WINS / LOSSES</div>
                     <div className="font-mono text-sm text-white">{data.wins} / {data.losses}</div></div>
                 <div><div className="font-mono text-[9px] text-[#52525B]">ALPHA-CLEAN</div>
                     <div className="font-mono text-sm text-[#00FF41]" data-testid="attribution-alpha-clean">{data.alpha_clean}</div></div>
+                <div><div className="font-mono text-[9px] text-[#52525B]">AVG CONFIDENCE</div>
+                    <div className="font-mono text-sm text-[#0099FF]" data-testid="attribution-confidence">
+                        {data.avg_confidence != null ? data.avg_confidence : "—"}
+                        {data.avg_unexplained != null && (
+                            <span className="text-[9px] text-[#52525B]"> ({Math.round((data.avg_unexplained || 0) * 100)}% unexpl.)</span>
+                        )}
+                    </div></div>
                 <div><div className="font-mono text-[9px] text-[#52525B]">BIGGEST DRAG</div>
                     <div className="font-mono text-sm text-[#FF3B30]" data-testid="attribution-worst">
                         {data.worst_category ? CAT_LABEL[data.worst_category] || data.worst_category : "—"}

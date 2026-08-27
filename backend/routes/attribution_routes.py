@@ -19,6 +19,8 @@ _LESSONS = {
     "NEWS_SHOCK": "high-impact news hit inside the trade window",
     "CORRELATION_ERROR": "too many correlated positions lost together",
     "NORMAL_VARIANCE": "normal trading variance — no fix needed",
+    "UNEXPLAINED": "the data cannot fully explain this result — "
+                   "no confident lesson is drawn",
 }
 
 
@@ -39,6 +41,7 @@ async def attribution_summary_ep(days: int = 30,
     cats: dict = {}
     strategies: dict = {}
     total, losses, wins, alpha_clean = 0, 0, 0, 0
+    conf_sum, conf_n, unexpl_sum = 0.0, 0, 0.0
     async for o in db.trade_outcomes.find(q, {"_id": 0}).limit(5000):
         total += 1
         r = float(o.get("result_r") or 0)
@@ -48,6 +51,10 @@ async def attribution_summary_ep(days: int = 30,
             wins += 1
         if o.get("alpha_clean"):
             alpha_clean += 1
+        if o.get("attribution_confidence") is not None:
+            conf_sum += float(o["attribution_confidence"])
+            conf_n += 1
+        unexpl_sum += float(o.get("unexplained_fraction") or 0)
         for cat, w in (o.get("attribution") or {}).items():
             c = cats.setdefault(cat, {"weighted_r": 0.0, "loss_r": 0.0,
                                       "trades": 0, "primary_count": 0})
@@ -80,6 +87,8 @@ async def attribution_summary_ep(days: int = 30,
         if cats else None
     return {"days": days, "total": total, "wins": wins, "losses": losses,
             "alpha_clean": alpha_clean, "categories": cats,
+            "avg_confidence": round(conf_sum / conf_n, 2) if conf_n else None,
+            "avg_unexplained": round(unexpl_sum / total, 3) if total else 0.0,
             "strategies": strategies, "worst_category": worst,
             "lesson": (f"Biggest drag: {worst.replace('_', ' ')} — "
                        f"{_LESSONS.get(worst, '')}") if worst else

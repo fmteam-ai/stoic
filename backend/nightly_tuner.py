@@ -84,6 +84,13 @@ async def sweep_user(db, user_id: str) -> dict:
     except Exception as e:  # noqa: BLE001
         errors.append(f"shadow eval: {e}")
 
+    # canary ladder — advance / hold / auto-rollback running canaries
+    try:
+        from canary_promotion import evaluate_canaries
+        await evaluate_canaries(db, user_id)
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"canary eval: {e}")
+
     result = {"ran": ran, "combos": len(combos), "registered": registered,
               "errors": errors, "at": now.isoformat()}
     await db.quant_tuning_state.update_one(

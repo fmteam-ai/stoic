@@ -771,6 +771,8 @@ async def poll_trades(payload: PollRequest):
                 ],
             },
             {"$set": {"_dispatched_at": datetime.now(timezone.utc).isoformat(),
+                      "latency_trace.t7_ms": int(
+                          datetime.now(timezone.utc).timestamp() * 1000),
                       "submission_state": "sent_to_terminal"},
              "$inc": {"_dispatch_count": 1}},
         )
@@ -1258,6 +1260,9 @@ async def report_trade(payload: BridgeTradeReport):
     # broker-clamped vs live POSITION_SL). Protection lifecycle still
     # certifies via the heartbeat snapshot; these are the ack-time facts.
     if payload.status == "open":
+        # T9 — broker acknowledgement (T0→T9 profiler)
+        update["latency_trace.t9_ms"] = int(
+            datetime.now(timezone.utc).timestamp() * 1000)
         if payload.requested_sl is not None and payload.requested_sl > 0:
             update["requested_sl"] = float(payload.requested_sl)
         if payload.applied_sl is not None and payload.applied_sl > 0:

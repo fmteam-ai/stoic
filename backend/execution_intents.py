@@ -322,6 +322,13 @@ class CanonicalIntent:
     expires_at: str
     fencing_epoch: int
     nonce: str
+    # v56 hardening — immutable decision-context references: five years
+    # later STOIC can answer "why exactly was this trade permitted?"
+    market_snapshot_id: str = ""
+    authority_snapshot_id: str = ""
+    broker_capability_version: str = ""
+    model_version: str = ""
+    execution_policy_version: str = ""
 
 
 def canonical_payload(**kw) -> dict:

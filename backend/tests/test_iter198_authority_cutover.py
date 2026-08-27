@@ -33,7 +33,7 @@ class StubEngine:
 
     async def execute_authorized(self, *, user_id, account, signal,
                                  max_concurrent=0, cfg_account_id=None,
-                                 intent=None):
+                                 intent=None, authorization=None):
         self.calls.append(intent)
         return dict(self.result)
 

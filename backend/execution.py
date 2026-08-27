@@ -60,7 +60,21 @@ class MT5BridgeEngine(ExecutionEngine):
     async def execute_authorized(self, *, user_id, account, signal,
                                  max_concurrent: int = 0,
                                  cfg_account_id: str = None,
-                                 intent: dict = None) -> dict:
+                                 intent: dict = None,
+                                 authorization=None) -> dict:
+        # v56 hardening — capability gate: only calls carrying a valid
+        # single-use ExecutionAuthorization (mintable ONLY by the
+        # Execution Authority) may reach the engine stage.
+        from execution_authorization import verify_authorization
+        _refusal = verify_authorization(
+            authorization, (intent or {}).get("intent_id") or "")
+        if _refusal:
+            logger.critical(
+                "EXECUTION CHOKE POINT BYPASS BLOCKED — execute_authorized "
+                "called without a valid ExecutionAuthorization (%s) user=%s "
+                "sym=%s", _refusal, user_id, signal.get("symbol"))
+            return {"blocked": "unauthorized_execution_path",
+                    "reason": _refusal}
         db = get_db()
 
         # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — the dispatcher never
@@ -471,6 +485,8 @@ class MT5BridgeEngine(ExecutionEngine):
             trade_doc["execution_intent_id"] = _intent["intent_id"]
         if signal.get("_authority_reduced"):
             trade_doc["authority_reduced"] = True
+        if signal.get("latency_trace"):
+            trade_doc["latency_trace"] = dict(signal["latency_trace"])
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)

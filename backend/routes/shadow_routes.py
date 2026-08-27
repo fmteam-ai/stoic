@@ -103,13 +103,43 @@ async def list_shadow_models(user=Depends(get_current_user)):
 
 @router.post("/models/{model_id}/promote")
 async def promote_shadow_model(model_id: str, user=Depends(get_current_user)):
-    from model_shadow import promote_model
+    """Human approval — starts the CANARY LADDER (5% → 10% → 25% → 50% →
+    100%), never a direct jump to full production."""
+    from canary_promotion import start_canary
     db = get_db()
     try:
-        return await promote_model(db, user["id"], model_id)
+        return await start_canary(db, user["id"], model_id)
     except ValueError as e:
         from errors import api_error
         raise api_error(422, "shadow_promote_invalid", str(e), exc=e)
+
+
+@router.get("/models/canary")
+async def canary_status_ep(user=Depends(get_current_user)):
+    from canary_promotion import LADDER, canary_status, evaluate_canaries
+    db = get_db()
+    evaluations = await evaluate_canaries(db, user["id"])
+    return {"ladder": LADDER, "evaluations": evaluations,
+            "canaries": await canary_status(db, user["id"])}
+
+
+@router.post("/models/{model_id}/canary/rollback")
+async def canary_rollback_ep(model_id: str,
+                             user=Depends(get_current_user)):
+    from bson import ObjectId
+    from canary_promotion import rollback_canary
+    db = get_db()
+    try:
+        m = await db.shadow_models.find_one(
+            {"_id": ObjectId(str(model_id)), "user_id": user["id"],
+             "status": "canary"})
+    except Exception:
+        m = None
+    if not m:
+        raise HTTPException(status_code=404, detail="No running canary "
+                                                    "for this model")
+    return await rollback_canary(db, user["id"], m, "manual rollback",
+                                 automatic=False)
 
 
 @router.post("/models/{model_id}/retire")

@@ -926,6 +926,10 @@ class ScalpRunner:
         feats = snapshot(self.state)
         if feats is None:
             return
+        # T0→T9 profiler — canonical decision-path marks (epoch ms)
+        _lt = {"t0_ms": int(self.state.last_tick.received_time_ms)
+               if self.state.last_tick else nm,
+               "t1_ms": now_ms()}
         perms = permissions.get_cached(self.user_id, self.symbol)
         # Phase C — meta strategy selector: preset parameters for the ONE
         # pullback setup, chosen per regime from realised performance
@@ -934,6 +938,7 @@ class ScalpRunner:
         cand = setup.detect(feats, self.state, params=_sel["params"])
         if cand is None:
             return
+        _lt["t2_ms"] = now_ms()   # T2 — opportunity detected
         cand["preset"] = _sel["preset"]
         direction = cand["direction"]
         # item 3 (round 3) — ONE active setup event per symbol: any live sim
@@ -947,10 +952,12 @@ class ScalpRunner:
 
         commission_pips = self._commission_pips()
         pred = scalp_model.predict(self.model_key(), feats)
+        _lt["t4_ms"] = now_ms()   # T4 — AI verdict
         model_p = pred["p"]
         fc = make_forecast(feats, cand, self.state, self.cfg,
                            model_p=model_p, commission_pips=commission_pips)
         edge_res = edge.evaluate(fc)
+        _lt["t3_ms"] = now_ms()   # T3 — strategy verdict (edge decided)
 
         from pip_utils import pip_value_usd_per_lot_strict
         pip_val = pip_value_usd_per_lot_strict(self.symbol)
@@ -1007,6 +1014,7 @@ class ScalpRunner:
             health_open_allowed=self.health["open_allowed"])
 
         all_ok = bool(perm_ok) and edge_res["ok"] and risk_res["ok"] and gate_res["ok"]
+        _lt["t5_ms"] = now_ms()   # T5 — risk decision complete
         if all_ok and self.mode == "demo_live":
             verdict = "live_traded"
         elif all_ok:
@@ -1033,6 +1041,7 @@ class ScalpRunner:
             "dataset": "candidate",
             "ts_ms": nm, "signal_ts_ms": signal_ts_ms,
             "feature_snapshot_ts_ms": feats["_now_ms"],
+            "latency_trace": dict(_lt),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "direction": direction, "mode": self.mode,
             "features": {k: v for k, v in feats.items() if not k.startswith("_")},
@@ -1718,7 +1727,10 @@ class ScalpRunner:
                         "take_profit": round_to_tick(tp, tick),
                         "origin": "auto", "scope": "scalp_fast",
                         "scalp_decision_id": decision["decision_id"],
-                        "scalp_lease_epoch": lease_epoch},
+                        "scalp_lease_epoch": lease_epoch,
+                        "model_version": decision.get("model_version"),
+                        "latency_trace": dict(
+                            decision.get("latency_trace") or {})},
                 cfg_account_id=self.account_id)
         except BaseException:
             # only a FAILED submission releases here — round 17 main: a

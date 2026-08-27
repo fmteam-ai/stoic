@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { LatencyPanel } from "@/components/LatencyPanel";
 import {
     Zap, Activity, Network, Layers, RefreshCw, Clock,
     TrendingUp, ChevronRight, Send,
@@ -85,6 +86,9 @@ export default function Execution() {
             />
             <div className="p-4 md:p-8 space-y-6 max-w-6xl">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
+
+                {/* T0→T9 canonical latency decomposition */}
+                <LatencyPanel />
 
                 {loading ? (
                     <div className="font-mono text-xs text-[#52525B] tracking-widest">LOADING…</div>

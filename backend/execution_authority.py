@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("execution.authority")
 
+EXECUTION_POLICY_VERSION = "v56.3"
+
 
 def _validate(signal: dict, account: dict) -> list:
     problems = []
@@ -84,16 +86,24 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
                 risk_snapshot_id="", signal_id=str(signal.get("signal_id")
                                                    or ""),
                 fencing_epoch=int(signal.get("scalp_lease_epoch") or 0),
-                nonce=""),
+                nonce="",
+                broker_capability_version=str(account.get("ea_version")
+                                              or account.get(
+                                                  "broker_capability_version")
+                                              or ""),
+                model_version=str(signal.get("model_version") or ""),
+                execution_policy_version=EXECUTION_POLICY_VERSION),
             account_id=_acct_id, actor=user_id)
     except (TypeError, AttributeError):  # isolated unit-test db mock
         logger.critical("execution authority BYPASSED — non-Motor db "
                         "object; intent pipeline inactive for this call "
                         "(must never happen in production)")
+        from execution_authorization import mint_authorization
         return await engine.execute_authorized(
             user_id=user_id, account=account, signal=signal,
             max_concurrent=max_concurrent,
-            cfg_account_id=cfg_account_id, intent=None)
+            cfg_account_id=cfg_account_id, intent=None,
+            authorization=mint_authorization(""))
     if intent.get("duplicate"):
         logger.warning("authority blocked duplicate intent user=%s sym=%s "
                        "intent=%s status=%s", user_id,
@@ -164,13 +174,48 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
             logger.warning("verdict tracking failed: %s", e)
     await transition(db, iid, "authorized",
                      detail=f"authority {gate.get('level') or 'FULL'}")
+    # v56 hardening — immutable decision-context snapshots: the exact
+    # authority verdict and market state behind this authorization are
+    # persisted and referenced from the canonical intent forever.
+    try:
+        import uuid as _uuid
+        _now_iso = datetime.now(timezone.utc).isoformat()
+        auth_snap_id = f"authsnap_{_uuid.uuid4().hex[:12]}"
+        await db.authority_snapshots.insert_one(
+            {"snapshot_id": auth_snap_id, "intent_id": iid,
+             "user_id": user_id, "at": _now_iso,
+             "gate": {k: gate.get(k) for k in
+                      ("ok", "level", "reasons", "reduce_factor")},
+             "execution_policy_version": EXECUTION_POLICY_VERSION})
+        mkt_snap_id = f"mktsnap_{_uuid.uuid4().hex[:12]}"
+        _tick = await db.price_ticks.find_one(
+            {"symbol": str(signal.get("symbol") or "").upper()},
+            sort=[("ts", -1)])
+        await db.market_snapshots.insert_one(
+            {"snapshot_id": mkt_snap_id, "intent_id": iid,
+             "symbol": str(signal.get("symbol") or "").upper(),
+             "price": float(_tick.get("price") or 0) if _tick else None,
+             "tick_at": str(_tick.get("ts")) if _tick else None,
+             "at": _now_iso})
+        await db.execution_intents.update_one(
+            {"intent_id": iid},
+            {"$set": {"payload.authority_snapshot_id": auth_snap_id,
+                      "payload.market_snapshot_id": mkt_snap_id}})
+    except Exception as e:
+        logger.warning("decision-context snapshot failed for %s: %s",
+                       iid, e)
+    # T6 — Execution Authority authorization mark (T0→T9 profiler)
+    signal.setdefault("latency_trace", {})["t6_ms"] = int(
+        datetime.now(timezone.utc).timestamp() * 1000)
     intent = await db.execution_intents.find_one({"intent_id": iid},
                                                  {"_id": 0})
-    # 4 — EXECUTION ENGINE (the intent is its input)
+    # 4 — EXECUTION ENGINE (the intent is its input; the capability token
+    # proves this call came through the authority choke point)
+    from execution_authorization import mint_authorization
     result = await engine.execute_authorized(
         user_id=user_id, account=account, signal=signal,
         max_concurrent=max_concurrent, cfg_account_id=cfg_account_id,
-        intent=intent)
+        intent=intent, authorization=mint_authorization(iid))
     if isinstance(result, dict) and result.get("blocked"):
         # engine refused pre-dispatch — the order never left STOIC
         await _finalize_pre_dispatch(db, iid, "cancelled",

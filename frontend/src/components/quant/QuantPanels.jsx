@@ -179,20 +179,30 @@ function PromotionChecks({ promotion }) {
 export function ShadowLabPanel() {
     const [data, setData] = useState(null);
     const [recon, setRecon] = useState(null);
+    const [canary, setCanary] = useState(null);
     const [loading, setLoading] = useState(true);
 
     const load = useCallback(() => {
         setLoading(true);
         api.get("/shadow/models").then(({ data }) => setData(data)).catch(() => {}).finally(() => setLoading(false));
         api.get("/shadow/reconciliation?days=14").then(({ data }) => setRecon(data)).catch(() => {});
+        api.get("/shadow/models/canary").then(({ data }) => setCanary(data)).catch(() => {});
     }, []);
     useEffect(() => { load(); }, [load]);
 
     const promote = async (m) => {
-        if (!window.confirm(`Promote ${m.version} to LIVE engine params on all active bots?`)) return;
+        if (!window.confirm(`Start the CANARY LADDER for ${m.version}? It ramps 5% → 10% → 25% → 50% → 100% of signals with automatic rollback on deviation — never a direct jump to full production.`)) return;
         try {
             const { data: res } = await api.post(`/shadow/models/${m._id}/promote`);
-            toast.success(`${res.version} promoted — ${res.configs_updated} bot config(s) updated`);
+            toast.success(`${res.version} canary started at ${res.allocation_pct}% allocation`);
+            load();
+        } catch (e) { toast.error(formatApiError(e)); }
+    };
+    const rollbackCanary = async (c) => {
+        if (!window.confirm(`Roll back canary ${c.version}? Challenger params stop applying immediately.`)) return;
+        try {
+            await api.post(`/shadow/models/${c.model_id}/canary/rollback`);
+            toast.success(`${c.version} rolled back`);
             load();
         } catch (e) { toast.error(formatApiError(e)); }
     };
@@ -246,6 +256,38 @@ export function ShadowLabPanel() {
                 <div className={`${mono10} text-[#52525B] flex items-center gap-2`}><RefreshCw size={11} className="animate-spin" /> Evaluating challengers…</div>
             ) : (
                 <>
+                    {!!canary?.canaries?.length && (
+                        <div className="mb-3 space-y-2" data-testid="canary-list">
+                            {canary.canaries.map((c) => (
+                                <div key={c.model_id} className={`border px-3 py-2 ${c.status === "canary" ? "border-[#FFD700]/40 bg-[#FFD700]/5" : "border-[#FF3B30]/30 bg-[#FF3B30]/5"}`}
+                                    data-testid={`canary-${c.version}`}>
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <span className={`${mono10} text-white`}>CANARY · {c.engine} · {c.version}</span>
+                                        {c.status === "canary" ? (
+                                            <>
+                                                <span className="flex items-center gap-1">
+                                                    {(c.ladder || []).map((p) => (
+                                                        <span key={p} className={`${mono10} px-1.5 py-0.5 border ${p === c.allocation_pct ? "border-[#FFD700] text-[#FFD700]" : (c.ladder.indexOf(p) < (c.stage_idx ?? 0) ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#1F1F1F] text-[#3F3F46]")}`}>
+                                                            {p}%
+                                                        </span>
+                                                    ))}
+                                                </span>
+                                                <span className={`${mono10} text-[#52525B]`}>
+                                                    stage: {c.realized_this_stage?.trades ?? 0} trades · expected WR {c.expected?.win_rate} / realized {c.realized_this_stage?.win_rate ?? "—"}
+                                                </span>
+                                                <button onClick={() => rollbackCanary(c)} data-testid={`canary-rollback-${c.version}`}
+                                                    className={`${mono10} ml-auto tracking-widest px-2 py-0.5 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10`}>
+                                                    ROLL BACK
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <span className={`${mono10} text-[#FF3B30]`}>ROLLED BACK — {c.rollback_reason}</span>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                     <div data-testid="shadow-testing-list">
                         {(data?.testing || []).map((m) => <Row key={m._id} m={m} live />)}
                         {!data?.testing?.length && <div className={`${mono10} text-[#52525B]`}>No challengers in shadow — send a tuning proposal here.</div>}
