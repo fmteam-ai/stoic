@@ -1551,3 +1551,11 @@ USER CHOICES: sandbox broker first (real broker later via same interface), Mongo
 - Phase 4 PRODUCT NAV: Sidebar PRODUCTS section (AI Trading Bot /, Managed Strategy /managed adminOnly, Marketplace, VPS /vps, Analytics). pages/ComingSoon.jsx for VPS. adminOnly item filtering in Sidebar.
 - Sandbox adapter gained close_all_positions; BrokerAdapter default raises NotImplementedError.
 - Tests: tests/test_iter186_pamm_risk_health.py (14, all pass) + 18 M1 regression pass. Manifest → 3,163/309. testing_agent iteration_117.json 100% both stacks.
+
+## Iter-187 (2026-06) — PAMM security audit fixes (SEC-001/002/003)
+- Security audit verdict was CONDITIONAL PASS: strong BOLA/webhook/CORS/CSRF/XSS posture confirmed; 3 findings fixed.
+- SEC-001: step-up MFA (require_step_up action=risk_raise + audit_event → db.audit_log) now gates risk-INCREASING PAMM mutations: resume, clear-emergency-stop, clear-risk-breach, PUT risk-limits, POST /pamm/managers. Risk-REDUCING actions (pause, emergency-stop) deliberately stay instant. Frontend needs no change — axios interceptor + StepUpDialog auto-handle step_up_required 403s.
+- SEC-002: rate limiting via security.rate_limit on all PAMM POSTs — scope pamm_mutate 30/min per user, pamm_health 10/min, pamm_webhook 600/min per partner_id (pre-auth endpoint).
+- SEC-003: broker-derived error text sanitized (create_program, add_investor, webhook 401→"unauthorized"/400→"invalid webhook"); internals logged server-side via logger "pamm.api". Pure input-validation messages (risk-limits patch) still echoed.
+- Tests: tests/test_iter187_pamm_security.py (9, all pass: real-gate 403s + code assertions, bypass-satisfied 200s, pause/e-stop ungated, health-check 429, webhook 429 via seeded window counter, generic error assertions, audit_log entry). 32 PAMM regression tests pass. Manifest → 3,172/310. E2E curl on preview confirmed mfa_enrollment_required + generic webhook error.
+- NOTE: preview admin has no TOTP/passkey → gated actions show "enroll 2FA first" dialog (intended platform behavior, same as governance actions).
