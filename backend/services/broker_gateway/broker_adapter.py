@@ -56,6 +56,13 @@ def adapter_for(db, partner: dict) -> BrokerAdapter:
         if kind == "sandbox":
             from services.broker_gateway.sandbox_adapter import SandboxAdapter
             register_adapter("sandbox", SandboxAdapter)
+        elif kind == "rest":
+            from services.broker_gateway.rest_adapter import RestBrokerAdapter
+            register_adapter("rest", RestBrokerAdapter)
+        elif kind == "mt5_manager":
+            from services.broker_gateway.mt5_manager_adapter import \
+                Mt5ManagerAdapter
+            register_adapter("mt5_manager", Mt5ManagerAdapter)
         else:
             raise ValueError(f"no broker adapter registered for '{kind}'")
     return _REGISTRY[kind](db, partner)

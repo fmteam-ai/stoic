@@ -776,6 +776,10 @@ async def poll_trades(payload: PollRequest):
         )
         if not t:
             break
+        if t.get("execution_intent_id"):
+            from execution_intents import transition as _intent_transition
+            await _intent_transition(db, t["execution_intent_id"], "acked",
+                                     detail="dispatched to terminal")
         # Round 10/11 item 1 — fencing-epoch enforcement at the dispatch
         # fence. The AUTHORITATIVE current ownership document is the truth:
         # the order's epoch must EQUAL the current lease_epoch and the lease
@@ -1224,6 +1228,17 @@ async def report_trade(payload: BridgeTradeReport):
               "submission_state": ("broker_accepted"
                                    if payload.status == "open"
                                    else f"broker_{payload.status}")}
+    # execution intent lifecycle (v55 §2) — broker outcome closes the intent
+    if trade.get("execution_intent_id"):
+        from execution_intents import transition as _intent_transition
+        if payload.status == "open":
+            await _intent_transition(db, trade["execution_intent_id"],
+                                     "filled",
+                                     detail=f"ticket {payload.mt5_ticket}")
+        elif payload.status == "failed":
+            await _intent_transition(db, trade["execution_intent_id"],
+                                     "rejected",
+                                     detail=str(payload.error or "")[:120])
     # EA v1.50 — broker-native OrderCheck preflight rejection: structured
     # telemetry so failed preflights are visible and countable.
     if payload.status == "failed" and (payload.error or "").startswith(

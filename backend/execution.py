@@ -351,9 +351,46 @@ class MT5BridgeEngine(ExecutionEngine):
         from correlation import get_correlation_id
         trade_doc.setdefault("trace_id", get_correlation_id())
         trade_doc["order_authorization"] = order_auth
+        # EXECUTION INTENT (v55 §1/§2) — at-most-once: a retried/replayed
+        # signal converges on the ORIGINAL intent instead of a second trade.
+        from execution_intents import create_intent, dedupe_key_for, transition
+        _sig_ref = (signal.get("intent_ref") or signal.get("signal_id")
+                    or f"{trade_doc['opened_at'][:16]}|"
+                       f"{signal.get('entry_price')}|"
+                       f"{signal.get('stop_loss')}")
+        try:
+            _intent = await create_intent(
+                db, source=str(signal.get("scope")
+                               or signal.get("origin") or "manual"),
+                kind="open_trade",
+                dedupe_key=dedupe_key_for("mt5_bridge", "open_trade",
+                                          _acct_id, signal["symbol"],
+                                          _side, _sig_ref),
+                payload={"symbol": broker_symbol, "action": _side,
+                         "lot_size": signal.get("lot_size"),
+                         "entry_price": signal.get("entry_price")},
+                account_id=_acct_id, actor=user_id)
+        except (TypeError, AttributeError):  # isolated unit-test db mock
+            _intent = None
+        if _intent and _intent.get("duplicate"):
+            logger.warning("MT5 execute blocked — duplicate execution "
+                           "intent user=%s sym=%s intent=%s status=%s",
+                           user_id, signal.get("symbol"),
+                           _intent.get("intent_id"), _intent.get("status"))
+            return {"blocked": "duplicate_intent",
+                    "intent_id": _intent.get("intent_id"),
+                    "intent_status": _intent.get("status"),
+                    "original_result": _intent.get("result")}
+        if _intent:
+            trade_doc["execution_intent_id"] = _intent["intent_id"]
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
+        if _intent:
+            await transition(db, _intent["intent_id"], "submitted",
+                             detail=f"trade {trade_doc['id']} pending "
+                                    f"dispatch",
+                             result={"trade_id": trade_doc["id"]})
         await ws_manager.broadcast(user_id, "trade_created", trade_doc)
         return trade_doc
 

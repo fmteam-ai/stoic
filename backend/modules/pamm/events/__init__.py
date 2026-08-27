@@ -15,6 +15,7 @@ EVENT_TYPES = {
     "OpStateChanged", "ChangeRequested", "ChangeApproved", "ChangeRejected",
     "FlattenFailed", "FlattenResolved",
     "BrokerIncidentOpened", "BrokerIncidentResolved", "ExternalEscalation",
+    "PositionDrift", "PositionDriftAcknowledged", "DriftToleranceChanged",
 }
 
 

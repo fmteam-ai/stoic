@@ -43,12 +43,30 @@ async def sweep_once(db) -> dict:
         except Exception as e:
             logger.warning("sweep risk-check failed on %s: %s",
                            p.get("program_id"), e)
+    # position truth (v55 §3) — expected vs broker book; drift freezes
+    # new exposure via the op-state machine (escalation only)
+    truth_checked, drifts = 0, 0
+    from modules.pamm.reconciliation.position_truth import \
+        check_position_truth
+    async for p in db.pamm_programs.find({"status": "active"}, {"_id": 0}):
+        try:
+            r = await check_position_truth(db, p, actor="auto-sweep")
+            truth_checked += 1
+            if r.get("status") == "drift":
+                drifts += 1
+        except Exception as e:
+            logger.warning("sweep position-truth failed on %s: %s",
+                           p.get("program_id"), e)
+    from execution_intents import expire_stale
+    intents_expired = await expire_stale(db)
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=HEALTH_RETENTION_DAYS)).isoformat()
     await db.pamm_health.delete_many({"at": {"$lt": cutoff}})
     doc = {"_id": "last", "at": started, "finished_at": _now(),
            "programs_checked": checked, "breaches": breaches,
            "flatten_retries": flatten_retries,
+           "position_truth": {"checked": truth_checked, "drift": drifts},
+           "intents_expired": intents_expired,
            "heartbeats": [{k: h.get(k) for k in
                            ("partner_id", "ok", "score", "status",
                             "latency_ms")} for h in heartbeats]}

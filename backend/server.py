@@ -30,6 +30,8 @@ from routes.setup_routes import router as setup_router
 from routes.auth_routes import router as auth_router
 from routes.webauthn_routes import router as webauthn_router
 from modules.pamm.api import router as pamm_router
+from routes.intent_routes import router as intent_router
+from services.broker_gateway.mock_broker import router as mockbroker_router
 from routes.market_routes import router as market_router
 from routes.bot_routes import router as bot_router
 from routes.signal_routes import router as signal_router
@@ -395,6 +397,8 @@ api_router.include_router(setup_router)
 api_router.include_router(auth_router)
 api_router.include_router(webauthn_router)
 api_router.include_router(pamm_router)
+api_router.include_router(intent_router)
+api_router.include_router(mockbroker_router)
 api_router.include_router(market_router)
 api_router.include_router(bot_router)
 api_router.include_router(signal_router)

@@ -35,10 +35,28 @@ async def _flatten_and_verify(db, program: dict, actor: str,
     pid = program["program_id"]
     remaining, error = None, None
     try:
+        from execution_intents import dedupe_key_for, run_once
         from services.broker_gateway.pamm_api import get_adapter
         adapter = await get_adapter(db, program["partner_id"])
-        closed = await adapter.close_all_positions(
-            program["broker_program_id"])
+        first_at = (program.get("flatten_failed") or {}).get("first_at") or ""
+
+        async def _close(_intent):
+            return await adapter.close_all_positions(
+                program["broker_program_id"])
+        # execution intent (v55 §2): one logical flatten attempt executes
+        # the broker close command AT MOST once — duplicate callbacks and
+        # concurrent sweeps converge on the original intent.
+        out = await run_once(
+            db, source="pamm", kind="emergency_flatten",
+            dedupe_key=dedupe_key_for("pamm", "flatten", pid, first_at,
+                                      attempt),
+            payload={"program_id": pid, "attempt": attempt},
+            executor=_close, program_id=pid, actor=actor)
+        if out.get("in_flight"):
+            logger.warning("flatten attempt %s on %s already in flight — "
+                           "skipping duplicate execution", attempt, pid)
+            return False
+        closed = out.get("result") or {"closed": 0}
         # verify against the broker — the command result is NOT proof
         remaining = len(await adapter.get_positions(
             program["broker_program_id"]))
@@ -53,6 +71,11 @@ async def _flatten_and_verify(db, program: dict, actor: str,
                 await emit_event(db, "BrokerIncidentResolved",
                                  {"program_id": pid,
                                   "incident_id": inc["incident_id"]})
+            # broker confirmed flat → STOIC expected state is empty too
+            await db.pamm_expected_positions.update_one(
+                {"program_id": pid},
+                {"$set": {"positions": [], "at": _now(),
+                          "source": "flatten_verified"}}, upsert=True)
             await emit_event(db, "PositionsFlattened",
                              {"program_id": pid,
                               "closed": int(closed.get("closed", 0)),

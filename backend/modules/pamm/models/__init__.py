@@ -31,5 +31,11 @@ async def ensure_pamm_setup(db) -> None:
     await db.pamm_change_requests.create_index(
         [("program_id", 1), ("status", 1)])
     await db.pamm_incidents.create_index([("program_id", 1), ("status", 1)])
+    await db.pamm_expected_positions.create_index("program_id", unique=True)
+    await db.pamm_position_truth.create_index([("program_id", 1), ("at", -1)])
+    from execution_intents import ensure_intent_indexes
+    await ensure_intent_indexes(db)
     from services.broker_gateway.pamm_api import ensure_sandbox_partner
     await ensure_sandbox_partner(db)
+    from services.broker_gateway.mock_broker import ensure_rest_demo_partner
+    await ensure_rest_demo_partner(db)

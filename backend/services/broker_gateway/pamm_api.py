@@ -42,3 +42,58 @@ def webhook_secret(partner: dict) -> str:
     import secrets_vault
     return secrets_vault.decrypt(partner["webhook_secret_enc"],
                                  associated_data=b"broker_webhook_secret")
+
+
+async def register_partner(db, payload: dict, actor: str) -> dict:
+    """Register a REAL broker partner (rest / mt5_manager). All secrets
+    are encrypted at rest via the vault and never returned."""
+    import secrets_vault
+    adapter = str(payload.get("adapter") or "")
+    if adapter not in ("rest", "mt5_manager"):
+        raise ValueError("adapter must be 'rest' or 'mt5_manager'")
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError("name required")
+    doc = {"partner_id": f"prt_{uuid.uuid4().hex[:8]}", "name": name[:120],
+           "adapter": adapter, "status": "active", "created_by": actor,
+           "webhook_secret_enc": secrets_vault.encrypt(
+               uuid.uuid4().hex + uuid.uuid4().hex,
+               associated_data=b"broker_webhook_secret"),
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    if adapter == "rest":
+        cfg = dict(payload.get("rest_config") or {})
+        if not cfg.get("base_url"):
+            raise ValueError("rest_config.base_url required")
+        api_key = cfg.pop("api_key", None)
+        if not api_key:
+            raise ValueError("rest_config.api_key required")
+        cfg["api_key_enc"] = secrets_vault.encrypt(
+            str(api_key), associated_data=b"broker_api_key")
+        doc["rest_config"] = cfg
+    else:
+        cfg = dict(payload.get("mt5_config") or {})
+        for req in ("gateway_url", "manager_login", "server"):
+            if not cfg.get(req):
+                raise ValueError(f"mt5_config.{req} required")
+        pw = cfg.pop("manager_password", None)
+        if not pw:
+            raise ValueError("mt5_config.manager_password required")
+        cfg["manager_password_enc"] = secrets_vault.encrypt(
+            str(pw), associated_data=b"broker_manager_password")
+        doc["mt5_config"] = cfg
+    await db.broker_partners.insert_one(dict(doc))
+    return redact_partner({k: v for k, v in doc.items() if k != "_id"})
+
+
+def redact_partner(p: dict) -> dict:
+    out = dict(p)
+    out.pop("webhook_secret_enc", None)
+    for cfg_key, secret in (("rest_config", "api_key_enc"),
+                            ("mt5_config", "manager_password_enc")):
+        cfg = out.get(cfg_key)
+        if isinstance(cfg, dict):
+            cfg = dict(cfg)
+            if cfg.pop(secret, None):
+                cfg["credentials_set"] = True
+            out[cfg_key] = cfg
+    return out

@@ -6,8 +6,9 @@ import requests
 import pytest
 
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
-STEP_UP = os.environ.get("STEP_UP_BYPASS_TOKEN") or open("/app/backend/.env").read().split("STEP_UP_BYPASS_TOKEN=")[1].split()[0]
-RL_BYPASS = os.environ.get("RATE_LIMIT_BYPASS_TOKEN") or open("/app/backend/.env").read().split("RATE_LIMIT_BYPASS_TOKEN=")[1].split()[0]
+_ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+STEP_UP = os.environ.get("STEP_UP_BYPASS_TOKEN") or open(_ENV_PATH).read().split("STEP_UP_BYPASS_TOKEN=")[1].split()[0]
+RL_BYPASS = os.environ.get("RATE_LIMIT_BYPASS_TOKEN") or open(_ENV_PATH).read().split("RATE_LIMIT_BYPASS_TOKEN=")[1].split()[0]
 
 
 def _login(email, password):

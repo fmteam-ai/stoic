@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import api, { formatApiError } from "@/lib/api";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -540,3 +540,74 @@ export function EventsFeed({ events }) {
         </div>
     );
 }
+
+export function PositionTruthWidget({ programId, isAdmin }) {
+    const [data, setData] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const load = useCallback(async () => {
+        try {
+            const r = await api.get(`/pamm/programs/${programId}/position-truth`);
+            setData(r.data);
+        } catch { /* non-fatal */ }
+    }, [programId]);
+    useEffect(() => { load(); }, [load]);
+    const run = async (action) => {
+        setBusy(true);
+        try {
+            await api.post(`/pamm/programs/${programId}/position-truth/${action}`);
+            await load();
+            toast.success(action === "check" ? "Position truth checked" : "Broker truth adopted — trading stays frozen until resumed");
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    const t = data?.truth;
+    const status = t?.status || "unchecked";
+    const tone = status === "drift" ? "text-[#FF3B30] border-[#FF3B30]/40"
+        : status === "in_sync" ? "text-[#00FF41] border-[#00FF41]/40"
+            : "text-[#FFB000] border-[#FFB000]/40";
+    return (
+        <div className={box} data-testid="pamm-position-truth">
+            <div className="px-4 py-3 border-b border-[#141414] flex items-center justify-between">
+                <div className={label}>POSITION TRUTH</div>
+                <div className="flex items-center gap-2">
+                    <span className={`font-mono text-[10px] px-1.5 py-0.5 border ${tone}`} data-testid="position-truth-status">
+                        {status.toUpperCase().replace("_", " ")}
+                    </span>
+                    <button onClick={() => run("check")} disabled={busy} data-testid="position-truth-check-button"
+                        className={`${btn} border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B] hover:text-white`}>
+                        {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : "CHECK"}
+                    </button>
+                </div>
+            </div>
+            <div className="px-4 py-3 grid grid-cols-3 gap-2 text-center">
+                <div>
+                    <div className={label}>EXPECTED</div>
+                    <div className="font-mono text-sm text-white" data-testid="position-truth-expected">{t?.expected_count ?? "—"}</div>
+                </div>
+                <div>
+                    <div className={label}>BROKER</div>
+                    <div className="font-mono text-sm text-white" data-testid="position-truth-broker">{t?.broker_count ?? "—"}</div>
+                </div>
+                <div>
+                    <div className={label}>TOLERANCE</div>
+                    <div className="font-mono text-sm text-white" data-testid="position-truth-tolerance">{data?.drift_tolerance ?? 0} lots</div>
+                </div>
+            </div>
+            {status === "drift" && (
+                <div className="mx-4 mb-3 border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-3 py-2" data-testid="position-truth-drift-banner">
+                    <div className="font-mono text-[10px] text-[#FF3B30]">
+                        POSITION DRIFT — {t.missing} missing · {t.unexpected} unexpected · {t.mismatched} mismatched. New exposure FROZEN.
+                    </div>
+                    {isAdmin && (
+                        <button onClick={() => run("acknowledge")} disabled={busy} data-testid="position-truth-ack-button"
+                            className={`${btn} mt-2 border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10`}>
+                            ADOPT BROKER TRUTH
+                        </button>
+                    )}
+                </div>
+            )}
+            {t?.at && <div className="px-4 pb-3 font-mono text-[10px] text-[#52525B]">last check {t.at.slice(0, 19).replace("T", " ")} UTC</div>}
+        </div>
+    );
+}
+

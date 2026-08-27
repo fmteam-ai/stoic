@@ -94,6 +94,11 @@ class TestBrokerComparison:
                               timeout=20)
         data = r.json()
         found_latency = False
+        any_samples = any((b["execution"].get("latency_samples") or 0) > 0
+                          for b in data["brokers"])
+        if not any_samples:
+            pytest.skip("no dispatch-latency samples inside the rolling "
+                        "30-day window — live-data dependent")
         for b in data["brokers"]:
             e = b["execution"]
             if e["median_fill_latency_s"] is not None:

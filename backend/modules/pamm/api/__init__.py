@@ -615,3 +615,104 @@ async def webhook_ep(partner_id: str, request: Request):
     except ValueError as e:
         logger.warning("pamm webhook rejected for %s: %s", partner_id, e)
         raise HTTPException(status_code=400, detail="invalid webhook")
+
+
+@router.get("/partners")
+async def partners_ep(user=Depends(get_current_user)):
+    db = get_db()
+    await require_manager(db, user)
+    from services.broker_gateway.pamm_api import redact_partner
+    return {"partners": [redact_partner(p) async for p in
+                         db.broker_partners.find({}, {"_id": 0})
+                         .sort("created_at", 1)]}
+
+
+@router.post("/partners")
+async def create_partner_ep(payload: dict, request: Request,
+                            user=Depends(get_current_user)):
+    """Register a REAL broker partner (rest / mt5_manager) — admin +
+    step-up MFA; credentials are vault-encrypted at rest."""
+    db = get_db()
+    require_admin(user)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    await _step_up(db, user, request, "pamm_partner_create",
+                   {"name": payload.get("name"),
+                    "adapter": payload.get("adapter")})
+    from services.broker_gateway.pamm_api import register_partner
+    try:
+        return await register_partner(db, payload, user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/programs/{program_id}/position-truth")
+async def position_truth_ep(program_id: str,
+                            user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    expected = await db.pamm_expected_positions.find_one(
+        {"program_id": program_id}, {"_id": 0})
+    history = [h async for h in db.pamm_position_truth.find(
+        {"program_id": program_id}, {"_id": 0}).sort("at", -1).limit(20)]
+    incident = await db.pamm_incidents.find_one(
+        {"program_id": program_id, "type": "position_drift",
+         "status": "open"}, {"_id": 0})
+    return {"truth": program.get("position_truth"),
+            "drift_tolerance": float(program.get("drift_tolerance") or 0.0),
+            "expected": expected, "history": history,
+            "open_incident": incident}
+
+
+@router.post("/programs/{program_id}/position-truth/check")
+async def position_truth_check_ep(program_id: str, request: Request,
+                                  user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_health")
+    from modules.pamm.reconciliation.position_truth import \
+        check_position_truth
+    try:
+        return await check_position_truth(db, program, actor=user["id"])
+    except Exception as e:
+        logger.warning("position truth check failed on %s: %s",
+                       program_id, e)
+        raise HTTPException(status_code=502,
+                            detail="Broker positions unavailable")
+
+
+@router.post("/programs/{program_id}/position-truth/acknowledge")
+async def position_truth_ack_ep(program_id: str, request: Request,
+                                user=Depends(get_current_user)):
+    """Adopt broker truth as expected state. Trading REMAINS frozen —
+    resume is a separate step-up-gated action."""
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from step_up import audit_event
+    await audit_event(db, user["id"], "pamm_position_truth_ack",
+                      {"program_id": program_id}, request)
+    from modules.pamm.reconciliation.position_truth import acknowledge_drift
+    return await acknowledge_drift(db, program, user["id"])
+
+
+@router.put("/programs/{program_id}/drift-tolerance")
+async def drift_tolerance_ep(program_id: str, payload: dict,
+                             request: Request,
+                             user=Depends(get_current_user)):
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.reconciliation.position_truth import \
+        set_drift_tolerance
+    try:
+        return await set_drift_tolerance(
+            db, program, float(payload.get("tolerance") or 0), user["id"])
+    except PermissionError as e:  # increases go through dual auth
+        raise HTTPException(status_code=409, detail=str(e))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail="tolerance must be a number >= 0")

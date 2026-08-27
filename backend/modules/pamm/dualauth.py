@@ -12,7 +12,7 @@ CRITICAL_KINDS = {"risk_limits_increase", "unlock",
                   "strategy_replacement", "strategy_version_promotion",
                   "leverage_cap_increase", "max_aum_increase",
                   "fee_change", "withdrawal_rules_change",
-                  "allocation_method_change"}
+                  "allocation_method_change", "drift_tolerance_increase"}
 EXPIRY_HOURS = 48
 
 
@@ -74,6 +74,11 @@ async def _apply(db, req: dict) -> None:
         await db.pamm_programs.update_one(
             {"program_id": program["program_id"]},
             {"$set": {"risk_limits": merged}})
+    elif kind == "drift_tolerance_increase":
+        await db.pamm_programs.update_one(
+            {"program_id": program["program_id"]},
+            {"$set": {"drift_tolerance":
+                      float(payload.get("tolerance") or 0.0)}})
     elif kind == "unlock":
         from modules.pamm.risk.states import set_op_state
         await set_op_state(db, program,
