@@ -238,6 +238,7 @@ class MT5BridgeEngine(ExecutionEngine):
             _orig_lot = float(signal["lot_size"])
             signal["lot_size"] = max(
                 0.01, round(_orig_lot * float(gate["reduce_factor"]), 2))
+            signal["_authority_reduced"] = True
             logger.warning(
                 "TRADING AUTHORITY REDUCED — lot %s → %s user=%s sym=%s",
                 _orig_lot, signal["lot_size"], user_id,
@@ -435,6 +436,8 @@ class MT5BridgeEngine(ExecutionEngine):
                     "original_result": _intent.get("result")}
         if _intent:
             trade_doc["execution_intent_id"] = _intent["intent_id"]
+        if signal.get("_authority_reduced"):
+            trade_doc["authority_reduced"] = True
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)

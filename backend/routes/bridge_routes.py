@@ -1492,10 +1492,12 @@ async def report_trade(payload: BridgeTradeReport):
         try:
             from loss_postmortem import maybe_record_postmortem, maybe_record_winner
             from drift_detector import record_residual_for_trade
+            from outcome_attribution import attribute_trade_by_id
             import asyncio
             asyncio.create_task(maybe_record_postmortem(db, payload.trade_id))
             asyncio.create_task(maybe_record_winner(db, payload.trade_id))
             asyncio.create_task(record_residual_for_trade(db, payload.trade_id))
+            asyncio.create_task(attribute_trade_by_id(db, payload.trade_id))
         except Exception as _sw:  # noqa: BLE001
             record_swallow("bridge", "report_trade", _sw)
 

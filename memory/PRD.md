@@ -1580,3 +1580,14 @@ REMAINING (next): #1 signing-key external-signer abstraction, #5 per-installatio
 
 - Backlog (next): Outcome Attribution Engine (P1), Champion/Challenger AI pipeline (P1), Regime-conditioned calibration (P2), Command Center GREEN/YELLOW/RED dashboard (P2), Unified Execution Authority hard-cutover (route Scalp/Swing/AI/Allocator submit paths through run_once), real broker credentials onboarding via new partner registry.
 
+
+## Iter-197 (2026-06) — Outcome Attribution engine (v56 §12/§13)
+- `outcome_attribution.py`: every closed trade decomposes into weighted multi-category contributions (sum=1): ALPHA_ERROR, REGIME_ERROR, TIMING_ERROR, SIZING_ERROR, EXECUTION_ERROR, BROKER_ERROR, INFRASTRUCTURE_ERROR, NEWS_SHOCK, CORRELATION_ERROR, NORMAL_VARIANCE. Rule-based v1 (engine_version=1) using signals: slippage ratio vs planned risk, fill delay, dispatch retries, degraded/unknown execution intents, ghost/external trades, broker reject text + incident overlap, cached high-impact news in trade window, authority/verdict size reductions, concurrent losing trades (correlation), session shift on losses. Losses: residual blame → ALPHA_ERROR (noise cap 0.85); wins: mostly NORMAL_VARIANCE. `alpha_clean` flag (noise ≤ 0.3) marks outcomes safe for AI alpha learning — the consumable for the v56-B learning pipeline.
+- Storage: `trade_outcomes` collection (unique trade_id) + attribution/attribution_primary/alpha_clean mirrored onto trade docs. result_r in R units (price-based, pnl-sign fallback).
+- Wiring: bridge /report on close fires attribute_trade_by_id async; PAMM sweep backfills 100/cycle (outcomes_attributed in sweep doc) — 1200 historical trades already attributed in preview. execution.py marks authority_reduced on trade docs.
+- API `/api/attribution`: GET /summary?days&strategy (per-category weighted-R + loss-R, per-strategy noise_r, worst_category + plain-language lesson; admin all, users own), GET /trades, GET /trades/{id}, POST /backfill (admin).
+- Frontend: AttributionPanel on Loss Lab (data-testid attribution-panel) — 7/30/90d category loss bars, alpha-clean count, biggest-drag + lesson line.
+- Tested: test_iter197_outcome_attribution.py (9/9) + 46 regression (iter193/195/196). Screenshot verified panel + AuthorityStrip. Manifest 3300 tests.
+- Note: 2 stale preview UNKNOWN intents manually expired (test artifacts; UNKNOWN behavior verified correct — never resent).
+- v56-B remaining: AI learning pipeline consuming alpha_clean, verdict decision recording, Scalp latency profiler (T0–T9), calibration hierarchy, broker-intelligence latency convergence.
+

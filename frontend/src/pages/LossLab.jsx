@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { FailureTaxonomyCard } from "@/components/FailureTaxonomyCard";
+import { AttributionPanel } from "@/components/AttributionPanel";
 import {
     RefreshCw, FlaskConical, AlertTriangle, Brain, TrendingDown, ShieldCheck,
     Activity, ChevronRight, Calendar,
@@ -368,6 +369,9 @@ export default function LossLab() {
 
             <div className="p-4 md:p-8 space-y-6">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
+
+                {/* v56 §12 — Outcome Attribution */}
+                <AttributionPanel />
 
                 {regenerating && (
                     <div className="border border-[#0099FF]/30 bg-[#0099FF]/5 px-4 py-3 text-xs text-[#0099FF] font-mono flex items-center gap-2"
