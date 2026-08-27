@@ -49,7 +49,9 @@ async def trade_verdict(db, program: dict,
     allowed, reason = await trading_allowed(db, program)
     if not allowed:
         return {**base, "verdict": "REJECT", "approved_risk_pct": 0.0,
-                "reason": reason, "factors": []}
+                "reason": reason, "primary_reason": reason,
+                "limiting_factor": "trading_blocked", "risk_factor": 0.0,
+                "factors": []}
 
     ev = await evaluate_program(db, program)
     factors = []
@@ -69,12 +71,19 @@ async def trade_verdict(db, program: dict,
                         "curve": "fixed", "factor": RISK_REDUCED_FACTOR})
 
     approved = round(requested * min(scale, 1.0), 4)
+    limiting = min(factors, key=lambda f: f["factor"]) if factors else None
     if scale <= MIN_FACTOR:
         verdict, approved = "REJECT", 0.0
     elif scale >= 0.999:
         verdict = "APPROVE"
     else:
         verdict = "REDUCE"
+    # reason hierarchy (review v54 §4) → feeds Outcome Attribution later
+    primary = ("full_headroom" if verdict == "APPROVE"
+               else f"{limiting['limit']}_headroom" if limiting else "ok")
     return {**base, "verdict": verdict, "approved_risk_pct": approved,
             "scale": round(min(scale, 1.0), 4), "reason": "ok",
+            "primary_reason": primary,
+            "limiting_factor": limiting["limit"] if limiting else None,
+            "risk_factor": limiting["factor"] if limiting else 1.0,
             "factors": factors, "nav": ev.get("nav")}

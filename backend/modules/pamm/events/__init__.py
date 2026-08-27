@@ -14,6 +14,7 @@ EVENT_TYPES = {
     "JoinRequested", "JoinApproved", "JoinRejected",
     "OpStateChanged", "ChangeRequested", "ChangeApproved", "ChangeRejected",
     "FlattenFailed", "FlattenResolved",
+    "BrokerIncidentOpened", "BrokerIncidentResolved", "ExternalEscalation",
 }
 
 

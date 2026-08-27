@@ -30,5 +30,6 @@ async def ensure_pamm_setup(db) -> None:
     await db.pamm_change_requests.create_index("change_id", unique=True)
     await db.pamm_change_requests.create_index(
         [("program_id", 1), ("status", 1)])
+    await db.pamm_incidents.create_index([("program_id", 1), ("status", 1)])
     from services.broker_gateway.pamm_api import ensure_sandbox_partner
     await ensure_sandbox_partner(db)

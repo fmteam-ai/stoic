@@ -107,9 +107,10 @@ class TestFlattenVerification:
             ev = _run(db.pamm_events.find_one(
                 {"type": "FlattenFailed", "data.program_id": pid}))
             assert ev is not None
+            # escalation ladder: attempt 1 = retry only, NO alert yet
             note = _run(db.pamm_notifications.find_one(
                 {"type": "FlattenFailed", "program_id": pid}))
-            assert note["severity"] == "critical"
+            assert note is None
             # heal the broker; sweep retries and verifies flat
             _run(db.pamm_programs.update_one(
                 {"program_id": pid},

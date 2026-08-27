@@ -563,6 +563,31 @@ async def decide_change_ep(change_id: str, decision: str, request: Request,
         raise HTTPException(status_code=409, detail=str(e))
 
 
+@router.post("/partners/{partner_id}/certify")
+async def certify_partner_ep(partner_id: str, request: Request,
+                             user=Depends(get_current_user)):
+    """Run the standard adapter certification contract (v54 §14)."""
+    db = get_db()
+    require_admin(user)
+    partner = await db.broker_partners.find_one(
+        {"partner_id": partner_id}, {"_id": 0})
+    if not partner:
+        raise HTTPException(status_code=404, detail="Partner not found")
+    await _rl(db, request, user["id"], "pamm_health", max_attempts=10)
+    from services.broker_gateway.certification import certify_adapter
+    return await certify_adapter(db, partner)
+
+
+@router.get("/incidents")
+async def incidents_ep(status: str | None = None,
+                       user=Depends(get_current_user)):
+    db = get_db()
+    await require_manager(db, user)
+    q = {"status": status} if status in ("open", "resolved") else {}
+    return {"incidents": [i async for i in db.pamm_incidents.find(
+        q, {"_id": 0}).sort("opened_at", -1).limit(100)]}
+
+
 @router.get("/sweep-status")
 async def sweep_status_ep(user=Depends(get_current_user)):
     db = get_db()

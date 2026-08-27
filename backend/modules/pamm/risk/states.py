@@ -45,6 +45,14 @@ async def _flatten_and_verify(db, program: dict, actor: str,
         if remaining == 0:
             await db.pamm_programs.update_one(
                 {"program_id": pid}, {"$unset": {"flatten_failed": ""}})
+            inc = await db.pamm_incidents.find_one_and_update(
+                {"program_id": pid, "type": "flatten_failed",
+                 "status": "open"},
+                {"$set": {"status": "resolved", "resolved_at": _now()}})
+            if inc:
+                await emit_event(db, "BrokerIncidentResolved",
+                                 {"program_id": pid,
+                                  "incident_id": inc["incident_id"]})
             await emit_event(db, "PositionsFlattened",
                              {"program_id": pid,
                               "closed": int(closed.get("closed", 0)),
@@ -71,18 +79,84 @@ async def _flatten_and_verify(db, program: dict, actor: str,
     await emit_event(db, "FlattenFailed",
                      {"program_id": pid, "attempt": attempt,
                       "remaining": remaining, "error": error})
-    if attempt == 1 or attempt % 5 == 0:  # first + periodic re-escalation
-        await db.pamm_notifications.insert_one(
-            {"type": "FlattenFailed", "program_id": pid,
-             "severity": "critical", "at": _now(), "seen": False,
-             "summary": f"CRITICAL: emergency flatten UNVERIFIED on "
-                        f"{program.get('name')} — "
-                        f"{remaining if remaining is not None else '?'} "
-                        f"position(s) may remain (attempt {attempt}). "
-                        f"Human intervention required."})
+    await _escalate_flatten(db, program, incident, attempt)
     logger.critical("PAMM FLATTEN FAILED on %s (attempt %s): remaining=%s "
                     "error=%s", pid, attempt, remaining, error)
     return False
+
+
+async def _escalate_flatten(db, program: dict, incident: dict,
+                            attempt: int) -> None:
+    """Escalation ladder (review v54 §2): 1→retry only · 2→critical alert ·
+    3→formal broker incident · 5→page operator · >5min→external escalation.
+    Unresolved exposure is a first-class incident for managed money."""
+    from datetime import datetime, timezone
+    from modules.pamm.events import emit_event
+    pid = program["program_id"]
+    name = program.get("name")
+
+    async def _notify(severity: str, summary: str):
+        await db.pamm_notifications.insert_one(
+            {"type": "FlattenFailed", "program_id": pid,
+             "severity": severity, "at": _now(), "seen": False,
+             "summary": summary})
+
+    if attempt == 2:
+        await _notify("critical",
+                      f"CRITICAL: emergency flatten UNVERIFIED on {name} — "
+                      f"{incident.get('remaining') if incident.get('remaining') is not None else '?'} "
+                      f"position(s) may remain (attempt 2). "
+                      f"Human intervention required.")
+    open_inc = await db.pamm_incidents.find_one(
+        {"program_id": pid, "type": "flatten_failed", "status": "open"})
+    if attempt >= 3:
+        if not open_inc:
+            open_inc = {"incident_id": f"inc_{_uuid_hex()}",
+                        "type": "flatten_failed", "program_id": pid,
+                        "program_name": name, "status": "open",
+                        "opened_at": _now(), "attempts": attempt,
+                        "last_error": incident.get("error"),
+                        "external_escalated": False}
+            await db.pamm_incidents.insert_one(dict(open_inc))
+            await emit_event(db, "BrokerIncidentOpened",
+                             {"program_id": pid,
+                              "incident_id": open_inc["incident_id"],
+                              "kind": "flatten_failed"})
+            await _notify("critical",
+                          f"BROKER INCIDENT OPENED on {name}: emergency "
+                          f"flatten unresolved after {attempt} attempts.")
+        else:
+            await db.pamm_incidents.update_one(
+                {"incident_id": open_inc["incident_id"]},
+                {"$set": {"attempts": attempt,
+                          "last_error": incident.get("error")}})
+    if attempt >= 5 and attempt % 5 == 0:
+        await _notify("page",
+                      f"PAGE OPERATOR: flatten on {name} still unresolved "
+                      f"after {attempt} attempts. Manual broker action "
+                      f"required NOW.")
+    first_at = incident.get("first_at")
+    if first_at and open_inc and not open_inc.get("external_escalated"):
+        age_s = (datetime.now(timezone.utc)
+                 - datetime.fromisoformat(first_at)).total_seconds()
+        if age_s > 300:  # >5 minutes → external escalation
+            await db.pamm_incidents.update_one(
+                {"incident_id": open_inc["incident_id"]},
+                {"$set": {"external_escalated": True,
+                          "external_escalated_at": _now()}})
+            await emit_event(db, "ExternalEscalation",
+                             {"program_id": pid,
+                              "incident_id": open_inc["incident_id"],
+                              "age_seconds": int(age_s)})
+            await _notify("page",
+                          f"EXTERNAL ESCALATION on {name}: unresolved "
+                          f"exposure for over 5 minutes "
+                          f"(incident {open_inc['incident_id']}).")
+
+
+def _uuid_hex() -> str:
+    import uuid
+    return uuid.uuid4().hex[:10]
 
 
 def blocks_new_trades(state: str) -> bool:

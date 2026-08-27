@@ -184,6 +184,17 @@ export function RiskPanel({ programId, riskStatus, limits, breach, onChanged, is
 }
 
 export function BrokerHealthWidget({ partners, onPing, pinging }) {
+    const [certifying, setCertifying] = useState(null);
+    const certify = async (pid) => {
+        setCertifying(pid);
+        try {
+            const r = await api.post(`/pamm/partners/${pid}/certify`);
+            toast[r.data.certified ? "success" : "warning"](
+                `${r.data.score}% — ${r.data.certified ? "CERTIFIED" : "NOT CERTIFIED"} (${r.data.passed} pass / ${r.data.failed} fail)`);
+            onPing();
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setCertifying(null); }
+    };
     return (
         <div className={box} data-testid="pamm-broker-health">
             <div className="flex items-center justify-between px-4 py-3 border-b border-[#1F1F1F]">
@@ -210,6 +221,19 @@ export function BrokerHealthWidget({ partners, onPing, pinging }) {
                         <div className="flex items-center justify-between mt-1">
                             <span className={`font-mono text-[10px] tracking-widest ${tone}`}>{(h.status || "unchecked").toUpperCase()}</span>
                             <span className="font-mono text-[10px] text-[#52525B]">{h.latency_ms !== undefined ? `${h.latency_ms}ms` : ""}</span>
+                        </div>
+                        <div className="flex items-center justify-between mt-1.5">
+                            {p.certification ? (
+                                <span className={`font-mono text-[9px] px-1.5 py-0.5 border tracking-widest ${p.certification.certified ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#FF3B30]/40 text-[#FF3B30]"}`}
+                                    data-testid={`broker-cert-badge-${p.partner_id}`}>
+                                    {p.certification.certified ? "CERTIFIED" : "NOT CERTIFIED"} {p.certification.score}%
+                                </span>
+                            ) : <span className="font-mono text-[9px] text-[#52525B]">UNCERTIFIED ADAPTER</span>}
+                            <button onClick={() => certify(p.partner_id)} disabled={certifying === p.partner_id}
+                                data-testid={`broker-certify-${p.partner_id}`}
+                                className={`${btn} border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B] hover:text-white`}>
+                                {certifying === p.partner_id ? <Loader2 className="w-3 h-3 animate-spin" /> : "CERTIFY"}
+                            </button>
                         </div>
                         <div className="flex gap-0.5 mt-2 items-end h-5">
                             {[...(p.history || [])].reverse().map((c, i) => (
@@ -360,14 +384,19 @@ export function VerdictTester({ programId }) {
                 {result && (
                     <span className={`px-2 py-1 font-mono text-[10px] tracking-widest border ${tone[result.verdict]}`}
                         data-testid="verdict-result">
-                        {result.verdict}{result.verdict !== "REJECT" ? ` → ${result.approved_risk_pct}%` : ` (${result.reason})`}
+                        {result.verdict}{result.verdict !== "REJECT" ? ` → ${result.approved_risk_pct}%` : ` (${result.primary_reason || result.reason})`}
                     </span>
                 )}
             </div>
+            {result?.limiting_factor && result.limiting_factor !== "trading_blocked" && result.verdict !== "APPROVE" && (
+                <div className="mt-2 font-mono text-[10px] text-[#FFB000]" data-testid="verdict-limiting">
+                    LIMITING: {LIMIT_LABELS[result.limiting_factor] || result.limiting_factor} ×{result.risk_factor}
+                </div>
+            )}
             {result?.factors?.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                     {result.factors.map(f => (
-                        <span key={f.limit} className="font-mono text-[9px] px-1.5 py-0.5 border border-[#1F1F1F] text-[#52525B]">
+                        <span key={f.limit} className={`font-mono text-[9px] px-1.5 py-0.5 border ${f.limit === result.limiting_factor && result.verdict !== "APPROVE" ? "border-[#FFB000]/60 text-[#FFB000]" : "border-[#1F1F1F] text-[#52525B]"}`}>
                             {LIMIT_LABELS[f.limit] || f.limit} ×{f.factor}
                         </span>
                     ))}
@@ -482,6 +511,7 @@ export function FlattenFailedBanner({ incident }) {
             <div className="text-xs font-mono text-[#FF3B30]">
                 CRITICAL — EMERGENCY FLATTEN UNVERIFIED: {incident.remaining ?? "?"} position(s) may remain open
                 (attempt {incident.attempts}{incident.error ? ` · ${incident.error}` : ""}).
+                {incident.attempts >= 3 ? " BROKER INCIDENT OPEN." : ""}
                 Auto-retrying every sweep. Verify manually at the broker NOW.
             </div>
         </div>

@@ -10,7 +10,8 @@ logger = logging.getLogger("pamm.health")
 
 HISTORY_WINDOW = 20
 PARTNER_FIELDS = {"_id": 0, "partner_id": 1, "name": 1, "adapter": 1,
-                  "status": 1, "health": 1, "created_at": 1}
+                  "status": 1, "health": 1, "certification": 1,
+                  "created_at": 1}
 
 
 def _now() -> str:

@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only validation of v54 batch on /managed page. All four v54 UI features work end-to-end: (1) Broker Health CERTIFIED 100% badge + CERTIFY re-runs with success toast '100% — CERTIFIED (13 pass / 0 fail)'; (2) Verdict tester APPROVE→0.3% baseline and, after seeding daily-loss NAV snapshots, verdict-limiting line renders with 'Daily loss cap % ×0.5' chip present + amber highlight on the actual limiting factor chip; (3) FlattenFailedBanner shows 'BROKER INCIDENT OPEN.' when flatten_failed.attempts>=3 and disappears after $unset; (4) Risk panel CURVE dropdowns render all 6 rows with correct defaults (linear/linear/linear/exponential/logistic/step). Regression: KPIs render, op-state RUNNING, sweep chip live-updating (24s AGO · 1 CHECKED), pause→BLOCKED:new_trades_paused, resume→step-up 'ENABLE 2FA IN SETTINGS' dialog (expected), marketplace MANAGED STRATEGIES tab loads. All Mongo seed data cleaned; Alpha Managed Fund left running/enabled with no flatten_failed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ManagedStrategy.jsx publish() references `p` inside the function body which is defined only in outer render scope (line 155-156). Works today because closure captures render-time `p`, but if the button is clicked after `detail` mutates and before re-render finishes, `p.published` may be stale. Prefer reading from `detail?.program` explicitly inside publish().",
+    "trade_verdict short-circuits to REJECT via trading_allowed BEFORE evaluating limit factors, so a persisted risk_breach masks all limiting_factor details (primary_reason='risk_breach:<limit>', limiting_factor='trading_blocked'). Consider still returning the factors array in the REJECT branch so the UI limiting chip still highlights the true breached limit."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "admin@stoicaibot.com / admin123",
+  "seed_data_creation": "Temporarily inserted 2 pamm_nav_snapshots (100000 yesterday, 96250 now) with _seed_test:true marker, temp raised daily_loss_pct threshold to 5.0 to demonstrate REDUCE without auto-sweep halt, and $set flatten_failed on program. All reverted at end. Program pgm_c270193fed (Alpha Managed Fund) restored to running/enabled with original last_nav 116245.68 and threshold 3.5.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Note: main agent's requested seed of nav 100000→96250 (loss -3.75%) exceeds the 3.5% cap and therefore auto-sweep persists risk_breach → verdict REJECTs (risk_breach:daily_loss_pct) rather than REDUCE. To validate the REDUCE + '×0.5' chip UI I temporarily raised the daily_loss_pct threshold to 5.0 during the check (utilization=0.75 → linear factor 0.5), then restored to 3.5. The verdict-limiting line, factor chips and amber highlight all render correctly. Because NAV was dropped ~-17% vs historic high (116245→96250), max_drawdown_pct became the actual limiting_factor at ×0.078, so LIMITING text showed 'Max drawdown % ×0.078' (still confirms the reason-hierarchy UI works — the daily_loss chip is present at ×0.5 as expected, but daily_loss was not the min factor). Op-state control renders inline text 'RUNNINGSET STATE…RISK REDUCED NEW TRADES PAUSED CLOSE RISK ONLY EMERGENCY FLATTEN LOCKED' — the select+badge combined structure looks intentional but visually the badge and dropdown share the same wrapper without whitespace separator in DOM text.",
+  "rca of the issue": "N/A — no bugs found. Test-seed vs auto-sweep interaction documented above."
+}
