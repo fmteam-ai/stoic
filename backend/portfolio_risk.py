@@ -228,7 +228,7 @@ async def marginal_verdict(db, account_id: str, candidate: dict,
     """Portfolio Risk Brain — what risk does THIS trade add to the whole
     portfolio? APPROVE / REDUCE / REJECT with an approved risk fraction;
     reductions are recorded for empirical verdict-outcome scoring."""
-    positions = await open_positions(db, account_id)
+    positions = await open_positions(db, account_id, user_id=user_id)
     ev = evaluate(positions, candidate, equity, params)
     risk_c = ev["candidate_risk_usd"]
     if ev["ok"]:
@@ -271,11 +271,16 @@ async def marginal_verdict(db, account_id: str, candidate: dict,
     return out
 
 
-async def open_positions(db, account_id: str, limit: int = 100) -> list:
-    """All live commitments on the account, EVERY scope (cross-strategy)."""
+async def open_positions(db, account_id: str, limit: int = 100,
+                         user_id: str | None = None) -> list:
+    """All live commitments on the account, EVERY scope (cross-strategy).
+    Pass user_id to enforce ownership scoping at the query level."""
+    q = {"account_id": account_id, "status": {"$in": ["open", "pending"]}}
+    if user_id:
+        q["user_id"] = user_id
     out = []
     async for tr in db.trades.find(
-            {"account_id": account_id, "status": {"$in": ["open", "pending"]}},
+            q,
             {"symbol": 1, "action": 1, "lot_size": 1, "entry_price": 1,
              "stop_loss": 1, "scope": 1}).limit(limit):
         out.append({"symbol": tr.get("symbol"), "action": tr.get("action"),
@@ -286,10 +291,11 @@ async def open_positions(db, account_id: str, limit: int = 100) -> list:
     return out
 
 
-async def snapshot(db, account_id: str, equity: float) -> dict:
+async def snapshot(db, account_id: str, equity: float,
+                   user_id: str | None = None) -> dict:
     """Observability endpoint payload: the portfolio picture with no
     candidate — exposure, stress and pairwise correlations as they stand."""
-    positions = await open_positions(db, account_id)
+    positions = await open_positions(db, account_id, user_id=user_id)
     exp = currency_exposure(positions)
     stress = stress_loss_usd(positions, DEFAULTS["gap_mult"])
     return {"account_id": account_id, "equity": equity,

@@ -1,0 +1,25 @@
+{
+  "summary": "SEC-001 (BOLA on /api/brain/portfolio and /api/brain/regime) fix verified. New test suite tests/test_sec001_brain_bola.py: 7/7 PASS. As a freshly-registered non-admin user, GET /api/brain/portfolio?account_id=<admin_account_id> returns 404 (no open_positions/currency_exposure leaked in body) and GET /api/brain/regime?symbol=XAUUSD&account_id=<admin_account_id> also returns 404. Positive path: admin GET /api/brain/portfolio with own account_id returns full snapshot (open_positions/currency_exposure/stress/limits). Edge cases: nonexistent OID 000000000000000000000000 → 404; malformed 'abc' → 422 (Pydantic/parse layer; NOT 500). Regression: tests/test_iter202_brain_phase_a.py 12/12 PASS (portfolio brain marginal_verdict still works with user_id scoping). Symbol-only /api/brain/regime and /api/brain/router still return 200 for any authenticated user.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_sec001_brain_bola.py",
+    "/app/test_reports/pytest/sec001_results.xml",
+    "/app/test_reports/pytest/iter202_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_owned_account correctly uses 404 (not 403) to prevent OID enumeration — good.",
+    "portfolio_risk.open_positions/snapshot now accepts optional user_id and applies it at the Mongo query level (trades.user_id) — defense in depth is real, not just a route-level check.",
+    "Malformed account_id currently returns 422 via Pydantic/parse_object_id — request wording suggested 400/404 but 422 is FastAPI-standard and equally safe (not 500). No action needed.",
+    "GET /api/brain/portfolio still requires account_id as a required query param; correct behavior. No leakage vector on missing param."
+  ],
+  "updated_files": ["/app/backend/tests/test_sec001_brain_bola.py"],
+  "success_rate": {"backend": "100% (7/7 SEC-001 + 12/12 iter202 regression)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "Attacker test user is created per-run with random uuid email under @qa.example.com (password Kd5#Zt9mW2xVpR7c). Non-persistent — no need to record in test_credentials.md.",
+  "seed_data_creation": "One ephemeral non-admin user per test run (email verified via mongo helper) — no persistent seed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "SEC-001 fix is stable at iter-127. Reusable regression file: tests/test_sec001_brain_bola.py. Note: fresh registration must use a real-looking domain — @qa.test is rejected by the pydantic email validator (special-use TLD); use @qa.example.com or similar.",
+  "rca of the issue": "Original BOLA (pre-fix): /api/brain/portfolio and /api/brain/regime accepted account_id from the caller but did not filter db.accounts.find_one by user_id for non-admins, so any authenticated user could read another user's live positions. Fix (verified): routes/brain_routes.py::_owned_account() builds {_id: OID, user_id: caller.id} for non-admins and returns 404 on miss; portfolio_risk.snapshot/open_positions now accepts user_id and filters trades at query time (defense in depth). Verified end-to-end via live HTTPS against the preview backend URL."
+}
