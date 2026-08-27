@@ -8,6 +8,7 @@ import logging
 logger = logging.getLogger("pamm.states")
 
 OP_STATES = ["running", "risk_reduced", "new_trades_paused",
+             "broker_uncertain",
              "close_risk_only", "emergency_flatten", "locked"]
 RISK_REDUCED_FACTOR = 0.5
 

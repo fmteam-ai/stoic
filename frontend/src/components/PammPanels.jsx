@@ -462,7 +462,7 @@ export function ChangeRequestsPanel({ requests, meId, onChanged }) {
     );
 }
 
-const OP_STATES = ["running", "risk_reduced", "new_trades_paused", "close_risk_only", "emergency_flatten", "locked"];
+const OP_STATES = ["running", "risk_reduced", "new_trades_paused", "broker_uncertain", "close_risk_only", "emergency_flatten", "locked"];
 const OP_TONE = {
     running: "border-[#00FF41]/40 text-[#00FF41]", risk_reduced: "border-[#FFB000]/40 text-[#FFB000]",
     new_trades_paused: "border-[#FFB000]/40 text-[#FFB000]", close_risk_only: "border-[#FF8800]/40 text-[#FF8800]",

@@ -25,8 +25,8 @@ GOOD_ENV = {
     "ADMIN_PASSWORD": "Xk9!strongProd2026#Zq",
     "ED25519_SIGNING_KEY_B64": "abc123def456",
     "KEY_VAULT_MASTER": "vault-master-material",
-    "RELEASE_SIGNER": "local",
-    "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": "true",
+    "RELEASE_SIGNER": "external",
+    "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": None,
     "BACKGROUND_WORKERS_IN_PROCESS": "true",
 }
 
@@ -49,8 +49,8 @@ def test_preflight_all_good_is_ready(monkeypatch):
     out = run_preflight()
     assert out["verdict"] in ("ready", "ready_with_warnings")
     assert out["fail_count"] == 0
-    # local signer with override is a warning, not a crash
-    assert _by_id(out)["release_signer"]["status"] == "warn"
+    # external signer is the only passing configuration (v56)
+    assert _by_id(out)["release_signer"]["status"] == "pass"
 
 
 def test_preflight_flags_each_boot_blocker(monkeypatch):

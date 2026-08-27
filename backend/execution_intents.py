@@ -9,6 +9,7 @@ import hashlib
 import logging
 import time
 import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
 from pymongo import ReturnDocument
@@ -16,13 +17,34 @@ from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger("execution.intents")
 
-STATES = ["created", "submitted", "acked", "filled", "rejected", "expired"]
-TERMINAL = {"filled", "rejected", "expired"}
+STATES = ["created", "validated", "authorized", "submitted", "dispatched",
+          "broker_pending", "acked", "acknowledged", "unknown", "filled",
+          "reconciled", "rejected", "expired", "cancelled",
+          "failed_confirmed"]
+TERMINAL = {"filled", "reconciled", "rejected", "expired", "cancelled",
+            "failed_confirmed"}
 _TRANSITIONS = {
-    "created": {"submitted", "rejected", "expired"},
-    "submitted": {"acked", "filled", "rejected", "expired"},
-    "acked": {"filled", "rejected", "expired"},
+    "created": {"validated", "authorized", "submitted", "rejected",
+                "expired", "cancelled"},
+    "validated": {"authorized", "rejected", "expired", "cancelled"},
+    "authorized": {"submitted", "dispatched", "rejected", "expired",
+                   "cancelled"},
+    "submitted": {"acked", "dispatched", "broker_pending", "filled",
+                  "rejected", "expired", "cancelled", "unknown"},
+    "dispatched": {"broker_pending", "acked", "acknowledged", "filled",
+                   "rejected", "expired", "unknown"},
+    "broker_pending": {"acked", "acknowledged", "filled", "rejected",
+                       "expired", "unknown"},
+    "acked": {"acknowledged", "filled", "rejected", "expired", "unknown"},
+    "acknowledged": {"reconciled", "filled", "failed_confirmed"},
+    # UNKNOWN never returns to a dispatchable state — broker truth decides
+    "unknown": {"acknowledged", "reconciled", "failed_confirmed", "expired"},
 }
+# states that may still be expired safely (order NEVER left STOIC)
+_PRE_DISPATCH = {"created", "validated", "authorized"}
+# states where the order may have reached the broker — on staleness these
+# become UNKNOWN and are resolved by broker-truth reconciliation only
+_IN_FLIGHT = {"submitted", "dispatched", "broker_pending", "acked"}
 _B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford alphabet
 
 
@@ -151,14 +173,114 @@ async def run_once(db, *, source: str, kind: str, dedupe_key: str,
 
 
 async def expire_stale(db, older_than_sec: int = 900) -> int:
-    """Sweep helper: non-terminal intents older than the window become
-    EXPIRED. At-most-once holds — the dedupe key stays reserved."""
+    """Sweep helper: stale PRE-DISPATCH intents become EXPIRED (the order
+    never left STOIC). In-flight intents are NEVER expired here — they go
+    UNKNOWN via mark_unknown_stale and only broker truth resolves them.
+    The dedupe key stays reserved either way (at-most-once holds)."""
     cutoff = (datetime.now(timezone.utc)
               - timedelta(seconds=older_than_sec)).isoformat()
     r = await db.execution_intents.update_many(
-        {"status": {"$in": ["created", "submitted", "acked"]},
+        {"status": {"$in": sorted(_PRE_DISPATCH)},
          "created_at": {"$lt": cutoff}},
         {"$set": {"status": "expired", "updated_at": _now()},
          "$push": {"history": {"to": "expired", "at": _now(),
                                "detail": f"stale > {older_than_sec}s"}}})
     return r.modified_count
+
+
+async def mark_unknown_stale(db, older_than_sec: int = 300) -> int:
+    """In-flight intents with no broker outcome inside the window enter
+    UNKNOWN: STOIC does not know whether the broker executed. The order
+    is NEVER resent — reconcile_unknown_intents queries stored broker
+    truth and only then decides."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=older_than_sec)).isoformat()
+    r = await db.execution_intents.update_many(
+        {"status": {"$in": sorted(_IN_FLIGHT)},
+         "created_at": {"$lt": cutoff}},
+        {"$set": {"status": "unknown", "updated_at": _now()},
+         "$push": {"history": {"to": "unknown", "at": _now(),
+                               "detail": f"no broker outcome in "
+                                         f"{older_than_sec}s"}}})
+    if r.modified_count:
+        logger.warning("%d execution intent(s) entered UNKNOWN — broker "
+                       "reconciliation required, no resend",
+                       r.modified_count)
+    return r.modified_count
+
+
+async def reconcile_unknown_intents(db, alert_after_sec: int = 900) -> dict:
+    """UNKNOWN → query broker truth (the trade document carries the
+    broker-reported outcome) → match identity → reconcile → decide.
+    Unresolvable intents stay UNKNOWN and page the operator — STOIC never
+    blindly resends."""
+    from bson import ObjectId
+    out = {"reconciled": 0, "failed_confirmed": 0, "still_unknown": 0}
+    alert_cutoff = (datetime.now(timezone.utc)
+                    - timedelta(seconds=alert_after_sec)).isoformat()
+    async for it in db.execution_intents.find({"status": "unknown"}):
+        trade_id = (it.get("result") or {}).get("trade_id")
+        trade = None
+        if trade_id:
+            try:
+                trade = await db.trades.find_one({"_id": ObjectId(trade_id)})
+            except Exception:
+                trade = None
+        status = (trade or {}).get("status")
+        if status in ("open", "closed"):  # broker DID execute
+            await transition(db, it["intent_id"], "reconciled",
+                             detail=f"broker truth: trade {status}, "
+                                    f"ticket {(trade or {}).get('mt5_ticket')}")
+            out["reconciled"] += 1
+        elif status in ("failed", "cancelled", "rejected"):
+            await transition(db, it["intent_id"], "failed_confirmed",
+                             detail=f"broker truth: trade {status}")
+            out["failed_confirmed"] += 1
+        else:
+            out["still_unknown"] += 1
+            if (it.get("created_at", "") < alert_cutoff
+                    and not it.get("unknown_alerted")):
+                await db.execution_intents.update_one(
+                    {"intent_id": it["intent_id"]},
+                    {"$set": {"unknown_alerted": True}})
+                await db.pamm_notifications.insert_one(
+                    {"type": "ExecutionUnknown", "severity": "critical",
+                     "at": _now(), "seen": False,
+                     "intent_id": it["intent_id"],
+                     "summary": f"Execution intent {it['intent_id']} is "
+                                f"UNKNOWN for >{alert_after_sec}s — broker "
+                                f"outcome unconfirmed, manual "
+                                f"reconciliation required (order will NOT "
+                                f"be resent)"})
+    return out
+
+
+@dataclass(frozen=True)
+class CanonicalIntent:
+    """v56 §2 — the one canonical object every trading source produces."""
+    execution_intent_id: str
+    account_id: str
+    broker_account_number: str
+    broker_server: str
+    strategy_id: str
+    strategy_version: str
+    symbol: str
+    side: str
+    requested_volume: float
+    stop_loss: float | None
+    take_profit: float | None
+    risk_snapshot_id: str
+    signal_id: str
+    created_at: str
+    expires_at: str
+    fencing_epoch: int
+    nonce: str
+
+
+def canonical_payload(**kw) -> dict:
+    kw.setdefault("execution_intent_id", "")
+    kw.setdefault("created_at", _now())
+    kw.setdefault("expires_at",
+                  (datetime.now(timezone.utc)
+                   + timedelta(seconds=120)).isoformat())
+    return asdict(CanonicalIntent(**kw))

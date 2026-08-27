@@ -41,15 +41,13 @@ def sign_hex(data: bytes) -> str:
     if mode == "external":
         return _external_sign(data)
     from app_env import is_production
-    if (is_production()
-            and os.environ.get("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
-                               "").strip().lower() not in ("1", "true", "yes")):
+    if is_production():
         raise RuntimeError(
             "RELEASE_SIGNER=local is forbidden in production — the private "
-            "signing key must NOT live in the API. Set RELEASE_SIGNER="
+            "signing key must NOT live in the API. Configure RELEASE_SIGNER="
             "external + RELEASE_SIGNER_URL/RELEASE_SIGNER_TOKEN (KMS/HSM "
-            "proxy), or explicitly set RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD="
-            "true to accept the risk.")
+            "proxy). There is no local override (v56: escape hatch "
+            "removed).")
     return _private_key().sign(data).hex()
 
 

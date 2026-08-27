@@ -8,14 +8,15 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 444 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2781 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2816 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 3256 tests across 318 files.**
+**Total: 3291 tests across 321 files.**
 
 | file | class | tests |
 |------|-------|-------|
 | `backend/tests/test_ai_optimizer.py` | http-live | 6 |
+| `backend/tests/test_e2e_v56_authority.py` | http-live | 12 |
 | `backend/tests/test_iter100_batch_a.py` | http-live | 6 |
 | `backend/tests/test_iter100_http.py` | http-live | 7 |
 | `backend/tests/test_iter100_rl_policy.py` | http-live | 17 |
@@ -148,6 +149,8 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter193_e2e_external.py` | http-live | 14 |
 | `backend/tests/test_iter193_v55_batch.py` | http-live | 23 |
 | `backend/tests/test_iter194_security_audit.py` | http-live | 8 |
+| `backend/tests/test_iter195_execution_invariants.py` | http-live | 9 |
+| `backend/tests/test_iter196_authority_truth.py` | http-live | 14 |
 | `backend/tests/test_iter19_gold_history_fallback.py` | http-live | 5 |
 | `backend/tests/test_iter19_safety_blocks.py` | http-live | 12 |
 | `backend/tests/test_iter20_suggestion.py` | http-live | 17 |

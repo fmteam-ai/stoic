@@ -57,8 +57,31 @@ async def sweep_once(db) -> dict:
         except Exception as e:
             logger.warning("sweep position-truth failed on %s: %s",
                            p.get("program_id"), e)
-    from execution_intents import expire_stale
+            # BROKER_UNCERTAIN (v56 §8): 3 consecutive failures to
+            # establish position truth → new trades NO, close risk YES
+            fails = int(p.get("position_truth_failures") or 0) + 1
+            await db.pamm_programs.update_one(
+                {"program_id": p["program_id"]},
+                {"$set": {"position_truth_failures": fails}})
+            if fails >= 3:
+                from modules.pamm.risk.states import (op_state_of,
+                                                      set_op_state)
+                from modules.pamm.risk.states import severity as _sev
+                if _sev(op_state_of(p)) < _sev("broker_uncertain"):
+                    try:
+                        await set_op_state(
+                            db, p, "broker_uncertain", "auto-sweep",
+                            reason=f"position truth unavailable x{fails} "
+                                   f"— broker state cannot be verified",
+                            source="automation")
+                    except Exception as e2:
+                        logger.error("broker_uncertain escalation failed "
+                                     "on %s: %s", p.get("program_id"), e2)
+    from execution_intents import (expire_stale, mark_unknown_stale,
+                                   reconcile_unknown_intents)
     intents_expired = await expire_stale(db)
+    intents_unknown = await mark_unknown_stale(db)
+    unknown_recon = await reconcile_unknown_intents(db)
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=HEALTH_RETENTION_DAYS)).isoformat()
     await db.pamm_health.delete_many({"at": {"$lt": cutoff}})
@@ -67,6 +90,8 @@ async def sweep_once(db) -> dict:
            "flatten_retries": flatten_retries,
            "position_truth": {"checked": truth_checked, "drift": drifts},
            "intents_expired": intents_expired,
+           "intents_unknown": intents_unknown,
+           "unknown_reconciled": unknown_recon,
            "heartbeats": [{k: h.get(k) for k in
                            ("partner_id", "ok", "score", "status",
                             "latency_ms")} for h in heartbeats]}

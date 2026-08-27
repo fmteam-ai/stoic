@@ -102,10 +102,10 @@ def test_local_signing_forbidden_in_production(monkeypatch):
     monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
     with pytest.raises(RuntimeError, match="forbidden in production"):
         release_signing.sign_hex(b"x")
-    # explicit risk-acceptance escape hatch still works
+    # v56: the escape hatch was REMOVED — the override no longer works
     monkeypatch.setenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "true")
-    sig = release_signing.sign_hex(b"x")
-    assert release_signing.verify_hex(b"x", sig)
+    with pytest.raises(RuntimeError, match="forbidden in production"):
+        release_signing.sign_hex(b"x")
 
 
 def test_signer_status_exposed_on_release_key():

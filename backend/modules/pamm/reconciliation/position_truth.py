@@ -21,8 +21,22 @@ def _norm(positions: list) -> dict:
         pid = str(p.get("position_id") or p.get("ticket")
                   or p.get("id") or "")
         if pid:
-            out[pid] = float(p.get("volume") or p.get("lots") or 0)
+            side = str(p.get("side") or p.get("type") or "BUY").upper()
+            out[pid] = {"volume": float(p.get("volume")
+                                        or p.get("lots") or 0),
+                        "symbol": str(p.get("symbol") or "?"),
+                        "side": "SELL" if side.startswith("S") else "BUY"}
     return out
+
+
+def net_exposure(pos_map: dict) -> dict:
+    """Physical view for netting accounts: signed net volume per symbol
+    (1 signal != 1 broker position — v56 §5)."""
+    net = {}
+    for p in pos_map.values():
+        signed = p["volume"] * (-1 if p["side"] == "SELL" else 1)
+        net[p["symbol"]] = round(net.get(p["symbol"], 0.0) + signed, 4)
+    return net
 
 
 async def check_position_truth(db, program: dict,
@@ -35,37 +49,68 @@ async def check_position_truth(db, program: dict,
     expected_doc = await db.pamm_expected_positions.find_one(
         {"program_id": pid}, {"_id": 0})
     tol = float(program.get("drift_tolerance") or 0.0)
+    mode = str(program.get("position_mode") or "hedging")
     at = _now()
     base = {"check_id": f"ptc_{uuid.uuid4().hex[:10]}", "program_id": pid,
-            "at": at, "tolerance": tol, "broker_count": len(actual)}
+            "at": at, "tolerance": tol, "mode": mode,
+            "broker_count": len(actual)}
+    a_net = net_exposure(actual)
     if expected_doc is None:  # first sight → adopt broker truth as baseline
         await _store_expected(db, pid, actual, "baseline")
         result = {**base, "status": "baseline",
                   "expected_count": len(actual), "missing": [],
-                  "unexpected": [], "mismatched": []}
+                  "unexpected": [], "mismatched": [], "classification": [],
+                  "expected_net": a_net, "broker_net": a_net}
     else:
-        expected = {p["position_id"]: float(p.get("volume") or 0)
-                    for p in expected_doc.get("positions") or []}
-        missing = sorted(set(expected) - set(actual))
-        unexpected = sorted(set(actual) - set(expected))
-        mismatched = [{"position_id": k, "expected": expected[k],
-                       "actual": actual[k]}
-                      for k in sorted(set(expected) & set(actual))
-                      if abs(expected[k] - actual[k]) > tol]
+        expected = {p["position_id"]: {
+            "volume": float(p.get("volume") or 0),
+            "symbol": str(p.get("symbol") or "?"),
+            "side": str(p.get("side") or "BUY")}
+            for p in expected_doc.get("positions") or []}
+        e_net = net_exposure(expected)
+        if mode == "netting":
+            # netting accounts: compare PHYSICAL net exposure per symbol
+            symbols = sorted(set(e_net) | set(a_net))
+            mismatched = [{"symbol": s, "expected_net": e_net.get(s, 0.0),
+                           "actual_net": a_net.get(s, 0.0)}
+                          for s in symbols
+                          if abs(e_net.get(s, 0.0) - a_net.get(s, 0.0))
+                          > tol]
+            missing, unexpected = [], []
+            classification = (["NET_EXPOSURE_MISMATCH"] if mismatched
+                              else [])
+        else:  # hedging: per-position identity comparison
+            missing = sorted(set(expected) - set(actual))
+            unexpected = sorted(set(actual) - set(expected))
+            mismatched = [{"position_id": k,
+                           "expected": expected[k]["volume"],
+                           "actual": actual[k]["volume"]}
+                          for k in sorted(set(expected) & set(actual))
+                          if abs(expected[k]["volume"]
+                                 - actual[k]["volume"]) > tol]
+            classification = [c for c, hit in
+                              (("MISSING_AT_BROKER", missing),
+                               ("UNEXPECTED_AT_BROKER", unexpected),
+                               ("VOLUME_MISMATCH", mismatched)) if hit]
         drift = bool(missing or unexpected or mismatched)
         result = {**base, "status": "drift" if drift else "in_sync",
                   "expected_count": len(expected), "missing": missing,
-                  "unexpected": unexpected, "mismatched": mismatched}
+                  "unexpected": unexpected, "mismatched": mismatched,
+                  "classification": classification,
+                  "expected_net": e_net, "broker_net": a_net}
     await db.pamm_position_truth.insert_one(dict(result))
     result.pop("_id", None)
     summary = {"status": result["status"], "at": at, "tolerance": tol,
-               "broker_count": result["broker_count"],
+               "mode": mode, "broker_count": result["broker_count"],
                "expected_count": result["expected_count"],
                "missing": len(result["missing"]),
                "unexpected": len(result["unexpected"]),
-               "mismatched": len(result["mismatched"])}
+               "mismatched": len(result["mismatched"]),
+               "classification": result["classification"]}
     await db.pamm_programs.update_one(
-        {"program_id": pid}, {"$set": {"position_truth": summary}})
+        {"program_id": pid},
+        {"$set": {"position_truth": summary,
+                  "position_truth_failures": 0}})
     if result["status"] == "drift":
         await _on_drift(db, program, result, actor)
     else:
@@ -77,7 +122,8 @@ async def _store_expected(db, pid: str, positions: dict,
                           source: str) -> None:
     await db.pamm_expected_positions.update_one(
         {"program_id": pid},
-        {"$set": {"positions": [{"position_id": k, "volume": v}
+        {"$set": {"positions": [{"position_id": k, "volume": v["volume"],
+                                 "symbol": v["symbol"], "side": v["side"]}
                                 for k, v in positions.items()],
                   "at": _now(), "source": source}}, upsert=True)
 
@@ -90,7 +136,8 @@ async def _on_drift(db, program: dict, result: dict, actor: str) -> None:
                      {"program_id": pid, "check_id": result["check_id"],
                       "missing": result["missing"],
                       "unexpected": result["unexpected"],
-                      "mismatched": [m["position_id"]
+                      "classification": result.get("classification") or [],
+                      "mismatched": [m.get("position_id") or m.get("symbol")
                                      for m in result["mismatched"]]},
                      source="position_truth")
     # freeze NEW exposure — escalation only, never towards more authority

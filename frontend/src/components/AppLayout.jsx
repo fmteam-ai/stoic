@@ -3,6 +3,7 @@ import { CoPilotWidget } from "@/components/CoPilotWidget";
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import { TickerTape } from "@/components/TickerTape";
 import { StatusBar } from "@/components/StatusBar";
+import { AuthorityStrip } from "@/components/AuthorityStrip";
 import { QuickActionsBar } from "@/components/QuickActionsBar";
 import { OnboardingBanner } from "@/components/OnboardingBanner";
 import OnboardingWizard from "@/components/OnboardingWizard";
@@ -16,6 +17,7 @@ export function AppLayout({ children }) {
             <StepUpDialog />
             <main className="md:ml-60 min-h-screen">
                 <StatusBar />
+                <AuthorityStrip />
                 <TickerTape />
                 <SubscriptionBanner />
                 <div className="px-4 md:px-8 pt-3">

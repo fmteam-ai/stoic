@@ -110,15 +110,19 @@ def run_preflight() -> dict:
     if signer == "external":
         s_status, s_cur = "pass", "external"
     elif allow_local:
-        s_status, s_cur = "warn", "local (allowed via override)"
+        # v56: the escape hatch was REMOVED — a set override is now a
+        # misconfiguration signal, not a permission
+        s_status, s_cur = "fail", ("local (RELEASE_SIGNER_ALLOW_LOCAL_IN_"
+                                   "PROD is no longer supported)")
     else:
-        s_status, s_cur = "warn", "local (no override)"
+        s_status, s_cur = "warn", "local (KMS/HSM required to sign in prod)"
     checks.append(_check(
         "release_signer", "RELEASE_SIGNER", s_status, s_cur,
-        "external (KMS) — or local + RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true",
+        "external (KMS/HSM) — local signing is never permitted in "
+        "production",
         "Does NOT block boot — but local signing in production errors at "
         "signing time (audit anchors, release manifests) until an external "
-        "KMS signer is configured or the override is set."))
+        "KMS signer is configured. The local override was removed in v56."))
 
     workers = env.get("BACKGROUND_WORKERS_IN_PROCESS")
     checks.append(_check(
