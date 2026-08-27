@@ -108,7 +108,15 @@ async def meta_decide(db, user_id: str, signal: dict,
     fam = _family_of(scope)
     w = routing["weights"].get(fam, 1.0 / 3)
     regime_comp = _clamp100(w / max(routing["weights"].values()) * 100)
-    unc = await assess(db, user_id, signal)
+    unc_cost = None
+    try:
+        from transaction_costs import expected_cost_r
+        unc_cost = await expected_cost_r(db, user_id, symbol,
+                                         signal=signal, scope=scope)
+        unc = await assess(db, user_id, signal,
+                           cost_r=float(unc_cost["required_edge_r"]))
+    except Exception:  # noqa: BLE001
+        unc = await assess(db, user_id, signal)
     dims = {
         "opportunity_quality": await _opportunity(signal),
         "strategy_reliability": await _reliability(db, user_id, scope),
@@ -127,6 +135,22 @@ async def meta_decide(db, user_id: str, signal: dict,
     else:
         decision = "TRADE"
         mult = round(min(1.0, 0.5 + composite / 200), 2)
+    # Strategy Decay Detector — health can only reduce or disable
+    health = None
+    try:
+        from strategy_decay import MULT as _HMULT, health_for
+        health = await health_for(db, user_id, scope)
+        if health and not health.get("unproven"):
+            hm = float(_HMULT.get(health["state"], 1.0))
+            if decision != "SKIP":
+                if hm <= 0:
+                    decision, mult = "SKIP", 0.0
+                elif hm < 1.0:
+                    mult = round(mult * hm, 2)
+                    if decision == "TRADE":
+                        decision = "REDUCE"
+    except Exception as e:  # noqa: BLE001
+        logger.debug("strategy health unavailable: %s", e)
     out = {"decision": decision, "risk_multiplier": mult,
            "composite": composite, "scorecard": dims,
            "uncertainty": uncertainty, "uncertainty_detail": unc,
@@ -135,7 +159,15 @@ async def meta_decide(db, user_id: str, signal: dict,
                             "vector": state.get("vector"),
                             "session": state.get("session")},
            "router": {"weights": routing["weights"], "family": fam},
-           "engine_version": 1, "at": _now()}
+           "strategy_health": ({"state": health.get("state"),
+                                "flags": health.get("flags")}
+                               if health else None),
+           "transaction_cost": ({"cost_r": unc_cost.get("cost_r"),
+                                 "required_edge_r":
+                                 unc_cost.get("required_edge_r")}
+                                if unc_cost else None),
+           "decision_id": signal.get("decision_id"),
+           "engine_version": 2, "at": _now()}
     try:
         await db.meta_decisions.insert_one(
             {**out, "user_id": user_id, "symbol": symbol, "scope": scope,

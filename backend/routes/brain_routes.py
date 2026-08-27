@@ -68,3 +68,80 @@ async def portfolio_brain_ep(account_id: str,
     snap["factors"] = portfolio_risk.factor_exposure(
         snap["open_positions"], equity)
     return snap
+
+
+# ───────────────────────── Phase B — v59 brain endpoints ─────────────────
+
+@router.get("/decisions")
+async def decisions_list_ep(limit: int = 20,
+                            user=Depends(get_current_user)):
+    db = get_db()
+    q = {} if user.get("role") == "admin" else {"user_id": user["id"]}
+    lim = max(1, min(int(limit), 100))
+    return {"decisions": [d async for d in db.decision_contexts.find(
+        q, {"_id": 0, "stages.detail": 0}).sort("at", -1).limit(lim)]}
+
+
+@router.get("/decisions/{decision_id}")
+async def decision_ep(decision_id: str, user=Depends(get_current_user)):
+    from decision_context import get_decision
+    db = get_db()
+    doc = await get_decision(db, decision_id, user_id=user["id"],
+                             admin=user.get("role") == "admin")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return doc
+
+
+@router.get("/memory")
+async def memory_ep(symbol: str = Query("XAUUSD"),
+                    user=Depends(get_current_user)):
+    from market_memory import recall, verdict
+    from regime_intelligence import market_state
+    db = get_db()
+    state = await market_state(db, user["id"], symbol)
+    mem = await recall(db, user["id"], symbol, state.get("vector"),
+                       session=state.get("session"))
+    return {"market_state": {"fingerprint_key":
+                             state.get("fingerprint_key"),
+                             "labels": state.get("labels"),
+                             "session": state.get("session"),
+                             "available": state.get("available")},
+            "memory": mem, "verdict": verdict(mem)}
+
+
+@router.get("/strategy-health")
+async def strategy_health_ep(user=Depends(get_current_user)):
+    from strategy_decay import evaluate_all
+    db = get_db()
+    return {"strategies": await evaluate_all(db, user["id"])}
+
+
+@router.get("/degraded")
+async def degraded_ep(user=Depends(get_current_user)):
+    from degraded_intelligence import status
+    return await status(get_db())
+
+
+@router.get("/costs")
+async def costs_ep(symbol: str = Query("XAUUSD"),
+                   scope: str | None = None,
+                   user=Depends(get_current_user)):
+    from transaction_costs import expected_cost_r
+    return await expected_cost_r(get_db(), user["id"], symbol,
+                                 scope=scope)
+
+
+@router.post("/challenger/{model_id}/qualify")
+async def qualify_challenger_ep(model_id: str,
+                                user=Depends(get_current_user)):
+    from champion_challenger2 import qualify
+    try:
+        return await qualify(get_db(), user["id"], model_id)
+    except ValueError:
+        raise HTTPException(status_code=404,
+                            detail="shadow model not found")
+    except Exception:
+        raise HTTPException(status_code=400,
+                            detail="qualification failed — invalid model"
+                                   " id or replay error")

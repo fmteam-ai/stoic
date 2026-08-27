@@ -61,6 +61,20 @@ async def start_canary(db, user_id: str, model_id) -> dict:
     if not status["ready"]:
         failed = [c["name"] for c in status["checks"] if not c["passed"]]
         raise ValueError("promotion gate not passed: " + "; ".join(failed))
+    # Champion/Challenger 2.0 — institutional qualification scorecard
+    # (purged WF, CPCV, Monte Carlo). qualified=None (insufficient replay
+    # data) is advisory; an explicit False BLOCKS the ladder.
+    try:
+        from champion_challenger2 import qualify
+        q = await qualify(db, user_id, str(m["_id"]))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("qualification 2.0 unavailable (%s) — advisory", e)
+        q = None
+    if q and q.get("qualified") is False:
+        failed = [c["name"] for c in q.get("checks", [])
+                  if not c["passed"]]
+        raise ValueError("qualification 2.0 not passed: "
+                         + "; ".join(failed))
     active_cfgs = await db.bot_configs.count_documents(
         {"user_id": user_id, "active": True})
     if not active_cfgs:

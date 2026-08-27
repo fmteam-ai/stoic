@@ -162,8 +162,15 @@ async def authenticate_api_key(request: Request,
     from distributed_rate_limit import allow_request
     allowed, meta = await allow_request(
         db, key_id=kid, tenant=str(doc["user_id"]),
-        endpoint_class=endpoint_class, limit_per_minute=class_limit)
+        endpoint_class=endpoint_class, limit_per_minute=class_limit,
+        fail_closed=(endpoint_class == "write"))
     if not allowed:
+        if meta.get("fail_closed"):
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "limiter_unavailable",
+                        "message": "Rate-limit infrastructure unavailable"
+                                   " — financial mutations fail closed"})
         raise HTTPException(
             status_code=429,
             detail={"error": "rate_limited",

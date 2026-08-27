@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("outcome.attribution")
 
-ENGINE_VERSION = 2
+ENGINE_VERSION = 3
 CATEGORIES = ["ALPHA_ERROR", "REGIME_ERROR", "TIMING_ERROR",
               "SIZING_ERROR", "EXECUTION_ERROR", "BROKER_ERROR",
               "INFRASTRUCTURE_ERROR", "NEWS_SHOCK", "CORRELATION_ERROR",
@@ -192,12 +192,56 @@ def _weights(sig: dict, r: float, r_source: str = "price") -> dict:
     return {k: round(v, 3) for k, v in out.items() if round(v, 3) > 0}
 
 
+def counterfactuals(trade: dict, r: float, sig: dict, attribution: dict,
+                    median_account_slippage: float | None = None) -> dict:
+    """v3 — what WOULD the result have been under alternative worlds.
+    Prevents retraining a strategy for a loss the broker/infra caused."""
+    slip_r = float(sig.get("slippage_ratio") or 0)
+    cf = {"actual_r": r, "no_trade_r": 0.0,
+          "normal_execution_r": round(r + slip_r, 3)}
+    if median_account_slippage is not None:
+        cf["median_broker_slippage_r"] = round(
+            r + max(0.0, slip_r - float(median_account_slippage)), 3)
+    delay = float(sig.get("fill_delay_s") or 0)
+    if delay > 30:
+        cf["earlier_entry_r"] = round(r + min(0.2, delay / 600), 3)
+    reg_w = float(attribution.get("REGIME_ERROR") or 0)
+    if reg_w > 0:
+        cf["correct_regime_r"] = round(r + reg_w * max(0.3, abs(r)), 3)
+    return cf
+
+
+async def _median_slippage(db, account_id: str | None) -> float | None:
+    if not account_id:
+        return None
+    vals = []
+    async for o in db.trade_outcomes.find(
+            {"account_id": account_id,
+             "signals.slippage_ratio": {"$ne": None}},
+            {"signals.slippage_ratio": 1}).sort(
+            "closed_at", -1).limit(100):
+        v = (o.get("signals") or {}).get("slippage_ratio")
+        if v is not None:
+            vals.append(abs(float(v)))
+    if not vals:
+        return None
+    vals.sort()
+    return vals[len(vals) // 2]
+
+
 async def attribute_trade(db, trade: dict) -> dict:
     """Decompose one closed trade. Idempotent — upserts by trade_id."""
     trade_id = str(trade.get("_id") or trade.get("id"))
     r, r_source = result_r(trade)
     sig = await _signals(db, trade)
     attribution = _weights(sig, r, r_source)
+    try:
+        med_slip = await _median_slippage(db, trade.get("account_id"))
+        cf = counterfactuals(trade, r, sig, attribution,
+                             median_account_slippage=med_slip)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("counterfactuals failed: %s", e)
+        cf = {"actual_r": r, "no_trade_r": 0.0}
     primary = max(attribution, key=attribution.get)
     noise = sum(attribution.get(c, 0) for c in
                 ("EXECUTION_ERROR", "BROKER_ERROR",
@@ -217,6 +261,8 @@ async def attribute_trade(db, trade: dict) -> dict:
                "pnl": float(trade.get("pnl") or 0),
                "closed_at": trade.get("closed_at"),
                "attribution": attribution, "primary_category": primary,
+               "counterfactuals": cf,
+               "decision_id": trade.get("decision_id"),
                "attribution_confidence": confidence,
                "unexplained_fraction": round(unexplained, 3),
                "alpha_clean": noise <= 0.3, "signals": sig,

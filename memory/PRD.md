@@ -1655,3 +1655,51 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
   Manifest regenerated (3368 tests, 333 files).
 - Verified (testing agent iteration_128 + local): backend-unit 474/474, integration 22/22,
   pip-audit zero vulns, workflows valid YAML, SEC-001 BOLA fix not regressed.
+
+## STOIC v59 — Brain Phase B (iter-204, June 2026 — DONE, 526/526 tests)
+- **DecisionContext + decision_id** (`decision_context.py`): every BUY/SELL opportunity mints an
+  immutable `dec_<hex16>` snapshot in `db.decision_contexts` (market/regime/versions/account/
+  broker/news/risk); stages appended by meta-decision, market memory, portfolio brain; trades and
+  trade_outcomes carry `decision_id` (execution.py both trade_docs). API: GET /api/brain/decisions,
+  GET /api/brain/decisions/{id} (tenant-isolated). Indexes via `ensure_decision_indexes` (pamm models init).
+- **Market Memory Engine** (`market_memory.py`): cosine similarity over stored market-state vectors,
+  weighted by similarity²×recency(30d half-life)×session×symbol×scope; Kish n_eff; outcome
+  distribution continuation/reversal/neutral + weighted median R; downscale-only verdict OK/REDUCE(0.6)/
+  AVOID. Wired into bot_runner after the meta block (cfg `market_memory_enabled` default true).
+  API: GET /api/brain/memory?symbol=.
+- **Outcome Attribution 2.0**: `counterfactuals()` (actual/normal-execution/median-broker-slippage/
+  earlier-entry/correct-regime/no-trade R) on every outcome; ENGINE_VERSION=3. Note: slippage read
+  from the TRADE doc.
+- **Strategy Decay Detector** (`strategy_decay.py`): HEALTHY→WATCH→DEGRADED→DECAYING→DISABLED from
+  flags (expectancy decline, negative expectancy, PF collapse, WR drop, frequency drop) on
+  alpha_clean trades only; attribution guard softens one state when >50% recent losses are
+  noise-primary. Integrated into meta_decide (downscale-only; DISABLED→SKIP); 15-min cache.
+  API: GET /api/brain/strategy-health (persists db.strategy_health with history).
+- **Champion/Challenger 2.0** (`champion_challenger2.py`): replay-derived R series (bayes_opt
+  `_r_log` hook) → scorecard: purged walk-forward (5 folds, embargo 3), CPCV (6 groups, PBO≤0.35),
+  Monte Carlo (500 iters, P(profit)≥0.75, ES5, DD p95), cost/slippage shock survival, regime
+  stability. HARD-BLOCKS canary_promotion.start_canary when qualified=False; advisory (None) when
+  insufficient replay data. API: POST /api/brain/challenger/{model_id}/qualify.
+- **Dynamic Transaction Cost Engine** (`transaction_costs.py`): spread(live signal or per-symbol
+  default)+commission+realized median slippage+latency+swap, floor 0.03R, safety margin 0.02R;
+  feeds uncertainty_engine.assess cost gate via meta_decide (meta engine_version=2, carries
+  strategy_health + transaction_cost + decision_id). API: GET /api/brain/costs?symbol=.
+- **Degraded Intelligence Mode** (`degraded_intelligence.py`): 9-subsystem POLICY (memory→continue,
+  meta→0.5x, uncertainty→0.6x, portfolio→deterministic 0.5x, position_truth/risk/authority→0.0);
+  state-transition-aware reporting to db.intelligence_health; NORMAL/DEGRADED_INTELLIGENCE. bot_runner
+  meta + portfolio brain exception paths now apply fallbacks instead of fail-open.
+  API: GET /api/brain/degraded.
+- **Fail-closed limiter (roadmap #20)**: allow_request(fail_closed=True) for enterprise WRITE class →
+  503 limiter_unavailable when infra down; reads still fail open.
+- **UI**: `BrainPhaseBPanel.jsx` on /signals under MetaBrainPanel — strategy-health-board,
+  market-memory-panel, cost-model-panel, decision-inspector (expandable stages), degraded-mode-chip.
+- Tests: tests/test_iter204_brain_phase_b.py (19) + tests/test_iter204_brain_phase_b_integration.py
+  (5, by testing agent) + full regression 526/526 (report iteration_129.json). Manifest regenerated.
+
+### v59 remaining roadmap context (user's 3-release plan)
+- v60 — Execution Intelligence: Pre-Trade Digital Twin (fast/deep), Execution Alpha, T0→T9 profiler
+  completion, Broker Intelligence 2.0, Portfolio Brain 2.0 (factor/correlation-aware), Strategy
+  Router 2.0 (recency+health), Uncertainty 2.0 (ensemble/conformal), Trading Intelligence Graph (P2).
+- v61 — Production Proof: signed Host Agent (Windows service+MSI), PAMM broker certification &
+  micro-pilot, load/stress/chaos testing, automated tenant-isolation CI gate, soak/DR/SLOs.
+- After v61: freeze core trading feature set; split Intelligence vs Infrastructure.

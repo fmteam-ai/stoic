@@ -101,8 +101,11 @@ async def _allow_mongo(db, bucket: str, capacity: int):
 
 async def allow_request(db, *, key_id: str, tenant: str,
                         endpoint_class: str,
-                        limit_per_minute: int) -> tuple:
-    """Returns (allowed: bool, meta: dict). Never raises."""
+                        limit_per_minute: int,
+                        fail_closed: bool = False) -> tuple:
+    """Returns (allowed: bool, meta: dict). Never raises. fail_closed:
+    financial mutations refuse when limiter infrastructure is uncertain;
+    reads may degrade fail-open."""
     capacity = max(1, int(limit_per_minute))
     bucket = f"{key_id}:{tenant}:{endpoint_class}"
     backend = "mongo"
@@ -116,6 +119,13 @@ async def allow_request(db, *, key_id: str, tenant: str,
         try:
             out = await _allow_mongo(db, bucket, capacity)
         except Exception as e:
+            if fail_closed:
+                # critical-write policy: security infrastructure uncertain
+                # → the financial mutation is refused, never waved through
+                logger.error("rate limiter unavailable (%s) — FAILING "
+                             "CLOSED for %s", e, endpoint_class)
+                return False, {"backend": "none", "degraded": True,
+                               "fail_closed": True}
             # limiter infrastructure failure must not take the API down —
             # fail open but log loudly (visible in ops telemetry)
             logger.error("rate limiter unavailable (%s) — failing open "

@@ -39,6 +39,8 @@ async def ensure_pamm_setup(db) -> None:
     await ensure_attribution_indexes(db)
     from verdict_tracking import ensure_verdict_indexes
     await ensure_verdict_indexes(db)
+    from decision_context import ensure_decision_indexes
+    await ensure_decision_indexes(db)
     from services.broker_gateway.pamm_api import ensure_sandbox_partner
     await ensure_sandbox_partner(db)
     import os as _os

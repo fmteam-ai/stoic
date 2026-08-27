@@ -684,6 +684,15 @@ async def _process_user_account_locked(db, cfg: dict):
             # iter-142 · Velocity veto re-wired (the iter-53 guardrail was
             # silently dropped in the orchestrator refactor). Disarmed by
             # default; fires only when cfg regime_overrides arm it.
+            # DecisionContext (v59) — one immutable dec_… snapshot per
+            # BUY/SELL opportunity, threaded through the entire pipeline.
+            if signal.get("action") in ("BUY", "SELL"):
+                try:
+                    from decision_context import mint as _dc_mint
+                    signal["decision_id"] = await _dc_mint(
+                        db, user_id, signal, cfg=cfg)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("decision context mint failed: %s", e)
             # Meta-Decision Engine (Phase A) — the brain above strategies:
             # TRADE / REDUCE / SKIP + downscale-only risk multiplier.
             if (signal.get("action") in ("BUY", "SELL")
@@ -697,6 +706,15 @@ async def _process_user_account_locked(db, cfg: dict):
                         ("decision", "risk_multiplier", "composite",
                          "scorecard", "uncertainty", "market_state")}
                     signal["market_state"] = _md["market_state"]
+                    try:
+                        from decision_context import record_stage as _dcs
+                        await _dcs(db, signal.get("decision_id"),
+                                   "meta_decision",
+                                   signal["meta_decision"])
+                        from degraded_intelligence import report as _dir
+                        await _dir(db, "meta_decision", ok=True)
+                    except Exception:  # noqa: BLE001
+                        pass
                     if _md["decision"] == "SKIP":
                         _msg = (f"Meta-Decision SKIP: composite "
                                 f"{_md['composite']}/100, uncertainty "
@@ -712,8 +730,74 @@ async def _process_user_account_locked(db, cfg: dict):
                                             reason=_msg, signal=signal)
                         continue
                 except Exception as e:  # noqa: BLE001
-                    logger.warning("meta decision failed (fail-open to "
-                                   "existing gates): %s", e)
+                    logger.warning("meta decision failed — "
+                                   "DEGRADED_INTELLIGENCE fallback "
+                                   "(reduced risk): %s", e)
+                    try:
+                        from degraded_intelligence import multiplier_for
+                        from degraded_intelligence import report as _dir
+                        await _dir(db, "meta_decision", ok=False,
+                                   error=str(e))
+                        _fb_mult = multiplier_for("meta_decision")
+                    except Exception:  # noqa: BLE001
+                        _fb_mult = 0.5
+                    signal["meta_decision"] = {
+                        "decision": "REDUCE", "risk_multiplier": _fb_mult,
+                        "fallback": True, "error": str(e)[:200]}
+            # Market Memory (v59) — episodic evidence from historically
+            # similar situations. Downscale-only: REDUCE or AVOID.
+            if (signal.get("action") in ("BUY", "SELL")
+                    and cfg.get("market_memory_enabled", True)):
+                try:
+                    from market_memory import recall
+                    from market_memory import verdict as _mm_verdict
+                    _ms = signal.get("market_state") or {}
+                    _mem = await recall(db, user_id, sym,
+                                        _ms.get("vector"),
+                                        session=_ms.get("session"),
+                                        scope=signal.get("scope"))
+                    _mv = _mm_verdict(_mem)
+                    signal["market_memory"] = {
+                        **{k: _mem.get(k) for k in
+                           ("available", "n", "n_eff", "distribution",
+                            "median_r", "confidence")},
+                        "verdict": _mv}
+                    try:
+                        from decision_context import record_stage as _dcs
+                        await _dcs(db, signal.get("decision_id"),
+                                   "market_memory",
+                                   signal["market_memory"])
+                        from degraded_intelligence import report as _dir
+                        await _dir(db, "market_memory", ok=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if _mv["action"] == "AVOID":
+                        _msg = f"Market Memory AVOID: {_mv['reason']}"
+                        signal["action"] = "HOLD"
+                        signal["tradeable"] = False
+                        signal["veto_applied"] = True
+                        signal["reasoning"] = (
+                            f"{_msg} | {signal.get('reasoning') or ''}")
+                        await _record_pulse(db, cfg, symbol=sym,
+                                            action="SKIP", level="warn",
+                                            reason=_msg, signal=signal)
+                        continue
+                    if _mv["action"] == "REDUCE":
+                        _mdd = signal.setdefault("meta_decision", {})
+                        _mdd["risk_multiplier"] = round(
+                            min(1.0, float(_mdd.get("risk_multiplier")
+                                           or 1.0))
+                            * float(_mv["multiplier"]), 2)
+                        _mdd["memory_reduce"] = _mv["reason"]
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("market memory failed (continue "
+                                 "without memory): %s", e)
+                    try:
+                        from degraded_intelligence import report as _dir
+                        await _dir(db, "market_memory", ok=False,
+                                   error=str(e))
+                    except Exception:  # noqa: BLE001
+                        pass
             if signal.get("action") in ("BUY", "SELL"):
                 try:
                     from regime_adapter import velocity_veto
@@ -1766,6 +1850,15 @@ async def _process_user_account_locked(db, cfg: dict):
                     k: _pv.get(k) for k in
                     ("verdict", "approved_fraction", "blocks",
                      "marginal_cluster_risk_usd")}
+                try:
+                    from decision_context import record_stage as _dcs
+                    await _dcs(db, signal.get("decision_id"),
+                               "portfolio_brain",
+                               signal["portfolio_brain"])
+                    from degraded_intelligence import report as _dir
+                    await _dir(db, "portfolio_brain", ok=True)
+                except Exception:  # noqa: BLE001
+                    pass
                 if _pv["verdict"] == "REJECT":
                     _msg = ("Portfolio Risk Brain REJECT: "
                             + "; ".join(_pv.get("blocks") or []))
@@ -1782,7 +1875,16 @@ async def _process_user_account_locked(db, cfg: dict):
                     sizing_method = (f"{sizing_method}+portfolio_x"
                                      f"{_pv['approved_fraction']}")
             except Exception as e:  # noqa: BLE001
-                logger.warning("portfolio brain failed (fail-open): %s", e)
+                logger.warning("portfolio brain failed — DEGRADED "
+                               "fallback (deterministic 0.5x cap): %s", e)
+                try:
+                    from degraded_intelligence import report as _dir
+                    await _dir(db, "portfolio_brain", ok=False,
+                               error=str(e))
+                except Exception:  # noqa: BLE001
+                    pass
+                effective_lot = max(0.01, round(effective_lot * 0.5, 2))
+                sizing_method = f"{sizing_method}+degraded_portfolio_x0.5"
 
         logger.info(
             "Lot sized acct=%s sym=%s equity=$%s conf=%s%% kelly_f=%s "

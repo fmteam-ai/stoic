@@ -82,10 +82,15 @@ def replay(engine: str, bars: list, feats_by_bar: list, params: dict | None,
             tp_hit = (hi >= pos["tp"]) if is_buy else (lo <= pos["tp"])
             if sl_hit:                      # conservative: SL first
                 _book(st, -1.0)
+                _r_closed = -1.0
             elif tp_hit:
                 _book(st, TP_MULT)
+                _r_closed = TP_MULT
             else:
                 continue
+            if "_r_log" in st:   # per-trade series for CC 2.0 scorecards
+                st["_r_log"].append({"r": _r_closed, "t": t,
+                                     "opened_t": pos.get("opened_t")})
             st["open_pos"] = None
             st["cooldown_until_t"] = t + COOLDOWN_SEC
             continue
