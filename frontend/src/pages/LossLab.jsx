@@ -4,6 +4,8 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { FailureTaxonomyCard } from "@/components/FailureTaxonomyCard";
 import { AttributionPanel } from "@/components/AttributionPanel";
+import { VerdictEffectivenessPanel } from "@/components/VerdictEffectivenessPanel";
+import { LearningDietStrip } from "@/components/LearningDietStrip";
 import {
     RefreshCw, FlaskConical, AlertTriangle, Brain, TrendingDown, ShieldCheck,
     Activity, ChevronRight, Calendar,
@@ -372,6 +374,10 @@ export default function LossLab() {
 
                 {/* v56 §12 — Outcome Attribution */}
                 <AttributionPanel />
+
+                {/* alpha-clean learning diet + verdict outcome tracking */}
+                <LearningDietStrip />
+                <VerdictEffectivenessPanel />
 
                 {regenerating && (
                     <div className="border border-[#0099FF]/30 bg-[#0099FF]/5 px-4 py-3 text-xs text-[#0099FF] font-mono flex items-center gap-2"

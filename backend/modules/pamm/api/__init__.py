@@ -506,11 +506,31 @@ async def trade_verdict_ep(program_id: str, payload: dict,
     await require_program_access(db, user, program)
     from modules.pamm.risk import trade_verdict
     try:
-        return await trade_verdict(
+        v = await trade_verdict(
             db, program, float(payload.get("requested_risk_pct") or 0))
     except (TypeError, ValueError):
         raise HTTPException(status_code=400,
                             detail="requested_risk_pct must be positive")
+    if v.get("verdict") in ("REDUCE", "REJECT"):
+        try:
+            from verdict_tracking import record_verdict
+            v["verdict_tracking_id"] = await record_verdict(
+                db, source="pamm_verdict", verdict=v["verdict"],
+                requested=v["requested_risk_pct"],
+                approved=v["approved_risk_pct"], unit="risk_pct",
+                user_id=user["id"], program_id=program_id,
+                limiting_factor=v.get("limiting_factor"),
+                factors=v.get("factors"),
+                reasons=[v.get("primary_reason") or v.get("reason") or ""],
+                nav=v.get("nav"),
+                context={"symbol": payload.get("symbol"),
+                         "side": payload.get("side"),
+                         "entry_price": payload.get("entry_price"),
+                         "stop_loss": payload.get("stop_loss"),
+                         "take_profit": payload.get("take_profit")})
+        except Exception:
+            pass
+    return v
 
 
 @router.get("/programs/{program_id}/change-requests")

@@ -145,7 +145,8 @@ async def approve_application(application_id: str, admin_email: str) -> dict:
             affiliate["parent_affiliate_code"] = parent["code"]
 
     await db.affiliates.insert_one(affiliate)
-    return {"ok": True, "code": code, "affiliate": {**affiliate, "id": "newly_created"}}
+    clean = {k: v for k, v in affiliate.items() if k != "_id"}
+    return {"ok": True, "code": code, "affiliate": {**clean, "id": "newly_created"}}
 
 
 async def reject_application(application_id: str, admin_email: str, reason: str = "") -> dict:

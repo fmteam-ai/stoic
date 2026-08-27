@@ -80,6 +80,18 @@ async def learning_speeds(user=Depends(get_current_user)):
     ]}
 
 
+@router.get("/quality")
+async def learning_quality_ep(user=Depends(get_current_user)):
+    """Alpha-clean learning diet — what the model was (and wasn't) fed."""
+    db = get_db()
+    doc = await db.learning_quality.find_one({"_id": "last"}) or {}
+    doc.pop("_id", None)
+    return {"quality": doc,
+            "policy": "only alpha-clean outcomes retrain the strategy — "
+                      "trades dominated by broker/execution/infrastructure/"
+                      "news noise are excluded from training"}
+
+
 @router.get("/safety-invariants")
 async def safety_invariants(user=Depends(get_current_user)):
     """Autopilot #14 — dangerous self-learning behaviors and what prevents

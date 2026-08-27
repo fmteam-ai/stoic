@@ -169,7 +169,7 @@ def calculate_emergency_stop(entry: float, direction: str, lot: float,
     emergency full close instead."""
     if not entry or not lot:
         return None
-    from pip_utils import pip_size, pip_value_usd_per_lot_strict
+    from pip_utils import pip_size
     from scalp.instruments import approved
     # round 12 item 5 — NEVER fabricate a pip value: unpriceable symbol →
     # None → the caller queues an emergency close instead.

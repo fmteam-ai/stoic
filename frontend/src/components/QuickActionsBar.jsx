@@ -66,6 +66,8 @@ export function QuickActionsBar() {
     if (!data) return null;
     const botPnl = data.todays_bot_pnl_usd ?? 0;
     const manPnl = data.todays_manual_pnl_usd ?? 0;
+    const pnl = botPnl + manPnl;
+    const pnlPositive = pnl >= 0;
     const fmt = (v) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
     return (

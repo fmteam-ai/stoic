@@ -89,6 +89,13 @@ async def sweep_once(db) -> dict:
     except Exception as e:
         logger.warning("attribution backfill failed: %s", e)
         attributed = 0
+    # verdict outcome tracking — score blocked trades counterfactually
+    try:
+        from verdict_tracking import resolve_blocked
+        verdicts_resolved = await resolve_blocked(db, limit=50)
+    except Exception as e:
+        logger.warning("verdict resolution sweep failed: %s", e)
+        verdicts_resolved = 0
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=HEALTH_RETENTION_DAYS)).isoformat()
     await db.pamm_health.delete_many({"at": {"$lt": cutoff}})
@@ -100,6 +107,7 @@ async def sweep_once(db) -> dict:
            "intents_unknown": intents_unknown,
            "unknown_reconciled": unknown_recon,
            "outcomes_attributed": attributed,
+           "verdicts_resolved": verdicts_resolved,
            "heartbeats": [{k: h.get(k) for k in
                            ("partner_id", "ok", "score", "status",
                             "latency_ms")} for h in heartbeats]}

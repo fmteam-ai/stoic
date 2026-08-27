@@ -164,7 +164,18 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
         sig_map[str(s["_id"])] = s
 
     X, y, sessions, pnls, entered = [], [], [], [], []
+    quality = {"total_closed": len(trades), "accepted": 0,
+               "alpha_clean_accepted": 0, "unattributed_included": 0,
+               "excluded_noise": 0, "excluded_by_category": {}}
     for t in trades:
+        # Alpha-clean gate — outcomes dominated by broker/execution/infra/
+        # news noise NEVER retrain the strategy (Outcome Attribution v56).
+        if t.get("alpha_clean") is False:
+            quality["excluded_noise"] += 1
+            cat = str(t.get("attribution_primary") or "NOISE")
+            quality["excluded_by_category"][cat] = \
+                quality["excluded_by_category"].get(cat, 0) + 1
+            continue
         sig = sig_map.get(str(t.get("signal_id") or ""))
         if not sig:
             continue
@@ -179,6 +190,11 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
         X.append(feats)
         y.append(1 if float(t.get("pnl") or 0) > 0 else 0)
         pnls.append(abs(float(t.get("pnl") or 0)))
+        quality["accepted"] += 1
+        if t.get("alpha_clean") is True:
+            quality["alpha_clean_accepted"] += 1
+        else:
+            quality["unattributed_included"] += 1
 
     # H5 · chronological order — walk-forward OOS calibration requires it
     if X:
@@ -199,7 +215,8 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
         sample_w = np.clip(arr / max(med, 1e-9), 0.25, 4.0)
     else:
         sample_w = np.array([])
-    return np.array(X, dtype=float), np.array(y, dtype=float), sessions, sample_w
+    return (np.array(X, dtype=float), np.array(y, dtype=float), sessions,
+            sample_w, quality)
 
 
 def _train_logreg(X: np.ndarray, y: np.ndarray,
@@ -471,13 +488,26 @@ async def _record_calibration_history(db, doc: dict) -> None:
 async def retrain() -> dict:
     """Pull closed-trade dataset, train global + per-session models. Persist artifacts."""
     db = get_db()
-    X, y, sessions, sample_w = await _build_dataset()
+    # attribute any straggler closed trades first so the alpha-clean gate
+    # sees an attribution verdict for (nearly) every candidate sample
+    try:
+        from outcome_attribution import attribute_missing
+        await attribute_missing(db, limit=500)
+    except Exception as e:
+        logger.warning("pre-train attribution backfill failed: %s", e)
+    X, y, sessions, sample_w, quality = await _build_dataset()
     n = len(y)
+    await db.learning_quality.replace_one(
+        {"_id": "last"},
+        {"_id": "last", "at": datetime.now(timezone.utc).isoformat(),
+         **quality, "n_samples": n, "trained": n >= MIN_SAMPLES},
+        upsert=True)
     if n < MIN_SAMPLES:
         return {
             "trained": False,
             "reason": f"need ≥{MIN_SAMPLES} closed trades (have {n})",
             "n_samples": n,
+            "learning_quality": quality,
         }
 
     # 1. Global fallback artifact — always trained when there's enough data
@@ -522,6 +552,7 @@ async def retrain() -> dict:
         **{k: global_doc[k] for k in ("n_samples", "n_wins", "train_auc", "threshold", "trained_at")},
         "global": {k: global_doc[k] for k in ("n_samples", "n_wins", "train_auc", "threshold", "trained_at")},
         "per_session": per_session,
+        "learning_quality": quality,
     }
 
 

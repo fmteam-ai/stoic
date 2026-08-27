@@ -32,6 +32,7 @@ from routes.webauthn_routes import router as webauthn_router
 from modules.pamm.api import router as pamm_router
 from routes.attribution_routes import router as attribution_router
 from routes.authority_routes import router as authority_router
+from routes.verdict_routes import router as verdict_router
 from routes.intent_routes import router as intent_router
 from services.broker_gateway.mock_broker import router as mockbroker_router
 from routes.market_routes import router as market_router
@@ -402,6 +403,7 @@ api_router.include_router(pamm_router)
 api_router.include_router(intent_router)
 api_router.include_router(authority_router)
 api_router.include_router(attribution_router)
+api_router.include_router(verdict_router)
 if os.environ.get("APP_ENV", "").lower() != "production":
     # SEC-003: mock broker is a certification test double — never in prod
     api_router.include_router(mockbroker_router)
@@ -567,7 +569,6 @@ app.include_router(api_router)
 # a 500. Prevents the same class of bug (iter22 P2.2) from re-emerging when
 # new routes are added.
 from bson.errors import InvalidId
-from fastapi import Request
 from fastapi.responses import JSONResponse
 
 

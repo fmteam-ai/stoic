@@ -118,6 +118,20 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
     if not gate.get("ok"):
         logger.warning("authority refused intent %s level=%s reasons=%s",
                        iid, gate.get("level"), gate.get("reasons"))
+        try:
+            from verdict_tracking import record_verdict
+            await record_verdict(
+                db, source="trading_authority", verdict="REJECT",
+                requested=float(signal.get("lot_size") or 0), approved=0.0,
+                unit="lot", user_id=user_id,
+                limiting_factor=gate.get("level"),
+                reasons=gate.get("reasons"),
+                context={"symbol": signal.get("symbol"), "side": _side,
+                         "entry_price": signal.get("entry_price"),
+                         "stop_loss": signal.get("stop_loss"),
+                         "take_profit": signal.get("take_profit")})
+        except Exception as e:
+            logger.warning("verdict tracking failed: %s", e)
         await _finalize_pre_dispatch(
             db, iid, "cancelled",
             f"trading authority {gate.get('level')}: "
@@ -125,6 +139,7 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
         return {"blocked": "trading_authority", "intent_id": iid,
                 "authority_level": gate.get("level"),
                 "reasons": gate.get("reasons")}
+    _verdict_id = None
     if gate.get("reduce_factor") and signal.get("lot_size"):
         _orig = float(signal["lot_size"])
         signal["lot_size"] = max(
@@ -133,6 +148,20 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
         logger.warning("TRADING AUTHORITY REDUCED — lot %s → %s user=%s "
                        "sym=%s", _orig, signal["lot_size"], user_id,
                        signal.get("symbol"))
+        try:
+            from verdict_tracking import record_verdict
+            _verdict_id = await record_verdict(
+                db, source="trading_authority", verdict="REDUCE",
+                requested=_orig, approved=float(signal["lot_size"]),
+                unit="lot", user_id=user_id,
+                limiting_factor=gate.get("level"),
+                reasons=gate.get("reasons"),
+                context={"symbol": signal.get("symbol"), "side": _side,
+                         "entry_price": signal.get("entry_price"),
+                         "stop_loss": signal.get("stop_loss"),
+                         "take_profit": signal.get("take_profit")})
+        except Exception as e:
+            logger.warning("verdict tracking failed: %s", e)
     await transition(db, iid, "authorized",
                      detail=f"authority {gate.get('level') or 'FULL'}")
     intent = await db.execution_intents.find_one({"intent_id": iid},
@@ -147,4 +176,10 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
         await _finalize_pre_dispatch(db, iid, "cancelled",
                                      f"engine block: {result['blocked']}")
         result.setdefault("intent_id", iid)
+    elif _verdict_id and isinstance(result, dict) and result.get("id"):
+        try:
+            from verdict_tracking import link_trade
+            await link_trade(db, _verdict_id, result["id"])
+        except Exception as e:
+            logger.warning("verdict link failed: %s", e)
     return result
