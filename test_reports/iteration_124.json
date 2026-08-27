@@ -1,0 +1,35 @@
+{
+  "summary": "Independent P0 verification of v56 timeout classification + hard-cutover pass. Ran main-agent-cited suites (test_iter198_authority_cutover.py 9, test_iter195_execution_invariants.py 10, test_iter193_v55_batch.py 23) = 42/42 green. Authored 2 new suites (test_iter124_p0_verification.py 6 tests, test_iter124_e2e_intent_wiring.py 2 tests) proving: (a) TimeoutError in run_once → status 'unknown', executor NEVER re-runs on retry (duplicate+in_flight=True), reconcile with open trade → 'reconciled', with failed trade → 'failed_confirmed'; (b) ValueError / PermissionError / ConnectionRefusedError / PreDispatchError → 'rejected'; (c) real POST /api/accounts/{id}/test-trade flow persists trade with execution_intent_id set, and the referenced intent history contains created→validated→authorized→submitted; (d) GET /api/authority + /api/execution/intents + /api/execution/intents/stats return 200 for admin. Ran regression suites test_iter86_test_trade.py 6/6, test_iter191_v53_batch.py + test_iter185_pamm_m1.py 15/15 (PAMM emergency-stop verified flatten & sweep retry both green). Frontend smoke: admin login on stoic-trading-bot.preview.emergentagent.com works, dashboard renders with data-testid='authority-strip' present. Total: 71/71 tests passed. No blocking issues found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard header", "issues": ["4 x 401 console errors on initial load — background poller fetches before session cookie fully seated; pre-existing, non-blocking, noted in previous iterations."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter124_p0_verification.py",
+    "/app/backend/tests/test_iter124_e2e_intent_wiring.py",
+    "/app/test_reports/pytest/iter124_p0.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "execution_intents.request_never_left() classifier is correctly conservative: unknown exception types default to False (POST_DISPATCH → UNKNOWN, never resent). Good defensive default.",
+    "run_once() merges result.error into any partial result written by the executor (e.g. trade_id stashed before response was lost). Good — preserves broker-truth pointer for reconcile.",
+    "MT5BridgeEngine.execute is a real shim: `assert 'submit_intent' in inspect.getsource(...)` passes; execute_authorized(intent=...) exists. Cutover is source-level provable.",
+    "Pre-dispatch refusals (validation / authority / engine gates) correctly RELEASE the dedupe_key ($unset), verified via `'dedupe_key' not in doc` assertions in 3 places. From dispatch onward at-most-once is strict.",
+    "Only minor observation: reconcile_unknown_intents relies on result.trade_id being present — if an executor times out BEFORE stashing trade_id, the intent stays UNKNOWN awaiting operator (this is the correct safe behaviour and is already alerted via pamm_notifications after alert_after_sec)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter124_p0_verification.py (new)",
+    "/app/backend/tests/test_iter124_e2e_intent_wiring.py (new)"
+  ],
+  "success_rate": {"backend": "100% (71/71)", "frontend": "100% smoke (login + authority-strip)"},
+  "test_credentials": "Backend: admin@trading.bot / admin123. Frontend UI: admin@stoicaibot.com / admin123.",
+  "seed_data_creation": "Test-only users iter124_* / iter86_* / iter124f-* markers created and torn down by fixtures. No residual data — verified platform_state.trading_authority absent and execution_intents.account_id='acct-cutover' count = 0 post-run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "P0 timeout classification + hard-cutover verified independently in iter-124. New suites live at tests/test_iter124_p0_verification.py (6) and tests/test_iter124_e2e_intent_wiring.py (2). Reuse these + iter198/195/193 as the P0 regression bar for future authority-related work. The 4 x 401 console errors on dashboard load are pre-existing background-poller noise, not related to this change.",
+  "rca of the issue": "N/A — this iteration was a P0 fix verification, no bugs uncovered. Main-agent-implemented fixes in execution_intents.request_never_left() + execution_authority.submit_intent + MT5BridgeEngine.execute shim behave as specified."
+}

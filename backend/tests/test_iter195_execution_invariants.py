@@ -202,7 +202,10 @@ class TestExecutionInvariants:
         finally:
             _cleanup(keys=[key])
 
-    def test_08_broker_timeout_marks_rejected_no_retry_execution(self):
+    def test_08_broker_timeout_goes_unknown_never_false_certainty(self):
+        """v56 P0 correction: a timeout AFTER the request may have left
+        STOIC is NOT a rejection — the intent goes UNKNOWN until broker
+        truth decides, and retries never re-execute."""
         from execution_intents import run_once
         db, key, calls = _db(), _key(), []
 
@@ -213,14 +216,39 @@ class TestExecutionInvariants:
             with pytest.raises(TimeoutError):
                 _run(run_once(db, source="t", kind="open_trade",
                               dedupe_key=key, executor=ex))
+            doc = _run(db.execution_intents.find_one({"dedupe_key": key}))
+            assert doc["status"] == "unknown", \
+                "POST_DISPATCH_TIMEOUT must be UNKNOWN, never REJECTED"
             retry = _run(run_once(db, source="t", kind="open_trade",
                                   dedupe_key=key, executor=ex))
             assert retry["duplicate"] is True
+            assert retry["in_flight"] is True
             assert len(calls) == 1, "timeout retry re-executed!"
-            doc = _run(db.execution_intents.find_one({"dedupe_key": key}))
-            assert doc["status"] == "rejected"
         finally:
             _cleanup(keys=[key])
+
+    def test_08b_pre_dispatch_failures_reject(self):
+        """Failures where the request verifiably never left STOIC (or the
+        broker answered with an error) are safe to REJECT."""
+        from execution_intents import (PreDispatchError, dedupe_key_for,
+                                       run_once)
+        db = _db()
+        for exc in (PreDispatchError("validation failed"),
+                    ValueError("broker: invalid volume"),
+                    ConnectionRefusedError("connection refused")):
+            key = dedupe_key_for("test", "pre", uuid.uuid4().hex)
+
+            async def ex(i, _e=exc):
+                raise _e
+            try:
+                with pytest.raises(type(exc)):
+                    _run(run_once(db, source="t", kind="open_trade",
+                                  dedupe_key=key, executor=ex))
+                doc = _run(db.execution_intents.find_one(
+                    {"dedupe_key": key}))
+                assert doc["status"] == "rejected", type(exc).__name__
+            finally:
+                _cleanup(keys=[key])
 
     def test_09_broker_executed_but_response_lost(self):
         """The most dangerous case: broker DID execute, response was lost.

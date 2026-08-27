@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 444 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2825 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 2841 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 3300 tests across 322 files.**
+**Total: 3316 tests across 325 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -60,7 +60,9 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter122b_enforcement.py` | http-live | 9 |
 | `backend/tests/test_iter122c_vps_trust.py` | http-live | 5 |
 | `backend/tests/test_iter123_e2e.py` | http-live | 10 |
+| `backend/tests/test_iter124_e2e_intent_wiring.py` | http-live | 2 |
 | `backend/tests/test_iter124_identity_rule.py` | http-live | 3 |
+| `backend/tests/test_iter124_p0_verification.py` | http-live | 4 |
 | `backend/tests/test_iter125_identity_corrections.py` | http-live | 17 |
 | `backend/tests/test_iter125_mtf_confluence.py` | http-live | 7 |
 | `backend/tests/test_iter126_mtf_only_engine.py` | http-live | 10 |
@@ -149,9 +151,10 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter193_e2e_external.py` | http-live | 14 |
 | `backend/tests/test_iter193_v55_batch.py` | http-live | 23 |
 | `backend/tests/test_iter194_security_audit.py` | http-live | 8 |
-| `backend/tests/test_iter195_execution_invariants.py` | http-live | 9 |
+| `backend/tests/test_iter195_execution_invariants.py` | http-live | 10 |
 | `backend/tests/test_iter196_authority_truth.py` | http-live | 14 |
 | `backend/tests/test_iter197_outcome_attribution.py` | http-live | 9 |
+| `backend/tests/test_iter198_authority_cutover.py` | http-live | 9 |
 | `backend/tests/test_iter19_gold_history_fallback.py` | http-live | 5 |
 | `backend/tests/test_iter19_safety_blocks.py` | http-live | 12 |
 | `backend/tests/test_iter20_suggestion.py` | http-live | 17 |

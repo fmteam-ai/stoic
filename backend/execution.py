@@ -47,6 +47,20 @@ class MT5BridgeEngine(ExecutionEngine):
 
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
+        """v56 hard cutover — strategies never reach the engine directly:
+        every call becomes a canonical ExecutionIntent submitted to the
+        Execution Authority (validate → authorize), and only then does the
+        engine stage run with the intent as its INPUT."""
+        from execution_authority import submit_intent
+        return await submit_intent(user_id=user_id, account=account,
+                                   signal=signal, engine=self,
+                                   max_concurrent=max_concurrent,
+                                   cfg_account_id=cfg_account_id)
+
+    async def execute_authorized(self, *, user_id, account, signal,
+                                 max_concurrent: int = 0,
+                                 cfg_account_id: str = None,
+                                 intent: dict = None) -> dict:
         db = get_db()
 
         # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — the dispatcher never
@@ -218,31 +232,32 @@ class MT5BridgeEngine(ExecutionEngine):
                     "safety_blocked_by": safety["blocked_by"],
                     "safety_audit": safety["audit"]}
 
-        # GLOBAL TRADING AUTHORITY (v56 §16) — the authority, not the
-        # strategy, decides whether new exposure may open. CLOSE_ONLY and
-        # above block; REDUCED halves requested volume.
-        try:
-            from trading_authority import enforce_new_trade
-            gate = await enforce_new_trade(db, account=account)
-        except (TypeError, AttributeError):  # isolated unit-test db mock
-            gate = {"ok": True}
-        if not gate.get("ok"):
-            logger.warning(
-                "execute blocked by TRADING AUTHORITY level=%s user=%s "
-                "sym=%s reasons=%s", gate.get("level"), user_id,
-                signal.get("symbol"), gate.get("reasons"))
-            return {"blocked": "trading_authority",
-                    "authority_level": gate.get("level"),
-                    "reasons": gate.get("reasons")}
-        if gate.get("reduce_factor") and signal.get("lot_size"):
-            _orig_lot = float(signal["lot_size"])
-            signal["lot_size"] = max(
-                0.01, round(_orig_lot * float(gate["reduce_factor"]), 2))
-            signal["_authority_reduced"] = True
-            logger.warning(
-                "TRADING AUTHORITY REDUCED — lot %s → %s user=%s sym=%s",
-                _orig_lot, signal["lot_size"], user_id,
-                signal.get("symbol"))
+        # GLOBAL TRADING AUTHORITY (v56 §16) — normally enforced upstream
+        # by the Execution Authority. This fallback only runs on the
+        # legacy/no-intent path (isolated unit tests bypassing the shim).
+        if intent is None:
+            try:
+                from trading_authority import enforce_new_trade
+                gate = await enforce_new_trade(db, account=account)
+            except (TypeError, AttributeError):  # isolated unit-test db mock
+                gate = {"ok": True}
+            if not gate.get("ok"):
+                logger.warning(
+                    "execute blocked by TRADING AUTHORITY level=%s user=%s "
+                    "sym=%s reasons=%s", gate.get("level"), user_id,
+                    signal.get("symbol"), gate.get("reasons"))
+                return {"blocked": "trading_authority",
+                        "authority_level": gate.get("level"),
+                        "reasons": gate.get("reasons")}
+            if gate.get("reduce_factor") and signal.get("lot_size"):
+                _orig_lot = float(signal["lot_size"])
+                signal["lot_size"] = max(
+                    0.01, round(_orig_lot * float(gate["reduce_factor"]), 2))
+                signal["_authority_reduced"] = True
+                logger.warning(
+                    "TRADING AUTHORITY REDUCED — lot %s → %s user=%s sym=%s",
+                    _orig_lot, signal["lot_size"], user_id,
+                    signal.get("symbol"))
 
         # iter-71b · Per-account symbol_suffix override. Brokers like VT
         # Markets rename `XAUUSD` to `XAUUSD.x` / `XAUUSDpro` / etc. and the
@@ -377,63 +392,81 @@ class MT5BridgeEngine(ExecutionEngine):
         from correlation import get_correlation_id
         trade_doc.setdefault("trace_id", get_correlation_id())
         trade_doc["order_authorization"] = order_auth
-        # EXECUTION INTENT (v55 §1/§2) — at-most-once: a retried/replayed
-        # signal converges on the ORIGINAL intent instead of a second trade.
+        # EXECUTION INTENT (v55 §1/§2, v56 hard cutover) — normally the
+        # intent arrives as INPUT from the Execution Authority. The
+        # create-here branch only serves the legacy/no-intent path.
         from execution_intents import (canonical_payload, create_intent,
                                        dedupe_key_for, transition)
-        _sig_ref = (signal.get("intent_ref") or signal.get("signal_id")
-                    or f"{trade_doc['opened_at'][:16]}|"
-                       f"{signal.get('entry_price')}|"
-                       f"{signal.get('stop_loss')}")
-        try:
-            import hashlib as _hl
-            _risk_snap = _hl.sha256(
-                repr(sorted((safety.get("audit") or {}).items())
-                     if isinstance(safety.get("audit"), dict)
-                     else safety.get("audit")).encode()).hexdigest()[:16]
-            _intent = await create_intent(
-                db, source=str(signal.get("scope")
-                               or signal.get("origin") or "manual"),
-                kind="open_trade",
-                dedupe_key=dedupe_key_for("mt5_bridge", "open_trade",
-                                          _acct_id, signal["symbol"],
-                                          _side, _sig_ref),
-                payload=canonical_payload(
-                    account_id=str(_acct_id or ""),
-                    broker_account_number=str(
-                        account.get("account_number")
-                        or account.get("login") or ""),
-                    broker_server=str(account.get("server")
-                                      or account.get("broker_server")
-                                      or ""),
-                    strategy_id=str(signal.get("scope")
-                                    or signal.get("origin") or "manual"),
-                    strategy_version=str(
-                        signal.get("strategy_version") or ""),
-                    symbol=broker_symbol, side=str(_side),
-                    requested_volume=float(signal.get("lot_size") or 0),
-                    stop_loss=signal.get("stop_loss"),
-                    take_profit=signal.get("take_profit"),
-                    risk_snapshot_id=_risk_snap,
-                    signal_id=str(signal.get("signal_id") or ""),
-                    fencing_epoch=int(signal.get("scalp_lease_epoch")
-                                      or 0),
-                    nonce=str(order_auth.get("nonce") or "")),
-                account_id=_acct_id, actor=user_id)
-        except (TypeError, AttributeError):  # isolated unit-test db mock
-            logger.critical("execution intent creation SKIPPED — non-Motor "
-                            "db object; at-most-once guard inactive for "
-                            "this call (must never happen in production)")
-            _intent = None
-        if _intent and _intent.get("duplicate"):
-            logger.warning("MT5 execute blocked — duplicate execution "
-                           "intent user=%s sym=%s intent=%s status=%s",
-                           user_id, signal.get("symbol"),
-                           _intent.get("intent_id"), _intent.get("status"))
-            return {"blocked": "duplicate_intent",
-                    "intent_id": _intent.get("intent_id"),
-                    "intent_status": _intent.get("status"),
-                    "original_result": _intent.get("result")}
+        import hashlib as _hl
+        _risk_snap = _hl.sha256(
+            repr(sorted((safety.get("audit") or {}).items())
+                 if isinstance(safety.get("audit"), dict)
+                 else safety.get("audit")).encode()).hexdigest()[:16]
+        _intent = intent
+        if _intent is not None:
+            # enrich the authority-minted intent with engine-stage facts
+            try:
+                await db.execution_intents.update_one(
+                    {"intent_id": _intent["intent_id"]},
+                    {"$set": {"payload.symbol": broker_symbol,
+                              "payload.nonce": str(order_auth.get("nonce")
+                                                   or ""),
+                              "payload.risk_snapshot_id": _risk_snap}})
+            except Exception:  # enrichment is best-effort audit detail
+                pass
+        else:
+            _sig_ref = (signal.get("intent_ref") or signal.get("signal_id")
+                        or f"{trade_doc['opened_at'][:16]}|"
+                           f"{signal.get('entry_price')}|"
+                           f"{signal.get('stop_loss')}")
+            try:
+                _intent = await create_intent(
+                    db, source=str(signal.get("scope")
+                                   or signal.get("origin") or "manual"),
+                    kind="open_trade",
+                    dedupe_key=dedupe_key_for("mt5_bridge", "open_trade",
+                                              _acct_id, signal["symbol"],
+                                              _side, _sig_ref),
+                    payload=canonical_payload(
+                        account_id=str(_acct_id or ""),
+                        broker_account_number=str(
+                            account.get("account_number")
+                            or account.get("login") or ""),
+                        broker_server=str(account.get("server")
+                                          or account.get("broker_server")
+                                          or ""),
+                        strategy_id=str(signal.get("scope")
+                                        or signal.get("origin")
+                                        or "manual"),
+                        strategy_version=str(
+                            signal.get("strategy_version") or ""),
+                        symbol=broker_symbol, side=str(_side),
+                        requested_volume=float(signal.get("lot_size")
+                                               or 0),
+                        stop_loss=signal.get("stop_loss"),
+                        take_profit=signal.get("take_profit"),
+                        risk_snapshot_id=_risk_snap,
+                        signal_id=str(signal.get("signal_id") or ""),
+                        fencing_epoch=int(signal.get("scalp_lease_epoch")
+                                          or 0),
+                        nonce=str(order_auth.get("nonce") or "")),
+                    account_id=_acct_id, actor=user_id)
+            except (TypeError, AttributeError):  # isolated unit-test db mock
+                logger.critical(
+                    "execution intent creation SKIPPED — non-Motor db "
+                    "object; at-most-once guard inactive for this call "
+                    "(must never happen in production)")
+                _intent = None
+            if _intent and _intent.get("duplicate"):
+                logger.warning("MT5 execute blocked — duplicate execution "
+                               "intent user=%s sym=%s intent=%s status=%s",
+                               user_id, signal.get("symbol"),
+                               _intent.get("intent_id"),
+                               _intent.get("status"))
+                return {"blocked": "duplicate_intent",
+                        "intent_id": _intent.get("intent_id"),
+                        "intent_status": _intent.get("status"),
+                        "original_result": _intent.get("result")}
         if _intent:
             trade_doc["execution_intent_id"] = _intent["intent_id"]
         if signal.get("_authority_reduced"):

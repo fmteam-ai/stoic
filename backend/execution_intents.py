@@ -134,6 +134,34 @@ async def transition(db, intent_id: str, to: str, detail: str = "",
     return upd
 
 
+class PreDispatchError(Exception):
+    """Executors raise this when the action verifiably never left STOIC."""
+
+
+def request_never_left(exc: BaseException) -> bool:
+    """Classify an executor failure (v56 P0 correction).
+    True  → safe to REJECT: the request never reached the wire, or the
+            broker itself responded with an error (broker truth exists).
+    False → POST-DISPATCH uncertainty: the request may have left STOIC —
+            the intent must go UNKNOWN until broker truth decides.
+    Unknown failure modes default to False: never infer safety."""
+    if isinstance(exc, PreDispatchError):
+        return True
+    name = type(exc).__name__.lower()
+    if "connecttimeout" in name or "connecterror" in name:
+        return True  # TCP connect never established — nothing was sent
+    if isinstance(exc, ConnectionRefusedError):
+        return True
+    if isinstance(exc, TimeoutError) or "timeout" in name \
+            or "cancelled" in name:
+        return False  # request may be in flight — POST_DISPATCH_TIMEOUT
+    if isinstance(exc, (ValueError, PermissionError)):
+        # adapters raise these from PARSED broker responses — the broker
+        # answered, so the outcome is confirmed
+        return True
+    return False
+
+
 async def run_once(db, *, source: str, kind: str, dedupe_key: str,
                    executor, payload: dict | None = None,
                    program_id: str | None = None,
@@ -162,8 +190,27 @@ async def run_once(db, *, source: str, kind: str, dedupe_key: str,
     try:
         result = await executor(intent)
     except Exception as e:
-        await transition(db, iid, "rejected", detail=str(e)[:200],
-                         result={"error": str(e)[:300]})
+        # merge error into any partial result the executor already stashed
+        # (e.g. a trade_id written before the response was lost)
+        cur = await db.execution_intents.find_one({"intent_id": iid},
+                                                  {"result": 1})
+        merged = dict((cur or {}).get("result") or {})
+        merged["error"] = str(e)[:300]
+        if request_never_left(e):
+            # PRE_DISPATCH failure / broker-confirmed error → REJECTED
+            await transition(db, iid, "rejected", detail=str(e)[:200],
+                             result=merged)
+        else:
+            # POST_DISPATCH_TIMEOUT (v56 P0) — the broker may have
+            # executed. Never claim rejection: UNKNOWN until broker truth.
+            await transition(
+                db, iid, "unknown",
+                detail=f"post-dispatch failure "
+                       f"({type(e).__name__}): {str(e)[:140]} — broker "
+                       f"truth required, order will NOT be resent",
+                result=merged)
+            logger.warning("intent %s → UNKNOWN after post-dispatch "
+                           "failure: %s", iid, e)
         raise
     safe = result if isinstance(result, dict) else {"value": str(result)[:300]}
     safe.pop("_id", None)

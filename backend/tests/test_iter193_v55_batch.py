@@ -111,19 +111,21 @@ class TestExecutionIntents:
             _run(db.execution_intents.delete_many({"dedupe_key": key}))
 
     def test_run_once_failure_marks_rejected(self):
+        """Broker-CONFIRMED errors (parsed responses → ValueError) reject."""
         from execution_intents import dedupe_key_for, run_once
         db = _db()
         key = dedupe_key_for("test", "flatten", uuid.uuid4().hex)
 
         async def boom(intent):
-            raise RuntimeError("broker down")
+            raise ValueError("broker rejected: invalid volume")
         try:
-            with pytest.raises(RuntimeError):
+            with pytest.raises(ValueError):
                 _run(run_once(db, source="test", kind="flatten",
                               dedupe_key=key, executor=boom))
             doc = _run(db.execution_intents.find_one({"dedupe_key": key}))
             assert doc["status"] == "rejected"
-            assert "broker down" in (doc.get("result") or {}).get("error", "")
+            assert "broker rejected" in (doc.get("result") or {}).get(
+                "error", "")
         finally:
             _run(db.execution_intents.delete_many({"dedupe_key": key}))
 
