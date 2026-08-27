@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- STOIC Host Agent MSI (WiX v5). Packages the trading bridge EA and the
+     Host Agent bootstrap so a client machine installs everything from ONE
+     signed artifact. Built + signed + independently verified by
+     .github/workflows/msi-release.yml -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="STOIC Host Agent"
+           Manufacturer="STOIC AI"
+           Version="1.0.0"
+           UpgradeCode="7f3f7c1e-9a44-4c14-b8f3-1d2e0a5c9b21"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of the STOIC Host Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="STOIC Host Agent">
+        <Component Id="BridgeEa" Guid="8b1f4a02-6d3e-4f7a-9c50-2ab3e4d5f601">
+          <File Id="EaSource"
+                Source="$(var.RepoRoot)\backend\static\EmergentTradingBridge.mq5"
+                KeyPath="yes" />
+        </Component>
+        <Component Id="HostAgentBootstrap" Guid="c4d5e6f7-1829-4a3b-8c9d-0e1f2a3b4c5d">
+          <File Id="BootstrapPs1"
+                Source="$(var.RepoRoot)\host_agent\install_host_agent.ps1"
+                KeyPath="yes" />
+        </Component>
+        <Component Id="AgentReadme" Guid="d5e6f708-293a-4b4c-9d0e-1f2a3b4c5d6e">
+          <File Id="ReadmeMd"
+                Source="$(var.RepoRoot)\host_agent\README.md"
+                KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+  </Package>
+</Wix>

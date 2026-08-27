@@ -95,6 +95,19 @@ async def heartbeat(payload: BridgeHeartbeat):
         "status": "connected" if not mismatch else "disconnected",
         "last_heartbeat": now_iso,
     }
+    # iter-212 — explicit clock-health telemetry: skew = server − agent GMT.
+    # Includes one-way network transit, so it is an UPPER bound on the true
+    # offset; |skew| beyond 1.5s is flagged for the health scopes.
+    if payload.client_time_ms:
+        try:
+            server_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            skew = server_ms - int(payload.client_time_ms)
+            set_doc["agent_clock"] = {
+                "skew_ms": skew, "ntp_synced": payload.ntp_synced,
+                "at": now_iso,
+                "status": "OK" if abs(skew) <= 1500 else "SKEW_SUSPECTED"}
+        except (TypeError, ValueError):
+            pass
     if payload.installation_id:
         set_doc["ea_identity"] = {
             "installation_id": payload.installation_id,

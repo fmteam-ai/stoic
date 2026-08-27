@@ -64,7 +64,11 @@
   "scripts": {
     "start": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "cd ../e2e && yarn --frozen-lockfile && yarn test"
   },
   "browserslist": {
     "production": [
@@ -83,6 +87,9 @@
     "@babel/plugin-proposal-private-property-in-object": "7.21.11",
     "@emergentbase/visual-edits": "https://assets.emergent.sh/npm/emergentbase-visual-edits-1.0.12.tgz",
     "@eslint/js": "9.23.0",
+    "@testing-library/dom": "10",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "^16.3.3",
     "@types/lodash": "4.17.24",
     "@vitejs/plugin-react": "^6.0.4",
     "autoprefixer": "10.4.20",
@@ -93,9 +100,12 @@
     "eslint-plugin-react": "7.37.4",
     "eslint-plugin-react-hooks": "5.2.0",
     "globals": "15.15.0",
+    "jsdom": "25",
     "postcss": "8.5.18",
     "tailwindcss": "3.4.17",
-    "vite": "^8.1.5"
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "3.2.4"
   },
   "resolutions": {
     "react-router": "7.18.0",

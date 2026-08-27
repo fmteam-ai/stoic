@@ -1,0 +1,106 @@
+name: MSI Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "host-agent-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-msi:
+    runs-on: windows-latest
+    outputs:
+      sha256: ${{ steps.hash.outputs.sha256 }}
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+
+      - name: Install WiX v5
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          wix build host_agent/wix/StoicHostAgent.wxs `
+            -arch x64 `
+            -d RepoRoot="$PWD" `
+            -o out/StoicHostAgent.msi
+          if (-not (Test-Path out/StoicHostAgent.msi)) { throw "MSI not produced" }
+
+      - name: Sign MSI (requires CODESIGN_PFX_BASE64 + CODESIGN_PFX_PASSWORD secrets)
+        id: sign
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.CODESIGN_PFX_PASSWORD }}
+        run: |
+          if (-not $env:PFX_B64) {
+            Write-Warning "No code-signing certificate configured — producing UNSIGNED MSI."
+            "signed=false" >> $env:GITHUB_OUTPUT
+            "## :warning: MSI is UNSIGNED (configure CODESIGN_PFX_BASE64 / CODESIGN_PFX_PASSWORD)" >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:PFX_B64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName | Select-Object -Last 1
+          & $signtool.FullName sign /f cert.pfx /p $env:PFX_PASS `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+            out\StoicHostAgent.msi
+          Remove-Item cert.pfx -Force
+          # primary verification in the BUILD job
+          & $signtool.FullName verify /pa /v out\StoicHostAgent.msi
+          "signed=true" >> $env:GITHUB_OUTPUT
+          "## :lock: MSI signed and signature verified in build job" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Hash manifest
+        id: hash
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash out/StoicHostAgent.msi -Algorithm SHA256).Hash
+          "StoicHostAgent.msi  $h" | Out-File out/SHA256SUMS.txt -Encoding ascii
+          "sha256=$h" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: stoic-host-agent-msi
+          path: out/
+
+  verify-msi:
+    # INDEPENDENT verification on a FRESH runner — the artifact must
+    # re-verify without any state from the build job.
+    needs: build-msi
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5
+        with:
+          name: stoic-host-agent-msi
+          path: msi
+
+      - name: Re-verify hash manifest
+        shell: pwsh
+        run: |
+          $expected = "${{ needs.build-msi.outputs.sha256 }}"
+          $actual = (Get-FileHash msi/StoicHostAgent.msi -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "SHA256 mismatch: $actual != $expected" }
+          $manifest = (Get-Content msi/SHA256SUMS.txt) -split "\s+" | Select-Object -Last 1
+          if ($actual -ne $manifest) { throw "manifest mismatch" }
+          Write-Host "Hash verified independently: $actual"
+
+      - name: Re-verify Authenticode signature
+        shell: pwsh
+        run: |
+          if ("${{ needs.build-msi.outputs.signed }}" -ne "true") {
+            Write-Warning "MSI was built UNSIGNED — skipping signature verification."
+            "## :warning: Independent check: artifact is UNSIGNED" >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName | Select-Object -Last 1
+          & $signtool.FullName verify /pa /v msi\StoicHostAgent.msi
+          $sig = Get-AuthenticodeSignature msi\StoicHostAgent.msi
+          if ($sig.Status -ne "Valid") { throw "Authenticode status: $($sig.Status)" }
+          "## :white_check_mark: Independent verification PASSED (signature + hash)" >> $env:GITHUB_STEP_SUMMARY

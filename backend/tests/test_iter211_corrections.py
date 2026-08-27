@@ -117,7 +117,8 @@ class TestBolaMatrix:
 
     def test_matrix_mechanisms_valid(self):
         from security_matrix import BOLA_MATRIX
-        assert all(m in ("user_scoped_query", "owned_account_helper")
+        assert all(m in ("user_scoped_query", "owned_account_helper",
+                         "program_access", "manager_scoped", "admin_only")
                    for m in BOLA_MATRIX.values())
 
 

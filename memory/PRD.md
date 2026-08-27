@@ -1857,3 +1857,18 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
 - P1 STOIC v61 Production Proof: signed Host Agent (MSI/Windows service), real PAMM broker certification micro-pilot, chaos/load testing (tenant isolation, 5000+ bots).
 - P2 Command Center dashboard (single GREEN/YELLOW/RED screen — /api/brain/health scopes now provide the data source).
 - P2 Investor monthly statements (PAMM).
+
+## Production-Proof hardening batch (iter-212, June 2026 — DONE, 1642/1642 offline + 35/35 HTTP, report iteration_136.json)
+1. Chaos/soak markers added to pytest.ini; tests/test_chaos_soak.py (chaos drill battery run live & passed; soak marker for live-env checks).
+2. Frontend CI gates: package.json scripts lint/typecheck/test/test:e2e; eslint.config.mjs (flat, 0 errors), tsconfig.json (tsc --noEmit), vitest (9 tests: cn, renderMarkdown, Button); new ci.yml job `frontend-quality` (lint+typecheck+test); e2e already existed as frontend-e2e job.
+3. BOLA matrix expanded: SENSITIVE_PARAMS now includes decision/intent/execution/installation/trade/signal/program/request/investor/fund/pamm/allocation ids; ~55 new declared routes (mechanisms: user_scoped_query, owned_account_helper, program_access, manager_scoped, admin_only); completeness test enforces.
+4. NTP/clock telemetry: BridgeHeartbeat.client_time_ms + ntp_synced; heartbeat computes agent_clock{skew_ms,status} (|skew|>1500ms ⇒ SKEW_SUSPECTED); EA v1.56 heartbeat JSON now sends client_time_ms=(long)TimeGMT()*1000 (no version bump); merged into /api/latency/clock-skew (reported field + suspected) and /api/brain/health scope=account (clock_telemetry).
+5. Segmented coverage: uncertainty_engine.segment_coverage + coverage_segments (by strategy/symbol/session/regime via decision_contexts fingerprint join); /api/brain/coverage returns overall (old contract preserved) + segments.
+6. AI Value Ledger: value_ledger.py — entries labelled observed/estimated/unobservable, never blended; GET /api/brain/value-ledger.
+7. Certification split: certification.py + routes/certification_routes.py — GET /api/certification/system?account_id= (6 infra checks, OAH BOLA) vs GET /api/certification/strategy?scope= (4 edge checks).
+8. Roadmap cleaned: docs/ROADMAP.md — Production blockers / Evidence campaigns / Research / Post-GA.
+9. Signed MSI pipeline: host_agent/{wix/StoicHostAgent.wxs, install_host_agent.ps1, README.md} + .github/workflows/msi-release.yml (WiX v5 build on windows-latest, signtool sign from CODESIGN_PFX_BASE64/CODESIGN_PFX_PASSWORD secrets, verify in build job, INDEPENDENT verify-msi job re-checks signature+SHA256 on fresh runner). BLOCKED on user's code-signing cert (secrets placeholder documented).
+10. Soak campaign machinery: soak_campaign.py (pure evaluate(): 14 days, ≥80% checkpoint coverage, zero critical incidents, no red days) + routes/soak_routes.py admin-only /api/ops/soak/{start,checkpoint,incident,status} + /api/ops/broker-validation?account_id= (7-check broker-attached checklist); runbook docs/SOAK_CAMPAIGN.md. NEEDS: real broker account + 14 elapsed days.
+- Note: soak POSTs need X-CSRF-Token header (cookie auth CSRF).
+- New tests: test_iter212_production_proof.py (16 offline), test_iter212_http_endpoints.py (35 HTTP by testing agent), test_chaos_soak.py. TEST_MANIFEST regenerated (3517 tests/346 files).
+- Frontend devDeps added: typescript, vitest@3.2.4, jsdom@25, @testing-library/react+dom, @testing-library/jest-dom@6.6.3 (node 20 engine limits: jsdom 25 / jest-dom 6.6.3 pinned).

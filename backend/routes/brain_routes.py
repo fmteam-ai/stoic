@@ -239,10 +239,24 @@ async def interventions_ep(days: int = Query(30, ge=1, le=90),
 async def conformal_coverage_ep(symbol: str | None = None,
                                 scope: str | None = None,
                                 user=Depends(get_current_user)):
-    """Realized conformal coverage of the uncertainty engine."""
-    from uncertainty_engine import _sample_r, realized_coverage
-    rs = await _sample_r(get_db(), user["id"], scope, symbol)
+    """Realized conformal coverage — overall + segmented by
+    strategy/symbol/session/regime (iter-212)."""
+    from uncertainty_engine import (_sample_r, coverage_segments,
+                                    realized_coverage)
+    db = get_db()
+    rs = await _sample_r(db, user["id"], scope, symbol)
     if len(rs) < 20:
-        return {"evaluated": 0, "coverage": None, "ok": True,
-                "note": f"only {len(rs)} comparable trades"}
-    return realized_coverage(list(reversed(rs)))
+        overall = {"evaluated": 0, "coverage": None, "ok": True,
+                   "note": f"only {len(rs)} comparable trades"}
+    else:
+        overall = realized_coverage(list(reversed(rs)))
+    segments = await coverage_segments(db, user["id"])
+    return {**overall, "segments": segments}
+
+
+@router.get("/value-ledger")
+async def value_ledger_ep(days: int = Query(30, ge=1, le=90),
+                          user=Depends(get_current_user)):
+    """AI Value Ledger — observed vs estimated vs unobservable effects."""
+    from value_ledger import ledger
+    return await ledger(get_db(), user["id"], days=days)

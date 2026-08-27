@@ -1,0 +1,37 @@
+{
+  "summary": "iter-212 Production-Proof HTTP end-to-end verification. Created /app/backend/tests/test_iter212_http_endpoints.py with 35 tests covering ALL new/changed endpoints introduced by the 10 hardening items: /api/brain/coverage (overall + segments), /api/brain/value-ledger (observed/estimated/unobservable), /api/certification/strategy + /system (BOLA 404 verified), full /api/ops/soak/* admin lifecycle (start / already_running / checkpoint / incident / bogus severity 400 / status), non-admin 403 on ALL soak+broker-validation endpoints, /api/ops/broker-validation admin checklist (7 checks) and bad_id 404, heartbeat client_time_ms → agent_clock (OK vs SKEW_SUSPECTED at 10s past), /api/latency/clock-skew merges reported telemetry and flags suspected, /api/brain/health scope=account carries clock_telemetry field, plus regression spot-checks on iter-211 endpoints (report/interventions/health scopes/latency summary). 35/35 PASS against the live preview backend and real Mongo. Offline suite (test_iter212_production_proof.py + test_iter211_corrections.py) also re-verified: 28 passed (note: request said 30, actual collection is 14+14=28 — discrepancy in the review request, not a real failure). All seeded docs (soak_campaigns/soak_checkpoints/soak_incidents, test users, test accounts) confirmed cleaned up post-run — preview DB is spotless.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter212_http_endpoints.py",
+    "/app/test_reports/pytest/iter212_http.xml"
+  ],
+  "action_items": [
+    "Cosmetic only: review request states offline suite is '30 passed' but actual collection is 28 (14 in test_iter212_production_proof.py + 14 in test_iter211_corrections.py). If 30 was the target, two tests were dropped or not yet added — otherwise update the roadmap/description to reflect 28."
+  ],
+  "critical_code_review_comments": [
+    "soak_routes._require_admin correctly returns 403 (not 401) for non-admin on ALL five soak/broker-validation endpoints — verified end-to-end.",
+    "certification_routes._owned_account uses parse_object_id + user-scoped query, so both invalid ObjectId and cross-tenant IDs return 404 — anti-enumeration behaviour is correct (no 403 leak).",
+    "bridge_routes heartbeat computes skew = server_ms − client_time_ms and marks SKEW_SUSPECTED when |skew|>1500ms — 10s past client_time correctly flagged in end-to-end run.",
+    "latency_profiler.clock_skew merges accounts that only have reported agent_clock (n=0 rows) — verified an account that received two heartbeats (OK then SKEW) is surfaced in accounts[] with a 'reported' block and appears in suspected[] after the skewed HB.",
+    "soak_campaign.log_incident correctly rejects 'bogus' severity at the route boundary (400) before touching Mongo — no bad docs written.",
+    "value_ledger contract holds: unobservable entries (uncertainty_hard_gate, meta_skip, pretrade_twin_block) never carry value_usd; observed_total_usd sums only 'observed'-labelled entries — 'never blends' policy verified structurally at the response level."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter212_http_endpoints.py (NEW, 35 HTTP tests)"
+  ],
+  "success_rate": {"backend": "100% (35/35 HTTP + 28/28 offline)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@trading.bot / admin123 (legacy admin, cookie auth + X-CSRF-Token header for mutating soak POSTs). Fresh non-admin users test_iter212_<uuid>@example.com created per-run with UUID-derived passwords (avoids HIBP), email_verified flipped directly in Mongo.",
+  "seed_data_creation": "Per module-scoped fixtures: 2 verified test users, 3 test accounts (TestBrokerA212 / TestBrokerB212 for BOLA, TestHBBroker212 for heartbeat telemetry) — all with unique bridge_tokens (accounts unique index). Soak: 1 test campaign started via /api/ops/soak/start, then checkpoint + minor incident added, then torn down via soak_cleanup fixture that deletes soak_campaigns/soak_checkpoints/soak_incidents by campaign_id AND wipes any leftover RUNNING campaign. Post-run mongo counts: soak_campaigns=0, soak_checkpoints=0, soak_incidents=0, iter212 users=0, 212 accounts=0.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter212_http_endpoints.py is the canonical HTTP regression for iter-212. Key gotchas: (1) CSRF: after cookie login the csrf_token cookie value MUST be echoed in X-CSRF-Token header on POSTs — _csrf_headers(session) helper does this; (2) soak_campaigns has an app-level uniqueness of one RUNNING campaign — soak_cleanup fixture pre-wipes RUNNING before starting to be defensive; (3) heartbeat client_time_ms is a number in ms (int) not a datetime string — response reads back agent_clock.status; (4) /api/latency/clock-skew now returns BOTH the derived (t7-t6) accounts and the accounts that only have reported agent_clock — n=0 rows are valid; (5) BOLA on /api/certification/system: user A hitting user B's account_id returns 404 (correct anti-enumeration). All 35 HTTP tests + 28 offline tests green — no product code touched.",
+  "rca of the issue": "N/A — no bugs found. Only a minor cosmetic discrepancy in the request text (says '30 passed' for the offline suite but actual test collection is 28) — no product/test action needed."
+}

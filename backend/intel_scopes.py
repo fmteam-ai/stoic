@@ -107,6 +107,9 @@ async def account_health(db, acc: dict) -> dict:
             "connected": connected,
             "broker": acc.get("broker") or acc.get("broker_server"),
             "clock_skew": my_skew or {"status": "NO_DATA"},
+            "clock_telemetry": acc.get("agent_clock")
+            or {"status": "NO_DATA",
+                "note": "agent has not reported client_time_ms yet"},
             "strategy_decay": {"worst": worst_decay,
                                "strategies": strategies},
             "at": _now()}

@@ -87,6 +87,72 @@ def realized_coverage(rs_chrono: list, alpha: float = 0.1,
             "ok": cov >= target - COVERAGE_TARGET_TOL}
 
 
+def segment_coverage(rows: list, key: str, alpha: float = 0.1,
+                     min_trades: int = 30) -> list:
+    """Realized coverage per segment. `rows` are CHRONOLOGICAL dicts with
+    at least {r, <key>}; segments below min_trades are reported as
+    insufficient rather than judged."""
+    groups: dict = {}
+    for row in rows:
+        k = row.get(key)
+        if k is None:
+            continue
+        groups.setdefault(str(k), []).append(row["r"])
+    out = []
+    for k, rs in sorted(groups.items(), key=lambda x: -len(x[1])):
+        if len(rs) < min_trades:
+            out.append({"segment": k, "n": len(rs), "coverage": None,
+                        "ok": True, "note": "insufficient trades"})
+        else:
+            out.append({"segment": k, "n": len(rs),
+                        **realized_coverage(rs, alpha=alpha)})
+    return out
+
+
+async def coverage_segments(db, user_id: str,
+                            days: int = LOOKBACK_DAYS) -> dict:
+    """Realized conformal coverage segmented by strategy scope, symbol,
+    session and regime fingerprint — a single global coverage number can
+    hide one strategy/regime whose intervals are lying."""
+    from latency_profiler import _session
+    from outcome_attribution import result_r
+    since = (datetime.now(timezone.utc)
+             - timedelta(days=max(1, min(int(days), 365)))).isoformat()
+    rows = []
+    dec_ids = []
+    async for t in db.trades.find(
+            {"user_id": user_id, "status": "closed",
+             "closed_at": {"$gte": since}, "alpha_clean": {"$ne": False}},
+            {"pnl": 1, "entry_price": 1, "stop_loss": 1, "exit_price": 1,
+             "action": 1, "scope": 1, "symbol": 1, "closed_at": 1,
+             "decision_id": 1}).sort("closed_at", 1).limit(2000):
+        r, _src = result_r(t)
+        try:
+            sess = _session(datetime.fromisoformat(
+                str(t.get("closed_at")).replace("Z", "+00:00")))
+        except (TypeError, ValueError):
+            sess = None
+        rows.append({"r": r, "scope": t.get("scope"),
+                     "symbol": t.get("symbol"), "session": sess,
+                     "decision_id": t.get("decision_id"), "regime": None})
+        if t.get("decision_id"):
+            dec_ids.append(t["decision_id"])
+    if dec_ids:
+        fp = {}
+        async for d in db.decision_contexts.find(
+                {"decision_id": {"$in": dec_ids[:1000]}},
+                {"decision_id": 1, "regime.fingerprint_key": 1}):
+            fp[d["decision_id"]] = (d.get("regime") or {}).get(
+                "fingerprint_key")
+        for row in rows:
+            row["regime"] = fp.get(row.get("decision_id"))
+    return {"trades": len(rows),
+            "by_strategy": segment_coverage(rows, "scope"),
+            "by_symbol": segment_coverage(rows, "symbol"),
+            "by_session": segment_coverage(rows, "session"),
+            "by_regime": segment_coverage(rows, "regime")}
+
+
 async def assess(db, user_id: str, signal: dict,
                  cost_r: float = COST_R_DEFAULT,
                  market_state: dict | None = None) -> dict:

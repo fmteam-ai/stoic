@@ -419,6 +419,10 @@ class BridgeHeartbeat(BaseModel):
     broker_server: Optional[str] = None
     terminal_build: Optional[int] = None
     ea_version: Optional[str] = None
+    # iter-212: explicit NTP/clock-health telemetry — the agent reports its
+    # own GMT epoch ms; the server computes the skew bound on receipt.
+    client_time_ms: Optional[int] = None
+    ntp_synced: Optional[bool] = None
     # EA v1.22+: full ticket list of currently-open MT5 positions on this account.
     # When provided, the server reconciles DB-open trades against this list and
     # auto-closes any orphans (e.g. SL hit but trade-close report was missed).

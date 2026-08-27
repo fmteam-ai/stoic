@@ -140,6 +140,26 @@ async def clock_skew(db, user_id: str | None = None,
                          "cloud_to_ea_min_ms": mn,
                          "cloud_to_ea_median_ms": med,
                          "skew_bound_ms": skew_bound, "status": status})
+    # iter-212 — merge explicit heartbeat clock telemetry (agent_clock is
+    # stamped server-side from the agent's reported GMT epoch ms)
+    q_acc = {"user_id": user_id} if user_id else {}
+    reported = {}
+    async for a in db.accounts.find(
+            q_acc, {"agent_clock": 1}).limit(3000):
+        if a.get("agent_clock"):
+            reported[str(a["_id"])] = a["agent_clock"]
+    for row in accounts:
+        rep = reported.pop(row["account_id"], None)
+        row["reported"] = rep
+        if rep and rep.get("status") != "OK":
+            row["status"] = "SKEW_SUSPECTED"
+    for acc_id, rep in reported.items():
+        accounts.append({"account_id": acc_id, "n": 0,
+                         "cloud_to_ea_min_ms": None,
+                         "cloud_to_ea_median_ms": None,
+                         "skew_bound_ms": 0, "reported": rep,
+                         "status": ("OK" if rep.get("status") == "OK"
+                                    else "SKEW_SUSPECTED")})
     accounts.sort(key=lambda a: a["skew_bound_ms"])
     return {"days": days, "accounts": accounts,
             "suspected": [a["account_id"] for a in accounts

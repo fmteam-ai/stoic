@@ -14,6 +14,9 @@ Mechanisms:
 
 USQ = "user_scoped_query"
 OAH = "owned_account_helper"
+PGA = "program_access"        # PAMM require_program_access permission model
+MGR = "manager_scoped"        # require_manager + scope filter
+ADM = "admin_only"            # role==admin gate (403 otherwise)
 
 BOLA_MATRIX: dict[tuple[str, str], str] = {
     # accounts
@@ -79,9 +82,74 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     ("GET", "/api/trades/live"): USQ,
     ("GET", "/api/trades/stats"): USQ,
     ("GET", "/api/v1/trades"): USQ,
+    # ── iter-212 expansion: decision / execution / trade / signal ids ──
+    ("GET", "/api/attribution/trades/{trade_id}"): USQ,
+    ("GET", "/api/brain/decisions/{decision_id}"): USQ,
+    ("GET", "/api/execution/intents"): MGR,
+    ("GET", "/api/execution/intents/{intent_id}"): MGR,
+    ("POST", "/api/infra/installations/{installation_id}/revoke"): USQ,
+    ("POST", "/api/journal/{trade_id}/card"): USQ,
+    ("PUT", "/api/journal/{trade_id}/card"): USQ,
+    ("GET", "/api/journal/{trade_id}/card"): USQ,
+    ("DELETE", "/api/journal/{trade_id}/card"): USQ,
+    ("POST", "/api/journal/{trade_id}/share"): USQ,
+    ("POST", "/api/ops/signals/{signal_id}/replay-validate"): ADM,
+    ("GET", "/api/postmortem/{trade_id}"): USQ,
+    ("POST", "/api/postmortem/{trade_id}/regenerate"): USQ,
+    ("DELETE", "/api/signals/{signal_id}"): USQ,
+    ("GET", "/api/trades/events"): USQ,
+    ("POST", "/api/trades/execute/{signal_id}"): USQ,
+    ("GET", "/api/trades/{trade_id}/audit"): USQ,
+    ("POST", "/api/trades/{trade_id}/close"): USQ,
+    ("GET", "/api/trades/{trade_id}/dna"): USQ,
+    ("GET", "/api/trades/{trade_id}/explain"): USQ,
+    ("GET", "/api/trades/{trade_id}/replay"): USQ,
+    ("POST", "/api/trades/{trade_id}/revive"): USQ,
+    ("GET", "/api/trades/{trade_id}/timeline"): USQ,
+    ("GET", "/api/trades/{trade_id}/trace"): USQ,
+    # ── iter-212 expansion: PAMM program / request ids ──
+    ("GET", "/api/pamm/events"): MGR,
+    ("POST", "/api/pamm/join-requests/{request_id}/{decision}"): PGA,
+    ("POST", "/api/pamm/marketplace/{program_id}/join"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/allocations"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/change-requests"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/change-requests"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/clear-emergency-stop"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/clear-risk-breach"): PGA,
+    ("PUT", "/api/pamm/programs/{program_id}/drift-tolerance"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/emergency-stop"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/investors"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/join-requests"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/master"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/nav"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/op-state"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/pause"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/position-truth"): PGA,
+    ("POST",
+     "/api/pamm/programs/{program_id}/position-truth/acknowledge"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/position-truth/check"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/publish"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/reconcile"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/reconciliation"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/resume"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/risk-check"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/risk-limits"): PGA,
+    ("PUT", "/api/pamm/programs/{program_id}/risk-limits"): PGA,
+    ("GET", "/api/pamm/programs/{program_id}/risk-status"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/trade-verdict"): PGA,
+    # ── iter-212 additions: certification + soak ──
+    ("GET", "/api/certification/system"): OAH,
+    ("GET", "/api/ops/broker-validation"): ADM,
 }
 
-SENSITIVE_PARAMS = {"account_id", "bot_id"}
+SENSITIVE_PARAMS = {"account_id", "bot_id",
+                    # iter-212 expansion — decision/execution/trade/signal,
+                    # PAMM program/request and installation identifiers
+                    "decision_id", "intent_id", "execution_id",
+                    "installation_id", "trade_id", "signal_id",
+                    "program_id", "request_id", "investor_id",
+                    "fund_id", "pamm_id", "allocation_id"}
 
 
 def sensitive_routes_from_openapi(spec: dict) -> set[tuple[str, str]]:
