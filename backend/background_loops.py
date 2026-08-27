@@ -19,6 +19,25 @@ from workers.base import record_progress
 logger = logging.getLogger(__name__)
 
 
+async def _pamm_sweep_loop():
+    """iter-188 · PAMM Phases 9/10 — automatic risk sweeps + broker
+    heartbeat every PAMM_SWEEP_INTERVAL_SEC (default 60s)."""
+    INTERVAL = int(os.environ.get("PAMM_SWEEP_INTERVAL_SEC", "60"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
+            from modules.pamm.sweep import sweep_once
+            res = await sweep_once(get_db())
+            record_progress("_pamm_sweep_loop",
+                            processed=res.get("programs_checked", 0),
+                            started_at=t0, interval_sec=INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("pamm sweep failed: %s", e)
+
+
 async def _nightly_tuning_loop():
     """iter-141 · Hourly check; each user is swept at most once per 24h
     (guard lives in nightly_tuner.sweep_user via quant_tuning_state)."""

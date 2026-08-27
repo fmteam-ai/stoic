@@ -255,6 +255,70 @@ export function InvestorsPanel({ programId, allocations, onChanged }) {
     );
 }
 
+export function JoinRequestsPanel({ programId, requests, onChanged }) {
+    const [busy, setBusy] = useState(null);
+    const decide = async (rid, decision) => {
+        setBusy(rid);
+        try {
+            await api.post(`/pamm/join-requests/${rid}/${decision}`);
+            toast.success(decision === "approve" ? "Approved — allocation created on broker" : "Request rejected");
+            onChanged();
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(null); }
+    };
+    const pending = (requests || []).filter(r => r.status === "pending");
+    const decided = (requests || []).filter(r => r.status !== "pending");
+    return (
+        <div className={box} data-testid="pamm-join-requests-panel">
+            <div className="px-4 py-3 border-b border-[#1F1F1F] flex items-center justify-between">
+                <span className={label}>JOIN REQUESTS</span>
+                {pending.length > 0 && <span className="font-mono text-[10px] px-1.5 py-0.5 border border-[#FFB000]/40 text-[#FFB000]" data-testid="join-requests-pending-count">{pending.length} PENDING</span>}
+            </div>
+            {pending.map(r => (
+                <div key={r.request_id} className="px-4 py-2.5 border-b border-[#141414]" data-testid={`join-request-${r.request_id}`}>
+                    <div className="flex justify-between text-xs">
+                        <span className="text-white truncate">{r.email}</span>
+                        <span className="font-mono text-[#00FF41]">{Number(r.amount).toLocaleString()}</span>
+                    </div>
+                    {r.note && <div className="font-mono text-[10px] text-[#52525B] mt-0.5 truncate">"{r.note}"</div>}
+                    <div className="flex gap-2 mt-2">
+                        <button onClick={() => decide(r.request_id, "approve")} disabled={busy === r.request_id}
+                            data-testid={`join-approve-${r.request_id}`}
+                            className={`${btn} flex-1 border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10`}>APPROVE</button>
+                        <button onClick={() => decide(r.request_id, "reject")} disabled={busy === r.request_id}
+                            data-testid={`join-reject-${r.request_id}`}
+                            className={`${btn} flex-1 border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10`}>REJECT</button>
+                    </div>
+                </div>
+            ))}
+            {!pending.length && <div className="px-4 py-4 text-center text-xs font-mono text-[#52525B]">No pending requests.</div>}
+            {decided.slice(0, 5).map(r => (
+                <div key={r.request_id} className="px-4 py-1.5 border-t border-[#141414] flex justify-between text-[10px] font-mono">
+                    <span className="text-[#52525B] truncate">{r.email}</span>
+                    <span className={r.status === "approved" ? "text-[#00FF41]" : "text-[#FF3B30]"}>{r.status.toUpperCase()}</span>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+export function SweepChip({ sweep }) {
+    if (!sweep?.at) return (
+        <span className="px-2 py-1 font-mono text-[10px] tracking-widest border border-[#1F1F1F] text-[#52525B]" data-testid="pamm-sweep-chip">
+            AUTO-SWEEP: WAITING FOR FIRST RUN
+        </span>
+    );
+    const ageS = Math.max(0, Math.round((Date.now() - new Date(sweep.at).getTime()) / 1000));
+    const fresh = ageS < 180;
+    return (
+        <span className={`px-2 py-1 font-mono text-[10px] tracking-widest border ${fresh ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#FFB000]/40 text-[#FFB000]"}`}
+            data-testid="pamm-sweep-chip"
+            title={`Programs checked: ${sweep.programs_checked} · breaches enforced: ${sweep.breaches?.length || 0}`}>
+            AUTO-SWEEP {ageS}s AGO · {sweep.programs_checked} CHECKED
+        </span>
+    );
+}
+
 export function EventsFeed({ events }) {
     return (
         <div className={box} data-testid="pamm-events-feed">

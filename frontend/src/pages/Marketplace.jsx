@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { toast } from "sonner";
 import { Store, Star, RefreshCw, Download, Check } from "lucide-react";
+import { PammMarketplace } from "@/components/PammMarketplace";
 
 const fmtPnl = (v) => v == null ? "—" : `${v >= 0 ? "+$" : "-$"}${Math.abs(v).toFixed(2)}`;
 const pnlCls = (v) => v > 0 ? "text-[#00FF41]" : v < 0 ? "text-[#FF3B30]" : "text-[#A1A1AA]";
@@ -113,6 +114,7 @@ export default function Marketplace() {
     const [accounts, setAccounts] = useState([]);
     const [err, setErr] = useState("");
     const [loading, setLoading] = useState(true);
+    const [tab, setTab] = useState("presets");
 
     const load = useCallback(async () => {
         setErr("");
@@ -136,18 +138,31 @@ export default function Marketplace() {
                 icon={Store}
             />
             <div className="px-4 md:px-8 py-5">
-                {err && <div className="font-mono text-xs text-[#FF3B30] mb-3" data-testid="market-error">{err}</div>}
-                {loading ? (
-                    <div className="font-mono text-xs text-[#52525B] flex items-center gap-2">
-                        <RefreshCw size={12} className="animate-spin" /> Loading strategies…
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4" data-testid="market-grid">
-                        {(data?.strategies || []).map((s) => (
-                            <StrategyCard key={s.key} s={s} accounts={accounts} onInstalled={load} />
-                        ))}
-                    </div>
-                )}
+                <div className="flex gap-2 mb-5" data-testid="market-tabs">
+                    {[["presets", "BOT PRESETS"], ["managed", "MANAGED STRATEGIES"]].map(([k, lbl]) => (
+                        <button key={k} onClick={() => setTab(k)}
+                            data-testid={`market-tab-${k}`}
+                            className={`px-4 py-2 text-[10px] font-mono tracking-widest border transition ${
+                                tab === k
+                                    ? "border-[#00FF41]/40 bg-[#00FF41]/10 text-[#00FF41]"
+                                    : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B] hover:text-white"
+                            }`}>{lbl}</button>
+                    ))}
+                </div>
+                {tab === "managed" ? <PammMarketplace /> : (<>
+                    {err && <div className="font-mono text-xs text-[#FF3B30] mb-3" data-testid="market-error">{err}</div>}
+                    {loading ? (
+                        <div className="font-mono text-xs text-[#52525B] flex items-center gap-2">
+                            <RefreshCw size={12} className="animate-spin" /> Loading strategies…
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4" data-testid="market-grid">
+                            {(data?.strategies || []).map((s) => (
+                                <StrategyCard key={s.key} s={s} accounts={accounts} onInstalled={load} />
+                            ))}
+                        </div>
+                    )}
+                </>)}
             </div>
         </AppLayout>
     );

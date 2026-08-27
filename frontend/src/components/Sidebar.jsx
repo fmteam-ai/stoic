@@ -51,7 +51,6 @@ const SECTIONS = [
         items: [
             { to: "/bot-health", label: "Bot Health", icon: Stethoscope, testid: "nav-bot-health" },
             { to: "/performance", label: "Verified Performance", icon: BadgeCheck, testid: "nav-performance" },
-            { to: "/analytics", label: "Analytics", icon: BarChart3, testid: "nav-analytics" },
             { to: "/loss-lab", label: "Loss Lab", icon: FlaskConical, testid: "nav-loss-lab" },
             { to: "/scoreboard", label: "Scoreboard", icon: Trophy, testid: "nav-scoreboard" },
             { to: "/brokers", label: "Broker Compare", icon: Scale, testid: "nav-broker-compare" },
@@ -65,7 +64,6 @@ const SECTIONS = [
             { to: "/bot", label: "Bot Config", icon: Sliders, testid: "nav-bot" },
             { to: "/scalp", label: "Scalp Fast Path", icon: Zap, testid: "nav-scalp" },
             { to: "/strategies", label: "Strategies", icon: Sparkles, testid: "nav-strategies" },
-            { to: "/marketplace", label: "Marketplace", icon: Store, testid: "nav-marketplace" },
             { to: "/agents", label: "Agents", icon: Cpu, testid: "nav-agents" },
             { to: "/infrastructure", label: "Infrastructure", icon: Server, testid: "nav-infrastructure" },
             { to: "/research", label: "Research Agent", icon: Brain, testid: "nav-research" },

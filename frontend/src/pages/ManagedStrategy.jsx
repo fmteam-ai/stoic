@@ -3,8 +3,8 @@ import { toast } from "sonner";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { BrokerHealthWidget, EventsFeed, InvestorsPanel, KpiTile, NavChart, RiskPanel } from "@/components/PammPanels";
-import { Loader2, OctagonAlert, Pause, Play, Plus, RefreshCw } from "lucide-react";
+import { BrokerHealthWidget, EventsFeed, InvestorsPanel, JoinRequestsPanel, KpiTile, NavChart, RiskPanel, SweepChip } from "@/components/PammPanels";
+import { Globe, Loader2, OctagonAlert, Pause, Play, Plus, RefreshCw } from "lucide-react";
 
 const btn = "px-3 py-1.5 text-[10px] font-mono tracking-widest border transition disabled:opacity-40 flex items-center gap-1.5";
 
@@ -30,7 +30,7 @@ function ProgramBar({ programs, selected, onSelect, onCreate, busy }) {
     );
 }
 
-function Controls({ program, allowed, reason, act, busy }) {
+function Controls({ program, allowed, reason, act, busy, publish }) {
     const paused = program.trading === "paused";
     return (
         <div className="flex flex-wrap items-center gap-2" data-testid="pamm-controls">
@@ -58,6 +58,12 @@ function Controls({ program, allowed, reason, act, busy }) {
                 className={`${btn} border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B] hover:text-white`}>
                 {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} RECONCILE
             </button>
+            <button onClick={publish} disabled={busy} data-testid="pamm-publish-button"
+                className={`${btn} ${program.published
+                    ? "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10"
+                    : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#52525B] hover:text-white"}`}>
+                <Globe className="w-3 h-3" /> {program.published ? "PUBLISHED" : "PUBLISH TO MARKETPLACE"}
+            </button>
         </div>
     );
 }
@@ -73,6 +79,8 @@ export default function ManagedStrategy() {
     const [limits, setLimits] = useState(null);
     const [health, setHealth] = useState([]);
     const [events, setEvents] = useState([]);
+    const [joinRequests, setJoinRequests] = useState([]);
+    const [sweep, setSweep] = useState(null);
     const [busy, setBusy] = useState(false);
     const [pinging, setPinging] = useState(false);
 
@@ -87,24 +95,30 @@ export default function ManagedStrategy() {
     const loadDetail = useCallback(async (pid) => {
         if (!pid) return;
         try {
-            const [d, n, a, rs, rl, ev] = await Promise.all([
+            const [d, n, a, rs, rl, ev, jr] = await Promise.all([
                 api.get(`/pamm/programs/${pid}`),
                 api.get(`/pamm/programs/${pid}/nav`),
                 api.get(`/pamm/programs/${pid}/allocations`),
                 api.get(`/pamm/programs/${pid}/risk-status`),
                 api.get(`/pamm/programs/${pid}/risk-limits`),
                 api.get(`/pamm/events?program_id=${pid}`),
+                api.get(`/pamm/programs/${pid}/join-requests`),
             ]);
             setDetail(d.data); setNav(n.data.nav || []);
             setAllocations(a.data.allocations || []);
             setRiskStatus(rs.data); setLimits(rl.data.risk_limits);
             setEvents(ev.data.events || []);
+            setJoinRequests(jr.data.requests || []);
         } catch (e) { toast.error(formatApiError(e)); }
     }, []);
 
     const loadHealth = useCallback(async () => {
-        try { setHealth((await api.get("/pamm/health")).data.partners || []); }
-        catch { /* non-fatal */ }
+        try {
+            const [h, sw] = await Promise.all([
+                api.get("/pamm/health"), api.get("/pamm/sweep-status")]);
+            setHealth(h.data.partners || []);
+            setSweep(sw.data);
+        } catch { /* non-fatal */ }
     }, []);
 
     useEffect(() => { loadPrograms(); loadHealth(); }, [loadPrograms, loadHealth]);
@@ -126,6 +140,17 @@ export default function ManagedStrategy() {
         try {
             await api.post(`/pamm/programs/${selected}/${action}`, payload);
             toast.success(action.replace(/-/g, " ").toUpperCase());
+            await loadDetail(selected);
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+
+    const publish = async () => {
+        setBusy(true);
+        try {
+            await api.post(`/pamm/programs/${selected}/publish`,
+                { publish: !p.published });
+            toast.success(p.published ? "Removed from marketplace" : "Published to marketplace");
             await loadDetail(selected);
         } catch (e) { toast.error(formatApiError(e)); }
         finally { setBusy(false); }
@@ -154,7 +179,10 @@ export default function ManagedStrategy() {
                     Create your first managed program above — it will be provisioned on the sandbox broker.
                 </div>}
                 {p && (<>
-                    <Controls program={p} allowed={detail.trading_allowed} reason={detail.trading_block_reason} act={act} busy={busy} />
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Controls program={p} allowed={detail.trading_allowed} reason={detail.trading_block_reason} act={act} busy={busy} publish={publish} />
+                        <SweepChip sweep={sweep} />
+                    </div>
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                         <KpiTile title="AUM" value={fmt(p.aum)} sub={p.currency} testid="kpi-aum" />
                         <KpiTile title="NAV" value={fmt(p.last_nav?.nav)} sub={p.last_nav?.at?.slice(0, 16).replace("T", " ")} testid="kpi-nav" />
@@ -173,6 +201,7 @@ export default function ManagedStrategy() {
                         </div>
                         <div className="space-y-4">
                             <BrokerHealthWidget partners={health} onPing={ping} pinging={pinging} />
+                            <JoinRequestsPanel programId={selected} requests={joinRequests} onChanged={() => loadDetail(selected)} />
                             <InvestorsPanel programId={selected} allocations={allocations} onChanged={() => loadDetail(selected)} />
                             <EventsFeed events={events} />
                         </div>

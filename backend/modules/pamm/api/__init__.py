@@ -351,6 +351,93 @@ async def broker_health_check_ep(request: Request,
     return {"results": await heartbeat_all(db)}
 
 
+@router.get("/marketplace")
+async def marketplace_ep(user=Depends(get_current_user)):
+    """Published program listings — any authenticated user may browse."""
+    db = get_db()
+    from modules.pamm.marketplace import public_listings
+    return {"listings": await public_listings(db)}
+
+
+@router.post("/marketplace/{program_id}/join")
+async def join_request_ep(program_id: str, payload: dict, request: Request,
+                          user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    if not (program.get("published") and program.get("status") == "active"):
+        raise HTTPException(status_code=404, detail="Program not found")
+    await _rl(db, request, user["id"], "pamm_join", max_attempts=5)
+    from modules.pamm.marketplace import create_join_request
+    try:
+        amount = float(payload.get("amount") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="valid amount required")
+    try:
+        return await create_join_request(
+            db, program, user, amount, str(payload.get("note") or ""))
+    except ValueError as e:  # user-input validation feedback only
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/marketplace/my-requests")
+async def my_requests_ep(user=Depends(get_current_user)):
+    db = get_db()
+    from modules.pamm.marketplace import my_requests
+    return {"requests": await my_requests(db, user["id"])}
+
+
+@router.post("/programs/{program_id}/publish")
+async def publish_ep(program_id: str, payload: dict, request: Request,
+                     user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.marketplace import set_published
+    return await set_published(db, program, bool(payload.get("publish")),
+                               payload.get("pitch"))
+
+
+@router.get("/programs/{program_id}/join-requests")
+async def join_requests_ep(program_id: str, user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.marketplace import list_join_requests
+    return {"requests": await list_join_requests(db, program_id)}
+
+
+@router.post("/join-requests/{request_id}/{decision}")
+async def decide_join_ep(request_id: str, decision: str, request: Request,
+                         user=Depends(get_current_user)):
+    if decision not in ("approve", "reject"):
+        raise HTTPException(status_code=404, detail="Not found")
+    db = get_db()
+    req = await db.pamm_join_requests.find_one(
+        {"request_id": request_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    program = await _program_or_404(db, req["program_id"])
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.marketplace import decide_join_request
+    try:
+        return await decide_join_request(db, request_id,
+                                         decision == "approve", user["id"])
+    except ValueError as e:
+        logger.warning("pamm join decision failed on %s: %s", request_id, e)
+        raise HTTPException(status_code=409,
+                            detail="Request already decided or unavailable")
+
+
+@router.get("/sweep-status")
+async def sweep_status_ep(user=Depends(get_current_user)):
+    db = get_db()
+    await require_manager(db, user)
+    from modules.pamm.sweep import sweep_status
+    return await sweep_status(db)
+
+
 @router.post("/webhooks/{partner_id}")
 async def webhook_ep(partner_id: str, request: Request):
     """Broker → STOIC signed webhooks (HMAC + replay window + idempotency)."""

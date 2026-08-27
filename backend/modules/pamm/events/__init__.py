@@ -11,6 +11,7 @@ EVENT_TYPES = {
     "BrokerDisconnected", "VersionUpdated", "ProgramCreated",
     "InvestorCreated", "ReconciliationDrift",
     "RiskLimitBreached", "PositionsFlattened", "BrokerHealthDegraded",
+    "JoinRequested", "JoinApproved", "JoinRejected",
 }
 
 
