@@ -54,7 +54,6 @@ async def mint(db, user_id: str, signal: dict, cfg: dict | None = None,
         "risk": {"risk_profile": cfg.get("risk_profile"),
                  "max_lot_size": cfg.get("max_lot_size"),
                  "soft_stop_enabled": cfg.get("soft_stop_enabled")},
-        "stages": [],
         "at": _now(),
     }
     try:
@@ -79,14 +78,13 @@ def _trim(payload) -> dict:
 
 async def record_stage(db, decision_id: str | None, stage: str,
                        payload: dict | None = None) -> None:
+    """Append-only DecisionEvent — the snapshot itself is never mutated."""
     if not decision_id:
         return
     try:
-        await db.decision_contexts.update_one(
-            {"decision_id": decision_id,
-             f"stages.{MAX_STAGES}": {"$exists": False}},
-            {"$push": {"stages": {"stage": stage, "at": _now(),
-                                  "detail": _trim(payload or {})}}})
+        await db.decision_events.insert_one(
+            {"decision_id": decision_id, "stage": stage, "at": _now(),
+             "detail": _trim(payload or {})})
     except Exception as e:  # noqa: BLE001
         logger.debug("record_stage(%s) failed: %s", stage, e)
 
@@ -99,6 +97,11 @@ async def get_decision(db, decision_id: str, user_id: str | None = None,
     doc = await db.decision_contexts.find_one(q, {"_id": 0})
     if not doc:
         return None
+    events = [e async for e in db.decision_events.find(
+        {"decision_id": decision_id}, {"_id": 0, "decision_id": 0})
+        .sort("at", 1).limit(MAX_STAGES)]
+    # legacy documents carried embedded stages before the snapshot/event split
+    doc["events"] = (doc.pop("stages", None) or []) + events
     trade = await db.trades.find_one({"decision_id": decision_id})
     if trade:
         doc["trade"] = {"trade_id": str(trade["_id"]),
@@ -116,4 +119,5 @@ async def get_decision(db, decision_id: str, user_id: str | None = None,
 async def ensure_decision_indexes(db) -> None:
     await db.decision_contexts.create_index("decision_id", unique=True)
     await db.decision_contexts.create_index([("user_id", 1), ("at", -1)])
+    await db.decision_events.create_index([("decision_id", 1), ("at", 1)])
     await db.trades.create_index("decision_id", sparse=True)

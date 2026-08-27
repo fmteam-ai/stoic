@@ -16,7 +16,26 @@ NOISE_PRIMARY = {"EXECUTION_ERROR", "BROKER_ERROR",
                  "INFRASTRUCTURE_ERROR", "NEWS_SHOCK"}
 MIN_BASE_TRADES = 15
 CACHE_TTL_S = 900
+RECOVERY_STREAK = 2   # consecutive better evaluations before de-escalating
 _cache: dict = {}
+
+
+def hysteresis_step(prev_state: str | None, raw_state: str,
+                    better_streak: int,
+                    min_streak: int = RECOVERY_STREAK) -> tuple:
+    """Hysteresis on health transitions: degradation applies IMMEDIATELY
+    (safety first, jumps allowed); recovery moves at most ONE step per
+    evaluation and only after `min_streak` consecutive better readings.
+    Returns (effective_state, new_better_streak)."""
+    if prev_state not in STATES:
+        return raw_state, 0
+    pi, ri = STATES.index(prev_state), STATES.index(raw_state)
+    if ri >= pi:                       # same or worse → apply raw at once
+        return raw_state, 0
+    streak = better_streak + 1
+    if streak >= min_streak:           # recover one step, reset streak
+        return STATES[pi - 1], 0
+    return prev_state, streak          # hold the worse state for now
 
 
 def _state_of(n_flags: int) -> str:
@@ -87,7 +106,26 @@ async def strategy_health(db, user_id: str, scope: str) -> dict:
         flags = flags[:-1]   # execution/broker noise, not alpha decay
         attribution_guard = True
     state = _state_of(len(flags))
-    return {"scope": scope, "state": state, "flags": flags,
+    raw_state = state
+    better_streak = 0
+    try:
+        prev = await db.strategy_health.find_one(
+            {"user_id": user_id, "scope": scope},
+            {"state": 1, "better_streak": 1})
+        if prev:
+            state, better_streak = hysteresis_step(
+                prev.get("state"), raw_state,
+                int(prev.get("better_streak") or 0))
+        await db.strategy_health.update_one(
+            {"user_id": user_id, "scope": scope},
+            {"$set": {"state": state, "raw_state": raw_state,
+                      "better_streak": better_streak,
+                      "hysteresis_at": datetime.now(
+                          timezone.utc).isoformat()}}, upsert=True)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("decay hysteresis unavailable: %s", e)
+    return {"scope": scope, "state": state, "raw_state": raw_state,
+            "better_streak": better_streak, "flags": flags,
             "unproven": False, "attribution_guard": attribution_guard,
             "noise_loss_fraction": round(noise_frac, 2),
             "metrics": {
@@ -129,9 +167,12 @@ async def evaluate_all(db, user_id: str) -> list:
         try:
             await db.strategy_health.update_one(
                 {"user_id": user_id, "scope": str(scope)},
-                {"$set": {**h, "user_id": user_id},
+                {"$set": {**{k: v for k, v in h.items()
+                             if k != "better_streak"}, "user_id": user_id},
                  "$push": {"history": {
-                     "$each": [{"state": h["state"], "at": h.get("at"),
+                     "$each": [{"state": h["state"],
+                                "raw_state": h.get("raw_state"),
+                                "at": h.get("at"),
                                 "flags": h["flags"]}],
                      "$slice": -50}}},
                 upsert=True)

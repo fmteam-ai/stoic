@@ -1801,3 +1801,25 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
   position truth, two-person rule, manager guide, help links). Sidebar link under LEARN
   (nav-pamm-guide — hidden in Simple Mode by design, like other LEARN links).
 - Verified: page renders with all sections behind login (screenshot).
+
+## Six principal corrections (iter-209, June 2026 — DONE, 540/540 unit + 11/11 live, report iteration_133.json)
+1. DecisionSnapshot immutable + DecisionEvents append-only: decision_contexts never mutated;
+   record_stage inserts db.decision_events (index decision_id+at); get_decision merges legacy
+   embedded stages + events into "events". Frontend decision inspector reads events.
+2. Degraded Intelligence distributed: failure counters shared via Redis (REDIS_URL, di:fails:* keys,
+   6h TTL) with Mongo persisted fallback; recovery from a fresh process consults the shared store.
+   Redis branch covered by mocked unit test only (no Redis in preview by design).
+3. Broker/account-specific costs: commission = bot_configs.commission_usd_per_lot_side (R via
+   risk-per-lot from live signal) → realized median from db.broker_deals → default; swap likewise
+   (0.2x for non-swing). signal["account_id"] set in bot_runner, threaded through meta_decide and
+   GET /api/brain/costs?account_id=. NOTE (informational): the /costs endpoint has no live signal, so
+   account_config commission surfaces only via the bot_runner path; endpoint falls to realized/default.
+4. CPCV metric renamed pbo → oos_loss_rate ("CPCV OOS loss rate ≤ 0.35") with explicit not-formal-PBO
+   docstring; formal Bailey PBO would need multi-config IS/OOS ranking (possible future work).
+5. Horizon-aware purging: horizon_embargo(log) = ceil(median holding bars / median inter-trade gap),
+   clamp 1-10; walk-forward + CPCV report embargo_basis horizon/fixed/explicit; qualify passes r_log.
+6. Strategy Decay hysteresis: degradation immediate (jumps allowed); recovery needs 2 consecutive
+   better evaluations and moves ONE step per evaluation; db.strategy_health persists
+   state/raw_state/better_streak.
+- Tests: tests/test_iter209_corrections.py (12) + tests/test_iter209_live_integration.py (11, by
+  testing agent). Backlog note: optional one-time migration of legacy embedded stages → decision_events.

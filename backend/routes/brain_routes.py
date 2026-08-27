@@ -79,7 +79,7 @@ async def decisions_list_ep(limit: int = 20,
     q = {} if user.get("role") == "admin" else {"user_id": user["id"]}
     lim = max(1, min(int(limit), 100))
     return {"decisions": [d async for d in db.decision_contexts.find(
-        q, {"_id": 0, "stages.detail": 0}).sort("at", -1).limit(lim)]}
+        q, {"_id": 0}).sort("at", -1).limit(lim)]}
 
 
 @router.get("/decisions/{decision_id}")
@@ -132,10 +132,11 @@ async def degraded_ep(user=Depends(get_current_user)):
 @router.get("/costs")
 async def costs_ep(symbol: str = Query("XAUUSD"),
                    scope: str | None = None,
+                   account_id: str | None = None,
                    user=Depends(get_current_user)):
     from transaction_costs import expected_cost_r
     return await expected_cost_r(get_db(), user["id"], symbol,
-                                 scope=scope)
+                                 scope=scope, account_id=account_id)
 
 
 @router.post("/challenger/{model_id}/qualify")

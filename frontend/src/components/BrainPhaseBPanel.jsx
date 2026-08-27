@@ -34,19 +34,19 @@ function DecisionRow({ d }) {
                 className="w-full text-left py-1 flex items-center gap-2 hover:bg-[#141414] px-1">
                 <span className="font-mono text-[9px] text-[#A855F7]">{d.decision_id}</span>
                 <span className="font-mono text-[9px] text-[#A1A1AA]">{d.symbol}</span>
-                <span className="font-mono text-[9px] text-[#52525B]">{(d.stages || []).length} stages</span>
+                <span className="font-mono text-[9px] text-[#52525B]">{d.scope}</span>
                 <span className="font-mono text-[8px] text-[#52525B] ml-auto">{String(d.at || "").slice(5, 16).replace("T", " ")}</span>
             </button>
             {open && full && (
                 <div className="px-2 pb-2 font-mono text-[9px] text-[#A1A1AA] space-y-0.5" data-testid="decision-detail">
-                    {(full.stages || []).map((s, i) => (
+                    {(full.events || full.stages || []).map((s, i) => (
                         <div key={i} className="flex gap-2">
                             <span className="text-[#00FF41] w-28 shrink-0">{s.stage}</span>
                             <span className="text-[#52525B] truncate">{JSON.stringify(s.detail).slice(0, 90)}</span>
                         </div>
                     ))}
                     {full.trade && <div className="text-[#FFB000]">→ trade {full.trade.status} · pnl {full.trade.pnl ?? "—"}</div>}
-                    {!full.stages?.length && <div className="text-[#52525B]">no stages recorded yet</div>}
+                    {!(full.events || full.stages || []).length && <div className="text-[#52525B]">no events recorded yet</div>}
                 </div>
             )}
         </div>

@@ -71,8 +71,8 @@ def test_decision_context_mint_record_and_tenant_isolation():
         assert doc is not None
         assert doc["symbol"] == "XAUUSD"
         assert doc["user_id"] == TEST_UID
-        assert isinstance(doc.get("stages"), list) and len(doc["stages"]) == 2
-        stage_names = [s["stage"] for s in doc["stages"]]
+        assert isinstance(doc.get("events"), list) and len(doc["events"]) == 2
+        stage_names = [s["stage"] for s in doc["events"]]
         assert stage_names == ["meta_decision", "market_memory"]
 
         # tenant isolation: another user must NOT see it
@@ -295,8 +295,14 @@ def _cleanup_test_data():
         for uid in (TEST_UID, OTHER_UID, EMPTY_UID, DECAY_UID):
             await db.trades.delete_many({"user_id": uid})
             await db.signals.delete_many({"user_id": uid})
+            dids = [d["decision_id"] async for d in db.decision_contexts
+                    .find({"user_id": uid}, {"decision_id": 1})]
+            if dids:
+                await db.decision_events.delete_many(
+                    {"decision_id": {"$in": dids}})
             await db.decision_contexts.delete_many({"user_id": uid})
             await db.trade_outcomes.delete_many({"user_id": uid})
+            await db.strategy_health.delete_many({"user_id": uid})
     try:
         _run(_c())
     except Exception:

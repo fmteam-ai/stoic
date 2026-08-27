@@ -111,8 +111,9 @@ async def meta_decide(db, user_id: str, signal: dict,
     unc_cost = None
     try:
         from transaction_costs import expected_cost_r
-        unc_cost = await expected_cost_r(db, user_id, symbol,
-                                         signal=signal, scope=scope)
+        unc_cost = await expected_cost_r(
+            db, user_id, symbol, signal=signal, scope=scope,
+            account_id=signal.get("account_id"))
         unc = await assess(db, user_id, signal,
                            cost_r=float(unc_cost["required_edge_r"]),
                            market_state=state)

@@ -72,15 +72,102 @@ async def _latency_r(db, user_id: str, symbol: str):
     return round(min(0.05, max(0.0, (p50 - 300) / 20000)), 3), len(totals)
 
 
+def _risk_per_lot_usd(signal: dict | None, symbol: str):
+    """USD stop-risk of 1.0 lot from the live signal's entry/SL."""
+    try:
+        from portfolio_risk import position_risk_usd
+        r = position_risk_usd({"symbol": symbol, "lot": 1.0,
+                               "entry_price": (signal or {}).get(
+                                   "entry_price"),
+                               "stop_loss": (signal or {}).get(
+                                   "stop_loss")})
+        return r if r > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _configured_commission_r(db, user_id: str, account_id,
+                                   risk_per_lot):
+    """Broker/account-specific: bot_configs.commission_usd_per_lot_side."""
+    if not account_id or not risk_per_lot:
+        return None
+    cfg = await db.bot_configs.find_one(
+        {"user_id": user_id, "account_id": str(account_id)},
+        {"commission_usd_per_lot_side": 1})
+    per_side = float((cfg or {}).get("commission_usd_per_lot_side") or 0)
+    if per_side <= 0:
+        return None
+    return round(min(0.2, per_side * 2.0 / risk_per_lot), 4)
+
+
+async def _realized_deal_cost_r(db, account_id, symbol: str, field: str,
+                                risk_per_lot):
+    """Median realized |commission|/|swap| per lot from broker deals."""
+    import re
+    if not account_id or not risk_per_lot:
+        return None, 0
+    vals = []
+    async for d in db.broker_deals.find(
+            {"account_id": str(account_id),
+             "symbol": {"$regex": f"^{re.escape(symbol[:6])}",
+                        "$options": "i"},
+             field: {"$nin": [None, 0]}},
+            {field: 1, "lots": 1}).sort("deal_time", -1).limit(200):
+        lots = float(d.get("lots") or 0)
+        if lots > 0:
+            vals.append(abs(float(d[field])) / lots)
+    if not vals:
+        return None, 0
+    vals.sort()
+    per_lot = vals[len(vals) // 2]
+    return round(min(0.2, per_lot / risk_per_lot), 4), len(vals)
+
+
 async def expected_cost_r(db, user_id: str, symbol: str,
                           signal: dict | None = None,
-                          scope: str | None = None) -> dict:
+                          scope: str | None = None,
+                          account_id: str | None = None) -> dict:
+    account_id = account_id or (signal or {}).get("account_id")
     spread_r, spread_basis = spread_r_of(signal, symbol)
     slip_r, slip_n = await _median_slippage_r(db, user_id, symbol)
     lat_r, lat_n = await _latency_r(db, user_id, symbol)
-    swap_r = 0.02 if "swing" in str(scope or "").lower() else 0.0
+    risk_per_lot = _risk_per_lot_usd(signal, symbol)
+    # commission: account config → realized broker deals → default
+    commission_r, commission_source = None, "default"
+    try:
+        commission_r = await _configured_commission_r(
+            db, user_id, account_id, risk_per_lot)
+        if commission_r is not None:
+            commission_source = "account_config"
+    except Exception:  # noqa: BLE001
+        pass
+    comm_n = 0
+    if commission_r is None:
+        try:
+            commission_r, comm_n = await _realized_deal_cost_r(
+                db, account_id, symbol, "commission", risk_per_lot)
+            if commission_r is not None:
+                commission_source = "realized_deals"
+        except Exception:  # noqa: BLE001
+            pass
+    if commission_r is None:
+        commission_r = COMMISSION_R
+    # swap: realized broker deals → scope heuristic
+    swap_r, swap_source, swap_n = None, "heuristic", 0
+    is_swing = "swing" in str(scope or "").lower()
+    try:
+        swap_r, swap_n = await _realized_deal_cost_r(
+            db, account_id, symbol, "swap", risk_per_lot)
+        if swap_r is not None:
+            swap_source = "realized_deals"
+            if not is_swing:
+                swap_r = round(swap_r * 0.2, 4)   # intraday rarely rolls
+    except Exception:  # noqa: BLE001
+        pass
+    if swap_r is None:
+        swap_r = 0.02 if is_swing else 0.0
     components = {"spread_r": spread_r,
-                  "commission_r": COMMISSION_R,
+                  "commission_r": commission_r,
                   "slippage_r": slip_r if slip_r is not None
                   else SLIPPAGE_R_DEFAULT,
                   "latency_r": lat_r, "swap_r": swap_r}
@@ -93,5 +180,11 @@ async def expected_cost_r(db, user_id: str, symbol: str,
                       "slippage_samples": slip_n,
                       "latency_samples": lat_n,
                       "slippage_source": "realized" if slip_r is not None
-                      else "default"},
+                      else "default",
+                      "commission_source": commission_source,
+                      "commission_samples": comm_n,
+                      "swap_source": swap_source,
+                      "swap_samples": swap_n,
+                      "account_id": str(account_id) if account_id
+                      else None},
             "symbol": str(symbol or "").upper()}

@@ -89,7 +89,7 @@ def test_cc2_scorecard_qualifies_robust_series():
     sc = build_scorecard(_winning_series())
     assert sc["qualified"] is True
     assert sc["metrics"]["expectancy"] > 0
-    assert sc["cpcv"]["pbo"] <= 0.35
+    assert sc["cpcv"]["oos_loss_rate"] <= 0.35
     assert sc["monte_carlo"]["p_profit"] >= 0.75
 
 

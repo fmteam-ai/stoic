@@ -696,6 +696,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 _lt.setdefault("t1_ms", _tn)   # features ready
                 _lt.setdefault("t2_ms", _tn)   # opportunity detected
                 _lt.setdefault("t3_ms", _tn)   # strategy verdict
+                if cfg.get("account_id"):
+                    signal.setdefault("account_id",
+                                      str(cfg["account_id"]))
                 try:
                     from decision_context import mint as _dc_mint
                     signal["decision_id"] = await _dc_mint(
