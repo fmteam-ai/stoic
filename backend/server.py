@@ -398,7 +398,9 @@ api_router.include_router(auth_router)
 api_router.include_router(webauthn_router)
 api_router.include_router(pamm_router)
 api_router.include_router(intent_router)
-api_router.include_router(mockbroker_router)
+if os.environ.get("APP_ENV", "").lower() != "production":
+    # SEC-003: mock broker is a certification test double — never in prod
+    api_router.include_router(mockbroker_router)
 api_router.include_router(market_router)
 api_router.include_router(bot_router)
 api_router.include_router(signal_router)

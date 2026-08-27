@@ -44,6 +44,38 @@ def webhook_secret(partner: dict) -> str:
                                  associated_data=b"broker_webhook_secret")
 
 
+def _validate_broker_url(url: str) -> None:
+    """SEC-002: refuse partner URLs that point at internal/private
+    networks — the server makes outbound HTTP calls to these hosts."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+    u = urlparse(str(url))
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise ValueError("broker URL must be http(s) with a hostname")
+    try:
+        infos = socket.getaddrinfo(u.hostname, u.port or 443)
+    except OSError:
+        raise ValueError("broker URL hostname does not resolve")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise ValueError(
+                "broker URL resolves to a private/internal address — "
+                "refused")
+
+
+def _validate_endpoint_overrides(endpoints: dict) -> None:
+    for name, spec in (endpoints or {}).items():
+        method, _, path = str(spec).partition(" ")
+        if (method.upper() not in ("GET", "POST", "PUT", "DELETE")
+                or not path.startswith("/") or "://" in path):
+            raise ValueError(
+                f"invalid endpoint override '{name}': must be "
+                f"'METHOD /relative/path'")
+
+
 async def register_partner(db, payload: dict, actor: str) -> dict:
     """Register a REAL broker partner (rest / mt5_manager). All secrets
     are encrypted at rest via the vault and never returned."""
@@ -64,6 +96,8 @@ async def register_partner(db, payload: dict, actor: str) -> dict:
         cfg = dict(payload.get("rest_config") or {})
         if not cfg.get("base_url"):
             raise ValueError("rest_config.base_url required")
+        _validate_broker_url(cfg["base_url"])
+        _validate_endpoint_overrides(cfg.get("endpoints"))
         api_key = cfg.pop("api_key", None)
         if not api_key:
             raise ValueError("rest_config.api_key required")
@@ -75,6 +109,7 @@ async def register_partner(db, payload: dict, actor: str) -> dict:
         for req in ("gateway_url", "manager_login", "server"):
             if not cfg.get(req):
                 raise ValueError(f"mt5_config.{req} required")
+        _validate_broker_url(cfg["gateway_url"])
         pw = cfg.pop("manager_password", None)
         if not pw:
             raise ValueError("mt5_config.manager_password required")

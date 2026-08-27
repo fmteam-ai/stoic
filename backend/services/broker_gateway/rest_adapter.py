@@ -57,7 +57,7 @@ class RestBrokerAdapter(BrokerAdapter):
         if r.status_code in (401, 403):
             raise PermissionError("broker rejected credentials")
         if r.status_code >= 400:
-            raise ValueError(f"broker error {r.status_code}: {r.text[:160]}")
+            raise ValueError(f"broker error {r.status_code} on {name}")
         return r.json()
 
     async def get_pamm_programs(self) -> list:

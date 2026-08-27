@@ -70,8 +70,7 @@ class Mt5ManagerAdapter(BrokerAdapter):
         if r.status_code == 404:
             raise ValueError(f"MT5 manager: unknown resource {path}")
         if r.status_code >= 400:
-            raise ValueError(
-                f"MT5 manager error {r.status_code}: {r.text[:160]}")
+            raise ValueError(f"MT5 manager error {r.status_code} on {path}")
         return r.json()
 
     async def get_pamm_programs(self) -> list:

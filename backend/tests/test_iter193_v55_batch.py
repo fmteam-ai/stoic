@@ -416,7 +416,7 @@ class TestPartnerRegistry:
         db = _db()
         doc = _run(register_partner(
             db, {"name": "Test REST Broker", "adapter": "rest",
-                 "rest_config": {"base_url": "https://api.broker.example",
+                 "rest_config": {"base_url": "https://example.com",
                                  "api_key": "sk_test_123"}}, "admin"))
         try:
             assert doc["partner_id"].startswith("prt_")
@@ -443,7 +443,8 @@ class TestPartnerRegistry:
         with pytest.raises(ValueError):
             _run(register_partner(
                 db, {"name": "x", "adapter": "mt5_manager",
-                     "mt5_config": {"gateway_url": "http://gw"}}, "admin"))
+                     "mt5_config": {"gateway_url": "https://example.com"}},
+                "admin"))
 
     def test_partners_endpoint_redacts_secrets(self):
         s = _login()

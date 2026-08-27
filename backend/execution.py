@@ -371,6 +371,9 @@ class MT5BridgeEngine(ExecutionEngine):
                          "entry_price": signal.get("entry_price")},
                 account_id=_acct_id, actor=user_id)
         except (TypeError, AttributeError):  # isolated unit-test db mock
+            logger.critical("execution intent creation SKIPPED — non-Motor "
+                            "db object; at-most-once guard inactive for "
+                            "this call (must never happen in production)")
             _intent = None
         if _intent and _intent.get("duplicate"):
             logger.warning("MT5 execute blocked — duplicate execution "

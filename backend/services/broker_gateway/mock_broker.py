@@ -4,6 +4,7 @@ RestBrokerAdapter certifies against it over genuine HTTP round-trips.
 State lives in its OWN collections (mockbroker_*) so it is a truly
 independent source of truth. Auth: bearer key (hash stored server-side)."""
 import hashlib
+import hmac
 import random
 import uuid
 from datetime import datetime, timezone
@@ -25,9 +26,16 @@ async def _auth(request: Request) -> None:
     tok = (request.headers.get("authorization") or "")
     tok = tok[7:].strip() if tok.lower().startswith("bearer ") else ""
     cfg = await get_db().mockbroker_config.find_one({"_id": "auth"})
-    if (not tok or not cfg or hashlib.sha256(tok.encode()).hexdigest()
-            != cfg.get("key_hash")):
+    digest = hashlib.sha256(tok.encode()).hexdigest()
+    if (not tok or not cfg or not cfg.get("key_hash")
+            or not hmac.compare_digest(digest, cfg["key_hash"])):
         raise HTTPException(status_code=401, detail="unauthorized")
+
+
+async def _cap(collection, query: dict, limit: int) -> None:
+    if await collection.count_documents(query) >= limit:
+        raise HTTPException(status_code=429,
+                            detail="mock broker capacity reached")
 
 
 async def _program(pid: str) -> dict:
@@ -49,6 +57,7 @@ async def list_programs(request: Request):
 async def create_program(payload: dict, request: Request):
     """Broker back-office: provision a PAMM program."""
     await _auth(request)
+    await _cap(get_db().mockbroker_programs, {}, 100)
     doc = {"program_id": f"mbx_{uuid.uuid4().hex[:10]}",
            "name": str(payload.get("name") or "program")[:120],
            "currency": str(payload.get("currency") or "USD"),
@@ -98,6 +107,7 @@ async def add_position(pid: str, payload: dict, request: Request):
     """Broker back-office: open a position on the master (drift drills)."""
     await _auth(request)
     await _program(pid)
+    await _cap(get_db().mockbroker_positions, {"program_id": pid}, 500)
     doc = {"position_id": f"mpx_{uuid.uuid4().hex[:8]}", "program_id": pid,
            "symbol": str(payload.get("symbol") or "XAUUSD"),
            "volume": float(payload.get("volume") or 0.1),
@@ -111,6 +121,7 @@ async def add_position(pid: str, payload: dict, request: Request):
 async def create_investor(pid: str, payload: dict, request: Request):
     await _auth(request)
     await _program(pid)
+    await _cap(get_db().mockbroker_investors, {"program_id": pid}, 1000)
     doc = {"investor_id": f"mbi_{uuid.uuid4().hex[:10]}",
            "program_id": pid,
            "name": str(payload.get("name") or "investor")[:80],
