@@ -23,7 +23,7 @@ GOOD_ENV = {
     "RATE_LIMIT_BYPASS_TOKEN": "",
     "ADMIN_MFA_ENFORCED": "true",
     "ADMIN_PASSWORD": "Xk9!strongProd2026#Zq",
-    "ED25519_SIGNING_KEY_B64": "abc123def456",
+    "ED25519_SIGNING_KEY_B64": "testkey-testkey-testkey",  # dummy, not a key
     "KEY_VAULT_MASTER": "vault-master-material",
     "RELEASE_SIGNER": "external",
     "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": None,

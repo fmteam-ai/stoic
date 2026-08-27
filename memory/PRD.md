@@ -1765,3 +1765,26 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
   tests/test_sec_iter206_brain_hardening_http.py (9 HTTP, by testing agent); broker-matrix
   integration test made session-stable (seed pinned to 10:00 UTC). Report iteration_131.json.
   Manifest regenerated.
+
+## CI fix round 2 (iter-207, June 2026 — DONE, verified iteration_132.json)
+- Progressive pip-freeze artifacts surfaced after the emergentintegrations index fix:
+  1) torch==2.12.1+cpu only exists on download.pytorch.org/whl/cpu (not PyPI) → CI installs now add
+     that extra index.
+  2) emergentintegrations==0.2.0 HARD-PINS openai==1.99.9 (app pins openai==2.47.0) →
+     ResolutionImpossible when installed together. Fix: all 4 workflow install blocks (ci.yml ×3,
+     release.yml ×1) grep out ^emergentintegrations into /tmp/ci-reqs.txt, install that with the
+     pytorch index, then `pip install --no-deps emergentintegrations==0.2.0` from the cloudfront
+     index (the ORIGINAL pre-freeze pattern, restored). requirements.txt itself unchanged.
+  3) gitleaks 1 leak: dummy 'abc123def456' ED25519 fixture in tests/test_iter181 (commit 4927daa3)
+     → fingerprint appended to /app/.gitleaksignore; current fixture now low-entropy
+     'testkey-testkey-testkey'. Local gitleaks run: no leaks found.
+- Proof: full `pip install --dry-run --ignore-installed` of the filtered reqs resolves (exit 0);
+  474/474 CI unit set; preflight tests 8/8; workflows valid YAML.
+- LEARNING for future agents: NEVER run bare `pip freeze > requirements.txt` here — it embeds
+  private-index pins (emergentintegrations, torch +cpu) and creates an openai version conflict.
+  If freezing, keep the CI grep-split pattern intact.
+
+## Deployment status (June 2026)
+- PRODUCTION LIVE at https://www.stoicaibot.com (user deployed). Preview remains the dev env.
+- Production env guidance given: APP_ENV=production + strong ADMIN_PASSWORD (≥12), ADMIN_MFA_ENFORCED=true,
+  ED25519_SIGNING_KEY_B64, KEY_VAULT_MASTER, no bypass tokens. Verify via GET /api/ops/deploy-preflight.

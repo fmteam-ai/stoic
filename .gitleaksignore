@@ -34,3 +34,6 @@ e9264f93692b47cd8ba9d891fb39c90e7d463ccb:backend/tests/test_iter165_reaudit_fixe
 # False positive: this is the Ed25519 PUBLIC release-verification key,
 # intentionally pinned/embedded in the host agent (not a secret).
 fd55748ee0148a5de08d08ca39e1909bcb1207b0:docs/host-agent/stoic-host-agent.ps1:generic-api-key:32
+# False positive (2026-06): dummy ED25519_SIGNING_KEY_B64 placeholder in the
+# deploy-preflight test env fixture; current file uses a labelled dummy value.
+4927daa3b318756900a610d0933e8e6e6887a2ca:backend/tests/test_iter181_deploy_preflight.py:generic-api-key:26
