@@ -1703,3 +1703,48 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
 - v61 — Production Proof: signed Host Agent (Windows service+MSI), PAMM broker certification &
   micro-pilot, load/stress/chaos testing, automated tenant-isolation CI gate, soak/DR/SLOs.
 - After v61: freeze core trading feature set; split Intelligence vs Infrastructure.
+
+## STOIC v60 — Execution Intelligence (iter-205, June 2026 — DONE, 553/553 tests)
+- **Pre-Trade Digital Twin** (`pretrade_twin.py`): FAST checks every trade (edge-vs-cost from
+  calibrated ev_r vs required_edge_r, 2× gap-through-stop shock vs 2% equity, 5% equity stop-risk
+  cap, spread stress) + DEEP seeded Monte Carlo (300 iters, 10-trade sequence, per-trade ES5 floor
+  -0.6R) for swing/trend_ride scopes. TRADE/REDUCE/SKIP, downscale-only; persisted db.pretrade_twin
+  with decision_id; wired in bot_runner after portfolio brain (cfg `pretrade_twin_enabled`).
+- **Execution Alpha** (`execution_alpha.py`): pure `classify()` → EXECUTE_NOW/WAIT/REDUCE/SKIP
+  actionable (+ LIMIT/SPLIT advisory, never blocking) from spread delay state (execution_timing),
+  broker execution forecast (grade D → 0.7x, scalp slippage >2× typical spread → SKIP), vol/liquidity
+  vector, lot vs 30d median. Persisted db.execution_alpha_decisions; wired before the spread-timing
+  block (cfg `execution_alpha_enabled`); WAIT honored by existing consider_delay.
+- **T0→T9 completion + v59 gap fix**: main bot path stamps t0 (pre-analyze), t1/t2/t3 (signal ready),
+  t4 (meta), t5 (pre-dispatch); execution_authority stamps t6, bridge t7/t9, EA t8. CRITICAL: the
+  engine.execute() whitelist dict now carries `decision_id` + `latency_trace` (previously dropped —
+  main-path trades had neither); paper engine also copies latency_trace.
+- **Broker Intelligence 2.0** (`broker_intel.py` bottom): `execution_matrix(db,user,days)` —
+  broker×symbol×session cells scored 0-100 (slippage vs typical spread cap-40, latency p50 cap-30,
+  reject rate cap-30) + submissions-weighted broker_ranking. Pure core `matrix_cell_score`.
+- **Portfolio Risk Brain 2.0** (`portfolio_risk.py`): deterministic factor model (`factor_loadings`
+  — GOLD/EQUITIES/CRYPTO/RISK_ON/OFF/currency legs; `marginal_factor_verdict` with 2.5% factor cap,
+  breach only when exposure grows) added to evaluate() blocks; regime-sensitive correlations
+  (`regime_correlation`, evaluate/marginal_verdict `vol_stress` param: sign×min(1,|c|+0.35×vs));
+  bot_runner derives vol_stress = (volatility-0.6)/0.4 from the market-state vector. Factor fraction
+  can only shrink the cluster approval.
+- **Strategy Router 2.0** (`strategy_router.py`): recency-weighted avg R (21d half-life,
+  `recency_weight`), per-family worst decay state from db.strategy_health multiplies score
+  (HEALTH_ROUTER_MULT, floor 0.5 — router never zeroes a family), engine_version 2, evidence carries
+  health.
+- **Uncertainty Engine 2.0** (`uncertainty_engine.py`): `conformal_interval` (split-conformal around
+  median) + `components` dict (bootstrap_width, disagreement, conformal_uncertainty,
+  regime_uncertainty, execution_uncertainty); assess() accepts market_state (meta_decide passes it).
+- **UI**: `ExecutionIntelPanel.jsx` on /execution above the Latency Profiler — broker-matrix-panel,
+  execution-alpha-panel, pretrade-twin-panel.
+- Tests: tests/test_iter205_execution_intelligence.py (19 unit) +
+  tests/test_iter205_execution_intelligence_integration.py (8 data-level, by testing agent) + full
+  regression = 553/553 (report iteration_130.json). Manifest regenerated (3419 tests / 337 files).
+- Seed-data gotchas recorded by testing agent: db.accounts unique partial index on bridge_token;
+  execution_matrix filters on created_at ISO strings.
+
+### Remaining from user roadmap after v60
+- Trading Intelligence Graph (P2, item 15) — deferred.
+- v61 — Production Proof: signed Host Agent (Windows service+MSI), PAMM broker certification &
+  micro-pilot, load/stress/chaos testing, automated tenant-isolation CI gate, soak/DR/SLOs,
+  Command Center dashboard.

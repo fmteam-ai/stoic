@@ -78,6 +78,20 @@ def pair_correlation(a: str, b: str) -> float:
     return 0.0
 
 
+def regime_correlation(a: str, b: str, vol_stress: float = 0.0) -> float:
+    """v60 #12 — correlations are regime-sensitive, not static: in a
+    volatility shock everything correlates toward ±1."""
+    c = pair_correlation(a, b)
+    try:
+        vs = max(0.0, min(1.0, float(vol_stress or 0)))
+    except (TypeError, ValueError):
+        vs = 0.0
+    if c == 0.0 or vs == 0.0:
+        return c
+    sign = 1.0 if c > 0 else -1.0
+    return round(sign * min(1.0, abs(c) + 0.35 * vs), 3)
+
+
 def _dir(pos: dict) -> float:
     return 1.0 if str(pos.get("direction")
                       or pos.get("action") or "BUY").upper() == "BUY" else -1.0
@@ -160,16 +174,26 @@ def vol_size_multiplier(current_vol: float | None,
 
 
 def evaluate(positions: list, candidate: dict, equity: float,
-             params: dict | None = None) -> dict:
+             params: dict | None = None,
+             vol_stress: float = 0.0) -> dict:
     """Portfolio verdict for ONE new candidate against ALL open positions.
-    Returns ok/blocks plus the full metric set for explainability."""
+    Returns ok/blocks plus the full metric set for explainability.
+    vol_stress (0-1) tightens correlations toward ±1 (v60 regime-aware)."""
     cfg = {**DEFAULTS, **(params or {})}
     equity = max(float(equity or 0), 0.01)
     blocks: list = []
 
     risk_c = position_risk_usd(candidate)
+
+    def _corr(p) -> float:
+        c = position_correlation(candidate, p)
+        if vol_stress and c:
+            sign = 1.0 if c > 0 else -1.0
+            c = sign * min(1.0, abs(c) + 0.35 * min(1.0, vol_stress))
+        return c
+
     cluster = risk_c + sum(
-        max(0.0, position_correlation(candidate, p)) * position_risk_usd(p)
+        max(0.0, _corr(p)) * position_risk_usd(p)
         for p in positions)
     cluster_cap = equity * cfg["cluster_risk_pct"] / 100.0
     if cluster > cluster_cap:
@@ -192,6 +216,10 @@ def evaluate(positions: list, candidate: dict, equity: float,
                       f"${stress['loss_usd']:.0f} exceeds "
                       f"{cfg['stress_pct']}% of equity")
 
+    # v60 — marginal FACTOR contribution (USD/GOLD/EQUITIES/CRYPTO/…)
+    fv = marginal_factor_verdict(positions, candidate, equity)
+    blocks.extend(fv["breaches"])
+
     return {"ok": not blocks, "blocks": blocks,
             "candidate_risk_usd": round(risk_c, 2),
             "cluster_risk_usd": round(cluster, 2),
@@ -199,8 +227,73 @@ def evaluate(positions: list, candidate: dict, equity: float,
             "currency_exposure": exp,
             "currency_cap_usd": round(ccy_cap, 2),
             "stress": {**stress, "cap_usd": round(stress_cap, 2)},
+            "factor_verdict": fv,
+            "vol_stress": round(min(1.0, max(0.0, vol_stress)), 3),
             "open_positions": len(positions),
             "correlations": correlation_matrix(everything)}
+
+
+# ─────────────── Portfolio Risk Brain 2.0 (v60 #12) — factor model ────────
+
+FACTOR_CAP_PCT = 2.5
+GROUP_FACTORS = {
+    "metals": {"GOLD": 1.0, "USD": -0.6, "RISK_OFF": 0.4},
+    "indices": {"EQUITIES": 1.0, "RISK_ON": 0.6},
+    "crypto": {"CRYPTO": 1.0, "RISK_ON": 0.5},
+}
+
+
+def factor_loadings(symbol: str) -> dict:
+    """Deterministic factor loadings per symbol (v60 factor model)."""
+    s = base_symbol(symbol).upper()
+    g = group_of(s)
+    if g in GROUP_FACTORS:
+        return dict(GROUP_FACTORS[g])
+    b, q = legs(s)
+    return {b: 1.0, q: -1.0}
+
+
+def factor_risk(positions: list) -> dict:
+    """Signed risk-USD per FACTOR (currency legs + macro factors)."""
+    out: dict = {}
+    for p in positions:
+        r = position_risk_usd(p) * _dir(p)
+        for f, load in factor_loadings(p.get("symbol") or "").items():
+            out[f] = round(out.get(f, 0.0) + r * load, 2)
+    return out
+
+
+def marginal_factor_verdict(positions: list, candidate: dict,
+                            equity: float,
+                            cap_pct: float = FACTOR_CAP_PCT) -> dict:
+    """Marginal factor contribution of ONE candidate — which factor does
+    this trade really add, and does it breach the factor budget?"""
+    equity = max(float(equity or 0), 0.01)
+    before = factor_risk(positions)
+    after = factor_risk(list(positions) + [candidate])
+    cap = equity * cap_pct / 100.0
+    breaches = []
+    marginal = {}
+    for f in set(before) | set(after):
+        delta = round(after.get(f, 0.0) - before.get(f, 0.0), 2)
+        if delta:
+            marginal[f] = delta
+        if abs(after.get(f, 0.0)) > cap \
+                and abs(after.get(f, 0.0)) > abs(before.get(f, 0.0)):
+            breaches.append(
+                f"factor {f} exposure ${abs(after[f]):.0f} exceeds "
+                f"{cap_pct}% of equity")
+    fraction = 1.0
+    if breaches:
+        worst_over = max(
+            (abs(after[f]) - cap) for f in after
+            if abs(after.get(f, 0.0)) > cap
+            and abs(after.get(f, 0.0)) > abs(before.get(f, 0.0)))
+        cand_r = position_risk_usd(candidate) or 1e-9
+        fraction = round(max(0.0, 1.0 - worst_over / cand_r), 3)
+    return {"marginal_factors": marginal, "factor_risk_after": after,
+            "factor_cap_usd": round(cap, 2), "breaches": breaches,
+            "approved_fraction": fraction}
 
 
 def factor_exposure(positions: list, equity: float) -> dict:
@@ -224,12 +317,14 @@ def factor_exposure(positions: list, equity: float) -> dict:
 
 async def marginal_verdict(db, account_id: str, candidate: dict,
                            equity: float, user_id: str | None = None,
-                           params: dict | None = None) -> dict:
+                           params: dict | None = None,
+                           vol_stress: float = 0.0) -> dict:
     """Portfolio Risk Brain — what risk does THIS trade add to the whole
     portfolio? APPROVE / REDUCE / REJECT with an approved risk fraction;
     reductions are recorded for empirical verdict-outcome scoring."""
     positions = await open_positions(db, account_id, user_id=user_id)
-    ev = evaluate(positions, candidate, equity, params)
+    ev = evaluate(positions, candidate, equity, params,
+                  vol_stress=vol_stress)
     risk_c = ev["candidate_risk_usd"]
     if ev["ok"]:
         verdict = {"verdict": "APPROVE", "approved_fraction": 1.0,
@@ -243,6 +338,9 @@ async def marginal_verdict(db, account_id: str, candidate: dict,
     headroom = max(0.0, ev["cluster_cap_usd"]
                    - (ev["cluster_risk_usd"] - risk_c))
     fraction = round(min(1.0, headroom / risk_c), 3) if risk_c else 0.0
+    # v60 — the factor budget can only shrink the approval further
+    fraction = min(fraction,
+                   float(ev["factor_verdict"]["approved_fraction"]))
     verdict_name = "REJECT" if fraction < 0.2 else "REDUCE"
     out = {"verdict": verdict_name,
            "approved_fraction": 0.0 if verdict_name == "REJECT"

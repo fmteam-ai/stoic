@@ -635,6 +635,7 @@ async def _process_user_account_locked(db, cfg: dict):
             if cfg_account_id:
                 active_positions_q["account_id"] = cfg_account_id
             active_positions = await db.trades.find(active_positions_q).to_list(length=50)
+            _t0_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
             tick_out = await orch.analyze_tick(
                 user_id=user_id, symbol=sym, risk_level=risk_level,
                 active_positions=active_positions,
@@ -687,6 +688,14 @@ async def _process_user_account_locked(db, cfg: dict):
             # DecisionContext (v59) — one immutable dec_… snapshot per
             # BUY/SELL opportunity, threaded through the entire pipeline.
             if signal.get("action") in ("BUY", "SELL"):
+                # T0→T5 telemetry (v60) — main-path stamps; T6 is stamped
+                # by the Execution Authority, T7-T9 by the EA/bridge.
+                _lt = signal.setdefault("latency_trace", {})
+                _lt.setdefault("t0_ms", _t0_ms)
+                _tn = int(datetime.now(timezone.utc).timestamp() * 1000)
+                _lt.setdefault("t1_ms", _tn)   # features ready
+                _lt.setdefault("t2_ms", _tn)   # opportunity detected
+                _lt.setdefault("t3_ms", _tn)   # strategy verdict
                 try:
                     from decision_context import mint as _dc_mint
                     signal["decision_id"] = await _dc_mint(
@@ -706,6 +715,8 @@ async def _process_user_account_locked(db, cfg: dict):
                         ("decision", "risk_multiplier", "composite",
                          "scorecard", "uncertainty", "market_state")}
                     signal["market_state"] = _md["market_state"]
+                    signal.setdefault("latency_trace", {})["t4_ms"] = int(
+                        datetime.now(timezone.utc).timestamp() * 1000)
                     try:
                         from decision_context import record_stage as _dcs
                         await _dcs(db, signal.get("decision_id"),
@@ -1841,11 +1852,18 @@ async def _process_user_account_locked(db, cfg: dict):
                          "lot": effective_lot,
                          "entry_price": signal.get("entry_price"),
                          "stop_loss": signal.get("stop_loss")}
+                _vec = (signal.get("market_state") or {}).get(
+                    "vector") or {}
+                try:
+                    _vs = max(0.0, (float(_vec.get("volatility") or 0)
+                                    - 0.6) / 0.4)
+                except (TypeError, ValueError):
+                    _vs = 0.0
                 _pv = await _pr.marginal_verdict(
                     db, cfg_account_id, _cand,
                     float(cfg.get("_account_equity") or 0)
                     or float(sized.get("equity") or 0),
-                    user_id=user_id)
+                    user_id=user_id, vol_stress=min(1.0, _vs))
                 signal["portfolio_brain"] = {
                     k: _pv.get(k) for k in
                     ("verdict", "approved_fraction", "blocks",
@@ -1885,6 +1903,48 @@ async def _process_user_account_locked(db, cfg: dict):
                     pass
                 effective_lot = max(0.01, round(effective_lot * 0.5, 2))
                 sizing_method = f"{sizing_method}+degraded_portfolio_x0.5"
+
+        # Pre-Trade Digital Twin (v60) — simulate before committing
+        # capital: edge-vs-cost, gap shock, equity cap; deep Monte Carlo
+        # for swing scopes. Only reduces or rejects, never increases.
+        if cfg.get("pretrade_twin_enabled", True):
+            try:
+                from pretrade_twin import simulate as _twin_sim
+                _tw = await _twin_sim(
+                    db, user_id, signal, effective_lot,
+                    float(cfg.get("_account_equity") or 0)
+                    or float(sized.get("equity") or 0))
+                signal["pretrade_twin"] = {
+                    k: _tw.get(k) for k in
+                    ("verdict", "approved_fraction", "mode",
+                     "risk_usd", "elapsed_ms")}
+                try:
+                    from decision_context import record_stage as _dcs
+                    await _dcs(db, signal.get("decision_id"),
+                               "pretrade_twin", signal["pretrade_twin"])
+                except Exception:  # noqa: BLE001
+                    pass
+                if _tw["verdict"] == "SKIP":
+                    _fails = [c["detail"] for c in _tw.get("checks", [])
+                              if not c["passed"]]
+                    _msg = ("Pre-Trade Twin SKIP: "
+                            + "; ".join(_fails[:2]))
+                    signal["action"] = "HOLD"
+                    signal["tradeable"] = False
+                    signal["veto_applied"] = True
+                    await _record_pulse(db, cfg, symbol=sym,
+                                        action="SKIP", level="warn",
+                                        reason=_msg, signal=signal)
+                    continue
+                if _tw["verdict"] == "REDUCE":
+                    effective_lot = max(0.01, round(
+                        effective_lot
+                        * float(_tw["approved_fraction"]), 2))
+                    sizing_method = (f"{sizing_method}+twin_x"
+                                     f"{_tw['approved_fraction']}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pretrade twin failed (fail-open — "
+                               "hard gates still apply): %s", e)
 
         logger.info(
             "Lot sized acct=%s sym=%s equity=$%s conf=%s%% kelly_f=%s "
@@ -2277,6 +2337,40 @@ async def _process_user_account_locked(db, cfg: dict):
             signal["operational_mode"] = _mg["mode"]
 
         engine = engine_for_account(target_account)
+        # Execution Alpha (v60) — HOW to execute: EXECUTE_NOW / WAIT /
+        # REDUCE / SKIP (LIMIT & SPLIT recorded as advisory). WAIT is
+        # honored by the spread-timing block below.
+        if cfg.get("execution_alpha_enabled", True):
+            try:
+                from execution_alpha import decide as _ea_decide
+                _plan = await _ea_decide(db, user_id, target_account,
+                                         signal, effective_lot)
+                signal["execution_alpha"] = {
+                    k: _plan.get(k) for k in
+                    ("mode", "risk_multiplier", "reasons", "advisory")}
+                try:
+                    from decision_context import record_stage as _dcs
+                    await _dcs(db, signal.get("decision_id"),
+                               "execution_alpha",
+                               signal["execution_alpha"])
+                except Exception:  # noqa: BLE001
+                    pass
+                if _plan["mode"] == "SKIP":
+                    _msg = ("Execution Alpha SKIP: "
+                            + "; ".join(_plan.get("reasons") or []))
+                    await _record_pulse(db, cfg, symbol=sym,
+                                        action="SKIP", level="warn",
+                                        reason=_msg, signal=signal)
+                    continue
+                _pm = float(_plan.get("risk_multiplier") or 1.0)
+                if 0 < _pm < 1.0:
+                    effective_lot = max(0.01,
+                                        round(effective_lot * _pm, 2))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("execution alpha failed (fail-open): %s",
+                               e)
+        signal.setdefault("latency_trace", {})["t5_ms"] = int(
+            datetime.now(timezone.utc).timestamp() * 1000)
         # Phase 2 · Execution timing — brief pre-send delay when the live
         # spread is spiking vs its 10-min median (never vetoes).
         if (cfg.get("execution_timing_enabled", True)
@@ -2297,6 +2391,8 @@ async def _process_user_account_locked(db, cfg: dict):
             account=target_account,
             signal={
                 "signal_id": signal_id,
+                "decision_id": signal.get("decision_id"),
+                "latency_trace": signal.get("latency_trace"),
                 "symbol": signal["symbol"],
                 "action": signal["action"],
                 "lot_size": effective_lot,

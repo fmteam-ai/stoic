@@ -114,9 +114,10 @@ async def meta_decide(db, user_id: str, signal: dict,
         unc_cost = await expected_cost_r(db, user_id, symbol,
                                          signal=signal, scope=scope)
         unc = await assess(db, user_id, signal,
-                           cost_r=float(unc_cost["required_edge_r"]))
+                           cost_r=float(unc_cost["required_edge_r"]),
+                           market_state=state)
     except Exception:  # noqa: BLE001
-        unc = await assess(db, user_id, signal)
+        unc = await assess(db, user_id, signal, market_state=state)
     dims = {
         "opportunity_quality": await _opportunity(signal),
         "strategy_reliability": await _reliability(db, user_id, scope),

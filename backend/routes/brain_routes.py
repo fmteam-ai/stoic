@@ -145,3 +145,32 @@ async def qualify_challenger_ep(model_id: str,
         raise HTTPException(status_code=400,
                             detail="qualification failed — invalid model"
                                    " id or replay error")
+
+
+# ───────────────────── v60 — Execution Intelligence ─────────────────────
+
+@router.get("/broker-matrix")
+async def broker_matrix_ep(days: int = Query(30, ge=1, le=90),
+                           user=Depends(get_current_user)):
+    from broker_intel import execution_matrix
+    return await execution_matrix(get_db(), user["id"], days=days)
+
+
+@router.get("/execution-alpha/recent")
+async def execution_alpha_recent_ep(limit: int = 20,
+                                    user=Depends(get_current_user)):
+    db = get_db()
+    q = {} if user.get("role") == "admin" else {"user_id": user["id"]}
+    lim = max(1, min(int(limit), 100))
+    return {"decisions": [d async for d in db.execution_alpha_decisions
+            .find(q, {"_id": 0}).sort("at", -1).limit(lim)]}
+
+
+@router.get("/twin/recent")
+async def twin_recent_ep(limit: int = 20,
+                         user=Depends(get_current_user)):
+    db = get_db()
+    q = {} if user.get("role") == "admin" else {"user_id": user["id"]}
+    lim = max(1, min(int(limit), 100))
+    return {"verdicts": [d async for d in db.pretrade_twin
+            .find(q, {"_id": 0}).sort("at", -1).limit(lim)]}

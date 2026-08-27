@@ -309,3 +309,97 @@ async def _broker_intel_loop():
             raise
         except Exception as e:  # noqa: BLE001
             logger.warning("broker intel loop error: %s", e)
+
+
+# ─────────────── Broker Intelligence 2.0 (v60 #11) ───────────────
+
+def _cell_session(opened_at) -> str:
+    ts = _parse_iso(opened_at)
+    if not ts:
+        return "unknown"
+    h = ts.astimezone(timezone.utc).hour
+    if 7 <= h < 12:
+        return "london"
+    if 12 <= h < 16:
+        return "overlap"
+    if 16 <= h < 21:
+        return "newyork"
+    return "asia"
+
+
+def matrix_cell_score(*, slips: list, lats_ms: list, rejects: int,
+                      total: int, typical_spread_pips: float) -> dict:
+    """Pure 0-100 execution score for one broker×symbol×session cell."""
+    score = 100.0
+    detail = {}
+    if slips:
+        avg = sum(slips) / len(slips)
+        penalty = min(40.0, avg / max(0.1, typical_spread_pips) * 20.0)
+        score -= penalty
+        detail["avg_slippage_pips"] = round(avg, 2)
+    if lats_ms:
+        p50 = sorted(lats_ms)[len(lats_ms) // 2]
+        score -= min(30.0, max(0.0, (p50 - 500) / 100.0))
+        detail["latency_p50_ms"] = int(p50)
+    if total:
+        rate = rejects / total
+        score -= min(30.0, rate * 100.0)
+        detail["reject_rate"] = round(rate, 3)
+    return {"score": round(max(0.0, score), 1), **detail,
+            "fills": len(slips), "submissions": total}
+
+
+async def execution_matrix(db, user_id: str, days: int = 30) -> dict:
+    """Proprietary execution-quality dataset: broker × symbol × session
+    from realized fills — spread, slippage, latency, rejects → 0-100."""
+    since = (_now() - timedelta(days=max(1, min(int(days), 90))))
+    since_iso = since.isoformat()
+    brokers = {}
+    async for a in db.accounts.find({"user_id": user_id},
+                                    {"broker": 1, "server": 1, "label": 1}):
+        brokers[str(a["_id"])] = str(a.get("broker") or a.get("server")
+                                     or a.get("label") or "unknown")
+    cells: dict = {}
+    async for t in db.trades.find(
+            {"user_id": user_id, "origin": "auto",
+             "created_at": {"$gte": since_iso}},
+            {"symbol": 1, "account_id": 1, "opened_at": 1,
+             "created_at": 1, "slippage_pips": 1, "latency_trace": 1,
+             "status": 1}).limit(5000):
+        broker = brokers.get(str(t.get("account_id")), "unknown")
+        sym = base_symbol(str(t.get("symbol") or "?"))
+        sess = _cell_session(t.get("opened_at") or t.get("created_at"))
+        c = cells.setdefault((broker, sym, sess),
+                             {"slips": [], "lats": [], "rejects": 0,
+                              "total": 0})
+        c["total"] += 1
+        if t.get("status") == "failed":
+            c["rejects"] += 1
+            continue
+        if t.get("slippage_pips") is not None:
+            c["slips"].append(abs(float(t["slippage_pips"])))
+        lt = t.get("latency_trace") or {}
+        if lt.get("t7_ms") and lt.get("t9_ms"):
+            c["lats"].append(int(lt["t9_ms"]) - int(lt["t7_ms"]))
+    rows = []
+    broker_agg: dict = {}
+    for (broker, sym, sess), c in cells.items():
+        cell = matrix_cell_score(
+            slips=c["slips"], lats_ms=c["lats"], rejects=c["rejects"],
+            total=c["total"],
+            typical_spread_pips=_typical_spread_pips(sym))
+        rows.append({"broker": broker, "symbol": sym, "session": sess,
+                     **cell})
+        ba = broker_agg.setdefault(broker, {"scores": [], "n": 0})
+        ba["scores"].append(cell["score"] * c["total"])
+        ba["n"] += c["total"]
+    rows.sort(key=lambda r: -r["submissions"])
+    ranking = sorted(
+        ({"broker": b, "execution_score":
+          round(sum(v["scores"]) / v["n"], 1), "submissions": v["n"]}
+         for b, v in broker_agg.items() if v["n"]),
+        key=lambda x: -x["execution_score"])
+    return {"days": days, "cells": rows, "broker_ranking": ranking,
+            "note": "execution quality measured from realized fills — "
+                    "slippage vs typical spread, broker latency p50, "
+                    "reject rate"}

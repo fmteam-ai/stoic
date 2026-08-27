@@ -572,6 +572,8 @@ class PaperEngine(ExecutionEngine):
         }
         from correlation import get_correlation_id
         trade_doc.setdefault("trace_id", get_correlation_id())
+        if signal.get("latency_trace"):
+            trade_doc["latency_trace"] = dict(signal["latency_trace"])
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
