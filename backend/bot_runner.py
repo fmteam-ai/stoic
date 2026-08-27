@@ -684,6 +684,36 @@ async def _process_user_account_locked(db, cfg: dict):
             # iter-142 · Velocity veto re-wired (the iter-53 guardrail was
             # silently dropped in the orchestrator refactor). Disarmed by
             # default; fires only when cfg regime_overrides arm it.
+            # Meta-Decision Engine (Phase A) — the brain above strategies:
+            # TRADE / REDUCE / SKIP + downscale-only risk multiplier.
+            if (signal.get("action") in ("BUY", "SELL")
+                    and cfg.get("meta_decision_enabled", True)):
+                try:
+                    from meta_decision import meta_decide
+                    _md = await meta_decide(db, user_id, signal,
+                                            account_id=cfg_account_id)
+                    signal["meta_decision"] = {
+                        k: _md[k] for k in
+                        ("decision", "risk_multiplier", "composite",
+                         "scorecard", "uncertainty", "market_state")}
+                    signal["market_state"] = _md["market_state"]
+                    if _md["decision"] == "SKIP":
+                        _msg = (f"Meta-Decision SKIP: composite "
+                                f"{_md['composite']}/100, uncertainty "
+                                f"{_md['uncertainty']} — "
+                                f"{(_md.get('uncertainty_detail') or {}).get('note') or 'quality below trade bar'}")
+                        signal["action"] = "HOLD"
+                        signal["tradeable"] = False
+                        signal["veto_applied"] = True
+                        signal["reasoning"] = (
+                            f"{_msg} | {signal.get('reasoning') or ''}")
+                        await _record_pulse(db, cfg, symbol=sym,
+                                            action="SKIP", level="warn",
+                                            reason=_msg, signal=signal)
+                        continue
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("meta decision failed (fail-open to "
+                                   "existing gates): %s", e)
             if signal.get("action") in ("BUY", "SELL"):
                 try:
                     from regime_adapter import velocity_veto
@@ -1710,6 +1740,49 @@ async def _process_user_account_locked(db, cfg: dict):
             if max_lot_cap > 0 and effective_lot > max_lot_cap:
                 effective_lot = max_lot_cap
             sizing_method = sized.get("method") or "absolute_kelly"
+        # Meta-Decision risk multiplier — REDUCE/TRADE scaling is strictly
+        # downscale-only and applied after every existing sizing rule.
+        _md_mult = float((signal.get("meta_decision") or {})
+                         .get("risk_multiplier") or 1.0)
+        if 0 < _md_mult < 1.0:
+            effective_lot = max(0.01, round(effective_lot * _md_mult, 2))
+            sizing_method = f"{sizing_method}+meta_x{_md_mult}"
+        # Portfolio Risk Brain — marginal contribution to the WHOLE
+        # portfolio (correlated cluster / currency factor / stress), never
+        # per-trade risk alone. Downscale-only; REJECT skips the trade.
+        if cfg_account_id and cfg.get("portfolio_brain_enabled", True):
+            try:
+                import portfolio_risk as _pr
+                _cand = {"symbol": sym, "action": signal.get("action"),
+                         "lot": effective_lot,
+                         "entry_price": signal.get("entry_price"),
+                         "stop_loss": signal.get("stop_loss")}
+                _pv = await _pr.marginal_verdict(
+                    db, cfg_account_id, _cand,
+                    float(cfg.get("_account_equity") or 0)
+                    or float(sized.get("equity") or 0),
+                    user_id=user_id)
+                signal["portfolio_brain"] = {
+                    k: _pv.get(k) for k in
+                    ("verdict", "approved_fraction", "blocks",
+                     "marginal_cluster_risk_usd")}
+                if _pv["verdict"] == "REJECT":
+                    _msg = ("Portfolio Risk Brain REJECT: "
+                            + "; ".join(_pv.get("blocks") or []))
+                    signal["action"] = "HOLD"
+                    signal["tradeable"] = False
+                    signal["veto_applied"] = True
+                    await _record_pulse(db, cfg, symbol=sym, action="SKIP",
+                                        level="warn", reason=_msg,
+                                        signal=signal)
+                    continue
+                if _pv["verdict"] == "REDUCE":
+                    effective_lot = max(0.01, round(
+                        effective_lot * float(_pv["approved_fraction"]), 2))
+                    sizing_method = (f"{sizing_method}+portfolio_x"
+                                     f"{_pv['approved_fraction']}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("portfolio brain failed (fail-open): %s", e)
 
         logger.info(
             "Lot sized acct=%s sym=%s equity=$%s conf=%s%% kelly_f=%s "

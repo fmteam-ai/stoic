@@ -34,6 +34,7 @@ from routes.attribution_routes import router as attribution_router
 from routes.authority_routes import router as authority_router
 from routes.verdict_routes import router as verdict_router
 from routes.latency_routes import router as latency_router
+from routes.brain_routes import router as brain_router
 from routes.intent_routes import router as intent_router
 from services.broker_gateway.mock_broker import router as mockbroker_router
 from routes.market_routes import router as market_router
@@ -406,6 +407,7 @@ api_router.include_router(authority_router)
 api_router.include_router(attribution_router)
 api_router.include_router(verdict_router)
 api_router.include_router(latency_router)
+api_router.include_router(brain_router)
 if os.environ.get("APP_ENV", "").lower() != "production":
     # SEC-003: mock broker is a certification test double — never in prod
     api_router.include_router(mockbroker_router)

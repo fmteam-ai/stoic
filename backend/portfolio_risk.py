@@ -203,6 +203,74 @@ def evaluate(positions: list, candidate: dict, equity: float,
             "correlations": correlation_matrix(everything)}
 
 
+def factor_exposure(positions: list, equity: float) -> dict:
+    """Real-time factor view: risk-weighted currency factors (the four-
+    trades-that-are-all-USD problem), directionality and concentration."""
+    equity = max(float(equity or 0), 0.01)
+    ccy = currency_exposure(positions)
+    total_risk = sum(position_risk_usd(p) for p in positions)
+    factors = [{"factor": c, "net_risk_usd": round(v, 2),
+                "pct_of_equity": round(abs(v) / equity * 100, 2),
+                "direction": "LONG" if v > 0 else "SHORT"}
+               for c, v in sorted(ccy.items(),
+                                  key=lambda kv: -abs(kv[1])) if v]
+    dominant = factors[0] if factors else None
+    return {"factors": factors, "dominant_factor": dominant,
+            "total_risk_usd": round(total_risk, 2),
+            "concentration": round(abs(dominant["net_risk_usd"])
+                                   / total_risk, 2)
+            if dominant and total_risk else 0.0}
+
+
+async def marginal_verdict(db, account_id: str, candidate: dict,
+                           equity: float, user_id: str | None = None,
+                           params: dict | None = None) -> dict:
+    """Portfolio Risk Brain — what risk does THIS trade add to the whole
+    portfolio? APPROVE / REDUCE / REJECT with an approved risk fraction;
+    reductions are recorded for empirical verdict-outcome scoring."""
+    positions = await open_positions(db, account_id)
+    ev = evaluate(positions, candidate, equity, params)
+    risk_c = ev["candidate_risk_usd"]
+    if ev["ok"]:
+        verdict = {"verdict": "APPROVE", "approved_fraction": 1.0,
+                   "blocks": [],
+                   "marginal_cluster_risk_usd": round(
+                       ev["cluster_risk_usd"], 2),
+                   "factors": factor_exposure(positions + [candidate],
+                                              equity)}
+        return verdict
+    # scale the candidate until the correlated cluster fits its cap
+    headroom = max(0.0, ev["cluster_cap_usd"]
+                   - (ev["cluster_risk_usd"] - risk_c))
+    fraction = round(min(1.0, headroom / risk_c), 3) if risk_c else 0.0
+    verdict_name = "REJECT" if fraction < 0.2 else "REDUCE"
+    out = {"verdict": verdict_name,
+           "approved_fraction": 0.0 if verdict_name == "REJECT"
+           else fraction,
+           "blocks": ev["blocks"],
+           "marginal_cluster_risk_usd": round(ev["cluster_risk_usd"], 2),
+           "cluster_cap_usd": ev["cluster_cap_usd"],
+           "factors": factor_exposure(positions + [candidate], equity)}
+    try:
+        from verdict_tracking import record_verdict
+        out["verdict_tracking_id"] = await record_verdict(
+            db, source="portfolio_brain", verdict=verdict_name,
+            requested=float(candidate.get("lot") or 0),
+            approved=round(float(candidate.get("lot") or 0)
+                           * out["approved_fraction"], 2),
+            unit="lot", user_id=user_id,
+            limiting_factor="portfolio_" + ("cluster" if any(
+                "cluster" in b for b in ev["blocks"]) else "factor"),
+            reasons=ev["blocks"],
+            context={"symbol": candidate.get("symbol"),
+                     "side": candidate.get("action"),
+                     "entry_price": candidate.get("entry_price"),
+                     "stop_loss": candidate.get("stop_loss")})
+    except Exception:
+        pass
+    return out
+
+
 async def open_positions(db, account_id: str, limit: int = 100) -> list:
     """All live commitments on the account, EVERY scope (cross-strategy)."""
     out = []
