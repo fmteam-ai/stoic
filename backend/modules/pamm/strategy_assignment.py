@@ -36,7 +36,20 @@ def feature_flags() -> dict:
             e("PAMM_DYNAMIC_AI", "false").lower() == "true",
         "PAMM_NITRO_LIVE":
             e("PAMM_NITRO_LIVE", "false").lower() == "true",
+        "PAMM_REQUIRE_CERTIFICATION":
+            e("PAMM_REQUIRE_CERTIFICATION", "true").lower() == "true",
     }
+
+
+async def program_account(db, program: dict) -> dict | None:
+    acc_id = program.get("master_account_id")
+    if not acc_id:
+        return None
+    from bson import ObjectId
+    try:
+        return await db.accounts.find_one({"_id": ObjectId(str(acc_id))})
+    except Exception:  # noqa: BLE001 — non-ObjectId ids
+        return await db.accounts.find_one({"_id": acc_id})
 
 
 _indexes_done = False
@@ -227,6 +240,17 @@ async def activate(db, program: dict, actor: str) -> dict:
                 "detail": "PAMM_NITRO_LIVE feature flag is off — Nitro "
                           "can be assigned and validated but not "
                           "activated for live capital"}
+    if feature_flags()["PAMM_REQUIRE_CERTIFICATION"]:
+        acc = await program_account(db, program)
+        if acc:
+            from broker_env import broker_environment
+            if (broker_environment(acc) == "LIVE"
+                    and a.get("certification_status") != "CERTIFIED"):
+                return {"error": "certification_required",
+                        "detail": "LIVE broker environment requires a "
+                                  "CERTIFIED PAMM × strategy combo — "
+                                  "complete the replay → shadow → demo → "
+                                  "canary certification campaign first"}
     await db.pamm_strategy_assignments.update_one(
         {"assignment_id": a["assignment_id"]},
         {"$set": {"status": "ACTIVE", "activated_at": _now(),

@@ -888,3 +888,114 @@ async def change_program_strategy_ep(program_id: str, payload: dict,
                                        "assignment_exists") else 400
         raise HTTPException(status_code=code, detail=out)
     return out
+
+
+# ═══════ v62.2 — PAMM × Strategy Certification Campaigns ══════════════════
+
+@router.get("/programs/{program_id}/certification")
+async def cert_campaign_status_ep(program_id: str,
+                                  user=Depends(get_current_user)):
+    """Campaign state + stage criteria + live evaluation preview."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from strategies.certification_campaign import status
+    return await status(db, program)
+
+
+@router.get("/programs/{program_id}/certification/evidence")
+async def cert_campaign_evidence_ep(program_id: str,
+                                    user=Depends(get_current_user)):
+    """Hash-chained evidence records for the current campaign."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from strategies.certification_campaign import evidence, get_campaign
+    camp = await get_campaign(db, program_id)
+    if not camp:
+        raise HTTPException(status_code=404, detail="No campaign")
+    return await evidence(db, camp["campaign_id"])
+
+
+@router.post("/programs/{program_id}/certification/start")
+async def cert_campaign_start_ep(program_id: str, request: Request,
+                                 user=Depends(get_current_user)):
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from strategies.certification_campaign import start
+    out = await start(db, program, user["id"])
+    if out.get("error"):
+        code = 409 if out["error"] == "campaign_exists" else 400
+        raise HTTPException(status_code=code, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/certification/checkpoint")
+async def cert_campaign_checkpoint_ep(program_id: str, payload: dict,
+                                      request: Request,
+                                      user=Depends(get_current_user)):
+    """Admin-recorded, audited, hash-chained stage evidence checkpoint."""
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from strategies.certification_campaign import checkpoint
+    out = await checkpoint(db, program, payload, user["id"])
+    if out.get("error"):
+        raise HTTPException(status_code=400, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/certification/evaluate")
+async def cert_campaign_evaluate_ep(program_id: str, request: Request,
+                                    user=Depends(get_current_user)):
+    """Run the current stage-gate evaluation against merged auto +
+    checkpoint metrics and record it in the evidence chain."""
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from strategies.certification_campaign import evaluate
+    out = await evaluate(db, program, user["id"])
+    if out.get("error"):
+        raise HTTPException(status_code=409, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/certification/advance")
+async def cert_campaign_advance_ep(program_id: str, request: Request,
+                                   user=Depends(get_current_user)):
+    """Advance the campaign one lifecycle stage — impossible without a
+    PASSING evaluation of the current stage. Admin + step-up MFA."""
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _step_up(db, user, request, "pamm_cert_advance",
+                   {"program_id": program_id})
+    from strategies.certification_campaign import advance
+    out = await advance(db, program, user["id"])
+    if out.get("error"):
+        raise HTTPException(status_code=409, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/certification/revoke")
+async def cert_campaign_revoke_ep(program_id: str, payload: dict,
+                                  request: Request,
+                                  user=Depends(get_current_user)):
+    """Abort a mid-pipeline campaign (→ DRAFT) or revoke an issued
+    certification (→ REVOKED, cert revoked, assignment flagged)."""
+    db = get_db()
+    require_admin(user)
+    program = await _program_or_404(db, program_id)
+    await _step_up(db, user, request, "pamm_cert_revoke",
+                   {"program_id": program_id,
+                    "reason": payload.get("reason")})
+    from strategies.certification_campaign import revoke_campaign
+    out = await revoke_campaign(db, program, user["id"],
+                                str(payload.get("reason") or "manual"))
+    if out.get("error"):
+        raise HTTPException(status_code=409, detail=out)
+    return out
