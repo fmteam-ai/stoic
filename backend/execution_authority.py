@@ -25,6 +25,15 @@ def _validate(signal: dict, account: dict) -> list:
     side = str(signal.get("action") or signal.get("side") or "").upper()
     if side not in ("BUY", "SELL"):
         problems.append("side must be BUY or SELL")
+    # SEC v62.7 — this plane only ever OPENS exposure. An order that
+    # self-labels as risk-reducing is fraudulent here (those labels are
+    # a guard bypass for safety exits, which never flow through this
+    # plane). Reject structurally, never by convention.
+    if (signal.get("reduce_only") or signal.get("close_trade")
+            or signal.get("pamm_risk_reducing")
+            or signal.get("intent") in ("close", "reduce")):
+        problems.append("risk-reducing labels are not accepted on the "
+                        "open-trade execution plane")
     try:
         if float(signal.get("lot_size") or 0) <= 0:
             problems.append("lot_size must be > 0")

@@ -1652,3 +1652,13 @@ P1 (deferred → ROADMAP): signed normalized factor exposure; distribution-based
 Fallout fixed: 3 scalp integration tests + iter25l read bridge_token from account create response (removed by SEC fix) → now fetch via GET /accounts/{id}/bridge-token.
 Files: strategy_guard.py, strategies/nitro/eligibility.py, .github/workflows/ci.yml, tests/unit/pamm/test_hardening_v627.py, tests/test_iter222_hardening_http.py.
 NOTE for future tests: HTTP strategy/activate route enforces LIVE certification (409) — iter222 activates assignments directly in Mongo and disables PAMM_REQUIRE_CERTIFICATION via in-process feature_flags patch to reach risk-truth checks.
+
+## Security Audit #3 + structural hardening (June 2026 — CONDITIONAL PASS → finding fixed, testing agent iteration_143: 87/87)
+Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe telemetry, NAV freshness, snapshot hashing, nitro latency evidence forgery, bridge-token endpoint, BOLA, prod gating). No confirmed vulnerability.
+- SEC-001 [LOW, FIXED structurally]: risk-reducing bypass was safe only by convention. Now:
+  a) execution_authority._validate REJECTS any order carrying reduce_only/close_trade/pamm_risk_reducing/intent=close|reduce (the open-trade plane only ever opens exposure).
+  b) strategy_guard._authorize verifies the label against reality: open/pending position must exist on account(+symbol) else reject 'risk_reducing_label_invalid'; DB read failure during verification still allows the safety exit.
+  c) Producer allowlist unit test: trade_routes/execution_agent/bot_runner must never carry the flags.
+- iter222 live_setup now seeds a genuine open EURUSD trade (invariant is 'CLOSE EXISTING position').
+- Audit also noted [P3, informational]: crypto_routes → BinanceCCXTEngine bypasses submit_intent (pre-existing, non-PAMM; confirm Binance accounts can never be PAMM masters) — left as backlog note.
+- Verified by testing agent (iteration_143): 87/87 — hardening unit 17/17, iter222 10/10, iter218/220/221 regression green, fresh _validate probes 8/8, e2e manual BUY still works, Pydantic drops extra flags at the route boundary.

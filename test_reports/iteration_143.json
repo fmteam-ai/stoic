@@ -1,0 +1,37 @@
+{
+  "summary": "Independent verification of v62.7 SEC-001 hardening. All targeted suites GREEN: unit hardening 17/17, iter222 http 10/10, iter221 http 15/15, iter220 http 23 combined, iter218 http 22/22, plus 8 fresh SEC-001 _validate checks and 2 end-to-end manual-trade checks (normal BUY + Pydantic-drops-extra-flags). Total 87 tests executed here, 87 passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_sec001_v627_verification.py",
+    "/app/backend/tests/test_sec001_v627_e2e.py",
+    "/app/backend/tests/unit/pamm/test_hardening_v627.py",
+    "/app/backend/tests/test_iter222_hardening_http.py",
+    "/app/backend/tests/test_iter221_risk_truth_http.py",
+    "/app/backend/tests/test_iter220_safety_closure_http.py",
+    "/app/backend/tests/test_iter218_strategy_guard_http.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "execution_authority._validate does not explicitly check for action=CLOSE|REDUCE|FLATTEN — however these are still structurally rejected because the earlier 'side must be BUY or SELL' gate fires first. Verified in test_action_CLOSE_rejected_by_side_check. Consider consolidating both gates under one clear 'risk-reducing labels not allowed on open-trade plane' message for observability so operators aren't misled by a generic side error when the caller was trying to smuggle a close.",
+    "ManualTradeRequest (routes/trade_routes.py:57) uses strict typed fields; extra fields like reduce_only are silently dropped by pydantic v2 default (extra='ignore'). This is a fine defense-in-depth layer, but if you ever change it to extra='allow', SEC-001 becomes reachable via HTTP again. Consider making it extra='forbid' to hard-fail such attempts at the API boundary (currently they succeed as clean BUYs, which is safe but silent)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_sec001_v627_verification.py (new)",
+    "/app/backend/tests/test_sec001_v627_e2e.py (new)"
+  ],
+  "success_rate": {"backend": "100% (87/87)", "frontend": "n/a"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (used for e2e manual-trade tests)",
+  "seed_data_creation": "e2e tests reuse existing paper accounts or create one via /api/accounts if none present; no persistent seed changes",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Mind the 5-orders-per-minute manual-trade rate limit between iter218 and any other suite that POSTs to /api/trades/manual — sleep 65s between them. test_sec001_v627_verification.py runs without Mongo (env -u MONGO_URL) and covers all documented risk-reducing flag variants for execution_authority._validate. test_sec001_v627_e2e.py exercises the HTTP endpoint including the pydantic-drops-extras path.",
+  "rca of the issue": "SEC-001 root cause was convention-based safety: the PAMM strategy guard trusted an order's self-labelled risk-reducing flags as a bypass to new-risk caps. Fix is now structural on two layers: (1) execution_authority._validate rejects any of {reduce_only, close_trade, pamm_risk_reducing, intent in (close,reduce)} on the open-trade plane; action in {CLOSE,REDUCE,FLATTEN} is separately rejected by the pre-existing BUY/SELL side gate; (2) strategy_guard._authorize now verifies a risk-reducing label against reality (open/pending position on the account & symbol) and rejects with reason 'risk_reducing_label_invalid' otherwise, with a DB-failure fail-safe. Both layers verified GREEN across 87 tests."
+}

@@ -526,8 +526,33 @@ async def _authorize(db, program: dict, account: dict, signal: dict,
     risk_reducing = is_risk_reducing(signal)
     evidence["risk_reducing"] = risk_reducing
     if risk_reducing:
+        # SEC v62.7 — the label must match REALITY: there must be an open
+        # position on this account (and symbol, when given) to reduce.
+        # A fraudulent label is rejected; a read failure never blocks a
+        # genuine safety exit (the engine cannot open on a failed DB
+        # anyway, so the bypass is worthless during an outage).
+        sym = str(signal.get("symbol") or "").upper()
+        has_open = False
+        try:
+            async for tr in db.trades.find(
+                    {"account_id": acct_id,
+                     "status": {"$in": ["open", "pending"]}},
+                    {"symbol": 1}).limit(500):
+                if not sym or str(tr.get("symbol") or "").upper() == sym:
+                    has_open = True
+                    break
+        except Exception as e:  # noqa: BLE001
+            logger.critical("risk-reducing verification read failed "
+                            "acct=%s: %s — allowing safety exit", acct_id, e)
+            has_open = True
+        if not has_open:
+            return _reject("risk_reducing_label_invalid", checks,
+                           {"symbol": sym or None,
+                            "note": "signal is labelled risk-reducing but "
+                                    "there is no open position to reduce"})
         _ok(checks, "risk_reducing",
-            "safety exit — new-risk blocks bypassed")
+            "safety exit verified against open positions — new-risk "
+            "blocks bypassed")
     # program operating state permits new risk
     from modules.pamm.risk import trading_allowed
     allowed, why = await trading_allowed(db, program)

@@ -198,6 +198,13 @@ def live_setup(request, admin_session, admin_id):
     _assign(admin_session, pid, "sniper", "controlled")
     _validate(admin_session, pid)
     _activate(admin_session, pid)
+    # a real open position exists — CLOSE/REDUCE labels must match reality
+    mongo.trades.insert_one({
+        "trade_id": f"iter222_open_{uuid.uuid4().hex[:8]}",
+        "user_id": admin_id, "account_id": acc_id,
+        "symbol": "EURUSD", "action": "BUY", "lot_size": 0.05,
+        "status": "open",
+        "opened_at": datetime.now(timezone.utc).isoformat()})
     yield {"pid": pid, "acc_id": acc_id, "mongo": mongo}
     _cleanup(mongo, pid, acc_id)
     c.close()
@@ -238,6 +245,15 @@ class TestI1FailSafeAsymmetry:
             "strategy_id": "sniper", "risk_pct": 0.2}))
         assert out["authorized"] is False, out
         assert out["reason"] == "risk_unknown", out
+
+    def test_fraudulent_risk_reducing_label_rejected(self, live_setup):
+        """SEC v62.7 — a 'CLOSE' on a symbol with NO open position is a
+        guard-bypass attempt, not a safety exit."""
+        out = _run(lambda: _guard_call(live_setup["acc_id"], {
+            "symbol": "GBPJPY", "action": "CLOSE",
+            "strategy_id": "sniper"}))
+        assert out["authorized"] is False, out
+        assert out["reason"] == "risk_reducing_label_invalid", out
 
     def test_close_allowed_even_when_program_paused(self, live_setup):
         mongo = live_setup["mongo"]

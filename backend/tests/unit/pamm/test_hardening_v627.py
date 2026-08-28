@@ -200,6 +200,36 @@ class TestFailSafeAsymmetryWiring:
         assert "strategy_provenance_missing" in src
         assert "governed_program_requires_assignment" in src
 
+    def test_risk_reducing_label_verified_against_open_positions(self):
+        from modules.pamm import strategy_guard as g
+        src = inspect.getsource(g._authorize)
+        assert "risk_reducing_label_invalid" in src
+
+    def test_open_trade_plane_rejects_risk_reducing_labels(self):
+        """SEC audit #3 — structural enforcement: the open-trade execution
+        plane refuses any self-labelled risk-reducing order."""
+        from execution_authority import _validate
+        acct = {"_id": "a1"}
+        base = {"symbol": "EURUSD", "action": "BUY", "lot_size": 0.01}
+        assert _validate(base, acct) == []
+        for flag in ({"reduce_only": True}, {"close_trade": True},
+                     {"pamm_risk_reducing": True}, {"intent": "close"},
+                     {"intent": "reduce"}):
+            problems = _validate({**base, **flag}, acct)
+            assert any("risk-reducing" in p for p in problems), (flag,
+                                                                 problems)
+
+    def test_no_producer_wires_intent_flags(self):
+        """Producer allowlist — signal builders must never carry the
+        guard-bypass labels (they exist only for genuine close paths)."""
+        backend = pathlib.Path(__file__).parents[3]
+        for rel in ("routes/trade_routes.py", "agents/execution_agent.py",
+                    "bot_runner.py"):
+            src = backend.joinpath(rel).read_text()
+            for flag in ("reduce_only", "pamm_risk_reducing",
+                         '"close_trade"'):
+                assert flag not in src, f"{rel} carries {flag}"
+
 
 class TestSnapshotHashAndProvenance:
     def test_hash_is_deterministic_and_tamper_evident(self):
