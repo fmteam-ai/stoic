@@ -1,5 +1,6 @@
 import { Briefcase, ShieldCheck, Users, Store, Scale, AlertTriangle, LifeBuoy, GitPullRequest, Landmark } from "lucide-react";
 import { Link } from "react-router-dom";
+import { AppLayout } from "@/components/AppLayout";
 
 const LIMITS = [
     ["Daily loss", "5% of value", "Trading halts for the day"],
@@ -35,7 +36,8 @@ function Section({ icon: Icon, id, title, children }) {
 
 export default function PammGuide() {
     return (
-        <div className="space-y-6 max-w-4xl" data-testid="pamm-guide-page">
+        <AppLayout>
+        <div className="px-4 md:px-8 py-6 space-y-6 max-w-4xl" data-testid="pamm-guide-page">
             <div>
                 <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">LEARN · MANAGED MONEY</div>
                 <h1 className="font-display font-bold text-2xl md:text-3xl">PAMM Accounts — How They Work</h1>
@@ -144,5 +146,6 @@ export default function PammGuide() {
                     <Link to="/support" className="text-[#A855F7] underline"> Support</Link>.</p>
             </Section>
         </div>
+        </AppLayout>
     );
 }
