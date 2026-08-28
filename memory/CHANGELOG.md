@@ -1604,3 +1604,10 @@ USER CHOICES: sandbox broker first (real broker later via same interface), Mongo
 - All 4 MP4s regenerated from REAL app screens + OpenAI TTS (onyx/tts-1-hd, mp3s cached in build/): getting-started 64.1s/1.28MB, ai-trading-bot 61.9s/1.66MB, pamm-manager 63.2s/1.42MB, investor-flow 39.3s/1.05MB.
 - Verified: frame extraction shows real Managed Strategy UI incl. Strategy Profile + Certification panels; cookie-auth curl → /api/tutorials/manifest lists 4, /api/tutorials/media/*.mp4 all 200 with correct sizes; /tutorials page screenshot shows both track tabs + players + durations.
 - Regen command: for t in getting-started ai-trading-bot pamm-manager investor-flow; do python scripts/generate_tutorials.py --id $t; sleep 30; done
+
+## v62.5.1 — Tutorial Captions (June 2026 — DONE, self-tested)
+- generate_tutorials.py: build_vtt() writes sentence-level WEBVTT cues timed from per-step segment durations (ffprobe); `--captions-only --id <slug>` rebuilds vtt without recapture; manifest entries gain "captions".
+- tutorial_routes.py: /media/{name} now serves .vtt as text/vtt (MEDIA_TYPES map).
+- Tutorials.jsx: <track kind=subtitles default> added to players (data-testid tutorial-captions-<slug>).
+- Verified: 4 vtts served 200 text/vtt; browser parsed 13 cues on getting-started, track mode 'showing'.
+- LEARNING: playwright headless_shell chromium has NO H.264/AAC codecs — video.play() throws NotSupportedError in tests. NOT an app bug; real browsers play the mp4s. Don't doom-loop on this.

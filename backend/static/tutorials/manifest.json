@@ -14,7 +14,8 @@
     "Before trading, secure your account. In Settings, open the Security section and enroll two factor authentication. Sensitive actions like live activation always require a fresh 2FA code.",
     "Now connect your MetaTrader 5 account. On the MT5 Accounts page, add your account, then install the STOIC host agent on your VPS and pair it with the one-time bridge token. Once the heartbeat turns green, you are connected.",
     "That's it. Your dashboard is live and the AI is watching the market. Next, learn how to run the trading bot."
-   ]
+   ],
+   "captions": "getting-started.vtt"
   },
   {
    "slug": "ai-trading-bot",
@@ -30,7 +31,8 @@
     "Risk Commander is your natural language control room. Ask it to reduce risk, pause a symbol, or explain a decision, and it acts within your safety limits.",
     "In Bot Config you choose your risk level and which symbols to trade. The safety guardian and trading authority always have the final word over every order.",
     "And remember the panic button on the top bar. One click flattens exposure and halts the bot instantly. You are always in control."
-   ]
+   ],
+   "captions": "ai-trading-bot.vtt"
   },
   {
    "slug": "pamm-manager",
@@ -45,7 +47,8 @@
     "In the Strategy Profile panel you assign one of the four registered strategies: Sniper, Scalper, Fast Scalp or Nitro Scalper, together with a risk profile. The assignment pins the exact strategy version and hash, so live money never runs on a moving target.",
     "Before real capital, the combination must earn its certification: replay, shadow, demo and canary stages, each with hard evidence gates and a tamper-evident audit chain. Only a certified combo can go live.",
     "Once live, the execution guard checks every single order against the assignment, the certification and the strictest risk envelope. If anything drifts, trading fails closed. That is managed money done safely."
-   ]
+   ],
+   "captions": "pamm-manager.vtt"
   },
   {
    "slug": "investor-flow",
@@ -59,7 +62,8 @@
     "The Marketplace lists published PAMM programs with verified track records, fees and risk limits. Compare managers before committing a single dollar.",
     "Found a program you like? Send a join request with your deposit amount. The manager approves it and your allocation starts tracking the program's NAV.",
     "Monitor everything on the Verified Performance page: returns, drawdown and your allocation, all reconciled against broker truth. Withdrawals follow the same audited path. Welcome aboard."
-   ]
+   ],
+   "captions": "investor-flow.vtt"
   }
  ],
  "voice": "onyx",

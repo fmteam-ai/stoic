@@ -192,6 +192,34 @@ def duration(f: Path) -> float:
     return round(float(r.stdout.strip() or 0), 1)
 
 
+def _ts(sec: float) -> str:
+    h, m = int(sec // 3600), int(sec % 3600 // 60)
+    return f"{h:02d}:{m:02d}:{sec % 60:06.3f}"
+
+
+def build_vtt(tut: dict) -> Path:
+    """Write OUT/<slug>.vtt with sentence-level cues timed from the
+    per-step segment durations."""
+    import re
+    cues, t0 = [], 0.0
+    for i, step in enumerate(tut["steps"]):
+        seg = BUILD / f"{tut['slug']}_{i}.mp4"
+        d = duration(seg)
+        sentences = [s.strip() for s in
+                     re.split(r"(?<=[.!?])\s+", step["say"]) if s.strip()]
+        total_chars = sum(len(s) for s in sentences) or 1
+        t = t0
+        for s in sentences:
+            dur = max(1.0, d * len(s) / total_chars)
+            end = min(t + dur, t0 + d)
+            cues.append(f"{_ts(t)} --> {_ts(end)}\n{s}")
+            t = end
+        t0 += d
+    vtt = OUT / f"{tut['slug']}.vtt"
+    vtt.write_text("WEBVTT\n\n" + "\n\n".join(cues) + "\n")
+    return vtt
+
+
 def update_manifest(entry: dict) -> None:
     mf = OUT / "manifest.json"
     data = {"tutorials": [], "voice": VOICE, "model": MODEL}
@@ -274,13 +302,27 @@ async def run_one(slug: str) -> None:
             await anon_ctx.close()
     final = OUT / f"{slug}.mp4"
     ffmpeg_concat(segs, final)
+    build_vtt(tut)
     entry = {"slug": slug, "title": tut["title"],
              "description": tut["description"], "track": tut["track"],
-             "file": f"{slug}.mp4", "duration_s": duration(final),
+             "file": f"{slug}.mp4", "captions": f"{slug}.vtt",
+             "duration_s": duration(final),
              "size_mb": round(final.stat().st_size / 1e6, 2),
              "steps": [s["say"] for s in tut["steps"]]}
     update_manifest(entry)
     print(f"WROTE {final} ({entry['duration_s']}s, {entry['size_mb']}MB)")
+
+
+def captions_only(slug: str) -> None:
+    tut = next(t for t in TUTORIALS if t["slug"] == slug)
+    build_vtt(tut)
+    mf = OUT / "manifest.json"
+    data = json.loads(mf.read_text())
+    for t in data["tutorials"]:
+        if t["slug"] == slug:
+            t["captions"] = f"{slug}.vtt"
+    mf.write_text(json.dumps(data, indent=1))
+    print(f"WROTE {OUT / (slug + '.vtt')}")
 
 
 if __name__ == "__main__":
@@ -288,4 +330,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--id", required=True,
                     choices=[t["slug"] for t in TUTORIALS])
-    asyncio.run(run_one(ap.parse_args().id))
+    ap.add_argument("--captions-only", action="store_true",
+                    help="rebuild .vtt from existing build segments")
+    args = ap.parse_args()
+    if args.captions_only:
+        captions_only(args.id)
+    else:
+        asyncio.run(run_one(args.id))

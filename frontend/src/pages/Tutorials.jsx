@@ -23,7 +23,13 @@ function VideoCard({ t }) {
         <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid={`tutorial-card-${t.slug}`}>
             <video controls preload="metadata" className="w-full aspect-video bg-black"
                 data-testid={`tutorial-video-${t.slug}`}
-                src={`${API}/api/tutorials/media/${t.file}`} />
+                src={`${API}/api/tutorials/media/${t.file}`}>
+                {t.captions && (
+                    <track kind="subtitles" srcLang="en" label="English" default
+                        data-testid={`tutorial-captions-${t.slug}`}
+                        src={`${API}/api/tutorials/media/${t.captions}`} />
+                )}
+            </video>
             <div className="p-4 space-y-2 font-mono">
                 <div className="flex items-center justify-between">
                     <span className="text-sm font-bold text-[#E4E4E7]">{t.title}</span>

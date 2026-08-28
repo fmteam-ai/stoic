@@ -22,12 +22,16 @@ async def tutorials_manifest(user=Depends(get_current_user)):
     return json.loads(mf.read_text())
 
 
+MEDIA_TYPES = {".mp4": "video/mp4", ".vtt": "text/vtt"}
+
+
 @router.get("/media/{name}")
 async def tutorial_media(name: str, user=Depends(get_current_user)):
-    if "/" in name or ".." in name or not name.endswith(".mp4"):
+    ext = Path(name).suffix
+    if "/" in name or ".." in name or ext not in MEDIA_TYPES:
         raise HTTPException(status_code=400, detail="bad media name")
     f = MEDIA_DIR / name
     if not f.exists():
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(f, media_type="video/mp4",
+    return FileResponse(f, media_type=MEDIA_TYPES[ext],
                         headers={"Cache-Control": "public, max-age=86400"})

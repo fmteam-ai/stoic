@@ -1,0 +1,40 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:03.320
+Welcome to STOIC, your AI trading co-pilot.
+
+00:00:03.320 --> 00:00:12.200
+To get started, open the register page, enter your email and a password, accept the terms, and create your account.
+
+00:00:12.200 --> 00:00:18.655
+Check your inbox for a verification email and click the activation link.
+
+00:00:18.655 --> 00:00:22.600
+Then sign in here with your new credentials.
+
+00:00:22.600 --> 00:00:25.492
+Before trading, secure your account.
+
+00:00:25.492 --> 00:00:31.597
+In Settings, open the Security section and enroll two factor authentication.
+
+00:00:31.597 --> 00:00:37.300
+Sensitive actions like live activation always require a fresh 2FA code.
+
+00:00:37.300 --> 00:00:40.275
+Now connect your MetaTrader 5 account.
+
+00:00:40.275 --> 00:00:50.686
+On the MT5 Accounts page, add your account, then install the STOIC host agent on your VPS and pair it with the one-time bridge token.
+
+00:00:50.686 --> 00:00:54.600
+Once the heartbeat turns green, you are connected.
+
+00:00:54.600 --> 00:00:55.600
+That's it.
+
+00:00:55.600 --> 00:01:00.708
+Your dashboard is live and the AI is watching the market.
+
+00:01:00.708 --> 00:01:04.100
+Next, learn how to run the trading bot.
