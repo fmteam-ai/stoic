@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 502 |
+| unit | pure logic, no external I/O | every CI job | 515 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3351 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3369 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 3884 tests across 366 files.**
+**Total: 3915 tests across 369 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -106,6 +106,8 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter145_ea_fencing.py` | http-live | 26 |
 | `backend/tests/test_iter145_value_ledger_link.py` | http-live | 2 |
 | `backend/tests/test_iter146_ea_exec_audit.py` | http-live | 22 |
+| `backend/tests/test_iter146_signed_factor_http.py` | http-live | 2 |
+| `backend/tests/test_iter146_verification.py` | http-live | 16 |
 | `backend/tests/test_iter147_ea_preflight_complete.py` | http-live | 7 |
 | `backend/tests/test_iter148_p0_exec_truth.py` | http-live | 14 |
 | `backend/tests/test_iter148_p0_live_e2e.py` | http-live | 5 |
@@ -357,8 +359,9 @@ fails when this file drifts from the tree.
 | `e2e/tests/pages.spec.ts` | ui-e2e | 2 |
 | `e2e/tests/settings.spec.ts` | ui-e2e | 2 |
 | `backend/tests/unit/pamm/test_hardening_v627.py` | unit | 17 |
-| `backend/tests/unit/pamm/test_iter144_p0_p1_verification.py` | unit | 17 |
-| `backend/tests/unit/pamm/test_risk_truth.py` | unit | 23 |
+| `backend/tests/unit/pamm/test_iter144_p0_p1_verification.py` | unit | 18 |
+| `backend/tests/unit/pamm/test_iter146_corrections.py` | unit | 10 |
+| `backend/tests/unit/pamm/test_risk_truth.py` | unit | 25 |
 | `backend/tests/unit/scalp/test_iter140_permissions_news.py` | unit | 6 |
 | `backend/tests/unit/scalp/test_iter142_p0_audit.py` | unit | 15 |
 | `backend/tests/unit/scalp/test_iter143_prelive_hardening.py` | unit | 15 |

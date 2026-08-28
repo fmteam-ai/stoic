@@ -105,9 +105,19 @@ class TestSnapshotProvenance:
     def test_production_requires_provenance(self):
         from modules.pamm.strategy_guard import _enforce_production_provenance
         with pytest.raises(RuntimeError):
-            _enforce_production_provenance(sha="unknown", production=True)
+            _enforce_production_provenance(sha="unknown", production=True,
+                                           image_digest="sha256:x")
         _enforce_production_provenance(sha="unknown", production=False)
-        _enforce_production_provenance(sha="d" * 40, production=True)
+        _enforce_production_provenance(sha="d" * 40, production=True,
+                                       image_digest="sha256:" + "e" * 64)
+
+    def test_production_requires_image_digest(self):
+        from modules.pamm.strategy_guard import _enforce_production_provenance
+        with pytest.raises(RuntimeError, match="STOIC_IMAGE_DIGEST"):
+            _enforce_production_provenance(sha="d" * 40, production=True,
+                                           image_digest="")
+        _enforce_production_provenance(sha="d" * 40, production=False,
+                                       image_digest="")
 
     def test_snapshot_hash_is_sha256_and_tamper_evident(self):
         from modules.pamm.strategy_guard import _snapshot_hash

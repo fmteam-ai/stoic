@@ -163,13 +163,19 @@ jobs:
           curl -sf http://127.0.0.1:8001/api/health/live
           curl -sf http://127.0.0.1:8001/api/health/ready
           echo "clean-machine deployment certified"
-      - name: v62.6/v62.7 Risk Truth HTTP invariants (Mongo + Redis +
-          live backend — RISK_UNKNOWN asymmetry through the application path)
+      - name: Full PAMM / Risk Truth HTTP invariant matrix (Mongo + Redis +
+          live backend — strategy governance, certification campaign,
+          strategy guard, safety closure, risk truth, fail-safe asymmetry)
         run: |
           cd backend
           export REACT_APP_BACKEND_URL=http://127.0.0.1:8001
-          python -m pytest tests/test_iter222_hardening_http.py \
-            tests/test_iter221_risk_truth_http.py -q
+          python -m pytest \
+            tests/test_iter216_pamm_strategy_http.py \
+            tests/test_iter217_cert_campaign_http.py \
+            tests/test_iter218_strategy_guard_http.py \
+            tests/test_iter220_safety_closure_http.py \
+            tests/test_iter221_risk_truth_http.py \
+            tests/test_iter222_hardening_http.py -q
       - name: Backend log on failure
         if: failure()
         run: tail -120 /tmp/clean-deploy.log || true

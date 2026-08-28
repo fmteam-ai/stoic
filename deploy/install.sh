@@ -176,6 +176,18 @@ fi
 export GIT_SHA
 echo "   build provenance: ${GIT_SHA}"
 docker compose build
+
+# Exact backend image identity — production risk snapshots REQUIRE it and
+# the backend refuses to boot in production without it.
+BACKEND_IMG=$(docker compose config --images 2>/dev/null | grep -m1 backend || true)
+STOIC_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' "${BACKEND_IMG}" 2>/dev/null || true)
+if [ -z "${STOIC_IMAGE_DIGEST}" ]; then
+  echo "ERROR: could not resolve the built backend image digest (${BACKEND_IMG})"
+  exit 1
+fi
+set_kv .env STOIC_IMAGE_DIGEST "${STOIC_IMAGE_DIGEST}"
+export STOIC_IMAGE_DIGEST
+echo "   image provenance: ${STOIC_IMAGE_DIGEST}"
 echo "-- starting stack"
 docker compose up -d
 

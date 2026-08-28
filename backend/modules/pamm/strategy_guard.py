@@ -73,6 +73,43 @@ def symbol_factors(symbol) -> list:
     return [c for c in (s[:3], s[3:6]) if len(c) == 3 and c.isalpha()]
 
 
+def signed_factor_lots(symbol, action, lots) -> dict:
+    """Signed factor contribution — BUY EURUSD 1.0 → {EUR:+1.0, USD:-1.0};
+    SELL flips. Long and short exposure on the same factor NET OUT, which
+    is the correct multi-strategy model. Missing action = BUY (long base)."""
+    f = symbol_factors(symbol)
+    sign = -1.0 if str(action or "").upper() == "SELL" else 1.0
+    lots = float(lots or 0)
+    out = {}
+    if len(f) >= 1:
+        out[f[0]] = round(sign * lots, 4)
+    if len(f) >= 2:
+        out[f[1]] = round(-sign * lots, 4)
+    return out
+
+
+# Minimum realized-fill evidence before latency-critical styles may open
+# NEW risk — a p95 computed from a handful of fills is meaningless.
+MIN_SLIPPAGE_SAMPLES = {"VERY_HIGH": 10, "MAXIMUM": 20}
+
+
+def slippage_evidence_violation(latency_sensitivity,
+                                telemetry) -> dict | None:
+    sens = str(latency_sensitivity or "").upper()
+    need = MIN_SLIPPAGE_SAMPLES.get(sens)
+    if not need:
+        return None
+    n = int((telemetry or {}).get("recent_slippage_sample_count") or 0)
+    if n < need:
+        return {"reason": "insufficient_slippage_evidence",
+                "detail": {"sample_count": n, "required": need,
+                           "latency_sensitivity": sens,
+                           "note": "latency-critical styles need enough "
+                                   "measured fills for a meaningful p95 "
+                                   "before opening new risk"}}
+    return None
+
+
 def _age_s(iso: str | None) -> float | None:
     if not iso:
         return None
@@ -204,14 +241,17 @@ def envelope_violations(envelope: dict, signal: dict,
                                          "at the bridge"}})
     fe = env.get("max_factor_exposure_lots")
     if fe is not None and t.get("factor_lots") is not None:
-        new_lot = float(signal.get("lot_size") or 0)
-        for f in symbol_factors(sym):
-            proposed = float((t["factor_lots"] or {}).get(f, 0.0)) + new_lot
-            if proposed > float(fe):
+        contrib = signed_factor_lots(sym, signal.get("action"),
+                                     signal.get("lot_size"))
+        for f, add in contrib.items():
+            net = float((t["factor_lots"] or {}).get(f, 0.0)) + add
+            if abs(net) > float(fe):
                 v.append({"reason": "factor_exposure_exceeded",
                           "detail": {"factor": f,
-                                     "proposed_lots": round(proposed, 4),
-                                     "strictest_max": float(fe)}})
+                                     "proposed_lots": round(abs(net), 4),
+                                     "proposed_net_lots": round(net, 4),
+                                     "strictest_max": float(fe),
+                                     "model": "signed_net"}})
                 break
     return v
 
@@ -323,8 +363,10 @@ GIT_COMMIT = _build_sha()
 
 
 def _enforce_production_provenance(sha: str | None = None,
-                                   production: bool | None = None) -> None:
-    """A production process may NEVER run without immutable Git provenance."""
+                                   production: bool | None = None,
+                                   image_digest: str | None = None) -> None:
+    """A production process may NEVER run without immutable provenance:
+    the exact Git SHA AND the exact backend image digest."""
     sha = GIT_COMMIT if sha is None else sha
     if production is None:
         from app_env import is_production
@@ -333,6 +375,13 @@ def _enforce_production_provenance(sha: str | None = None,
         raise RuntimeError(
             "Git SHA provenance missing — production builds must inject "
             "backend/BUILD_SHA (Dockerfile ARG GIT_SHA) or STOIC_BUILD_SHA")
+    digest = (os.environ.get("STOIC_IMAGE_DIGEST", "")
+              if image_digest is None else image_digest) or ""
+    if production and not digest.strip():
+        raise RuntimeError(
+            "STOIC_IMAGE_DIGEST missing — production risk snapshots must "
+            "carry the exact backend image digest (deploy/install.sh sets "
+            "it after the image build)")
 
 
 _enforce_production_provenance()
@@ -380,12 +429,14 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
         sym_lots, risk_sum = 0.0, 0.0
         factor_lots: dict = {}
         async for tr in db.trades.find(open_q, {"lot_size": 1, "symbol": 1,
+                                                "action": 1,
                                                 "risk_pct": 1}).limit(500):
             lots = float(tr.get("lot_size") or 0)
             if str(tr.get("symbol") or "").upper() == symbol:
                 sym_lots += lots
-            for f in symbol_factors(tr.get("symbol")):
-                factor_lots[f] = round(factor_lots.get(f, 0.0) + lots, 4)
+            for f, add in signed_factor_lots(
+                    tr.get("symbol"), tr.get("action"), lots).items():
+                factor_lots[f] = round(factor_lots.get(f, 0.0) + add, 4)
             risk_sum += float(tr.get("risk_pct") or 0)
         t["symbol_open_lots"] = round(sym_lots, 4)
         t["factor_lots"] = factor_lots
@@ -812,6 +863,13 @@ async def _authorize(db, program: dict, account: dict, signal: dict,
              "position_truth_age_s": round(pt_age, 1),
              "spread_age_s": t.get("spread_age_s"),
              "freshness": fresh})
+        # latency-critical styles must have ENOUGH measured fills before
+        # opening new risk — a tail estimate from 3 fills is not evidence
+        if not risk_reducing:
+            sv = slippage_evidence_violation(
+                fresh["latency_sensitivity"], t)
+            if sv:
+                return _reject(sv["reason"], checks, sv["detail"])
     if not risk_reducing:
         vio = envelope_violations(envelope, signal, t)
         if vio:

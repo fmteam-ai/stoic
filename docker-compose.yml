@@ -20,6 +20,9 @@ x-app-common: &app-common
     JWT_SECRET_FILE: /run/secrets/jwt_secret
     KEY_VAULT_MASTER_FILE: /run/secrets/key_vault_master
     METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    # Exact backend image identity — REQUIRED in production risk snapshots
+    # (deploy/install.sh writes it to .env after the image build).
+    STOIC_IMAGE_DIGEST: ${STOIC_IMAGE_DIGEST:-}
   secrets:
     - mongo_url
     - jwt_secret

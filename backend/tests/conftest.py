@@ -157,6 +157,12 @@ def _auto_csrf_header():
     _stepup = os.environ.get("STEP_UP_BYPASS_TOKEN")
 
     def patched(self, method, url, **kwargs):
+        # CI targets plain http://127.0.0.1 — requests refuses to SEND
+        # cookies flagged Secure over http. The flag is a browser transport
+        # concern; strip it client-side so the jar keeps working.
+        if str(url).startswith("http://"):
+            for c in self.cookies:
+                c.secure = False
         headers = kwargs.get("headers") or {}
         if _bypass:
             headers.setdefault("X-RateLimit-Bypass", _bypass)

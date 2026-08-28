@@ -1986,6 +1986,20 @@ Local verification: 502 unit no-DB + collect-only clean; 24/24 HTTP over plain h
 - Scope: all changes since Audit #3 — build provenance mechanism, snapshot provenance (artifact_hashes account scoping), Value Ledger BOLA, test-bypass tokens (production refusal + constant-time), CI/release supply chain, cookie flags, slippage worst-of gate, plus regression sweep (auth core, BOLA matrix, bridge token, tutorial media, secret hygiene). Verdict: PASS — no Critical/High/Medium.
 - 2 P3 hardening items FIXED: (1) ci.yml top-level `permissions: contents: read` (least-privilege GITHUB_TOKEN); (2) release.yml no longer interpolates `${{ github.ref_name }}`/`${{ github.sha }}`/`repository_owner` directly into run shells — routed through step `env:` vars (CWE-78 defense-in-depth). `with:` inputs untouched (not shell).
 
+## Production Proof corrections #2 (iter-146/147, Aug 2026 — DONE, report iteration_146.json, 100%)
+P0:
+- BUILD_SHA == GITHUB_SHA equality (not regex-only) enforced in release.yml at THREE gates: export step (verifies export-subst expansion == workflow commit, then authoritatively regenerates BUILD_SHA from GITHUB_SHA into the shipped tar.gz), suite-from-archive completeness gate, install-from-archive unpack gate.
+- suite-from-archive: added `pytest tests/unit --collect-only -q` zero-collection gate (already runs full unit + truth + Mongo integration suites).
+- clean-deploy-cert now runs the FULL PAMM HTTP invariant matrix: iter216 (strategy governance) + iter217 (cert campaign) + iter218 (strategy guard) + iter220 (safety closure) + iter221 (risk truth) + iter222 (fail-safe asymmetry) — 124 tests, validated in a clean-DB sim. Secure-cookie stripping moved into tests/conftest.py session request patch (fixes ALL http suites over plain http, not just iter221/222).
+- Immutable signed release evidence record: release-evidence.json (all artifact hashes from SHA256SUMS + manifest/sums hashes + image digests + host-agent source hash + EA version + run identity + verification list), cosign signed + verified + published with the release.
+P1:
+- SIGNED factor exposure (multi-strategy model): signed_factor_lots() — BUY EURUSD → {EUR:+, USD:-}, SELL flips; guard telemetry factor_lots is signed net from open trades (action-aware, missing action=BUY); cap enforced on abs(net); detail carries proposed_net_lots + model='signed_net'. Long/short net out correctly (unit + HTTP r8 regression green).
+- Minimum slippage evidence for latency-critical styles: MIN_SLIPPAGE_SAMPLES {VERY_HIGH:10 (fast_scalp), MAXIMUM:20 (nitro_scalper)}; LIVE new-risk with fewer recent fill samples → 'insufficient_slippage_evidence'; CLOSE/REDUCE and low-sensitivity styles unaffected.
+- Production risk snapshots REQUIRE backend image digest: _enforce_production_provenance also raises when production and STOIC_IMAGE_DIGEST empty; docker-compose passes STOIC_IMAGE_DIGEST env; install.sh resolves the built image Id after `docker compose build`, hard-fails if unresolvable, persists to root .env.
+- Unified Host Agent hash: release-manifest.json host_agent.source_hash = deterministic sha256 over host_agent/** (path+content, sorted); MSI binary itself is signed/re-verified in msi-release.yml.
+- Testing: 515/515 unit no-DB; 124/124 full HTTP matrix in clean-DB sim AND against preview (testing agent iteration_146, plus 16 new targeted tests in tests/test_iter146_verification.py).
+DEFERRED (explicitly, next up): O(1) maintained Risk State (before large-scale Nitro use) — architectural change (incrementally maintained open-exposure/loss/drawdown state with staleness verification), scheduled as its own iteration.
+
 ## Backlog (next picks)
 - P1: Command Center dashboard (GREEN/YELLOW/RED aggregate of soak/certs/guard health); Evidence report export (hash-chained, downloadable); O(1) risk-state aggregation; independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure for MULTI.
 - P2: Dynamic AI strategy assignment (Portfolio Brain budget rebalancing).

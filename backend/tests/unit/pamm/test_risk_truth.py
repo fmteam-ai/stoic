@@ -73,12 +73,33 @@ class TestEnvelopeViolationsV626:
 
     def test_factor_exposure_uses_both_symbol_factors(self):
         from modules.pamm.strategy_guard import envelope_violations
+        # signed model: SELL XAUUSD adds +USD exposure (short gold = long USD)
         t = {"factor_lots": {"USD": 1.9, "XAU": 0.1}}
         v = envelope_violations(self._env(), {"symbol": "XAUUSD",
+                                              "action": "SELL",
                                               "lot_size": 0.2}, t)
         assert v and v[0]["reason"] == "factor_exposure_exceeded"
-        assert v[0]["detail"]["factor"] == "XAU" or \
-            v[0]["detail"]["factor"] == "USD"
+        assert v[0]["detail"]["factor"] == "USD"
+        assert v[0]["detail"]["model"] == "signed_net"
+
+    def test_factor_exposure_nets_out_opposite_direction(self):
+        from modules.pamm.strategy_guard import envelope_violations
+        # BUY XAUUSD REDUCES long-USD exposure — signed netting must allow
+        t = {"factor_lots": {"USD": 1.9, "XAU": 0.1}}
+        v = envelope_violations(self._env(), {"symbol": "XAUUSD",
+                                              "action": "BUY",
+                                              "lot_size": 0.2}, t)
+        assert not any(x["reason"] == "factor_exposure_exceeded" for x in v)
+
+    def test_factor_exposure_short_side_capped_by_abs(self):
+        from modules.pamm.strategy_guard import envelope_violations
+        # net SHORT exposure beyond the cap is just as forbidden as long
+        t = {"factor_lots": {"EUR": -1.9}}
+        v = envelope_violations(self._env(), {"symbol": "EURUSD",
+                                              "action": "SELL",
+                                              "lot_size": 0.2}, t)
+        assert v and v[0]["reason"] == "factor_exposure_exceeded"
+        assert v[0]["detail"]["proposed_net_lots"] == -2.1
 
     def test_missing_telemetry_never_fabricates(self):
         from modules.pamm.strategy_guard import envelope_violations
