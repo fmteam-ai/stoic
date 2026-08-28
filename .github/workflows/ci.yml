@@ -1,5 +1,9 @@
 name: CI
 
+# Least-privilege default — jobs only read the repo; no job needs write.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]

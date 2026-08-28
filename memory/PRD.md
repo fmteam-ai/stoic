@@ -1982,6 +1982,10 @@ P1:
 - iter221/iter222 class-scoped instance-method fixtures converted to module-level (PytestRemovedIn10Warning eliminated; teardown residuals fixed — verified 0 leftovers with -W error).
 Local verification: 502 unit no-DB + collect-only clean; 24/24 HTTP over plain http AND https preview; release-from-archive simulation (git archive → 501 passed/1 skipped from clean tree with no MONGO_URL/GITHUB_SHA, BUILD_SHA export-subst expanded); frontend lint/typecheck/vitest/build green; Playwright e2e 8/11 vs preview (3 flakes = preview-edge rate limiting; all 3 pages verified rendering individually — CI e2e runs against local build, unaffected); EA structural check green. NOT executable in pod (static-reviewed only): docker install-from-archive, Windows MetaEditor compile, MSI signature jobs (msi-release.yml already signs + independently re-verifies Authenticode + hash manifest).
 
+## Security Audit round 6 (iter-146, Aug 2026 — PASS, no material findings)
+- Scope: all changes since Audit #3 — build provenance mechanism, snapshot provenance (artifact_hashes account scoping), Value Ledger BOLA, test-bypass tokens (production refusal + constant-time), CI/release supply chain, cookie flags, slippage worst-of gate, plus regression sweep (auth core, BOLA matrix, bridge token, tutorial media, secret hygiene). Verdict: PASS — no Critical/High/Medium.
+- 2 P3 hardening items FIXED: (1) ci.yml top-level `permissions: contents: read` (least-privilege GITHUB_TOKEN); (2) release.yml no longer interpolates `${{ github.ref_name }}`/`${{ github.sha }}`/`repository_owner` directly into run shells — routed through step `env:` vars (CWE-78 defense-in-depth). `with:` inputs untouched (not shell).
+
 ## Backlog (next picks)
 - P1: Command Center dashboard (GREEN/YELLOW/RED aggregate of soak/certs/guard health); Evidence report export (hash-chained, downloadable); O(1) risk-state aggregation; independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure for MULTI.
 - P2: Dynamic AI strategy assignment (Portfolio Brain budget rebalancing).

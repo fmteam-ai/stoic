@@ -170,12 +170,19 @@ jobs:
           name: EmergentTradingBridge-ex5
           path: backend/static/
       - name: Export release archive
-        run: git archive --format=tar.gz -o stoic-${{ github.ref_name }}.tar.gz HEAD
+        # github context passes through env vars — never interpolated
+        # directly into the shell (CWE-78 defense-in-depth).
+        env:
+          REF: ${{ github.ref_name }}
+        run: git archive --format=tar.gz -o "stoic-${REF}.tar.gz" HEAD
 
       - name: Build images
+        env:
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
-          docker build -f Dockerfile.backend --build-arg GIT_SHA=${{ github.sha }} -t stoic-backend:${{ github.ref_name }} .
-          docker build -f Dockerfile.frontend -t stoic-frontend:${{ github.ref_name }} .
+          docker build -f Dockerfile.backend --build-arg GIT_SHA="${SHA}" -t "stoic-backend:${REF}" .
+          docker build -f Dockerfile.frontend -t "stoic-frontend:${REF}" .
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
@@ -186,13 +193,16 @@ jobs:
 
       - name: Publish images to GHCR (immutable digests)
         id: push
+        env:
+          REF: ${{ github.ref_name }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          OWNER=$(echo "${REPO_OWNER}" | tr '[:upper:]' '[:lower:]')
           for c in backend frontend; do
             IMG="ghcr.io/${OWNER}/stoic-${c}"
-            docker tag "stoic-${c}:${{ github.ref_name }}" "${IMG}:${{ github.ref_name }}"
-            docker push "${IMG}:${{ github.ref_name }}"
-            DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMG}:${{ github.ref_name }}")
+            docker tag "stoic-${c}:${REF}" "${IMG}:${REF}"
+            docker push "${IMG}:${REF}"
+            DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMG}:${REF}")
             echo "${c}_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
             echo "published ${DIGEST}"
           done
@@ -284,7 +294,9 @@ jobs:
           EOF
 
       - name: Checksums
-        run: sha256sum stoic-${{ github.ref_name }}.tar.gz backend/static/EmergentTradingBridge.ex5 release-manifest.json sbom-backend.spdx.json sbom-frontend.spdx.json > SHA256SUMS
+        env:
+          REF: ${{ github.ref_name }}
+        run: sha256sum "stoic-${REF}.tar.gz" backend/static/EmergentTradingBridge.ex5 release-manifest.json sbom-backend.spdx.json sbom-frontend.spdx.json > SHA256SUMS
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
