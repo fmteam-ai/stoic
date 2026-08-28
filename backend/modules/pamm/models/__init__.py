@@ -43,8 +43,8 @@ async def ensure_pamm_setup(db) -> None:
     await ensure_decision_indexes(db)
     from services.broker_gateway.pamm_api import ensure_sandbox_partner
     await ensure_sandbox_partner(db)
-    import os as _os
-    if _os.environ.get("APP_ENV", "").lower() != "production":
+    from app_env import is_production
+    if not is_production():
         from services.broker_gateway.mock_broker import \
             ensure_rest_demo_partner
         await ensure_rest_demo_partner(db)
