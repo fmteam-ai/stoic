@@ -1,0 +1,306 @@
+..............................................s......................... [  3%]
+........................................................................ [  6%]
+........................................................................ [ 10%]
+........................................................................ [ 13%]
+........................................................................ [ 17%]
+........................................................................ [ 20%]
+........................................................................ [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 31%]
+........................................................................ [ 34%]
+........................................................................ [ 38%]
+........................................................................ [ 41%]
+........................................................................ [ 45%]
+........................................................................ [ 48%]
+........................................................................ [ 52%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 73%]
+........s...................................s..s....................FF.. [ 76%]
+.................F...................................................... [ 80%]
+........................................................................ [ 83%]
+........................................................................ [ 87%]
+........................................................................ [ 90%]
+........................................................................ [ 94%]
+........................................................................ [ 97%]
+.................................................                        [100%]
+=================================== FAILURES ===================================
+____________________ test_mt5_engine_allows_when_below_cap _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xfc5d406b1650>
+
+    @pytest.mark.asyncio
+    async def test_mt5_engine_allows_when_below_cap(monkeypatch):
+        """Engine MUST still insert when inflight < cap."""
+        from execution import MT5BridgeEngine
+    
+        fake_db = MagicMock()
+        fake_db.trades.count_documents = AsyncMock(return_value=2)  # under cap
+        fake_inserted = MagicMock()
+        fake_inserted.inserted_id = "fakeid"
+        fake_db.trades.insert_one = AsyncMock(return_value=fake_inserted)
+        monkeypatch.setattr("execution.get_db", lambda: fake_db)
+        monkeypatch.setattr("execution.authorize_order",
+                            AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                    "signature": "s",
+                                                    "authorized_at": "t"}))
+        async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+            return None
+        monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+        monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+        monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+    
+        monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
+        monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
+    
+        async def passing_audit(**kw):  # noqa: ARG001
+            return {"ok": True, "blocked_by": None, "audit": [],
+                    "evaluated_at": "2026-01-01T00:00:00+00:00", "context": {}}
+        monkeypatch.setattr("execution.audit_pre_trade", passing_audit)
+    
+        engine = MT5BridgeEngine()
+>       result = await engine.execute(
+            user_id="u1",
+            account={"_id": "a1", "broker": "MT5", "mode": "live",
+                     "equity": 10000.0, "balance": 10000.0, "free_margin": 9000.0},
+            signal={
+                "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.05,
+                "entry_price": 3960.0, "stop_loss": 3970.0, "take_profit": 3940.0,
+                "origin": "auto",
+            },
+            max_concurrent=5,
+            cfg_account_id="acct_1",
+        )
+
+tests/test_max_concurrent_race.py:88: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+execution.py:55: in execute
+    return await submit_intent(user_id=user_id, account=account,
+execution_authority.py:215: in submit_intent
+    result = await engine.execute_authorized(
+execution.py:495: in execute_authorized
+    await transition(db, _intent["intent_id"], "submitted",
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+db = <MagicMock id='277477450667216'>
+intent_id = 'xin_01M12W1G7Z0X6D0XYYKS3RV3MG', to = 'submitted'
+detail = 'trade fakeid pending dispatch', result = {'trade_id': 'fakeid'}
+
+    async def transition(db, intent_id: str, to: str, detail: str = "",
+                         result: dict | None = None) -> dict | None:
+        """Move an intent along the legal lifecycle. Illegal transitions are
+        REFUSED (returns None) — a terminal intent can never re-execute."""
+        if to not in STATES:
+            raise ValueError(f"unknown intent state: {to}")
+        allowed_from = [s for s, t in _TRANSITIONS.items() if to in t]
+        sets = {"status": to, "updated_at": _now()}
+        if result is not None:
+            sets["result"] = result
+>       upd = await db.execution_intents.find_one_and_update(
+            {"intent_id": intent_id, "status": {"$in": allowed_from}},
+            {"$set": sets,
+             "$push": {"history": {"to": to, "at": _now(),
+                                   "detail": str(detail or "")[:200]}}},
+            return_document=ReturnDocument.AFTER)
+E       TypeError: object MagicMock can't be used in 'await' expression
+
+execution_intents.py:123: TypeError
+------------------------------ Captured log call -------------------------------
+WARNING  swallowed:silent_failures.py:28 {"event": "swallowed_exception", "component": "execution", "where": "execute", "error": "TypeError: object MagicMock can't be used in 'await' expression"}
+______________________ test_mt5_engine_no_cap_arg_allows _______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xfc5d4097e250>
+
+    @pytest.mark.asyncio
+    async def test_mt5_engine_no_cap_arg_allows(monkeypatch):
+        """Backward-compat: when max_concurrent isn't passed (e.g. manual UI
+        trade execution), engine inserts without any cap check."""
+        from execution import MT5BridgeEngine
+    
+        fake_db = MagicMock()
+        fake_db.trades.count_documents = AsyncMock(return_value=999)  # would block if checked
+        fake_inserted = MagicMock()
+        fake_inserted.inserted_id = "fakeid"
+        fake_db.trades.insert_one = AsyncMock(return_value=fake_inserted)
+        monkeypatch.setattr("execution.get_db", lambda: fake_db)
+        monkeypatch.setattr("execution.authorize_order",
+                            AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                    "signature": "s",
+                                                    "authorized_at": "t"}))
+        async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+            return None
+        monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+        monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+        monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+    
+        monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
+        monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
+    
+        async def passing_audit(**kw):  # noqa: ARG001
+            return {"ok": True, "blocked_by": None, "audit": [],
+                    "evaluated_at": "2026-01-01T00:00:00+00:00", "context": {}}
+        monkeypatch.setattr("execution.audit_pre_trade", passing_audit)
+    
+        engine = MT5BridgeEngine()
+>       result = await engine.execute(
+            user_id="u1",
+            account={"_id": "a1", "broker": "MT5", "mode": "live",
+                     "equity": 10000.0, "balance": 10000.0, "free_margin": 9000.0},
+            signal={
+                "symbol": "XAUUSD", "action": "BUY", "lot_size": 0.05,
+                "entry_price": 3960.0, "stop_loss": 3950.0, "take_profit": 3980.0,
+                "origin": "manual",
+            },
+        )
+
+tests/test_max_concurrent_race.py:136: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+execution.py:55: in execute
+    return await submit_intent(user_id=user_id, account=account,
+execution_authority.py:215: in submit_intent
+    result = await engine.execute_authorized(
+execution.py:495: in execute_authorized
+    await transition(db, _intent["intent_id"], "submitted",
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+db = <MagicMock id='277477445851536'>
+intent_id = 'xin_01M12W1G9MP18ZZ5GDR13W7F9S', to = 'submitted'
+detail = 'trade fakeid pending dispatch', result = {'trade_id': 'fakeid'}
+
+    async def transition(db, intent_id: str, to: str, detail: str = "",
+                         result: dict | None = None) -> dict | None:
+        """Move an intent along the legal lifecycle. Illegal transitions are
+        REFUSED (returns None) — a terminal intent can never re-execute."""
+        if to not in STATES:
+            raise ValueError(f"unknown intent state: {to}")
+        allowed_from = [s for s, t in _TRANSITIONS.items() if to in t]
+        sets = {"status": to, "updated_at": _now()}
+        if result is not None:
+            sets["result"] = result
+>       upd = await db.execution_intents.find_one_and_update(
+            {"intent_id": intent_id, "status": {"$in": allowed_from}},
+            {"$set": sets,
+             "$push": {"history": {"to": to, "at": _now(),
+                                   "detail": str(detail or "")[:200]}}},
+            return_document=ReturnDocument.AFTER)
+E       TypeError: object MagicMock can't be used in 'await' expression
+
+execution_intents.py:123: TypeError
+------------------------------ Captured log call -------------------------------
+WARNING  swallowed:silent_failures.py:28 {"event": "swallowed_exception", "component": "execution", "where": "execute", "error": "TypeError: object MagicMock can't be used in 'await' expression"}
+______________ test_mt5_engine_stamps_safety_audit_on_good_trade _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xfc5d40d92510>
+
+    @pytest.mark.asyncio
+    async def test_mt5_engine_stamps_safety_audit_on_good_trade(monkeypatch):
+        """When guardian passes, the inserted trade doc gets a `safety_audit` field."""
+        from execution import MT5BridgeEngine
+    
+        fake_db = MagicMock()
+        fake_db.trades.count_documents = AsyncMock(return_value=0)
+        inserted = MagicMock()
+        inserted.inserted_id = "tid"
+        fake_db.trades.insert_one = AsyncMock(return_value=inserted)
+        monkeypatch.setattr("execution.get_db", lambda: fake_db)
+        monkeypatch.setattr("execution.authorize_order",
+                            AsyncMock(return_value={"ok": True, "nonce": "n",
+                                                    "signature": "s",
+                                                    "authorized_at": "t"}))
+        async def _gate_open(*a, **k):  # deterministic: bypass entitlement+identity gates
+            return None
+        monkeypatch.setattr("entitlements.verify_execution_entitlement", _gate_open)
+        monkeypatch.setattr("vps_agent.verify_execution_identity", _gate_open)
+        monkeypatch.setattr("microstructure.is_market_closed", lambda s: None)
+    
+        monkeypatch.setattr("execution.ws_manager.broadcast", AsyncMock())
+    
+        fake_audit = {"ok": True, "blocked_by": None,
+                      "audit": [{"name": "per_trade_risk_cap", "ok": True}],
+                      "evaluated_at": "2026-01-01T00:00:00+00:00",
+                      "context": {"equity": 10000.0}}
+    
+        async def passing_audit(**kw):  # noqa: ARG001
+            return fake_audit
+        monkeypatch.setattr("execution.audit_pre_trade", passing_audit)
+        monkeypatch.setattr("execution.get_quote", AsyncMock(return_value={}))
+    
+        engine = MT5BridgeEngine()
+>       result = await engine.execute(
+            user_id="u1", account=_live_acct(),
+            signal=_good_signal(lot=0.05),
+            max_concurrent=5, cfg_account_id="acct_1",
+        )
+
+tests/test_safety_guardian.py:266: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+execution.py:55: in execute
+    return await submit_intent(user_id=user_id, account=account,
+execution_authority.py:215: in submit_intent
+    result = await engine.execute_authorized(
+execution.py:495: in execute_authorized
+    await transition(db, _intent["intent_id"], "submitted",
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+db = <MagicMock id='277477450076112'>
+intent_id = 'xin_01M12W1GCSWR8KE3STZX43V8YG', to = 'submitted'
+detail = 'trade tid pending dispatch', result = {'trade_id': 'tid'}
+
+    async def transition(db, intent_id: str, to: str, detail: str = "",
+                         result: dict | None = None) -> dict | None:
+        """Move an intent along the legal lifecycle. Illegal transitions are
+        REFUSED (returns None) — a terminal intent can never re-execute."""
+        if to not in STATES:
+            raise ValueError(f"unknown intent state: {to}")
+        allowed_from = [s for s, t in _TRANSITIONS.items() if to in t]
+        sets = {"status": to, "updated_at": _now()}
+        if result is not None:
+            sets["result"] = result
+>       upd = await db.execution_intents.find_one_and_update(
+            {"intent_id": intent_id, "status": {"$in": allowed_from}},
+            {"$set": sets,
+             "$push": {"history": {"to": to, "at": _now(),
+                                   "detail": str(detail or "")[:200]}}},
+            return_document=ReturnDocument.AFTER)
+E       TypeError: object MagicMock can't be used in 'await' expression
+
+execution_intents.py:123: TypeError
+------------------------------ Captured log call -------------------------------
+WARNING  swallowed:silent_failures.py:28 {"event": "swallowed_exception", "component": "execution", "where": "execute", "error": "TypeError: object MagicMock can't be used in 'await' expression"}
+=============================== warnings summary ===============================
+../../root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:24
+  /root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:24: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('amount')
+
+../../root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:30
+  /root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:30: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('quantity')
+
+../../root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:36
+  /root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:36: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('stripe_price_id')
+
+../../root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:44
+  /root/.venv/lib/python3.11/site-packages/emergentintegrations/payments/stripe/checkout.py:44: PydanticDeprecatedSince20: Pydantic V1 style `@validator` validators are deprecated. You should migrate to Pydantic V2 style `@field_validator` validators, see the migration guide for more details. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    @validator('payment_methods')
+
+../../root/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1
+  /root/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+tests/test_iter108_ml_ensemble.py::test_train_sync_learns_and_weights_normalize
+tests/test_iter108_ml_ensemble.py::test_train_sync_learns_and_weights_normalize
+tests/test_iter108_ml_ensemble.py::test_train_sync_learns_and_weights_normalize
+tests/test_iter108_ml_ensemble.py::test_train_sync_learns_and_weights_normalize
+  /root/.venv/lib/python3.11/site-packages/sklearn/utils/validation.py:2827: UserWarning: X does not have valid feature names, but LGBMClassifier was fitted with feature names
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_max_concurrent_race.py::test_mt5_engine_allows_when_below_cap
+FAILED tests/test_max_concurrent_race.py::test_mt5_engine_no_cap_arg_allows
+FAILED tests/test_safety_guardian.py::test_mt5_engine_stamps_safety_audit_on_good_trade
+3 failed, 2058 passed, 4 skipped, 1850 deselected, 9 warnings in 48.20s

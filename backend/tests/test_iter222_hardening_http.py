@@ -430,33 +430,34 @@ class TestI3NitroLatencyFreshness:
 
 # ═════ P0.2 · Application-path proof (submit_intent + HTTP close) ═════════
 
+@pytest.fixture(scope="class")
+def app_setup(admin_session, admin_id):
+    c = MongoClient(MONGO_URL)
+    mongo = c[DB_NAME]
+    pid = _create_program(admin_session, "apppath")
+    acc_id = _insert_account(mongo, admin_id, "LIVE")
+    mongo.pamm_programs.update_one(
+        {"program_id": pid},
+        {"$set": {"master_account_id": acc_id}})
+    _assign(admin_session, pid, "sniper", "controlled")
+    _validate(admin_session, pid)
+    _activate(admin_session, pid)
+    tr = mongo.trades.insert_one({
+        "trade_id": f"iter222_app_{uuid.uuid4().hex[:8]}",
+        "user_id": admin_id, "account_id": acc_id,
+        "symbol": "EURUSD", "action": "BUY", "lot_size": 0.05,
+        "status": "open",
+        "opened_at": datetime.now(timezone.utc).isoformat()})
+    yield {"pid": pid, "acc_id": acc_id, "mongo": mongo,
+           "open_trade_id": str(tr.inserted_id)}
+    _cleanup(mongo, pid, acc_id)
+    c.close()
+
+
 class TestApplicationPathRiskUnknown:
     """Risk Unknown proven through the REAL execution pipeline
     (ExecutionIntent → PAMM guard → authority), not a direct guard call,
     and CLOSE through the actual HTTP route."""
-
-    @pytest.fixture(scope="class")
-    def app_setup(self, admin_session, admin_id):
-        c = MongoClient(MONGO_URL)
-        mongo = c[DB_NAME]
-        pid = _create_program(admin_session, "apppath")
-        acc_id = _insert_account(mongo, admin_id, "LIVE")
-        mongo.pamm_programs.update_one(
-            {"program_id": pid},
-            {"$set": {"master_account_id": acc_id}})
-        _assign(admin_session, pid, "sniper", "controlled")
-        _validate(admin_session, pid)
-        _activate(admin_session, pid)
-        tr = mongo.trades.insert_one({
-            "trade_id": f"iter222_app_{uuid.uuid4().hex[:8]}",
-            "user_id": admin_id, "account_id": acc_id,
-            "symbol": "EURUSD", "action": "BUY", "lot_size": 0.05,
-            "status": "open",
-            "opened_at": datetime.now(timezone.utc).isoformat()})
-        yield {"pid": pid, "acc_id": acc_id, "mongo": mongo,
-               "open_trade_id": str(tr.inserted_id)}
-        _cleanup(mongo, pid, acc_id)
-        c.close()
 
     def test_buy_blocked_via_submit_intent_pipeline(self, app_setup):
         acc_id = app_setup["acc_id"]
@@ -549,7 +550,7 @@ class TestSnapshotHashPersisted:
         assert snap, "decision snapshot missing"
         assert len(snap.get("hash") or "") == 64
         prov = snap.get("provenance") or {}
-        assert prov.get("guard_version") == "v62.7"
+        assert prov.get("guard_policy_version") == "v62.8"
         assert prov.get("execution_policy_version")
         # hash verifies against content
         from modules.pamm.strategy_guard import _snapshot_hash

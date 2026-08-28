@@ -1,7 +1,8 @@
 """ITER-144 P0/P1 verification tests:
 1) p95 slippage worst-of gate in envelope_violations
 2) _telemetry p95 index math against sorted slippage list
-3) Snapshot provenance carries real 40-hex git_commit (not "unknown")
+3) Snapshot provenance uses the injected-build-SHA mechanism (BUILD_SHA
+   file > env fallback > "unknown"; production hard-fails on "unknown")
 4) Snapshot hash is SHA-256 tamper-evident
 5) outcome_attribution.attribute_trade writes risk_snapshot_id
 """
@@ -72,12 +73,41 @@ class TestP95IndexMath:
             assert idx == n - 1
 
 
-# ─── (3) & (4) Snapshot provenance: real git_commit + tamper hash ───────
+# ─── (3) & (4) Snapshot provenance: injected build SHA + tamper hash ────
 class TestSnapshotProvenance:
-    def test_git_commit_is_real_40hex(self):
-        from modules.pamm.strategy_guard import GIT_COMMIT
-        assert GIT_COMMIT != "unknown", "git commit provenance must not be 'unknown' — /app is a git repo"
-        assert re.fullmatch(r"[0-9a-f]{40}", GIT_COMMIT), f"expected 40-char hex, got {GIT_COMMIT!r}"
+    def test_build_sha_reads_injected_file(self, tmp_path):
+        from modules.pamm.strategy_guard import _build_sha
+        f = tmp_path / "BUILD_SHA"
+        f.write_text("a" * 40 + "\n")
+        assert _build_sha(path=f, env={}) == "a" * 40
+
+    def test_build_sha_env_fallbacks(self, tmp_path):
+        from modules.pamm.strategy_guard import _build_sha
+        missing = tmp_path / "nope"
+        assert _build_sha(path=missing,
+                          env={"STOIC_BUILD_SHA": "b" * 40}) == "b" * 40
+        assert _build_sha(path=missing,
+                          env={"GITHUB_SHA": "C" * 40}) == "c" * 40
+        assert _build_sha(path=missing, env={}) == "unknown"
+
+    def test_build_sha_rejects_malformed(self, tmp_path):
+        from modules.pamm.strategy_guard import _build_sha
+        f = tmp_path / "BUILD_SHA"
+        f.write_text("$Format:%H$")  # unexpanded git-archive placeholder
+        assert _build_sha(path=f, env={"GITHUB_SHA": "not-a-sha"}) == "unknown"
+
+    def test_injected_file_wins_over_env(self, tmp_path):
+        from modules.pamm.strategy_guard import _build_sha
+        f = tmp_path / "BUILD_SHA"
+        f.write_text("e" * 40)
+        assert _build_sha(path=f, env={"GITHUB_SHA": "f" * 40}) == "e" * 40
+
+    def test_production_requires_provenance(self):
+        from modules.pamm.strategy_guard import _enforce_production_provenance
+        with pytest.raises(RuntimeError):
+            _enforce_production_provenance(sha="unknown", production=True)
+        _enforce_production_provenance(sha="unknown", production=False)
+        _enforce_production_provenance(sha="d" * 40, production=True)
 
     def test_snapshot_hash_is_sha256_and_tamper_evident(self):
         from modules.pamm.strategy_guard import _snapshot_hash

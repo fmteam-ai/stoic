@@ -5,3 +5,5 @@ __pycache__/ export-ignore
 node_modules/ export-ignore
 test-results/ export-ignore
 playwright-report/ export-ignore
+# Immutable build provenance — git archive substitutes the exact commit SHA
+backend/BUILD_SHA export-subst

@@ -7,6 +7,11 @@ x-app-common: &app-common
   build:
     context: .
     dockerfile: Dockerfile.backend
+    args:
+      # Immutable build provenance — installer injects the exact commit SHA
+      # (from backend/BUILD_SHA in release archives, or git rev-parse in a
+      # checkout). The backend image build FAILS if this is missing.
+      GIT_SHA: ${GIT_SHA:-}
   restart: unless-stopped
   env_file:
     - backend/.env

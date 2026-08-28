@@ -17,6 +17,13 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY backend/ ./
 
+# Immutable build provenance — the image knows EXACTLY which commit built it.
+# Production builds FAIL without a valid 40-hex Git SHA.
+ARG GIT_SHA
+RUN echo "${GIT_SHA}" | grep -qE '^[0-9a-f]{40}$' \
+    || { echo "BUILD BLOCKED: GIT_SHA build-arg (40-hex commit) is required"; exit 1; } \
+    && echo "${GIT_SHA}" > BUILD_SHA
+
 # Run unprivileged (security-audit hardening)
 RUN useradd --create-home --shell /usr/sbin/nologin stoic \
     && chown -R stoic:stoic /app/backend

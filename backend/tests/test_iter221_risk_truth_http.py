@@ -74,9 +74,25 @@ def _headers(session, step_up=False):
     return h
 
 
+def _allow_http_cookies(s):
+    # CI targets plain http://127.0.0.1 — requests refuses to SEND cookies
+    # flagged Secure over http. The flag is a browser transport concern;
+    # strip it client-side right before each request is prepared (CI only).
+    orig = s.prepare_request
+
+    def prep(req):
+        for c in s.cookies:
+            c.secure = False
+        return orig(req)
+
+    s.prepare_request = prep
+
+
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()
+    if BASE_URL.startswith("http://"):
+        _allow_http_cookies(s)
     r = s.post(f"{BASE_URL}/api/auth/login",
                json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
@@ -306,26 +322,27 @@ def _walk_to_certified(admin_session, pid):
 # ~15-30s certification walk over the four LIVE-only scenarios)
 # ═════════════════════════════════════════════════════════════════════════
 
+@pytest.fixture(scope="class")
+def live_setup(admin_session, admin_id):
+    c = MongoClient(MONGO_URL)
+    db = c[DB_NAME]
+    pid = _create_program(admin_session, "live")
+    acc_id = _insert_paper_account(db, admin_id, "LIVE")
+    _bind_master(db, pid, acc_id)
+    _assign(admin_session, pid, "sniper", "controlled")
+    _seed_system_cert(db, acc_id)
+    _validate(admin_session, pid)
+    _walk_to_certified(admin_session, pid)
+    _activate(admin_session, pid)
+    yield {"pid": pid, "acc_id": acc_id, "db": db}
+    _cleanup_program(db, pid)
+    _cleanup_account(db, acc_id)
+    c.close()
+
+
 class TestLiveRiskTruth:
     """R1-R4: LIVE governed CERTIFIED program; each test resets risk-
     truth evidence in setUp and perturbs a single dimension."""
-
-    @pytest.fixture(scope="class")
-    def live_setup(self, admin_session, admin_id):
-        c = MongoClient(MONGO_URL)
-        db = c[DB_NAME]
-        pid = _create_program(admin_session, "live")
-        acc_id = _insert_paper_account(db, admin_id, "LIVE")
-        _bind_master(db, pid, acc_id)
-        _assign(admin_session, pid, "sniper", "controlled")
-        _seed_system_cert(db, acc_id)
-        _validate(admin_session, pid)
-        _walk_to_certified(admin_session, pid)
-        _activate(admin_session, pid)
-        yield {"pid": pid, "acc_id": acc_id, "db": db}
-        _cleanup_program(db, pid)
-        _cleanup_account(db, acc_id)
-        c.close()
 
     @pytest.fixture(autouse=True)
     def _reset_evidence(self, live_setup):

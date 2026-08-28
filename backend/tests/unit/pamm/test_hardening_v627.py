@@ -248,11 +248,11 @@ class TestSnapshotHashAndProvenance:
         from modules.pamm import strategy_guard as g
         src = inspect.getsource(g.authorize_pamm_strategy_execution)
         assert '"provenance"' in src
-        assert "guard_version" in src
+        assert "guard_policy_version" in src
         assert "execution_policy_version" in src
         assert "ea_version" in src
         assert '_snapshot_hash' in src
-        assert g.GUARD_VERSION == "v62.7"
+        assert g.GUARD_VERSION == "v62.8"
 
 
 class TestPhysicalCiIsolation:

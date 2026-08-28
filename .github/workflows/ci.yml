@@ -34,6 +34,11 @@ jobs:
             sleep 15
           done
           pip show -q emergentintegrations
+      - name: Collection gate — zero collection failures in the exact
+          pinned dependency environment
+        run: |
+          cd backend
+          python -m pytest tests/unit --collect-only -q
       - name: Physically isolated unit suite (tests/unit only — no DB,
           no env, no live server, no marker tree-scan)
         run: |
@@ -100,9 +105,14 @@ jobs:
         image: mongo:7
         ports:
           - 27017:27017
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
     env:
       MONGO_URL: mongodb://localhost:27017
       DB_NAME: stoic_cleandeploy
+      REDIS_URL: redis://localhost:6379
       BACKGROUND_WORKERS_IN_PROCESS: "false"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
@@ -140,12 +150,13 @@ jobs:
           curl -sf http://127.0.0.1:8001/api/health/live
           curl -sf http://127.0.0.1:8001/api/health/ready
           echo "clean-machine deployment certified"
-      - name: v62.7 HTTP hardening suite (Risk Unknown asymmetry through
-          the application path)
+      - name: v62.6/v62.7 Risk Truth HTTP invariants (Mongo + Redis +
+          live backend — RISK_UNKNOWN asymmetry through the application path)
         run: |
           cd backend
           export REACT_APP_BACKEND_URL=http://127.0.0.1:8001
-          python -m pytest tests/test_iter222_hardening_http.py -q
+          python -m pytest tests/test_iter222_hardening_http.py \
+            tests/test_iter221_risk_truth_http.py -q
       - name: Backend log on failure
         if: failure()
         run: tail -120 /tmp/clean-deploy.log || true
@@ -369,7 +380,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Build backend image
-        run: docker build -f Dockerfile.backend -t stoic-backend:${{ github.sha }} .
+        run: docker build -f Dockerfile.backend --build-arg GIT_SHA=${{ github.sha }} -t stoic-backend:${{ github.sha }} .
       - name: Build frontend image
         run: docker build -f Dockerfile.frontend -t stoic-frontend:${{ github.sha }} .
       - name: SBOM (backend image)

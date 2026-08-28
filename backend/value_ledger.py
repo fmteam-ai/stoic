@@ -62,6 +62,25 @@ async def ledger(db, user_id: str, days: int = 30) -> dict:
         "source": "pretrade_twin_block", "effect": "unobservable",
         "n": eff["twin"]["SKIP"],
         "basis": "twin-blocked trades have no counterfactual outcome"})
+    # PAMM risk governance — every guard decision is a hashed Risk
+    # Decision Snapshot; blocked new risk has no counterfactual.
+    acct_ids = [str(a["_id"]) async for a in db.accounts.find(
+        {"user_id": user_id}, {"_id": 1}).limit(200)]
+    n_guard = 0
+    snap_ids: list = []
+    if acct_ids:
+        async for d in db.pamm_risk_decisions.find(
+                {"account_id": {"$in": acct_ids}, "authorized": False,
+                 "at": {"$gte": since}},
+                {"snapshot_id": 1}).sort("at", -1).limit(MAX_DOCS):
+            n_guard += 1
+            if len(snap_ids) < 20:
+                snap_ids.append(d.get("snapshot_id"))
+    entries.append({
+        "source": "pamm_risk_guard", "effect": "unobservable",
+        "n": n_guard, "risk_snapshot_ids": snap_ids,
+        "basis": "guard-blocked new risk has no counterfactual outcome; "
+                 "every decision links to a hashed Risk Decision Snapshot"})
     observed_usd = round(sum(e.get("value_usd") or 0 for e in entries
                              if e["effect"] == "observed"), 2)
     return {"days": days, "entries": entries,

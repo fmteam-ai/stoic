@@ -161,6 +161,20 @@ fi
 
 # 4 · build + start
 echo "-- building images"
+# Immutable Git provenance: release archives carry the exact SHA in
+# backend/BUILD_SHA (git export-subst); a git checkout derives it at BUILD
+# time. The backend image build HARD-FAILS without it.
+GIT_SHA=$(grep -oE '^[0-9a-f]{40}' backend/BUILD_SHA 2>/dev/null || true)
+if [ -z "${GIT_SHA}" ]; then
+  GIT_SHA=$(git rev-parse HEAD 2>/dev/null || true)
+fi
+if ! echo "${GIT_SHA}" | grep -qE '^[0-9a-f]{40}$'; then
+  echo "ERROR: Git SHA provenance missing — backend/BUILD_SHA is not a release"
+  echo "       archive export and this is not a git checkout. Refusing to build."
+  exit 1
+fi
+export GIT_SHA
+echo "   build provenance: ${GIT_SHA}"
 docker compose build
 echo "-- starting stack"
 docker compose up -d

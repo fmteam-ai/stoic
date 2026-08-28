@@ -1,0 +1,39 @@
+{
+  "summary": "iter-145 independent verification of P0+P1 corrections. Backend-only per request. All specified items verified: (1) unit lane physically-isolated `env -u MONGO_URL pytest tests/unit` → 502/502 passed, collect-only clean; (2) NO runtime `git rev-parse`/subprocess in strategy_guard.py (only a comment reference); (3) HTTP suites over plain http://127.0.0.1:8001 with _allow_http_cookies helpers → tests/test_iter222_hardening_http.py + tests/test_iter221_risk_truth_http.py = 24/24 passed; (4) test_decision_snapshot_is_hashed_with_provenance asserts provenance.guard_policy_version == 'v62.8' — PASS; (5) persisted snapshot in db.pamm_risk_decisions carries required provenance keys (guard_policy_version, execution_policy_version, git_commit, image_digest, ea_version, host_agent_version, artifact_hashes dict, strategy_hash) and re-hash verifies (test passes); (6) slippage sample_count wired at strategy_guard.py L493 (recent_slippage_sample_count) and consumed in envelope_violations L198-199 (unit tests confirm p95/median gate); (7) AI Value Ledger link: authored /app/backend/tests/test_iter145_value_ledger_link.py — 2/2 passed: pamm_risk_guard entry present with n/risk_snapshot_ids, and n increments +1 after inserting a test doc with authorized:false for an admin-owned account, then decrements cleanly after DELETE (cleanup verified). Static review of Dockerfile.backend/docker-compose.yml/install.sh/ci.yml/release.yml: all gates present as spec'd (Dockerfile ARG GIT_SHA hard-fail regex ^[0-9a-f]{40}$ L23-25; compose passes GIT_SHA build-arg L14; install.sh derives from backend/BUILD_SHA then git rev-parse and refuses missing L167-175; ci.yml backend-unit collect-only gate L41; clean-deploy-cert has redis:7 service+REDIS_URL and runs BOTH iter222+iter221 L109-159; container-build uses --build-arg GIT_SHA L383; release.yml BUILD_SHA expansion gate L54-56, cosign install+sign+verify for images L200-212 and blobs L289-304, emergentintegrations retry L79-85, provenance block L266). No new backend defects surfaced.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A (tests)", "issue": "Class-scoped fixture defined as instance method (PytestRemovedIn10Warning) in tests/test_iter222_hardening_http.py (TestApplicationPathRiskUnknown.app_setup) and tests/test_iter221_risk_truth_http.py (TestLiveRiskTruth.live_setup). Behaviour appears correct today but the pattern is deprecated. During my run, 3 TEST_iter222_inv_* programs + 3 associated accounts leaked past teardown (I cleaned them). Root cause is likely tied to this deprecated pattern — teardown may not have executed under class-scoped instance-method fixtures. Recommend converting to @classmethod or module/session-scoped module-level fixtures."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/unit/pamm/test_iter144_p0_p1_verification.py",
+    "/app/backend/tests/test_iter222_hardening_http.py",
+    "/app/backend/tests/test_iter221_risk_truth_http.py",
+    "/app/backend/tests/test_iter145_value_ledger_link.py",
+    "/app/test_reports/pytest/iter145_unit.xml",
+    "/app/test_reports/pytest/iter145_http.xml"
+  ],
+  "action_items": [
+    "OPTIONAL/LOW: Refactor class-scoped instance-method fixtures (live_setup / app_setup / live_setup in iter221) to @classmethod or module-scoped module-level fixtures to eliminate the PytestRemovedIn10Warning and prevent occasional teardown skips (residual test docs observed this run, cleaned by tester)."
+  ],
+  "critical_code_review_comments": [
+    "strategy_guard.py cleanly separates build-provenance mechanism (_build_sha with file>env fallbacks, malformed rejection, production-hard-fail via _enforce_production_provenance) from GIT_COMMIT constant — good.",
+    "_snapshot_hash correctly excludes only the 'hash' key from the canonical JSON; provenance sub-dict is inside the hashed body (tests confirm). Good.",
+    "authorize_pamm_strategy_execution snapshot insert wraps the insert in try/except TypeError|AttributeError to keep unit-test stubs working — fine, but production Mongo errors will surface elsewhere; acceptable.",
+    "value_ledger.pamm_risk_guard fetches admin's accounts up to 200 and lists up to 20 snapshot_ids — bounded, safe.",
+    "install.sh performs early hard-fail on missing 40-hex SHA before docker build — matches Dockerfile ARG gate, no drift.",
+    "release.yml BUILD_SHA expansion gate runs BEFORE archive assembly (grep on backend/BUILD_SHA) — correct order."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter145_value_ledger_link.py (new regression test for AI Value Ledger link)"
+  ],
+  "success_rate": {"backend": "100% (502 unit + 24 HTTP + 2 value-ledger = 528/528)", "frontend": "not tested (backend-only per request)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (per /app/memory/test_credentials.md)",
+  "seed_data_creation": "test_iter145_value_ledger_link.py inserts one temporary pamm_risk_decisions doc (snapshot_id prefix rds_iter145_*) per test and deletes it in finally; verified DB clean after run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "P0+P1 iter-145 fully verified independently. 528 tests pass. If you add tests, keep tests/unit MongoDB-free — pytest.ini already sets pythonpath=. so no sys.path.insert is needed under tests/unit. HTTP suites work with either https preview URL or http://127.0.0.1:8001 thanks to _allow_http_cookies. Note the deprecated instance-method class-scoped fixture pattern in iter221/iter222 caused teardown residuals in my run (cleaned) — worth refactoring at leisure.",
+  "rca of the issue": "N/A — no new bugs. Minor observation: leftover TEST_iter222_inv_* fixtures traced to pytest PytestRemovedIn10Warning about class-scoped instance-method fixtures potentially skipping teardown across test-class instances; mitigation is converting to @classmethod fixtures."
+}

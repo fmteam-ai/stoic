@@ -21,7 +21,10 @@ v62.4 invariants:
   · certification identity re-bound to the CURRENT assignment/account/
     broker/risk profile on every execution (drift ⇒ REJECT)"""
 import logging
+import os
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 logger = logging.getLogger("pamm.strategy_guard")
 
@@ -192,6 +195,8 @@ def envelope_violations(envelope: dict, signal: dict,
             v.append({"reason": "expected_slippage_exceeded",
                       "detail": {"recent_median_slippage_pips": med,
                                  "recent_p95_slippage_pips": p95,
+                                 "sample_count": t.get(
+                                     "recent_slippage_sample_count"),
                                  "max_slippage_pips": float(sl),
                                  "note": "pre-trade block on measured fill "
                                          "evidence (median OR p95 tail); "
@@ -278,7 +283,7 @@ async def _consensus_spread(db, symbol: str, exclude_acct_id: str):
 
 NAV_FRESHNESS_S = 900  # broker-truth NAV older than this is NOT evidence
 
-GUARD_VERSION = "v62.7"
+GUARD_VERSION = "v62.8"
 
 
 def _execution_policy_version() -> str:
@@ -289,25 +294,48 @@ def _execution_policy_version() -> str:
         return "unknown"
 
 
-def _git_commit() -> str:
+# Immutable build provenance — production images inject backend/BUILD_SHA at
+# build time (Dockerfile ARG GIT_SHA); release archives carry it via
+# .gitattributes export-subst. NO runtime `git rev-parse`.
+BUILD_SHA_FILE = Path(__file__).resolve().parents[2] / "BUILD_SHA"
+_SHA_RE = r"[0-9a-f]{40}"
+
+
+def _build_sha(path: Path = BUILD_SHA_FILE, env: dict | None = None) -> str:
+    env = os.environ if env is None else env
+    candidates = []
     try:
-        import subprocess
-        from pathlib import Path
-        repo = Path(__file__).resolve().parents[3]
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=str(repo),
-            capture_output=True, text=True, timeout=5).stdout.strip()[:40]
-        if sha:
-            return sha
-    except Exception:  # noqa: BLE001
+        if path.exists():
+            candidates.append(path.read_text().strip())
+    except OSError:
         pass
-    # containers / CI without a .git dir: commit SHA injected via env
-    import os
-    return (os.environ.get("GITHUB_SHA")
-            or os.environ.get("GIT_COMMIT") or "unknown")[:40]
+    candidates += [env.get("STOIC_BUILD_SHA", ""),
+                   env.get("GITHUB_SHA", ""),
+                   env.get("GIT_COMMIT", "")]
+    for c in candidates:
+        c = (c or "").strip().lower()
+        if re.fullmatch(_SHA_RE, c):
+            return c
+    return "unknown"
 
 
-GIT_COMMIT = _git_commit()
+GIT_COMMIT = _build_sha()
+
+
+def _enforce_production_provenance(sha: str | None = None,
+                                   production: bool | None = None) -> None:
+    """A production process may NEVER run without immutable Git provenance."""
+    sha = GIT_COMMIT if sha is None else sha
+    if production is None:
+        from app_env import is_production
+        production = is_production()
+    if production and not re.fullmatch(_SHA_RE, sha or ""):
+        raise RuntimeError(
+            "Git SHA provenance missing — production builds must inject "
+            "backend/BUILD_SHA (Dockerfile ARG GIT_SHA) or STOIC_BUILD_SHA")
+
+
+_enforce_production_provenance()
 
 
 def _snapshot_hash(snap: dict) -> str:
@@ -462,6 +490,7 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
             # distribution view — p95 catches tail slippage a median hides
             t["recent_slippage_p95_pips"] = slips[
                 min(len(slips) - 1, int(0.95 * (len(slips) - 1) + 0.5))]
+            t["recent_slippage_sample_count"] = len(slips)
         # consecutive losses
         streak = 0
         async for tr in db.trades.find(
@@ -488,6 +517,24 @@ async def _effective_envelope(db, program: dict,
 
 
 # ───────────────────────── the authoritative gate ──────────────────────────
+
+async def _artifact_hashes(db, acct_id: str) -> dict:
+    """Latest installer-reported artifact digests (EA .ex5 / Host Agent),
+    verified against CI-published hashes at report time (match flag)."""
+    out: dict = {}
+    try:
+        async for d in db.artifact_digests.find(
+                {"account_id": acct_id},
+                {"artifact": 1, "sha256": 1, "match": 1}).sort(
+                    "reported_at", -1).limit(20):
+            name = str(d.get("artifact") or "")
+            if name and name not in out:
+                out[name] = {"sha256": d.get("sha256"),
+                             "match": d.get("match")}
+    except Exception:  # noqa: BLE001 — provenance enrichment never blocks
+        return out
+    return out
+
 
 async def authorize_pamm_strategy_execution(db, program: dict,
                                             account: dict,
@@ -522,12 +569,15 @@ async def authorize_pamm_strategy_execution(db, program: dict,
             "assignment_id": (evidence.get("assignment") or {}).get(
                 "assignment_id"),
             "provenance": {
-                "guard_version": GUARD_VERSION,
-                "git_commit": GIT_COMMIT,
+                "guard_policy_version": GUARD_VERSION,
                 "execution_policy_version": _execution_policy_version(),
+                "git_commit": GIT_COMMIT,
+                "image_digest": os.environ.get("STOIC_IMAGE_DIGEST"),
                 "ea_version": (account or {}).get("ea_version"),
                 "host_agent_version": (account or {}).get(
                     "host_agent_version"),
+                "artifact_hashes": await _artifact_hashes(
+                    db, str((account or {}).get("_id") or "")),
                 "strategy_hash": (evidence.get("assignment")
                                   or {}).get("strategy_hash")},
             "checks": res.get("checks")}
