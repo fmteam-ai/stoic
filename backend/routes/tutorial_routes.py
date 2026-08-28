@@ -28,7 +28,8 @@ MEDIA_TYPES = {".mp4": "video/mp4", ".vtt": "text/vtt"}
 @router.get("/media/{name}")
 async def tutorial_media(name: str, user=Depends(get_current_user)):
     ext = Path(name).suffix
-    if "/" in name or ".." in name or ext not in MEDIA_TYPES:
+    if ("/" in name or "\\" in name or ".." in name or "\x00" in name
+            or ext not in MEDIA_TYPES):
         raise HTTPException(status_code=400, detail="bad media name")
     f = MEDIA_DIR / name
     if not f.exists():

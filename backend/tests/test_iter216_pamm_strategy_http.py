@@ -119,6 +119,10 @@ def _create_program(admin_session, mongo, name_suffix):
                            headers=_csrf(admin_session), timeout=20)
     assert r.status_code in (200, 201), f"create program: {r.status_code} {r.text}"
     pgm = r.json()
+    # tests must not depend on the live news calendar — disable blackout
+    mongo.pamm_programs.update_one(
+        {"program_id": pgm["program_id"]},
+        {"$set": {"risk_limits.news_filter.enabled": False}})
     return pgm["program_id"], name
 
 

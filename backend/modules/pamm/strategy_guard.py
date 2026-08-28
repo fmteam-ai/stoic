@@ -246,6 +246,32 @@ def current_identity_hash(program_id: str, assignment: dict,
 
 # ───────────────────────── telemetry collection ────────────────────────────
 
+async def _consensus_spread(db, symbol: str, exclude_acct_id: str):
+    """Cross-account median spread for the symbol from other recently
+    heartbeating accounts — an independent plausibility reference against
+    a tampered EA self-report. None when fewer than 2 peers exist."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(minutes=10)).isoformat()
+    q = {"spreads_updated_at": {"$gte": cutoff},
+         f"current_spreads.{symbol}": {"$exists": True}}
+    try:
+        from bson import ObjectId
+        q["_id"] = {"$ne": ObjectId(exclude_acct_id)}
+    except Exception:
+        pass
+    vals = []
+    async for a in db.accounts.find(
+            q, {f"current_spreads.{symbol}": 1}).limit(20):
+        try:
+            vals.append(float(a["current_spreads"][symbol]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(vals) < 2:
+        return None
+    vals.sort()
+    return vals[len(vals) // 2]
+
+
 async def _telemetry(db, program: dict, account: dict, signal: dict,
                      strategy_id: str | None = None) -> dict:
     """Risk Truth collector — every REQUIRED item resolves to a value or
@@ -320,13 +346,23 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
     age = _age_s((account or {}).get("spreads_updated_at"))
     t["spread_age_s"] = round(age, 1) if age is not None else None
     if sp is not None and age is not None and age <= fresh["spread_s"]:
-        t["spread_pips"] = float(sp)
+        # SEC — EA spreads are self-reports; an implausibly LOW value vs
+        # the cross-account consensus is treated as UNVERIFIED (None ⇒
+        # RISK_UNKNOWN on LIVE), never as passing evidence.
+        consensus = await _consensus_spread(db, symbol, acct_id)
+        if consensus is not None and float(sp) < 0.5 * consensus:
+            t["spread_unverified"] = {"reported": float(sp),
+                                      "consensus_median": consensus}
+        else:
+            t["spread_pips"] = float(sp)
     t["freshness"] = fresh
-    # recent measured fill slippage (median of last true measurements)
+    # recent measured fill slippage (median of last TRUSTED measurements
+    # — tampered/unverified PAMM self-reports are excluded)
     slips = []
     async for tr in db.trades.find(
             {"account_id": acct_id, "slippage_checked": True,
-             "slippage_pips": {"$ne": None}},
+             "slippage_pips": {"$ne": None},
+             "pamm_slippage_verified": {"$ne": False}},
             {"slippage_pips": 1}).sort("created_at", -1).limit(10):
         slips.append(float(tr.get("slippage_pips") or 0))
     if slips:

@@ -184,6 +184,19 @@ export default function Accounts() {
     };
 
     const [refreshingBalance, setRefreshingBalance] = useState({});
+    // Bridge token is a secret — no longer bulk-returned; fetch on demand.
+    const [revealedTokens, setRevealedTokens] = useState({});
+    const revealToken = async (id) => {
+        if (revealedTokens[id]) return revealedTokens[id];
+        try {
+            const { data } = await api.get(`/accounts/${id}/bridge-token`);
+            setRevealedTokens(prev => ({ ...prev, [id]: data.bridge_token }));
+            return data.bridge_token;
+        } catch (e) {
+            toast.error("Couldn't fetch bridge token", { description: formatApiError(e) });
+            return null;
+        }
+    };
     const [importAccount, setImportAccount] = useState(null);   // account selected in the Import Positions modal
     const refreshBalance = async (id) => {
         setRefreshingBalance(prev => ({ ...prev, [id]: true }));
@@ -621,8 +634,14 @@ export default function Accounts() {
                                         }} />
                                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2 mt-4">BRIDGE TOKEN · paste into MT5 EA inputs</div>
                                         <div className="flex items-center gap-2 flex-wrap">
-                                            <code className="font-mono text-xs px-3 py-2 bg-[#050505] border border-[#1F1F1F] flex-1 break-all" data-testid={`bridge-token-${a.account_number}`}>{a.bridge_token}</code>
-                                            <button onClick={() => copyToken(a.bridge_token)} data-testid={`copy-token-${a.account_number}`}
+                                            <code className="font-mono text-xs px-3 py-2 bg-[#050505] border border-[#1F1F1F] flex-1 break-all" data-testid={`bridge-token-${a.account_number}`}>{revealedTokens[a.id] || "•••••••••••••••• (hidden)"}</code>
+                                            {!revealedTokens[a.id] && (
+                                                <button onClick={() => revealToken(a.id)} data-testid={`reveal-token-${a.account_number}`}
+                                                    className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
+                                                    REVEAL
+                                                </button>
+                                            )}
+                                            <button onClick={async () => { const t = await revealToken(a.id); if (t) copyToken(t); }} data-testid={`copy-token-${a.account_number}`}
                                                 className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
                                                 <Copy className="w-3.5 h-3.5" /> COPY
                                             </button>

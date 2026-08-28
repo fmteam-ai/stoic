@@ -1627,3 +1627,14 @@ All 12 review items implemented:
 12. Canary 5% renamed to OPEN-RISK cap: CANARY_MAX_OPEN_RISK_PCT, reason canary_open_risk_cap_exceeded, campaign criteria max_open_risk_pct + metric canary_open_risk_pct (canary_capital_pct fallback), check key open_risk_cap.
 Guard restructured: authorize_pamm_strategy_execution = snapshot wrapper; _authorize = closure chain; _telemetry(db, program, account, signal, strategy_id) collects all risk truth.
 Tests: tests/unit/pamm/test_risk_truth.py (30 unit) + tests/test_iter221_risk_truth_http.py (11 http by testing agent). iter220 http fixtures gained _seed_risk_truth. Total collected 4167.
+
+## Security Audit #2 + fixes (June 2026 — CONDITIONAL PASS → all findings fixed & tested)
+Audit scope: v62.4/62.6 PAMM surface, bridge, tutorials, cert campaign, BOLA matrix, CSRF/session, prod gating (no regression of prior SEC-001).
+- SEC-001 (MEDIUM, FIXED): risk-truth inputs were EA self-reports. Fixes:
+  a) bridge report_trade: EA requested_price only trusted within sanity band (max(20, 10×cap) pips of server-side intended entry); otherwise UNVERIFIED → PAMM slippage cap enforced against INTENDED price (fail closed on tamper); trades stamped pamm_slippage_verified; violations record baseline+verified flag.
+  b) guard _telemetry: EA spread cross-checked vs _consensus_spread (median of ≥2 other fresh accounts); implausibly low (<50% of consensus) → spread_pips=None + spread_unverified detail ⇒ RISK_UNKNOWN on LIVE.
+  c) guard pre-trade slippage median excludes pamm_slippage_verified:False trades.
+- P3 (FIXED): bridge_token removed from account list/detail serialization (has_bridge_token bool); new owner-scoped GET /api/accounts/{id}/bridge-token; Accounts.jsx masks token with REVEAL/COPY on-demand fetch (verified in UI).
+- P3 (FIXED): tutorial media route rejects "\\" and null bytes (400, no 500); traversal re-verified (encoded ../ → 404).
+- Test flakiness fixed: _create_program in iter216/217/218/220/221 http suites now disables risk_limits.news_filter on test programs (live Fed-speech blackout was failing suites); iter43 TestLiveFeeds re-marked external.
+- Verified: unit 466 (tests/unit, no Mongo), iter216+217 66, iter218 22, iter220+221 23 all pass; curls: account list has no bridge_token, /bridge-token returns owner token, tutorials %00 → 400, traversal → 404.

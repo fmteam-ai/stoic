@@ -49,6 +49,10 @@ def _serialize(doc: dict) -> dict:
     creds = doc.pop("creds", {}) or {}
     doc["has_investor_password"] = bool(creds.get("investor"))
     doc["has_master_password"] = bool(creds.get("master"))
+    # SEC hardening — the bridge token is a secret; never bulk-return it.
+    # The owner fetches it on demand via GET /{id}/bridge-token.
+    doc["has_bridge_token"] = bool(doc.pop("bridge_token", None))
+    doc.pop("bridge_token_prev", None)
     return doc
 
 
@@ -666,6 +670,18 @@ async def import_positions(account_id: str, payload: ImportPositionsRequest,
         "skipped_existing": skipped,
         "total_submitted": len(payload.positions),
     }
+
+
+@router.get("/{account_id}/bridge-token")
+async def get_bridge_token(account_id: str, user=Depends(get_current_user)):
+    """Owner-scoped on-demand secret fetch (kept out of list responses)."""
+    db = get_db()
+    acc = await db.accounts.find_one(
+        {"_id": parse_object_id(account_id, "Account"),
+         "user_id": user["id"]}, {"bridge_token": 1})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"bridge_token": acc.get("bridge_token") or ""}
 
 
 @router.get("/{account_id}/test-connection")

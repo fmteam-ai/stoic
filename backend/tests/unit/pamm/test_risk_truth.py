@@ -187,6 +187,26 @@ class TestGateWiring:
         assert "pamm_slippage_violations" in src
         assert "pamm_max_slippage_pips" in src
 
+    def test_slippage_self_report_verified_or_fail_closed(self):
+        """SEC — EA requested_price outside the sanity band ⇒ the PAMM
+        cap is enforced against the server-side intended price."""
+        import pathlib
+        src = pathlib.Path(
+            __file__).parents[3].joinpath(
+            "routes/bridge_routes.py").read_text()
+        assert "pamm_slippage_verified" in src
+        assert "sanity_pips" in src
+        assert "requested if verified else intended" in src
+
+    def test_spread_self_report_verified_against_consensus(self):
+        from modules.pamm import strategy_guard as g
+        assert callable(g._consensus_spread)
+        src = inspect.getsource(g._telemetry)
+        assert "_consensus_spread" in src
+        assert "spread_unverified" in src
+        # tampered measurements never feed the pre-trade median
+        assert '"pamm_slippage_verified": {"$ne": False}' in src
+
     def test_authority_stamps_snapshot_on_intent(self):
         import pathlib
         src = pathlib.Path(__file__).parents[3].joinpath(

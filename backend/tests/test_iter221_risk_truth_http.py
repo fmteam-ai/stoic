@@ -96,7 +96,14 @@ def _create_program(admin_session, suffix):
                            json={"name": name},
                            headers=_csrf(admin_session), timeout=20)
     assert r.status_code in (200, 201), r.text
-    return r.json()["program_id"]
+    pid = r.json()["program_id"]
+    # tests must not depend on the live news calendar — disable blackout
+    c = MongoClient(MONGO_URL)
+    c[DB_NAME].pamm_programs.update_one(
+        {"program_id": pid},
+        {"$set": {"risk_limits.news_filter.enabled": False}})
+    c.close()
+    return pid
 
 
 def _insert_paper_account(mongo, admin_id, broker_env="DEMO",
