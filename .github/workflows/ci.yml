@@ -139,6 +139,15 @@ jobs:
           export JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export KEY_VAULT_MASTER=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export ADMIN_PASSWORD="admin123"
+          # Test-suite bypasses (server-side secrets, refused when
+          # APP_ENV=production): step-up MFA + volume rate limits. The
+          # pytest conftest auto-injects them as headers when set, so the
+          # HTTP invariant suites can walk certification/activation flows.
+          STEP_UP_BYPASS_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+          RATE_LIMIT_BYPASS_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+          export STEP_UP_BYPASS_TOKEN RATE_LIMIT_BYPASS_TOKEN
+          echo "STEP_UP_BYPASS_TOKEN=${STEP_UP_BYPASS_TOKEN}" >> "$GITHUB_ENV"
+          echo "RATE_LIMIT_BYPASS_TOKEN=${RATE_LIMIT_BYPASS_TOKEN}" >> "$GITHUB_ENV"
           nohup python -m uvicorn server:app --host 127.0.0.1 --port 8001 > /tmp/clean-deploy.log 2>&1 &
       - name: Certify liveness + readiness
         run: |
