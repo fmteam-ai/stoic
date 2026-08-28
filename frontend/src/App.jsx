@@ -53,6 +53,7 @@ const Infrastructure = lazy(() => import("@/pages/Infrastructure"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const EnterpriseApi = lazy(() => import("@/pages/EnterpriseApi"));
 const PammGuide = lazy(() => import("@/pages/PammGuide"));
+const Tutorials = lazy(() => import("@/pages/Tutorials"));
 const PublicPerformance = lazy(() => import("@/pages/PublicPerformance"));
 const PublicJournal = lazy(() => import("@/pages/PublicJournal"));
 const AdminUsers = lazy(() => import("@/pages/AdminUsers"));
@@ -153,6 +154,7 @@ function App() {
                         <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
                         <Route path="/faq" element={<ProtectedRoute><FAQ /></ProtectedRoute>} />
                         <Route path="/guide" element={<ProtectedRoute><Guide /></ProtectedRoute>} />
+                        <Route path="/tutorials" element={<ProtectedRoute><Tutorials /></ProtectedRoute>} />
                         <Route path="/agents" element={<ProtectedRoute><Agents /></ProtectedRoute>} />
                         <Route path="/strategies" element={<ProtectedRoute><Strategies /></ProtectedRoute>} />
                         <Route path="/portfolio" element={<ProtectedRoute><Portfolio /></ProtectedRoute>} />

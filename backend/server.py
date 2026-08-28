@@ -37,6 +37,7 @@ from routes.latency_routes import router as latency_router
 from routes.brain_routes import router as brain_router
 from routes.certification_routes import router as certification_router
 from routes.soak_routes import router as soak_router
+from routes.tutorial_routes import router as tutorials_router
 from routes.intent_routes import router as intent_router
 from services.broker_gateway.mock_broker import router as mockbroker_router
 from routes.market_routes import router as market_router
@@ -412,6 +413,7 @@ api_router.include_router(latency_router)
 api_router.include_router(brain_router)
 api_router.include_router(certification_router)
 api_router.include_router(soak_router)
+api_router.include_router(tutorials_router)
 from app_env import is_production as _is_production
 if not _is_production():
     # SEC-003: mock broker is a certification test double — never in prod

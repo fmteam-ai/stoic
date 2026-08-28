@@ -8,6 +8,7 @@ import { QuickActionsBar } from "@/components/QuickActionsBar";
 import { OnboardingBanner } from "@/components/OnboardingBanner";
 import OnboardingWizard from "@/components/OnboardingWizard";
 import { StepUpDialog } from "@/components/StepUpDialog";
+import { TourRunner } from "@/components/GuidedTour";
 
 export function AppLayout({ children }) {
     return (
@@ -15,6 +16,7 @@ export function AppLayout({ children }) {
             <Sidebar />
             <QuickActionsBar />
             <StepUpDialog />
+            <TourRunner />
             <main className="md:ml-60 min-h-screen">
                 <StatusBar />
                 <AuthorityStrip />

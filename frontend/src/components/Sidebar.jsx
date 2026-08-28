@@ -10,7 +10,7 @@ import {
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers, BadgeCheck,
     FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound, Store, Server, Rocket,
-    Bot, Briefcase,
+    Bot, Briefcase, GraduationCap,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -98,6 +98,7 @@ const SECTIONS = [
         key: "learn",
         label: "LEARN",
         items: [
+            { to: "/tutorials", label: "Tutorials", icon: GraduationCap, testid: "nav-tutorials" },
             { to: "/help", label: "Help Center", icon: LifeBuoy, testid: "nav-help" },
             { to: "/support", label: "Support", icon: MessageSquare, testid: "nav-support" },
             { to: "/guide", label: "Guide", icon: BookOpen, testid: "nav-guide" },
