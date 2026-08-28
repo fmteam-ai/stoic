@@ -59,9 +59,25 @@ def _headers(session, step_up=False):
     return h
 
 
+def _allow_http_cookies(s):
+    # CI targets plain http://127.0.0.1 — requests refuses to SEND cookies
+    # flagged Secure over http. The flag is a browser transport concern;
+    # strip it client-side right before each request is prepared (CI only).
+    orig = s.prepare_request
+
+    def prep(req):
+        for c in s.cookies:
+            c.secure = False
+        return orig(req)
+
+    s.prepare_request = prep
+
+
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()
+    if BASE_URL.startswith("http://"):
+        _allow_http_cookies(s)
     r = s.post(f"{BASE_URL}/api/auth/login",
                json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)

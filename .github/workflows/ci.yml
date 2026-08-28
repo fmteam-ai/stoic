@@ -25,8 +25,15 @@ jobs:
           grep -v '^emergentintegrations' backend/requirements.txt > /tmp/ci-reqs.txt
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install --no-deps emergentintegrations==0.2.0 \
-            --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+          # Emergent CDN index occasionally serves an empty page — retry.
+          for i in 1 2 3 4 5; do
+            pip install --no-deps emergentintegrations==0.2.0 \
+              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+              && break
+            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            sleep 15
+          done
+          pip show -q emergentintegrations
       - name: Physically isolated unit suite (tests/unit only — no DB,
           no env, no live server, no marker tree-scan)
         run: |
@@ -67,8 +74,15 @@ jobs:
           grep -v '^emergentintegrations' backend/requirements.txt > /tmp/ci-reqs.txt
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install --no-deps emergentintegrations==0.2.0 \
-            --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+          # Emergent CDN index occasionally serves an empty page — retry.
+          for i in 1 2 3 4 5; do
+            pip install --no-deps emergentintegrations==0.2.0 \
+              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+              && break
+            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            sleep 15
+          done
+          pip show -q emergentintegrations
       - name: Integration-classified tests (real MongoDB)
         run: |
           cd backend
@@ -100,8 +114,15 @@ jobs:
           grep -v '^emergentintegrations' backend/requirements.txt > /tmp/ci-reqs.txt
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install --no-deps emergentintegrations==0.2.0 \
-            --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+          # Emergent CDN index occasionally serves an empty page — retry.
+          for i in 1 2 3 4 5; do
+            pip install --no-deps emergentintegrations==0.2.0 \
+              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+              && break
+            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            sleep 15
+          done
+          pip show -q emergentintegrations
       - name: Boot backend on a clean machine
         run: |
           cd backend
@@ -237,8 +258,15 @@ jobs:
           grep -v '^emergentintegrations' backend/requirements.txt > /tmp/ci-reqs.txt
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install --no-deps emergentintegrations==0.2.0 \
-            --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+          # Emergent CDN index occasionally serves an empty page — retry.
+          for i in 1 2 3 4 5; do
+            pip install --no-deps emergentintegrations==0.2.0 \
+              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+              && break
+            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            sleep 15
+          done
+          pip show -q emergentintegrations
       - name: Generate random CI admin credentials
         run: |
           echo "ADMIN_PASSWORD=Ci9!$(python -c "import secrets; print(secrets.token_urlsafe(24))")" >> "$GITHUB_ENV"

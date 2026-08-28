@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 444 |
+| unit | pure logic, no external I/O | every CI job | 498 |
 | integration | real MongoDB service container | CI `backend-integration` | 22 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3314 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3349 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 4167 tests across 358 files.**
+**Total: 3878 tests across 365 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -180,7 +180,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter213_production_hardening.py` | http-live | 19 |
 | `backend/tests/test_iter216_pamm_strategy.py` | http-live | 20 |
 | `backend/tests/test_iter216_pamm_strategy_http.py` | http-live | 30 |
-| `backend/tests/test_iter217_cert_campaign.py` | http-live | 26 |
+| `backend/tests/test_iter217_cert_campaign.py` | http-live | 27 |
 | `backend/tests/test_iter217_cert_campaign_http.py` | http-live | 36 |
 | `backend/tests/test_iter218_strategy_guard.py` | http-live | 23 |
 | `backend/tests/test_iter218_strategy_guard_http.py` | http-live | 22 |
@@ -188,6 +188,8 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter21_presets_and_payouts.py` | http-live | 21 |
 | `backend/tests/test_iter220_safety_closure.py` | http-live | 24 |
 | `backend/tests/test_iter220_safety_closure_http.py` | http-live | 12 |
+| `backend/tests/test_iter221_risk_truth_http.py` | http-live | 11 |
+| `backend/tests/test_iter222_hardening_http.py` | http-live | 13 |
 | `backend/tests/test_iter22_live_verification.py` | http-live | 9 |
 | `backend/tests/test_iter22_security_hardening.py` | http-live | 9 |
 | `backend/tests/test_iter23_reconciler.py` | http-live | 9 |
@@ -336,6 +338,8 @@ fails when this file drifts from the tree.
 | `backend/tests/test_regime_dispatch.py` | http-live | 9 |
 | `backend/tests/test_safety_guardian.py` | http-live | 11 |
 | `backend/tests/test_sec001_brain_bola.py` | http-live | 7 |
+| `backend/tests/test_sec001_v627_e2e.py` | http-live | 2 |
+| `backend/tests/test_sec001_v627_verification.py` | http-live | 8 |
 | `backend/tests/test_sec_iter206_brain_hardening.py` | http-live | 5 |
 | `backend/tests/test_sec_iter206_brain_hardening_http.py` | http-live | 8 |
 | `backend/tests/test_sec_iter210_costs_bola.py` | http-live | 7 |
@@ -351,6 +355,9 @@ fails when this file drifts from the tree.
 | `e2e/tests/helpers.ts` | ui-e2e | 0 |
 | `e2e/tests/pages.spec.ts` | ui-e2e | 2 |
 | `e2e/tests/settings.spec.ts` | ui-e2e | 2 |
+| `backend/tests/unit/pamm/test_hardening_v627.py` | unit | 17 |
+| `backend/tests/unit/pamm/test_iter144_p0_p1_verification.py` | unit | 13 |
+| `backend/tests/unit/pamm/test_risk_truth.py` | unit | 23 |
 | `backend/tests/unit/scalp/test_iter140_permissions_news.py` | unit | 6 |
 | `backend/tests/unit/scalp/test_iter142_p0_audit.py` | unit | 15 |
 | `backend/tests/unit/scalp/test_iter143_prelive_hardening.py` | unit | 15 |
@@ -372,4 +379,4 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/scalp/test_scalp_unit.py` | unit | 161 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
-| `backend/tests/unit/test_unit_independence.py` | unit | 1 |
+| `backend/tests/unit/test_unit_independence.py` | unit | 2 |

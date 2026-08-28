@@ -292,11 +292,19 @@ def _execution_policy_version() -> str:
 def _git_commit() -> str:
     try:
         import subprocess
-        return subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd="/app", capture_output=True,
-            text=True, timeout=5).stdout.strip()[:40] or "unknown"
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[3]
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo),
+            capture_output=True, text=True, timeout=5).stdout.strip()[:40]
+        if sha:
+            return sha
     except Exception:  # noqa: BLE001
-        return "unknown"
+        pass
+    # containers / CI without a .git dir: commit SHA injected via env
+    import os
+    return (os.environ.get("GITHUB_SHA")
+            or os.environ.get("GIT_COMMIT") or "unknown")[:40]
 
 
 GIT_COMMIT = _git_commit()
