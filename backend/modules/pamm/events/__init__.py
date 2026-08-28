@@ -16,6 +16,12 @@ EVENT_TYPES = {
     "FlattenFailed", "FlattenResolved",
     "BrokerIncidentOpened", "BrokerIncidentResolved", "ExternalEscalation",
     "PositionDrift", "PositionDriftAcknowledged", "DriftToleranceChanged",
+    # v62.1 — PAMM Strategy Profiles
+    "PAMM_STRATEGY_ASSIGNED", "PAMM_STRATEGY_VALIDATED",
+    "PAMM_STRATEGY_CERTIFIED", "PAMM_STRATEGY_ACTIVATED",
+    "PAMM_STRATEGY_CHANGE_REQUESTED", "PAMM_STRATEGY_DRAIN_STARTED",
+    "PAMM_STRATEGY_CHANGED", "PAMM_STRATEGY_SUSPENDED",
+    "PAMM_STRATEGY_REVOKED",
 }
 
 

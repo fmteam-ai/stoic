@@ -4,6 +4,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { BrokerHealthWidget, ChangeRequestsPanel, EventsFeed, FlattenFailedBanner, InvestorsPanel, JoinRequestsPanel, KpiTile, NavChart, OpStateControl, PositionTruthWidget, RiskPanel, SweepChip, VerdictTester } from "@/components/PammPanels";
+import { PammStrategyPanel } from "@/components/PammStrategyPanel";
 import { Globe, Loader2, OctagonAlert, Pause, Play, Plus, RefreshCw } from "lucide-react";
 
 const btn = "px-3 py-1.5 text-[10px] font-mono tracking-widest border transition disabled:opacity-40 flex items-center gap-1.5";
@@ -206,6 +207,7 @@ export default function ManagedStrategy() {
                                 onChanged={() => loadDetail(selected)} isAdmin={user?.role === "admin"} />
                         </div>
                         <div className="space-y-4">
+                            <PammStrategyPanel programId={selected} onChanged={() => loadDetail(selected)} />
                             <PositionTruthWidget programId={selected} isAdmin={user?.role === "admin"} />
                             <ChangeRequestsPanel requests={changeRequests} meId={user?.id} onChanged={() => loadDetail(selected)} />
                             <BrokerHealthWidget partners={health} onPing={ping} pinging={pinging} />

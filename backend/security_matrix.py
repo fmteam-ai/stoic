@@ -141,6 +141,15 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     # ── iter-212 additions: certification + soak ──
     ("GET", "/api/certification/system"): OAH,
     ("GET", "/api/ops/broker-validation"): ADM,
+    # ── v62.1 — PAMM Strategy Profiles ──
+    ("GET", "/api/pamm/strategies/nitro-eligibility"): OAH,
+    ("GET", "/api/pamm/programs/{program_id}/strategy"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/strategy"): PGA,
+    ("PATCH", "/api/pamm/programs/{program_id}/strategy"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/strategy/validate"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/strategy/activate"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/strategy/suspend"): PGA,
+    ("POST", "/api/pamm/programs/{program_id}/strategy/change"): PGA,
 }
 
 SENSITIVE_PARAMS = {"account_id", "bot_id",

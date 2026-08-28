@@ -736,3 +736,155 @@ async def drift_tolerance_ep(program_id: str, payload: dict,
     except (TypeError, ValueError):
         raise HTTPException(status_code=400,
                             detail="tolerance must be a number >= 0")
+
+
+# ═══════════════ v62.1 — PAMM Strategy Profiles ═══════════════════════════
+
+@router.get("/strategies")
+async def pamm_strategies_ep(user=Depends(get_current_user)):
+    """PAMM-eligible strategies from the central registry + versions
+    + feature flags + risk profiles."""
+    db = get_db()
+    await require_manager(db, user)
+    from modules.pamm.risk_profiles import list_profiles
+    from modules.pamm.strategy_assignment import feature_flags
+    from strategies.registry import pamm_eligible_strategies, strategy_hash
+    return {"strategies": [
+                {**d.model_dump(), "strategy_hash": strategy_hash(d)}
+                for d in pamm_eligible_strategies()],
+            "modes": {"SINGLE": True, "MULTI": False, "DYNAMIC_AI": False},
+            "feature_flags": feature_flags(),
+            "risk_profiles": await list_profiles(db)}
+
+
+@router.get("/strategies/nitro-eligibility")
+async def nitro_eligibility_ep(account_id: str | None = None,
+                               user=Depends(get_current_user)):
+    db = get_db()
+    await require_manager(db, user)
+    acc = None
+    if account_id:
+        from route_utils import parse_object_id
+        q = {"_id": parse_object_id(account_id)}
+        if not is_admin(user):
+            q["user_id"] = user["id"]
+        acc = await db.accounts.find_one(q)
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account not found")
+    from strategies.nitro.eligibility import eligibility
+    return await eligibility(db, user["id"], acc)
+
+
+@router.get("/programs/{program_id}/strategy")
+async def get_program_strategy_ep(program_id: str,
+                                  user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.strategy_assignment import get_assignment
+    return await get_assignment(db, program_id)
+
+
+@router.post("/programs/{program_id}/strategy")
+async def assign_program_strategy_ep(program_id: str, payload: dict,
+                                     request: Request,
+                                     user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_manager(db, user)
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.strategy_assignment import assign
+    out = await assign(db, program, payload, user["id"])
+    if out.get("error"):
+        code = 409 if out["error"] == "assignment_exists" else 400
+        raise HTTPException(status_code=code, detail=out)
+    return out
+
+
+@router.patch("/programs/{program_id}/strategy")
+async def patch_program_strategy_ep(program_id: str, payload: dict,
+                                    request: Request,
+                                    user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_manager(db, user)
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.strategy_assignment import patch
+    out = await patch(db, program, payload, user["id"])
+    if out.get("error"):
+        raise HTTPException(status_code=400, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/strategy/validate")
+async def validate_program_strategy_ep(program_id: str, request: Request,
+                                       user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_manager(db, user)
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.strategy_assignment import validate
+    out = await validate(db, program, user["id"])
+    if out.get("error"):
+        raise HTTPException(status_code=400, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/strategy/activate")
+async def activate_program_strategy_ep(program_id: str, request: Request,
+                                       user=Depends(get_current_user)):
+    """Live activation is risk-affecting → step-up MFA required."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_manager(db, user)
+    await require_program_access(db, user, program)
+    await _step_up(db, user, request, "pamm_strategy_activate",
+                   {"program_id": program_id})
+    from modules.pamm.strategy_assignment import activate
+    out = await activate(db, program, user["id"])
+    if out.get("error"):
+        code = 403 if out["error"] == "nitro_live_disabled" else 409
+        raise HTTPException(status_code=code, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/strategy/suspend")
+async def suspend_program_strategy_ep(program_id: str, payload: dict,
+                                      request: Request,
+                                      user=Depends(get_current_user)):
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_manager(db, user)
+    await require_program_access(db, user, program)
+    await _rl(db, request, user["id"], "pamm_mutate")
+    from modules.pamm.strategy_assignment import suspend
+    out = await suspend(db, program, user["id"],
+                        str(payload.get("reason") or ""))
+    if out.get("error"):
+        raise HTTPException(status_code=409, detail=out)
+    return out
+
+
+@router.post("/programs/{program_id}/strategy/change")
+async def change_program_strategy_ep(program_id: str, payload: dict,
+                                     request: Request,
+                                     user=Depends(get_current_user)):
+    """Guarded change: requires flat program + step-up MFA. Positions are
+    NEVER inherited by the new strategy."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_manager(db, user)
+    await require_program_access(db, user, program)
+    await _step_up(db, user, request, "pamm_strategy_change",
+                   {"program_id": program_id,
+                    "new_strategy": payload.get("strategy_id")})
+    from modules.pamm.strategy_assignment import change
+    out = await change(db, program, payload, user["id"])
+    if out.get("error"):
+        code = 409 if out["error"] in ("program_not_flat",
+                                       "assignment_exists") else 400
+        raise HTTPException(status_code=code, detail=out)
+    return out
