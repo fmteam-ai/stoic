@@ -236,3 +236,7 @@ def test_onboarding_existing_trader_auto_done():
     assert r.status_code == 200
     assert r.json()["status"] == "done"
     db.accounts.delete_many({"user_id": str(u["_id"])})
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

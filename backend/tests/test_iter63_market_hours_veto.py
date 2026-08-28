@@ -88,3 +88,7 @@ def test_reopens_in_hours_decreasing_toward_open():
     # Sun 22:00 reopen — Sat noon = 34h, Sun noon = 10h
     assert 30 <= sat_noon["reopens_in_hours"] <= 36
     assert 8 <= sun_noon["reopens_in_hours"] <= 12
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

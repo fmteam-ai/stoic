@@ -205,3 +205,7 @@ async def test_explain_trade_falls_back_to_live_composition():
     assert out["tick_id"] == "tk1"
     assert out["live"] is True
     assert out["entry"]["confidence"] == 75
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

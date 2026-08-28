@@ -20,8 +20,9 @@ def _server_up():
         return False
 
 
-pytestmark = pytest.mark.skipif(not _server_up(),
-                                reason="backend not running on :8001")
+pytestmark = [pytest.mark.http,
+              pytest.mark.skipif(not _server_up(),
+                                 reason="backend not running on :8001")]
 
 
 @pytest.fixture()

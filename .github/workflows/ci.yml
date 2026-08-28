@@ -27,7 +27,11 @@ jobs:
             --extra-index-url https://download.pytorch.org/whl/cpu
           pip install --no-deps emergentintegrations==0.2.0 \
             --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
-      - name: Unit + source-level execution-truth tests (no live server needed)
+      - name: Marker-isolated unit suite (no DB, no env, no live server)
+        run: |
+          cd backend
+          python -m pytest -m unit -q
+      - name: Source-level execution-truth tests (no live server needed)
         run: |
           cd backend
           python -m pytest tests/unit \
@@ -68,6 +72,55 @@ jobs:
         run: |
           cd backend
           python -m pytest tests/integration -m integration -q
+
+  clean-deploy-cert:
+    # iter-213 P1 — clean-machine deployment certification: from a FRESH
+    # runner install ONLY committed requirements, boot the backend with a
+    # minimal generated env against a clean Mongo, and prove liveness +
+    # readiness. Certifies that the committed code deploys on a machine
+    # with no local state.
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: stoic_cleandeploy
+      BACKGROUND_WORKERS_IN_PROCESS: "false"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          grep -v '^emergentintegrations' backend/requirements.txt > /tmp/ci-reqs.txt
+          pip install -r /tmp/ci-reqs.txt \
+            --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install --no-deps emergentintegrations==0.2.0 \
+            --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+      - name: Boot backend on a clean machine
+        run: |
+          cd backend
+          export JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          export KEY_VAULT_MASTER=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          export ADMIN_PASSWORD="Ci9!$(python -c "import secrets; print(secrets.token_urlsafe(24))")"
+          nohup python -m uvicorn server:app --host 127.0.0.1 --port 8001 > /tmp/clean-deploy.log 2>&1 &
+      - name: Certify liveness + readiness
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8001/api/health > /dev/null && ok=1 && break
+            sleep 2
+          done
+          [ "${ok:-}" = "1" ] || { echo "backend never became healthy on a clean machine"; tail -80 /tmp/clean-deploy.log; exit 1; }
+          curl -sf http://127.0.0.1:8001/api/health/live
+          curl -sf http://127.0.0.1:8001/api/health/ready
+          echo "clean-machine deployment certified"
+      - name: Backend log on failure
+        if: failure()
+        run: tail -120 /tmp/clean-deploy.log || true
 
   ea-structural-check:
     runs-on: ubuntu-latest

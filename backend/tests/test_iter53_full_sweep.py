@@ -179,3 +179,7 @@ class TestBotLoopHealth:
                 print("  ", b)
         # Soft assertion — report but do not fail entire suite (flagged in test report)
         assert len(bad) <= 5, f"Excessive tracebacks in backend log: {len(bad)}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

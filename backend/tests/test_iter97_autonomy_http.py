@@ -247,3 +247,7 @@ def test_bot_config_put_operational_mode_roundtrip_and_restore(sess):
 def test_regression_endpoints(sess, path):
     r = sess.get(f"{API}{path}", timeout=45)
     assert r.status_code == 200, f"{path} → {r.status_code} {r.text[:300]}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

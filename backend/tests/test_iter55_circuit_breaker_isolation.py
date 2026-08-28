@@ -209,3 +209,7 @@ async def test_trade_manager_check_drawdown_only_disables_own_cfg_on_trip():
     # Filter must target THIS cfg only (by _id), not user-wide.
     assert captured_filter.get("_id") == "rf-cfg"
     assert "user_id" not in captured_filter or captured_filter.get("user_id") == "rf-cfg"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

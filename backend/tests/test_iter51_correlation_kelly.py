@@ -153,3 +153,7 @@ async def test_reason_string_describes_trim(monkeypatch):
     )
     assert isinstance(out["reason"], str)
     assert "corr_pressure" in out["reason"] or "CVaR" in out["reason"] or "budget" in out["reason"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

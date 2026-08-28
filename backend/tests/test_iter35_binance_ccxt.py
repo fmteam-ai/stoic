@@ -289,3 +289,7 @@ async def test_engine_handles_exchange_error_gracefully():
 
     assert result["blocked"] == "exchange_error"
     assert "insufficient funds" in result["error"]
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

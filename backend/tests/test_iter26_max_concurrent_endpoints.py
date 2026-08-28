@@ -204,3 +204,7 @@ async def test_paper_engine_no_cap_kwarg_skips_count(monkeypatch):
     )
     assert "blocked" not in res
     fake_db.trades.count_documents.assert_not_called()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

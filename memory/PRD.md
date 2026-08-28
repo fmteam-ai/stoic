@@ -1883,3 +1883,16 @@ User supplied a 12-item architecture blueprint with 3 phases. Phase A (Meta-Deci
 - Root cause: frontend/yarn.lock changes from the iter-212 `yarn add` were NOT picked up by the platform auto-commit (same as historical ccb8c78) → GitHub had new package.json + old lockfile → `--frozen-lockfile` failed in frontend-build/quality/e2e. Fixed with explicit commit 309abd0.
 - TEST_MANIFEST.md stale (testing agent added test_iter212_http_endpoints.py after last regen) → regenerated (3552 tests / 347 files), --check passes, committed.
 - Verified: clean-dir `yarn install --frozen-lockfile` passes against committed files. LEARNING: after any `yarn add`, explicitly `git add frontend/yarn.lock` — auto-commit skips it.
+
+## Production-Proof corrections batch 2 (iter-215, June 2026 — DONE, 2061+ offline, 1595/1595 env-free unit, 22/22 HTTP, report iteration_137.json)
+P0-1 pytest -m unit isolation: fixed apply_markers skip-condition (was skipping any file containing "pytest.mark" — 54 files had NO suite marker and were invisible to -m runs); marked them; fixed 3 pre-existing broken tests surfaced by this (MagicMock→_mock_intents AsyncMock in test_max_concurrent_race/test_safety_guardian); test_iter87 pytestmark now [http, skipif]; removed stray unit mark in test_iter211_http_endpoints; policy test (iter213 TestMarkerIsolationPolicy) forbids unmarked files; CI backend-unit now runs `pytest -m unit` (no Mongo service, no env) = structural isolation enforcement. `env -u MONGO_URL... pytest -m unit` → 1595 passed.
+P0-2/3 soak: record_checkpoint scoped to campaign.account_id; invariants = duplicates (signal_id/mt5_ticket agg), unconfirmed ghosts (open>1h no ticket), unknown_rate ≤0.2, rejects; global health separate (only critical_failing gates). Note: platform-wide preview checkpoints legitimately NOT green (legacy seeded data has 0.95 unknown rate + dup signal_ids).
+P0-4 msi-release.yml: tag builds (github.ref_type==tag) THROW without signing secrets; dispatch builds may be unsigned dev builds.
+P0-5 broker_env.py: LIVE/DEMO/PAPER (explicit broker_environment field wins; demo-token server detection; paper mode). Used in broker-validation (live_environment check), system cert, account health.
+P1-6 MIN_CHECKPOINT_COVERAGE=1.0. P1-7 SEVERITIES taxonomy (critical=instant FAIL, >2 majors=FAIL, minor never gates) in status + incident docs.
+P1-8 strategy_tier(): CERTIFIED_A (n≥100, lower_r>0, coverage, HEALTHY) / CERTIFIED_B / PROVISIONAL / UNCERTIFIED; passed=A|B; new lower_bound_clears check.
+P1-9 cert persistence: db.certifications, POST /api/certification/issue (system 7d / strategy 30d expiry, BOLA-checked), GET /active (tenant-scoped, valid/expired/revoked), POST /revoke (admin). cert_validity pure rule.
+P1-10 production_evidence: hash-chained append-only records per checkpoint (evidence_hash/verify_chain), GET /api/ops/soak/evidence (admin) → chain_valid.
+P1-11 frozen_versions at soak start (material_versions: LATEST_EA + release_fingerprint GIT_SHA|src-hash); version_drift marks day RED.
+P1-12 ci.yml clean-deploy-cert job: fresh runner, pip install committed reqs, boot uvicorn w/ generated secrets + clean Mongo, certify /api/health(/live,/ready).
+- New tests: test_iter213_production_hardening.py (19 offline) + test_iter213_http_endpoints.py (22 HTTP by testing agent). TEST_MANIFEST 3593/349 committed explicitly.

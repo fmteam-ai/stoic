@@ -243,3 +243,7 @@ async def test_optimizer_slice_plan_for_large_lot(monkeypatch):
     assert out["slice_plan"] is not None
     assert sum(out["slice_plan"]) == pytest.approx(0.20)
     assert len(out["slice_plan"]) >= 2
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

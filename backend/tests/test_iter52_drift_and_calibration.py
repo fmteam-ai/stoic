@@ -228,3 +228,7 @@ async def test_predict_p_win_returns_calibrated_and_raw(monkeypatch):
     assert "p_win" in out and "p_win_raw" in out and "p_win_calibrated" in out
     assert out["calibrated"] is True
     assert out["brier_raw"] == 0.25
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

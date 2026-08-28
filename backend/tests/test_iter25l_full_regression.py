@@ -296,3 +296,7 @@ def test_trade_audit_404_for_unknown_id(admin_session):
     assert r.status_code in (200, 400, 404)
     if r.status_code == 200:
         assert "events" in r.json()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

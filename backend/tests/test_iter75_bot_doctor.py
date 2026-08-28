@@ -279,3 +279,7 @@ def test_doctor_per_account_scoped(admin_session):
         timeout=60)
     assert r.status_code == 200
     assert r.json()["status"] in ("healthy", "watch", "degraded", "critical")
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

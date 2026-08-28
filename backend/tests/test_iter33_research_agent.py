@@ -213,3 +213,7 @@ async def test_self_improver_cooldown_expired():
     })
     on_cd = await _on_cooldown(db, "u1")
     assert on_cd is False
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

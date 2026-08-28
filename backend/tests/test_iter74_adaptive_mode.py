@@ -458,3 +458,7 @@ def test_presets_endpoint_exposes_fast_scalp(admin_session):
     assert r.status_code == 200
     keys = {p["key"] for p in r.json()["presets"]}
     assert "fast_scalp" in keys
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

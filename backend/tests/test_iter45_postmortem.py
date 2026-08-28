@@ -289,3 +289,7 @@ async def test_winner_loosen_skips_losses():
     })
     out = await lp.maybe_record_winner(db, ObjectId())
     assert out is None
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

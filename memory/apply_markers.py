@@ -20,7 +20,7 @@ def main():
     changed = skipped = 0
     for f in sorted(TESTS.glob("test_*.py")):
         src = f.read_text()
-        if "pytestmark" in src or "pytest.mark" in src:
+        if re.search(r"pytest\.mark\.(unit|integration|http|broker|external|chaos|soak)\b", src) or "pytestmark" in src:
             skipped += 1
             continue
         marker = classify(src)

@@ -143,3 +143,7 @@ async def test_small_sample_note_fires(monkeypatch):
     )
     assert result["matched_trades"] == 5
     assert any("sample" in n.lower() for n in result["notes"])
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

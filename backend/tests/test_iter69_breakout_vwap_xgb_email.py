@@ -185,3 +185,7 @@ async def test_generate_ai_reflection_returns_none_without_key(monkeypatch):
     monkeypatch.delenv("EMERGENT_LLM_KEY", raising=False)
     out = await _generate_ai_reflection({"stats": {"trades": 0}})
     assert out is None
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

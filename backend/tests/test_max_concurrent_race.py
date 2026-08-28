@@ -14,6 +14,15 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+def _mock_intents(fake_db):
+    from unittest.mock import AsyncMock
+    fake_db.execution_intents.insert_one = AsyncMock()
+    fake_db.execution_intents.find_one = AsyncMock(return_value=None)
+    fake_db.execution_intents.update_one = AsyncMock()
+    fake_db.execution_intents.find_one_and_update = AsyncMock(
+        return_value={"intent_id": "i", "status": "submitted"})
+
+
 
 @pytest.mark.asyncio
 async def test_mt5_engine_blocks_when_cap_reached(monkeypatch):
@@ -21,6 +30,7 @@ async def test_mt5_engine_blocks_when_cap_reached(monkeypatch):
     from execution import MT5BridgeEngine
 
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     fake_db.trades.count_documents = AsyncMock(return_value=5)  # already at cap
     fake_db.trades.insert_one = AsyncMock()
     monkeypatch.setattr("execution.get_db", lambda: fake_db)
@@ -61,6 +71,7 @@ async def test_mt5_engine_allows_when_below_cap(monkeypatch):
     from execution import MT5BridgeEngine
 
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     fake_db.trades.count_documents = AsyncMock(return_value=2)  # under cap
     fake_inserted = MagicMock()
     fake_inserted.inserted_id = "fakeid"
@@ -109,6 +120,7 @@ async def test_mt5_engine_no_cap_arg_allows(monkeypatch):
     from execution import MT5BridgeEngine
 
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     fake_db.trades.count_documents = AsyncMock(return_value=999)  # would block if checked
     fake_inserted = MagicMock()
     fake_inserted.inserted_id = "fakeid"
@@ -146,3 +158,7 @@ async def test_mt5_engine_no_cap_arg_allows(monkeypatch):
     assert "blocked" not in result
     # cap check is gated on max_concurrent > 0, so count_documents should NOT be called
     fake_db.trades.count_documents.assert_not_called()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

@@ -171,3 +171,7 @@ class TestBrokerComparison:
         overlap = names & expected_any
         assert len(overlap) >= 3, \
             f"Expected >=3 of {expected_any} in admin dataset, got {names}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

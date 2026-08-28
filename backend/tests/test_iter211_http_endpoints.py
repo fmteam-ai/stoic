@@ -452,10 +452,9 @@ class TestSeededReport:
         assert body["outcomes"]["closed"] == 0
 
 
-# ────────── unit-level checks — router DISABLED & canonical stages ──────
+# ────────── source-level checks (kept in the http suite of this file) ────
 
 
-@pytest.mark.unit
 class TestRouterDisabledSemantics:
     def test_router_disabled_multiplier_zero(self):
         from strategy_router import HEALTH_ROUTER_MULT

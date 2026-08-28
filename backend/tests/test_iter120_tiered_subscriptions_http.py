@@ -343,3 +343,7 @@ class TestAccountQuota:
         d = r2.json().get("detail", {})
         assert d.get("error") == "account_quota_exceeded"
         assert d.get("minimum_tier") == "trader"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

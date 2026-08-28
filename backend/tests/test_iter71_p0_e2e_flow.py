@@ -154,3 +154,7 @@ async def test_execution_health_has_unresolved_submissions(admin_cookies):
     body = r.json()
     assert "unresolved_submissions" in body, list(body.keys())
     assert isinstance(body["unresolved_submissions"], int)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

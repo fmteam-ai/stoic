@@ -39,7 +39,11 @@ jobs:
           PFX_PASS: ${{ secrets.CODESIGN_PFX_PASSWORD }}
         run: |
           if (-not $env:PFX_B64) {
-            Write-Warning "No code-signing certificate configured — producing UNSIGNED MSI."
+            if ("${{ github.ref_type }}" -eq "tag") {
+              # iter-213 P0 — a production tag MUST produce a SIGNED MSI.
+              throw "Production tag build requires code signing: configure CODESIGN_PFX_BASE64 / CODESIGN_PFX_PASSWORD secrets."
+            }
+            Write-Warning "No code-signing certificate configured — producing UNSIGNED MSI (dev build only)."
             "signed=false" >> $env:GITHUB_OUTPUT
             "## :warning: MSI is UNSIGNED (configure CODESIGN_PFX_BASE64 / CODESIGN_PFX_PASSWORD)" >> $env:GITHUB_STEP_SUMMARY
             exit 0

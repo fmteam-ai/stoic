@@ -95,3 +95,7 @@ async def test_invalid_object_id_skipped():
         actions=[{"kind": "close_trade", "trade_id": "not-an-oid"}])
     assert out["skipped"] == 1
     db.trades.update_one.assert_not_awaited()
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

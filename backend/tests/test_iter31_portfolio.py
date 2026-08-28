@@ -177,3 +177,7 @@ async def test_execute_deleveraging_skips_invalid_id():
     )
     assert out["closed"] == 0
     assert out["skipped"] == 1
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

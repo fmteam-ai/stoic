@@ -71,3 +71,7 @@ class TestLiveFeeds:
             h = await get_history(s)
             assert len(h) >= 100, f"{s} history too short: {len(h)}"
             assert h[-1]["close"] > 1000
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

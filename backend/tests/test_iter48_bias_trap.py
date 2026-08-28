@@ -144,3 +144,7 @@ def test_sector_cap_falls_back_to_largest_when_no_pnl():
     assert not has_pnl
     worst = max(positions, key=lambda x: x["notional"])
     assert worst["trade_id"] == "b"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

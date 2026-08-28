@@ -158,3 +158,7 @@ class TestPreDispatchRejects:
             assert doc["status"] == "rejected"
         finally:
             _run(db.execution_intents.delete_many({"dedupe_key": key}))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

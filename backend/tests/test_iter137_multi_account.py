@@ -196,3 +196,7 @@ class TestListStillWorks:
             session.patch(f"{API}/accounts/{aid}",
                           json={"group": "", "trading_enabled": True},
                           timeout=15)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

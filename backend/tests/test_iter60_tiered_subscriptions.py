@@ -257,3 +257,7 @@ def _async_return(value):
     async def _f(*a, **kw):
         return value
     return _f
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

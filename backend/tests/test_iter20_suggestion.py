@@ -373,3 +373,7 @@ def test_apply_suggestion_requires_auth():
     r = requests.post(f"{BASE_URL}/api/safety-blocks/apply-suggestion",
                       json={"patch": {"risk_level": "low"}}, timeout=10)
     assert r.status_code in (401, 403)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

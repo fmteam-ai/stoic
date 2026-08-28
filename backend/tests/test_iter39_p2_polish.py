@@ -157,3 +157,7 @@ async def test_no_per_account_override_falls_back_to_env(monkeypatch):
     persisted = db.trades.insert_one.await_args[0][0]
     assert persisted["crypto_risk_cap"]["cap_source"] == "env_default"
     assert persisted["crypto_risk_cap"]["applied_pct"] == 0.5
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

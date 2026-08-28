@@ -255,3 +255,7 @@ async def test_profit_target_escalate_disabled_does_not_ratchet(patch_realised_p
     assert out["hit"] is True
     assert out["escalation_steps"] == 0
     assert out["effective_target_r"] == 2.0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

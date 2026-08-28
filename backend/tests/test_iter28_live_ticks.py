@@ -169,3 +169,7 @@ async def test_heartbeat_skips_broadcast_on_terminal_mismatch(monkeypatch):
     )
     await bridge_routes.heartbeat(hb)
     assert not any(m["event"] == "position_ticks" for m in sent)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

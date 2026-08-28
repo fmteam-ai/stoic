@@ -219,3 +219,7 @@ def test_tenant_iso_admin_decision_404_for_non_admin(test_user, admin_session,
             await mongo_db.meta_decisions.delete_many(
                 {"decision_id": admin_dec_id})
         asyncio.get_event_loop().run_until_complete(_clean())
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

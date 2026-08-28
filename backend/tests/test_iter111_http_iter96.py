@@ -197,3 +197,7 @@ class TestLiveOpsRegression:
         # Must return valid JSON
         data = r.json()
         assert data is not None
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

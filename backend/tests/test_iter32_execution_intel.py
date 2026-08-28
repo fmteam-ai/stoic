@@ -248,3 +248,7 @@ async def test_auto_deleverage_fires_when_needed(monkeypatch):
     assert out["triggered"] == 1
     assert out["closed"] == 1
     assert any(b["evt"] == "auto_deleverage" for b in broadcasts)
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

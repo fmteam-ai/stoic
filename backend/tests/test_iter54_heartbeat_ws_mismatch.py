@@ -144,3 +144,7 @@ async def test_heartbeat_ws_broadcast_passes_through_when_no_mismatch():
     assert p["equity"] == 16596.41
     assert p["broker_account_mismatch"] is False
     assert p["status"] == "connected"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

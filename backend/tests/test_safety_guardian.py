@@ -15,6 +15,14 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
+def _mock_intents(fake_db):
+    fake_db.execution_intents.insert_one = AsyncMock()
+    fake_db.execution_intents.find_one = AsyncMock(return_value=None)
+    fake_db.execution_intents.update_one = AsyncMock()
+    fake_db.execution_intents.find_one_and_update = AsyncMock(
+        return_value={"intent_id": "i", "status": "submitted"})
+
+
 class _AsyncCursor:
     """Mimics a Motor cursor that supports both `async for` and to_list."""
     def __init__(self, docs):
@@ -52,6 +60,7 @@ def _good_signal(lot=0.05):
 
 def _empty_db():
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     # No open trades (async-for cursor), no realized PnL today (aggregate).
     fake_db.trades.find = MagicMock(return_value=_AsyncCursor([]))
     fake_db.trades.aggregate = MagicMock(return_value=_AsyncCursor([]))
@@ -143,6 +152,7 @@ async def test_live_account_daily_loss_cap_refuses():
     """Already lost 7% of balance today → refuse another trade (cap 6%)."""
     from safety_guardian import audit_pre_trade
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     # Realized -700 USD today via the aggregation path; no open trades.
     fake_db.trades.aggregate = MagicMock(return_value=_AsyncCursor(
         [{"_id": None, "pnl": -700.0}]))
@@ -162,6 +172,7 @@ async def test_live_account_aggregate_risk_cap_refuses(monkeypatch):
     """Open trades already chew 9% of equity, new trade would push past 9% cap."""
     from safety_guardian import audit_pre_trade
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     # No realized PnL today (aggregate empty); big open trades chew equity.
     fake_db.trades.aggregate = MagicMock(return_value=_AsyncCursor([]))
     fake_db.trades.find = MagicMock(return_value=_AsyncCursor([
@@ -194,6 +205,7 @@ async def test_mt5_engine_calls_guardian_and_blocks_on_failure(monkeypatch):
     from execution import MT5BridgeEngine
 
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     fake_db.trades.count_documents = AsyncMock(return_value=0)
     fake_db.trades.insert_one = AsyncMock()
     fake_db.safety_blocks.insert_one = AsyncMock()
@@ -235,6 +247,7 @@ async def test_mt5_engine_stamps_safety_audit_on_good_trade(monkeypatch):
     from execution import MT5BridgeEngine
 
     fake_db = MagicMock()
+    _mock_intents(fake_db)
     fake_db.trades.count_documents = AsyncMock(return_value=0)
     inserted = MagicMock()
     inserted.inserted_id = "tid"
@@ -271,3 +284,7 @@ async def test_mt5_engine_stamps_safety_audit_on_good_trade(monkeypatch):
     assert "blocked" not in result
     inserted_doc = fake_db.trades.insert_one.await_args.args[0]
     assert inserted_doc.get("safety_audit") == fake_audit
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.integration

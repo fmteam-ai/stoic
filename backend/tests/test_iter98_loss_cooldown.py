@@ -104,3 +104,7 @@ async def test_zero_minutes_disables():
 def test_bot_runner_wiring():
     src = open(os.path.join(BACKEND, "bot_runner.py")).read()
     assert "loss_cooldown_block" in src and '"loss_cooldown_block"' in src
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

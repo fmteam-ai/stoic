@@ -209,3 +209,7 @@ async def test_research_path_keeps_legacy_audit_fields():
     # Legacy iter-36 fields preserved for downstream audit consumers
     assert set_body["last_research_proposal_id"] == "prop-123"
     assert set_body["last_research_target_mode"] == "matching:X"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

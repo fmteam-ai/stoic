@@ -343,3 +343,7 @@ def test_bot_pulse_per_account_engine_label(admin_session):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v", "--tb=short"]))
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

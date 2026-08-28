@@ -141,3 +141,7 @@ async def test_compute_sessions_rank_requires_min_sample_of_three():
         result = await analytics.compute_sessions("u1")
     assert result["best_session_by_r"] == "LONDON"
     assert result["best_session_by_pnl"] == "LONDON"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

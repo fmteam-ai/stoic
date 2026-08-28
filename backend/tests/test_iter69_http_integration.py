@@ -100,3 +100,7 @@ def test_weekly_digest_email_endpoint_shape(admin_session):
         assert "id" in data, f"ok:true should include id: {data}"
     else:
         assert "error" in data, f"ok:false should include error: {data}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

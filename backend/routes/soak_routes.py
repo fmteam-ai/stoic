@@ -52,6 +52,15 @@ async def soak_status_ep(user=Depends(get_current_user)):
     return await status(get_db())
 
 
+@router.get("/soak/evidence")
+async def soak_evidence_ep(campaign_id: str | None = None,
+                           user=Depends(get_current_user)):
+    """Immutable hash-chained Production Evidence records."""
+    _require_admin(user)
+    from soak_campaign import evidence
+    return await evidence(get_db(), campaign_id)
+
+
 @router.get("/broker-validation")
 async def broker_validation_ep(account_id: str,
                                user=Depends(get_current_user)):

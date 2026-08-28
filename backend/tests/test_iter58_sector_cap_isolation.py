@@ -187,3 +187,7 @@ async def test_build_snapshot_uses_cfg_override(monkeypatch):
     snap_strict = await build_snapshot(None, account=acc, open_positions=positions, cfg=cfg)
     assert snap_strict["sectors"]["commodity"]["over_cap"] is True
     assert snap_strict["limits"]["sector_caps_pct"]["commodity"] == 100.0
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

@@ -77,6 +77,7 @@ async def regional_health(db, user_id: str | None = None) -> dict:
 
 async def account_health(db, acc: dict) -> dict:
     """Single-account view — caller MUST have already enforced ownership."""
+    from broker_env import broker_environment
     acc_id = str(acc["_id"])
     user_id = str(acc.get("user_id") or "")
     connected = _connected(acc, _hb_cutoff())
@@ -106,6 +107,7 @@ async def account_health(db, acc: dict) -> dict:
     return {"scope": "account", "account_id": acc_id, "status": status,
             "connected": connected,
             "broker": acc.get("broker") or acc.get("broker_server"),
+            "broker_environment": broker_environment(acc),
             "clock_skew": my_skew or {"status": "NO_DATA"},
             "clock_telemetry": acc.get("agent_clock")
             or {"status": "NO_DATA",

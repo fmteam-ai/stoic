@@ -239,3 +239,7 @@ def test_diagnostic_nonadmin_403(user_a):
     s, _ = user_a
     r = s.get(f"{BASE_URL}/api/diagnostic/run", timeout=15)
     assert r.status_code == 403
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

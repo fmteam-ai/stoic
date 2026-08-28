@@ -1,12 +1,36 @@
-"""Production-proof Soak Campaign (iter-212) — a 14-day broker-attached
-validation with daily checkpoints, an incident log and explicit pass
-criteria. The campaign SELF-DOCUMENTS: verdicts are computed from the
-recorded evidence, never asserted."""
+"""Production-proof Soak Campaign (iter-212, hardened iter-213):
+
+  · GREEN is earned by INVARIANTS, not vibes: execution (no duplicate
+    executions, no unconfirmed ghosts), latency UNKNOWN rate, version
+    freeze, plus global degraded state.
+  · Evidence is SCOPED to the campaign account; global platform health
+    is reported separately and only platform-critical failures gate.
+  · Checkpoint coverage requirement is 100% — one checkpoint per day.
+  · Every checkpoint appends an IMMUTABLE hash-chained Production
+    Evidence record carrying the release fingerprint.
+  · Material versions (EA, backend release) are FROZEN at campaign
+    start; any drift marks the day RED."""
+import hashlib
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 DEFAULT_DAYS = 14
-MIN_CHECKPOINT_COVERAGE = 0.8
+MIN_CHECKPOINT_COVERAGE = 1.0   # iter-213 P1: every campaign day, no gaps
+MAX_MAJOR_INCIDENTS = 2
+UNKNOWN_RATE_MAX = 0.2
+
+SEVERITIES = {
+    "critical": "Money-impacting or trust-destroying: wrong/duplicate "
+                "execution, unreconciled position, data loss, security "
+                "breach. ONE critical fails the campaign immediately.",
+    "major": "Capability degraded: missed trading window, subsystem "
+             "failing > 1h, repeated broker rejects. More than "
+             f"{MAX_MAJOR_INCIDENTS} majors fail the campaign.",
+    "minor": "Transient or cosmetic: brief blip with automatic recovery, "
+             "UI defect, noisy log. Recorded, never gating.",
+}
 
 
 def _now_dt() -> datetime:
@@ -17,26 +41,124 @@ def _now() -> str:
     return _now_dt().isoformat()
 
 
+# ───────────────────── material versions / release hash ──────────────────
+
+_release_fp_cache: str | None = None
+
+
+def release_fingerprint() -> str:
+    """Deterministic release hash: GIT_SHA when the deploy provides it,
+    else a content hash over the backend source tree."""
+    global _release_fp_cache
+    sha = os.environ.get("GIT_SHA")
+    if sha:
+        return sha[:40]
+    if _release_fp_cache:
+        return _release_fp_cache
+    base = os.path.dirname(os.path.abspath(__file__))
+    h = hashlib.sha256()
+    for root, dirs, files in os.walk(base):
+        dirs[:] = sorted(d for d in dirs
+                         if d not in ("__pycache__", "tests", ".pytest_cache"))
+        for f in sorted(files):
+            if f.endswith(".py"):
+                p = os.path.join(root, f)
+                h.update(os.path.relpath(p, base).encode())
+                with open(p, "rb") as fh:
+                    h.update(hashlib.sha256(fh.read()).digest())
+    _release_fp_cache = "src-" + h.hexdigest()[:40]
+    return _release_fp_cache
+
+
+def material_versions() -> dict:
+    try:
+        from routes.diagnostic_routes import LATEST_EA
+    except Exception:  # noqa: BLE001
+        LATEST_EA = None
+    return {"ea_version": LATEST_EA, "release": release_fingerprint()}
+
+
+def version_drift(frozen: dict | None, current: dict | None) -> list:
+    """Pure comparison — returns the list of drifted keys."""
+    frozen, current = frozen or {}, current or {}
+    return sorted(k for k in set(frozen) | set(current)
+                  if frozen.get(k) != current.get(k))
+
+
+# ───────────────────── immutable evidence chain ───────────────────────────
+
+def evidence_hash(record: dict, prev_hash: str) -> str:
+    body = {k: v for k, v in record.items() if k not in ("hash", "_id")}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                           default=str)
+    return hashlib.sha256((prev_hash + canonical).encode()).hexdigest()
+
+
+def verify_chain(records: list) -> bool:
+    prev = "genesis"
+    for r in records:
+        if r.get("prev_hash") != prev:
+            return False
+        if evidence_hash(r, prev) != r.get("hash"):
+            return False
+        prev = r["hash"]
+    return True
+
+
+async def _append_evidence(db, campaign_id: str, checkpoint: dict) -> dict:
+    last = await db.production_evidence.find_one(
+        {"campaign_id": campaign_id}, sort=[("seq", -1)])
+    seq = int(last["seq"]) + 1 if last else 1
+    prev = last["hash"] if last else "genesis"
+    record = {"campaign_id": campaign_id, "seq": seq, "at": _now(),
+              "day": checkpoint.get("day"),
+              "checkpoint": {k: v for k, v in checkpoint.items()
+                             if k != "_id"},
+              "release": release_fingerprint(),
+              "prev_hash": prev}
+    record["hash"] = evidence_hash(record, prev)
+    await db.production_evidence.insert_one(dict(record))
+    record.pop("_id", None)
+    return record
+
+
+async def evidence(db, campaign_id: str | None = None) -> dict:
+    q = {"campaign_id": campaign_id} if campaign_id else {}
+    if not campaign_id:
+        camp = await db.soak_campaigns.find_one({}, sort=[("started_at", -1)])
+        if camp:
+            q = {"campaign_id": camp["campaign_id"]}
+    records = [r async for r in db.production_evidence.find(
+        q, {"_id": 0}).sort("seq", 1).limit(2000)]
+    return {"records": records, "count": len(records),
+            "chain_valid": verify_chain(records),
+            "note": "hash-chained append-only records — any tampering "
+                    "breaks chain_valid"}
+
+
+# ───────────────────────── evaluation (pure) ──────────────────────────────
+
 def evaluate(campaign: dict, checkpoints: list, incidents: list,
              now: datetime | None = None) -> dict:
-    """Pure pass/fail evaluation — unit-testable without a DB."""
     now = now or _now_dt()
     started = datetime.fromisoformat(campaign["started_at"])
     days_target = int(campaign.get("days") or DEFAULT_DAYS)
-    day = min(days_target, int((now - started).total_seconds() // 86400) + 1)
     elapsed_days = max(1, min(days_target,
                               int((now - started).total_seconds() // 86400)
                               + 1))
-    coverage = round(len({c["day"] for c in checkpoints})
-                     / days_target, 3)
+    coverage = round(len({c["day"] for c in checkpoints}) / days_target, 3)
     critical = [i for i in incidents
                 if str(i.get("severity")).lower() == "critical"]
-    red_checkpoints = [c["day"] for c in checkpoints if not c.get("green")]
+    major = [i for i in incidents
+             if str(i.get("severity")).lower() == "major"]
+    red_checkpoints = sorted({c["day"] for c in checkpoints
+                              if not c.get("green")})
     criteria = {
-        "duration_complete": day >= days_target
-        and (now - started).total_seconds() >= days_target * 86400,
+        "duration_complete":
+            (now - started).total_seconds() >= days_target * 86400,
         "checkpoint_coverage_ok": coverage >= MIN_CHECKPOINT_COVERAGE,
         "no_critical_incidents": not critical,
+        "major_incidents_within_budget": len(major) <= MAX_MAJOR_INCIDENTS,
         "no_red_checkpoints": not red_checkpoints,
     }
     if critical:
@@ -46,10 +168,15 @@ def evaluate(campaign: dict, checkpoints: list, incidents: list,
     else:
         verdict = "RUNNING" if not criteria["duration_complete"] else "FAIL"
     return {"day": elapsed_days, "days_target": days_target,
-            "checkpoint_coverage": coverage, "criteria": criteria,
+            "checkpoint_coverage": coverage,
+            "coverage_required": MIN_CHECKPOINT_COVERAGE,
+            "criteria": criteria,
             "critical_incidents": len(critical),
+            "major_incidents": len(major),
             "red_checkpoint_days": red_checkpoints, "verdict": verdict}
 
+
+# ───────────────────────── campaign lifecycle ─────────────────────────────
 
 async def start(db, started_by: str, days: int = DEFAULT_DAYS,
                 account_id: str | None = None,
@@ -61,10 +188,48 @@ async def start(db, started_by: str, days: int = DEFAULT_DAYS,
     doc = {"campaign_id": "soak_" + uuid4().hex[:10],
            "started_at": _now(), "days": max(1, min(int(days), 60)),
            "account_id": account_id, "note": note,
-           "started_by": started_by, "status": "RUNNING"}
+           "started_by": started_by, "status": "RUNNING",
+           # iter-213 P1: material versions FROZEN for the whole campaign
+           "frozen_versions": material_versions()}
     await db.soak_campaigns.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
+
+
+async def _account_invariants(db, account_id: str | None,
+                              since: str) -> dict:
+    """Execution / reconciliation / duplicate / UNKNOWN invariants,
+    SCOPED to the campaign account when one is set."""
+    scope = {"account_id": account_id} if account_id else {}
+    opened = await db.trades.count_documents(
+        {**scope, "opened_at": {"$gte": since}})
+    traced = await db.trades.count_documents(
+        {**scope, "opened_at": {"$gte": since},
+         "latency_trace.t9_ms": {"$exists": True}})
+    unknown_rate = round(1 - traced / opened, 3) if opened else None
+    dup = 0
+    for field in ("signal_id", "mt5_ticket"):
+        pipeline = [
+            {"$match": {**scope, "opened_at": {"$gte": since},
+                        field: {"$nin": [None, ""]}}},
+            {"$group": {"_id": f"${field}", "n": {"$sum": 1}}},
+            {"$match": {"n": {"$gt": 1}}},
+            {"$limit": 10},
+        ]
+        dup += len([d async for d in db.trades.aggregate(pipeline)])
+    hour_ago = (_now_dt() - timedelta(hours=1)).isoformat()
+    ghosts = await db.trades.count_documents(
+        {**scope, "status": "open", "opened_at": {"$lt": hour_ago},
+         "$or": [{"mt5_ticket": None}, {"mt5_ticket": {"$exists": False}}]})
+    rejects = await db.trades.count_documents(
+        {**scope, "status": {"$in": ["rejected", "failed"]},
+         "opened_at": {"$gte": since}})
+    return {"trades_24h": opened, "unknown_rate": unknown_rate,
+            "unknown_rate_ok": unknown_rate is None
+            or unknown_rate <= UNKNOWN_RATE_MAX,
+            "duplicate_executions": dup, "duplicates_ok": dup == 0,
+            "unconfirmed_ghosts": ghosts, "reconciliation_ok": ghosts == 0,
+            "rejects_24h": rejects}
 
 
 async def record_checkpoint(db) -> dict:
@@ -73,27 +238,54 @@ async def record_checkpoint(db) -> dict:
         return {"error": "no_running_campaign"}
     started = datetime.fromisoformat(campaign["started_at"])
     day = int((_now_dt() - started).total_seconds() // 86400) + 1
+    acc_id = campaign.get("account_id")
     hb_cutoff = (_now_dt() - timedelta(minutes=5)).isoformat()
-    total = await db.accounts.count_documents({"status": {"$ne": "deleted"}})
-    connected = await db.accounts.count_documents(
-        {"last_heartbeat": {"$gte": hb_cutoff}})
+    if acc_id:
+        from route_utils import parse_object_id
+        acc = await db.accounts.find_one({"_id": parse_object_id(acc_id)})
+        account_connected = bool(
+            acc and acc.get("last_heartbeat")
+            and str(acc["last_heartbeat"]) >= hb_cutoff)
+    else:
+        acc = None
+        account_connected = bool(await db.accounts.count_documents(
+            {"last_heartbeat": {"$gte": hb_cutoff}}, limit=1))
+    day_ago = (_now_dt() - timedelta(days=1)).isoformat()
+    invariants = await _account_invariants(db, acc_id, day_ago)
+    # global platform health — reported SEPARATELY; only platform-critical
+    # subsystem failures gate the day
     from degraded_intelligence import status as degraded_status
     deg = await degraded_status(db)
-    day_ago = (_now_dt() - timedelta(days=1)).isoformat()
-    rejects = await db.trades.count_documents(
-        {"status": {"$in": ["rejected", "failed"]},
-         "opened_at": {"$gte": day_ago}})
+    global_health = {"degraded_mode": deg["mode"],
+                     "failing_subsystems": deg.get("failing", []),
+                     "critical_failing": deg.get("critical_failing", [])}
     incidents = await db.soak_incidents.count_documents(
         {"campaign_id": campaign["campaign_id"], "severity": "critical"})
-    green = deg["mode"] == "NORMAL" and incidents == 0
+    drift = version_drift(campaign.get("frozen_versions"),
+                          material_versions())
+    green = (incidents == 0
+             and not global_health["critical_failing"]
+             and account_connected
+             and invariants["unknown_rate_ok"]
+             and invariants["duplicates_ok"]
+             and invariants["reconciliation_ok"]
+             and not drift)
     cp = {"campaign_id": campaign["campaign_id"], "day": day, "at": _now(),
-          "accounts_total": total, "accounts_connected": connected,
-          "degraded_mode": deg["mode"],
-          "failing_subsystems": deg.get("failing", []),
-          "rejects_24h": rejects, "green": green}
+          "scope": {"account_id": acc_id} if acc_id else {"account_id": None,
+                                                          "note": "no "
+                                                          "campaign account "
+                                                          "set — platform-"
+                                                          "wide scope"},
+          "account_connected": account_connected,
+          "invariants": invariants,
+          "global_health": global_health,
+          "version_drift": drift,
+          "green": green}
     await db.soak_checkpoints.update_one(
         {"campaign_id": cp["campaign_id"], "day": day},
         {"$set": cp}, upsert=True)
+    cp.pop("_id", None)
+    cp["evidence"] = await _append_evidence(db, campaign["campaign_id"], cp)
     return cp
 
 
@@ -104,6 +296,7 @@ async def log_incident(db, severity: str, note: str,
         return {"error": "no_running_campaign"}
     doc = {"campaign_id": campaign["campaign_id"],
            "severity": str(severity).lower(), "note": note,
+           "definition": SEVERITIES.get(str(severity).lower()),
            "logged_by": logged_by, "at": _now()}
     await db.soak_incidents.insert_one(dict(doc))
     doc.pop("_id", None)
@@ -115,6 +308,7 @@ async def status(db) -> dict:
         {}, sort=[("started_at", -1)])
     if not campaign:
         return {"status": "NO_CAMPAIGN",
+                "severity_definitions": SEVERITIES,
                 "hint": "POST /api/ops/soak/start to begin the 14-day "
                         "production-proof campaign"}
     campaign.pop("_id", None)
@@ -125,19 +319,24 @@ async def status(db) -> dict:
         {"campaign_id": campaign["campaign_id"]}, {"_id": 0})
         .sort("at", -1).limit(200)]
     ev = evaluate(campaign, cps, incidents)
+    ev["version_drift"] = version_drift(campaign.get("frozen_versions"),
+                                        material_versions())
     if campaign["status"] == "RUNNING" and ev["verdict"] in ("PASS", "FAIL"):
         await db.soak_campaigns.update_one(
             {"campaign_id": campaign["campaign_id"]},
             {"$set": {"status": ev["verdict"], "finished_at": _now()}})
         campaign["status"] = ev["verdict"]
     return {"campaign": campaign, "evaluation": ev,
+            "severity_definitions": SEVERITIES,
             "checkpoints": cps, "incidents": incidents}
 
 
 async def broker_validation(db, account: dict) -> dict:
     """Broker-attached validation checklist — evidence that a REAL broker
     account is wired end-to-end before/while the soak runs."""
+    from broker_env import broker_environment
     acc_id = str(account["_id"])
+    env = broker_environment(account)
     d30 = (_now_dt() - timedelta(days=30)).isoformat()
     hb_age = None
     try:
@@ -155,8 +354,9 @@ async def broker_validation(db, account: dict) -> dict:
         {"account_id": acc_id, "latency_trace.t9_ms": {"$exists": True},
          "opened_at": {"$gte": d30}}, limit=1)
     checks = [
-        {"key": "not_paper", "label": "Real broker account (not paper)",
-         "ok": account.get("mode") != "paper"},
+        {"key": "live_environment",
+         "label": "LIVE broker environment (not DEMO/PAPER)",
+         "ok": env == "LIVE", "value": env},
         {"key": "identity_verified", "label": "Verified installation identity",
          "ok": bool((account.get("ea_identity") or {}).get("authoritative"))},
         {"key": "heartbeat_live", "label": "Live heartbeat < 5 min",
@@ -170,6 +370,6 @@ async def broker_validation(db, account: dict) -> dict:
         {"key": "clock_health", "label": "Agent clock telemetry OK",
          "ok": (account.get("agent_clock") or {}).get("status") == "OK"},
     ]
-    return {"account_id": acc_id,
+    return {"account_id": acc_id, "broker_environment": env,
             "passed": all(c["ok"] for c in checks),
             "checks": checks, "at": _now()}

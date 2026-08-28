@@ -232,3 +232,7 @@ async def test_safety_guardian_passes_btc_during_yield_surge(monkeypatch):
         user_id="u1", cfg_account_id="acct1",
     )
     assert result.get("blocked_by") != "macro_regime_gate"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

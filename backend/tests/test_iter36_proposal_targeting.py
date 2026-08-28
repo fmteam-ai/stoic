@@ -203,3 +203,7 @@ async def test_apply_with_auto_flag_uses_auto_audit_key():
     set_body = db.bot_configs.update_one.await_args[0][1]["$set"]
     assert "last_auto_accepted_at" in set_body
     assert "last_research_applied_at" not in set_body
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

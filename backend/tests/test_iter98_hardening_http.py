@@ -182,3 +182,7 @@ def test_audit_log_has_migration_and_governance_entries():
 def test_regression_endpoints_ok(admin, path):
     r = admin.get(f"{API}{path}", timeout=20)
     assert r.status_code == 200, f"{path} → {r.status_code}: {r.text[:200]}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit

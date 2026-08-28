@@ -24,10 +24,29 @@ computed (never asserted) pass criteria.
 
 ## Pass criteria (computed in `backend/soak_campaign.py:evaluate`)
 - 14 full days elapsed since start
-- checkpoint coverage ≥ 80 % of campaign days
+- checkpoint coverage **100 %** — one checkpoint per campaign day, no gaps
 - **zero critical incidents** (any critical ⇒ immediate FAIL)
-- no RED checkpoints (degraded intelligence mode or critical incident
-  on the day)
+- **≤ 2 major incidents**
+- no RED checkpoints — a day is GREEN only when ALL invariants hold:
+  campaign account connected, **no duplicate executions** (signal/ticket),
+  **no unconfirmed ghost trades** (reconciliation), latency **UNKNOWN
+  rate ≤ 20 %**, **no version drift** vs the versions frozen at start,
+  and no platform-critical subsystem failing (global health is reported
+  separately and only critical failures gate)
+
+## Incident severity taxonomy (formal)
+| Severity | Definition | Effect |
+|----------|------------|--------|
+| critical | Money-impacting/trust-destroying: wrong or duplicate execution, unreconciled position, data loss, security breach | ONE fails the campaign |
+| major | Capability degraded: missed trading window, subsystem failing > 1h, repeated rejects | > 2 fail the campaign |
+| minor | Transient/cosmetic with automatic recovery | recorded, never gating |
+
+## Immutable Production Evidence
+Every checkpoint appends a hash-chained record (campaign, day, full
+checkpoint, release fingerprint) to `production_evidence`.
+`GET /api/ops/soak/evidence` returns the chain + `chain_valid` —
+any tampering breaks verification. Material versions (EA + backend
+release hash) are frozen at `soak/start`; drift marks the day RED.
 
 The status endpoint transitions the campaign to PASS/FAIL automatically
 and the whole evidence trail (checkpoints + incidents) stays queryable.

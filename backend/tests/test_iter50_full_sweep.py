@@ -231,3 +231,7 @@ def test_bridge_poll_trades_requires_key():
 def test_bridge_external_deal_requires_key():
     r = requests.post(f"{BASE_URL}/api/bridge/external-deal", json={}, timeout=20)
     assert r.status_code in (401, 403, 422), f"got {r.status_code}"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

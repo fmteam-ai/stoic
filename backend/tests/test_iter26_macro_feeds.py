@@ -207,3 +207,7 @@ async def test_snapshot_endpoint_returns_5_series_for_admin():
     assert series_ids == {"DGS10", "DGS2", "FEDFUNDS", "DTWEXBGS", "T10YIE"}
     for s in body["series"]:
         assert "latest" in s and "dod_delta" in s and "wow_delta" in s and "date" in s
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.http

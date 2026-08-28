@@ -165,3 +165,7 @@ async def test_optimizer_disqualifies_lucky_2_trade_winner(monkeypatch):
                             user_id="u1")
     # The 2-trade variant is below the n=5 floor — must not be declared best.
     assert out["best"]["filters"]["session_preference"] != "tokyo"
+
+
+import pytest as _pytest  # noqa: E402
+pytestmark = _pytest.mark.unit
