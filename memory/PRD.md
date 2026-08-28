@@ -1928,3 +1928,8 @@ User findings addressed (all P0):
 - Tests: test_iter218_strategy_guard.py (24 unit) + test_iter218_strategy_guard_http.py (22 HTTP by testing agent, incl. guard E2E via /api/trades/manual on paper master accounts). 2 stale iter216 HTTP tests updated for new patch/weight semantics. TEST_MANIFEST 3750/355.
 - NOTE: no UI yet for strategy-ownership / guard rejections (backend-only batch).
 ### Backlog after v62.3: DRAIN/FLATTEN transitions, AUTO_SUSPEND_TRIGGERS automation, strategy-ownership + guard-rejection UI, Command Center (P1), evidence PDF export (P1), MULTI/Dynamic AI (P2).
+
+## Security Audit round 4 (iter-219, June 2026 — CONDITIONAL PASS → fixed)
+- Full audit of v62.2/v62.3 PAMM surface + execution plane + auth core + BOLA matrix: NO Critical/High findings. Guard unbypassable, step-up single-use, BOLA matrix consistent with actual enforcement, no secrets leaked.
+- SEC-001 (MEDIUM, FIXED): server.py mockbroker router mount + modules/pamm/models demo-partner seed compared APP_ENV to the literal "production" — an APP_ENV=prod deploy would have kept the mock broker live and seeded fake partner prt_rest_demo. Both now route through app_env.is_production(). Regression: tests/test_iter219_sec001_prod_gating.py (3 unit tests). Verified 0 remaining '!= "production"' literals in non-test code.
+- Hardening suggestions noted (not implemented, low priority): step-up on certification evaluate; broker rest_config.base_url egress allowlist (admin+step-up already).
