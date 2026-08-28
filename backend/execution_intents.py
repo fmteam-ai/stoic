@@ -329,6 +329,13 @@ class CanonicalIntent:
     broker_capability_version: str = ""
     model_version: str = ""
     execution_policy_version: str = ""
+    # v62.3 — PAMM lineage: PAMM → assignment → strategy/version →
+    # decision → intent → broker order → position → outcome
+    pamm_program_id: str = ""
+    assignment_id: str = ""
+    strategy_hash: str = ""
+    risk_profile_id: str = ""
+    certification_id: str = ""
 
 
 def canonical_payload(**kw) -> dict:

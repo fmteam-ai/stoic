@@ -36,6 +36,22 @@ def broker_identity_snapshot(account: dict) -> dict:
     }
 
 
+def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
+    """v62.3 — full ownership lineage on every PAMM-originated trade:
+    PAMM → assignment → strategy/version → intent → position."""
+    ident = signal.get("_pamm_identity")
+    if not ident:
+        return
+    trade_doc.update({
+        "pamm_program_id": ident.get("pamm_program_id"),
+        "pamm_assignment_id": ident.get("assignment_id"),
+        "pamm_strategy_id": ident.get("strategy_id"),
+        "pamm_strategy_version": ident.get("strategy_version"),
+        "pamm_strategy_hash": ident.get("strategy_hash"),
+        "pamm_risk_profile_id": ident.get("risk_profile_id"),
+        "pamm_certification_id": ident.get("certification_id")})
+
+
 class ExecutionEngine(ABC):
     @abstractmethod
     async def execute(self, *, user_id, account, signal,
@@ -484,6 +500,7 @@ class MT5BridgeEngine(ExecutionEngine):
                         "original_result": _intent.get("result")}
         if _intent:
             trade_doc["execution_intent_id"] = _intent["intent_id"]
+        stamp_pamm_identity(trade_doc, signal)
         if signal.get("_authority_reduced"):
             trade_doc["authority_reduced"] = True
         if signal.get("latency_trace"):
@@ -506,6 +523,32 @@ class PaperEngine(ExecutionEngine):
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+        # v62.3 — the PAMM Strategy Guard applies to EVERY engine: a paper
+        # master account is governed identically to live (no alternate
+        # PAMM route escapes the guard).
+        _prog = None
+        try:
+            from modules.pamm.strategy_guard import resolve_program
+            _acct = str(account.get("_id") or account.get("account_id")
+                        or cfg_account_id or "")
+            _prog = await resolve_program(db, _acct, signal)
+        except (TypeError, AttributeError):  # isolated unit-test db mock
+            _prog = None
+        if _prog is not None:
+            from modules.pamm.strategy_guard import \
+                authorize_pamm_strategy_execution
+            guard = await authorize_pamm_strategy_execution(
+                db, _prog, account, signal)
+            if not guard["authorized"]:
+                logger.warning("paper execute blocked by PAMM strategy "
+                               "guard user=%s program=%s reason=%s",
+                               user_id, _prog.get("program_id"),
+                               guard["reason"])
+                return {"blocked": "pamm_strategy_guard",
+                        "reason": guard["reason"],
+                        "checks": guard["checks"]}
+            if guard["mode"] == "STRATEGY":
+                signal["_pamm_identity"] = guard["context"]
         # Mirror MT5 path's market-hours veto so paper-shadow PnL stays
         # consistent with live behaviour (no phantom weekend fills).
         from microstructure import is_market_closed
@@ -572,6 +615,7 @@ class PaperEngine(ExecutionEngine):
         }
         from correlation import get_correlation_id
         trade_doc.setdefault("trace_id", get_correlation_id())
+        stamp_pamm_identity(trade_doc, signal)
         if signal.get("latency_trace"):
             trade_doc["latency_trace"] = dict(signal["latency_trace"])
         r = await db.trades.insert_one(trade_doc)

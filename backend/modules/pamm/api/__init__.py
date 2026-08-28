@@ -806,11 +806,19 @@ async def assign_program_strategy_ep(program_id: str, payload: dict,
 async def patch_program_strategy_ep(program_id: str, payload: dict,
                                     request: Request,
                                     user=Depends(get_current_user)):
+    """Material changes (risk profile / re-enable) are risk-affecting →
+    step-up MFA, and they invalidate the previous validation +
+    certification (REVALIDATION_REQUIRED)."""
     db = get_db()
     program = await _program_or_404(db, program_id)
     await require_manager(db, user)
     await require_program_access(db, user, program)
-    await _rl(db, request, user["id"], "pamm_mutate")
+    if "risk_profile_id" in payload or payload.get("enabled") is True:
+        await _step_up(db, user, request, "pamm_strategy_patch",
+                       {"program_id": program_id,
+                        "fields": sorted(payload)})
+    else:
+        await _rl(db, request, user["id"], "pamm_mutate")
     from modules.pamm.strategy_assignment import patch
     out = await patch(db, program, payload, user["id"])
     if out.get("error"):
@@ -891,6 +899,21 @@ async def change_program_strategy_ep(program_id: str, payload: dict,
 
 
 # ═══════ v62.2 — PAMM × Strategy Certification Campaigns ══════════════════
+
+@router.get("/programs/{program_id}/strategy-ownership")
+async def strategy_ownership_ep(program_id: str,
+                                user=Depends(get_current_user)):
+    """Position Truth strategy ownership — open positions that cannot be
+    attributed to the active strategy assignment are FLAGGED
+    (PAMM_OWNER_UNKNOWN / STRATEGY_OWNER_UNKNOWN /
+    STRATEGY_VERSION_MISMATCH), never guessed."""
+    db = get_db()
+    program = await _program_or_404(db, program_id)
+    await require_program_access(db, user, program)
+    from modules.pamm.reconciliation.strategy_ownership import \
+        strategy_ownership
+    return await strategy_ownership(db, program)
+
 
 @router.get("/programs/{program_id}/certification")
 async def cert_campaign_status_ep(program_id: str,

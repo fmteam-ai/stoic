@@ -195,7 +195,8 @@ class TestStrategiesEndpoint:
         assert ff == {"PAMM_STRATEGY_ASSIGNMENT": True,
                       "PAMM_MULTI_STRATEGY": False,
                       "PAMM_DYNAMIC_AI": False,
-                      "PAMM_NITRO_LIVE": False}
+                      "PAMM_NITRO_LIVE": False,
+                      "PAMM_REQUIRE_CERTIFICATION": True}
 
     def test_risk_profiles_present(self, admin_session):
         r = admin_session.get(f"{BASE_URL}/api/pamm/strategies", timeout=15)
@@ -340,16 +341,36 @@ class TestAssignmentLifecycle:
         # sniper does NOT require latency cert -> no execution_eligibility
         assert "execution_eligibility" not in keys
 
-    def test_patch_updates_and_bumps_version(self, admin_session, program_a):
+    def test_patch_weights_rejected_in_single(self, admin_session,
+                                              program_a):
+        # v62.3 — SINGLE mode pins weights (min=0, target=1, max=1)
         r = admin_session.patch(
             f"{BASE_URL}/api/pamm/programs/{program_a}/strategy",
             json={"risk_profile_id": "growth", "target_weight": 0.8},
-            headers=_csrf(admin_session), timeout=15)
+            headers=_headers(admin_session, step_up=True), timeout=15)
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"]["error"] == "weights_fixed_in_single"
+
+    def test_patch_material_change_requires_revalidation(self,
+                                                         admin_session,
+                                                         program_a):
+        # v62.3 — a risk-profile change invalidates prior validation/
+        # certification: REVALIDATION_REQUIRED, last_validation cleared
+        r = admin_session.patch(
+            f"{BASE_URL}/api/pamm/programs/{program_a}/strategy",
+            json={"risk_profile_id": "growth"},
+            headers=_headers(admin_session, step_up=True), timeout=15)
         assert r.status_code == 200, r.text
         j = r.json()
         assert j["risk_profile_id"] == "growth"
-        assert abs(j["target_weight"] - 0.8) < 1e-6
         assert int(j["version"]) >= 2
+        assert j["revalidation_required"] is True
+        assert j["last_validation"] is None
+        # re-validate so downstream activation tests keep working
+        rv = admin_session.post(
+            f"{BASE_URL}/api/pamm/programs/{program_a}/strategy/validate",
+            headers=_csrf(admin_session), timeout=20)
+        assert rv.status_code == 200 and rv.json()["passed"] is True
 
     def test_patch_bogus_profile_400(self, admin_session, program_a):
         r = admin_session.patch(

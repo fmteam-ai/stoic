@@ -52,6 +52,18 @@ async def program_account(db, program: dict) -> dict | None:
         return await db.accounts.find_one({"_id": acc_id})
 
 
+def weights_valid(mn, tg, mx) -> bool:
+    """MULTI-mode invariant (future): 0 ≤ min ≤ target ≤ max ≤ 1."""
+    try:
+        mn, tg, mx = float(mn), float(tg), float(mx)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 <= mn <= tg <= mx <= 1.0
+
+
+SINGLE_WEIGHTS = (0.0, 1.0, 1.0)  # SINGLE mode pins weights — no config
+
+
 _indexes_done = False
 
 
@@ -121,6 +133,16 @@ async def assign(db, program: dict, payload: dict, actor: str) -> dict:
                 "assignment_id": existing["assignment_id"],
                 "detail": "SINGLE mode allows one assignment — use "
                           "/strategy/change"}
+    if any(k in payload for k in ("min_weight", "target_weight",
+                                  "max_weight")):
+        w = (float(payload.get("min_weight") or 0.0),
+             float(payload.get("target_weight") or 1.0),
+             float(payload.get("max_weight") or 1.0))
+        if w != SINGLE_WEIGHTS:
+            return {"error": "weights_fixed_in_single",
+                    "detail": "SINGLE mode pins min=0.0 target=1.0 "
+                              "max=1.0 — weights become configurable "
+                              "with MULTI"}
     doc = {"assignment_id": "psa_" + uuid4().hex[:12],
            "pamm_program_id": program_id,
            "strategy_id": d.strategy_id,
@@ -128,9 +150,9 @@ async def assign(db, program: dict, payload: dict, actor: str) -> dict:
            "strategy_hash": strategy_hash(d),
            "mode": mode, "enabled": True,
            "risk_profile_id": rp_id,
-           "min_weight": float(payload.get("min_weight") or 0.0),
-           "target_weight": float(payload.get("target_weight") or 1.0),
-           "max_weight": float(payload.get("max_weight") or 1.0),
+           "min_weight": SINGLE_WEIGHTS[0],
+           "target_weight": SINGLE_WEIGHTS[1],
+           "max_weight": SINGLE_WEIGHTS[2],
            "certification_status": "UNCERTIFIED",
            "status": "ASSIGNED",
            "created_by": actor, "created_at": _now(),
@@ -155,27 +177,56 @@ async def patch(db, program: dict, payload: dict, actor: str) -> dict:
         sort=[("created_at", -1)])
     if not a:
         return {"error": "no_assignment"}
+    if any(k in payload for k in ("min_weight", "target_weight",
+                                  "max_weight")):
+        return {"error": "weights_fixed_in_single",
+                "detail": "SINGLE mode pins min=0.0 target=1.0 max=1.0 — "
+                          "weights become configurable with MULTI"}
     updates: dict = {}
+    material = False
     if "risk_profile_id" in payload:
         from modules.pamm.risk_profiles import get_profile
         rp = str(payload["risk_profile_id"])
         if not await get_profile(db, rp):
             return {"error": "unknown_risk_profile"}
+        if rp != a.get("risk_profile_id"):
+            material = True
         updates["risk_profile_id"] = rp
-    for k in ("min_weight", "target_weight", "max_weight"):
-        if k in payload:
-            updates[k] = float(payload[k])
     if "enabled" in payload:
         updates["enabled"] = bool(payload["enabled"])
     if not updates:
         return {"error": "nothing_to_update"}
     updates["version"] = int(a.get("version") or 1) + 1
+    if material:
+        # a material change breaks every assumption the previous
+        # validation/certification was built on — the assignment is no
+        # longer trusted as though nothing happened
+        updates["last_validation"] = None
+        if a.get("certification_status") != "UNCERTIFIED":
+            updates["certification_status"] = "REVALIDATION_REQUIRED"
+        if a.get("certification_status") == "CERTIFIED" \
+                and a.get("cert_id"):
+            from certification import revoke as revoke_cert
+            await revoke_cert(db, a["cert_id"], actor,
+                              "material assignment change: risk profile "
+                              f"{a.get('risk_profile_id')} → "
+                              f"{updates['risk_profile_id']}")
+        await _audit(db, "PAMM_STRATEGY_REVALIDATION_REQUIRED",
+                     program_id, actor,
+                     {"assignment_id": a["assignment_id"],
+                      "changed": "risk_profile_id",
+                      "from": a.get("risk_profile_id"),
+                      "to": updates["risk_profile_id"],
+                      "previous_certification":
+                          a.get("certification_status")})
     await db.pamm_strategy_assignments.update_one(
         {"assignment_id": a["assignment_id"]}, {"$set": updates})
     await _audit(db, "PAMM_STRATEGY_ASSIGNED", program_id, actor,
                  {"assignment_id": a["assignment_id"],
-                  "patched": sorted(updates), "action": "patch"})
-    return {**{k: v for k, v in a.items() if k != "_id"}, **updates}
+                  "patched": sorted(updates), "action": "patch",
+                  "material": material})
+    return {**{k: v for k, v in a.items() if k != "_id"}, **updates,
+            "revalidation_required": material}
 
 
 async def validate(db, program: dict, actor: str) -> dict:
@@ -197,19 +248,28 @@ async def validate(db, program: dict, actor: str) -> dict:
         {"key": "risk_profile", "ok": bool(
             await get_profile(db, a["risk_profile_id"]))},
     ]
-    nitro = None
-    if d and d.requires_latency_certification:
-        from strategies.nitro.eligibility import eligibility
+    exec_elig = None
+    from strategies.execution_eligibility import (POLICIES,
+                                                  execution_eligibility)
+    if d and POLICIES.get(d.strategy_id):
+        # account-scoped evidence: PAMM → master_account_id → account —
+        # never lose agent clock / spread freshness by defaulting
+        acc = await program_account(db, program)
         manager = str(program.get("manager_user_id")
+                      or program.get("manager_id")
                       or program.get("created_by") or actor)
-        nitro = await eligibility(db, manager)
+        exec_elig = await execution_eligibility(db, d.strategy_id,
+                                                manager, acc)
         checks.append({"key": "execution_eligibility",
-                       "ok": nitro["status"] != "NITRO_PAUSED",
-                       "detail": {"score": nitro["score"],
-                                  "status": nitro["status"]}})
+                       "ok": exec_elig["status"] != "INELIGIBLE",
+                       "detail": {"policy": exec_elig["policy"],
+                                  "score": exec_elig["score"],
+                                  "status": exec_elig["status"],
+                                  "account_scoped":
+                                      exec_elig["evidence_account_scoped"]}})
     passed = all(c["ok"] for c in checks)
     result = {"passed": passed, "checks": checks, "at": _now(),
-              "nitro_eligibility": nitro}
+              "execution_eligibility": exec_elig}
     await db.pamm_strategy_assignments.update_one(
         {"assignment_id": a["assignment_id"]},
         {"$set": {"last_validation": result}})
@@ -244,13 +304,29 @@ async def activate(db, program: dict, actor: str) -> dict:
         acc = await program_account(db, program)
         if acc:
             from broker_env import broker_environment
-            if (broker_environment(acc) == "LIVE"
-                    and a.get("certification_status") != "CERTIFIED"):
-                return {"error": "certification_required",
-                        "detail": "LIVE broker environment requires a "
-                                  "CERTIFIED PAMM × strategy combo — "
-                                  "complete the replay → shadow → demo → "
-                                  "canary certification campaign first"}
+            if broker_environment(acc) == "LIVE":
+                cert_ok = False
+                if (a.get("certification_status") == "CERTIFIED"
+                        and a.get("cert_id")):
+                    from certification import cert_validity
+                    cert = await db.certifications.find_one(
+                        {"cert_id": a["cert_id"]})
+                    cert_ok = bool(cert and cert_validity(cert)["valid"])
+                if not cert_ok:
+                    from strategies.certification_campaign import \
+                        get_campaign
+                    camp = await get_campaign(db, program_id)
+                    # CANARY trial is the ONLY pre-cert live exception:
+                    # tiny capped capital, evidence-gated by the campaign
+                    cert_ok = bool(camp and camp.get("state") == "CANARY")
+                if not cert_ok:
+                    return {"error": "certification_required",
+                            "detail": "LIVE broker environment requires a "
+                                      "CERTIFIED PAMM × strategy combo "
+                                      "with a VALID certificate (or an "
+                                      "active CANARY campaign stage) — "
+                                      "complete the replay → shadow → "
+                                      "demo → canary pipeline first"}
     await db.pamm_strategy_assignments.update_one(
         {"assignment_id": a["assignment_id"]},
         {"$set": {"status": "ACTIVE", "activated_at": _now(),

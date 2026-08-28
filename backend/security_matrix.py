@@ -158,6 +158,7 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     ("POST", "/api/pamm/programs/{program_id}/certification/evaluate"): ADM,
     ("POST", "/api/pamm/programs/{program_id}/certification/advance"): ADM,
     ("POST", "/api/pamm/programs/{program_id}/certification/revoke"): ADM,
+    ("GET", "/api/pamm/programs/{program_id}/strategy-ownership"): PGA,
 }
 
 SENSITIVE_PARAMS = {"account_id", "bot_id",

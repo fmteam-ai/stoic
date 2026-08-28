@@ -61,6 +61,15 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
     _sig_ref = (signal.get("intent_ref") or signal.get("signal_id")
                 or f"{minute}|{signal.get('entry_price')}|"
                    f"{signal.get('stop_loss')}")
+    # 0 — PAMM resolution (a PAMM master account or program-tagged signal
+    # makes this a PAMM-originated execution; the Strategy Guard is bound
+    # HERE so no alternate PAMM route to MT5 can exist)
+    _pamm_program = None
+    try:
+        from modules.pamm.strategy_guard import resolve_program
+        _pamm_program = await resolve_program(db, _acct_id, signal)
+    except (TypeError, AttributeError):  # isolated unit-test db mock
+        _pamm_program = None
     # 1 — CANONICAL INTENT FIRST (the input to execution)
     try:
         intent = await create_intent(
@@ -92,7 +101,11 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
                                                   "broker_capability_version")
                                               or ""),
                 model_version=str(signal.get("model_version") or ""),
-                execution_policy_version=EXECUTION_POLICY_VERSION),
+                execution_policy_version=EXECUTION_POLICY_VERSION,
+                pamm_program_id=str((_pamm_program or {}).get("program_id")
+                                    or "")),
+            program_id=(str(_pamm_program.get("program_id"))
+                        if _pamm_program else None),
             account_id=_acct_id, actor=user_id)
     except (TypeError, AttributeError):  # isolated unit-test db mock
         logger.critical("execution authority BYPASSED — non-Motor db "
@@ -114,6 +127,42 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
                 "intent_status": intent.get("status"),
                 "original_result": intent.get("result")}
     iid = intent["intent_id"]
+    # 2a — PAMM STRATEGY GUARD (v62.3): PAMM-originated execution must be
+    # authorized against the active assignment (strategy/version/hash,
+    # certification, strictest risk, execution eligibility) BEFORE the
+    # Global Trading Authority. LEGACY programs pass through unchanged.
+    if _pamm_program is not None:
+        from modules.pamm.strategy_guard import \
+            authorize_pamm_strategy_execution
+        guard = await authorize_pamm_strategy_execution(
+            db, _pamm_program, account, signal)
+        if not guard["authorized"]:
+            logger.warning("PAMM strategy guard REJECTED intent %s "
+                           "program=%s reason=%s", iid,
+                           _pamm_program.get("program_id"),
+                           guard["reason"])
+            await _finalize_pre_dispatch(
+                db, iid, "rejected",
+                f"pamm_strategy_guard: {guard['reason']}")
+            return {"blocked": "pamm_strategy_guard", "intent_id": iid,
+                    "reason": guard["reason"], "checks": guard["checks"]}
+        if guard["mode"] == "STRATEGY":
+            ctx = guard["context"]
+            signal["_pamm_identity"] = ctx
+            signal["strategy_version"] = ctx["strategy_version"]
+            await db.execution_intents.update_one(
+                {"intent_id": iid},
+                {"$set": {"payload.pamm_program_id":
+                          ctx["pamm_program_id"],
+                          "payload.assignment_id": ctx["assignment_id"],
+                          "payload.strategy_id": ctx["strategy_id"],
+                          "payload.strategy_version":
+                          ctx["strategy_version"],
+                          "payload.strategy_hash": ctx["strategy_hash"],
+                          "payload.risk_profile_id":
+                          ctx["risk_profile_id"],
+                          "payload.certification_id":
+                          ctx["certification_id"]}})
     # 2 — VALIDATED
     problems = _validate(signal, account)
     if problems:
