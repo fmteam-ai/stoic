@@ -27,10 +27,11 @@ jobs:
             --extra-index-url https://download.pytorch.org/whl/cpu
           pip install --no-deps emergentintegrations==0.2.0 \
             --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
-      - name: Marker-isolated unit suite (no DB, no env, no live server)
+      - name: Physically isolated unit suite (tests/unit only — no DB,
+          no env, no live server, no marker tree-scan)
         run: |
           cd backend
-          python -m pytest -m unit -q
+          python -m pytest tests/unit -q
       - name: Source-level execution-truth tests (no live server needed)
         run: |
           cd backend

@@ -186,7 +186,10 @@ def _mint_bridge_token(admin_session):
     r = admin_session.post(f"{BASE_URL}/api/accounts", json=body, timeout=15)
     assert r.status_code in (200, 201), f"create acct: {r.status_code} {r.text[:200]}"
     acct = r.json()
-    return acct["id"], acct["bridge_token"]
+    # SEC — bridge_token is no longer bulk-returned; fetch on demand
+    tr = admin_session.get(
+        f"{BASE_URL}/api/accounts/{acct['id']}/bridge-token", timeout=10)
+    return acct["id"], tr.json()["bridge_token"]
 
 
 def test_heartbeat_positions_derives_open_tickets(admin_session):

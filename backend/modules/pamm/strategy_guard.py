@@ -272,114 +272,181 @@ async def _consensus_spread(db, symbol: str, exclude_acct_id: str):
     return vals[len(vals) // 2]
 
 
+NAV_FRESHNESS_S = 900  # broker-truth NAV older than this is NOT evidence
+
+GUARD_VERSION = "v62.7"
+
+
+def _execution_policy_version() -> str:
+    try:
+        from execution_authority import EXECUTION_POLICY_VERSION
+        return str(EXECUTION_POLICY_VERSION)
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _snapshot_hash(snap: dict) -> str:
+    """Tamper-evident content hash over the canonical snapshot."""
+    import hashlib
+    import json
+    body = {k: v for k, v in snap.items() if k != "hash"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def is_risk_reducing(signal: dict) -> bool:
+    """Fail-safe asymmetry — RISK_UNKNOWN blocks NEW exposure, NEVER a
+    safety exit. Close/reduce intents must stay executable."""
+    s = signal or {}
+    action = str(s.get("action") or s.get("side") or "").upper()
+    return bool(s.get("reduce_only") or s.get("close_trade")
+                or s.get("pamm_risk_reducing") is True
+                or s.get("intent") in ("close", "reduce")
+                or action in ("CLOSE", "REDUCE", "FLATTEN"))
+
+
 async def _telemetry(db, program: dict, account: dict, signal: dict,
                      strategy_id: str | None = None) -> dict:
     """Risk Truth collector — every REQUIRED item resolves to a value or
     stays None (RISK_UNKNOWN evidence gap). A known balance with zero
-    closed trades is EVIDENCE of zero loss, never a gap."""
+    closed trades is EVIDENCE of zero loss, never a gap. Any read
+    failure degrades THAT item to None (RISK_UNKNOWN on LIVE) — never
+    an exception, never an accidental zero."""
     acct_id = str((account or {}).get("_id") or "")
     symbol = str(signal.get("symbol") or "").upper()
     balance = ((account or {}).get("balance")
                or (account or {}).get("equity"))
-    t: dict = {}
+    t: dict = {"open_positions": None, "open_risk_pct_sum": None,
+               "symbol_open_lots": None, "factor_lots": None,
+               "daily_loss_pct": None, "weekly_loss_pct": None,
+               "drawdown_pct": None, "spread_pips": None,
+               "recent_slippage_pips": None, "consecutive_losses": None}
     open_q = {"account_id": acct_id, "status": {"$in": ["open", "pending"]}}
-    t["open_positions"] = await db.trades.count_documents(open_q)
-    sym_lots, risk_sum = 0.0, 0.0
-    factor_lots: dict = {}
-    async for tr in db.trades.find(open_q, {"lot_size": 1, "symbol": 1,
-                                            "risk_pct": 1}).limit(500):
-        lots = float(tr.get("lot_size") or 0)
-        if str(tr.get("symbol") or "").upper() == symbol:
-            sym_lots += lots
-        for f in symbol_factors(tr.get("symbol")):
-            factor_lots[f] = round(factor_lots.get(f, 0.0) + lots, 4)
-        risk_sum += float(tr.get("risk_pct") or 0)
-    t["symbol_open_lots"] = round(sym_lots, 4)
-    t["factor_lots"] = factor_lots
-    t["open_risk_pct_sum"] = round(risk_sum, 4)
+    try:
+        t["open_positions"] = await db.trades.count_documents(open_q)
+        sym_lots, risk_sum = 0.0, 0.0
+        factor_lots: dict = {}
+        async for tr in db.trades.find(open_q, {"lot_size": 1, "symbol": 1,
+                                                "risk_pct": 1}).limit(500):
+            lots = float(tr.get("lot_size") or 0)
+            if str(tr.get("symbol") or "").upper() == symbol:
+                sym_lots += lots
+            for f in symbol_factors(tr.get("symbol")):
+                factor_lots[f] = round(factor_lots.get(f, 0.0) + lots, 4)
+            risk_sum += float(tr.get("risk_pct") or 0)
+        t["symbol_open_lots"] = round(sym_lots, 4)
+        t["factor_lots"] = factor_lots
+        t["open_risk_pct_sum"] = round(risk_sum, 4)
+    except Exception as e:  # noqa: BLE001 — evidence gap, not a crash
+        logger.error("risk-truth open-exposure read failed acct=%s: %s",
+                     acct_id, e)
     # daily + weekly realized loss — needs a known balance denominator
-    now = datetime.now(timezone.utc)
-    day0 = now.strftime("%Y-%m-%dT00:00:00")
-    week0 = (now - timedelta(days=now.weekday())).strftime(
-        "%Y-%m-%dT00:00:00")
     if balance:
-        day_net, week_net = 0.0, 0.0
-        async for tr in db.trades.find(
-                {"account_id": acct_id, "status": "closed",
-                 "closed_at": {"$gte": week0}},
-                {"pnl": 1, "closed_at": 1}).limit(2000):
-            pnl = float(tr.get("pnl") or 0)
-            week_net += pnl
-            if str(tr.get("closed_at") or "") >= day0:
-                day_net += pnl
-        t["daily_loss_pct"] = round(
-            max(0.0, -day_net) / float(balance) * 100, 4)
-        t["weekly_loss_pct"] = round(
-            max(0.0, -week_net) / float(balance) * 100, 4)
-    else:
-        t["daily_loss_pct"] = None
-        t["weekly_loss_pct"] = None
-    # drawdown — broker-truth NAV history (peak vs current)
-    t["drawdown_pct"] = None
-    pid = str((program or {}).get("program_id")
-              or (program or {}).get("_id") or "")
-    current_nav = ((program or {}).get("last_nav") or {}).get("nav")
-    if current_nav is None and pid:
-        latest = await db.pamm_nav_snapshots.find_one(
-            {"program_id": pid}, {"_id": 0, "nav": 1}, sort=[("at", -1)])
-        current_nav = latest["nav"] if latest else None
-    if pid and current_nav is not None:
-        peak = None
-        async for n in db.pamm_nav_snapshots.find(
-                {"program_id": pid}, {"_id": 0, "nav": 1}).limit(5000):
-            peak = n["nav"] if peak is None else max(peak, n["nav"])
-        if peak:
-            t["drawdown_pct"] = round(
-                max(0.0, (peak - float(current_nav)) / peak * 100), 4)
+        try:
+            now = datetime.now(timezone.utc)
+            day0 = now.strftime("%Y-%m-%dT00:00:00")
+            week0 = (now - timedelta(days=now.weekday())).strftime(
+                "%Y-%m-%dT00:00:00")
+            day_net, week_net = 0.0, 0.0
+            async for tr in db.trades.find(
+                    {"account_id": acct_id, "status": "closed",
+                     "closed_at": {"$gte": week0}},
+                    {"pnl": 1, "closed_at": 1}).limit(2000):
+                pnl = float(tr.get("pnl") or 0)
+                week_net += pnl
+                if str(tr.get("closed_at") or "") >= day0:
+                    day_net += pnl
+            t["daily_loss_pct"] = round(
+                max(0.0, -day_net) / float(balance) * 100, 4)
+            t["weekly_loss_pct"] = round(
+                max(0.0, -week_net) / float(balance) * 100, 4)
+        except Exception as e:  # noqa: BLE001
+            logger.error("risk-truth loss read failed acct=%s: %s",
+                         acct_id, e)
+            t["daily_loss_pct"] = None
+            t["weekly_loss_pct"] = None
+    # drawdown — broker-truth NAV history (peak vs current), and the
+    # NAV itself must be FRESH: stale NAV is not evidence
+    try:
+        pid = str((program or {}).get("program_id")
+                  or (program or {}).get("_id") or "")
+        last_nav = (program or {}).get("last_nav") or {}
+        current_nav, nav_at = last_nav.get("nav"), last_nav.get("at")
+        if current_nav is None and pid:
+            latest = await db.pamm_nav_snapshots.find_one(
+                {"program_id": pid}, {"_id": 0, "nav": 1, "at": 1},
+                sort=[("at", -1)])
+            if latest:
+                current_nav, nav_at = latest["nav"], latest.get("at")
+        nav_age = _age_s(nav_at)
+        t["nav_age_s"] = round(nav_age, 1) if nav_age is not None else None
+        if pid and current_nav is not None:
+            if nav_age is None or nav_age > NAV_FRESHNESS_S:
+                t["nav_stale"] = {"age_s": t["nav_age_s"],
+                                  "max_age_s": NAV_FRESHNESS_S}
+            else:
+                peak = None
+                async for n in db.pamm_nav_snapshots.find(
+                        {"program_id": pid},
+                        {"_id": 0, "nav": 1}).limit(5000):
+                    peak = n["nav"] if peak is None else max(peak, n["nav"])
+                if peak:
+                    t["drawdown_pct"] = round(
+                        max(0.0,
+                            (peak - float(current_nav)) / peak * 100), 4)
+    except Exception as e:  # noqa: BLE001
+        logger.error("risk-truth NAV read failed: %s", e)
+        t["drawdown_pct"] = None
     # current spread — from the EA heartbeat, strategy-fresh or nothing
     fresh = telemetry_freshness(strategy_id)
-    t["spread_pips"] = None
-    spreads = (account or {}).get("current_spreads") or {}
-    sp = spreads.get(symbol)
-    if sp is None and len(symbol) > 6:
-        sp = spreads.get(symbol[:6])
-    age = _age_s((account or {}).get("spreads_updated_at"))
-    t["spread_age_s"] = round(age, 1) if age is not None else None
-    if sp is not None and age is not None and age <= fresh["spread_s"]:
-        # SEC — EA spreads are self-reports; an implausibly LOW value vs
-        # the cross-account consensus is treated as UNVERIFIED (None ⇒
-        # RISK_UNKNOWN on LIVE), never as passing evidence.
-        consensus = await _consensus_spread(db, symbol, acct_id)
-        if consensus is not None and float(sp) < 0.5 * consensus:
-            t["spread_unverified"] = {"reported": float(sp),
-                                      "consensus_median": consensus}
-        else:
-            t["spread_pips"] = float(sp)
     t["freshness"] = fresh
+    try:
+        spreads = (account or {}).get("current_spreads") or {}
+        sp = spreads.get(symbol)
+        if sp is None and len(symbol) > 6:
+            sp = spreads.get(symbol[:6])
+        age = _age_s((account or {}).get("spreads_updated_at"))
+        t["spread_age_s"] = round(age, 1) if age is not None else None
+        if sp is not None and age is not None and age <= fresh["spread_s"]:
+            # SEC — EA spreads are self-reports; an implausibly LOW value
+            # vs the cross-account consensus is treated as UNVERIFIED
+            # (None ⇒ RISK_UNKNOWN on LIVE), never as passing evidence.
+            consensus = await _consensus_spread(db, symbol, acct_id)
+            if consensus is not None and float(sp) < 0.5 * consensus:
+                t["spread_unverified"] = {"reported": float(sp),
+                                          "consensus_median": consensus}
+            else:
+                t["spread_pips"] = float(sp)
+    except Exception as e:  # noqa: BLE001
+        logger.error("risk-truth spread read failed acct=%s: %s",
+                     acct_id, e)
+        t["spread_pips"] = None
     # recent measured fill slippage (median of last TRUSTED measurements
     # — tampered/unverified PAMM self-reports are excluded)
-    slips = []
-    async for tr in db.trades.find(
-            {"account_id": acct_id, "slippage_checked": True,
-             "slippage_pips": {"$ne": None},
-             "pamm_slippage_verified": {"$ne": False}},
-            {"slippage_pips": 1}).sort("created_at", -1).limit(10):
-        slips.append(float(tr.get("slippage_pips") or 0))
-    if slips:
-        slips.sort()
-        t["recent_slippage_pips"] = slips[len(slips) // 2]
-    else:
-        t["recent_slippage_pips"] = None
-    # consecutive losses
-    streak = 0
-    async for tr in db.trades.find(
-            {"account_id": acct_id, "status": "closed"},
-            {"pnl": 1}).sort("closed_at", -1).limit(20):
-        if float(tr.get("pnl") or 0) < 0:
-            streak += 1
-        else:
-            break
-    t["consecutive_losses"] = streak
+    try:
+        slips = []
+        async for tr in db.trades.find(
+                {"account_id": acct_id, "slippage_checked": True,
+                 "slippage_pips": {"$ne": None},
+                 "pamm_slippage_verified": {"$ne": False}},
+                {"slippage_pips": 1}).sort("created_at", -1).limit(10):
+            slips.append(float(tr.get("slippage_pips") or 0))
+        if slips:
+            slips.sort()
+            t["recent_slippage_pips"] = slips[len(slips) // 2]
+        # consecutive losses
+        streak = 0
+        async for tr in db.trades.find(
+                {"account_id": acct_id, "status": "closed"},
+                {"pnl": 1}).sort("closed_at", -1).limit(20):
+            if float(tr.get("pnl") or 0) < 0:
+                streak += 1
+            else:
+                break
+        t["consecutive_losses"] = streak
+    except Exception as e:  # noqa: BLE001
+        logger.error("risk-truth slippage/streak read failed acct=%s: %s",
+                     acct_id, e)
     return t
 
 
@@ -426,7 +493,16 @@ async def authorize_pamm_strategy_execution(db, program: dict,
             "missing_required": evidence.get("missing_required"),
             "assignment_id": (evidence.get("assignment") or {}).get(
                 "assignment_id"),
+            "provenance": {
+                "guard_version": GUARD_VERSION,
+                "execution_policy_version": _execution_policy_version(),
+                "ea_version": (account or {}).get("ea_version"),
+                "host_agent_version": (account or {}).get(
+                    "host_agent_version"),
+                "strategy_hash": (evidence.get("assignment")
+                                  or {}).get("strategy_hash")},
             "checks": res.get("checks")}
+    snap["hash"] = _snapshot_hash(snap)
     try:
         await db.pamm_risk_decisions.insert_one(dict(snap))
     except (TypeError, AttributeError):  # isolated unit-test db mock
@@ -444,15 +520,23 @@ async def _authorize(db, program: dict, account: dict, signal: dict,
     from broker_env import broker_environment
     env_name = broker_environment(account) if account else "PAPER"
     evidence["environment"] = env_name
+    # FAIL-SAFE ASYMMETRY — closing/reducing exposure is a SAFETY EXIT:
+    # it bypasses every NEW-RISK block (program state, drift, RISK_UNKNOWN,
+    # envelope, canary) but still passes the structural identity chain.
+    risk_reducing = is_risk_reducing(signal)
+    evidence["risk_reducing"] = risk_reducing
+    if risk_reducing:
+        _ok(checks, "risk_reducing",
+            "safety exit — new-risk blocks bypassed")
     # program operating state permits new risk
     from modules.pamm.risk import trading_allowed
     allowed, why = await trading_allowed(db, program)
-    if not allowed:
+    if not allowed and not risk_reducing:
         return _reject("program_state_blocks_trading", checks, why)
     _ok(checks, "program_state", why)
     # Position Truth healthy (defence-in-depth; drift also pauses op-state)
     pt = program.get("position_truth") or {}
-    if pt.get("status") == "drift":
+    if pt.get("status") == "drift" and not risk_reducing:
         return _reject("position_truth_drift", checks,
                        pt.get("classification"))
     _ok(checks, "position_truth", pt.get("status") or "never_checked")
@@ -583,12 +667,17 @@ async def _authorize(db, program: dict, account: dict, signal: dict,
         return _reject("risk_profile_invalid", checks,
                        a["risk_profile_id"])
     envelope = await _effective_envelope(db, program, a["risk_profile_id"])
-    t = await _telemetry(db, program, account, signal,
-                         strategy_id=a["strategy_id"])
+    try:
+        t = await _telemetry(db, program, account, signal,
+                             strategy_id=a["strategy_id"])
+    except Exception as e:  # noqa: BLE001 — total collection failure
+        logger.critical("risk-truth collection failed entirely: %s", e)
+        t = {}
     evidence["envelope"], evidence["telemetry"] = envelope, t
     # RISK TRUTH (v62.6) — LIVE governed exposure requires COMPLETE
-    # required evidence; any gap ⇒ RISK_UNKNOWN ⇒ fail closed
-    if env_name == "LIVE":
+    # required evidence; any gap ⇒ RISK_UNKNOWN ⇒ fail closed.
+    # v62.7 asymmetry: RISK_UNKNOWN blocks NEW risk, never a safety exit.
+    if env_name == "LIVE" and not risk_reducing:
         missing = missing_required_telemetry(t)
         evidence["missing_required"] = missing
         if missing:
@@ -597,7 +686,8 @@ async def _authorize(db, program: dict, account: dict, signal: dict,
                             "state": "RISK_UNKNOWN",
                             "note": "new exposure is blocked until every "
                                     "required risk input is measurable "
-                                    "and fresh"})
+                                    "and fresh — closes/reductions remain "
+                                    "allowed"})
         # FRESH POSITION TRUTH — LIVE PAMM never trades on stale broker
         # reconciliation (window scales with strategy latency demand)
         fresh = t.get("freshness") or telemetry_freshness(a["strategy_id"])
@@ -618,12 +708,13 @@ async def _authorize(db, program: dict, account: dict, signal: dict,
              "position_truth_age_s": round(pt_age, 1),
              "spread_age_s": t.get("spread_age_s"),
              "freshness": fresh})
-    vio = envelope_violations(envelope, signal, t)
-    if vio:
-        return _reject(vio[0]["reason"], checks, vio[0]["detail"])
+    if not risk_reducing:
+        vio = envelope_violations(envelope, signal, t)
+        if vio:
+            return _reject(vio[0]["reason"], checks, vio[0]["detail"])
     _ok(checks, "risk_envelope", envelope)
-    # CANARY OPEN-RISK CAP — enforced at EXECUTION time
-    if canary_mode:
+    # CANARY OPEN-RISK CAP — enforced at EXECUTION time (new risk only)
+    if canary_mode and not risk_reducing:
         cv = canary_violation(t.get("open_risk_pct_sum", 0.0),
                               signal.get("risk_pct"))
         if cv:

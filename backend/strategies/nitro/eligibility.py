@@ -9,6 +9,9 @@ from strategies.nitro.config import (ENABLED_MIN, HARD_COMPONENTS,
                                      HARD_FLOOR, REDUCED_MIN, WEIGHTS)
 
 
+LATENCY_EVIDENCE_MAX_AGE_S = 1800  # stale latency samples ≠ evidence
+
+
 def score_to_status(score: float, components: dict) -> str:
     if any(components.get(c, 0) <= HARD_FLOOR for c in HARD_COMPONENTS):
         return "NITRO_PAUSED"
@@ -48,6 +51,27 @@ async def eligibility(db, user_id: str,
     if p95s:
         worst = max(p95s)
         comps["latency_quality"] = _clamp(100 - worst / 30)  # 3s → 0
+        # v62.7 — latency EVIDENCE must be FRESH: a score derived only
+        # from old samples is not evidence about execution quality NOW.
+        # Stale ⇒ same conservative treatment as no evidence at all,
+        # which puts Nitro/Fast-Scalp below their hard floors.
+        newest = await db.trades.find_one(
+            {"user_id": user_id, "latency_trace.t9_ms": {"$exists": True}},
+            {"opened_at": 1}, sort=[("opened_at", -1)])
+        age = None
+        try:
+            d = datetime.fromisoformat(
+                str((newest or {}).get("opened_at")))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - d).total_seconds()
+        except (TypeError, ValueError):
+            pass
+        comps["latency_evidence_age_s"] = (
+            round(age, 1) if age is not None else -1.0)
+        if age is None or age > LATENCY_EVIDENCE_MAX_AGE_S:
+            comps["latency_quality"] = min(
+                comps["latency_quality"], 40.0)
     else:
         comps["latency_quality"] = 40  # no evidence → conservative
     unknown = ls.get("unknown_rate")

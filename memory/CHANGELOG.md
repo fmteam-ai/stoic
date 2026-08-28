@@ -1638,3 +1638,17 @@ Audit scope: v62.4/62.6 PAMM surface, bridge, tutorials, cert campaign, BOLA mat
 - P3 (FIXED): tutorial media route rejects "\\" and null bytes (400, no 500); traversal re-verified (encoded ../ → 404).
 - Test flakiness fixed: _create_program in iter216/217/218/220/221 http suites now disables risk_limits.news_filter on test programs (live Fed-speech blackout was failing suites); iter43 TestLiveFeeds re-marked external.
 - Verified: unit 466 (tests/unit, no Mongo), iter216+217 66, iter218 22, iter220+221 23 all pass; curls: account list has no bridge_token, /bridge-token returns owner token, tutorials %00 → 400, traversal → 404.
+
+## v62.7 — Risk Truth Hardening release (iter-222, June 2026 — DONE, self-tested: 9/9 invariant http + 14 new unit + full regression green)
+P0s:
+1. Physical CI isolation: ci.yml unit lane now `pytest tests/unit` (no whole-tree `-m unit` scan). Verified `env -u MONGO_URL pytest tests/unit` → 482 passed.
+2. Fail-safe collection: _telemetry sections individually wrapped — any DB read failure degrades THAT item to None (RISK_UNKNOWN on LIVE), never exceptions, never accidental zeros; _authorize wraps the whole collection (total failure → t={} → risk_unknown).
+3. DB-failure tests: unit _BoomDB test + http I2 (simulated mongo timeout via patched _telemetry → reason risk_unknown, no 500, never authorized).
+4. Stale NAV: NAV_FRESHNESS_S=900; last_nav.at / snapshot 'at' required and fresh else drawdown_pct=None + nav_stale detail ⇒ RISK_UNKNOWN on LIVE (tested unit + http).
+5. FAIL-SAFE ASYMMETRY: is_risk_reducing(signal) (CLOSE/REDUCE/FLATTEN/reduce_only/close_trade/intent=close/pamm_risk_reducing) bypasses ALL new-risk blocks (program state, PT drift, RISK_UNKNOWN, PT freshness, envelope, canary) while the structural identity chain (assignment/provenance/version/cert) still applies. Verified: LIVE+no evidence: BUY→risk_unknown, CLOSE→ALLOW, REDUCE→ALLOW, INCREASE→REJECT, CLOSE allowed even when program paused.
+Invariant 3: nitro/eligibility.py — LATENCY_EVIDENCE_MAX_AGE_S=1800; latency_quality derived only from samples older than window ⇒ degraded to 40 (≤ hard floors) ⇒ nitro_scalper AND fast_scalp INELIGIBLE (reason hard_floor: latency_quality); latency_evidence_age_s exposed in components. Tested fresh-vs-stale with real Mongo evidence.
+P1 (done now): snapshots hashed (_snapshot_hash sha256 canonical-json, excludes hash field) + provenance block {guard_version v62.7, execution_policy_version, ea_version, host_agent_version, strategy_hash}; verified persisted hash recomputes.
+P1 (deferred → ROADMAP): signed normalized factor exposure; distribution-based slippage monitoring; risk_snapshot_id into Outcome Attribution/Trade Intelligence; global risk/error taxonomy; O(1) risk-state aggregation for Fast/Nitro scale.
+Fallout fixed: 3 scalp integration tests + iter25l read bridge_token from account create response (removed by SEC fix) → now fetch via GET /accounts/{id}/bridge-token.
+Files: strategy_guard.py, strategies/nitro/eligibility.py, .github/workflows/ci.yml, tests/unit/pamm/test_hardening_v627.py, tests/test_iter222_hardening_http.py.
+NOTE for future tests: HTTP strategy/activate route enforces LIVE certification (409) — iter222 activates assignments directly in Mongo and disables PAMM_REQUIRE_CERTIFICATION via in-process feature_flags patch to reach risk-truth checks.

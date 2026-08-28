@@ -42,3 +42,10 @@
 - **P1 Batch 3 (DevEx/Ops)**: ./scripts/test-scalp.sh self-contained runner (venv, ephemeral Mongo, migrations, unit+integration, JUnit/coverage); frontend package scripts lint/typecheck/test/test:e2e/build mandatory in CI; unified command center (single GREEN/YELLOW/ORANGE/RED "safe to trade?" aggregating cloud/DB/workers/broker/EA/risk/PAMM)
 - **P2 Strategic**: Opportunity Engine above strategies (§23), Strategy Capital Allocator (§24), champion/challenger promotion (§26, extends existing shadow), Broker Intelligence scoring per strategy/symbol (§27, extends broker_intel), requirements split per service (§21, spec exists), final-execution-gate consolidation audit (§6 — verify no path bypasses order_authorization)
 - **P2 Verdict tuning**: per-program SOFT_ZONE/MIN_FACTOR knobs; ChangeRequestsPanel expiry countdown
+
+## v62.7 deferred P1s (from user hardening review, June 2026)
+- Upgrade factor exposure to SIGNED normalized exposure (currently absolute lots per currency bucket).
+- Upgrade slippage monitoring from median-only to distribution-based (p95/p99, regime-aware).
+- Add risk_snapshot_id to Outcome Attribution and Trade Intelligence joins.
+- Create a stable global risk/error taxonomy (single registry of reason codes).
+- Begin O(1) risk-state aggregation design (incremental counters) for Fast/Nitro scale.
