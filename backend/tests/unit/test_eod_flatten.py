@@ -1,11 +1,8 @@
 """iter-53 · EOD flatten unit tests — pure Python, stubbed DB."""
 import asyncio
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from eod_flatten import (FLATTEN_END_MIN, FLATTEN_START_MIN,  # noqa: E402
                          eod_flatten_block, in_flatten_window,

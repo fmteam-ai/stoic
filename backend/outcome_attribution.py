@@ -263,6 +263,7 @@ async def attribute_trade(db, trade: dict) -> dict:
                "attribution": attribution, "primary_category": primary,
                "counterfactuals": cf,
                "decision_id": trade.get("decision_id"),
+               "risk_snapshot_id": trade.get("pamm_risk_snapshot_id"),
                "attribution_confidence": confidence,
                "unexplained_fraction": round(unexplained, 3),
                "alpha_clean": noise <= 0.3, "signals": sig,

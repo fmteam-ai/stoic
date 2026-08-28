@@ -7,12 +7,9 @@ A crashed holder is simulated by simply never releasing — its lease
 expires and the slot becomes reclaimable, with token fencing preventing
 any foreign renew/release."""
 import asyncio
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scalp import engine as eng
 from scalp.engine import (acquire_broker_submission_slot,

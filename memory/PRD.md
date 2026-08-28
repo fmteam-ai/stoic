@@ -1950,3 +1950,23 @@ P1s folded in: allowed_symbols enforcement, get_assignment_history() (DRAIN prep
 - Tests: test_iter220_safety_closure.py (25 unit) + test_iter220_safety_closure_http.py (12 by testing agent). iter218 http scenario B updated for override semantics. TEST_MANIFEST 3790/357.
 - Testing-agent note (expected behavior): LIVE strategies with requires_broker_certification need a valid system cert before envelope checks are even reached.
 - Non-blocking suggestions parked: admin step-up 'reset-governance' escape hatch; closed_at coalesce in _telemetry streak query.
+
+## v62.6 — PAMM Risk Truth & Production Gate (iter-221, Aug 2026 — DONE, report iteration_142.json)
+- Full risk truth per trade: weekly loss, drawdown, spread, slippage (pre-trade + on-fill), per-currency factor exposure — always strictest, never averaged. Missing/stale evidence on LIVE ⇒ RISK_UNKNOWN block. Every decision persisted as audit snapshot linked to order+trade (pamm_events). Canary "5%" renamed open-risk cap. Unit suite physically isolated (green with no DB).
+- Tests: tests/test_iter221_risk_truth_http.py (11 HTTP), tests/unit/pamm/test_risk_truth.py (30).
+
+## Security Audit round 5 + v62.7 Hardening (iter-222, Aug 2026 — DONE, report iteration_143.json, 87/87)
+- SEC-001 fixed structurally: execution_authority._validate rejects any risk-reducing label ({reduce_only, close_trade, pamm_risk_reducing, intent close/reduce}) on the open-trade plane; strategy_guard._authorize verifies risk-reducing labels against a REAL open/pending position (else 'risk_reducing_label_invalid'). Bridge token masked in list + REVEAL button; tutorial media route input-hardened.
+- v62.7 fail-safe asymmetry (CRITICAL INVARIANT, unit-enforced): RISK_UNKNOWN blocks BUY/exposure-increase but ALWAYS allows CLOSE/SELL-to-flatten/REDUCE. DB failure during risk collection degrades to RISK_UNKNOWN (never crash, never authorize). NAV >15min stale blocks new exposure; Nitro/Fast-Scalp INELIGIBLE when latency evidence >30min old. Snapshots SHA-256 tamper-evident with guard/policy/EA version provenance.
+- Tests: tests/unit/pamm/test_hardening_v627.py (17), tests/test_iter222_hardening_http.py (13), test_sec001_v627_verification/e2e.py.
+
+## Production Proof P0/P1 (iter-223/144, Aug 2026 — DONE, report iteration_144.json, 100%)
+- P0 CI (.github/workflows/ci.yml): physically isolated unit lane (`pytest tests/unit` with NO MONGO_URL — 498 tests), v62.7 HTTP hardening suite executed against a live in-CI backend (proves RISK_UNKNOWN blocks BUY / allows CLOSE over HTTP), dependency-backed integration lane, real MetaEditor compile gate (downloads MT5, compiles EA, fails on any MQL error, publishes verified .ex5 artifact), frontend gates (yarn build + lint + typecheck + vitest + Playwright e2e vs production build).
+- P1 strategy_guard.py: p95 tail-slippage gate — envelope 'expected_slippage_exceeded' fires when EITHER median OR recent_slippage_p95_pips exceeds max_slippage_pips (worst-of); _telemetry computes p95 from sorted recent fills. provenance.git_commit (live 40-hex SHA via git rev-parse at import; needs process restart to refresh — supervisor restarts on deploy) in every risk snapshot.
+- P1 outcome_attribution.attribute_trade: trade_outcomes records now carry risk_snapshot_id (from trade.pamm_risk_snapshot_id) — closes the audit chain decision-snapshot → trade → outcome.
+- pytest.ini: pythonpath=. (no sys.path.insert import-path magic allowed in tests — user convention). docs/TESTING.md documents isolation rules.
+- Tests: tests/unit/pamm/test_iter144_p0_p1_verification.py (13, by testing agent) + full regression 498 unit no-DB + 24 HTTP + 64 PAMM unit.
+
+## Backlog (next picks)
+- P1: Command Center dashboard (GREEN/YELLOW/RED aggregate of soak/certs/guard health); Evidence report export (hash-chained, downloadable); O(1) risk-state aggregation; independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure for MULTI.
+- P2: Dynamic AI strategy assignment (Portfolio Brain budget rebalancing).

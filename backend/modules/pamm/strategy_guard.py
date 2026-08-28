@@ -184,15 +184,19 @@ def envelope_violations(envelope: dict, signal: dict,
                              "spread_pips": float(t["spread_pips"]),
                              "max_spread_pips": float(sp)}})
     sl = env.get("max_slippage_pips")
-    if (sl is not None and t.get("recent_slippage_pips") is not None
-            and float(t["recent_slippage_pips"]) > float(sl)):
-        v.append({"reason": "expected_slippage_exceeded",
-                  "detail": {"recent_median_slippage_pips":
-                             float(t["recent_slippage_pips"]),
-                             "max_slippage_pips": float(sl),
-                             "note": "pre-trade block on measured fill "
-                                     "evidence; post-trade fills are "
-                                     "enforced at the bridge"}})
+    if sl is not None:
+        med = t.get("recent_slippage_pips")
+        p95 = t.get("recent_slippage_p95_pips")
+        worst = max((x for x in (med, p95) if x is not None), default=None)
+        if worst is not None and float(worst) > float(sl):
+            v.append({"reason": "expected_slippage_exceeded",
+                      "detail": {"recent_median_slippage_pips": med,
+                                 "recent_p95_slippage_pips": p95,
+                                 "max_slippage_pips": float(sl),
+                                 "note": "pre-trade block on measured fill "
+                                         "evidence (median OR p95 tail); "
+                                         "post-trade fills are enforced "
+                                         "at the bridge"}})
     fe = env.get("max_factor_exposure_lots")
     if fe is not None and t.get("factor_lots") is not None:
         new_lot = float(signal.get("lot_size") or 0)
@@ -283,6 +287,19 @@ def _execution_policy_version() -> str:
         return str(EXECUTION_POLICY_VERSION)
     except Exception:  # noqa: BLE001
         return "unknown"
+
+
+def _git_commit() -> str:
+    try:
+        import subprocess
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd="/app", capture_output=True,
+            text=True, timeout=5).stdout.strip()[:40] or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+GIT_COMMIT = _git_commit()
 
 
 def _snapshot_hash(snap: dict) -> str:
@@ -434,6 +451,9 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
         if slips:
             slips.sort()
             t["recent_slippage_pips"] = slips[len(slips) // 2]
+            # distribution view — p95 catches tail slippage a median hides
+            t["recent_slippage_p95_pips"] = slips[
+                min(len(slips) - 1, int(0.95 * (len(slips) - 1) + 0.5))]
         # consecutive losses
         streak = 0
         async for tr in db.trades.find(
@@ -495,6 +515,7 @@ async def authorize_pamm_strategy_execution(db, program: dict,
                 "assignment_id"),
             "provenance": {
                 "guard_version": GUARD_VERSION,
+                "git_commit": GIT_COMMIT,
                 "execution_policy_version": _execution_policy_version(),
                 "ea_version": (account or {}).get("ea_version"),
                 "host_agent_version": (account or {}).get(

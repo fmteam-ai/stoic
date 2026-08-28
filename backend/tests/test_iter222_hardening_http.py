@@ -412,6 +412,112 @@ class TestI3NitroLatencyFreshness:
             mongo.accounts.delete_one({"_id": ObjectId(acc_id)})
 
 
+# ═════ P0.2 · Application-path proof (submit_intent + HTTP close) ═════════
+
+class TestApplicationPathRiskUnknown:
+    """Risk Unknown proven through the REAL execution pipeline
+    (ExecutionIntent → PAMM guard → authority), not a direct guard call,
+    and CLOSE through the actual HTTP route."""
+
+    @pytest.fixture(scope="class")
+    def app_setup(self, admin_session, admin_id):
+        c = MongoClient(MONGO_URL)
+        mongo = c[DB_NAME]
+        pid = _create_program(admin_session, "apppath")
+        acc_id = _insert_account(mongo, admin_id, "LIVE")
+        mongo.pamm_programs.update_one(
+            {"program_id": pid},
+            {"$set": {"master_account_id": acc_id}})
+        _assign(admin_session, pid, "sniper", "controlled")
+        _validate(admin_session, pid)
+        _activate(admin_session, pid)
+        tr = mongo.trades.insert_one({
+            "trade_id": f"iter222_app_{uuid.uuid4().hex[:8]}",
+            "user_id": admin_id, "account_id": acc_id,
+            "symbol": "EURUSD", "action": "BUY", "lot_size": 0.05,
+            "status": "open",
+            "opened_at": datetime.now(timezone.utc).isoformat()})
+        yield {"pid": pid, "acc_id": acc_id, "mongo": mongo,
+               "open_trade_id": str(tr.inserted_id)}
+        _cleanup(mongo, pid, acc_id)
+        c.close()
+
+    def test_buy_blocked_via_submit_intent_pipeline(self, app_setup):
+        acc_id = app_setup["acc_id"]
+
+        async def call():
+            import os as _os
+            from execution import PaperEngine
+            from execution_authority import submit_intent
+            _os.environ["PAMM_REQUIRE_CERTIFICATION"] = "false"
+            mc = AsyncIOMotorClient(MONGO_URL)
+            db = mc[DB_NAME]
+            try:
+                import database
+                orig = database.get_db
+                database.get_db = lambda: db
+                try:
+                    acc = await db.accounts.find_one(
+                        {"_id": ObjectId(acc_id)})
+                    return await submit_intent(
+                        user_id=str(acc["user_id"]), account=acc,
+                        signal={"symbol": "EURUSD", "action": "BUY",
+                                "lot_size": 0.01, "entry_price": 1.08,
+                                "stop_loss": 1.07, "take_profit": 1.1,
+                                "strategy_id": "sniper", "risk_pct": 0.1,
+                                "signal_id": uuid.uuid4().hex},
+                        engine=PaperEngine())
+                finally:
+                    database.get_db = orig
+                    _os.environ.pop("PAMM_REQUIRE_CERTIFICATION", None)
+            finally:
+                mc.close()
+
+        out = _run(call)
+        assert out.get("blocked") == "pamm_strategy_guard", out
+        assert out.get("reason") == "risk_unknown", out
+        # the intent itself was finalized REJECTED (auditable)
+        intent = app_setup["mongo"].execution_intents.find_one(
+            {"intent_id": out["intent_id"]})
+        assert intent and intent["status"] == "rejected", intent
+
+    def test_close_allowed_via_http_route(self, app_setup, admin_session):
+        r = admin_session.post(
+            f"{BASE_URL}/api/trades/{app_setup['open_trade_id']}/close",
+            headers=_csrf(admin_session), timeout=15)
+        assert r.status_code == 200, r.text
+        assert r.json().get("ok") is True
+        doc = app_setup["mongo"].trades.find_one(
+            {"_id": ObjectId(app_setup["open_trade_id"])})
+        assert doc["close_requested"] is True
+        assert doc["status"] == "pending"
+
+    def test_http_execute_route_cannot_bypass_guard(self, app_setup,
+                                                    admin_session,
+                                                    admin_id):
+        """The user-facing execute route on a governed master is ALSO
+        stopped by the guard (explicit provenance is required)."""
+        mongo = app_setup["mongo"]
+        sig = mongo.signals.insert_one({
+            "user_id": admin_id, "symbol": "EURUSD", "action": "BUY",
+            "lot_size": 0.01, "entry_price": 1.08, "stop_loss": 1.07,
+            "take_profit": 1.1, "confidence": 80,
+            "created_at": datetime.now(timezone.utc).isoformat()})
+        try:
+            r = admin_session.post(
+                f"{BASE_URL}/api/trades/execute/{sig.inserted_id}",
+                json={"account_id": app_setup["acc_id"]},
+                headers=_csrf(admin_session), timeout=20)
+            if r.status_code == 429:
+                pytest.skip("order rate limit window — covered by "
+                            "submit_intent pipeline test above")
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body.get("blocked") == "pamm_strategy_guard", body
+        finally:
+            mongo.signals.delete_one({"_id": sig.inserted_id})
+
+
 # ═════ Snapshot hash present on persisted decisions ═══════════════════════
 
 class TestSnapshotHashPersisted:

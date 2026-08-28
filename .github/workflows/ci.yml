@@ -107,7 +107,7 @@ jobs:
           cd backend
           export JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export KEY_VAULT_MASTER=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
-          export ADMIN_PASSWORD="Ci9!$(python -c "import secrets; print(secrets.token_urlsafe(24))")"
+          export ADMIN_PASSWORD="admin123"
           nohup python -m uvicorn server:app --host 127.0.0.1 --port 8001 > /tmp/clean-deploy.log 2>&1 &
       - name: Certify liveness + readiness
         run: |
@@ -119,6 +119,12 @@ jobs:
           curl -sf http://127.0.0.1:8001/api/health/live
           curl -sf http://127.0.0.1:8001/api/health/ready
           echo "clean-machine deployment certified"
+      - name: v62.7 HTTP hardening suite (Risk Unknown asymmetry through
+          the application path)
+        run: |
+          cd backend
+          export REACT_APP_BACKEND_URL=http://127.0.0.1:8001
+          python -m pytest tests/test_iter222_hardening_http.py -q
       - name: Backend log on failure
         if: failure()
         run: tail -120 /tmp/clean-deploy.log || true

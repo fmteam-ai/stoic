@@ -11,9 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
-import sys
 BACKEND = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(BACKEND))
 
 from scalp.instruments import approved  # noqa: E402
 from scalp.state import ScalpState, TickEvent  # noqa: E402
