@@ -66,6 +66,8 @@ def effective_envelope(profile: dict | None,
         "max_open_positions": strictest_limit(p.get("max_open_positions")),
         "max_symbol_exposure_lots": strictest_limit(
             p.get("max_symbol_exposure")),
+        "max_factor_exposure_lots": strictest_limit(
+            p.get("max_factor_exposure")),
         "max_consecutive_losses": strictest_limit(
             p.get("max_consecutive_losses")),
         "allowed_symbols": p.get("allowed_symbols"),

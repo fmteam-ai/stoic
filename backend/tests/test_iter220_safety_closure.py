@@ -102,7 +102,7 @@ class TestCanaryEnvelope:
         # open 4.9% + new 0.4% = 5.3% > 5.0% cap → REJECT
         from modules.pamm.strategy_guard import canary_violation
         cv = canary_violation(4.9, 0.4)
-        assert cv and cv["reason"] == "canary_cap_exceeded"
+        assert cv and cv["reason"] == "canary_open_risk_cap_exceeded"
         assert cv["detail"]["proposed_total"] == 5.3
 
     def test_within_cap_allows(self):
@@ -151,8 +151,7 @@ class TestFailClosedAndProvenanceWiring:
         import inspect
 
         from modules.pamm import strategy_guard
-        src = inspect.getsource(
-            strategy_guard.authorize_pamm_strategy_execution)
+        src = inspect.getsource(strategy_guard._authorize)
         assert "strategy_provenance_missing" in src
         assert "governed_program_requires_assignment" in src
         assert "canary_identity_drift" in src
@@ -194,7 +193,9 @@ class TestFailClosedAndProvenanceWiring:
         execution.stamp_pamm_identity(doc, {"_pamm_identity": {
             "pamm_program_id": "p1", "manual_override": True}})
         assert doc == {"pamm_program_id": "p1",
-                       "pamm_manual_override": True}
+                       "pamm_manual_override": True,
+                       "pamm_max_slippage_pips": None,
+                       "pamm_risk_snapshot_id": None}
         assert "pamm_strategy_id" not in doc
 
     def test_ownership_classifies_manual_override(self):

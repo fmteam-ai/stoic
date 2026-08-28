@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 
 class TestIndexWiring:
+    pytestmark = pytest.mark.unit
     def test_symbol_map_entries(self):
         assert SYMBOL_MAP["US30"] == {"asset": "index", "yh": "^DJI"}
         assert SYMBOL_MAP["NAS100"] == {"asset": "index", "yh": "^NDX"}
@@ -36,6 +37,7 @@ class TestIndexWiring:
 
 
 class TestBrokerAliases:
+    pytestmark = pytest.mark.unit
     def test_resolves_suffix(self):
         assert resolve_broker_symbol("US30", ["US30.fx", "XAUUSD.fx"]) == "US30.fx"
         assert resolve_broker_symbol("NAS100", ["NAS100#"]) == "NAS100#"
@@ -54,6 +56,7 @@ class TestBrokerAliases:
 
 
 class TestMarketHours:
+    pytestmark = pytest.mark.unit
     def test_indices_respect_weekend_close(self):
         sat = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)  # Saturday
         assert is_market_closed("US30", now=sat) is not None
@@ -63,6 +66,8 @@ class TestMarketHours:
 
 @pytest.mark.asyncio
 class TestLiveFeeds:
+    # hits live Yahoo feeds — external, NEVER part of the unit suite
+    pytestmark = pytest.mark.external
     async def test_live_quote_and_history(self):
         from market import get_quote, get_history
         for s in ("US30", "NAS100"):
@@ -71,7 +76,3 @@ class TestLiveFeeds:
             h = await get_history(s)
             assert len(h) >= 100, f"{s} history too short: {len(h)}"
             assert h[-1]["close"] > 1000
-
-
-import pytest as _pytest  # noqa: E402
-pytestmark = _pytest.mark.unit

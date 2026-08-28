@@ -11,7 +11,7 @@ fails when this file drifts from the tree.
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3314 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 3789 tests across 358 files.**
+**Total: 4167 tests across 358 files.**
 
 | file | class | tests |
 |------|-------|-------|

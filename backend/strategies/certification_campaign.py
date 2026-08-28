@@ -20,7 +20,8 @@ NEXT_STATE = {"DRAFT": "VALIDATING", "VALIDATING": "REPLAY",
               "REPLAY": "SHADOW", "SHADOW": "DEMO", "DEMO": "CANARY",
               "CANARY": "CERTIFIED", "CERTIFIED": "LIVE"}
 
-CANARY_MAX_CAPITAL_PCT = 5.0
+# The canary 5% is an OPEN-RISK cap (sum of open risk_pct), not capital.
+CANARY_MAX_OPEN_RISK_PCT = 5.0
 CERT_VALID_DAYS = 30
 
 STAGE_CRITERIA = {
@@ -35,7 +36,8 @@ STAGE_CRITERIA = {
         "max_unknown_rate": 0.02, "max_reject_rate": 0.05,
         "max_drawdown_pct": 10.0, "expectancy_r_gt": 0.0},
     "CANARY": {
-        "environment": "LIVE", "max_capital_pct": CANARY_MAX_CAPITAL_PCT,
+        "environment": "LIVE",
+        "max_open_risk_pct": CANARY_MAX_OPEN_RISK_PCT,
         "min_days": 5, "min_closed_trades": 20, "max_drawdown_pct": 2.0,
         "max_critical_incidents": 0, "execution_health_not": "RED"},
 }
@@ -128,10 +130,13 @@ def evaluate_stage(stage: str, m: dict) -> dict:
         checks = [
             _chk("environment", m.get("environment") == "LIVE",
                  m.get("environment"), "LIVE"),
-            _chk("capital_cap",
-                 _le(m.get("canary_capital_pct"), c["max_capital_pct"]),
-                 m.get("canary_capital_pct"),
-                 f"<= {c['max_capital_pct']}% of program capital"),
+            _chk("open_risk_cap",
+                 _le(m.get("canary_open_risk_pct",
+                           m.get("canary_capital_pct")),
+                     c["max_open_risk_pct"]),
+                 m.get("canary_open_risk_pct", m.get("canary_capital_pct")),
+                 f"<= {c['max_open_risk_pct']}% open risk (sum of open "
+                 f"risk_pct)"),
             _chk("days_elapsed", _ge(m.get("days_elapsed"), c["min_days"]),
                  m.get("days_elapsed"), f">= {c['min_days']}"),
             _chk("closed_trades",

@@ -1396,6 +1396,35 @@ async def report_trade(payload: BridgeTradeReport):
                 }
                 update["close_reason"] = "slippage_veto"
                 update["slippage_veto_cap_pips"] = cap
+        # v62.6 — PAMM envelope slippage cap enforced POST-TRADE on the
+        # true measurement (never user-disableable). Violation is recorded
+        # as evidence and the fill is force-closed.
+        pamm_cap = trade.get("pamm_max_slippage_pips")
+        if (trade.get("pamm_program_id") and pamm_cap is not None
+                and requested > 0 and slip_pips > float(pamm_cap)):
+            await db.pamm_slippage_violations.insert_one({
+                "program_id": trade.get("pamm_program_id"),
+                "trade_id": str(trade.get("_id")),
+                "account_id": account_id_str,
+                "symbol": symbol,
+                "strategy_id": trade.get("pamm_strategy_id"),
+                "risk_snapshot_id": trade.get("pamm_risk_snapshot_id"),
+                "slippage_pips": round(slip_pips, 2),
+                "max_slippage_pips": float(pamm_cap),
+                "requested_price": requested,
+                "fill_price": actual,
+                "forced_close": not slippage_force_close,
+                "at": datetime.now(timezone.utc).isoformat()})
+            update["pamm_slippage_violation"] = True
+            if not slippage_force_close:
+                slippage_force_close = True
+                update["pending_modification"] = {
+                    "type": "FULL_CLOSE",
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                    "reason": "pamm_slippage_veto",
+                }
+                update["close_reason"] = "pamm_slippage_veto"
+                update["slippage_veto_cap_pips"] = float(pamm_cap)
 
     if payload.entry_price is not None:
         update["entry_price"] = payload.entry_price

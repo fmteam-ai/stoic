@@ -9,7 +9,7 @@ Covers the user's 9 scenarios:
        pamm_manual_override=true, pamm_program_id set, no pamm_strategy_id,
        origin='manual_override'.
   S5 CANARY capital cap enforced at execution:
-       canary_cap_exceeded / authorized / canary_requires_risk_pct.
+       canary_open_risk_cap_exceeded / authorized / canary_requires_risk_pct.
   S6 Material patch on CANARY -> campaign reset/revoked; forced-restore
      CANARY state with OLD identity hash -> canary_identity_drift.
   S7 CERTIFIED, account.broker_server changed -> certification_identity_drift.
@@ -125,6 +125,26 @@ def _seed_system_cert(mongo, account_id):
     return cert_id
 
 
+def _seed_risk_truth(mongo, pid, acc_id):
+    """v62.6 — LIVE governed executions require COMPLETE risk evidence:
+    fresh spreads, NAV history (drawdown), fresh position truth."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        mongo.accounts.update_one(
+            {"_id": ObjectId(acc_id)},
+            {"$set": {"current_spreads": {"EURUSD": 0.8, "GBPUSD": 0.9,
+                                          "XAUUSD": 1.2},
+                      "spreads_updated_at": now}})
+    except Exception:
+        pass
+    mongo.pamm_programs.update_one(
+        {"program_id": pid},
+        {"$set": {"position_truth": {"status": "in_sync", "at": now},
+                  "last_nav": {"nav": 10000.0, "at": now}}})
+    mongo.pamm_nav_snapshots.insert_one(
+        {"program_id": pid, "nav": 10000.0, "at": now})
+
+
 def _bind_master(mongo, program_id, account_id):
     mongo.pamm_programs.update_one(
         {"program_id": program_id},
@@ -146,6 +166,8 @@ def _cleanup_program(mongo, pid):
         mongo.strategy_cert_evidence.delete_many(
             {"campaign_id": c["campaign_id"]})
     mongo.strategy_cert_campaigns.delete_many({"pamm_program_id": pid})
+    mongo.pamm_nav_snapshots.delete_many({"program_id": pid})
+    mongo.pamm_risk_decisions.delete_many({"program_id": pid})
     mongo.pamm_events.delete_many({"payload.program_id": pid})
 
 
@@ -450,6 +472,7 @@ class TestS5CanaryCapitalCap:
         _validate(admin_session, pid)
         _walk_to_canary(admin_session, pid)
         _activate(admin_session, pid)
+        _seed_risk_truth(mongo, pid, acc_id)
         # Seed 3 open trades summing risk_pct=4.9
         for r in (1.7, 1.6, 1.6):
             mongo.trades.insert_one({
@@ -462,12 +485,12 @@ class TestS5CanaryCapitalCap:
         _cleanup_account(mongo, acc_id)
         c.close()
 
-    def test_canary_cap_exceeded(self, canary_setup):
+    def test_canary_open_risk_cap_exceeded(self, canary_setup):
         out = _run(lambda: _guard_call(canary_setup["acc_id"], {
             "symbol": "EURUSD", "action": "BUY", "lot_size": 0.01,
             "strategy_id": "sniper", "risk_pct": 0.4}))
         assert out["authorized"] is False, out
-        assert out["reason"] == "canary_cap_exceeded", out
+        assert out["reason"] == "canary_open_risk_cap_exceeded", out
         det = out["checks"][-1]["detail"]
         assert abs(det["proposed_total"] - 5.3) < 0.01, det
 
@@ -568,6 +591,7 @@ class TestS7CertifiedThenBrokerMove:
             _validate(admin_session, pid)
             _walk_to_certified(admin_session, pid)
             _activate(admin_session, pid)
+            _seed_risk_truth(mongo, pid, acc_id)
             # Direct guard should PASS while server matches
             out = _run(lambda: _guard_call(acc_id, {
                 "symbol": "EURUSD", "action": "BUY", "lot_size": 0.01,

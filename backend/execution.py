@@ -46,7 +46,10 @@ def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
     if ident.get("manual_override"):
         trade_doc.update({
             "pamm_program_id": ident.get("pamm_program_id"),
-            "pamm_manual_override": True})
+            "pamm_manual_override": True,
+            "pamm_max_slippage_pips": (ident.get("effective_limits")
+                                       or {}).get("max_slippage_pips"),
+            "pamm_risk_snapshot_id": ident.get("risk_snapshot_id")})
         return
     trade_doc.update({
         "pamm_program_id": ident.get("pamm_program_id"),
@@ -55,7 +58,10 @@ def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
         "pamm_strategy_version": ident.get("strategy_version"),
         "pamm_strategy_hash": ident.get("strategy_hash"),
         "pamm_risk_profile_id": ident.get("risk_profile_id"),
-        "pamm_certification_id": ident.get("certification_id")})
+        "pamm_certification_id": ident.get("certification_id"),
+        "pamm_max_slippage_pips": (ident.get("effective_limits")
+                                   or {}).get("max_slippage_pips"),
+        "pamm_risk_snapshot_id": ident.get("risk_snapshot_id")})
 
 
 class ExecutionEngine(ABC):

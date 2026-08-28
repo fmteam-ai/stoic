@@ -21,11 +21,65 @@ v62.4 invariants:
   · certification identity re-bound to the CURRENT assignment/account/
     broker/risk profile on every execution (drift ⇒ REJECT)"""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("pamm.strategy_guard")
 
-CANARY_MAX_CAPITAL_PCT = 5.0
+# CANARY cap — what is actually measured is the SUM OF OPEN risk_pct on
+# the master account (open-risk cap), NOT deployed capital.
+CANARY_MAX_OPEN_RISK_PCT = 5.0
+
+# v62.6 Risk Truth — REQUIRED evidence for LIVE governed executions.
+# Missing any REQUIRED item ⇒ RISK_UNKNOWN ⇒ new exposure is blocked.
+REQUIRED_TELEMETRY = ("open_positions", "open_risk_pct_sum",
+                      "daily_loss_pct", "weekly_loss_pct", "drawdown_pct",
+                      "spread_pips")
+OPTIONAL_TELEMETRY = ("symbol_open_lots", "consecutive_losses",
+                      "factor_lots", "recent_slippage_pips")
+
+# Strategy-specific telemetry freshness (seconds), keyed by the registry
+# latency_sensitivity — a Nitro execution demands far fresher evidence.
+SPREAD_FRESHNESS_S = {"LOW": 300, "MEDIUM": 300, "MEDIUM_HIGH": 120,
+                      "HIGH": 60, "VERY_HIGH": 30, "MAXIMUM": 15}
+POSITION_TRUTH_FRESHNESS_S = {"LOW": 900, "MEDIUM": 900,
+                              "MEDIUM_HIGH": 600, "HIGH": 600,
+                              "VERY_HIGH": 300, "MAXIMUM": 300}
+
+
+def telemetry_freshness(strategy_id: str | None) -> dict:
+    sens = "MEDIUM"
+    if strategy_id:
+        from strategies.registry import get_strategy
+        d = get_strategy(strategy_id)
+        if d:
+            sens = str((d.characteristics or {}).get("latency_sensitivity")
+                       or "MEDIUM").upper()
+    return {"latency_sensitivity": sens,
+            "spread_s": SPREAD_FRESHNESS_S.get(sens, 300),
+            "position_truth_s": POSITION_TRUTH_FRESHNESS_S.get(sens, 900)}
+
+
+def missing_required_telemetry(telemetry: dict) -> list:
+    return [k for k in REQUIRED_TELEMETRY
+            if (telemetry or {}).get(k) is None]
+
+
+def symbol_factors(symbol) -> list:
+    """XAUUSD → [XAU, USD]; factor = 3-letter currency/asset bucket."""
+    s = str(symbol or "").upper()
+    return [c for c in (s[:3], s[3:6]) if len(c) == 3 and c.isalpha()]
+
+
+def _age_s(iso: str | None) -> float | None:
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
+    except (ValueError, TypeError):
+        return None
 
 
 def _reject(reason: str, checks: list, detail=None,
@@ -110,20 +164,62 @@ def envelope_violations(envelope: dict, signal: dict,
         v.append({"reason": "max_consecutive_losses_reached",
                   "detail": {"consecutive": int(t["consecutive_losses"]),
                              "strictest_max": int(cl)}})
+    wl = env.get("max_weekly_loss_pct")
+    if (wl is not None and t.get("weekly_loss_pct") is not None
+            and float(t["weekly_loss_pct"]) >= float(wl)):
+        v.append({"reason": "weekly_loss_cap_reached",
+                  "detail": {"weekly_loss_pct": float(t["weekly_loss_pct"]),
+                             "strictest_max": float(wl)}})
+    dd = env.get("max_drawdown_pct")
+    if (dd is not None and t.get("drawdown_pct") is not None
+            and float(t["drawdown_pct"]) >= float(dd)):
+        v.append({"reason": "drawdown_cap_reached",
+                  "detail": {"drawdown_pct": float(t["drawdown_pct"]),
+                             "strictest_max": float(dd)}})
+    sp = env.get("max_spread_pips")
+    if (sp is not None and t.get("spread_pips") is not None
+            and float(t["spread_pips"]) > float(sp)):
+        v.append({"reason": "spread_cap_exceeded",
+                  "detail": {"symbol": sym,
+                             "spread_pips": float(t["spread_pips"]),
+                             "max_spread_pips": float(sp)}})
+    sl = env.get("max_slippage_pips")
+    if (sl is not None and t.get("recent_slippage_pips") is not None
+            and float(t["recent_slippage_pips"]) > float(sl)):
+        v.append({"reason": "expected_slippage_exceeded",
+                  "detail": {"recent_median_slippage_pips":
+                             float(t["recent_slippage_pips"]),
+                             "max_slippage_pips": float(sl),
+                             "note": "pre-trade block on measured fill "
+                                     "evidence; post-trade fills are "
+                                     "enforced at the bridge"}})
+    fe = env.get("max_factor_exposure_lots")
+    if fe is not None and t.get("factor_lots") is not None:
+        new_lot = float(signal.get("lot_size") or 0)
+        for f in symbol_factors(sym):
+            proposed = float((t["factor_lots"] or {}).get(f, 0.0)) + new_lot
+            if proposed > float(fe):
+                v.append({"reason": "factor_exposure_exceeded",
+                          "detail": {"factor": f,
+                                     "proposed_lots": round(proposed, 4),
+                                     "strictest_max": float(fe)}})
+                break
     return v
 
 
 def canary_violation(open_risk_pct_sum: float, new_risk_pct,
-                     cap: float = CANARY_MAX_CAPITAL_PCT) -> dict | None:
-    """CANARY envelope enforced at EXECUTION time. Fail closed: a canary
-    trade without declared risk is unmeasurable ⇒ rejected."""
+                     cap: float = CANARY_MAX_OPEN_RISK_PCT) -> dict | None:
+    """CANARY OPEN-RISK cap enforced at EXECUTION time — the measured
+    quantity is the sum of open risk_pct, not deployed capital. Fail
+    closed: a canary trade without declared risk is unmeasurable ⇒
+    rejected."""
     if new_risk_pct is None:
         return {"reason": "canary_requires_risk_pct",
                 "detail": "canary trades must declare risk_pct — the "
-                          "capital cap is unmeasurable otherwise"}
+                          "open-risk cap is unmeasurable otherwise"}
     proposed = float(open_risk_pct_sum or 0) + float(new_risk_pct)
     if proposed > cap:
-        return {"reason": "canary_cap_exceeded",
+        return {"reason": "canary_open_risk_cap_exceeded",
                 "detail": {"open_risk_pct": float(open_risk_pct_sum or 0),
                            "requested_risk_pct": float(new_risk_pct),
                            "proposed_total": round(proposed, 4),
@@ -150,31 +246,95 @@ def current_identity_hash(program_id: str, assignment: dict,
 
 # ───────────────────────── telemetry collection ────────────────────────────
 
-async def _telemetry(db, acct_id: str, symbol: str,
-                     balance: float | None) -> dict:
+async def _telemetry(db, program: dict, account: dict, signal: dict,
+                     strategy_id: str | None = None) -> dict:
+    """Risk Truth collector — every REQUIRED item resolves to a value or
+    stays None (RISK_UNKNOWN evidence gap). A known balance with zero
+    closed trades is EVIDENCE of zero loss, never a gap."""
+    acct_id = str((account or {}).get("_id") or "")
+    symbol = str(signal.get("symbol") or "").upper()
+    balance = ((account or {}).get("balance")
+               or (account or {}).get("equity"))
     t: dict = {}
     open_q = {"account_id": acct_id, "status": {"$in": ["open", "pending"]}}
     t["open_positions"] = await db.trades.count_documents(open_q)
-    sym_lots = 0.0
-    risk_sum = 0.0
+    sym_lots, risk_sum = 0.0, 0.0
+    factor_lots: dict = {}
     async for tr in db.trades.find(open_q, {"lot_size": 1, "symbol": 1,
                                             "risk_pct": 1}).limit(500):
-        if str(tr.get("symbol") or "").upper() == str(symbol or "").upper():
-            sym_lots += float(tr.get("lot_size") or 0)
+        lots = float(tr.get("lot_size") or 0)
+        if str(tr.get("symbol") or "").upper() == symbol:
+            sym_lots += lots
+        for f in symbol_factors(tr.get("symbol")):
+            factor_lots[f] = round(factor_lots.get(f, 0.0) + lots, 4)
         risk_sum += float(tr.get("risk_pct") or 0)
     t["symbol_open_lots"] = round(sym_lots, 4)
+    t["factor_lots"] = factor_lots
     t["open_risk_pct_sum"] = round(risk_sum, 4)
-    midnight = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
-    net = 0.0
-    losses_today = False
+    # daily + weekly realized loss — needs a known balance denominator
+    now = datetime.now(timezone.utc)
+    day0 = now.strftime("%Y-%m-%dT00:00:00")
+    week0 = (now - timedelta(days=now.weekday())).strftime(
+        "%Y-%m-%dT00:00:00")
+    if balance:
+        day_net, week_net = 0.0, 0.0
+        async for tr in db.trades.find(
+                {"account_id": acct_id, "status": "closed",
+                 "closed_at": {"$gte": week0}},
+                {"pnl": 1, "closed_at": 1}).limit(2000):
+            pnl = float(tr.get("pnl") or 0)
+            week_net += pnl
+            if str(tr.get("closed_at") or "") >= day0:
+                day_net += pnl
+        t["daily_loss_pct"] = round(
+            max(0.0, -day_net) / float(balance) * 100, 4)
+        t["weekly_loss_pct"] = round(
+            max(0.0, -week_net) / float(balance) * 100, 4)
+    else:
+        t["daily_loss_pct"] = None
+        t["weekly_loss_pct"] = None
+    # drawdown — broker-truth NAV history (peak vs current)
+    t["drawdown_pct"] = None
+    pid = str((program or {}).get("program_id")
+              or (program or {}).get("_id") or "")
+    current_nav = ((program or {}).get("last_nav") or {}).get("nav")
+    if current_nav is None and pid:
+        latest = await db.pamm_nav_snapshots.find_one(
+            {"program_id": pid}, {"_id": 0, "nav": 1}, sort=[("at", -1)])
+        current_nav = latest["nav"] if latest else None
+    if pid and current_nav is not None:
+        peak = None
+        async for n in db.pamm_nav_snapshots.find(
+                {"program_id": pid}, {"_id": 0, "nav": 1}).limit(5000):
+            peak = n["nav"] if peak is None else max(peak, n["nav"])
+        if peak:
+            t["drawdown_pct"] = round(
+                max(0.0, (peak - float(current_nav)) / peak * 100), 4)
+    # current spread — from the EA heartbeat, strategy-fresh or nothing
+    fresh = telemetry_freshness(strategy_id)
+    t["spread_pips"] = None
+    spreads = (account or {}).get("current_spreads") or {}
+    sp = spreads.get(symbol)
+    if sp is None and len(symbol) > 6:
+        sp = spreads.get(symbol[:6])
+    age = _age_s((account or {}).get("spreads_updated_at"))
+    t["spread_age_s"] = round(age, 1) if age is not None else None
+    if sp is not None and age is not None and age <= fresh["spread_s"]:
+        t["spread_pips"] = float(sp)
+    t["freshness"] = fresh
+    # recent measured fill slippage (median of last true measurements)
+    slips = []
     async for tr in db.trades.find(
-            {"account_id": acct_id, "status": "closed",
-             "closed_at": {"$gte": midnight}},
-            {"pnl": 1}).limit(1000):
-        net += float(tr.get("pnl") or 0)
-        losses_today = True
-    if losses_today and balance:
-        t["daily_loss_pct"] = round(max(0.0, -net) / float(balance) * 100, 4)
+            {"account_id": acct_id, "slippage_checked": True,
+             "slippage_pips": {"$ne": None}},
+            {"slippage_pips": 1}).sort("created_at", -1).limit(10):
+        slips.append(float(tr.get("slippage_pips") or 0))
+    if slips:
+        slips.sort()
+        t["recent_slippage_pips"] = slips[len(slips) // 2]
+    else:
+        t["recent_slippage_pips"] = None
+    # consecutive losses
     streak = 0
     async for tr in db.trades.find(
             {"account_id": acct_id, "status": "closed"},
@@ -201,9 +361,53 @@ async def _effective_envelope(db, program: dict,
 async def authorize_pamm_strategy_execution(db, program: dict,
                                             account: dict,
                                             signal: dict) -> dict:
+    """Public gate — runs the closure chain, then persists a COMPLETE
+    Effective Risk Decision Snapshot (envelope + telemetry + every check)
+    for any governed decision and stamps its id into the context."""
+    evidence: dict = {}
+    res = await _authorize(db, program, account, signal, evidence)
+    if res.get("mode") == "LEGACY":
+        return res
+    import uuid
+    snap_id = f"rds_{uuid.uuid4().hex[:16]}"
+    snap = {"snapshot_id": snap_id,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "program_id": str(program.get("program_id")
+                              or program.get("_id")),
+            "account_id": str((account or {}).get("_id") or ""),
+            "environment": evidence.get("environment"),
+            "mode": res.get("mode"),
+            "authorized": bool(res.get("authorized")),
+            "reason": res.get("reason"),
+            "signal": {"symbol": signal.get("symbol"),
+                       "side": signal.get("action") or signal.get("side"),
+                       "risk_pct": signal.get("risk_pct"),
+                       "lot_size": signal.get("lot_size"),
+                       "strategy_id": signal.get("strategy_id"),
+                       "signal_id": signal.get("signal_id")},
+            "envelope": evidence.get("envelope"),
+            "telemetry": evidence.get("telemetry"),
+            "missing_required": evidence.get("missing_required"),
+            "assignment_id": (evidence.get("assignment") or {}).get(
+                "assignment_id"),
+            "checks": res.get("checks")}
+    try:
+        await db.pamm_risk_decisions.insert_one(dict(snap))
+    except (TypeError, AttributeError):  # isolated unit-test db mock
+        pass
+    if res.get("authorized") and res.get("context") is not None:
+        res["context"]["risk_snapshot_id"] = snap_id
+    return res
+
+
+async def _authorize(db, program: dict, account: dict, signal: dict,
+                     evidence: dict) -> dict:
     checks: list = []
     program_id = str(program.get("program_id") or program.get("_id"))
     acct_id = str((account or {}).get("_id") or "")
+    from broker_env import broker_environment
+    env_name = broker_environment(account) if account else "PAPER"
+    evidence["environment"] = env_name
     # program operating state permits new risk
     from modules.pamm.risk import trading_allowed
     allowed, why = await trading_allowed(db, program)
@@ -221,6 +425,7 @@ async def authorize_pamm_strategy_execution(db, program: dict,
     from modules.pamm.strategy_assignment import get_assignment
     cur = await get_assignment(db, program_id)
     a = cur.get("assignment")
+    evidence["assignment"] = a
     if gov == "LEGACY":
         _ok(checks, "governance", "LEGACY — never migrated")
         return {"authorized": True, "reason": "legacy_mode",
@@ -229,12 +434,13 @@ async def authorize_pamm_strategy_execution(db, program: dict,
     _ok(checks, "governance", "STRATEGY")
     # DEDICATED MANUAL OVERRIDE PATH — MFA + explicit origin enforced at
     # the route; never attributed to the strategy; envelope still applies
+    # with all AVAILABLE evidence (override is the emergency escape hatch,
+    # so RISK_UNKNOWN does not hard-block it)
     if signal.get("pamm_manual_override") is True:
         env = await _effective_envelope(
             db, program, (a or {}).get("risk_profile_id"))
-        t = await _telemetry(db, acct_id, signal.get("symbol"),
-                             (account or {}).get("balance")
-                             or (account or {}).get("equity"))
+        t = await _telemetry(db, program, account, signal)
+        evidence["envelope"], evidence["telemetry"] = env, t
         vio = envelope_violations(env, signal, t)
         if vio:
             return _reject(vio[0]["reason"], checks, vio[0]["detail"],
@@ -286,8 +492,6 @@ async def authorize_pamm_strategy_execution(db, program: dict,
     _ok(checks, "strategy_registered", d.strategy_id)
     # CURRENT CERTIFICATION IDENTITY — cert/campaign must bind to the
     # identity hash re-derived from CURRENT facts (drift ⇒ REJECT)
-    from broker_env import broker_environment
-    env_name = broker_environment(account) if account else "PAPER"
     from modules.pamm.strategy_assignment import feature_flags
     canary_mode = False
     if feature_flags()["PAMM_REQUIRE_CERTIFICATION"] and env_name == "LIVE":
@@ -343,14 +547,46 @@ async def authorize_pamm_strategy_execution(db, program: dict,
         return _reject("risk_profile_invalid", checks,
                        a["risk_profile_id"])
     envelope = await _effective_envelope(db, program, a["risk_profile_id"])
-    t = await _telemetry(db, acct_id, signal.get("symbol"),
-                         (account or {}).get("balance")
-                         or (account or {}).get("equity"))
+    t = await _telemetry(db, program, account, signal,
+                         strategy_id=a["strategy_id"])
+    evidence["envelope"], evidence["telemetry"] = envelope, t
+    # RISK TRUTH (v62.6) — LIVE governed exposure requires COMPLETE
+    # required evidence; any gap ⇒ RISK_UNKNOWN ⇒ fail closed
+    if env_name == "LIVE":
+        missing = missing_required_telemetry(t)
+        evidence["missing_required"] = missing
+        if missing:
+            return _reject("risk_unknown", checks,
+                           {"missing_required_evidence": missing,
+                            "state": "RISK_UNKNOWN",
+                            "note": "new exposure is blocked until every "
+                                    "required risk input is measurable "
+                                    "and fresh"})
+        # FRESH POSITION TRUTH — LIVE PAMM never trades on stale broker
+        # reconciliation (window scales with strategy latency demand)
+        fresh = t.get("freshness") or telemetry_freshness(a["strategy_id"])
+        pt_age = _age_s(pt.get("at"))
+        if pt_age is None:
+            return _reject("position_truth_missing", checks,
+                           {"state": "RISK_UNKNOWN",
+                            "note": "LIVE PAMM requires a completed "
+                                    "position-truth check"})
+        if pt_age > fresh["position_truth_s"]:
+            return _reject("position_truth_stale", checks,
+                           {"age_s": round(pt_age, 1),
+                            "max_age_s": fresh["position_truth_s"],
+                            "latency_sensitivity":
+                            fresh["latency_sensitivity"]})
+        _ok(checks, "risk_truth",
+            {"required": list(REQUIRED_TELEMETRY),
+             "position_truth_age_s": round(pt_age, 1),
+             "spread_age_s": t.get("spread_age_s"),
+             "freshness": fresh})
     vio = envelope_violations(envelope, signal, t)
     if vio:
         return _reject(vio[0]["reason"], checks, vio[0]["detail"])
     _ok(checks, "risk_envelope", envelope)
-    # CANARY ENVELOPE — capital cap enforced at EXECUTION time
+    # CANARY OPEN-RISK CAP — enforced at EXECUTION time
     if canary_mode:
         cv = canary_violation(t.get("open_risk_pct_sum", 0.0),
                               signal.get("risk_pct"))
@@ -358,7 +594,7 @@ async def authorize_pamm_strategy_execution(db, program: dict,
             return _reject(cv["reason"], checks, cv["detail"])
         _ok(checks, "canary_envelope",
             {"open_risk_pct": t.get("open_risk_pct_sum"),
-             "cap_pct": CANARY_MAX_CAPITAL_PCT})
+             "cap_pct": CANARY_MAX_OPEN_RISK_PCT})
     # STRATEGY-SPECIFIC EXECUTION ELIGIBILITY (never "Nitro for all")
     from strategies.execution_eligibility import (POLICIES,
                                                   execution_eligibility)

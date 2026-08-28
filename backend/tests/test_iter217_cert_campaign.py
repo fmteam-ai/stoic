@@ -130,11 +130,21 @@ class TestCanaryGate:
 
     def test_capital_cap_enforced(self):
         from strategies.certification_campaign import (
-            CANARY_MAX_CAPITAL_PCT, evaluate_stage)
+            CANARY_MAX_OPEN_RISK_PCT, evaluate_stage)
         r = evaluate_stage("CANARY", {**self._good(),
                                       "canary_capital_pct":
-                                      CANARY_MAX_CAPITAL_PCT + 0.1})
+                                      CANARY_MAX_OPEN_RISK_PCT + 0.1})
         assert r["passed"] is False
+
+    def test_open_risk_metric_name_supported(self):
+        from strategies.certification_campaign import (
+            CANARY_MAX_OPEN_RISK_PCT, evaluate_stage)
+        m = {k: v for k, v in self._good().items()
+             if k != "canary_capital_pct"}
+        m["canary_open_risk_pct"] = CANARY_MAX_OPEN_RISK_PCT + 0.1
+        assert evaluate_stage("CANARY", m)["passed"] is False
+        m["canary_open_risk_pct"] = 3.0
+        assert evaluate_stage("CANARY", m)["passed"] is True
 
     def test_drawdown_hard_limit(self):
         from strategies.certification_campaign import evaluate_stage

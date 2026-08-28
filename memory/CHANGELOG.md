@@ -1611,3 +1611,19 @@ USER CHOICES: sandbox broker first (real broker later via same interface), Mongo
 - Tutorials.jsx: <track kind=subtitles default> added to players (data-testid tutorial-captions-<slug>).
 - Verified: 4 vtts served 200 text/vtt; browser parsed 13 cues on getting-started, track mode 'showing'.
 - LEARNING: playwright headless_shell chromium has NO H.264/AAC codecs — video.play() throws NotSupportedError in tests. NOT an app bug; real browsers play the mp4s. Don't doom-loop on this.
+
+## v62.6 — PAMM Risk Truth & Production Gate (iter-221, June 2026 — DONE, testing agent iteration_142: 11/11 new E2E + 100/100 regression)
+All 12 review items implemented:
+1-2. max_weekly_loss_pct (closed-trade net since Monday UTC / balance) + max_drawdown_pct (peak NAV from pamm_nav_snapshots vs current last_nav) enforced in envelope_violations → weekly_loss_cap_reached / drawdown_cap_reached.
+3. PAMM-profile spread limit enforced from account.current_spreads (EA heartbeat) → spread_cap_exceeded; stale spread never fabricates a violation.
+4. Slippage pre-trade: median of last 10 measured trades.slippage_pips > envelope cap → expected_slippage_exceeded. Post-trade: bridge_routes report_trade enforces trades.pamm_max_slippage_pips on TRUE measurement (requested_price), force-closes (close_reason pamm_slippage_veto), records db.pamm_slippage_violations — not user-disableable.
+5. max_factor_exposure_lots in effective_envelope (profile max_factor_exposure); factor = 3-letter currency bucket (XAUUSD→XAU+USD); telemetry factor_lots → factor_exposure_exceeded.
+6. REQUIRED_TELEMETRY = (open_positions, open_risk_pct_sum, daily_loss_pct, weekly_loss_pct, drawdown_pct, spread_pips); OPTIONAL = (symbol_open_lots, consecutive_losses, factor_lots, recent_slippage_pips). Zero closed trades w/ known balance = evidence of 0 loss, not a gap.
+7. LIVE governed: missing REQUIRED → reject reason 'risk_unknown' detail.missing_required_evidence (RISK_UNKNOWN state). Manual override stays envelope-enforced but not RISK_UNKNOWN-blocked (emergency hatch).
+8. Fresh Position Truth for LIVE: position_truth_missing / position_truth_stale (age vs strategy window).
+9. Strategy-specific freshness from registry latency_sensitivity: spread 300/120/60/30/15s, position-truth 900/600/300s (sniper→nitro).
+10. Effective Risk Decision Snapshot: db.pamm_risk_decisions on EVERY governed decision (allow+reject) w/ envelope+telemetry+checks+signal; snapshot_id (rds_*) → context.risk_snapshot_id → execution_intents payload.risk_snapshot_id + trades.pamm_risk_snapshot_id.
+11. Physical unit isolation: `env -u MONGO_URL pytest -m unit` green (1713); test_unit_independence extended to scan file-level unit-marked modules tree-wide; test_iter43 TestLiveFeeds re-marked external (live Yahoo feeds).
+12. Canary 5% renamed to OPEN-RISK cap: CANARY_MAX_OPEN_RISK_PCT, reason canary_open_risk_cap_exceeded, campaign criteria max_open_risk_pct + metric canary_open_risk_pct (canary_capital_pct fallback), check key open_risk_cap.
+Guard restructured: authorize_pamm_strategy_execution = snapshot wrapper; _authorize = closure chain; _telemetry(db, program, account, signal, strategy_id) collects all risk truth.
+Tests: tests/unit/pamm/test_risk_truth.py (30 unit) + tests/test_iter221_risk_truth_http.py (11 http by testing agent). iter220 http fixtures gained _seed_risk_truth. Total collected 4167.
