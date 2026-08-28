@@ -30,13 +30,18 @@ jobs:
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
           # Emergent CDN index occasionally serves an empty page — retry.
+          # SECURITY: --index-url (EXCLUSIVE, no public PyPI fallback —
+          # dependency-confusion hardening) + sha256 pin of the exact wheel.
+          EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip install --no-deps emergentintegrations==0.2.0 \
-              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+              --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
-            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            echo "emergentintegrations download attempt $i failed — retry in 15s"
             sleep 15
           done
+          echo "${EI_SHA256}  /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl" | sha256sum -c -
+          pip install --no-deps /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl
           pip show -q emergentintegrations
       - name: Collection gate — zero collection failures in the exact
           pinned dependency environment
@@ -84,13 +89,18 @@ jobs:
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
           # Emergent CDN index occasionally serves an empty page — retry.
+          # SECURITY: --index-url (EXCLUSIVE, no public PyPI fallback —
+          # dependency-confusion hardening) + sha256 pin of the exact wheel.
+          EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip install --no-deps emergentintegrations==0.2.0 \
-              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+              --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
-            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            echo "emergentintegrations download attempt $i failed — retry in 15s"
             sleep 15
           done
+          echo "${EI_SHA256}  /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl" | sha256sum -c -
+          pip install --no-deps /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl
           pip show -q emergentintegrations
       - name: Integration-classified tests (real MongoDB)
         run: |
@@ -129,13 +139,18 @@ jobs:
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
           # Emergent CDN index occasionally serves an empty page — retry.
+          # SECURITY: --index-url (EXCLUSIVE, no public PyPI fallback —
+          # dependency-confusion hardening) + sha256 pin of the exact wheel.
+          EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip install --no-deps emergentintegrations==0.2.0 \
-              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+              --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
-            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            echo "emergentintegrations download attempt $i failed — retry in 15s"
             sleep 15
           done
+          echo "${EI_SHA256}  /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl" | sha256sum -c -
+          pip install --no-deps /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl
           pip show -q emergentintegrations
       - name: Boot backend on a clean machine
         run: |
@@ -149,6 +164,8 @@ jobs:
           # HTTP invariant suites can walk certification/activation flows.
           STEP_UP_BYPASS_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
           RATE_LIMIT_BYPASS_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+          echo "::add-mask::${STEP_UP_BYPASS_TOKEN}"
+          echo "::add-mask::${RATE_LIMIT_BYPASS_TOKEN}"
           export STEP_UP_BYPASS_TOKEN RATE_LIMIT_BYPASS_TOKEN
           echo "STEP_UP_BYPASS_TOKEN=${STEP_UP_BYPASS_TOKEN}" >> "$GITHUB_ENV"
           echo "RATE_LIMIT_BYPASS_TOKEN=${RATE_LIMIT_BYPASS_TOKEN}" >> "$GITHUB_ENV"
@@ -289,13 +306,18 @@ jobs:
           pip install -r /tmp/ci-reqs.txt \
             --extra-index-url https://download.pytorch.org/whl/cpu
           # Emergent CDN index occasionally serves an empty page — retry.
+          # SECURITY: --index-url (EXCLUSIVE, no public PyPI fallback —
+          # dependency-confusion hardening) + sha256 pin of the exact wheel.
+          EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip install --no-deps emergentintegrations==0.2.0 \
-              --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+              --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
-            echo "emergentintegrations install attempt $i failed — retry in 15s"
+            echo "emergentintegrations download attempt $i failed — retry in 15s"
             sleep 15
           done
+          echo "${EI_SHA256}  /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl" | sha256sum -c -
+          pip install --no-deps /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl
           pip show -q emergentintegrations
       - name: Generate random CI admin credentials
         run: |
