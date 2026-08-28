@@ -44,6 +44,38 @@ def strictest_limit(*limits) -> float | None:
     return min(vals) if vals else None
 
 
+def effective_envelope(profile: dict | None,
+                       program_limits: dict | None) -> dict:
+    """v62.4 — ONE Effective Risk Envelope: PAMM program limits and the
+    strategy risk profile merged with strictest_limit (never averaged)."""
+    p = profile or {}
+    pl = program_limits or {}
+
+    def _thr(key):
+        lim = pl.get(key) or {}
+        return lim.get("threshold") if lim.get("enabled") else None
+
+    return {
+        "max_risk_per_trade": strictest_limit(p.get("max_risk_per_trade")),
+        "max_daily_loss_pct": strictest_limit(p.get("max_daily_loss"),
+                                              _thr("daily_loss_pct")),
+        "max_weekly_loss_pct": strictest_limit(p.get("max_weekly_loss"),
+                                               _thr("weekly_loss_pct")),
+        "max_drawdown_pct": strictest_limit(p.get("max_drawdown"),
+                                            _thr("max_drawdown_pct")),
+        "max_open_positions": strictest_limit(p.get("max_open_positions")),
+        "max_symbol_exposure_lots": strictest_limit(
+            p.get("max_symbol_exposure")),
+        "max_consecutive_losses": strictest_limit(
+            p.get("max_consecutive_losses")),
+        "allowed_symbols": p.get("allowed_symbols"),
+        "max_spread_pips": (p.get("spread_limits")
+                            or {}).get("max_spread_pips"),
+        "max_slippage_pips": (p.get("slippage_limits")
+                              or {}).get("max_slippage_pips"),
+    }
+
+
 async def ensure_profiles(db) -> None:
     for p in DEFAULT_PROFILES:
         await db.pamm_risk_profiles.update_one(

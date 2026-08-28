@@ -95,10 +95,29 @@ async def get_assignment(db, program_id: str) -> dict:
          "status": {"$in": ["ASSIGNED", "ACTIVE", "SUSPENDED"]}},
         {"_id": 0}, sort=[("created_at", -1)])
     if not a:
+        # v62.4 FAIL CLOSED: once migrated (any assignment history), a
+        # program NEVER silently reverts to LEGACY
+        migrated = await db.pamm_strategy_assignments.count_documents(
+            {"pamm_program_id": program_id}, limit=1)
+        if migrated:
+            return {"mode": "GOVERNED_NO_ACTIVE", "assignment": None,
+                    "fail_closed": True,
+                    "note": "program was migrated to strategy governance "
+                            "— execution FAILS CLOSED until an assignment "
+                            "is ACTIVE (never reverts to LEGACY)"}
         return {"mode": "LEGACY", "assignment": None,
                 "note": "no strategy assignment — program behaves exactly "
                         "as before (migration is explicit, never forced)"}
     return {"mode": a["mode"], "assignment": a}
+
+
+async def get_assignment_history(db, program_id: str,
+                                 limit: int = 50) -> list:
+    """Every assignment ever made (incl. REPLACED) — the lookup DRAIN
+    transitions will need to attribute old-strategy positions."""
+    return [a async for a in db.pamm_strategy_assignments.find(
+        {"pamm_program_id": program_id}, {"_id": 0})
+        .sort("created_at", -1).limit(limit)]
 
 
 async def assign(db, program: dict, payload: dict, actor: str) -> dict:
@@ -161,6 +180,11 @@ async def assign(db, program: dict, payload: dict, actor: str) -> dict:
            "last_validation": None, "version": 1}
     await db.pamm_strategy_assignments.insert_one(dict(doc))
     doc.pop("_id", None)
+    # v62.4 — migration is STICKY: the program is strategy-governed from
+    # this moment on and can never silently fall back to LEGACY
+    await db.pamm_programs.update_one(
+        {"program_id": program_id},
+        {"$set": {"strategy_governance": "STRATEGY"}})
     await _audit(db, "PAMM_STRATEGY_ASSIGNED", program_id, actor,
                  {"strategy_id": d.strategy_id,
                   "strategy_version": d.version,
@@ -211,6 +235,16 @@ async def patch(db, program: dict, payload: dict, actor: str) -> dict:
                               "material assignment change: risk profile "
                               f"{a.get('risk_profile_id')} → "
                               f"{updates['risk_profile_id']}")
+        # v62.4 — a material change invalidates ANY open certification
+        # campaign: its identity (incl. risk profile) no longer matches
+        from strategies.certification_campaign import (get_campaign,
+                                                       revoke_campaign)
+        if await get_campaign(db, program_id):
+            await revoke_campaign(
+                db, program, actor,
+                "material configuration change: risk profile "
+                f"{a.get('risk_profile_id')} → "
+                f"{updates['risk_profile_id']}")
         await _audit(db, "PAMM_STRATEGY_REVALIDATION_REQUIRED",
                      program_id, actor,
                      {"assignment_id": a["assignment_id"],

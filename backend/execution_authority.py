@@ -163,6 +163,13 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
                           ctx["risk_profile_id"],
                           "payload.certification_id":
                           ctx["certification_id"]}})
+        elif guard["mode"] == "MANUAL_OVERRIDE":
+            signal["_pamm_identity"] = guard["context"]
+            await db.execution_intents.update_one(
+                {"intent_id": iid},
+                {"$set": {"payload.pamm_program_id":
+                          guard["context"]["pamm_program_id"],
+                          "payload.pamm_manual_override": True}})
     # 2 — VALIDATED
     problems = _validate(signal, account)
     if problems:

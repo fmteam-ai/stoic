@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from typing import Literal, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 from pydantic import BaseModel, Field
 
@@ -585,12 +585,18 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
 
 
 @router.post("/manual")
-async def execute_manual_trade(payload: ManualTradeRequest, user=Depends(get_current_user)):
+async def execute_manual_trade(payload: ManualTradeRequest,
+                               request: Request,
+                               user=Depends(get_current_user)):
     """Place a manual paper trade — bypasses AI signal/confidence gating.
 
     Allowed ONLY for paper-mode accounts; live accounts must execute via AI signals
     so that the EA bridge + risk vetoes apply.
-    """
+
+    v62.4 — if the account is the master of a strategy-GOVERNED PAMM
+    program, this becomes the DEDICATED manual-override path: step-up MFA
+    required, explicit override origin, and the trade is NEVER attributed
+    to the assigned strategy."""
     db = get_db()
     account = await db.accounts.find_one({"_id": parse_object_id(payload.account_id, "Account"),
                                            "user_id": user["id"]})
@@ -598,6 +604,20 @@ async def execute_manual_trade(payload: ManualTradeRequest, user=Depends(get_cur
         raise HTTPException(status_code=404, detail="Account not found")
     if (account.get("mode") or "live").lower() != "paper":
         raise HTTPException(status_code=400, detail="Manual trades are only allowed on paper accounts")
+
+    _pamm_override = False
+    from modules.pamm.strategy_guard import governance_mode, resolve_program
+    _prog = await resolve_program(db, str(account["_id"]), {})
+    if _prog is not None and await governance_mode(db, _prog) == "STRATEGY":
+        from step_up import audit_event, require_step_up
+        await require_step_up(db, user, request, "risk_raise")
+        await audit_event(db, user["id"], "pamm_manual_override",
+                          {"program_id": _prog.get("program_id"),
+                           "account_id": str(account["_id"]),
+                           "symbol": payload.symbol,
+                           "action": payload.action}, request,
+                          step_up=True)
+        _pamm_override = True
 
     rl = check_and_record(user["id"])
     if not rl["allowed"]:
@@ -644,7 +664,8 @@ async def execute_manual_trade(payload: ManualTradeRequest, user=Depends(get_cur
             "tp3": tp3,
             "sl_pips": payload.sl_pips,
             "tp_pips": [payload.tp1_pips, payload.tp2_pips, payload.tp3_pips],
-            "origin": "manual_test",
+            "origin": "manual_override" if _pamm_override else "manual_test",
+            "pamm_manual_override": _pamm_override,
         },
     )
     return trade_doc

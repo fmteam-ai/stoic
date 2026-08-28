@@ -37,10 +37,16 @@ def broker_identity_snapshot(account: dict) -> dict:
 
 
 def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
-    """v62.3 — full ownership lineage on every PAMM-originated trade:
-    PAMM → assignment → strategy/version → intent → position."""
+    """v62.3/v62.4 — full ownership lineage on every PAMM-originated
+    trade. Manual overrides carry the program only — NEVER attributed to
+    a strategy."""
     ident = signal.get("_pamm_identity")
     if not ident:
+        return
+    if ident.get("manual_override"):
+        trade_doc.update({
+            "pamm_program_id": ident.get("pamm_program_id"),
+            "pamm_manual_override": True})
         return
     trade_doc.update({
         "pamm_program_id": ident.get("pamm_program_id"),
@@ -547,7 +553,7 @@ class PaperEngine(ExecutionEngine):
                 return {"blocked": "pamm_strategy_guard",
                         "reason": guard["reason"],
                         "checks": guard["checks"]}
-            if guard["mode"] == "STRATEGY":
+            if guard["mode"] in ("STRATEGY", "MANUAL_OVERRIDE"):
                 signal["_pamm_identity"] = guard["context"]
         # Mirror MT5 path's market-hours veto so paper-shadow PnL stays
         # consistent with live behaviour (no phantom weekend fills).

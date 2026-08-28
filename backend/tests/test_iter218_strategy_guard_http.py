@@ -471,9 +471,11 @@ class TestExecutionGuardE2E:
 
     def test_scenario_B_strategy_mode_not_active_blocked_HTTP(
             self, admin_session, admin_id, mongo):
-        """HTTP path: manual paper trade with an ASSIGNED-but-not-ACTIVE
-        strategy MUST be rejected by the guard (v62.3 fix: the guard is
-        bound into PaperEngine too — no alternate PAMM route)."""
+        """v62.4: a manual paper trade on a strategy-GOVERNED program is
+        the DEDICATED manual-override path — allowed with step-up MFA
+        (conftest auto-injects the bypass), explicit override origin, and
+        NEVER attributed to the assigned strategy. Without step-up it is
+        refused outright."""
         pid = _create_program(admin_session, "gB")
         acc_id = _insert_paper_account(mongo, admin_id, "DEMO")
         _bind_master(mongo, pid, acc_id)
@@ -483,12 +485,29 @@ class TestExecutionGuardE2E:
                 json={"mode": "SINGLE", "strategy_id": "sniper",
                       "risk_profile_id": "controlled"},
                 headers=_csrf(admin_session), timeout=15)
+            # 1) without step-up → 403 (override REQUIRES fresh MFA)
+            prev = admin_session.headers.get("X-Step-Up-Bypass")
+            admin_session.headers["X-Step-Up-Bypass"] = ""
+            try:
+                r = self._fire(admin_session, acc_id)
+            finally:
+                if prev is None:
+                    admin_session.headers.pop("X-Step-Up-Bypass", None)
+                else:
+                    admin_session.headers["X-Step-Up-Bypass"] = prev
+            assert r.status_code in (401, 403), r.text
+            # 2) with step-up → ALLOWED as manual override, program-owned,
+            #    NOT attributed to sniper
             r = self._fire(admin_session, acc_id)
             assert r.status_code == 200, r.text
             body = r.json()
-            assert body.get("blocked") == "pamm_strategy_guard", body
-            assert body.get("reason") == "assignment_not_active", body
+            assert not body.get("blocked"), body
+            assert body.get("pamm_manual_override") is True, body
+            assert body.get("pamm_program_id") == pid, body
+            assert not body.get("pamm_strategy_id"), body
+            assert body.get("origin") == "manual_override", body
         finally:
+            mongo.trades.delete_many({"account_id": acc_id})
             _cleanup_program(mongo, pid)
             _cleanup_account(mongo, acc_id)
 
@@ -583,7 +602,7 @@ class TestExecutionGuardE2E:
                     return await authorize_pamm_strategy_execution(
                         db, prog, acc,
                         {"symbol": "EURUSD", "action": "BUY",
-                         "lot_size": 0.01})
+                         "strategy_id": "sniper", "lot_size": 0.01})
                 finally:
                     mc.close()
 
@@ -647,7 +666,7 @@ class TestExecutionGuardE2E:
                     return await authorize_pamm_strategy_execution(
                         db, prog, acc,
                         {"symbol": "EURUSD", "action": "BUY",
-                         "lot_size": 0.01})
+                         "strategy_id": "sniper", "lot_size": 0.01})
                 finally:
                     mc.close()
 
