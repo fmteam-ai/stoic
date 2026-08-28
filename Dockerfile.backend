@@ -8,12 +8,21 @@ WORKDIR /app/backend
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt \
-    # emergentintegrations pins openai==1.99.9 but litellm>=1.84 (security
-    # fix GHSA-4xpc/GHSA-jjhc) needs openai>=2.x — all its deps are pinned
-    # in requirements.txt, so install it without dependency resolution.
-    && pip install --no-cache-dir --no-deps emergentintegrations==0.2.0 \
-       --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+# emergentintegrations lives ONLY on the Emergent CDN index and pins
+# openai==1.99.9 while litellm>=1.84 (security fix GHSA-4xpc/GHSA-jjhc)
+# needs openai>=2.x — filter it from the freeze, install everything
+# else from PyPI, then install it without dependency resolution
+# (retried: the CDN index intermittently serves an empty page).
+RUN grep -v '^emergentintegrations' requirements.txt > /tmp/reqs.txt \
+    && pip install --no-cache-dir -r /tmp/reqs.txt \
+    && for i in 1 2 3 4 5; do \
+         pip install --no-cache-dir --no-deps emergentintegrations==0.2.0 \
+           --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+           && break; \
+         echo "emergentintegrations attempt $i failed — retry in 15s"; \
+         sleep 15; \
+       done \
+    && pip show -q emergentintegrations
 
 COPY backend/ ./
 

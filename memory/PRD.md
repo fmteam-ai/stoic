@@ -2000,6 +2000,7 @@ P1:
 - Testing: 515/515 unit no-DB; 124/124 full HTTP matrix in clean-DB sim AND against preview (testing agent iteration_146, plus 16 new targeted tests in tests/test_iter146_verification.py).
 DEFERRED (explicitly, next up): O(1) maintained Risk State (before large-scale Nitro use) — architectural change (incrementally maintained open-exposure/loss/drawdown state with staleness verification), scheduled as its own iteration.
 
+- CI-run fix #3 (container-build): backend/requirements.txt is a pip freeze that CONTAINS emergentintegrations==0.2.0 (CDN-only package) — Dockerfile.backend must filter it (`grep -v '^emergentintegrations'`) before `pip install -r`, then install it separately with the CDN extra-index + retry (matches all CI jobs). Fixed with sh-syntax-verified retry loop.
 ## Backlog (next picks)
 - P1: Command Center dashboard (GREEN/YELLOW/RED aggregate of soak/certs/guard health); Evidence report export (hash-chained, downloadable); O(1) risk-state aggregation; independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure for MULTI.
 - P2: Dynamic AI strategy assignment (Portfolio Brain budget rebalancing).
