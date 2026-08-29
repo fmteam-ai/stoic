@@ -1,0 +1,27 @@
+{
+  "summary": "iter-154 STOIC Certification Center + STOIC Connect + Developer v1 API — end-to-end tested. Regression suite (test_iter154_certification_connect.py + test_iter152_command_center.py) passes 8/8. New HTTP suite test_iter154_certification_connect_http.py passes 11/11 covering: pillars view (auth+ownership), issue/revoke hash-chain, public certificate endpoint (no auth, no account_id/user_id leak, hash_verified=true), Connect start (422 validation + install_command shape + 7-step status), and v1 API (write:connect scope create, status, scope-gate 403, 404-before-issue, cert with public_url after issue). Frontend: sidebar nav-product-connect + nav-certification present. /certification renders 6 pillar cards, tier banner, issue button (issues STC-*), issued list with copy/open/revoke — revoke flips row to REVOKED. /certificate/{id} renders as PUBLIC (VALID · HASH VERIFIED, 6 pillar bars, hash chain) and shows pc-error for bad ids. /connect wizard: form submit → install command panel with `installer.ps1` + `Install-Stoic -Token`, live progress checklist (account_created done, installer_paired pending, progress-pct=33%).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter154_certification_connect_http.py",
+    "/app/backend/tests/integration/test_iter154_certification_connect.py",
+    "/app/backend/tests/integration/test_iter152_command_center.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "public_certificate route (routes/certification_center_routes.py) correctly strips account_id/user_id via public_view — verified with HTTP assertion.",
+    "v1_account_certificate builds public_url from request.base_url when PUBLIC_BASE_URL unset — internally routed hostname could differ from user-facing one; setting PUBLIC_BASE_URL in .env would make the URL deterministic.",
+    "Class-scoped pytest fixture defined as instance method emits a PytestRemovedIn10Warning — harmless but consider @classmethod or moving to module-scope fixture."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter154_certification_connect_http.py (new)",
+    "/app/docs/TEST_MANIFEST.md (regenerated)"
+  ],
+  "success_rate": {"backend": "100% (19/19: 8 integration + 11 HTTP)", "frontend": "100% on tested flows"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (X-Step-Up-Bypass used from STEP_UP_BYPASS_TOKEN for /api/api-keys creation).",
+  "seed_data_creation": "Test suite creates 3 disposable MT5 accounts under admin via /connect + /v1/connect and best-effort DELETEs them in teardown_module. Also creates 2 TEST_iter154_* API keys (revoked at end). UI test created a new STC-* cert (revoked in-flow); pre-existing STC-3F1044BDF9 untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-154 fully green. Regression command: `cd /app/backend && python -m pytest tests/integration/test_iter154_certification_connect.py tests/integration/test_iter152_command_center.py tests/test_iter154_certification_connect_http.py tests/test_iter152_command_center_http.py -q` (25 tests). /admin/command-center HTTP is fine; UI automated navigation may hit Cloudflare challenge on fresh headless contexts — API tests are authoritative there.",
+  "rca of the issue": "No issues found."
+}

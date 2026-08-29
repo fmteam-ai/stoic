@@ -62,6 +62,9 @@ const AdminMigration = lazy(() => import("@/pages/AdminMigration"));
 const AdminSupport = lazy(() => import("@/pages/AdminSupport"));
 const AdminOps = lazy(() => import("@/pages/AdminOps"));
 const CommandCenter = lazy(() => import("@/pages/CommandCenter"));
+const CertificationCenter = lazy(() => import("@/pages/CertificationCenter"));
+const PublicCertificate = lazy(() => import("@/pages/PublicCertificate"));
+const Connect = lazy(() => import("@/pages/Connect"));
 const AdminBrokers = lazy(() => import("@/pages/AdminBrokers"));
 const AdminRunbooks = lazy(() => import("@/pages/AdminRunbooks"));
 const DeployPreflight = lazy(() => import("@/pages/DeployPreflight"));
@@ -97,6 +100,8 @@ function App() {
                         <Route path="/privacy" element={<Legal kind="privacy" />} />
                         <Route path="/risk-disclosure" element={<Legal kind="risk" />} />
                         <Route path="/status" element={<StatusPage />} />
+                        {/* Public certificate verification — no auth (like an SSL cert check) */}
+                        <Route path="/certificate/:certId" element={<PublicCertificate />} />
                         {/* Public email-verification landing page */}
                         <Route path="/verify-email" element={<VerifyEmail />} />
                         {/* Public password-reset flow */}
@@ -124,6 +129,8 @@ function App() {
                             the same page so direct navigation works either way. */}
                         <Route path="/bot-config" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
                         <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
+                        <Route path="/connect" element={<ProtectedRoute><Connect /></ProtectedRoute>} />
+                        <Route path="/certification" element={<ProtectedRoute><CertificationCenter /></ProtectedRoute>} />
                         <Route path="/crypto" element={<ProtectedRoute><Crypto /></ProtectedRoute>} />
                         <Route path="/shadow-performance" element={<ProtectedRoute><ShadowPerformance /></ProtectedRoute>} />
                         <Route path="/performance" element={<ProtectedRoute><VerifiedPerformance /></ProtectedRoute>} />

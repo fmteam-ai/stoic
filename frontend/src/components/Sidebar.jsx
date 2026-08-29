@@ -29,6 +29,7 @@ const SECTIONS = [
         label: "PRODUCTS",
         items: [
             { to: "/", label: "AI Trading Bot", icon: Bot, testid: "nav-product-bot" },
+            { to: "/connect", label: "Connect MT5", icon: Zap, testid: "nav-product-connect" },
             { to: "/managed", label: "Managed Strategy", icon: Briefcase, testid: "nav-product-managed", adminOnly: true },
             { to: "/marketplace", label: "Marketplace", icon: Store, testid: "nav-product-marketplace" },
             { to: "/vps", label: "VPS", icon: Server, testid: "nav-product-vps" },
@@ -51,6 +52,7 @@ const SECTIONS = [
         items: [
             { to: "/bot-health", label: "Bot Health", icon: Stethoscope, testid: "nav-bot-health" },
             { to: "/performance", label: "Verified Performance", icon: BadgeCheck, testid: "nav-performance" },
+            { to: "/certification", label: "Certification", icon: ShieldCheck, testid: "nav-certification" },
             { to: "/loss-lab", label: "Loss Lab", icon: FlaskConical, testid: "nav-loss-lab" },
             { to: "/scoreboard", label: "Scoreboard", icon: Trophy, testid: "nav-scoreboard" },
             { to: "/brokers", label: "Broker Compare", icon: Scale, testid: "nav-broker-compare" },

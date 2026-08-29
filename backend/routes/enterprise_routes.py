@@ -12,6 +12,7 @@ endpoint class.
 """
 import hashlib
 import hmac
+import os
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -33,7 +34,8 @@ public_router = APIRouter(prefix="/v1", tags=["enterprise-public-api"])
 
 KEY_PREFIX = "stoic_live_"
 PREFIX_LEN = len(KEY_PREFIX) + 8          # display/lookup prefix: stoic_live_XXXXXXXX
-VALID_SCOPES = {"read:accounts", "read:trades", "read:portfolio"}
+VALID_SCOPES = {"read:accounts", "read:trades", "read:portfolio",
+                "write:connect", "read:certificates"}
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -290,3 +292,71 @@ async def v1_portfolio(key=Depends(require_scope("read:portfolio"))):
     """Aggregate portfolio snapshot — same math as the web Accounts overview."""
     from routes.account_routes import accounts_overview
     return await accounts_overview(user={"id": key["user_id"]})
+
+
+# ───────────── STOIC Connect (iter-154) — Stripe-simple MT5 API ───────────
+
+async def _key_user(db, key: dict) -> dict:
+    from bson import ObjectId
+    u = await db.users.find_one({"_id": ObjectId(key["user_id"])})
+    if not u:
+        raise HTTPException(status_code=401, detail="key owner not found")
+    return {"id": str(u["_id"]), "role": u.get("role"),
+            "email": u.get("email")}
+
+
+async def _key_account(db, key: dict, account_id: str) -> dict:
+    from route_utils import parse_object_id
+    acc = await db.accounts.find_one(
+        {"_id": parse_object_id(account_id, "Account"),
+         "user_id": key["user_id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return acc
+
+
+@public_router.post("/connect/accounts")
+async def v1_connect_account(payload: dict, request: Request,
+                             key=Depends(require_scope("write:connect"))):
+    """ONE call: registers the MT5 account, issues the pairing token and
+    returns the single install command. VPS, EA, certificates and
+    reconciliation are handled behind STOIC."""
+    from connect_service import start_connect
+    db = get_db()
+    for f in ("broker", "server", "account_number"):
+        if not str(payload.get(f) or "").strip():
+            raise HTTPException(status_code=422, detail=f"{f} is required")
+    user = await _key_user(db, key)
+    return await start_connect(db, user, payload, request)
+
+
+@public_router.get("/connect/accounts/{account_id}/status")
+async def v1_connect_status(account_id: str,
+                            key=Depends(require_scope("read:accounts"))):
+    """Plain-language connection pipeline status (pairing → EA → identity
+    → integrity → reconciliation → certificate)."""
+    from connect_service import connect_status
+    db = get_db()
+    acc = await _key_account(db, key, account_id)
+    return await connect_status(db, acc)
+
+
+@public_router.get("/accounts/{account_id}/certificate")
+async def v1_account_certificate(account_id: str, request: Request,
+                                 key=Depends(
+                                     require_scope("read:certificates"))):
+    """Latest public STOIC certificate for the account + its public URL."""
+    from certification_center import public_view, verify_certificate
+    db = get_db()
+    acc = await _key_account(db, key, account_id)
+    cert = await db.public_certificates.find_one(
+        {"account_id": str(acc["_id"])}, sort=[("seq", -1)])
+    if not cert:
+        raise HTTPException(status_code=404,
+                            detail="No certificate issued for this account")
+    view = public_view(cert)
+    view["hash_verified"] = verify_certificate(cert)
+    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/") \
+        or str(request.base_url).rstrip("/")
+    view["public_url"] = f"{base}/certificate/{cert['cert_id']}"
+    return view
