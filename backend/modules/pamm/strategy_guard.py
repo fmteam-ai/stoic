@@ -689,6 +689,12 @@ async def authorize_pamm_strategy_execution(db, program: dict,
         await db.pamm_risk_decisions.insert_one(dict(snap))
     except (TypeError, AttributeError):  # isolated unit-test db mock
         pass
+    if not snap["authorized"]:
+        try:  # iter-152 — email admins on guard block (fire-and-forget)
+            from guard_alerts import queue_block_alert
+            queue_block_alert(db, snap)
+        except Exception:  # noqa: BLE001 — alerting must never gate trades
+            pass
     if res.get("authorized") and res.get("context") is not None:
         res["context"]["risk_snapshot_id"] = snap_id
     return res

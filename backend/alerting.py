@@ -48,6 +48,12 @@ async def raise_alert(db, kind: str, severity: str, message: str,
         "acked_by": None,
     })
     logger.warning("OPS ALERT [%s] %s: %s", severity, kind, message)
+    if severity == "critical":
+        try:  # iter-152 — critical alerts (stale telemetry, dead workers)
+            from guard_alerts import queue_ops_alert_email
+            queue_ops_alert_email(db, kind, severity, message, dedup_key)
+        except Exception:  # noqa: BLE001 — email must never break alerting
+            pass
     return str(res.inserted_id)
 
 

@@ -61,6 +61,7 @@ const AdminAffiliates = lazy(() => import("@/pages/AdminAffiliates"));
 const AdminMigration = lazy(() => import("@/pages/AdminMigration"));
 const AdminSupport = lazy(() => import("@/pages/AdminSupport"));
 const AdminOps = lazy(() => import("@/pages/AdminOps"));
+const CommandCenter = lazy(() => import("@/pages/CommandCenter"));
 const AdminBrokers = lazy(() => import("@/pages/AdminBrokers"));
 const AdminRunbooks = lazy(() => import("@/pages/AdminRunbooks"));
 const DeployPreflight = lazy(() => import("@/pages/DeployPreflight"));
@@ -108,6 +109,7 @@ function App() {
                         <Route path="/admin/affiliates" element={<ProtectedRoute requireAdmin><AdminAffiliates /></ProtectedRoute>} />
                         <Route path="/admin/migration" element={<ProtectedRoute requireAdmin><AdminMigration /></ProtectedRoute>} />
                         <Route path="/admin/ops" element={<ProtectedRoute requireAdmin><AdminOps /></ProtectedRoute>} />
+                        <Route path="/admin/command-center" element={<ProtectedRoute requireAdmin><CommandCenter /></ProtectedRoute>} />
                         <Route path="/admin/brokers" element={<ProtectedRoute requireAdmin><AdminBrokers /></ProtectedRoute>} />
                         <Route path="/admin/support" element={<ProtectedRoute requireAdmin><AdminSupport /></ProtectedRoute>} />
                         <Route path="/admin/runbooks" element={<ProtectedRoute requireAdmin><AdminRunbooks /></ProtectedRoute>} />

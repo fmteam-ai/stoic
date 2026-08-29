@@ -118,6 +118,7 @@ const ADMIN_SECTION = {
     label: "ADMIN",
     items: [
         { to: "/managed", label: "PAMM Accounts", icon: Briefcase, testid: "nav-admin-pamm" },
+        { to: "/admin/command-center", label: "Command Center", icon: Activity, testid: "nav-admin-command-center" },
         { to: "/admin/ops", label: "Ops Console", icon: Activity, testid: "nav-admin-ops" },
         { to: "/admin/preflight", label: "Deploy Preflight", icon: Rocket, testid: "nav-admin-preflight" },
         { to: "/admin/brokers", label: "Broker Registry", icon: Store, testid: "nav-admin-brokers" },

@@ -1,0 +1,32 @@
+{
+  "summary": "iter-152 Command Center + Evidence Export + Guard Email Alerts — reviewed. Backend pytest suites (test_iter152_command_center.py 4/4, test_iter149_risk_state 12/12 + test_iter146_verification 5/5 regression) all green. Added new HTTP auth-gating suite test_iter152_command_center_http.py (6/6 passing): anonymous → 401, non-admin registered user → 403 on both /api/command-center/status and /evidence-export; admin → 200 with correct schema and hash-chain report that verifies via command_center.verify_report (and fails after tamper). Frontend admin flow verified end-to-end on preview URL: sidebar shows nav-admin-command-center, /admin/command-center renders cc-overall-banner (RED — correct aggregation over 35 stale test accounts + 1 dead worker), all four section cards (soak YELLOW / certs YELLOW / guard RED / workers RED) with -status/-detail testids, metric testids (cc-soak-day, cc-guard-decisions/blocked/stale, cc-recent-alerts, cc-recent-emails, cc-email-config), EVIDENCE REPORT button triggers a JSON file download (stoic-evidence-…json) with a toast containing 'report_hash …', REFRESH button reloads without errors. Non-admin verification: after registering a fresh user and flipping email_verified in Mongo, sidebar hides the admin section (nav-admin-command-center count = 0) and direct navigation to /admin/command-center is blocked by ProtectedRoute (redirects to /, cc page not rendered).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Command Center overall banner", "issues": ["provenance shows 'commit unknown' because STOIC_IMAGE_DIGEST/git commit env vars are not populated in preview — cosmetic only; guard_policy_version is present as required."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/integration/test_iter152_command_center.py",
+    "/app/backend/tests/test_iter152_command_center_http.py",
+    "/app/test_reports/pytest/iter152_http_gating.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "command_center.py _cert_section: `expiring = [c for c in valid if str(c.get('expires_at') or '') <= soon]` uses string comparison of ISO timestamps — works because ISO-8601 sorts lexicographically, but only if all timestamps share the same TZ suffix. Safe today (issued_at/expires_at all UTC ISO), but fragile if a producer ever writes a naïve/local timestamp. Consider parsing with datetime.fromisoformat for defensive equality.",
+    "routes/command_center_routes.py returns a JSONResponse for evidence-export — good. Consider adding Cache-Control: no-store to prevent proxies caching a hash-chained audit artifact.",
+    "CommandCenter.jsx export handler will crash on `report.report_hash.slice(...)` if the API ever returns without report_hash — a minor guard (?.slice) would be cheap insurance."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter152_command_center_http.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123 (legacy admin used to avoid must_change_password redirect); non-admin: ccnon_11613bd0@example.com / Kd5#Zt9mW2xVpR7c (email_verified flipped via mongo).",
+  "seed_data_creation": "One registered non-admin user (ccnon_11613bd0@example.com). No other data mutated. All command-center pytest scenarios use scratch DB stoic_test_cc_<uuid> which is dropped at end of each test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter-152 Command Center endpoints are auth-gated and admin-only, evidence-export returns hash-chained JSON with Content-Disposition attachment; verify_report(report) is True on pristine and False on any tamper. Frontend page renders under /admin/command-center with all required testids. Preview aggregation is intentionally RED (35 stale test accounts + 1 dead worker) — do not treat as regression.",
+  "rca of the issue": "N/A — no bugs found."
+}
