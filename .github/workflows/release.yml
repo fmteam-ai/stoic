@@ -306,7 +306,7 @@ jobs:
           ea_version = None
           for line in open("backend/static/EmergentTradingBridge.mq5",
                            encoding="utf-8", errors="ignore"):
-              if "#property version" in line:
+              if line.strip().startswith("#property version"):
                   ea_version = line.split('"')[1] if '"' in line else None
                   break
           # unified Host Agent hash — deterministic digest over every

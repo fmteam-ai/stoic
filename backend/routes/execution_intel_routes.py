@@ -17,6 +17,16 @@ from execution_intel.order_book import pulse as ob_pulse
 router = APIRouter(prefix="/execution", tags=["execution-intelligence"])
 
 
+@router.get("/segments")
+async def execution_segments_ep(days: int = Query(30, ge=1, le=365),
+                                user=Depends(get_current_user)):
+    """iter-153 — segmented execution-quality evidence (admin only)."""
+    if (user or {}).get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    from execution_segments import segments
+    return await segments(get_db(), days=days)
+
+
 async def _resolve_account(db, user_id: str, account_id: str | None):
     if account_id:
         from bson import ObjectId

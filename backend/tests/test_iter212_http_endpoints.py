@@ -381,7 +381,7 @@ class TestBrokerValidationAdmin:
         assert isinstance(body["checks"], list)
         assert len(body["checks"]) == 7
         keys = {c["key"] for c in body["checks"]}
-        assert keys == {"not_paper", "identity_verified",
+        assert keys == {"live_environment", "identity_verified",
                         "heartbeat_live", "deal_history_synced",
                         "round_trip_trade", "latency_traced",
                         "clock_health"}

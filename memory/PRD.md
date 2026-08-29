@@ -2027,6 +2027,15 @@ DEFERRED (explicitly, next up): O(1) maintained Risk State (before large-scale N
 - Frontend: pages/CommandCenter.jsx at /admin/command-center (Sidebar nav-admin-command-center). Overall banner, 4 section cards, recent alerts + alert-email panels, EVIDENCE REPORT download button, 30s auto-refresh. All testids cc-*.
 - Verified: pytest tests/integration/test_iter152_command_center.py (4) + testing-agent HTTP gating suite tests/test_iter152_command_center_http.py (6) + full frontend flow — 100% both sides. Preview shows RED correctly (35 stale test accounts + 1 dead worker). "commit unknown" in preview is expected (no BUILD_SHA injection outside release builds).
 
+## Full local verification battery + segmented execution evidence (iter-153, Jun 2026 — DONE)
+- test_iter146_verification.py: hard-coded `_REPO = "/app"` → derived from `Path(__file__).parents[2]`.
+- Fixed EA-version parser bug in release.yml manifest + scripts/capture_release_hashes.py: `"#property version" in line` matched a COMMENT ("said \"1.29\"") — now requires line.strip().startswith. Real EA version is 1.56.
+- scripts/capture_release_hashes.py → docs/RELEASE_HASHES.json: git commit, EA v1.56 mq5 sha256, host_agent source hash (same walk as release.yml), guard v62.8 + exec policy v56.3, 4 strategy hashes. EX5/MSI/image digests+cosign = pending CI runners (not runnable in pod).
+- iter-153 segmented execution evidence: backend/execution_segments.py — trading_session() (UTC asia/london/overlap/newyork), record_fill() → db.execution_quality keyed broker_server×symbol×session (hooked in bridge_routes slippage block, never gates), segments() aggregation with median/p95/worst + evidence_ready vs MIN_SLIPPAGE_SAMPLES {VERY_HIGH:10, MAXIMUM:20}. Endpoint GET /api/execution/segments (admin). Tests tests/integration/test_iter153_execution_segments.py (3).
+- Fixed stale HTTP test expectation: test_iter212 broker-validation checklist key `not_paper` → `live_environment` (renamed iterations ago).
+- FULL BATTERY RESULTS (local pod): unit collect-only 515/0 errors; unit 515 pass; integration 32 pass; HTTP suites iter211-213+216-222+152: 209 pass, 2 weekend skips, 1 stale-expectation fixed+retested; frontend lint/typecheck/vitest/build all green; Playwright E2E 11 specs all green (3 flaked only under concurrent battery load, green standalone). Runbook §11 added: production-proof measurement campaigns (segment calibration, twin, exec alpha, uncertainty calibration, factor-exposure normalization pre-Multi-PAMM).
+- PREVIEW admin password: reset back to admin123 in DB (tests hardcode it); .env keeps the production recovery secret untouched.
+
 ## Backlog (next picks)
-- P1: independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure for MULTI.
+- P1: independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure (factor_lots → %-of-NAV risk) BEFORE Multi-Strategy PAMM.
 - P2: Dynamic AI strategy assignment (Portfolio Brain budget rebalancing).

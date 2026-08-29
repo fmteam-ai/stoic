@@ -107,6 +107,22 @@ swap them into `frontend/src/components/LandingTestimonials.jsx`
 
 ---
 
+## 11. Production-proof data collection (runs alongside the soak)
+These are MEASUREMENT campaigns, not code work. They require live demo/prod
+fills accumulating over days–weeks.
+
+| Item | How | Done when |
+|---|---|---|
+| 11.1 Segmented execution data | Automatic since iter-153: every measured fill lands in `db.execution_quality` keyed by broker_server × symbol × session. Review via `GET /api/execution/segments?days=30` (admin) | Every traded segment shows `evidence_ready.VERY_HIGH: true` |
+| 11.2 Calibrate 10/20 slippage thresholds | Compare per-segment p95/worst distributions from 11.1 against the global `MIN_SLIPPAGE_SAMPLES = {VERY_HIGH: 10, MAXIMUM: 20}`; raise/lower per evidence | Thresholds justified by ≥2 weeks of segment data |
+| 11.3 Digital Twin calibration | `GET /api/twin/summary` + `/api/twin/stress` — compare twin-predicted vs realized fills/PnL on demo | Twin error inside agreed tolerance over 100+ trades |
+| 11.4 Execution Alpha | The `execution_alpha` gate (strategies registry) logs its decisions — measure realized savings (avoided adverse fills) vs a naive baseline | Positive alpha with confidence interval reported |
+| 11.5 Uncertainty calibration | `GET /api/trades/calibration` — predicted win-prob vs realized frequency buckets | Calibration curve within tolerance band |
+| 11.6 Factor exposure normalization | BEFORE Multi-Strategy PAMM: move `factor_lots` (signed lots) to normalized risk exposure (%-of-NAV per factor). Code task tracked P1 in the backlog | Design reviewed + implemented + guard tests updated |
+
+
+---
+
 ## Sign-off
 
 | # | Item | Result (PASS/FAIL) | Operator | Date | Evidence link |

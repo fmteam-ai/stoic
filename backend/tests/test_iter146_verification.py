@@ -5,6 +5,7 @@ and slippage evidence gate placement (LIVE new-risk only).
 import os
 import re
 import uuid
+from pathlib import Path
 
 import pytest
 import yaml
@@ -85,7 +86,7 @@ class TestImageDigestEnforcement:
 
 
 # ---------- static workflow / deploy checks ----------
-_REPO = "/app"
+_REPO = str(Path(__file__).resolve().parents[2])
 
 
 class TestDeployStaticGates:

@@ -1365,6 +1365,15 @@ async def report_trade(payload: BridgeTradeReport):
             update["requested_price"] = requested
         update["slippage_pips"] = round(slip_pips, 2)
         update["slippage_checked"] = True
+        try:  # iter-153 — broker/server/symbol/session segmented evidence
+            from execution_segments import record_fill
+            await record_fill(db, trade=trade, account=acc, symbol=symbol,
+                              side=action, slippage_pips=slip_pips,
+                              requested_price=requested if requested > 0
+                              else None,
+                              actual_price=actual)
+        except Exception as e:  # noqa: BLE001 — evidence must never gate
+            logger.warning("execution segment record failed: %s", e)
         # Pull bot config for the threshold — prefer the per-account override
         # if it exists, else fall back to the user's default profile.
         account_id_str = str(acc["_id"])

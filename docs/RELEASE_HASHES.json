@@ -1,0 +1,42 @@
+{
+  "captured_at": "2026-08-29T14:30:41.468255+00:00",
+  "git_commit": "f5e1b1be5933211986c5bf06f9311564c999c822",
+  "ea": {
+    "version": "1.56",
+    "mq5_sha256": "513b86820c24feb119eef39459078d9952aa3b87fcd9de9174802543b3d19810",
+    "ex5_sha256": null,
+    "ex5_note": "compiled ONLY by the release.yml MetaEditor gate on a real Windows runner \u2014 pending CI"
+  },
+  "host_agent": {
+    "source_hash": "73d3cc94b3660ebda18aeb9a338ed4fe584dab9c2113e93afa44138383022dc5",
+    "files": 3,
+    "msi_note": "MSI built + Authenticode-signed only in msi-release.yml \u2014 pending CI"
+  },
+  "policies": {
+    "guard_policy_version": "v62.8",
+    "execution_policy_version": "v56.3"
+  },
+  "strategies": {
+    "fast_scalp": {
+      "version": "1.0.0",
+      "hash": "0bae1952a5c4b66f8a3731641a04428a"
+    },
+    "nitro_scalper": {
+      "version": "1.0.0",
+      "hash": "3db9fa52b202f7add2e2399f5e8791f4"
+    },
+    "scalper": {
+      "version": "1.0.0",
+      "hash": "7eb46aa92c104e5185af67f896974b51"
+    },
+    "sniper": {
+      "version": "1.0.0",
+      "hash": "d7dc3a1a8d0062260beea0350f5e5560"
+    }
+  },
+  "images": {
+    "backend_digest": null,
+    "frontend_digest": null,
+    "note": "immutable digests + cosign signatures are produced/verified only by release.yml on GHCR \u2014 pending CI"
+  }
+}
