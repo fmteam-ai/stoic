@@ -3,9 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { BACKEND_URL } from "@/lib/api";
 
 // ─── EDIT YOUR TESTIMONIALS HERE ────────────────────────────────────
-// Quotes are deliberately about experience, safety and control — not
-// profit promises (compliance-safe for a trading product). Swap these
-// for real customer quotes whenever you have them.
+// ILLUSTRATIVE PLACEHOLDERS — these are NOT real customer reviews and
+// are clearly labeled as such in the UI (section note + per-card badge
+// + footer disclaimer). Swap for real, written-authorization quotes and
+// remove the labels ONLY when every quote is genuine and authorized.
 const TESTIMONIALS = [
     { name: "Marcus T.", role: "Former prop-desk trader", rating: 5,
       quote: "The first bot I've used that tells me WHY it refused a trade. The veto log is worth the subscription alone." },
@@ -108,6 +109,7 @@ const Stars = ({ n }) => (
 
 const Card = ({ t, idx }) => (
     <figure className="tst-card" data-testid={`testimonial-card-${idx}`}>
+        <span className="tst-illustrative">Illustrative example</span>
         <Stars n={t.rating} />
         <blockquote className="tst-quote">&ldquo;{t.quote}&rdquo;</blockquote>
         <figcaption className="tst-person">
@@ -130,7 +132,11 @@ export const LandingTestimonials = () => {
                 Built for people who <em>hate</em> losing stupidly.
             </h2>
             <p className="tst-subline">
-                What traders say about living with a bot that says &ldquo;no&rdquo; a lot.
+                What living with a bot that says &ldquo;no&rdquo; a lot is designed to feel like.
+            </p>
+            <p className="tst-illustrative-note" data-testid="testimonials-illustrative-label">
+                The quotes below are illustrative examples, not real customer reviews.
+                The stats are live platform data.
             </p>
             <TrustBar />
             <div className="tst-marquee" data-testid="testimonials-marquee">
@@ -146,7 +152,9 @@ export const LandingTestimonials = () => {
                 </div>
             </div>
             <p className="tst-honesty" data-testid="testimonials-disclaimer">
-                Individual experiences — not a promise of performance. Trading involves risk.
+                Quotes are illustrative examples, not real customer reviews.
+                Platform stats are live data. Not a promise of performance —
+                trading involves risk.
             </p>
         </section>
     );

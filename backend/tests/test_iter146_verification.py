@@ -132,8 +132,14 @@ class TestCiWorkflowStaticGates:
     def test_release_yml_build_sha_equality_and_evidence(self):
         with open(f"{_REPO}/.github/workflows/release.yml") as f:
             body = f.read()
-        # equality gates (BUILD_SHA == GITHUB_SHA)
-        assert body.count("!= GITHUB_SHA") >= 2
+        # equality gates compare against the PEELED commit — github.sha is
+        # the tag OBJECT for annotated tags and must never be used raw
+        assert body.count("!= GITHUB_SHA commit") >= 3
+        assert body.count("^{commit}") >= 4
+        assert 'os.environ["COMMIT_SHA"]' in body
+        assert '--build-arg GIT_SHA="${COMMIT_SHA}"' in body
+        # no gate may compare BUILD_SHA against the raw event sha
+        assert '"${ARCHIVE_SHA}" != "${SHA}"' not in body
         # collect-only gate
         assert "pytest tests/unit --collect-only" in body
         # release-evidence lifecycle
