@@ -92,6 +92,24 @@ def signed_factor_lots(symbol, action, lots) -> dict:
 # NEW risk — a p95 computed from a handful of fills is meaningless.
 MIN_SLIPPAGE_SAMPLES = {"VERY_HIGH": 10, "MAXIMUM": 20}
 
+# P0-A (iter-156): the trusted-slippage evidence WINDOW must exceed the
+# largest minimum above, or Nitro (MAXIMUM ⇒ 20) could never satisfy its
+# own gate. 10/20 stay the ELIGIBILITY floors; 50 is the rolling window.
+SLIPPAGE_EVIDENCE_WINDOW = 50
+
+
+def _slip_stats(slips_sorted: list) -> dict:
+    """Distribution over the trusted-slippage window (ascending input)."""
+    def pct(p: float) -> float:
+        return slips_sorted[min(len(slips_sorted) - 1,
+                                int(p * (len(slips_sorted) - 1) + 0.5))]
+    return {"recent_slippage_pips": pct(0.5),
+            "recent_slippage_p75_pips": pct(0.75),
+            "recent_slippage_p90_pips": pct(0.9),
+            "recent_slippage_p95_pips": pct(0.95),
+            "recent_slippage_max_pips": slips_sorted[-1],
+            "recent_slippage_sample_count": len(slips_sorted)}
+
 
 def slippage_evidence_violation(latency_sensitivity,
                                 telemetry) -> dict | None:
@@ -457,10 +475,10 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
                 / float(balance) * 100, 4)
         slips = list(cached.get("slips") or [])
         if slips:
-            t["recent_slippage_pips"] = slips[len(slips) // 2]
-            t["recent_slippage_p95_pips"] = slips[
-                min(len(slips) - 1, int(0.95 * (len(slips) - 1) + 0.5))]
-            t["recent_slippage_sample_count"] = len(slips)
+            t.update(_slip_stats(slips))
+            age = _age_s(cached.get("slips_latest_at"))
+            t["slippage_evidence_age_s"] = (round(age, 1)
+                                            if age is not None else None)
         t["consecutive_losses"] = cached.get("consecutive_losses")
     if not cached:
         t["risk_state_source"] = "recomputed"
@@ -574,20 +592,25 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
     # — tampered/unverified PAMM self-reports are excluded)
     if not cached:
         try:
-            slips = []
+            slips, slips_latest_at = [], None
             async for tr in db.trades.find(
                     {"account_id": acct_id, "slippage_checked": True,
                      "slippage_pips": {"$ne": None},
                      "pamm_slippage_verified": {"$ne": False}},
-                    {"slippage_pips": 1}).sort("created_at", -1).limit(10):
+                    {"slippage_pips": 1, "created_at": 1}).sort(
+                        "created_at", -1).limit(SLIPPAGE_EVIDENCE_WINDOW):
+                if slips_latest_at is None:
+                    slips_latest_at = tr.get("created_at")
                 slips.append(float(tr.get("slippage_pips") or 0))
             if slips:
                 slips.sort()
-                t["recent_slippage_pips"] = slips[len(slips) // 2]
-                # distribution view — p95 catches tail slippage a median hides
-                t["recent_slippage_p95_pips"] = slips[
-                    min(len(slips) - 1, int(0.95 * (len(slips) - 1) + 0.5))]
-                t["recent_slippage_sample_count"] = len(slips)
+                # distribution view — p75/p90/p95/max catch the tail a
+                # median hides; the window (50) exceeds every eligibility
+                # minimum so Fast (10) AND Nitro (20) gates CAN pass
+                t.update(_slip_stats(slips))
+                age = _age_s(slips_latest_at)
+                t["slippage_evidence_age_s"] = (round(age, 1)
+                                                if age is not None else None)
             # consecutive losses
             streak = 0
             async for tr in db.trades.find(
@@ -600,6 +623,7 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
             t["consecutive_losses"] = streak
             if payload:
                 payload.update({"slips": slips,
+                                "slips_latest_at": slips_latest_at,
                                 "consecutive_losses": streak})
         except Exception as e:  # noqa: BLE001
             logger.error("risk-truth slippage/streak read failed acct=%s: %s",

@@ -1,18 +1,22 @@
-"""O(1) maintained risk state (iter-149).
+"""O(1) maintained risk state (iter-149, hardened iter-156).
 
 The PAMM guard's trade-derived telemetry (open exposure, weekly/daily
 realized loss, slippage samples, loss streak) previously required full
 document scans on EVERY authorization. This module maintains a per-account
-snapshot in `pamm_risk_state`, guarded by a cheap CONSISTENCY BASIS:
+snapshot in `pamm_risk_state`, guarded by a CONSISTENCY BASIS.
 
-    basis = {open_count, week_closed, week0, day0}
+P0-B (iter-156): the basis is a CONTENT fingerprint, not just counts —
+index-covered aggregations over the mutable risk inputs:
 
-Both counts are single indexed count queries. ANY trade open/close (or a
-test inserting/deleting trades directly in Mongo) changes the basis, which
-forces a full recompute — the cache can never serve wrong exposure or loss
-numbers, with zero writer hooks and zero drift risk. A hard age bound
-(RISK_STATE_MAX_AGE_S, default 600s) covers in-place updates that do not
-move a count (e.g. a fill confirmation stamping slippage on an open trade).
+    open trades:  count + Σlot_size + Σrisk_pct
+    week closed:  count + Σpnl
+
+So an open position changing SIZE or RISK, a partial fill, a manual broker
+position change surfaced by Position Truth, or a corrected closed-trade
+P&L each change the fingerprint and invalidate the maintained state
+IMMEDIATELY — even when document counts stay constant. A hard age bound
+(RISK_STATE_MAX_AGE_S, default 600s) additionally covers in-place updates
+outside the fingerprint (e.g. slippage stamps on old fills).
 
 NAV drawdown peaks get the same treatment in `pamm_nav_peak`, keyed by the
 append-only snapshot count per program.
@@ -69,14 +73,36 @@ async def ensure_indexes(db) -> None:
         logger.warning("risk_state index setup failed: %s", e)
 
 
+def _num(field: str) -> dict:
+    return {"$convert": {"input": f"${field}", "to": "double",
+                         "onError": 0.0, "onNull": 0.0}}
+
+
 async def compute_basis(db, acct_id: str, week0: str, day0: str) -> dict:
-    """Two indexed counts — O(1) consistency fingerprint for the state."""
-    open_count = await db.trades.count_documents(
-        {"account_id": acct_id, "status": {"$in": ["open", "pending"]}})
-    week_closed = await db.trades.count_documents(
-        {"account_id": acct_id, "status": "closed",
-         "closed_at": {"$gte": week0}})
-    return {"open_count": open_count, "week_closed": week_closed,
+    """Content fingerprint of every mutable risk input (P0-B, iter-156):
+    two index-covered aggregations — a size/risk change on an OPEN
+    position or a P&L correction on a CLOSED trade invalidates the state
+    immediately, even with unchanged document counts."""
+    open_g = {"n": 0, "lots": 0.0, "risk": 0.0}
+    async for g in db.trades.aggregate([
+            {"$match": {"account_id": acct_id,
+                        "status": {"$in": ["open", "pending"]}}},
+            {"$group": {"_id": None, "n": {"$sum": 1},
+                        "lots": {"$sum": _num("lot_size")},
+                        "risk": {"$sum": _num("risk_pct")}}}]):
+        open_g = g
+    week_g = {"n": 0, "pnl": 0.0}
+    async for g in db.trades.aggregate([
+            {"$match": {"account_id": acct_id, "status": "closed",
+                        "closed_at": {"$gte": week0}}},
+            {"$group": {"_id": None, "n": {"$sum": 1},
+                        "pnl": {"$sum": _num("pnl")}}}]):
+        week_g = g
+    return {"open_count": int(open_g.get("n") or 0),
+            "open_lots": round(float(open_g.get("lots") or 0.0), 6),
+            "open_risk": round(float(open_g.get("risk") or 0.0), 6),
+            "week_closed": int(week_g.get("n") or 0),
+            "week_pnl": round(float(week_g.get("pnl") or 0.0), 6),
             "week0": week0, "day0": day0}
 
 
