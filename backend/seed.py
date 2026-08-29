@@ -85,8 +85,30 @@ async def seed_admin():
         })
         log = logging.getLogger("seed")
         log.info("seeded admin account %s", admin_email)
-    # Do NOT overwrite an existing admin hash — the admin can change their
-    # password and it must survive restarts.
+    elif str(os.environ.get("ADMIN_PASSWORD_FORCE_RESET", "")
+             ).lower() in ("1", "true", "yes"):
+        # EXPLICIT operator recovery path (locked-out admin). One-shot PER
+        # SECRET VALUE: a fingerprint on the user doc ensures each env
+        # password is applied at most once even if the flag stays set, so
+        # an in-app password change is never silently reverted afterwards.
+        import hashlib
+        fp = hashlib.sha256(admin_password.encode()).hexdigest()
+        if existing.get("admin_env_pw_fingerprint") != fp:
+            await db.users.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"password_hash": hash_password(admin_password),
+                          "must_change_password": True,
+                          "admin_env_pw_fingerprint": fp},
+                 "$unset": {"password_reset_token": "",
+                            "password_reset_expires_at": ""}})
+            await db.login_attempts.delete_many(
+                {"identifier": {"$regex": admin_email.replace(".", r"\.")}})
+            logging.getLogger("seed").warning(
+                "ADMIN_PASSWORD_FORCE_RESET applied for %s — password "
+                "re-synced from env, first-login rotation enforced. "
+                "Remove the flag after recovery.", admin_email)
+    # Otherwise: NEVER overwrite an existing admin hash — the admin can
+    # change their password and it must survive restarts.
 
     # Default bot config for admin (account_id=None marks the user-default profile)
     admin = await db.users.find_one({"email": admin_email})
