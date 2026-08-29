@@ -1,0 +1,28 @@
+{
+  "summary": "SEC-001 fix verified: certification_center.revoke_public() admin branch now invokes auth.require_admin (mirrors _owned_account). 5/5 new tests pass + full iter154 regression (15/15) green. Admin end-to-end revoke flow works in preview (ADMIN_MFA_ENFORCED=false), non-admin cannot revoke another user's cert (404 by scoped query), and unit-level check with ADMIN_MFA_ENFORCED=true monkeypatched confirms revoke_public raises HTTPException 403 admin_mfa_required when admin lacks TOTP. Regular-user branch remains scoped by user_id and untouched by the MFA gate.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter150_sec001_revoke_mfa.py",
+    "/app/test_reports/pytest/iter150_sec001.xml",
+    "/app/test_reports/pytest/iter150_cert_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is minimal and correct: certification_center.py:262-263 mirrors the same require_admin call already used in _owned_account (routes/certification_center_routes.py:22-23). Both entry points to the admin branch are now guarded uniformly.",
+    "require_admin reads ADMIN_MFA_ENFORCED from os.environ at call time (auth.py:84) — verified via monkeypatch.setenv working correctly in-process without a backend restart.",
+    "revoke_public non-admin branch (line 260) uses user_id filter, so cross-tenant attempts naturally return 404 without leaking existence. Confirmed by test.",
+    "Certificate hash chain unaffected by revocation (revoked/revoked_at/revoked_reason excluded from evidence_hash inputs) — hash_verified still true after revoke."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter150_sec001_revoke_mfa.py (new)",
+    "/app/docs/TEST_MANIFEST.md (regenerated)"
+  ],
+  "success_rate": {"backend": "100% (20/20: 5 new + 15 regression)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "admin@stoicaibot.com/admin123 and ccnon_11613bd0@example.com/Kd5#Zt9mW2xVpR7c — both valid.",
+  "seed_data_creation": "none — reused existing admin account & certs; one new revoked cert (STC-*) written to db.public_certificates as expected side-effect of the admin revoke test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "SEC-001 audit finding closed. Certification surface (issue/view/revoke/public verify) fully covered. Preview ADMIN_MFA_ENFORCED stays false; enforcement path is exercised at unit-level with monkeypatched env so no server restart or .env mutation required.",
+  "rca of the issue": "Pre-fix, certification_center.revoke_public() admin branch (role=='admin') only widened the query (dropped user_id filter) without calling auth.require_admin — so an admin without TOTP could cross-tenant revoke certs even when ADMIN_MFA_ENFORCED=true, unlike the issue/view routes that go through _owned_account which already gates on require_admin. Fix adds the same require_admin(user) call in the admin branch. Verified: (1) production enforcement path (ADMIN_MFA_ENFORCED=true + admin w/o TOTP) now raises 403 admin_mfa_required; (2) preview path unchanged; (3) non-admin path still scoped to owner."
+}

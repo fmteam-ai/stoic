@@ -258,6 +258,9 @@ async def revoke_public(db, cert_id: str, user: dict, reason: str) -> dict:
     q = {"cert_id": cert_id, "revoked": False}
     if user.get("role") != "admin":
         q["user_id"] = user["id"]
+    else:
+        from auth import require_admin
+        require_admin(user)  # cross-tenant revoke needs the MFA gate (SEC-001)
     r = await db.public_certificates.find_one_and_update(
         q, {"$set": {"revoked": True, "revoked_at": _now_dt().isoformat(),
                      "revoked_reason": reason}})
