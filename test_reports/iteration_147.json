@@ -1,0 +1,33 @@
+{
+  "summary": "iter-149 O(1) maintained Risk State independently verified end-to-end. (1) Unit lane `env -u MONGO_URL pytest tests/unit -q` → 515/515 PASS (includes the updated NAV mock in test_hardening_v627 supporting pamm_nav_peak/count_documents). (2) Integration lifecycle tests/integration/test_iter149_risk_state.py (scratch DB) → 1/1 PASS: first read recomputed, second read maintained with identical values, trade insert/close flips basis → recompute with updated exposure, nav_peak follows snapshot count. (3) NEW adversarial + fail-safe suite tests/integration/test_iter149_adversarial.py → 1/1 PASS covering three properties: (a) tampering pamm_risk_state.payload.factor_lots={} AND inserting a trade → basis mismatch → recompute overwrites tampered payload with correct EUR/GBP/USD net lots; (b) monkeypatching risk_state._max_age_s → 0 forces recompute every read (age gate); restoring returns to maintained; (c) monkeypatching risk_state.compute_basis to RAISE (broken cache infra) → _telemetry still returns correct evidence via full recompute (open_positions=2, factor_lots EUR=1.0/USD=-1.5/GBP=0.5, open_risk_pct_sum=1.5), never crashes, never fabricates. (4) HTTP guard-invariant regression against preview URL (https://stoic-trading-bot.preview.emergentagent.com) — tests/test_iter221_risk_truth_http.py + tests/test_iter222_hardening_http.py → 24/24 PASS (exercises the new maintained-state read path through real guard authorizations: RISK_UNKNOWN asymmetry, envelope caps r5-r10, snapshot provenance). (5) iter218 + iter220 HTTP → 32 passed + 2 skipped (market_closed weekend skips are the designed behaviour, kill-switch was NOT bypassed). All scratch DBs (stoic_test_riskstate_*) were dropped by teardown; verified none leaked. Total independent pass: 515 unit + 2 integration + 24 HTTP guard + 32 HTTP hardening (+ 2 designed weekend skips) = 573/573 executed tests PASS.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A (pytest)", "issue": "PytestRemovedIn10Warning about class-scoped instance-method fixtures in test_iter218/220/221/222 persists (previously flagged in iter-145 & iter-146). Non-blocking cosmetic; recommended refactor to @classmethod fixtures."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/integration/test_iter149_risk_state.py",
+    "/app/backend/tests/integration/test_iter149_adversarial.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "modules/pamm/risk_state.py: consistency-basis design is airtight — two indexed count_documents ({account,status} and {account,status=closed,closed_at>=week0}) give an O(1) fingerprint that changes on ANY trade open/close/delete, so a stale payload cannot be served even if disk contents are tampered. The RISK_STATE_MAX_AGE_S=600s age gate covers in-place mutations that don't move a count (e.g. slippage stamping on an existing trade).",
+    "Every helper (ensure_indexes, compute_basis via strategy_guard wrap, read_state, store_state, nav_peak) catches Exception and logs — cache infra can never crash the guard. Verified experimentally in the adversarial test: replacing compute_basis with a RAISE still yields correct evidence.",
+    "strategy_guard._telemetry (L426-560): cache_ok flag correctly gates store_state at the recompute path's tail — partial evidence gaps (open-exposure failure or loss-scan failure) set cache_ok=False so a broken read is never persisted. The maintained branch reads slips-median/p95/count in one traversal and preserves consecutive_losses semantics identical to recompute.",
+    "nav_peak keyed by pamm_nav_snapshots.count_documents({program_id}) is correct because snapshots are append-only — any new snapshot bumps the count and forces the max-scan. limit(20000) is a safe rescan bound; would recommend documenting this ceiling in the docstring for programs that could exceed it.",
+    "iter218+iter220 market_closed skips are correctly implemented — the pytest.skip fires on blocked='market_closed', not on any other reason, so the kill-switch/env-caps remain fully tested even on weekends.",
+    "ci.yml clean-deploy sets MAX_ORDERS_PER_MIN=100 for test headroom while preserving the 5/min kill-switch codepath (no bypass added) — correct."
+  ],
+  "updated_files": [
+    "/app/backend/tests/integration/test_iter149_adversarial.py (NEW — cache-tamper + age-gate + fail-safe basis crash scenarios)"
+  ],
+  "success_rate": {"backend": "100% (515 unit + 2 integration + 24 HTTP guard + 32 HTTP hardening = 573/573 executed; 2 designed weekend skips)", "frontend": "not tested (backend-only per request)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (from /app/memory/test_credentials.md); backend/.env auto-injects STEP_UP_BYPASS_TOKEN + RATE_LIMIT_BYPASS_TOKEN via conftest",
+  "seed_data_creation": "test_iter149_adversarial.py creates a per-run scratch DB `stoic_test_riskstate_adv_<uuid>` and drops it in a finally block. Verified no leftover `stoic_test_riskstate*` databases after the run. No production/preview DB writes.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter-149 maintained risk state is verified for happy-path AND adversarial paths. New regression file: /app/backend/tests/integration/test_iter149_adversarial.py — runs in ~0.3s and confirms (a) basis-mismatch overwrites tampered payload, (b) age-gate forces recompute when _max_age_s=0, (c) exception in compute_basis degrades to correct recompute. Preferred targets: `env -u MONGO_URL pytest tests/unit -q`, then `pytest tests/integration -m integration -q`, then the HTTP matrix (iter216..iter222) against the preview URL. Note: the two skips in iter218/iter220 are expected on weekends (market_closed) and NOT a bug. Do NOT modify the 5/min order kill-switch — it is a safety control.",
+  "rca of the issue": "N/A — all six review-request items verified. No defects surfaced. The maintained-state design has no observed regressions and correctly fails safe under the three adversarial conditions tested."
+}

@@ -144,9 +144,20 @@ class TestStaleNavEvidence:
             async def find_one(self, *a, **k):
                 return None
 
+            async def count_documents(self, q):
+                return 2
+
+        class _Peak:
+            async def find_one(self, *a, **k):
+                return None
+
+            async def update_one(self, *a, **k):
+                return None
+
         class _DB:
             trades = _Trades()
             pamm_nav_snapshots = _Nav()
+            pamm_nav_peak = _Peak()
 
             def __getattr__(self, k):
                 return _BoomCollection()

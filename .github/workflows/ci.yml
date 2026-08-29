@@ -169,6 +169,9 @@ jobs:
           export STEP_UP_BYPASS_TOKEN RATE_LIMIT_BYPASS_TOKEN
           echo "STEP_UP_BYPASS_TOKEN=${STEP_UP_BYPASS_TOKEN}" >> "$GITHUB_ENV"
           echo "RATE_LIMIT_BYPASS_TOKEN=${RATE_LIMIT_BYPASS_TOKEN}" >> "$GITHUB_ENV"
+          # order kill-switch stays ON but with test-suite headroom — the
+          # invariant matrix legitimately places many orders per minute
+          export MAX_ORDERS_PER_MIN=100
           nohup python -m uvicorn server:app --host 127.0.0.1 --port 8001 > /tmp/clean-deploy.log 2>&1 &
       - name: Certify liveness + readiness
         run: |

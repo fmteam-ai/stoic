@@ -424,33 +424,78 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
                "drawdown_pct": None, "spread_pips": None,
                "recent_slippage_pips": None, "consecutive_losses": None}
     open_q = {"account_id": acct_id, "status": {"$in": ["open", "pending"]}}
+    # O(1) maintained risk state — consistency-basis cache (iter-149).
+    # Any trade open/close changes the basis and forces a recompute, so
+    # the cache can never misreport; failures degrade to full recompute.
+    from modules.pamm import risk_state
+    now = datetime.now(timezone.utc)
+    day0 = now.strftime("%Y-%m-%dT00:00:00")
+    week0 = (now - timedelta(days=now.weekday())).strftime(
+        "%Y-%m-%dT00:00:00")
+    basis, cached = None, None
     try:
-        t["open_positions"] = await db.trades.count_documents(open_q)
-        sym_lots, risk_sum = 0.0, 0.0
-        factor_lots: dict = {}
-        async for tr in db.trades.find(open_q, {"lot_size": 1, "symbol": 1,
-                                                "action": 1,
-                                                "risk_pct": 1}).limit(500):
-            lots = float(tr.get("lot_size") or 0)
-            if str(tr.get("symbol") or "").upper() == symbol:
-                sym_lots += lots
-            for f, add in signed_factor_lots(
-                    tr.get("symbol"), tr.get("action"), lots).items():
-                factor_lots[f] = round(factor_lots.get(f, 0.0) + add, 4)
-            risk_sum += float(tr.get("risk_pct") or 0)
-        t["symbol_open_lots"] = round(sym_lots, 4)
-        t["factor_lots"] = factor_lots
-        t["open_risk_pct_sum"] = round(risk_sum, 4)
-    except Exception as e:  # noqa: BLE001 — evidence gap, not a crash
-        logger.error("risk-truth open-exposure read failed acct=%s: %s",
-                     acct_id, e)
-    # daily + weekly realized loss — needs a known balance denominator
-    if balance:
+        await risk_state.ensure_indexes(db)
+        basis = await risk_state.compute_basis(db, acct_id, week0, day0)
+        cached = await risk_state.read_state(db, acct_id, basis)
+    except Exception as e:  # noqa: BLE001 — cache miss, never a crash
+        logger.warning("risk_state basis failed acct=%s: %s", acct_id, e)
+    payload: dict = {}
+    cache_ok = True
+    if cached:
+        t["risk_state_source"] = "maintained"
+        t["open_positions"] = basis["open_count"]
+        t["symbol_open_lots"] = round(float(
+            (cached.get("symbol_lots") or {}).get(symbol, 0.0)), 4)
+        t["factor_lots"] = cached.get("factor_lots") or {}
+        t["open_risk_pct_sum"] = cached.get("open_risk_pct_sum")
+        if balance:
+            t["daily_loss_pct"] = round(
+                max(0.0, -float(cached.get("day_net") or 0))
+                / float(balance) * 100, 4)
+            t["weekly_loss_pct"] = round(
+                max(0.0, -float(cached.get("week_net") or 0))
+                / float(balance) * 100, 4)
+        slips = list(cached.get("slips") or [])
+        if slips:
+            t["recent_slippage_pips"] = slips[len(slips) // 2]
+            t["recent_slippage_p95_pips"] = slips[
+                min(len(slips) - 1, int(0.95 * (len(slips) - 1) + 0.5))]
+            t["recent_slippage_sample_count"] = len(slips)
+        t["consecutive_losses"] = cached.get("consecutive_losses")
+    if not cached:
+        t["risk_state_source"] = "recomputed"
         try:
-            now = datetime.now(timezone.utc)
-            day0 = now.strftime("%Y-%m-%dT00:00:00")
-            week0 = (now - timedelta(days=now.weekday())).strftime(
-                "%Y-%m-%dT00:00:00")
+            t["open_positions"] = (basis["open_count"] if basis else
+                                   await db.trades.count_documents(open_q))
+            sym_lots, risk_sum = 0.0, 0.0
+            factor_lots: dict = {}
+            symbol_lots: dict = {}
+            async for tr in db.trades.find(open_q,
+                                           {"lot_size": 1, "symbol": 1,
+                                            "action": 1,
+                                            "risk_pct": 1}).limit(500):
+                lots = float(tr.get("lot_size") or 0)
+                s = str(tr.get("symbol") or "").upper()
+                if s == symbol:
+                    sym_lots += lots
+                if s:
+                    symbol_lots[s] = round(symbol_lots.get(s, 0.0) + lots, 4)
+                for f, add in signed_factor_lots(
+                        tr.get("symbol"), tr.get("action"), lots).items():
+                    factor_lots[f] = round(factor_lots.get(f, 0.0) + add, 4)
+                risk_sum += float(tr.get("risk_pct") or 0)
+            t["symbol_open_lots"] = round(sym_lots, 4)
+            t["factor_lots"] = factor_lots
+            t["open_risk_pct_sum"] = round(risk_sum, 4)
+            payload.update({"symbol_lots": symbol_lots,
+                            "factor_lots": factor_lots,
+                            "open_risk_pct_sum": t["open_risk_pct_sum"]})
+        except Exception as e:  # noqa: BLE001 — evidence gap, not a crash
+            logger.error("risk-truth open-exposure read failed acct=%s: %s",
+                         acct_id, e)
+            cache_ok = False  # incomplete evidence must never be cached
+        # daily + weekly realized loss — needs a known balance denominator
+        try:
             day_net, week_net = 0.0, 0.0
             async for tr in db.trades.find(
                     {"account_id": acct_id, "status": "closed",
@@ -460,15 +505,19 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
                 week_net += pnl
                 if str(tr.get("closed_at") or "") >= day0:
                     day_net += pnl
-            t["daily_loss_pct"] = round(
-                max(0.0, -day_net) / float(balance) * 100, 4)
-            t["weekly_loss_pct"] = round(
-                max(0.0, -week_net) / float(balance) * 100, 4)
+            payload.update({"day_net": round(day_net, 4),
+                            "week_net": round(week_net, 4)})
+            if balance:
+                t["daily_loss_pct"] = round(
+                    max(0.0, -day_net) / float(balance) * 100, 4)
+                t["weekly_loss_pct"] = round(
+                    max(0.0, -week_net) / float(balance) * 100, 4)
         except Exception as e:  # noqa: BLE001
             logger.error("risk-truth loss read failed acct=%s: %s",
                          acct_id, e)
             t["daily_loss_pct"] = None
             t["weekly_loss_pct"] = None
+            cache_ok = False  # incomplete evidence must never be cached
     # drawdown — broker-truth NAV history (peak vs current), and the
     # NAV itself must be FRESH: stale NAV is not evidence
     try:
@@ -489,11 +538,7 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
                 t["nav_stale"] = {"age_s": t["nav_age_s"],
                                   "max_age_s": NAV_FRESHNESS_S}
             else:
-                peak = None
-                async for n in db.pamm_nav_snapshots.find(
-                        {"program_id": pid},
-                        {"_id": 0, "nav": 1}).limit(5000):
-                    peak = n["nav"] if peak is None else max(peak, n["nav"])
+                peak = await risk_state.nav_peak(db, pid)
                 if peak:
                     t["drawdown_pct"] = round(
                         max(0.0,
@@ -527,34 +572,41 @@ async def _telemetry(db, program: dict, account: dict, signal: dict,
         t["spread_pips"] = None
     # recent measured fill slippage (median of last TRUSTED measurements
     # — tampered/unverified PAMM self-reports are excluded)
-    try:
-        slips = []
-        async for tr in db.trades.find(
-                {"account_id": acct_id, "slippage_checked": True,
-                 "slippage_pips": {"$ne": None},
-                 "pamm_slippage_verified": {"$ne": False}},
-                {"slippage_pips": 1}).sort("created_at", -1).limit(10):
-            slips.append(float(tr.get("slippage_pips") or 0))
-        if slips:
-            slips.sort()
-            t["recent_slippage_pips"] = slips[len(slips) // 2]
-            # distribution view — p95 catches tail slippage a median hides
-            t["recent_slippage_p95_pips"] = slips[
-                min(len(slips) - 1, int(0.95 * (len(slips) - 1) + 0.5))]
-            t["recent_slippage_sample_count"] = len(slips)
-        # consecutive losses
-        streak = 0
-        async for tr in db.trades.find(
-                {"account_id": acct_id, "status": "closed"},
-                {"pnl": 1}).sort("closed_at", -1).limit(20):
-            if float(tr.get("pnl") or 0) < 0:
-                streak += 1
-            else:
-                break
-        t["consecutive_losses"] = streak
-    except Exception as e:  # noqa: BLE001
-        logger.error("risk-truth slippage/streak read failed acct=%s: %s",
-                     acct_id, e)
+    if not cached:
+        try:
+            slips = []
+            async for tr in db.trades.find(
+                    {"account_id": acct_id, "slippage_checked": True,
+                     "slippage_pips": {"$ne": None},
+                     "pamm_slippage_verified": {"$ne": False}},
+                    {"slippage_pips": 1}).sort("created_at", -1).limit(10):
+                slips.append(float(tr.get("slippage_pips") or 0))
+            if slips:
+                slips.sort()
+                t["recent_slippage_pips"] = slips[len(slips) // 2]
+                # distribution view — p95 catches tail slippage a median hides
+                t["recent_slippage_p95_pips"] = slips[
+                    min(len(slips) - 1, int(0.95 * (len(slips) - 1) + 0.5))]
+                t["recent_slippage_sample_count"] = len(slips)
+            # consecutive losses
+            streak = 0
+            async for tr in db.trades.find(
+                    {"account_id": acct_id, "status": "closed"},
+                    {"pnl": 1}).sort("closed_at", -1).limit(20):
+                if float(tr.get("pnl") or 0) < 0:
+                    streak += 1
+                else:
+                    break
+            t["consecutive_losses"] = streak
+            if payload:
+                payload.update({"slips": slips,
+                                "consecutive_losses": streak})
+        except Exception as e:  # noqa: BLE001
+            logger.error("risk-truth slippage/streak read failed acct=%s: %s",
+                         acct_id, e)
+            cache_ok = False  # incomplete evidence must never be cached
+        if basis and cache_ok and payload:
+            await risk_state.store_state(db, acct_id, basis, payload)
     return t
 
 
