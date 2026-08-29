@@ -5,16 +5,24 @@ realized loss, slippage samples, loss streak) previously required full
 document scans on EVERY authorization. This module maintains a per-account
 snapshot in `pamm_risk_state`, guarded by a CONSISTENCY BASIS.
 
-P0-B (iter-156): the basis is a CONTENT fingerprint, not just counts —
-index-covered aggregations over the mutable risk inputs:
+P0 (iter-157): the basis is a COMPOSITION-sensitive content fingerprint —
+sum-based aggregates were blind to a position changing symbol/side/SL while
+totals stayed equal (BUY XAUUSD 1.0/1% → SELL EURUSD 1.0/1% kept the sums
+identical). Open positions are FEW and bounded, so the open-side identity
+is now a sha256 over the sorted per-position tuples of every
+risk-affecting field:
 
-    open trades:  count + Σlot_size + Σrisk_pct
+    open trades:  sha256[(id, symbol, action, side, lot_size, risk_pct,
+                          stop_loss, confirmed_stop_loss, status), ...]
     week closed:  count + Σpnl
+    day  closed:  count + Σpnl
 
-So an open position changing SIZE or RISK, a partial fill, a manual broker
-position change surfaced by Position Truth, or a corrected closed-trade
-P&L each change the fingerprint and invalidate the maintained state
-IMMEDIATELY — even when document counts stay constant. A hard age bound
+Every event the reviewer enumerated — order accepted, fill, partial fill,
+open, close, size/side/symbol/SL change, manual position, broker
+reconciliation — mutates an open-trade document (or the open set) and so
+changes the fingerprint IMMEDIATELY; P&L corrections and closed_at moves
+change the week/day sums. This is an authoritative identity computed from
+Position Truth itself: no writer hooks to forget. A hard age bound
 (RISK_STATE_MAX_AGE_S, default 600s) additionally covers in-place updates
 outside the fingerprint (e.g. slippage stamps on old fills).
 
@@ -25,6 +33,8 @@ FAIL-SAFE: every helper degrades to None/misses on ANY error — the guard
 then falls back to the full recompute path. The cache can slow things
 down when broken, never mislead.
 """
+import hashlib
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -78,19 +88,43 @@ def _num(field: str) -> dict:
                          "onError": 0.0, "onNull": 0.0}}
 
 
+# every field that changes what the position IS, risk-wise
+RISK_COMPOSITION_FIELDS = ("symbol", "action", "side", "lot_size",
+                           "risk_pct", "stop_loss", "confirmed_stop_loss",
+                           "status")
+
+
+def _norm(v):
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float)):
+        return round(float(v), 6)
+    return str(v)
+
+
+async def _open_composition_fp(db, acct_id: str) -> tuple[int, str]:
+    """Order-independent sha256 identity of the OPEN portfolio composition
+    (iter-157). Open positions are bounded and few, so this is a tight
+    projected read — not the O(N) history scan the cache exists to avoid."""
+    rows = []
+    async for tr in db.trades.find(
+            {"account_id": acct_id, "status": {"$in": ["open", "pending"]}},
+            {f: 1 for f in RISK_COMPOSITION_FIELDS}).limit(1000):
+        rows.append([str(tr.get("_id"))]
+                    + [_norm(tr.get(f)) for f in RISK_COMPOSITION_FIELDS])
+    rows.sort(key=lambda r: r[0])
+    fp = hashlib.sha256(
+        json.dumps(rows, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    return len(rows), fp
+
+
 async def compute_basis(db, acct_id: str, week0: str, day0: str) -> dict:
-    """Content fingerprint of every mutable risk input (P0-B, iter-156):
-    two index-covered aggregations — a size/risk change on an OPEN
-    position or a P&L correction on a CLOSED trade invalidates the state
-    immediately, even with unchanged document counts."""
-    open_g = {"n": 0, "lots": 0.0, "risk": 0.0}
-    async for g in db.trades.aggregate([
-            {"$match": {"account_id": acct_id,
-                        "status": {"$in": ["open", "pending"]}}},
-            {"$group": {"_id": None, "n": {"$sum": 1},
-                        "lots": {"$sum": _num("lot_size")},
-                        "risk": {"$sum": _num("risk_pct")}}}]):
-        open_g = g
+    """Composition-sensitive consistency identity (P0 iter-157): open-side
+    sha256 fingerprint + week/day closed count/Σpnl. Symbol, side, size,
+    risk% or SL changing on an open position — even with identical totals —
+    changes the identity and invalidates the maintained state immediately."""
+    open_count, open_fp = await _open_composition_fp(db, acct_id)
     week_g = {"n": 0, "pnl": 0.0}
     async for g in db.trades.aggregate([
             {"$match": {"account_id": acct_id, "status": "closed",
@@ -98,11 +132,18 @@ async def compute_basis(db, acct_id: str, week0: str, day0: str) -> dict:
             {"$group": {"_id": None, "n": {"$sum": 1},
                         "pnl": {"$sum": _num("pnl")}}}]):
         week_g = g
-    return {"open_count": int(open_g.get("n") or 0),
-            "open_lots": round(float(open_g.get("lots") or 0.0), 6),
-            "open_risk": round(float(open_g.get("risk") or 0.0), 6),
+    day_g = {"n": 0, "pnl": 0.0}
+    async for g in db.trades.aggregate([
+            {"$match": {"account_id": acct_id, "status": "closed",
+                        "closed_at": {"$gte": day0}}},
+            {"$group": {"_id": None, "n": {"$sum": 1},
+                        "pnl": {"$sum": _num("pnl")}}}]):
+        day_g = g
+    return {"open_count": open_count, "open_fp": open_fp,
             "week_closed": int(week_g.get("n") or 0),
             "week_pnl": round(float(week_g.get("pnl") or 0.0), 6),
+            "day_closed": int(day_g.get("n") or 0),
+            "day_pnl": round(float(day_g.get("pnl") or 0.0), 6),
             "week0": week0, "day0": day0}
 
 

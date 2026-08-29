@@ -12,10 +12,7 @@ import uuid
 import pytest
 import requests
 
-BASE = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/") or \
-    open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "..", "..", "frontend", ".env")).read(
-    ).split("REACT_APP_BACKEND_URL=")[1].splitlines()[0].strip()
+BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 API = BASE + "/api"
 
 ADMIN_EMAIL = "admin@trading.bot"

@@ -1,0 +1,38 @@
+{
+  "summary": "P0 iter-157 composition-blind risk-cache fix verified end-to-end. All 6 requested lanes pass, plus an independent scratch-DB probe of the exact reviewer scenario (BUY XAUUSD 1.0/1% -> SELL EURUSD 1.0/1% via one update, identical totals) confirms the maintained cache is invalidated and per-symbol exposure recomputes correctly, then re-warms to 'maintained' on the next read.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/integration/test_iter157_composition_invalidation.py",
+    "/app/backend/tests/integration/test_iter156_risk_invalidation.py",
+    "/app/backend/tests/integration/test_iter149_risk_state.py",
+    "/app/backend/tests/test_iter221_risk_truth_http.py",
+    "/app/backend/tests/test_iter222_hardening_http.py",
+    "/app/backend/tests/test_iter152_command_center_http.py",
+    "/app/backend/tests/test_iter154_certification_connect_http.py",
+    "/tmp/probe_composition.py"
+  ],
+  "test_results": {
+    "iter157_composition (PRIMARY)": "2/2 passed (0.46s) — side flip, symbol swap, SL-only change, reviewer's exact one-write case, closed_at into today all invalidate correctly",
+    "iter156+iter149 regression": "3/3 passed (0.62s) — lot/risk_pct/partial fill/broker-truth/pnl correction/Nitro 20 sample gate intact",
+    "iter221+iter222 guard HTTP": "24/24 passed (7.26s) — no rate-limit collisions this run",
+    "iter152+iter154 HTTP (P1)": "17/17 passed (7.15s) — both files use os.environ['REACT_APP_BACKEND_URL']; grep for 'frontend/.env' and hardcoded URLs = none",
+    "unit lane": "515/515 passed (3.55s)",
+    "independent probe (scratch-DB)": "PASSED — cold=recomputed, warm=maintained, one-write symbol+action swap (lots/risk/SL identical) => recomputed & new symbol exposure=1.0 & old symbol exposure=0.0, next read=maintained"
+  },
+  "action_items": [],
+  "critical_code_review_comments": [
+    "risk_state.py: sha256 identity built over sorted tuples of RISK_COMPOSITION_FIELDS is order-independent and covers every risk-affecting mutation surface enumerated by the reviewer. _norm rounds floats to 6dp to tolerate float noise while preserving semantic changes.",
+    "compute_basis reads open trades with a projected find limited to 1000 — matches the 'few and bounded' invariant; safe on money path.",
+    "Cache still degrades to full recompute on any error (fail-safe design preserved).",
+    "Minor (non-blocking): 'Task was destroyed but it is pending' warning at end of iter221+222 HTTP suite from guard_alerts._send_block_alert background task — unrelated to iter-157 fix; consider awaiting or shielding on shutdown."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "Not exercised in this iteration (integration tests use scratch DB; HTTP suites reuse existing admin session auto-configured via conftest).",
+  "seed_data_creation": "Independent probe creates & drops ephemeral DB stoic_probe_<uuid>.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-157 composition fingerprint is authoritative and covers symbol/action/side/lot_size/risk_pct/stop_loss/confirmed_stop_loss/status; any future field that affects risk semantics MUST be added to RISK_COMPOSITION_FIELDS in /app/backend/modules/pamm/risk_state.py or the cache will go composition-blind again for that field.",
+  "rca of the issue": "Previous basis was sum(lot_size)+sum(risk_pct)+count — a mutation preserving totals (BUY XAUUSD 1.0/1% -> SELL EURUSD 1.0/1%) kept basis unchanged so read_state served stale per-symbol/side exposure. Fix: replace sums with sha256 of sorted per-position (_id + normalized risk-affecting fields) tuples; also add day_closed group to catch closed_at moves that shift daily loss without altering weekly total. Verified: primary tests + independent one-write probe both show 'recomputed' on composition change and 'maintained' on re-read."
+}
