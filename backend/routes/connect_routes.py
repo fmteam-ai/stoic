@@ -30,6 +30,9 @@ async def connect_status_ep(account_id: str,
     q = {"_id": parse_object_id(account_id, "Account")}
     if user.get("role") != "admin":
         q["user_id"] = user["id"]
+    else:
+        from auth import require_admin
+        require_admin(user)  # cross-tenant scope needs the MFA gate (SEC-001)
     acc = await db.accounts.find_one(q)
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")

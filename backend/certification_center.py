@@ -3,6 +3,7 @@
 Broker Intelligence) into one scored view and issues PUBLIC, hash-chained,
 independently verifiable certificates (like an SSL cert for a trading
 account)."""
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -184,8 +185,16 @@ def _mask(num) -> str:
 async def issue_public(db, user: dict, account: dict) -> dict:
     from modules.pamm.strategy_guard import GIT_COMMIT, GUARD_VERSION
     from soak_campaign import evidence_hash
-    scores = await pillar_scores(db, user["id"], account)
     acct_id = str(account["_id"])
+    # issuance cap — public certs are append-only records, keep them scarce
+    day_ago = (_now_dt() - timedelta(days=1)).isoformat()
+    cap = int(os.environ.get("CERT_ISSUE_DAILY_CAP", "10"))
+    recent = await db.public_certificates.count_documents(
+        {"account_id": acct_id, "issued_at": {"$gte": day_ago}})
+    if recent >= cap:
+        raise ValueError(f"issuance cap reached — max {cap} certificates "
+                         "per account per 24h")
+    scores = await pillar_scores(db, user["id"], account)
     prev = await db.public_certificates.find_one(
         {"account_id": acct_id}, sort=[("seq", -1)])
     seq = int(prev["seq"]) + 1 if prev else 1

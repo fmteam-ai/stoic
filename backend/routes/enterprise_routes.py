@@ -356,7 +356,6 @@ async def v1_account_certificate(account_id: str, request: Request,
                             detail="No certificate issued for this account")
     view = public_view(cert)
     view["hash_verified"] = verify_certificate(cert)
-    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/") \
-        or str(request.base_url).rstrip("/")
-    view["public_url"] = f"{base}/certificate/{cert['cert_id']}"
+    from connect_service import _base_url
+    view["public_url"] = f"{_base_url(request)}/certificate/{cert['cert_id']}"
     return view

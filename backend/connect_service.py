@@ -22,9 +22,23 @@ def _age_s(iso) -> float | None:
 
 
 def _base_url(request) -> str:
+    """SEC-002 — never trust the raw Host header: PUBLIC_BASE_URL wins;
+    otherwise the request host must match a configured CORS origin, else
+    fall back to the first https origin."""
     env = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
     if env:
         return env
+    allowed = [o.strip().rstrip("/") for o in
+               os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+    if request:
+        req = str(request.base_url).rstrip("/")
+        req_host = req.split("://", 1)[-1]
+        for o in allowed:
+            if o.split("://", 1)[-1] == req_host:
+                return o
+    https = [o for o in allowed if o.startswith("https://")]
+    if https:
+        return https[0]
     return str(request.base_url).rstrip("/") if request else ""
 
 

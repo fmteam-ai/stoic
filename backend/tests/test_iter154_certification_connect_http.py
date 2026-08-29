@@ -32,6 +32,44 @@ ADMIN_EMAIL = "admin@stoicaibot.com"
 ADMIN_PASSWORD = "admin123"
 
 
+def setup_module(_m):
+    """Idempotency pre-clean — repeated runs otherwise trip the per-broker
+    account limit, the API-key cap and the daily cert-issuance cap."""
+    try:
+        import pymongo
+        from datetime import datetime, timezone
+        mongo_url = db_name = None
+        with open("/app/backend/.env") as f:
+            for line in f:
+                if line.startswith("MONGO_URL="):
+                    mongo_url = line.strip().split("=", 1)[1]
+                elif line.startswith("DB_NAME="):
+                    db_name = line.strip().split("=", 1)[1]
+        db = pymongo.MongoClient(mongo_url)[db_name]
+        accts = [str(a["_id"]) for a in
+                 db.accounts.find({"label": {"$regex": "^TEST_"}},
+                                  {"_id": 1})]
+        db.accounts.delete_many({"label": {"$regex": "^TEST_"}})
+        db.public_certificates.delete_many({"account_id": {"$in": accts}})
+        db.pairing_tokens.delete_many({"account_id": {"$in": accts}})
+        db.api_keys.update_many(
+            {"name": {"$regex": "^TEST_iter154"}, "revoked_at": None},
+            {"$set": {"revoked_at":
+                      datetime.now(timezone.utc).isoformat()}})
+        # keep the reused admin account under the 10/24h issuance cap
+        certs = list(db.public_certificates.find(
+            {}, {"account_id": 1}).sort("issued_at", -1))
+        from collections import Counter
+        for acct, n in Counter(c["account_id"] for c in certs).items():
+            if n >= 8:
+                keep = [c["_id"] for c in db.public_certificates.find(
+                    {"account_id": acct}).sort("seq", 1).limit(2)]
+                db.public_certificates.delete_many(
+                    {"account_id": acct, "_id": {"$nin": keep}})
+    except Exception:
+        pass
+
+
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()

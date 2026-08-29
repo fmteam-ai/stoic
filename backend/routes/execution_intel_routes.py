@@ -21,8 +21,8 @@ router = APIRouter(prefix="/execution", tags=["execution-intelligence"])
 async def execution_segments_ep(days: int = Query(30, ge=1, le=365),
                                 user=Depends(get_current_user)):
     """iter-153 — segmented execution-quality evidence (admin only)."""
-    if (user or {}).get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    from auth import require_admin
+    require_admin(user)  # role + mandatory TOTP MFA (SEC-001)
     from execution_segments import segments
     return await segments(get_db(), days=days)
 

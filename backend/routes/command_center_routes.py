@@ -12,8 +12,8 @@ router = APIRouter(prefix="/command-center", tags=["command-center"])
 
 
 def _require_admin(user):
-    if (user or {}).get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    from auth import require_admin
+    require_admin(user)  # role + mandatory TOTP MFA (SEC-001)
 
 
 @router.get("/status")

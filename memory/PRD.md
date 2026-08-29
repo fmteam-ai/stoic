@@ -2044,6 +2044,13 @@ DEFERRED (explicitly, next up): O(1) maintained Risk State (before large-scale N
 - Frontend: /certification (CertificationCenter.jsx: account select, tier banner, 6 pillar cards, issue/copy/open/revoke), /certificate/:certId PUBLIC (PublicCertificate.jsx SSL-style cert view), /connect wizard (Connect.jsx: form → command → live checklist, 5s poll). Sidebar: nav-product-connect (Products), nav-certification (Insights).
 - Verified: 19/19 backend (4 integration scratch-DB + 11 new HTTP by testing agent + regression) + full UI flows, 100%. Note CSRF: POSTs need X-CSRF-Token header from csrf_token cookie.
 
+## Security audit iter-155 (Jun 2026 — CONDITIONAL PASS → fixes applied)
+- Audit verdict: no authz bypass / tenant break / fail-open. 2 LOW findings, both FIXED:
+  - SEC-001 admin MFA gate: new admin endpoints now use auth.require_admin (role + TOTP when ADMIN_MFA_ENFORCED) — command_center_routes._require_admin, execution_intel /segments, and the cross-tenant admin branches in certification_center_routes._owned_account + connect_routes status. Preview keeps ADMIN_MFA_ENFORCED=false so tests still pass; production enforces.
+  - SEC-002 Host-header trust: connect_service._base_url now validates request host against CORS_ORIGINS (falls back to first https origin) when PUBLIC_BASE_URL unset; enterprise v1 public_url reuses it. Setting PUBLIC_BASE_URL in the production deploy env remains the recommended belt.
+- Hardening: cert issuance cap (CERT_ISSUE_DAILY_CAP=10/account/24h → HTTP 429). Declined (documented): removing git_commit from public cert view (needed for hash recompute; SHA public in releases anyway).
+- Test-infra fixes found during regression: tests/integration/conftest.py autouse fixture restores DB_NAME + resets Motor client (scratch-DB tests were leaking DB_NAME into same-process HTTP suites); test_iter154 http suite got an idempotency setup_module pre-clean (131 leftover TEST_ accounts had piled up, tripping broker/account/key/cert caps). Combined suite 25/25 twice consecutively; unit 515 + integration 36 green.
+
 ## Backlog (next picks)
 - P1: independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure (factor_lots → %-of-NAV risk) BEFORE Multi-Strategy PAMM.
 - P2: Dynamic AI strategy assignment (Portfolio Brain budget rebalancing).

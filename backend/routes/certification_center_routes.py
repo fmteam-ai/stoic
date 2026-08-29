@@ -18,6 +18,9 @@ async def _owned_account(db, user, account_id: str) -> dict:
     q = {"_id": parse_object_id(account_id, "Account")}
     if user.get("role") != "admin":
         q["user_id"] = user["id"]
+    else:
+        from auth import require_admin
+        require_admin(user)  # cross-tenant scope needs the MFA gate (SEC-001)
     acc = await db.accounts.find_one(q)
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -46,7 +49,10 @@ async def issue_certificate(payload: dict,
     owner = user
     if user.get("role") == "admin" and acc.get("user_id") != user["id"]:
         owner = {"id": acc["user_id"], "role": "admin"}
-    cert = await issue_public(db, owner, acc)
+    try:
+        cert = await issue_public(db, owner, acc)
+    except ValueError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     return public_view(cert)
 
 
