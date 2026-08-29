@@ -18,12 +18,14 @@ BASE_URL = os.environ.get(
 API = f"{BASE_URL}/api"
 
 # Load STEP_UP_BYPASS_TOKEN from backend/.env
+_BACKEND_ENV = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
 STEP_UP_BYPASS = None
 try:
-    with open("/app/backend/.env") as f:
+    with open(_BACKEND_ENV) as f:
         for line in f:
             if line.startswith("STEP_UP_BYPASS_TOKEN="):
-                STEP_UP_BYPASS = line.strip().split("=", 1)[1]
+                STEP_UP_BYPASS = line.strip().split("=", 1)[1].strip("\"'")
                 break
 except Exception:
     pass
@@ -39,12 +41,12 @@ def setup_module(_m):
         import pymongo
         from datetime import datetime, timezone
         mongo_url = db_name = None
-        with open("/app/backend/.env") as f:
+        with open(_BACKEND_ENV) as f:
             for line in f:
                 if line.startswith("MONGO_URL="):
-                    mongo_url = line.strip().split("=", 1)[1]
+                    mongo_url = line.strip().split("=", 1)[1].strip("\"'")
                 elif line.startswith("DB_NAME="):
-                    db_name = line.strip().split("=", 1)[1]
+                    db_name = line.strip().split("=", 1)[1].strip("\"'")
         db = pymongo.MongoClient(mongo_url)[db_name]
         accts = [str(a["_id"]) for a in
                  db.accounts.find({"label": {"$regex": "^TEST_"}},

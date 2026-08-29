@@ -2051,6 +2051,9 @@ DEFERRED (explicitly, next up): O(1) maintained Risk State (before large-scale N
 - Hardening: cert issuance cap (CERT_ISSUE_DAILY_CAP=10/account/24h → HTTP 429). Declined (documented): removing git_commit from public cert view (needed for hash recompute; SHA public in releases anyway).
 - Test-infra fixes found during regression: tests/integration/conftest.py autouse fixture restores DB_NAME + resets Motor client (scratch-DB tests were leaking DB_NAME into same-process HTTP suites); test_iter154 http suite got an idempotency setup_module pre-clean (131 leftover TEST_ accounts had piled up, tripping broker/account/key/cert caps). Combined suite 25/25 twice consecutively; unit 515 + integration 36 green.
 
+## CI fix iter-156 (Jun 2026 — DONE)
+- backend-unit CI gates tripped by iter-154/155 code: (1) certification issue route leaked str(e) → fixed message "certificate issuance cap reached…" (429); (2) hardcoded /app/backend + /app/frontend paths in test_iter152/154 http suites → derived from __file__. ALSO fixed the real reason the iter154 setup_module pre-clean silently failed: .env values are QUOTED — naive split left quotes → pymongo InvalidURI swallowed by try/except → 10 stale TEST keys hit the key cap. Parser now strips quotes. Guard tests 30/30, unit 515, http suites 17/17 twice.
+
 ## Backlog (next picks)
 - P1: independent market-data oracle verification of broker spread/slippage; normalize signed factor exposure (factor_lots → %-of-NAV risk) BEFORE Multi-Strategy PAMM.
 - P2: Dynamic AI strategy assignment (Portfolio Brain budget rebalancing).

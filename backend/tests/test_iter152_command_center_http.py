@@ -13,7 +13,9 @@ import pytest
 import requests
 
 BASE = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/") or \
-    open("/app/frontend/.env").read().split("REACT_APP_BACKEND_URL=")[1].splitlines()[0].strip()
+    open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "..", "frontend", ".env")).read(
+    ).split("REACT_APP_BACKEND_URL=")[1].splitlines()[0].strip()
 API = BASE + "/api"
 
 ADMIN_EMAIL = "admin@trading.bot"
@@ -109,7 +111,8 @@ def test_evidence_export_admin_download(admin_session):
 
     # Verify via backend's own verify_report
     import sys
-    sys.path.insert(0, "/app/backend")
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), ".."))
     from command_center import verify_report
     assert verify_report(report) is True
 

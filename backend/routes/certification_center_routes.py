@@ -51,8 +51,10 @@ async def issue_certificate(payload: dict,
         owner = {"id": acc["user_id"], "role": "admin"}
     try:
         cert = await issue_public(db, owner, acc)
-    except ValueError as e:
-        raise HTTPException(status_code=429, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=429,
+                            detail="certificate issuance cap reached for "
+                                   "this account — try again later")
     return public_view(cert)
 
 
