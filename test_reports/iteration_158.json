@@ -1,0 +1,29 @@
+{
+  "summary": "iter-158 Phase A (P0-1..P0-6) verified end-to-end. All 3 pytest tests in test_iter158_state_contract.py pass. New e2e API test file (test_iter158_e2e_review.py) added with 6 tests — all passing: anonymous 401 on /api/state/contract, contract shape + STALE/UNKNOWN → open_broker null (never 0), quick-actions has new + legacy fields, test-trade fail-closed 409 stale_ea on preview stale account, test-trade fail-closed 409 ea_never_connected on ephemeral no-heartbeat account (cleaned up), panic endpoint 200. Frontend QuickActionsBar shows 'OPEN 0 · STALE' in amber (#FFB020), PANIC armed, BOT OFF, header 'acct-switcher-counts' = '1/1 ON · 0 EA'. Accounts page: force-test-trade-999111 disabled=True (as required). /bot page shows 'safe default' under OBSERVE, no '(default)' anywhere near AUTONOMOUS LIVE. /bot-config direct load redirects to /bot. RouteErrorBoundary wraps all routes in App.jsx (lines 93-178). Route sweep of all 22 sidebar routes completed — but was contaminated by Cloudflare 429 rate limiting mid-sweep (aggressive polling from Dashboard + rapid page.goto storm); a subsequent clean single-page verification of the two most-affected pages (/bot, /bot-config) showed both render correctly with the correct copy and redirect behaviour.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/integration/test_iter158_state_contract.py",
+    "/app/backend/tests/integration/test_iter158_e2e_review.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "App.jsx defines /bot-config TWICE (lines 129 and 133) — first as Navigate to /bot, second as BotConfig component. React Router v6 resolves this correctly (the redirect wins in practice, as verified live), but the duplicate is confusing and should be removed — delete the line 133 alias to leave only the redirect. Not a functional bug today.",
+    "BotConfig.jsx is 1414 lines — exceeds the 700-line guideline; consider splitting into feature modules (scope selector, strategy presets, optimizer, mode card wiring, versions/rollback).",
+    "Route sweep triggered Cloudflare 429 storm because Dashboard mounts a large amount of polling on load. Consider (a) coalescing initial API calls into a single /api/state/contract-style endpoint, (b) adding a small backoff/jitter when 429 is received, and (c) muting the console.error spam for expected 429s during degraded periods."
+  ],
+  "updated_files": [
+    "/app/backend/tests/integration/test_iter158_e2e_review.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Ephemeral account with account_number=TEST<9digits>, label=iter158-nc-<n>, deleted via DELETE /api/accounts/{id}?force=true at test teardown (no residue).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Cloudflare in front of this preview is aggressive — a rapid page.goto sweep across 22 routes will trip 429 storms and pollute results. If you need a full route sweep, throttle to ~1 request/2s and monitor for 429s. Backend tests use STEP_UP_BYPASS token from backend/.env; keep session reuse. Preview has ONE account 'spread-test' (id 999111) with permanently stale heartbeat — this is expected preview state and drives all STALE/UNKNOWN/null-broker semantics.",
+  "rca of the issue": "No new bugs found. Earlier apparent failures in the multi-route sweep (/bot-config not redirecting, 'safe default' text missing on /bot) were caused by Cloudflare rate limiting kicking in mid-sweep — a clean re-run in isolation confirmed both flows work correctly."
+}

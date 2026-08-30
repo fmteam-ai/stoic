@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import "@/App.css";
 import { AuthProvider } from "@/context/AuthContext";
@@ -89,6 +90,7 @@ function App() {
             <ErrorBoundary>
             <BrowserRouter>
                 <AuthProvider>
+                    <RouteErrorBoundary>
                     <Suspense fallback={<RouteFallback />}>
                     <Routes>
                         <Route path="/login" element={<Login />} />
@@ -124,10 +126,9 @@ function App() {
                         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/signals" element={<ProtectedRoute><Signals /></ProtectedRoute>} />
                         <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
-                        {/* Alias — `bot-config` is the documented path, while
-                            the historical sidebar link is `/bot`. Both render
-                            the same page so direct navigation works either way. */}
-                        <Route path="/bot-config" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
+                        {/* One canonical Bot Configuration route (review P0-6):
+                            /bot-config always redirects to /bot. */}
+                        <Route path="/bot-config" element={<Navigate to="/bot" replace />} />
                         <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
                         <Route path="/connect" element={<ProtectedRoute><Connect /></ProtectedRoute>} />
                         <Route path="/certification" element={<ProtectedRoute><CertificationCenter /></ProtectedRoute>} />
@@ -172,6 +173,7 @@ function App() {
                         <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                     </Suspense>
+                    </RouteErrorBoundary>
                     <SiteFooter />
                     <Toaster theme="dark" position="top-right" />
                 </AuthProvider>

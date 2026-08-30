@@ -107,11 +107,12 @@ async def _evidence_scenario():
         assert report["report"] == "stoic-production-evidence"
         names = [s["section"] for s in report["sections"]]
         assert names == ["provenance", "certifications", "soak_status",
-                         "soak_evidence_chain", "guard_health"]
+                         "soak_evidence_chain", "guard_health",
+                         "release_canary"]
         # chain integrity holds on the pristine report
         assert verify_report(report) is True
         # guard section carries the block snapshot reference
-        gh = report["sections"][-1]["data"]
+        gh = report["sections"][-2]["data"]
         assert gh["recent_block_snapshots"][0]["snapshot_id"] == "rds_ev1"
 
         # ANY tamper breaks verification — data, order, or hash

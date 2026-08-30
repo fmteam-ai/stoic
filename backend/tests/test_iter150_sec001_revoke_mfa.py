@@ -205,3 +205,6 @@ def test_revoke_public_user_branch_scoped_to_owner(monkeypatch):
     assert out == {"ok": True, "cert_id": "STC-USEROWNED1"}
     assert captured["q"].get("user_id") == "user-uid-x"
     assert captured["q"].get("revoked") is False
+
+
+pytestmark = pytest.mark.http

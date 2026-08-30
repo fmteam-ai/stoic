@@ -101,39 +101,56 @@ export function QuickActionsBar() {
                     </div>
                 </div>
 
-                {/* Open trades */}
+                {/* Open trades — broker-verified truth; UNKNOWN never shows 0 */}
                 <div className="hidden sm:flex flex-col items-end px-2 border-l border-[#1F1F1F]"
-                     data-testid="quick-open-trades">
+                     data-testid="quick-open-trades"
+                     title={data.position_truth === "FRESH"
+                         ? `Broker-verified open positions · as of ${data.as_of ? new Date(data.as_of).toLocaleTimeString() : "now"}`
+                         : `Position truth ${data.position_truth || "UNKNOWN"} — broker count cannot be confirmed right now (local projection: ${data.open_trades})`}>
                     <div className="font-mono text-[9px] text-[#52525B] tracking-widest leading-none">
-                        OPEN
+                        {data.position_truth === "FRESH" ? "OPEN · VERIFIED" : "OPEN"}
                     </div>
-                    <div className="font-display text-sm leading-tight mt-0.5 text-white">
-                        {data.open_trades}
+                    <div className={`font-display text-sm leading-tight mt-0.5 ${
+                        data.position_truth === "FRESH" ? "text-white" : "text-[#FFB020]"}`}
+                        data-testid="quick-open-trades-value">
+                        {data.position_truth === "FRESH"
+                            ? (data.open_trades_broker ?? data.open_trades)
+                            : `${data.open_trades} · ${data.position_truth || "UNKNOWN"}`}
                     </div>
                 </div>
 
-                {/* Bot ON/OFF */}
+                {/* Bot ON/OFF — configured state + server-derived EFFECTIVE state */}
                 <button type="button" onClick={toggleBot} disabled={actionInflight}
                         data-testid="quick-toggle-bot"
-                        title={data.bot_active ? "Bot is ON — click to pause" : "Bot is OFF — click to start"}
+                        title={data.bot_active
+                            ? `Bot configured ON — effective execution state: ${data.effective_state || "…"}. Click to pause.`
+                            : "Bot is OFF — click to start"}
                         className={`flex items-center gap-1.5 font-mono text-[10px] tracking-widest px-2.5 py-1.5 border transition-colors ${
                             data.bot_active
-                                ? "text-[#00FF41] border-[#00FF41]/40 bg-[#00FF41]/10 hover:bg-[#00FF41]/15"
+                                ? (data.effective_state === "ACTIVE"
+                                    ? "text-[#00FF41] border-[#00FF41]/40 bg-[#00FF41]/10 hover:bg-[#00FF41]/15"
+                                    : "text-[#FFB020] border-[#FFB020]/40 bg-[#FFB020]/10 hover:bg-[#FFB020]/15")
                                 : "text-[#A1A1AA] border-[#1F1F1F] hover:border-[#52525B]"
                         } disabled:opacity-50`}>
                     <Power className="w-3 h-3" />
-                    <span className="hidden sm:inline">{data.bot_active ? "BOT ON" : "BOT OFF"}</span>
+                    <span className="hidden sm:inline" data-testid="quick-bot-effective-state">
+                        {data.bot_active
+                            ? `BOT ON · ${data.effective_state || "…"}`
+                            : "BOT OFF"}
+                    </span>
                 </button>
 
-                {/* PANIC button — solid red, larger, with pulsing alert ring when there's something to close */}
+                {/* PANIC — available whenever exposure exists OR cannot be ruled out */}
                 <button type="button" onClick={() => setPanicOpen(true)}
-                        disabled={data.open_trades === 0 || actionInflight}
+                        disabled={!(data.panic_available ?? data.open_trades > 0) || actionInflight}
                         data-testid="quick-panic"
-                        title={data.open_trades === 0
-                            ? "Nothing to panic-close"
-                            : `Close all ${data.open_trades} open positions immediately`}
+                        title={!(data.panic_available ?? data.open_trades > 0)
+                            ? "Nothing to panic-close (broker-verified flat)"
+                            : data.position_truth === "FRESH"
+                                ? `Close all ${data.open_trades} open positions immediately`
+                                : "Position truth is not fresh — PANIC stays armed and will issue durable close intents for every known position"}
                         className={`relative flex items-center gap-1.5 font-mono text-[11px] font-bold tracking-widest px-3 py-1.5 border-2 transition-all
-                            ${data.open_trades > 0 && !actionInflight
+                            ${(data.panic_available ?? data.open_trades > 0) && !actionInflight
                                 ? "bg-[#FF3B30] border-[#FF3B30] text-white hover:bg-[#E5352B] hover:border-[#E5352B] shadow-[0_0_0_3px_rgba(255,59,48,0.25)] hover:shadow-[0_0_0_4px_rgba(255,59,48,0.4)] panic-pulse"
                                 : "border-[#FF3B30]/30 text-[#FF3B30]/40 cursor-not-allowed"}
                         `}>

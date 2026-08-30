@@ -24,13 +24,17 @@ async def _soak_section(db) -> dict:
     if out.get("status") == "NO_CAMPAIGN":
         return {"status": "YELLOW", "verdict": None, "day": None,
                 "days_target": None, "coverage": None, "incidents": 0,
+                "days_remaining": None, "ends_at": None,
+                "today_checkpoint_done": None,
                 "detail": "no soak campaign — start the 14-day "
                           "production-proof campaign"}
     ev = out.get("evaluation") or {}
+    cd = out.get("countdown") or {}
     verdict = ev.get("verdict")
     drift = ev.get("version_drift") or []
     reds = ev.get("red_checkpoint_days") or []
     majors = int(ev.get("major_incidents") or 0)
+    campaign_status = (out.get("campaign") or {}).get("status")
     if verdict == "FAIL":
         color, detail = "RED", "soak campaign FAILED"
     elif verdict == "PASS":
@@ -41,6 +45,11 @@ async def _soak_section(db) -> dict:
             f"version drift: {', '.join(drift)}" if drift else "",
             f"red checkpoint days: {reds}" if reds else "",
             f"{majors} major incident(s)" if majors else ""]))
+    elif (campaign_status == "RUNNING"
+          and cd.get("today_checkpoint_done") is False
+          and (cd.get("hours_into_day") or 0) >= 12):
+        color = "YELLOW"
+        detail = "today's checkpoint is due — record it before the day ends"
     else:
         color, detail = "GREEN", "on track"
     return {"status": color, "verdict": verdict,
@@ -48,7 +57,10 @@ async def _soak_section(db) -> dict:
             "coverage": ev.get("checkpoint_coverage"),
             "incidents": (int(ev.get("critical_incidents") or 0)
                           + majors),
-            "campaign_status": (out.get("campaign") or {}).get("status"),
+            "campaign_status": campaign_status,
+            "days_remaining": cd.get("days_remaining"),
+            "ends_at": cd.get("ends_at"),
+            "today_checkpoint_done": cd.get("today_checkpoint_done"),
             "detail": detail}
 
 
@@ -113,6 +125,35 @@ async def _guard_section(db) -> dict:
             "detail": detail}
 
 
+async def _canary_section(db) -> dict:
+    """iter-159 — release canary: one demo account soaks new releases
+    ahead of the fleet; auto-halt on guard-block-rate divergence."""
+    from release_canary import status as canary_status
+    st = await canary_status(db)
+    if not st.get("enabled"):
+        return {"status": "GREEN", "enabled": False, "halted": False,
+                "detail": "release canary OFF — designate a demo account "
+                          "to soak new releases ahead of the fleet"}
+    rates = st.get("rates") or {}
+    canary = rates.get("canary") or {}
+    fleet = rates.get("fleet") or {}
+    verdict = st.get("verdict") or {}
+    base = {"enabled": True, "halted": bool(st.get("halted")),
+            "account_id": st.get("account_id"),
+            "account_name": st.get("account_name"),
+            "release": st.get("release"),
+            "canary_rate": canary.get("block_rate"),
+            "fleet_rate": fleet.get("block_rate"),
+            "canary_decisions": canary.get("decisions"),
+            "fleet_decisions": fleet.get("decisions"),
+            "window_hours": rates.get("window_hours")}
+    if st.get("halted"):
+        return {**base, "status": "RED",
+                "detail": f"CANARY HALTED — {st.get('halt_reason')}"}
+    return {**base, "status": "GREEN",
+            "detail": verdict.get("reason") or "tracking"}
+
+
 async def _workers_section(db) -> dict:
     now = _now_dt()
     total = alive = crashloops = 0
@@ -159,6 +200,7 @@ async def status(db) -> dict:
     sections = {"soak": await _soak_section(db),
                 "certifications": await _cert_section(db),
                 "guard": await _guard_section(db),
+                "canary": await _canary_section(db),
                 "workers": await _workers_section(db)}
     alerts = [a async for a in db.ops_alerts.find(
         {}, {"_id": 0, "kind": 1, "severity": 1, "message": 1,
@@ -185,6 +227,7 @@ async def evidence_report(db, generated_by: str) -> dict:
     hash = sha256(prev_hash + canonical(section)) — the same rule as the
     soak Production Evidence chain (soak_campaign.evidence_hash)."""
     from certification import active
+    from release_canary import status as canary_status
     from soak_campaign import evidence, evidence_hash
     from soak_campaign import status as soak_status
 
@@ -214,10 +257,11 @@ async def evidence_report(db, generated_by: str) -> dict:
          "program_id": 1, "hash": 1, "signal": 1})
         .sort("at", -1).limit(25)]
     add("guard_health", {**guard, "recent_block_snapshots": blocks})
+    add("release_canary", await canary_status(db))
 
     report_hash = hashlib.sha256(
         "".join(s["hash"] for s in sections).encode()).hexdigest()
-    return {"report": "stoic-production-evidence", "version": 1,
+    report = {"report": "stoic-production-evidence", "version": 1,
             "generated_at": _now_dt().isoformat(),
             "generated_by": generated_by,
             "verify": "each section: hash = sha256(prev_hash + canonical "
@@ -226,6 +270,8 @@ async def evidence_report(db, generated_by: str) -> dict:
                       "breaks the chain.",
             "sections": sections,
             "report_hash": report_hash}
+    report["chain_verified"] = verify_report(report)
+    return report
 
 
 def verify_report(report: dict) -> bool:

@@ -336,3 +336,6 @@ def teardown_module(module):
                 pass
     except Exception:
         pass
+
+
+pytestmark = pytest.mark.http

@@ -1819,7 +1819,26 @@ async def quick_actions(user=Depends(get_current_user)):
         "todays_bot_pnl_usd": round(bot_pnl, 2),
         "todays_bot_closed_count": bot_count,
         "todays_manual_pnl_usd": round(manual_pnl, 2),
+        # iter-158 review P0-1/2/3 — broker position truth + effective state
+        **(await _quick_truth_safe(db, user_id, open_count)),
     }
+
+
+async def _quick_truth_safe(db, user_id: str, open_count: int) -> dict:
+    """Fail-SAFE: on any error report UNKNOWN truth (never fabricated zero)
+    and keep PANIC available."""
+    try:
+        from state_contract import quick_truth
+        return await quick_truth(db, user_id, open_count)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger("bot_routes").warning(
+            "quick_truth failed for %s: %s", user_id, e)
+        return {"position_truth": "UNKNOWN", "open_trades_broker": None,
+                "effective_state": "BLOCKED", "panic_available": True,
+                "accounts_total": None, "accounts_enabled": None,
+                "bots_enabled": None, "eas_connected": None,
+                "as_of": datetime.now(timezone.utc).isoformat()}
 
 
 @router.get("/status")

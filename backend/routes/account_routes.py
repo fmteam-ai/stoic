@@ -1002,20 +1002,31 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
 
     # Heartbeat freshness gate (≤2 min)
     hb = account.get("last_heartbeat")
-    if hb:
-        try:
-            hb_dt = datetime.fromisoformat(hb.replace("Z", "+00:00"))
-            age_s = (datetime.now(timezone.utc) - hb_dt).total_seconds()
-            if age_s > 120:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"code": "stale_ea",
-                            "message": f"EA hasn't checked in for {int(age_s)}s. Open MT5 + ensure AutoTrading is ON, then retry."},
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            pass
+    # iter-158 review P0-5 — FAIL CLOSED: no heartbeat ever, or an
+    # unparseable heartbeat, must block exactly like a stale one.
+    if not hb:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ea_never_connected",
+                    "message": "This account's EA has never sent a heartbeat. "
+                               "Connect the terminal before firing a test trade."},
+        )
+    try:
+        hb_dt = datetime.fromisoformat(hb.replace("Z", "+00:00"))
+        age_s = (datetime.now(timezone.utc) - hb_dt).total_seconds()
+    except HTTPException:
+        raise
+    except Exception:
+        age_s = None
+    if age_s is None or age_s > 120:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "stale_ea",
+                    "message": (f"EA hasn't checked in for {int(age_s)}s. "
+                                if age_s is not None else
+                                "EA heartbeat timestamp is unreadable. ")
+                    + "Open MT5 + ensure AutoTrading is ON, then retry."},
+        )
 
     # Pick a base symbol the broker actually offers AND whose market is
     # currently open (weekends: XAUUSD/EURUSD closed → falls to BTCUSD).

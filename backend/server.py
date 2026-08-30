@@ -40,6 +40,7 @@ from routes.soak_routes import router as soak_router
 from routes.command_center_routes import router as command_center_router
 from routes.certification_center_routes import router as certification_center_router
 from routes.connect_routes import router as connect_router
+from routes.state_routes import router as state_router
 from routes.tutorial_routes import router as tutorials_router
 from routes.intent_routes import router as intent_router
 from services.broker_gateway.mock_broker import router as mockbroker_router
@@ -419,6 +420,7 @@ api_router.include_router(soak_router)
 api_router.include_router(command_center_router)
 api_router.include_router(certification_center_router)
 api_router.include_router(connect_router)
+api_router.include_router(state_router)
 api_router.include_router(tutorials_router)
 from app_env import is_production as _is_production
 if not _is_production():
@@ -662,7 +664,8 @@ from background_loops import (_analytics_loop, _auto_heal_loop,
                               _nightly_tuning_loop, _optimizer_loop,
                               _pamm_sweep_loop,
                               _protection_guard_loop, _scalp_reconcile_loop,
-                              _soak_sampler_loop, _stuck_open_sync_loop,
+                              _soak_sampler_loop, _soak_tracker_loop,
+                              _stuck_open_sync_loop,
                               _billing_loop)
 _protection_task = None
 _analytics_task = None
@@ -752,6 +755,7 @@ async def on_startup():
         _scalp_reconcile_task = asyncio.create_task(_scalp_reconcile_loop())
         _eod_flatten_task = asyncio.create_task(_eod_flatten_loop())
         asyncio.create_task(_soak_sampler_loop())
+        asyncio.create_task(_soak_tracker_loop())
         asyncio.create_task(_billing_loop())
         asyncio.create_task(_mode_guardian_loop())
         asyncio.create_task(_pamm_sweep_loop())

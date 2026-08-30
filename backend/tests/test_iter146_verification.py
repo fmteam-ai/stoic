@@ -162,3 +162,6 @@ class TestConftestSecureCookieStrip:
         # Some mutation of 'secure' cookie flag inside the session patch
         assert re.search(r"[Ss]ecure", body), \
             "expected secure-cookie handling in conftest.py"
+
+
+pytestmark = pytest.mark.unit

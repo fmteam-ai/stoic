@@ -196,6 +196,106 @@ async def start(db, started_by: str, days: int = DEFAULT_DAYS,
     return doc
 
 
+async def abort(db, actor: str, reason: str | None = None) -> dict:
+    running = await db.soak_campaigns.find_one({"status": "RUNNING"})
+    if not running:
+        return {"error": "no_running_campaign"}
+    await db.soak_campaigns.update_one(
+        {"campaign_id": running["campaign_id"]},
+        {"$set": {"status": "ABORTED", "finished_at": _now(),
+                  "aborted_by": actor, "abort_reason": reason}})
+    return {"campaign_id": running["campaign_id"], "status": "ABORTED"}
+
+
+async def reset(db, started_by: str, days: int = DEFAULT_DAYS,
+                account_id: str | None = None,
+                note: str | None = None) -> dict:
+    """Manual reset — abort the running campaign (if any) and start fresh,
+    frozen at the CURRENT release."""
+    aborted = await abort(db, started_by, reason="manual reset")
+    fresh = await start(db, started_by, days=days, account_id=account_id,
+                        note=note or "manual reset")
+    fresh["aborted_campaign"] = (aborted.get("campaign_id")
+                                 if "error" not in aborted else None)
+    return fresh
+
+
+# ───────────────── soak tracker (iter-159) ────────────────────────────────
+
+REMINDER_HOURS = 12         # hours into the campaign day before a reminder
+AUTO_CHECKPOINT_HOURS = 20  # safety net: auto-record so coverage never slips
+
+
+def countdown_info(campaign: dict, checkpoints: list,
+                   now: datetime | None = None) -> dict:
+    """Pure — countdown + today's-checkpoint state for a campaign."""
+    now = now or _now_dt()
+    started = datetime.fromisoformat(campaign["started_at"])
+    days_target = int(campaign.get("days") or DEFAULT_DAYS)
+    ends_at = started + timedelta(days=days_target)
+    elapsed = max(0.0, (now - started).total_seconds())
+    day = int(elapsed // 86400) + 1
+    hours_into_day = (elapsed % 86400) / 3600
+    done_days = {c["day"] for c in checkpoints}
+    return {"ends_at": ends_at.isoformat(),
+            "day": min(day, days_target), "days_target": days_target,
+            "days_remaining": round(
+                max(0.0, (ends_at - now).total_seconds() / 86400), 2),
+            "hours_into_day": round(hours_into_day, 1),
+            "today_checkpoint_done": day in done_days or day > days_target,
+            "missed_days": sorted(
+                d for d in range(1, min(day, days_target + 1))
+                if d not in done_days and d < day)}
+
+
+async def tracker_sweep(db) -> dict:
+    """Background sweep: auto-start a fresh campaign when a NEW release is
+    detected, remind when today's checkpoint is missing, and auto-record it
+    near the end of the day so coverage never slips."""
+    out = {"auto_started": False, "reminded": False,
+           "auto_checkpoint": False}
+    running = await db.soak_campaigns.find_one({"status": "RUNNING"})
+    if not running:
+        latest = await db.soak_campaigns.find_one(
+            {}, sort=[("started_at", -1)])
+        current = material_versions().get("release")
+        if latest and ((latest.get("frozen_versions") or {}).get("release")
+                       != current):
+            res = await start(
+                db, "auto", days=DEFAULT_DAYS,
+                account_id=latest.get("account_id"),
+                note=f"auto-started — new release detected "
+                     f"({str(current)[:12]})")
+            out["auto_started"] = "error" not in res
+            if out["auto_started"]:
+                from alerting import raise_alert
+                await raise_alert(
+                    db, "soak_auto_started", "info",
+                    f"New release {str(current)[:12]} detected — a fresh "
+                    f"{DEFAULT_DAYS}-day soak campaign was auto-started "
+                    f"({res['campaign_id']}).",
+                    dedup_key=f"soak_auto_{res['campaign_id']}")
+        return out
+    cps = [c async for c in db.soak_checkpoints.find(
+        {"campaign_id": running["campaign_id"]}, {"day": 1})]
+    info = countdown_info(running, cps)
+    if info["today_checkpoint_done"]:
+        return out
+    if info["hours_into_day"] >= AUTO_CHECKPOINT_HOURS:
+        cp = await record_checkpoint(db, recorded_by="auto")
+        out["auto_checkpoint"] = "error" not in cp
+    elif info["hours_into_day"] >= REMINDER_HOURS:
+        from alerting import raise_alert
+        await raise_alert(
+            db, "soak_checkpoint_due", "warning",
+            f"Soak day {info['day']}/{info['days_target']}: today's "
+            "checkpoint has not been recorded — record it in the Command "
+            "Center before the day ends.",
+            dedup_key=f"soak_cp_due_{running['campaign_id']}_{info['day']}")
+        out["reminded"] = True
+    return out
+
+
 async def _account_invariants(db, account_id: str | None,
                               since: str) -> dict:
     """Execution / reconciliation / duplicate / UNKNOWN invariants,
@@ -232,7 +332,7 @@ async def _account_invariants(db, account_id: str | None,
             "rejects_24h": rejects}
 
 
-async def record_checkpoint(db) -> dict:
+async def record_checkpoint(db, recorded_by: str = "manual") -> dict:
     campaign = await db.soak_campaigns.find_one({"status": "RUNNING"})
     if not campaign:
         return {"error": "no_running_campaign"}
@@ -280,6 +380,7 @@ async def record_checkpoint(db) -> dict:
           "invariants": invariants,
           "global_health": global_health,
           "version_drift": drift,
+          "recorded_by": recorded_by,
           "green": green}
     await db.soak_checkpoints.update_one(
         {"campaign_id": cp["campaign_id"], "day": day},
@@ -327,6 +428,7 @@ async def status(db) -> dict:
             {"$set": {"status": ev["verdict"], "finished_at": _now()}})
         campaign["status"] = ev["verdict"]
     return {"campaign": campaign, "evaluation": ev,
+            "countdown": countdown_info(campaign, cps),
             "severity_definitions": SEVERITIES,
             "checkpoints": cps, "incidents": incidents}
 

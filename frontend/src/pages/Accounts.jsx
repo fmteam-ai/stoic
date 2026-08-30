@@ -651,15 +651,21 @@ export default function Accounts() {
                                                 className="px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-50">
                                                 <PlugsConnected className="w-3.5 h-3.5" /> {testing[a.id] ? "TESTING…" : "TEST"}
                                             </button>
-                                            {a.mode !== "paper" && (
+                                            {a.mode !== "paper" && (() => {
+                                                const eaLive = a.last_heartbeat &&
+                                                    (Date.now() - new Date(a.last_heartbeat).getTime()) < 180000;
+                                                return (
                                                 <button onClick={() => forceTestTrade(a.id, a.label)}
-                                                    disabled={!!forcingTest[a.id]}
+                                                    disabled={!!forcingTest[a.id] || !eaLive}
                                                     data-testid={`force-test-trade-${a.account_number}`}
-                                                    title="Fire a 0.01 lot test trade to validate this broker's execution path"
-                                                    className="px-3 py-2 border border-[#FFB020]/50 text-[#FFB020] hover:bg-[#FFB020]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-50">
+                                                    title={eaLive
+                                                        ? "Fire a 0.01 lot test trade to validate this broker's execution path"
+                                                        : "EA disconnected — trade controls are locked. Use TEST for diagnostics and reconnect the terminal first."}
+                                                    className="px-3 py-2 border border-[#FFB020]/50 text-[#FFB020] hover:bg-[#FFB020]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                                                     <Lightning className="w-3.5 h-3.5" /> {forcingTest[a.id] ? "FIRING…" : "FORCE TRADE"}
                                                 </button>
-                                            )}
+                                                );
+                                            })()}
                                             <button onClick={() => requestSync(a.id)}
                                                 disabled={!!syncing[a.id]}
                                                 data-testid={`broker-sync-${a.account_number}`}

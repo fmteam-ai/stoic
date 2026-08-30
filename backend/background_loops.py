@@ -533,3 +533,24 @@ async def _soak_sampler_loop():
             raise
         except Exception as e:  # noqa: BLE001
             logger.warning("soak sampler loop error: %s", e)
+
+
+async def _soak_tracker_loop():
+    """iter-159 — soak auto-start on release change, daily checkpoint
+    reminders + end-of-day safety-net checkpoint, and release-canary
+    divergence evaluation. Every SOAK_TRACKER_INTERVAL_SEC (30 min)."""
+    INTERVAL = int(os.environ.get("SOAK_TRACKER_INTERVAL_SEC", "1800"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
+            from soak_campaign import tracker_sweep
+            await tracker_sweep(get_db())
+            from release_canary import evaluate as canary_evaluate
+            await canary_evaluate(get_db())
+            record_progress("_soak_tracker_loop", processed=1,
+                            started_at=t0, interval_sec=INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("soak tracker sweep failed: %s", e)

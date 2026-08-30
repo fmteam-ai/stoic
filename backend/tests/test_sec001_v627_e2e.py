@@ -2,6 +2,7 @@
 layer drops fraudulent risk-reducing flags (Pydantic strict model)."""
 import os
 import time
+import pytest
 import requests
 
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
@@ -76,3 +77,6 @@ def test_pydantic_drops_extra_risk_reducing_flags():
         assert not doc.get("pamm_risk_reducing")
         assert not doc.get("close_trade")
         assert doc.get("intent") not in ("close", "reduce")
+
+
+pytestmark = pytest.mark.http

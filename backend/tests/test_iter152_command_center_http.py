@@ -101,7 +101,8 @@ def test_evidence_export_admin_download(admin_session):
     assert report.get("report") == "stoic-production-evidence"
     names = [s["section"] for s in report["sections"]]
     assert names == ["provenance", "certifications", "soak_status",
-                     "soak_evidence_chain", "guard_health"]
+                     "soak_evidence_chain", "guard_health",
+                     "release_canary"]
     for s in report["sections"]:
         assert "prev_hash" in s and "hash" in s
     assert "report_hash" in report
@@ -118,3 +119,6 @@ def test_evidence_export_admin_download(admin_session):
     t = copy.deepcopy(report)
     t["sections"][0]["data"]["git_commit"] = "tampered"
     assert verify_report(t) is False
+
+
+pytestmark = pytest.mark.http

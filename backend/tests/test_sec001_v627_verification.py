@@ -5,6 +5,7 @@ Targets:
     open-trade plane (all documented flag variants).
   * A clean BUY still validates.
 """
+import pytest
 from execution_authority import _validate
 
 
@@ -53,3 +54,6 @@ class TestOpenPlaneRejectsLabels:
                    pamm_risk_reducing=True, intent="close")
         probs = _validate(sig, ACCOUNT)
         assert _has_risk_reducing_problem(probs)
+
+
+pytestmark = pytest.mark.unit

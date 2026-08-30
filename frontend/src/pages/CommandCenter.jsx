@@ -3,7 +3,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
-    Activity, AlertTriangle, Award, Download, Loader2, Mail,
+    Activity, AlertTriangle, Award, Bird, Download, Loader2, Mail,
     RefreshCw, ShieldCheck, Timer, Server,
 } from "lucide-react";
 
@@ -45,11 +45,23 @@ const Metric = ({ label, value, testid }) => (
     </div>
 );
 
+const ActionBtn = ({ onClick, disabled, testid, danger, children }) => (
+    <button onClick={onClick} disabled={disabled} data-testid={testid}
+        className={`px-2.5 py-1 text-[11px] font-mono tracking-widest border flex items-center gap-1.5 disabled:opacity-40 ${
+            danger
+                ? "border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10"
+                : "border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10"}`}>
+        {children}
+    </button>
+);
+
 export default function CommandCenter() {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [exporting, setExporting] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const [acting, setActing] = useState(null);
+    const [canaryAccount, setCanaryAccount] = useState("");
 
     const load = useCallback(async (manual = false) => {
         if (manual) setRefreshing(true);
@@ -68,6 +80,20 @@ export default function CommandCenter() {
         const t = setInterval(load, 30000);
         return () => clearInterval(t);
     }, [load]);
+
+    const act = async (path, body, okMsg) => {
+        setActing(path);
+        try {
+            const { data: res } = await api.post(path, body || {});
+            if (res?.error) toast.error(String(res.error));
+            else toast.success(okMsg || "Done");
+            await load();
+        } catch (e) {
+            toast.error(formatApiError(e));
+        } finally {
+            setActing(null);
+        }
+    };
 
     const exportEvidence = async () => {
         setExporting(true);
@@ -92,13 +118,14 @@ export default function CommandCenter() {
 
     const s = data?.sections || {};
     const overallTone = tone(data?.overall);
+    const soakRunning = s.soak?.campaign_status === "RUNNING";
 
     return (
         <AppLayout>
             <div data-testid="command-center-page">
                 <PageHeader
                     title="Command Center"
-                    subtitle="Soak · certifications · guard health — one glance"
+                    subtitle="Soak · certifications · guard health · release canary — one glance"
                     testid="command-center-header"
                     action={
                         <div className="flex items-center gap-2">
@@ -154,6 +181,16 @@ export default function CommandCenter() {
                     <SectionCard title="Soak Campaign" icon={Timer} section={s.soak} testid="cc-section-soak">
                         <Metric label="Day" testid="cc-soak-day"
                             value={s.soak?.day != null ? `${s.soak.day} / ${s.soak.days_target}` : "no campaign"} />
+                        <Metric label="Days remaining" testid="cc-soak-remaining"
+                            value={s.soak?.days_remaining != null
+                                ? `${s.soak.days_remaining.toFixed(1)}${s.soak.ends_at ? ` · ends ${new Date(s.soak.ends_at).toLocaleDateString()}` : ""}`
+                                : "—"} />
+                        <div className="flex items-center justify-between py-0.5 text-xs" data-testid="cc-soak-today">
+                            <span className="text-[#52525B]">Today's checkpoint</span>
+                            <span className={`font-mono font-bold ${s.soak?.today_checkpoint_done ? "text-[#00FF41]" : "text-[#FFD700]"}`}>
+                                {s.soak?.today_checkpoint_done == null ? "—" : (s.soak.today_checkpoint_done ? "RECORDED" : "DUE")}
+                            </span>
+                        </div>
                         <Metric label="Verdict" value={s.soak?.verdict || "—"} testid="cc-soak-verdict" />
                         <Metric label="Checkpoint coverage" testid="cc-soak-coverage"
                             value={s.soak?.coverage != null ? `${Math.round(s.soak.coverage * 100)}%` : "—"} />
@@ -164,6 +201,92 @@ export default function CommandCenter() {
                                     style={{ width: `${Math.min(100, (s.soak.day / (s.soak.days_target || 14)) * 100)}%` }} />
                             </div>
                         )}
+                        <div className="flex gap-2 mt-3">
+                            {s.soak?.day == null ? (
+                                <ActionBtn testid="cc-soak-start-btn" disabled={!!acting}
+                                    onClick={() => act("/ops/soak/start", {}, "14-day soak campaign started")}>
+                                    START 14-DAY SOAK
+                                </ActionBtn>
+                            ) : (
+                                <>
+                                    <ActionBtn testid="cc-soak-checkpoint-btn"
+                                        disabled={!!acting || !soakRunning || s.soak?.today_checkpoint_done === true}
+                                        onClick={() => act("/ops/soak/checkpoint", {}, "Today's checkpoint recorded")}>
+                                        RECORD CHECKPOINT
+                                    </ActionBtn>
+                                    <ActionBtn danger testid="cc-soak-reset-btn" disabled={!!acting}
+                                        onClick={() => {
+                                            if (window.confirm("Abort the current campaign and restart a fresh 14-day soak frozen at the CURRENT release?"))
+                                                act("/ops/soak/reset", {}, "Soak campaign reset — fresh 14 days");
+                                        }}>
+                                        RESET
+                                    </ActionBtn>
+                                </>
+                            )}
+                        </div>
+                        <div className="text-[10px] text-[#52525B] mt-2">
+                            Auto-starts on new release · reminder at 12h · safety-net auto-checkpoint at 20h
+                        </div>
+                    </SectionCard>
+
+                    <SectionCard title="Release Canary" icon={Bird} section={s.canary} testid="cc-section-canary">
+                        <Metric label="Canary account" testid="cc-canary-account"
+                            value={s.canary?.enabled
+                                ? (s.canary.account_name || `…${String(s.canary.account_id || "").slice(-6)}`)
+                                : "not set"} />
+                        <Metric label="Canary block-rate" testid="cc-canary-rate"
+                            value={s.canary?.canary_rate != null
+                                ? `${Math.round(s.canary.canary_rate * 100)}% (${s.canary.canary_decisions} decisions)` : "—"} />
+                        <Metric label="Fleet block-rate" testid="cc-canary-fleet-rate"
+                            value={s.canary?.fleet_rate != null
+                                ? `${Math.round(s.canary.fleet_rate * 100)}% (${s.canary.fleet_decisions} decisions)` : "—"} />
+                        <Metric label="Window" testid="cc-canary-window"
+                            value={s.canary?.window_hours != null ? `${s.canary.window_hours}h` : "—"} />
+                        <Metric label="Release" testid="cc-canary-release"
+                            value={s.canary?.release ? String(s.canary.release).slice(0, 12) : "—"} />
+                        <div className="flex gap-2 mt-3 flex-wrap items-center">
+                            {!s.canary?.enabled ? (
+                                <>
+                                    <input value={canaryAccount} onChange={(e) => setCanaryAccount(e.target.value)}
+                                        placeholder="demo account ID"
+                                        data-testid="cc-canary-account-input"
+                                        className="bg-transparent border border-[#1F1F1F] px-2 py-1 text-[11px] font-mono text-[#FAFAFA] w-44 focus:border-[#00FF41]/40 outline-none" />
+                                    <ActionBtn testid="cc-canary-enable-btn"
+                                        disabled={!!acting || !canaryAccount.trim()}
+                                        onClick={() => act("/ops/canary/enable", { account_id: canaryAccount.trim() }, "Release canary enabled")}>
+                                        ENABLE
+                                    </ActionBtn>
+                                </>
+                            ) : s.canary?.halted ? (
+                                <>
+                                    <ActionBtn testid="cc-canary-resume-btn" disabled={!!acting}
+                                        onClick={() => {
+                                            if (window.confirm("Reactivate the canary account's bots? Only resume after investigating the divergence."))
+                                                act("/ops/canary/resume", {}, "Canary resumed — bots reactivated");
+                                        }}>
+                                        RESUME
+                                    </ActionBtn>
+                                    <ActionBtn danger testid="cc-canary-disable-btn" disabled={!!acting}
+                                        onClick={() => act("/ops/canary/disable", {}, "Release canary disabled")}>
+                                        DISABLE
+                                    </ActionBtn>
+                                </>
+                            ) : (
+                                <>
+                                    <ActionBtn testid="cc-canary-evaluate-btn" disabled={!!acting}
+                                        onClick={() => act("/ops/canary/evaluate", {}, "Canary evaluated")}>
+                                        EVALUATE NOW
+                                    </ActionBtn>
+                                    <ActionBtn danger testid="cc-canary-disable-btn" disabled={!!acting}
+                                        onClick={() => act("/ops/canary/disable", {}, "Release canary disabled")}>
+                                        DISABLE
+                                    </ActionBtn>
+                                </>
+                            )}
+                        </div>
+                        <div className="text-[10px] text-[#52525B] mt-2">
+                            One demo account runs each new release ahead of the fleet — auto-halts if its guard-block rate diverges (≥20 decisions, +25pp / 3× fleet)
+                        </div>
                     </SectionCard>
 
                     <SectionCard title="Certifications" icon={Award} section={s.certifications} testid="cc-section-certs">

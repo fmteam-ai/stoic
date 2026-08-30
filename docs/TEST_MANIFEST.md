@@ -7,11 +7,11 @@ fails when this file drifts from the tree.
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 515 |
-| integration | real MongoDB service container | CI `backend-integration` | 40 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3391 |
+| integration | real MongoDB service container | CI `backend-integration` | 55 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3397 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 3955 tests across 380 files.**
+**Total: 3976 tests across 384 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -127,6 +127,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter157_verified_perf_audit.py` | http-live | 6 |
 | `backend/tests/test_iter158_differentiation_http.py` | http-live | 14 |
 | `backend/tests/test_iter158_resilience.py` | http-live | 11 |
+| `backend/tests/test_iter159_http_e2e.py` | http-live | 6 |
 | `backend/tests/test_iter159_scheduled_drills.py` | http-live | 9 |
 | `backend/tests/test_iter160_release_ops.py` | http-live | 8 |
 | `backend/tests/test_iter161_security_hardening.py` | http-live | 11 |
@@ -363,6 +364,9 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_iter154_certification_connect.py` | integration | 4 |
 | `backend/tests/integration/test_iter156_risk_invalidation.py` | integration | 2 |
 | `backend/tests/integration/test_iter157_composition_invalidation.py` | integration | 2 |
+| `backend/tests/integration/test_iter158_e2e_review.py` | integration | 6 |
+| `backend/tests/integration/test_iter158_state_contract.py` | integration | 3 |
+| `backend/tests/integration/test_iter159_soak_tracker_canary.py` | integration | 6 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 3 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |

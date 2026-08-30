@@ -61,6 +61,66 @@ async def soak_evidence_ep(campaign_id: str | None = None,
     return await evidence(get_db(), campaign_id)
 
 
+@router.post("/soak/reset")
+async def soak_reset_ep(payload: dict | None = None,
+                        user=Depends(get_current_user)):
+    """Abort the running campaign (if any) and start a fresh one."""
+    _require_admin(user)
+    from soak_campaign import reset
+    p = payload or {}
+    return await reset(get_db(), user["id"],
+                       days=int(p.get("days") or 14),
+                       account_id=p.get("account_id"),
+                       note=p.get("note"))
+
+
+# ───────────────── release canary (iter-159) ──────────────────────────────
+
+@router.get("/canary/status")
+async def canary_status_ep(user=Depends(get_current_user)):
+    _require_admin(user)
+    from release_canary import status
+    return await status(get_db())
+
+
+@router.post("/canary/enable")
+async def canary_enable_ep(payload: dict,
+                           user=Depends(get_current_user)):
+    _require_admin(user)
+    from release_canary import enable
+    account_id = str(payload.get("account_id") or "").strip()
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id required")
+    try:
+        return await enable(get_db(), account_id, user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/canary/disable")
+async def canary_disable_ep(user=Depends(get_current_user)):
+    _require_admin(user)
+    from release_canary import disable
+    return await disable(get_db(), user["id"])
+
+
+@router.post("/canary/evaluate")
+async def canary_evaluate_ep(user=Depends(get_current_user)):
+    _require_admin(user)
+    from release_canary import evaluate
+    return await evaluate(get_db())
+
+
+@router.post("/canary/resume")
+async def canary_resume_ep(user=Depends(get_current_user)):
+    _require_admin(user)
+    from release_canary import resume
+    try:
+        return await resume(get_db(), user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/broker-validation")
 async def broker_validation_ep(account_id: str,
                                user=Depends(get_current_user)):

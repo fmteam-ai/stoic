@@ -5,7 +5,7 @@ import { Eye, Ghost, FlaskConical, Users, Rocket, Shield, AlertOctagon } from "l
 
 const MODES = [
     { key: "observe", label: "OBSERVE", icon: Eye, color: "#38BDF8",
-      detail: "Detects and records opportunities — never creates trades" },
+      detail: "Detects and records opportunities — never creates trades (safe default)" },
     { key: "shadow", label: "SHADOW", icon: Ghost, color: "#A855F7",
       detail: "Records full simulated decisions from live data" },
     { key: "demo_autopilot", label: "DEMO AUTOPILOT", icon: FlaskConical, color: "#FFD700",
@@ -13,7 +13,7 @@ const MODES = [
     { key: "supervised_live", label: "SUPERVISED LIVE", icon: Users, color: "#FF8C00",
       detail: "Real capital at half size while you're available" },
     { key: "autonomous_live", label: "AUTONOMOUS LIVE", icon: Rocket, color: "#00FF41",
-      detail: "Approved strategies trade automatically (default)" },
+      detail: "Approved strategies trade automatically — separate promotion, never a default" },
     { key: "defensive", label: "DEFENSIVE", icon: Shield, color: "#F97316",
       detail: "Only manages and reduces existing exposure" },
     { key: "panic", label: "PANIC", icon: AlertOctagon, color: "#FF3B30",

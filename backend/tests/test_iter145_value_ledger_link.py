@@ -103,3 +103,6 @@ def test_pamm_risk_guard_n_increments_with_seeded_reject(
         # confirm cleanup
         assert mongo.pamm_risk_decisions.find_one(
             {"snapshot_id": snap_id}) is None
+
+
+pytestmark = pytest.mark.http
