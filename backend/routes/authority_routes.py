@@ -41,6 +41,19 @@ async def authority_ep(user=Depends(get_current_user)):
                 out.get("level") or "FULL", "CLOSE_ONLY")
             out["restricted"] = True
             out.setdefault("reasons", []).append(reason)
+        # the EXECUTION pill must never read FULL while readiness reports
+        # enabled bots blocked from executing — mirror the readiness
+        # reason so the ribbon and the readiness strip agree.
+        exb = codes.get("EXECUTION_BLOCKED") or codes.get("PANIC_TRIPPED")
+        if exb:
+            dom = out.setdefault("domains", {})
+            if (dom.get("execution") or {}).get("level") in (None, "FULL"):
+                dom["execution"] = {"level": "REDUCED",
+                                    "reason": exb["message"]}
+                out["level"] = worst_level(
+                    out.get("level") or "FULL", "REDUCED")
+                out["restricted"] = True
+                out.setdefault("reasons", []).append(exb["message"])
         out["readiness_level"] = rd.get("level")
     except Exception:  # noqa: BLE001 — display fallback, never 500 the strip
         pass

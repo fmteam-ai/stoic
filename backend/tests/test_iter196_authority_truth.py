@@ -73,10 +73,16 @@ class TestGlobalTradingAuthority:
         from trading_authority import LEVELS
         assert body["level"] in LEVELS
         assert body["enforced_level"] in LEVELS
+        # audit v4 P0-1 — position_truth may carry canonical truth values
+        # (STALE/UNKNOWN/CONFLICTED) when the caller's accounts are not
+        # fresh; every other domain sticks to authority LEVELS.
+        truth_levels = ("STALE", "UNKNOWN", "CONFLICTED")
         for d in ("platform", "account", "broker", "infrastructure",
                   "risk", "pamm", "execution", "position_truth"):
             assert d in body["domains"], f"missing domain {d}"
-            assert body["domains"][d]["level"] in LEVELS
+            allowed = (list(LEVELS) + list(truth_levels)
+                       if d == "position_truth" else list(LEVELS))
+            assert body["domains"][d]["level"] in allowed
 
     def test_requires_auth(self):
         r = requests.get(f"{API}/authority", timeout=TIMEOUT)
@@ -273,14 +279,20 @@ class TestPositionTruthV2:
 
 
 class TestReleaseSignerHatchRemoved:
-    def test_local_signing_forbidden_in_prod_even_with_override(
+    def test_local_signing_forbidden_in_prod_without_ack(
             self, monkeypatch):
+        # audit v5 P0-7 — local signing in prod is forbidden UNLESS the
+        # operator explicitly acknowledges a supervised pilot with
+        # RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true (boot guard parity).
         import release_signing
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("RELEASE_SIGNER", "local")
-        monkeypatch.setenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "true")
+        monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
+                           raising=False)
         with pytest.raises(RuntimeError, match="forbidden in production"):
             release_signing.sign_hex(b"x")
+        monkeypatch.setenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "true")
+        assert release_signing.sign_hex(b"x")
 
     def test_preflight_flags_override_as_fail(self, monkeypatch):
         from deploy_preflight import run_preflight

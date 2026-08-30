@@ -123,7 +123,7 @@ export function QuickActionsBar() {
                 <button type="button" onClick={toggleBot} disabled={actionInflight}
                         data-testid="quick-toggle-bot"
                         title={data.bot_active
-                            ? `Bot configured ON — effective execution state: ${data.effective_state || "…"}. Click to pause.`
+                            ? `Bot configured ON — effective execution state: ${data.effective_state || "…"}${data.effective_reason ? `. Why: ${data.effective_reason}` : ""}. Click to pause.`
                             : "Bot is OFF — click to start"}
                         className={`flex items-center gap-1.5 font-mono text-[10px] tracking-widest px-2.5 py-1.5 border transition-colors ${
                             data.bot_active

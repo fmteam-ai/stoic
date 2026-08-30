@@ -77,20 +77,27 @@ def account_truth(acc: dict, open_local: int) -> dict:
         broker = int(acc.get("open_positions") or 0)
         truth = "CONFLICTED" if broker != open_local else "FRESH"
     if paper:
-        authority = "FULL"
+        authority, authority_reason = "FULL", None
     elif not ea_connected:
         authority = "NONE"
+        authority_reason = ("EA not connected — no heartbeat, "
+                            "no execution authority")
     elif not acc.get("verified_identity"):
         authority = "REDUCED"
+        authority_reason = ("broker identity not verified — the EA "
+                            "heartbeat has no paired installation; pair "
+                            "this terminal from Setup → EA pairing to "
+                            "restore full authority")
     else:
-        authority = "FULL"
+        authority, authority_reason = "FULL", None
     return {"ea_connected": ea_connected,
             "heartbeat_age_seconds":
                 round(hb_age, 1) if hb_age is not None else None,
             "position_truth": truth,
             "open_positions_broker": broker,
             "open_positions_local": open_local,
-            "execution_authority": authority}
+            "execution_authority": authority,
+            "authority_reason": authority_reason}
 
 
 def effective_state(*, bot_enabled: bool, tripped: bool, truth: dict,
@@ -107,6 +114,30 @@ def effective_state(*, bot_enabled: bool, tripped: bool, truth: dict,
     if operational_mode in ("observe", "shadow"):
         return "OBSERVING"
     return "ACTIVE"
+
+
+def state_reason(*, eff: str, truth: dict, operational_mode: str) -> str | None:
+    """Human-readable WHY for a non-executing effective_state."""
+    if eff == "PANIC":
+        return ("panic switch tripped — investigate, verify broker "
+                "positions, then reset the panic switch")
+    if eff == "DISCONNECTED":
+        age = truth.get("heartbeat_age_seconds")
+        return ("no EA heartbeat ever received — attach the EA to this "
+                "account" if age is None else
+                f"EA heartbeat {age:.0f}s old — terminal/agent offline")
+    if eff == "BLOCKED":
+        if truth["position_truth"] != "FRESH":
+            return (f"position truth {truth['position_truth']} — a fresh "
+                    "broker snapshot plus reconciliation is required "
+                    "before opening orders")
+        return (truth.get("authority_reason")
+                or f"execution authority {truth['execution_authority']} — "
+                   "full authority required to execute")
+    if eff == "OBSERVING":
+        return (f"operational mode is {operational_mode} — signals only, "
+                "no live orders until switched to live")
+    return None
 
 
 async def contract(db, user_id: str) -> dict:
@@ -135,6 +166,8 @@ async def contract(db, user_id: str) -> dict:
                      "mode": a.get("mode"),
                      "account_enabled": enabled, "bot_enabled": bot_on,
                      "operational_mode": mode, "effective_state": eff,
+                     "state_reason": state_reason(
+                         eff=eff, truth=truth, operational_mode=mode),
                      "force_trade_allowed":
                          enabled and truth["ea_connected"]
                          and truth["position_truth"] == "FRESH"
@@ -165,6 +198,9 @@ async def quick_truth(db, user_id: str, open_local: int) -> dict:
               if r["bot_enabled"]]
     order = ["PANIC", "DISCONNECTED", "BLOCKED", "OBSERVING", "ACTIVE"]
     eff = next((s for s in order if s in states), "OFF")
+    eff_reason = next((r.get("state_reason") for r in c["accounts"]
+                       if r["bot_enabled"] and r["effective_state"] == eff
+                       and r.get("state_reason")), None)
     truth = c["position_truth"]
     broker = tot["open_broker"]
     # PANIC must be available whenever exposure exists OR cannot be ruled out
@@ -173,6 +209,7 @@ async def quick_truth(db, user_id: str, open_local: int) -> dict:
     return {"position_truth": truth,
             "open_trades_broker": broker,
             "effective_state": eff,
+            "effective_reason": eff_reason,
             "panic_available": panic_available,
             "accounts_total": tot["accounts_total"],
             "accounts_enabled": tot["accounts_enabled"],

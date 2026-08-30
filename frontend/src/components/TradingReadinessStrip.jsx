@@ -90,8 +90,13 @@ export function TradingReadinessStrip() {
                             </div>
                             <div className="text-[#52525B] mt-0.5">→ {r.recovery}</div>
                             {(r.accounts || []).length > 0 && (
-                                <div className="text-[#52525B] mt-0.5">
-                                    affected: {r.accounts.map(a => a.label || a.account_id.slice(-6)).join(", ")}
+                                <div className="text-[#52525B] mt-0.5" data-testid={`readiness-reason-accounts-${r.code}`}>
+                                    {r.accounts.map(a => (
+                                        <div key={a.account_id}>
+                                            affected: <span className="text-[#A1A1AA]">{a.label || a.account_id.slice(-6)}</span>
+                                            {a.reason ? <span> — {a.reason}</span> : null}
+                                        </div>
+                                    ))}
                                 </div>
                             )}
                         </div>

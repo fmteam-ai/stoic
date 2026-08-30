@@ -61,11 +61,17 @@ async def readiness(db, user_id: str) -> dict:
                     and r["effective_state"] in ("BLOCKED", "DISCONNECTED")
                     and r["position_truth"] == "FRESH"]
     if disconnected:
+        causes = sorted({r["state_reason"] for r in disconnected
+                         if r.get("state_reason")})
+        accs = [{"account_id": r["account_id"], "label": r.get("label"),
+                 "reason": r.get("state_reason")} for r in disconnected]
         add("EXECUTION_BLOCKED", "BLOCKED",
             f"{len(disconnected)} enabled bot(s) cannot execute "
-            f"({disconnected[0]['effective_state']})", _ids(disconnected),
-            "Open the account's blockers on the Accounts page and resolve "
-            "the listed condition")
+            f"({disconnected[0]['effective_state']})"
+            + (f" — {causes[0]}" if len(causes) == 1 else ""), accs,
+            causes[0] if len(causes) == 1 else
+            "Each affected account below lists its exact blocking "
+            "condition — resolve it to restore execution")
 
     # user-scoped unknown executions → reconciliation pending
     acct_ids = [r["account_id"] for r in rows]
