@@ -95,6 +95,16 @@ async def verify_token(token: str, remote_ip: str | None = None) -> dict:
 async def require_turnstile(db, token: str | None, remote_ip: str | None,
                             action: str = "login") -> None:
     """Gate for sensitive auth actions. No-op when disabled or unconfigured."""
+    # Break-glass: a misconfigured widget (e.g. production domain missing
+    # from the Cloudflare allowlist) must never brick EVERY login including
+    # the admin's. Set TURNSTILE_FORCE_DISABLE=true in the deployment env
+    # to bypass the gate while the widget is repaired.
+    if os.environ.get("TURNSTILE_FORCE_DISABLE",
+                      "").strip().lower() == "true":
+        logger.warning("turnstile FORCE-DISABLED via env break-glass "
+                       "(action=%s) — re-enable after fixing the widget",
+                       action)
+        return
     if not secret_key():
         return
     if not await is_enabled(db):
@@ -132,6 +142,8 @@ async def diagnose(db) -> dict:
     sk = secret_key()
     out = {
         "enabled": await is_enabled(db),
+        "force_disabled": os.environ.get(
+            "TURNSTILE_FORCE_DISABLE", "").strip().lower() == "true",
         "site_key_set": bool(site_key()),
         "site_key_prefix": site_key()[:14] if site_key() else None,
         "secret_key_set": bool(sk),

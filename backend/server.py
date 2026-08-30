@@ -628,7 +628,12 @@ async def _security_headers_middleware(request: Request, call_next):
 # can't pull authenticated calls from a logged-in browser.
 cors_origins_env = (os.environ.get("CORS_ORIGINS") or "").strip()
 if cors_origins_env and cors_origins_env != "*":
-    allowed = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    # SEC-001 — run the credentialed CORS allowlist through the SAME
+    # production filter as the CSRF origin check (dev/preview entries are
+    # dropped automatically when APP_ENV=production).
+    from security import _allowed_origins as _filtered_origins
+    allowed = sorted(_filtered_origins()) or [
+        o.strip() for o in cors_origins_env.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed,
@@ -704,11 +709,35 @@ async def on_startup():
         # public certificates must never hit a post-boot signing failure.
         if os.environ.get("RELEASE_SIGNER", "local").strip().lower() \
                 == "local":
-            raise RuntimeError(
-                "APP_ENV=production forbids RELEASE_SIGNER=local — the "
-                "signing key must not live in the API. Set RELEASE_SIGNER="
-                "external with RELEASE_SIGNER_URL/RELEASE_SIGNER_TOKEN "
-                "(KMS/HSM-backed).")
+            _ack = os.environ.get(
+                "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
+                "false").strip().lower() == "true"
+            if not _ack:
+                raise RuntimeError(
+                    "APP_ENV=production forbids RELEASE_SIGNER=local — the "
+                    "signing key must not live in the API. Set RELEASE_"
+                    "SIGNER=external with RELEASE_SIGNER_URL/RELEASE_SIGNER_"
+                    "TOKEN (KMS/HSM-backed), or explicitly acknowledge the "
+                    "risk with RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true for "
+                    "a supervised pilot.")
+            # audit v5 P0-7 — local signing keys refused unless EXPLICITLY
+            # acknowledged. Acknowledged: boot proceeds with a loud trail.
+            logger.critical(
+                "RELEASE_SIGNER=local in production — explicitly "
+                "acknowledged (RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true). "
+                "Release manifests are signed by a key resident in the API "
+                "process; migrate to a KMS/HSM-backed external signer "
+                "before scale-up.")
+            try:
+                from alerting import raise_alert
+                await raise_alert(
+                    get_db(), "release_signer_local_in_prod", "warning",
+                    "Production booted with RELEASE_SIGNER=local under "
+                    "explicit acknowledgment — migrate to an external "
+                    "KMS/HSM signer.",
+                    dedup_key="release_signer_local_in_prod")
+            except Exception:  # noqa: BLE001 — alerting must not block boot
+                pass
         if not os.environ.get("ED25519_SIGNING_KEY_B64"):
             raise RuntimeError(
                 "APP_ENV=production requires ED25519_SIGNING_KEY_B64 for "

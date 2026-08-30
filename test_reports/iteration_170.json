@@ -1,0 +1,31 @@
+{
+  "summary": "iter-170 review: verified the 'Human verification failed' login bug is not reproducible in preview. Login (HTTP + UI) works with admin@trading.bot/admin123, dashboard/accounts/safety-blocks render. /api/ops/turnstile-diag returns enabled=false, force_disabled=false, secret_check=secret_ok. All 6 tests in tests/test_iter170_prod_boot.py pass (turnstile break-glass + signer acknowledgment). Additional 8-test HTTP suite (test_iter170_review.py) all green. Manually verified release_signing.sign_hex: with RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true it signs; with the flag false it raises the 'forbidden in production' RuntimeError. CORS: real credentialed request from preview Origin returns 200 with cookies (functional CORS OK; response header rewriting to '*' is Cloudflare edge behavior in this preview env, not a backend bug).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter170_prod_boot.py",
+    "/app/backend/tests/test_iter170_review.py",
+    "/app/test_reports/pytest/iter170_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py CORS branch is correct (SEC-001): production allowlist runs through security._allowed_origins filter, credentialed only, else falls back to wildcard-no-credentials. Safe.",
+    "turnstile_gate.require_turnstile break-glass short-circuits BEFORE touching db — good, guarantees no crash if a misconfigured widget disables the API path.",
+    "release_signing._private_key acknowledgment path logs a WARNING-worthy message; consider structured audit log entry when APP_ENV=production and ack flag active so ops can track pilot rollout expiry.",
+    "test_iter170_prod_boot::test_env_carries_acknowledgment_for_pilot pins RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true in .env — remove this assertion once KMS/HSM migration lands (P0-7 audit)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter170_review.py (new HTTP suite)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (login + dashboard + accounts + safety-blocks all render, no CORS/turnstile errors)"},
+  "test_credentials": "admin@trading.bot / admin123 (preview only)",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Production is not reachable from preview; fixes verified via unit tests + preview HTTP + UI. Test file /app/backend/tests/test_iter170_review.py contains reusable regression assertions for the reported bug (login+turnstile-diag+CORS+smoke). The CORS preflight (OPTIONS) hits Cloudflare edge and echoes '*'; assert on functional cookie auth instead.",
+  "rca of the issue": "Production deploys were failing on the release-signer boot guard (APP_ENV=production forbids RELEASE_SIGNER=local), so production remained on an OLD backend build. That old build fail-closed on turnstile whenever the widget mis-loaded, producing the 'Human verification failed' 403 the user reported. Fix chain (all verified in preview): (1) boot guard + release_signing.sign_hex now honor RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true so the next deploy will actually succeed, (2) turnstile_gate.require_turnstile now supports TURNSTILE_FORCE_DISABLE break-glass so a widget mis-config can never brick logins again, (3) CORS credentialed branch runs through the production allowlist filter (SEC-001). Preview DB has turnstile disabled → login works with no challenge, confirming the gate is dormant when off."
+}

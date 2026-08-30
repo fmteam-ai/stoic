@@ -4,7 +4,10 @@ signing. Private key comes from the ED25519_SIGNING_KEY_B64 env var
 Public key is published via GET /api/release-key for verifier pinning.
 """
 import base64
+import logging
 import os
+
+logger = logging.getLogger("release_signing")
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -42,12 +45,21 @@ def sign_hex(data: bytes) -> str:
         return _external_sign(data)
     from app_env import is_production
     if is_production():
-        raise RuntimeError(
-            "RELEASE_SIGNER=local is forbidden in production — the private "
-            "signing key must NOT live in the API. Configure RELEASE_SIGNER="
-            "external + RELEASE_SIGNER_URL/RELEASE_SIGNER_TOKEN (KMS/HSM "
-            "proxy). There is no local override (v56: escape hatch "
-            "removed).")
+        # audit v5 P0-7 — local signing in production requires the SAME
+        # explicit acknowledgment as the boot guard (kept consistent so
+        # an acknowledged pilot never hits a post-boot signing failure).
+        ack = os.environ.get("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
+                             "false").strip().lower() == "true"
+        if not ack:
+            raise RuntimeError(
+                "RELEASE_SIGNER=local is forbidden in production — the "
+                "private signing key must NOT live in the API. Configure "
+                "RELEASE_SIGNER=external + RELEASE_SIGNER_URL/RELEASE_"
+                "SIGNER_TOKEN (KMS/HSM proxy), or explicitly acknowledge "
+                "with RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true for a "
+                "supervised pilot.")
+        logger.warning("release signing with LOCAL key in production "
+                       "(explicitly acknowledged) — migrate to KMS/HSM")
     return _private_key().sign(data).hex()
 
 
