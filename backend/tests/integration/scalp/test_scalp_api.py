@@ -61,9 +61,10 @@ class TestScalpApi:
             "label": "TEST_ScalpAcc", "broker": "Exness", "server": "T",
             "account_number": uuid.uuid4().hex[:8], "account_type": "standard",
             "base_currency": "USD"}, timeout=10).json()
-        # SEC — bridge_token is no longer bulk-returned; fetch on demand
-        acc["bridge_token"] = s.get(
-            f"{api}/accounts/{acc['id']}/bridge-token",
+        # SEC (audit F-05) — bridge-token GET is masked; rotation issues
+        # the full secret once.
+        acc["bridge_token"] = s.post(
+            f"{api}/accounts/{acc['id']}/rotate-token",
             timeout=10).json()["bridge_token"]
         return {"api": api, "s": s, "acc": acc}
 
@@ -125,8 +126,8 @@ class TestScalpApi:
             "label": "TEST_ScalpE2E", "broker": "Exness", "server": "T",
             "account_number": uuid.uuid4().hex[:8], "account_type": "standard",
             "base_currency": "USD"}, timeout=10).json()
-        acc["bridge_token"] = ctx["s"].get(
-            f"{ctx['api']}/accounts/{acc['id']}/bridge-token",
+        acc["bridge_token"] = ctx["s"].post(
+            f"{ctx['api']}/accounts/{acc['id']}/rotate-token",
             timeout=10).json()["bridge_token"]
         r = ctx["s"].post(f"{ctx['api']}/scalp/config", json={
             "account_id": acc["id"], "symbol": "EURUSD",

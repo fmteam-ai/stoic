@@ -9,8 +9,37 @@ import { OnboardingBanner } from "@/components/OnboardingBanner";
 import OnboardingWizard from "@/components/OnboardingWizard";
 import { StepUpDialog } from "@/components/StepUpDialog";
 import { TourRunner } from "@/components/GuidedTour";
+import { TradingReadinessStrip } from "@/components/TradingReadinessStrip";
+import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
+
+// audit F-20 — route-specific document titles
+const TITLES = {
+    "/": "Dashboard", "/dashboard": "Dashboard", "/trades": "Trades",
+    "/signals": "AI Signals", "/commander": "Risk Commander",
+    "/bot-health": "Bot Health", "/accounts": "MT5 Accounts",
+    "/bot": "Bot Config", "/bot-config": "Bot Config",
+    "/certification": "Certification", "/certification-center": "Certification Center",
+    "/scalp": "Scalp Fast Path", "/execution": "Execution Intel",
+    "/verified-performance": "Verified Performance", "/audit-log": "Audit Log",
+    "/loss-lab": "Loss Lab", "/portfolio": "Portfolio Risk",
+    "/connect": "STOIC Connect", "/strategies": "Strategies",
+    "/safety-blocks": "Safety Blocks", "/infrastructure": "Infrastructure",
+    "/agents": "AI Agents", "/research": "Research",
+    "/marketplace": "Marketplace", "/vps": "VPS", "/analytics": "Analytics",
+    "/subscription": "Subscription", "/settings": "Settings",
+    "/notifications": "Notifications", "/help": "Help", "/support": "Support",
+    "/status": "System Status", "/admin/command-center": "Command Center",
+};
 
 export function AppLayout({ children }) {
+    const location = useLocation();
+    useEffect(() => {
+        const name = TITLES[location.pathname]
+            || (location.pathname.split("/").filter(Boolean)[0] || "")
+                .replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        document.title = name ? `${name} | STOIC` : "STOIC · Disciplined AI Trading";
+    }, [location.pathname]);
     return (
         <div className="min-h-screen bg-[#050505] text-white">
             <Sidebar />
@@ -18,6 +47,7 @@ export function AppLayout({ children }) {
             <StepUpDialog />
             <TourRunner />
             <main className="md:ml-60 min-h-screen">
+                <TradingReadinessStrip />
                 <StatusBar />
                 <AuthorityStrip />
                 <TickerTape />

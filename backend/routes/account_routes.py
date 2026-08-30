@@ -698,14 +698,49 @@ async def import_positions(account_id: str, payload: ImportPositionsRequest,
 
 @router.get("/{account_id}/bridge-token")
 async def get_bridge_token(account_id: str, user=Depends(get_current_user)):
-    """Owner-scoped on-demand secret fetch (kept out of list responses)."""
+    """Audit F-05 — the full secret is shown ONCE (creation/rotation).
+    Thereafter only a masked form + usage metadata is returned; use
+    rotate to obtain a fresh full token."""
     db = get_db()
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"),
-         "user_id": user["id"]}, {"bridge_token": 1})
+         "user_id": user["id"]},
+        {"bridge_token": 1, "bridge_last_used_at": 1})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
-    return {"bridge_token": acc.get("bridge_token") or ""}
+    tok = acc.get("bridge_token") or ""
+    return {"bridge_token_masked": (f"••••••••••••{tok[-4:]}" if tok else ""),
+            "has_bridge_token": bool(tok),
+            "last_used_at": acc.get("bridge_last_used_at"),
+            "note": "Full token is shown only once at creation/rotation. "
+                    "Rotate to get a new one (15-min grace for the old)."}
+
+
+@router.post("/{account_id}/bridge-token/revoke")
+async def revoke_bridge_token(account_id: str,
+                              user=Depends(get_current_user)):
+    """Audit F-05 — immediate kill: EA polling stops until a rotate
+    issues a fresh token."""
+    db = get_db()
+    acc = await db.accounts.find_one(
+        {"_id": parse_object_id(account_id, "Account"),
+         "user_id": user["id"]}, {"label": 1})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    await db.accounts.update_one(
+        {"_id": acc["_id"]},
+        {"$unset": {"bridge_token": "", "bridge_token_prev": "",
+                    "bridge_token_prev_expires": ""},
+         "$set": {"bridge_token_revoked_at":
+                  datetime.now(timezone.utc).isoformat()}})
+    await db.audit_log.insert_one({
+        "user_id": user["id"], "actor": user["id"],
+        "action": "bridge_token_revoked",
+        "detail": {"account_id": account_id},
+        "at": datetime.now(timezone.utc).isoformat()})
+    return {"revoked": True,
+            "note": "EA authentication for this account is disabled until "
+                    "you rotate a new token."}
 
 
 @router.get("/{account_id}/test-connection")

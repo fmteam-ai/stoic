@@ -91,6 +91,19 @@ export function AccountSwitcher() {
                                     <div className="font-mono text-[9px] text-[#52525B] tracking-widest truncate">
                                         {a.broker || (a.mode === "paper" ? "PAPER" : "")} · #{a.account_number}
                                     </div>
+                                    {/* audit F-03 — counter drill-down: which records feed ACC/BOTS/EA */}
+                                    <div className="flex items-center gap-1 mt-0.5" data-testid={`switcher-chips-${a.account_number}`}>
+                                        <span className={`font-mono text-[8px] tracking-widest px-1 py-px border ${a.trading_enabled ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#1F1F1F] text-[#52525B]"}`}>
+                                            ACC {a.trading_enabled ? "ON" : "OFF"}
+                                        </span>
+                                        <span className={`font-mono text-[8px] tracking-widest px-1 py-px border ${a.bot_enabled ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#1F1F1F] text-[#52525B]"}`}>
+                                            BOT {a.bot_enabled ? "ON" : "OFF"}
+                                        </span>
+                                        <span className={`font-mono text-[8px] tracking-widest px-1 py-px border ${a.connection_state?.state === "CONNECTED" || a.connection_state?.state === "PAPER" ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#FFB020]/40 text-[#FFB020]"}`}
+                                            title={a.connection_state?.reason}>
+                                            EA {a.connection_state?.state || "—"}
+                                        </span>
+                                    </div>
                                 </div>
                                 <div className="text-right shrink-0">
                                     <div className="font-display font-bold text-xs tabular-nums">

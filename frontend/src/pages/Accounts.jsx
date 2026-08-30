@@ -169,9 +169,20 @@ export default function Accounts() {
     };
 
     const rotate = async (id) => {
+        if (!window.confirm("Rotate the bridge token? The old token keeps working for 15 minutes so a live EA can switch over.")) return;
         try {
             const { data } = await api.post(`/accounts/${id}/rotate-token`);
-            setMsg(`New bridge token: ${data.bridge_token.slice(0, 12)}…`);
+            setRevealedTokens(prev => ({ ...prev, [id]: data.bridge_token }));
+            setMsg("New bridge token generated — it is shown ONCE below. Copy it into the EA now; it will be masked afterwards.");
+        } catch (e) { setErr(formatApiError(e)); }
+    };
+
+    const revokeToken = async (id) => {
+        if (!window.confirm("Revoke the bridge token? The EA stops authenticating IMMEDIATELY until you rotate a new one.")) return;
+        try {
+            await api.post(`/accounts/${id}/bridge-token/revoke`);
+            setRevealedTokens(prev => { const n = { ...prev }; delete n[id]; return n; });
+            setMsg("Bridge token revoked — rotate to issue a new one.");
             await load();
         } catch (e) { setErr(formatApiError(e)); }
     };
@@ -190,17 +201,16 @@ export default function Accounts() {
     };
 
     const [refreshingBalance, setRefreshingBalance] = useState({});
-    // Bridge token is a secret — no longer bulk-returned; fetch on demand.
+    // Bridge token is a SECRET (audit F-05): the full value is shown only
+    // once, right after creation/rotation. Otherwise only masked metadata.
     const [revealedTokens, setRevealedTokens] = useState({});
-    const revealToken = async (id) => {
-        if (revealedTokens[id]) return revealedTokens[id];
+    const [tokenMeta, setTokenMeta] = useState({});
+    const fetchTokenMeta = async (id) => {
         try {
             const { data } = await api.get(`/accounts/${id}/bridge-token`);
-            setRevealedTokens(prev => ({ ...prev, [id]: data.bridge_token }));
-            return data.bridge_token;
+            setTokenMeta(prev => ({ ...prev, [id]: data }));
         } catch (e) {
-            toast.error("Couldn't fetch bridge token", { description: formatApiError(e) });
-            return null;
+            toast.error("Couldn't fetch token status", { description: formatApiError(e) });
         }
     };
     const [importAccount, setImportAccount] = useState(null);   // account selected in the Import Positions modal
@@ -638,18 +648,29 @@ export default function Accounts() {
                                                 toast.error(e?.response?.data?.detail || "Failed to update suffix");
                                             }
                                         }} />
-                                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2 mt-4">BRIDGE TOKEN · paste into MT5 EA inputs</div>
+                                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2 mt-4">BRIDGE TOKEN · secret — shown once at creation/rotation</div>
                                         <div className="flex items-center gap-2 flex-wrap">
-                                            <code className="font-mono text-xs px-3 py-2 bg-[#050505] border border-[#1F1F1F] flex-1 break-all" data-testid={`bridge-token-${a.account_number}`}>{revealedTokens[a.id] || "•••••••••••••••• (hidden)"}</code>
-                                            {!revealedTokens[a.id] && (
-                                                <button onClick={() => revealToken(a.id)} data-testid={`reveal-token-${a.account_number}`}
+                                            <code className="font-mono text-xs px-3 py-2 bg-[#050505] border border-[#1F1F1F] flex-1 break-all" data-testid={`bridge-token-${a.account_number}`}>
+                                                {revealedTokens[a.id]
+                                                    || tokenMeta[a.id]?.bridge_token_masked
+                                                    || "•••••••••••••••• (masked)"}
+                                            </code>
+                                            {revealedTokens[a.id] ? (
+                                                <button onClick={() => copyToken(revealedTokens[a.id])} data-testid={`copy-token-${a.account_number}`}
+                                                    className="px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
+                                                    <Copy className="w-3.5 h-3.5" /> COPY (SHOWN ONCE)
+                                                </button>
+                                            ) : (
+                                                <button onClick={() => fetchTokenMeta(a.id)} data-testid={`token-status-${a.account_number}`}
+                                                    title="Shows the masked token and when the EA last authenticated with it"
                                                     className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
-                                                    REVEAL
+                                                    STATUS
                                                 </button>
                                             )}
-                                            <button onClick={async () => { const t = await revealToken(a.id); if (t) copyToken(t); }} data-testid={`copy-token-${a.account_number}`}
-                                                className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
-                                                <Copy className="w-3.5 h-3.5" /> COPY
+                                            <button onClick={() => revokeToken(a.id)} data-testid={`revoke-token-${a.account_number}`}
+                                                title="Immediately invalidate this token — the EA stops authenticating until you rotate"
+                                                className="px-3 py-2 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10 text-xs font-mono tracking-widest transition-colors">
+                                                REVOKE
                                             </button>
                                             <button onClick={() => runConnectionTest(a.id)}
                                                 disabled={!!testing[a.id]}

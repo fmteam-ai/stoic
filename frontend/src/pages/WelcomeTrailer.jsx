@@ -35,7 +35,7 @@ const SCENES = [
         render: () => (
             <h1 className="headline">
                 <em>STOIC</em> is different.<br/>
-                A multi-agent AI hedge fund<br/><em>in your pocket.</em>
+                Multi-agent AI trading software<br/><em>in your pocket.</em>
             </h1>
         ),
         sub: "A machine that thinks before it trades — with the discipline to refuse any trade it can't prove is safe. That discipline? Nobody else has it.",
@@ -204,8 +204,8 @@ export default function WelcomeTrailer() {
                     <div className="scene active trailer-intro" data-testid="trailer-intro">
                         <div className="kicker">STOIC · 90-second trailer</div>
                         <h1 className="headline">
-                            An AI hedge fund<br/>
-                            that <em>refuses</em> to lose stupidly.
+                            AI trading software<br/>
+                            designed to <em>refuse</em> trades that fail its risk checks.
                         </h1>
                         <p className="subline">
                             Sound on. Watch how a multi-agent AI pipeline,
@@ -239,6 +239,22 @@ export default function WelcomeTrailer() {
                         </div>
                     </div>
                     <LandingTestimonials />
+                    {/* audit F-15 — legal navigation on the public welcome page */}
+                    <footer className="trailer-legal" data-testid="welcome-legal-footer"
+                        style={{ padding: "24px 16px 40px", textAlign: "center", fontFamily: "monospace", fontSize: "10px", letterSpacing: "2px", color: "#52525B" }}>
+                        <div style={{ display: "flex", gap: "18px", justifyContent: "center", flexWrap: "wrap", marginBottom: "10px" }}>
+                            <a href="/terms" style={{ color: "#8A8A93" }}>TERMS OF USE</a>
+                            <a href="/privacy" style={{ color: "#8A8A93" }}>PRIVACY POLICY</a>
+                            <a href="/risk-disclosure" style={{ color: "#8A8A93" }}>RISK DISCLOSURE</a>
+                            <a href="/support" style={{ color: "#8A8A93" }}>CONTACT</a>
+                        </div>
+                        <div style={{ maxWidth: "640px", margin: "0 auto", lineHeight: 1.6 }}>
+                            STOIC is automated trading software — not a broker, hedge fund or
+                            investment advisor. Trading involves substantial risk of loss and is
+                            not suitable for everyone. Past performance does not guarantee future
+                            results. © 2026 STOIC AI Technologies.
+                        </div>
+                    </footer>
                 </div>
             )}
 

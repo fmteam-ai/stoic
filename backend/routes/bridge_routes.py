@@ -30,6 +30,14 @@ async def _account_by_token(token: str) -> dict:
                 {"_id": acc["_id"]},
                 {"$unset": {"bridge_token_prev": "",
                             "bridge_token_prev_expires": ""}})
+        # audit F-05 — last-used tracking (throttled to ~1/min)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        last = acc.get("bridge_last_used_at") or ""
+        if not last or (datetime.fromisoformat(now_iso)
+                        - datetime.fromisoformat(last)).total_seconds() > 60:
+            await db.accounts.update_one(
+                {"_id": acc["_id"]},
+                {"$set": {"bridge_last_used_at": now_iso}})
         return acc
     # 15-min grace for the previous token after a rotation, so a live
     # EA keeps reporting while the operator swaps the new token in.

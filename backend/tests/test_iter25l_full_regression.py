@@ -186,9 +186,10 @@ def _mint_bridge_token(admin_session):
     r = admin_session.post(f"{BASE_URL}/api/accounts", json=body, timeout=15)
     assert r.status_code in (200, 201), f"create acct: {r.status_code} {r.text[:200]}"
     acct = r.json()
-    # SEC — bridge_token is no longer bulk-returned; fetch on demand
-    tr = admin_session.get(
-        f"{BASE_URL}/api/accounts/{acct['id']}/bridge-token", timeout=10)
+    # SEC (audit F-05) — the status endpoint is masked; a full token is
+    # only issued by rotation.
+    tr = admin_session.post(
+        f"{BASE_URL}/api/accounts/{acct['id']}/rotate-token", timeout=10)
     return acct["id"], tr.json()["bridge_token"]
 
 

@@ -44,7 +44,7 @@ async function computeSteps() {
         {
             key: "config",
             label: "Pick a risk profile and start the bot",
-            hint: "Choose a risk level (Low / Medium / High) and toggle the bot ON.",
+            hint: "Choose a risk profile (Low / Medium / High / Extreme) and toggle the bot ON.",
             done: hasActiveConfig,
             to: "/bot-config",
             cta: "Open BotConfig",

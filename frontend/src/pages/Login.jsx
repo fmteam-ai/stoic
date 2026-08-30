@@ -340,6 +340,19 @@ export default function Login() {
                             EARN 20% RECURRING · BECOME AN AFFILIATE →
                         </Link>
                     </div>
+
+                    {/* audit F-15 — legal navigation on every public page */}
+                    <div className="mt-6 pt-4 border-t border-[#1F1F1F] flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] tracking-widest text-[#52525B]"
+                        data-testid="login-legal-links">
+                        <Link to="/terms" className="hover:text-[#A1A1AA]">TERMS OF USE</Link>
+                        <Link to="/privacy" className="hover:text-[#A1A1AA]">PRIVACY</Link>
+                        <Link to="/risk-disclosure" className="hover:text-[#A1A1AA]">RISK DISCLOSURE</Link>
+                    </div>
+                    <p className="mt-2 font-mono text-[9px] text-[#52525B] leading-relaxed" data-testid="login-risk-note">
+                        Trading involves substantial risk of loss. STOIC is automated trading
+                        software, not a broker, fund or investment advisor. Past performance
+                        does not guarantee future results.
+                    </p>
                 </div>
             </div>
         </div>

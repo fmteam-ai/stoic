@@ -100,9 +100,14 @@ const TrustBar = () => {
 };
 
 const Stars = ({ n }) => (
-    <div className="tst-stars" aria-label={`${n} out of 5 stars`}>
+    // audit F-12 — visual stars render from the SAME numeric value as the
+    // accessible label: filled ★ for rating, hollow ☆ for the remainder.
+    <div className="tst-stars" role="img" aria-label={`${n} out of 5 stars`}>
         {[1, 2, 3, 4, 5].map(i => (
-            <span key={i} className={i <= n ? "tst-star on" : "tst-star"}>★</span>
+            <span key={i} aria-hidden="true"
+                className={i <= n ? "tst-star on" : "tst-star"}>
+                {i <= n ? "★" : "☆"}
+            </span>
         ))}
     </div>
 );
@@ -142,12 +147,17 @@ export const LandingTestimonials = () => {
             <div className="tst-marquee" data-testid="testimonials-marquee">
                 <div className="tst-track">
                     {[...rowA, ...rowA].map((t, i) => (
-                        <Card key={`a${i}`} t={t} idx={i < rowA.length ? i * 2 : undefined} />
+                        // audit F-19 — animation clones hidden from AT
+                        i < rowA.length
+                            ? <Card key={`a${i}`} t={t} idx={i * 2} />
+                            : <div key={`a${i}`} aria-hidden="true"><Card t={t} /></div>
                     ))}
                 </div>
                 <div className="tst-track reverse">
                     {[...rowB, ...rowB].map((t, i) => (
-                        <Card key={`b${i}`} t={t} idx={i < rowB.length ? i * 2 + 1 : undefined} />
+                        i < rowB.length
+                            ? <Card key={`b${i}`} t={t} idx={i * 2 + 1} />
+                            : <div key={`b${i}`} aria-hidden="true"><Card t={t} /></div>
                     ))}
                 </div>
             </div>

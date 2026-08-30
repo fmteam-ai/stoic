@@ -135,7 +135,7 @@ export function QuickActionsBar() {
                     <Power className="w-3 h-3" />
                     <span className="hidden sm:inline" data-testid="quick-bot-effective-state">
                         {data.bot_active
-                            ? `BOT ON · ${data.effective_state || "…"}`
+                            ? `BOT REQUESTED ON · ${data.effective_state === "ACTIVE" ? "EXECUTING" : `EXECUTION ${data.effective_state || "…"}`}`
                             : "BOT OFF"}
                     </span>
                 </button>

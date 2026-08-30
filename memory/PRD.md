@@ -2135,3 +2135,20 @@ User uploaded `STOIC_Post_Implementation_Frontend_Backend_Regression_Review_2026
 - Simulated all three failing CI jobs locally: unit 515 pass + iter148 14/14, integration 65 pass with env -u REACT_APP_BACKEND_URL, manifest check OK.
 - LESSON for next agent: any new route using `detail=str(e)` MUST have "ValueError" on the same line; any new test file must never hardcode /app paths and must regenerate the manifest.
 
+
+## Iter-163 (2026-08-30) — Third audit (stoic-ai-trading-bot-audit) Phase A+B (DONE, self-tested 592 pass + live UI verified)
+User uploaded `stoic-ai-trading-bot-audit-2026-08-30.md` (in /tmp/audit3.md). Implemented:
+- **F-02 Trading Readiness layer**: `trading_readiness.py` — levels READY/DEGRADED/CLOSE_ONLY/BLOCKED/EMERGENCY from state_contract rows (enabled accounts only): PANIC_TRIPPED→EMERGENCY, POSITION_TRUTH_STALE→BLOCKED, EXECUTION_BLOCKED→BLOCKED, RECONCILIATION_PENDING (user-scoped unknown execution_intents)→BLOCKED, AUTHORITY_REDUCED→CLOSE_ONLY, NO_ENABLED_ACCOUNTS/NO_BOTS_ENABLED→DEGRADED. Stable codes + per-reason recovery action + affected accounts + first_seen persisted per user+code in `trading_readiness` collection (cleared on recovery). GET /api/state/readiness. UI: `TradingReadinessStrip.jsx` rendered DOMINANT above StatusBar in AppLayout (expandable blockers list, testids trading-readiness-*). Infra uptime demoted to secondary strip.
+- **F-05 Bridge token hardening**: GET /accounts/{id}/bridge-token now returns MASKED token + last_used_at only (full secret only from creation/rotation); POST /accounts/{id}/bridge-token/revoke (audited, unsets token+grace); bridge auth records bridge_last_used_at (throttled 60s). Accounts UI: REVEAL/COPY replaced by masked display + STATUS (masked+last-used) + ROTATE (confirm, full token shown ONCE) + REVOKE (confirm). NOTE: tokens still stored plaintext server-side (hashing would break live EAs — deliberate, documented).
+- **F-03 Counter drill-down**: AccountSwitcher dropdown rows show per-account chips ACC ON/OFF · BOT ON/OFF · EA <state> (switcher-chips-*), driven by overview bot_enabled + connection_state.
+- **F-09**: QuickActionsBar label → "BOT REQUESTED ON · EXECUTING/EXECUTION <STATE>".
+- **F-07**: OnboardingBanner risk copy → Low/Medium/High/Extreme (backend enum has 4).
+- **F-12**: testimonial stars render ☆ for unfilled from the same numeric rating, role=img + aria-hidden glyphs.
+- **F-19**: marquee clone cards wrapped aria-hidden; prefers-reduced-motion CSS kills marquee/ticker animation.
+- **F-13/F-15**: WelcomeTrailer copy "AI hedge fund"→"AI trading software designed to refuse trades that fail its risk checks"; legal footer (Terms/Privacy/Risk/Contact + not-a-broker disclaimer) on welcome; legal links + risk note on Login.
+- **F-20**: route-specific document titles via TITLES map in AppLayout ("Dashboard | STOIC" verified).
+- **F-17**: index.css `.recharts-responsive-container {min-width/height:80px}`.
+- Tests: tests/integration/test_iter162_readiness_token.py (3). Updated legacy tests that fetched full tokens via GET (scalp api, iter25l use rotate-token now; iter22 garbage-id test uses GET + revoke 404). All 592 integration+unit green. Manifest → 4,003/389.
+- NOT done from this audit (needs user/business): F-14 rename/trademark, F-06 full Risk Commander staged-pipeline rework (existing confirm flow not yet audited), F-04 broker-sandbox PANIC duplicate-fill campaign, F-22 broker preflight enrichment, F-10 Auto-Heal governance split, F-16 timeout/skeleton sweep, F-18 AI Coach calibration metadata, F-21 nav simplification, mobile/WCAG full pass.
+- The audit's "33-day RECON / stale truth" observations are PREVIEW artifacts (no live EA feeds this env) — the fail-closed behavior showing BLOCKED/CLOSE-ONLY is by design.
+

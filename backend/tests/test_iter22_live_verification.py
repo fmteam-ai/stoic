@@ -134,7 +134,10 @@ def test_reveal_correct_password_returns_only_investor_by_default(admin_session,
 # --------------- P2.2 garbage id endpoints ---------------
 
 def test_bridge_token_with_garbage_account_id_returns_404(admin_session):
-    r = admin_session.post(f"{API}/accounts/garbage/bridge-token", timeout=10)
+    r = admin_session.get(f"{API}/accounts/garbage/bridge-token", timeout=10)
+    assert r.status_code == 404, f"Got {r.status_code}: {r.text}"
+    r = admin_session.post(
+        f"{API}/accounts/garbage/bridge-token/revoke", timeout=10)
     assert r.status_code == 404, f"Got {r.status_code}: {r.text}"
 
 

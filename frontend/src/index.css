@@ -103,3 +103,19 @@ body {
     outline: 1px solid #00FF41 !important;
     outline-offset: 2px;
 }
+
+/* audit F-17 — charts must never render with negative/zero dimensions */
+.recharts-responsive-container {
+    min-width: 80px;
+    min-height: 80px;
+}
+
+/* audit F-19 — respect reduced-motion for marquees/tickers */
+@media (prefers-reduced-motion: reduce) {
+    .tst-track,
+    .ticker-track,
+    [data-testid="testimonials-marquee"] * {
+        animation: none !important;
+        transform: none !important;
+    }
+}
