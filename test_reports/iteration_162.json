@@ -1,0 +1,24 @@
+{
+  "summary": "iter-166 STOIC audit v3 corrections verified end-to-end. Backend: existing unit suite tests/test_iter166_audit_v3.py 7 passed / 1 skipped (weekend XAU skip). New live HTTP suite tests/test_iter166_audit_v3_http.py 5/5 passed against public preview URL as admin@trading.bot (cookie auth). GET /api/state/inventory returns canonical shape: accounts_configured=6, accounts_enabled=3, bots_requested_on=3, ea_connection buckets summing to 6 (fresh=3, plus stale/offline/paper), ea_installation_count int, per-account rows carry account_enabled/bot_requested_enabled/bot_effective_state/ea_connection_state/environment. Auth-required check confirmed (401 when anonymous). GET /api/bot/health-score .context surfaces accounts_total=6, accounts_enabled=3, bots_requested_on=3, ea_connection matching inventory. GET /api/bot/pulse: every item exposes 'unbound' bool; default profile (account_id null) has unbound=true, account-bound configs unbound=false. Cross-surface consistency check: /api/accounts/overview totals.ea_fresh and totals.ea_paper match inventory.ea_connection.{fresh,paper}. Frontend (Playwright, admin@trading.bot login): StatusBar renders 'TRADING · BLOCKED' at x=264 to the LEFT of 'INFRA · OPERATIONAL' at x=415 (trading dominance ✓); status-dim-ea_bridge shows exact 'EA 3/6 FRESH · 2 OFF · 1 PAPER'; acct-switcher-counts shows '3/6 ACC · 3/6 BOTS · 3/6 EA FRESH · 1 PAPER' consistent with the StatusBar; Safety Blocks page renders sb-active-blockers panel titled 'ACTIVE PLATFORM BLOCKERS — NOW (BLOCKED)' with sb-blocker-EXECUTION_BLOCKED row ('2 enabled bot(s) cannot execute (BLOCKED)'), sb-goldilocks banner reads exactly 'TRADING BLOCKED — active platform blockers below override this page's historical veto stats' (no GOLDILOCKS / no 'trading freely'), and historical section heading is 'HISTORICAL TRADE VETOES BY REASON (7D)'. No 500s on risk/bot endpoints; abnormal_market_check accepts symbol= and blocks stale BTCUSD even on weekends (unit-verified). All audit v3 P0-2/P0-3/P0-4/P0-5/P0-6 and P1-5 checks pass. Zero bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter166_audit_v3.py",
+    "/app/backend/tests/test_iter166_audit_v3_http.py",
+    "/app/test_reports/pytest/iter166_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "state_contract.inventory() correctly summed across ea_connection buckets (fresh+stale+offline+paper == accounts_configured); bot-health context re-uses inventory rather than recomputing — good single source of truth.",
+    "Route naming: previous iteration flagged /verified-performance vs /performance mismatch in AppLayout title map — still open but unrelated to this review.",
+    "Bot Pulse 'unbound' flag is a boolean on every item — correct denominator semantics for BotPulsePanel (M excludes default profile)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter166_audit_v3_http.py"],
+  "success_rate": {"backend": "100% (5/5 HTTP + 7/7 unit, 1 weekend-skip)", "frontend": "100% (StatusBar dominance/EA-dim, switcher counts, SafetyBlocks panels + banner + historical rename all verified)"},
+  "test_credentials": "admin@trading.bot / admin123 (6-account admin, cookie auth)",
+  "seed_data_creation": "None — read-only verification per review request.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter166_audit_v3_http.py runs against REACT_APP_BACKEND_URL from frontend/.env and expects the admin@trading.bot 6-account admin with 3 accounts enabled and 3 bots requested ON. It also asserts /api/accounts/overview totals expose ea_fresh & ea_paper (audit v3 addition). Bot health endpoint path is /api/bot/health-score (NOT /api/bot/health). Preview readiness is EXPECTED to be BLOCKED (2 enabled bots cannot execute + 1 UNKNOWN execution) — that is the intended state to exercise the sb-active-blockers panel; do NOT change trading_enabled flags to 'fix' it.",
+  "rca of the issue": "N/A — no bugs found. All audit v3 corrections behave as designed."
+}

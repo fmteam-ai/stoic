@@ -30,21 +30,34 @@ async def _drill_duplicate_order(db) -> dict:
 
 
 def _drill_broker_disconnect() -> dict:
+    """Audit v3 P0-5 — session-aware disconnect drill. BTCUSD trades 24/7
+    so its stale-feed assertion runs EVERY day; XAUUSD's weekday rule is
+    only assertable while its session exists and is reported SKIPPED
+    (never PASS) on weekends."""
     from risk_engine import abnormal_market_check
     now = datetime.now(timezone.utc)
     anchor = now.timestamp()
     bars = [{"t": anchor - 3600 - (39 - i) * 900, "o": 100.0, "h": 101.0,
              "l": 99.0, "c": 100.0} for i in range(40)]  # last bar 60min old
-    res = abnormal_market_check(bars, now_ts=anchor)
+    crypto = abnormal_market_check(bars, now_ts=anchor, symbol="BTCUSD")
+    crypto_ok = crypto.get("status") == "block"
+    parts = ["BTCUSD (24/7): stale feed suspended trading" if crypto_ok
+             else f"BTCUSD stale feed NOT detected: {crypto}"]
+    skipped = []
+    ok = crypto_ok
     if now.weekday() < 5:
-        ok = res.get("status") == "block"
-        detail = ("stale candle feed (60min) suspended trading: "
-                  f"{res.get('detail')}" if ok else
-                  f"stale feed NOT detected: {res}")
+        xau = abnormal_market_check(bars, now_ts=anchor, symbol="XAUUSD")
+        xau_ok = xau.get("status") == "block"
+        ok = ok and xau_ok
+        parts.append("XAUUSD (weekday session): stale feed suspended "
+                     "trading" if xau_ok
+                     else f"XAUUSD stale feed NOT detected: {xau}")
     else:
-        ok = res.get("status") in ("ok", "trim")
-        detail = "weekend — stale-feed rule is weekday-only (by design)"
-    return {"drill": "broker_disconnect", "passed": ok, "detail": detail}
+        skipped.append("XAUUSD assertion SKIPPED — session closed "
+                       "(weekend); skipped is not a pass")
+    return {"drill": "broker_disconnect", "passed": ok,
+            "detail": "; ".join(parts + skipped),
+            "skipped_assertions": skipped}
 
 
 def _drill_volatility_shock() -> dict:

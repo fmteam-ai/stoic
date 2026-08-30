@@ -230,8 +230,9 @@ export default function BotPulsePanel() {
                     </span>
                 )}
                 <span className="ml-auto flex items-center gap-2">
-                    <span className="text-[10px] font-mono tracking-widest text-[#52525B]">
-                        {activeItems.length} ACTIVE · {items.length} TOTAL · LOOP {data.loop_interval_sec}s
+                    <span className="text-[10px] font-mono tracking-widest text-[#52525B]"
+                        title={items.some(i => i.unbound) ? "denominator counts only account-bound bots — the default profile is a template, not a bot" : undefined}>
+                        {activeItems.filter(i => !i.unbound).length} ACTIVE · {items.filter(i => !i.unbound).length} BOTS{items.some(i => i.unbound) ? " · +1 TEMPLATE" : ""} · LOOP {data.loop_interval_sec}s
                     </span>
                     {open ? <ChevronUp className="w-3.5 h-3.5 text-[#52525B]" />
                           : <ChevronDown className="w-3.5 h-3.5 text-[#52525B]" />}

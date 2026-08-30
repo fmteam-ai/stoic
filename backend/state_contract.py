@@ -179,3 +179,50 @@ async def quick_truth(db, user_id: str, open_local: int) -> dict:
             "bots_enabled": tot["bots_enabled"],
             "eas_connected": tot["eas_connected"],
             "as_of": c["as_of"]}
+
+
+async def inventory(db, user_id: str) -> dict:
+    """Audit v3 P0-2 — ONE canonical inventory object. Every surface
+    (header, Dashboard, Bot Pulse, Bot Health, Data Freshness,
+    Certification, Portfolio) must consume these counters — never
+    recompute their own."""
+    c = await contract(db, user_id)
+    accounts = {str(a["_id"]): a async for a in
+                db.accounts.find({"user_id": user_id})}
+    ea = {"fresh": 0, "stale": 0, "offline": 0, "paper": 0}
+    bots_effective: dict = {}
+    environments: dict = {}
+    rows = []
+    for r in c["accounts"]:
+        acc = accounts.get(r["account_id"]) or {}
+        conn = effective_connection_state(acc)
+        bucket = ("paper" if conn["state"] == "PAPER" else
+                  "fresh" if conn["state"] == "CONNECTED" else
+                  "stale" if conn["state"] == "STALE" else "offline")
+        ea[bucket] += 1
+        eff = r["effective_state"]
+        bots_effective[eff] = bots_effective.get(eff, 0) + 1
+        env = str(acc.get("mode") or "demo")
+        environments[env] = environments.get(env, 0) + 1
+        rows.append({"account_id": r["account_id"], "label": r.get("label"),
+                     "environment": env,
+                     "account_enabled": r["account_enabled"],
+                     "bot_requested_enabled": r["bot_enabled"],
+                     "bot_effective_state": eff,
+                     "ea_connection_state": conn["state"],
+                     "ea_heartbeat_age_seconds":
+                         conn["heartbeat_age_seconds"]})
+    installs = await db.installations.count_documents(
+        {"user_id": user_id, "revoked": {"$ne": True}})
+    tot = c["totals"]
+    return {"as_of": c["as_of"],
+            "accounts_configured": tot["accounts_total"],
+            "accounts_enabled": tot["accounts_enabled"],
+            "bots_requested_on": tot["bots_enabled"],
+            "bots_effective": bots_effective,
+            "ea_installation_count": installs,
+            "ea_connection": {**ea,
+                              "threshold_seconds": HEARTBEAT_FRESH_S},
+            "environments": environments,
+            "accounts": rows,
+            "note": "Canonical inventory — consume, never recompute."}

@@ -215,7 +215,7 @@ export default function RiskGaugePanel() {
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-0.5">
                         {anyHot
                             ? "One or more accounts approaching breaker — auto-halt at 100%"
-                            : "All accounts healthy · breakers armed but quiet"}
+                            : "Breaker scope only · none above 50% — see Trading Readiness for the global state"}
                     </div>
                 </div>
             </div>

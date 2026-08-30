@@ -278,6 +278,38 @@ async def promotion_gate(db, user_id: str, account_id: str | None,
                 verdict["allowed"] = False
         except Exception as e:  # noqa: BLE001 — health probe must not crash the gate
             logger.warning("shadow health probe failed: %s", e)
+
+    # Audit v3 P0-6 — capital-stage statistics are HARD promotion gates
+    # for unattended live, not informational cards.
+    if target_mode == "autonomous_live":
+        try:
+            from capital_stages import capital_stage
+            cs = await capital_stage(db, user_id)
+            verdict["evidence"]["capital_stage"] = cs
+            ev = cs["evidence"]
+            failures = []
+            if ev["n"] < 300:
+                failures.append(f"sample {ev['n']} < 300 trades")
+            if ev["ci95_lower_r"] <= 0:
+                failures.append(
+                    f"CI95-lower {ev['ci95_lower_r']:+.3f}R ≤ 0")
+            if (ev["profit_factor"] or 0) < 1.05:
+                failures.append(
+                    f"profit factor {ev['profit_factor']} < 1.05")
+            if ev["max_drawdown_r"] > 40:
+                failures.append(
+                    f"max drawdown {ev['max_drawdown_r']}R > 40R limit")
+            if failures:
+                verdict["blockers"].append(
+                    "capital-stage statistical gate FAILED: "
+                    + "; ".join(failures))
+                verdict["allowed"] = False
+        except Exception:  # noqa: BLE001 — fail CLOSED for autonomous live
+            logger.warning("capital stage probe failed", exc_info=True)
+            verdict["blockers"].append(
+                "capital-stage evidence unavailable — autonomous live "
+                "blocked fail-closed")
+            verdict["allowed"] = False
         # Correction #6 — after an automatic demotion, recovery to a live
         # mode requires a stable green period. Probe errors fail CLOSED
         # (this path only ever RAISES authority).

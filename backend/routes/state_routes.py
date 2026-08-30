@@ -19,3 +19,10 @@ async def trading_readiness_ep(user=Depends(get_current_user)):
     CLOSE_ONLY / BLOCKED / EMERGENCY) with stable reason codes."""
     from trading_readiness import readiness
     return await readiness(get_db(), user["id"])
+
+
+@router.get("/inventory")
+async def state_inventory(user=Depends(get_current_user)):
+    """Audit v3 P0-2 — canonical account/bot/EA inventory counters."""
+    from state_contract import inventory
+    return await inventory(get_db(), user["id"])

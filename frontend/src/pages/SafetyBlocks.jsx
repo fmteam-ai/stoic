@@ -56,7 +56,7 @@ function ReasonBar({ rows }) {
     if (!rows?.length) {
         return (
             <div className="text-center py-8 text-[#52525B] font-mono text-xs tracking-widest">
-                NO BLOCKS — bot operating within safety envelope
+                NO TRADE VETOES IN WINDOW — historical veto scope only; active platform blockers shown above
             </div>
         );
     }
@@ -181,18 +181,21 @@ export default function SafetyBlocks() {
     const [expanded, setExpanded] = useState(null);
     const [suggestion, setSuggestion] = useState(null);
     const [applying, setApplying] = useState(false);
+    const [readiness, setReadiness] = useState(null);
 
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const [s, l, sug] = await Promise.all([
+            const [s, l, sug, rd] = await Promise.all([
                 api.get(`/safety-blocks/stats?days=${days}`),
                 api.get(`/safety-blocks/list?days=${days}&limit=100`),
                 api.get(`/safety-blocks/suggestion?days=${days}`),
+                api.get("/state/readiness").catch(() => null),
             ]);
             setStats(s.data);
             setList(l.data);
             setSuggestion(sug.data);
+            setReadiness(rd?.data || null);
         } catch (e) {
             toast.error(formatApiError(e));
         } finally {
@@ -225,11 +228,17 @@ export default function SafetyBlocks() {
 
     const goldilocks = useMemo(() => {
         if (!stats) return null;
+        // audit v3 P0-4 — never claim "trading freely" unless the GLOBAL
+        // trading readiness is READY; this page inherits the blocker object.
+        const level = readiness?.level;
+        if (level && level !== "READY") {
+            return { msg: `TRADING ${level.replaceAll("_", " ")} — active platform blockers below override this page's historical veto stats`, tone: "bad" };
+        }
         if (stats.total === 0) return { msg: "GOLDILOCKS · Bot trading freely within all safety floors", tone: "good" };
-        if (stats.total < 5) return { msg: `OK · ${stats.total} blocks in ${days}d — bot occasionally clipped by floors`, tone: "ok" };
-        if (stats.total < 20) return { msg: `WATCH · ${stats.total} blocks in ${days}d — config may be too aggressive`, tone: "warn" };
-        return { msg: `LOOSEN OR REVIEW · ${stats.total} blocks in ${days}d — guardian frequently rejecting trades`, tone: "bad" };
-    }, [stats, days]);
+        if (stats.total < 5) return { msg: `OK · ${stats.total} vetoes in ${days}d — bot occasionally clipped by floors`, tone: "ok" };
+        if (stats.total < 20) return { msg: `WATCH · ${stats.total} vetoes in ${days}d — config may be too aggressive`, tone: "warn" };
+        return { msg: `LOOSEN OR REVIEW · ${stats.total} vetoes in ${days}d — guardian frequently rejecting trades`, tone: "bad" };
+    }, [stats, days, readiness]);
 
     return (
         <AppLayout>
@@ -256,6 +265,31 @@ export default function SafetyBlocks() {
             />
 
             <div className="space-y-4">
+                {/* audit v3 P0-4 — ACTIVE platform blockers NOW, inherited
+                    from the canonical readiness object, shown ABOVE the
+                    historical veto statistics */}
+                {(readiness?.reasons?.length || 0) > 0 && (
+                    <div className="border border-[#FF3B30]/40 bg-[#0A0A0A] p-4"
+                         data-testid="sb-active-blockers">
+                        <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-3">
+                            ACTIVE PLATFORM BLOCKERS — NOW ({readiness.level.replaceAll("_", " ")})
+                        </div>
+                        <div className="space-y-2">
+                            {readiness.reasons.map(r => (
+                                <div key={r.code} className="flex items-start gap-2 text-xs"
+                                     data-testid={`sb-blocker-${r.code}`}>
+                                    <AlertTriangle className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${r.level === "EMERGENCY" || r.level === "BLOCKED" ? "text-[#FF3B30]" : "text-[#FFB000]"}`} />
+                                    <div>
+                                        <span className="font-mono text-[10px] tracking-widest text-[#A1A1AA]">{r.code} · {r.level}</span>
+                                        <div className="text-[#E4E4E7]">{r.message}</div>
+                                        <div className="text-[10px] text-[#52525B] mt-0.5">Recovery: {r.recovery}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 {suggestion?.has_suggestion && (
                     <SuggestionBanner
                         suggestion={suggestion}
@@ -279,7 +313,7 @@ export default function SafetyBlocks() {
                 <div className="grid md:grid-cols-2 gap-4">
                     <div className="border border-[#1F1F1F] p-4">
                         <div className="font-mono text-[10px] text-[#FFB000] tracking-widest mb-3">
-                            BLOCKS BY REASON ({days}D)
+                            HISTORICAL TRADE VETOES BY REASON ({days}D)
                         </div>
                         <ReasonBar rows={stats?.by_reason || []} />
                     </div>
@@ -345,14 +379,14 @@ export default function SafetyBlocks() {
 
                 <div className="border border-[#1F1F1F]">
                     <div className="px-4 py-2.5 border-b border-[#1F1F1F] font-mono text-[10px] text-[#FFB000] tracking-widest">
-                        REFUSED TRADES ({list?.blocks?.length || 0})
+                        REFUSED TRADES — HISTORICAL ({list?.blocks?.length || 0})
                     </div>
                     {loading && !list && (
                         <div className="text-center py-10 text-[#A1A1AA] text-xs font-mono">Loading…</div>
                     )}
                     {!loading && (list?.blocks?.length || 0) === 0 && (
                         <div className="text-center py-10 text-[#52525B] text-xs font-mono tracking-widest">
-                            NO BLOCKS IN WINDOW
+                            NO TRADE VETOES IN WINDOW
                         </div>
                     )}
                     {(list?.blocks?.length || 0) > 0 && (

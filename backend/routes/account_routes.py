@@ -127,7 +127,7 @@ async def accounts_overview(user=Depends(get_current_user)):
 
     out_accounts, groups = [], set()
     tot = {"balance": 0.0, "equity": 0.0, "connected": 0, "trading_enabled": 0,
-           "bots_enabled": 0,
+           "bots_enabled": 0, "ea_fresh": 0, "ea_paper": 0,
            "pnl_today": 0.0, "pnl_7d": 0.0, "pnl_30d": 0.0, "open_positions": 0}
     for a in accounts:
         aid = str(a["_id"])
@@ -154,6 +154,8 @@ async def accounts_overview(user=Depends(get_current_user)):
         tot["balance"] += bal
         tot["equity"] += eq
         tot["connected"] += 1 if connected else 0
+        tot["ea_fresh"] += 1 if conn["state"] == "CONNECTED" else 0
+        tot["ea_paper"] += 1 if conn["state"] == "PAPER" else 0
         tot["trading_enabled"] += 1 if enabled else 0
         tot["bots_enabled"] += 1 if bot_on else 0
         tot["open_positions"] += a.get("open_positions") or 0

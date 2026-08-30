@@ -21,12 +21,19 @@ const TONE = {
 
 export function StatusBar() {
     const [status, setStatus] = useState(null);
+    const [readiness, setReadiness] = useState(null);
+    const [inv, setInv] = useState(null);
 
     useEffect(() => {
         let alive = true;
-        const load = () =>
+        const load = () => {
             api.get("/status").then(r => { if (alive) setStatus(r.data); })
                 .catch(() => { if (alive) setStatus({ overall: "unreachable" }); });
+            api.get("/state/readiness").then(r => { if (alive) setReadiness(r.data); })
+                .catch(() => { if (alive) setReadiness(null); });
+            api.get("/state/inventory").then(r => { if (alive) setInv(r.data); })
+                .catch(() => { if (alive) setInv(null); });
+        };
         load();
         const t = setInterval(load, 60000);
         return () => { alive = false; clearInterval(t); };
@@ -40,21 +47,52 @@ export function StatusBar() {
         : overall == null ? "bg-[#52525B]"
         : overall === "degraded" ? "bg-[#FFB000]" : "bg-[#FF3B30]";
     const comps = status?.components || {};
+    const READY_TONE = {
+        READY: "text-[#00FF41]", DEGRADED: "text-[#FFB000]",
+        CLOSE_ONLY: "text-[#FFB000]", BLOCKED: "text-[#FF3B30]",
+        EMERGENCY: "text-[#FF3B30]",
+    };
+    const ea = inv?.ea_connection;
+    const eaLabel = ea
+        ? `EA ${ea.fresh}/${inv.accounts_configured} FRESH`
+          + (ea.stale ? ` · ${ea.stale} STALE` : "")
+          + (ea.offline ? ` · ${ea.offline} OFF` : "")
+          + (ea.paper ? ` · ${ea.paper} PAPER` : "")
+        : null;
 
     return (
         <div
             className="hidden md:flex items-center justify-between gap-4 border-b border-[#1F1F1F] bg-[#0A0A0A] px-6 py-1.5"
             data-testid="status-bar">
             <div className="flex items-center gap-5 font-mono text-[10px] tracking-widest text-[#52525B]">
+                {/* audit v3 P0-3 — trading readiness DOMINATES uptime wording */}
+                {readiness?.level && (
+                    <span className={`flex items-center gap-1.5 font-bold ${READY_TONE[readiness.level] || "text-[#A1A1AA]"}`}
+                        data-testid="status-trading-readiness"
+                        title={(readiness.reasons || []).map(r => `${r.code}: ${r.message}`).join(" · ")
+                            || "trading readiness — independent of infrastructure uptime"}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${readiness.level === "READY" ? "bg-[#00FF41]" : readiness.level === "DEGRADED" || readiness.level === "CLOSE_ONLY" ? "bg-[#FFB000]" : "bg-[#FF3B30]"}`} />
+                        TRADING · {readiness.level.replaceAll("_", " ")}
+                    </span>
+                )}
                 <span className="flex items-center gap-1.5" data-testid="status-operational"
-                    title={status?.checked_at ? `live status · checked ${new Date(status.checked_at).toLocaleTimeString()}` : "live status"}>
+                    title={status?.checked_at ? `infrastructure uptime only — NOT trading readiness · checked ${new Date(status.checked_at).toLocaleTimeString()}` : "infrastructure uptime only"}>
                     <span className={`w-1.5 h-1.5 rounded-full ${dotTone}`} />
                     <span className={overallTone}>
-                        {overall ? `SERVICE · ${String(overall).replaceAll("_", " ").toUpperCase()}` : "SERVICE · …"}
+                        {overall ? `INFRA · ${String(overall).replaceAll("_", " ").toUpperCase()}` : "INFRA · …"}
                     </span>
                 </span>
                 <span className="hidden lg:flex items-center gap-2.5" data-testid="status-dimensions">
                     {Object.entries(DIM_LABEL).map(([key, label]) => {
+                        if (key === "ea_bridge" && eaLabel) {
+                            return (
+                                <span key={key} className="flex items-center gap-1"
+                                    title={`exact EA connectivity (threshold ${ea.threshold_seconds}s) — as of ${inv.as_of}`}
+                                    data-testid="status-dim-ea_bridge">
+                                    <span className={ea.offline || ea.stale ? "text-[#FFB000]" : "text-[#00FF41]"}>{eaLabel}</span>
+                                </span>
+                            );
+                        }
                         const st = comps[key]?.status;
                         return (
                             <span key={key} className="flex items-center gap-1"

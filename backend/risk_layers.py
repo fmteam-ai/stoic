@@ -306,7 +306,7 @@ async def evaluate_layers(db, user_id: str, account: dict | None) -> list[dict]:
                     "detail": "no intraday candle stream — shock detection "
                               "blind (pre-trade check still enforced)"}
         from risk_engine import abnormal_market_check
-        chk = abnormal_market_check(bars[-96:])
+        chk = abnormal_market_check(bars[-96:], symbol=cdoc.get("symbol"))
         sym = cdoc.get("symbol") or ""
         if chk["status"] == "block":
             return {"status": "tripped", "detail": f"{sym}: {chk['detail']}"}

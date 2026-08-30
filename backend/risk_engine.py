@@ -27,6 +27,15 @@ DEF_EVENT_EXPOSURE_CAP_PCT = 100.0
 SHOCK_RANGE_MULT = 4.0
 STALE_FEED_MIN = 45
 
+WEEKEND_TRADED_BASES = {"BTCUSD", "ETHUSD"}
+
+
+def _trades_weekends(symbol) -> bool:
+    if not symbol:
+        return False
+    from friday_flat import base_symbol
+    return base_symbol(symbol) in WEEKEND_TRADED_BASES
+
 
 def _notional(symbol: str, lot: float, price: float) -> float:
     base = (symbol or "").upper()
@@ -107,7 +116,7 @@ def drawdown_check(pnl_day, pnl_week, pnl_month, equity,
                       f"limits (D{daily_pct}/W{weekly_pct}/M{monthly_pct}%)"}
 
 
-def abnormal_market_check(bars, now_ts=None) -> dict:
+def abnormal_market_check(bars, now_ts=None, symbol=None) -> dict:
     if not bars or len(bars) < 30:
         return {"name": "abnormal_market", "status": "ok", "scale": 1.0,
                 "detail": "insufficient bars to judge"}
@@ -119,7 +128,11 @@ def abnormal_market_check(bars, now_ts=None) -> dict:
     last_range = last["h"] - last["l"]
     dow = datetime.now(timezone.utc).weekday()
     age_min = (now_ts - float(last.get("t") or 0)) / 60.0
-    if dow < 5 and age_min > STALE_FEED_MIN:
+    # Audit v3 P0-5 — session-aware staleness: the weekend exemption only
+    # applies to symbols whose market is actually closed. Crypto trades
+    # 24/7, so its stale-feed rule is governed EVERY day.
+    weekend_exempt = dow >= 5 and not _trades_weekends(symbol)
+    if not weekend_exempt and age_min > STALE_FEED_MIN:
         return {"name": "abnormal_market", "status": "block", "scale": 0.0,
                 "detail": f"candle feed stale ({age_min:.0f}min old) — "
                           f"flying blind, trading suspended until data "
@@ -259,7 +272,7 @@ async def risk_engine_evaluate(db, user_id, cfg, account, signal,
     cdoc = await db.intraday_candles.find_one(
         {"user_id": user_id, "symbol": base}, {"bars": 1})
     bars = (cdoc or {}).get("bars") or []
-    checks.append(abnormal_market_check(bars))
+    checks.append(abnormal_market_check(bars, symbol=base))
 
     checks.append(leverage_check(
         equity, sym, lot, price, bars, signal.get("uncertainty"),

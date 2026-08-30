@@ -389,6 +389,7 @@ async def get_bot_pulse(user=Depends(get_current_user)):
         out.append({
             "config_id": str(d["_id"]),
             "account_id": acct_id,
+            "unbound": acct_id is None,
             "label": label,
             "active": bool(d.get("active")),
             "paper_shadow_mode": bool(d.get("paper_shadow_mode")),
@@ -1820,6 +1821,8 @@ async def bot_health_score(user=Depends(get_current_user)):
         status = "critical"
         headline = "Bot is in trouble — needs attention now."
 
+    from state_contract import inventory as _inv
+    inv = await _inv(db, user["id"])
     return {
         "score": score,
         "status": status,
@@ -1828,8 +1831,14 @@ async def bot_health_score(user=Depends(get_current_user)):
         "hard_caps": hard_caps,
         "checked_at": now.isoformat(),
         "context": {
-            "accounts_connected": len(connected),
-            "accounts_total": len(accs),
+            # audit v3 P0-2 — canonical inventory counters, never recomputed
+            "accounts_connected": inv["ea_connection"]["fresh"]
+            + inv["ea_connection"]["paper"],
+            "accounts_total": inv["accounts_configured"],
+            "accounts_enabled": inv["accounts_enabled"],
+            "bots_requested_on": inv["bots_requested_on"],
+            "ea_connection": inv["ea_connection"],
+            "inventory_as_of": inv["as_of"],
             "ea_latest_version": LATEST_EA,
         },
     }
