@@ -9,10 +9,17 @@ import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
-    # fallback to reading frontend/.env
-    for line in open("/app/frontend/.env"):
-        if line.startswith("REACT_APP_BACKEND_URL="):
-            BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
+    # fallback to reading frontend/.env (relative — never a hardcoded path)
+    _env = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "frontend", ".env")
+    if os.path.exists(_env):
+        for line in open(_env):
+            if line.startswith("REACT_APP_BACKEND_URL="):
+                BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
+if not BASE_URL:
+    pytest.skip("REACT_APP_BACKEND_URL not configured — live-stack HTTP "
+                "suite runs in preview only", allow_module_level=True)
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
 ADMIN_PASSWORD = "admin123"

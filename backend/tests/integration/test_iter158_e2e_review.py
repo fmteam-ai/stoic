@@ -15,7 +15,9 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-assert BASE_URL, "REACT_APP_BACKEND_URL not set"
+if not BASE_URL:
+    pytest.skip("REACT_APP_BACKEND_URL not set — live-stack e2e review "
+                "suite runs in preview only", allow_module_level=True)
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
 ADMIN_PASSWORD = "admin123"
