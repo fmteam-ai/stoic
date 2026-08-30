@@ -56,7 +56,7 @@ export default function VerifiedPerformance() {
                 {d && (
                     <>
                         <IntegrityStamp integrity={d.integrity} />
-                        <AttestationSeal attestation={d.attestation} />
+                        <AttestationSeal attestation={d.attestation} blocked={d.attestation_blocked} />
                         <StatTiles overall={d.overall} maxDrawdown={d.max_drawdown} />
                         <EquityCurve curve={d.equity_curve} />
                         <AccountsTable accounts={d.accounts} />

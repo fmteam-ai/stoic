@@ -17,19 +17,9 @@ import re
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    _env = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "frontend", ".env")
-    if os.path.exists(_env):
-        with open(_env) as _f:
-            for _line in _f:
-                if _line.startswith("REACT_APP_BACKEND_URL="):
-                    BASE_URL = _line.split("=", 1)[1].strip().rstrip("/")
-if not BASE_URL:
-    pytest.skip("REACT_APP_BACKEND_URL not configured — live-stack HTTP "
-                "suite runs in preview only", allow_module_level=True)
+from live_target import require_live_base_url
+
+BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
 ADMIN_PASS = "admin123"

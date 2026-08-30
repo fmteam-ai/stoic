@@ -2,11 +2,27 @@ import { useState } from "react";
 import api from "@/lib/api";
 import { BadgeCheck, ShieldCheck, ShieldX } from "lucide-react";
 
-export const AttestationSeal = ({ attestation }) => {
+export const AttestationSeal = ({ attestation, blocked }) => {
     const [result, setResult] = useState(null);
     const [busy, setBusy] = useState(false);
 
-    if (!attestation) return null;
+    if (!attestation) {
+        if (!blocked) return null;
+        return (
+            <div className="border border-[#FFB020]/40 bg-[#FFB020]/5 px-4 py-3"
+                data-testid="attestation-withheld">
+                <div className="font-mono text-[10px] tracking-widest text-[#FFB020] mb-1">
+                    ATTESTATION WITHHELD
+                </div>
+                <div className="font-mono text-[10px] text-[#A1A1AA] leading-relaxed">
+                    {blocked.note}
+                </div>
+                <div className="font-mono text-[10px] text-[#52525B] mt-1">
+                    blockers: {(blocked.reasons || []).join(", ")}
+                </div>
+            </div>
+        );
+    }
 
     const verify = async () => {
         setBusy(true);

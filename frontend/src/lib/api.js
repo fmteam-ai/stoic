@@ -96,6 +96,9 @@ api.interceptors.response.use((r) => r, makeResponseInterceptor(api));
 axios.interceptors.response.use((r) => r, makeResponseInterceptor(axios));
 
 export function formatApiError(err) {
+    // 429s are transient (rate limiting) — never surface a raw axios error
+    if (err?.response?.status === 429)
+        return "Too many requests — the server is rate limiting. It will recover automatically in a moment.";
     const detail = err?.response?.data?.detail;
     if (detail == null) return err?.message || "Something went wrong.";
     if (typeof detail === "string") return detail;

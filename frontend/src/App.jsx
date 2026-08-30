@@ -140,6 +140,7 @@ function App() {
                         <Route path="/crypto" element={<ProtectedRoute><Crypto /></ProtectedRoute>} />
                         <Route path="/shadow-performance" element={<ProtectedRoute><ShadowPerformance /></ProtectedRoute>} />
                         <Route path="/performance" element={<ProtectedRoute><VerifiedPerformance /></ProtectedRoute>} />
+                        <Route path="/verified-performance" element={<Navigate to="/performance" replace />} />
                         <Route path="/audit-log" element={<ProtectedRoute><AuditLog /></ProtectedRoute>} />
                         <Route path="/p/:shareId" element={<PublicPerformance />} />
                         <Route path="/j/:shareId" element={<PublicJournal />} />

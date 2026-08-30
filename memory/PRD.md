@@ -2152,3 +2152,14 @@ User uploaded `stoic-ai-trading-bot-audit-2026-08-30.md` (in /tmp/audit3.md). Im
 - NOT done from this audit (needs user/business): F-14 rename/trademark, F-06 full Risk Commander staged-pipeline rework (existing confirm flow not yet audited), F-04 broker-sandbox PANIC duplicate-fill campaign, F-22 broker preflight enrichment, F-10 Auto-Heal governance split, F-16 timeout/skeleton sweep, F-18 AI Coach calibration metadata, F-21 nav simplification, mobile/WCAG full pass.
 - The audit's "33-day RECON / stale truth" observations are PREVIEW artifacts (no live EA feeds this env) — the fail-closed behavior showing BLOCKED/CLOSE-ONLY is by design.
 
+
+## Iter-164 (2026-08-30) — Pre-gate corrections (DONE, testing agent iteration_161.json 100%)
+User-reported batch before the next major gate:
+- **P0 canary boundary**: `divergence_verdict` threshold = `min(1.0, fleet+0.25, fleet*3)` — STRICTER of both limits (was looser max()). Fleet 0% → boundary 0% (quiet fleet tolerates no canary blocks once judged). Matrix tests at fleet 0/5/10/20/40% + tiny samples (n<20 never judges) in tests/integration/test_iter163_pre_gate.py.
+- **P1 multidimensional canary**: `dimension_verdicts` — guard_block_rate (pamm_risk_decisions, min 20) AND execution_failure_rate (execution_intents failed/unknown share, min 10, `MIN_CANARY_EXECUTIONS`); divergence in ANY judged dimension halts; status/evaluate return `dimensions` + thresholds.boundary_rule.
+- **P1 shared live target**: `tests/live_target.py` (REACT_APP_BACKEND_URL → LIVE_TEST_BASE_URL → frontend/.env, module-level skip). iter158 e2e + iter160/161 http suites refactored onto it — collection never fails in CI.
+- **P1 attestation prohibition**: `performance_routes._attestation_gate/_attach_attestation` — attestation withheld (attestation:null + attestation_blocked{reasons,note}) when PNL_UNRECONCILED, POSITION_TRUTH_NOT_FRESH (enabled accounts), or SYNTHETIC_ACCOUNT_DATA; applied to /performance/verified AND public share payloads; AttestationSeal shows amber ATTESTATION WITHHELD panel (testid attestation-withheld).
+- **P2 HMAC retirement**: `LEGACY_HMAC_ACCEPTED_UNTIL = 2027-01-01T00:00:00+00:00` — verify_attestation rejects HMAC after that instant; verify endpoint returns legacy_hmac_accepted_until.
+- Post-test advisories fixed: /verified-performance route alias → /performance; formatApiError maps 429 to a friendly transient message.
+- Testing: iteration_161.json — 100% backend (6/6 pre-gate + live canary dims + attestation + 589 regression + 22 collection-safety) and 100% frontend (attestation seal, canary card). Agent added tests/test_iter163_live_verify.py. Manifest 4,009/390 up to date.
+

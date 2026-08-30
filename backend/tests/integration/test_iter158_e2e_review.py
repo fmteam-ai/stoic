@@ -14,10 +14,9 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    pytest.skip("REACT_APP_BACKEND_URL not set — live-stack e2e review "
-                "suite runs in preview only", allow_module_level=True)
+from live_target import require_live_base_url
+
+BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
 ADMIN_PASSWORD = "admin123"

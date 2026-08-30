@@ -118,11 +118,57 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             "integrity": integrity}
 
 
+async def _attestation_gate(db, user_id: str) -> list:
+    """Review P1 — an attestation is a signed claim of truth. It is
+    PROHIBITED while P&L is UNRECONCILED, position truth is not FRESH on
+    an enabled account, or the dataset includes synthetic/test accounts."""
+    reasons = []
+    try:
+        from routes.trade_routes import trade_stats
+        stats = await trade_stats(user={"id": user_id})
+        if (stats.get("reconciliation") or {}).get("status") \
+                == "UNRECONCILED":
+            reasons.append("PNL_UNRECONCILED")
+    except Exception:  # noqa: BLE001 — fail closed
+        reasons.append("PNL_RECONCILIATION_UNAVAILABLE")
+    try:
+        from state_contract import contract
+        sc = await contract(db, user_id)
+        rows = [r for r in sc["accounts"] if r.get("account_enabled")]
+        if any(r["position_truth"] != "FRESH" for r in rows):
+            reasons.append("POSITION_TRUTH_NOT_FRESH")
+    except Exception:  # noqa: BLE001
+        reasons.append("POSITION_TRUTH_UNAVAILABLE")
+    from synthetic_data import is_synthetic_account
+    async for a in db.accounts.find(
+            {"user_id": user_id, "status": {"$ne": "deleted"}},
+            {"label": 1, "user_id": 1, "synthetic": 1}):
+        if is_synthetic_account(a):
+            reasons.append("SYNTHETIC_ACCOUNT_DATA")
+            break
+    return reasons
+
+
+async def _attach_attestation(db, user_id: str, payload: dict) -> dict:
+    blockers = await _attestation_gate(db, user_id)
+    if blockers:
+        payload["attestation"] = None
+        payload["attestation_blocked"] = {
+            "reasons": blockers,
+            "note": "Attestation withheld — a signed performance claim "
+                    "requires reconciled P&L, FRESH position truth and a "
+                    "dataset free of synthetic/test accounts."}
+    else:
+        payload["attestation"] = perf_attestation(payload)
+        payload["attestation_blocked"] = None
+    return payload
+
+
 @router.get("/verified")
 async def verified(user=Depends(get_current_user)):
     db = get_db()
     payload = await _verified_payload(db, user["id"])
-    payload["attestation"] = perf_attestation(payload)
+    payload = await _attach_attestation(db, user["id"], payload)
     share = await db.performance_shares.find_one(
         {"user_id": user["id"], "revoked": {"$ne": True}})
     payload["share"] = ({"share_id": share["share_id"],
@@ -162,7 +208,7 @@ async def public_performance(share_id: str):
     if not share:
         raise HTTPException(status_code=404, detail="Share link not found or revoked")
     payload = await _verified_payload(db, share["user_id"], mask=True)
-    payload["attestation"] = perf_attestation(payload)
+    payload = await _attach_attestation(db, share["user_id"], payload)
     payload["shared"] = True
     return payload
 
@@ -177,9 +223,12 @@ async def verify_performance(body: VerifyBody):
     """Anyone can verify a track record wasn't tampered with (Phase 8).
     Review P1-4: Ed25519 — independently verifiable without trusting this
     server (legacy HMAC attestations still accepted)."""
+    from differentiation import LEGACY_HMAC_ACCEPTED_UNTIL
     from release_signing import public_key_b64
     return {"valid": verify_attestation(body.payload_hash, body.signature),
-            "algo": "Ed25519(sha256-canonical-JSON); legacy HMAC accepted",
+            "algo": "Ed25519(sha256-canonical-JSON); legacy HMAC accepted "
+                    f"until {LEGACY_HMAC_ACCEPTED_UNTIL}",
+            "legacy_hmac_accepted_until": LEGACY_HMAC_ACCEPTED_UNTIL,
             "public_key_b64": public_key_b64(),
             "key_id": KEY_ID}
 

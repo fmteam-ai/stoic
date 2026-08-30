@@ -1,0 +1,23 @@
+{
+  "summary": "iter-163 pre-gate corrections verified. Backend: (P0) release_canary.divergence_verdict uses min() → stricter of +25pp and 3× fleet; pre-gate suite tests/integration/test_iter163_pre_gate.py (6/6) green covering fleet 0/5/10/20/40% and n<20 skip. Live /api/ops/canary/enable → status returns dimensions=[guard_block_rate, execution_failure_rate] each with judged/diverged/reason/rates; thresholds.boundary_rule=='stricter of +25pp / 3× fleet' and thresholds.min_canary_executions==10; /api/ops/canary/evaluate returns dimensions; canary left DISABLED (verified via final GET). /api/performance/verified for current admin (1 acct, trading_enabled=false, reconciled) returns attestation PRESENT (key_id=perf-ed25519-v1, algo=Ed25519(sha256-canonical-JSON)); POST /api/public/performance/verify → valid:true AND legacy_hmac_accepted_until=='2027-01-01T00:00:00+00:00'. Collection safety: with REACT_APP_BACKEND_URL unset, conftest still hydrates from frontend/.env so the three HTTP suites run (22 collected, 22 passed, zero collection errors) — matches note 'In preview the conftest injects the URL so they normally run'. Full regression tests/integration+tests/unit: 589/589 passed. Frontend: /performance (nav via sidebar due to preview 429 rate-limit on rapid programmatic goto) shows attestation-seal with Ed25519 + perf-ed25519-v1 + VERIFY SIGNATURE. /admin/command-center RELEASE CANARY card renders (cc-section-canary) with ENABLE input and tooltip mentioning '+25pp / 3× fleet'. No app bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/integration/test_iter163_pre_gate.py",
+    "/app/backend/tests/test_iter163_live_verify.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "release_canary.divergence_verdict correctly uses min() for boundary and evidence gate (n<min_decisions). Solid.",
+    "AppLayout maps '/verified-performance' → 'Verified Performance' but the actual route is '/performance' (App.jsx line 142). If any deep-link, breadcrumb, or seed dataset references '/verified-performance' it will 404 to Dashboard. The review request itself uses '/verified-performance' — main agent should reconcile the route naming (either add an alias or update copy).",
+    "Preview dev server aggressively rate-limits with 429 on rapid programmatic navigation; Dashboard even surfaces 'Request failed with status code 429' as a raw error banner. Consider swallowing 429 in the dashboard fetcher with a friendlier 'rate limited — retrying' message."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter163_live_verify.py"],
+  "success_rate": {"backend": "100% (6/6 pre-gate + 2/2 live + 589/589 regression + 22/22 collection-safety)", "frontend": "100% (attestation seal + canary card verified)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (cookie + X-CSRF-Token echoed from csrf_token cookie)",
+  "seed_data_creation": "None. Live verify test enables canary on demo account 6a39653e0760995b7e966183 then disables it in a finally block; final GET asserts enabled==false.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "VerifiedPerformance route is /performance NOT /verified-performance (App.jsx). AppLayout's title map still uses the old path — deep-link tests hitting /verified-performance will land on Dashboard. Preview 429 rate-limits rapid Playwright goto — click sidebar links with >=2-3s pauses instead. Canary is DISABLED at end of run. attestation is currently PRESENT for admin so the WITHHELD panel branch was not exercised on live; unit-level branches for it are covered in the pre-gate suite.",
+  "rca of the issue": "N/A — no bugs found."
+}

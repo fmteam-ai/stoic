@@ -18,6 +18,9 @@ from datetime import datetime, timedelta, timezone
 
 LEGACY_KEY_ID = "perf-hmac-v1"
 KEY_ID = "perf-ed25519-v1"
+# P2 (review) — legacy HMAC attestations are accepted for verification
+# only until this instant; afterwards only Ed25519 signatures verify.
+LEGACY_HMAC_ACCEPTED_UNTIL = "2027-01-01T00:00:00+00:00"
 
 
 def _signing_key() -> bytes:
@@ -48,7 +51,9 @@ def verify_attestation(payload_hash: str, signature: str) -> bool:
     from release_signing import verify_hex
     if verify_hex(payload_hash.encode(), signature):
         return True
-    # legacy HMAC attestations issued before the Ed25519 migration
+    # legacy HMAC attestations — only until the published retirement date
+    if datetime.now(timezone.utc).isoformat() >= LEGACY_HMAC_ACCEPTED_UNTIL:
+        return False
     want = hmac.new(_signing_key(), payload_hash.encode(),
                     hashlib.sha256).hexdigest()
     return hmac.compare_digest(want, signature)
