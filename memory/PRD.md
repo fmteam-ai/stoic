@@ -2177,3 +2177,8 @@ User-reported batch before the next major gate:
 
 ## Iter-164b (2026-06) — CI backend-integration fix (DONE, CI-repro verified)
 - CI failed 3 attestation tests (ED25519_SIGNING_KEY_B64 absent in CI env). Fix: tests/integration/conftest.py generates an EPHEMERAL Ed25519 key at import when the env var is unset — never overrides a configured key. Verified under exact CI conditions (no backend/frontend .env, only MONGO_URL/DB_NAME): 61 passed, 8 skipped, 0 failed; preview: 74 passed.
+
+## Iter-164c (2026-06) — remaining CI fixes (DONE, exact-CI repro verified)
+- backend-unit exit 4: iter150 module-level `BASE = require_live_base_url()` skipped the whole module in CI so `::TestEaSourceScenarios` had no collectors. BASE now resolved lazily inside `_report()`. CI repro (zero env): 544 passed, 1 skipped, exit 0.
+- backend-integration KeyError JWT_SECRET: legacy-HMAC attestation tests need a shared secret — integration conftest now sets an ephemeral JWT_SECRET when neither JWT_SECRET nor PERF_SIGNING_KEY is configured (never overrides). CI repro: 61 passed, 8 skipped, 0 failed.
+- Also fixed pre-existing preview credential mismatch in test_iter98_hardening_http.py (401 → legacy admin@trading.bot/admin123 fallback, same convention as iter123). Preview: unit suite 1787 passed, 0 errors.

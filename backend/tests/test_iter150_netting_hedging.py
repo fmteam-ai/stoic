@@ -18,8 +18,6 @@ load_dotenv(_os.path.join(_BACKEND_DIR, ".env"))
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 from live_target import require_live_base_url
 
-BASE = require_live_base_url()
-
 EA_PATH = _os.path.join(_BACKEND_DIR, "static", "EmergentTradingBridge.mq5")
 
 
@@ -83,7 +81,8 @@ async def _fixture(db):
 
 
 def _report(payload):
-    r = requests.post(f"{BASE}/api/bridge/report", json=payload, timeout=15)
+    base = require_live_base_url()
+    r = requests.post(f"{base}/api/bridge/report", json=payload, timeout=15)
     assert r.status_code == 200, f"{r.status_code} {r.text}"
     return r.json()
 

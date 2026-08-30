@@ -22,6 +22,12 @@ if not os.environ.get("ED25519_SIGNING_KEY_B64"):
             _ser.Encoding.Raw, _ser.PrivateFormat.Raw,
             _ser.NoEncryption())).decode()
 
+# Legacy HMAC attestation tests need SOME shared secret in CI.
+if not os.environ.get("JWT_SECRET") \
+        and not os.environ.get("PERF_SIGNING_KEY"):
+    import secrets as _secrets
+    os.environ["JWT_SECRET"] = _secrets.token_hex(32)
+
 
 @pytest.fixture(autouse=True)
 def _restore_db_name():
