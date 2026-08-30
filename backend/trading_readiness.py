@@ -77,7 +77,9 @@ async def readiness(db, user_id: str) -> dict:
         causes = sorted({r["state_reason"] for r in disconnected
                          if r.get("state_reason")})
         accs = [{"account_id": r["account_id"], "label": r.get("label"),
-                 "reason": r.get("state_reason")} for r in disconnected]
+                 "reason": r.get("state_reason"),
+                 "trust_eligible": bool(r.get("trust_eligible"))}
+                for r in disconnected]
         add("EXECUTION_BLOCKED", "BLOCKED",
             f"{len(disconnected)} enabled bot(s) cannot execute "
             f"({disconnected[0]['effective_state']})"

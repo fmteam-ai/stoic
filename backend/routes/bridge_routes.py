@@ -86,10 +86,29 @@ async def heartbeat(payload: BridgeHeartbeat):
     # chain verifies: installation recognized → bound to this account →
     # broker server matches → login matches → holds the execution lease.
     identity: Optional[dict] = None
-    if payload.installation_id:
+    effective_installation_id = payload.installation_id
+    if not effective_installation_id and not mismatch:
+        # iter-172 — one-click trusted terminal: an owner-approved
+        # user_trust installation lets a token-authenticated heartbeat
+        # whose MT5 login/server fingerprint matches verify through the
+        # SAME identity chain as installer pairing (no PowerShell).
+        trusted = await db.installations.find_one(
+            {"account_id": str(acc["_id"]), "revoked": {"$ne": True},
+             "method": "user_trust"})
+        if trusted:
+            fp = trusted.get("trusted_fingerprint") or {}
+            login_ok = (payload.account_login is not None
+                        and str(payload.account_login).strip()
+                        == str(fp.get("account_login") or "").strip())
+            srv_ok = (not fp.get("broker_server")
+                      or not payload.broker_server
+                      or payload.broker_server == fp["broker_server"])
+            if login_ok and srv_ok:
+                effective_installation_id = trusted["installation_id"]
+    if effective_installation_id:
         from vps_agent import verify_heartbeat_identity
         identity = await verify_heartbeat_identity(
-            db, acc, installation_id=payload.installation_id,
+            db, acc, installation_id=effective_installation_id,
             broker_server=payload.broker_server,
             reported_login=payload.account_login)
         if not identity["ok"]:
@@ -116,9 +135,9 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "status": "OK" if abs(skew) <= 1500 else "SKEW_SUSPECTED"}
         except (TypeError, ValueError):
             pass
-    if payload.installation_id:
+    if effective_installation_id:
         set_doc["ea_identity"] = {
-            "installation_id": payload.installation_id,
+            "installation_id": effective_installation_id,
             "broker_server": payload.broker_server,
             "terminal_build": payload.terminal_build,
             "ea_version": payload.ea_version,
@@ -134,7 +153,7 @@ async def heartbeat(payload: BridgeHeartbeat):
             set_doc["verified_identity"] = build_verified_identity(
                 account_number=payload.account_login,
                 broker_server=payload.broker_server,
-                installation_id=payload.installation_id)
+                installation_id=effective_installation_id)
     else:
         # iter-125 correction #1 — EA v1.55+ MUST carry the identity block.
         # A modern EA heartbeat without installation_id is UNVERIFIED:
@@ -368,7 +387,7 @@ async def heartbeat(payload: BridgeHeartbeat):
     try:
         from vps_agent import on_ea_heartbeat
         await on_ea_heartbeat(db, acc, payload.account_login,
-                              installation_id=payload.installation_id,
+                              installation_id=effective_installation_id,
                               broker_server=payload.broker_server,
                               identity_verified=(identity["ok"]
                                                  if identity else None))

@@ -84,12 +84,9 @@ def account_truth(acc: dict, open_local: int) -> dict:
                             "no execution authority")
     elif not acc.get("verified_identity"):
         authority = "REDUCED"
-        authority_reason = ("broker identity not verified — the EA "
-                            "heartbeat has no paired installation; open "
-                            "Accounts → this account → Quick Install, "
-                            "generate a pairing token, run the PowerShell "
-                            "one-liner on the MT5 host, then reattach the "
-                            "EA to restore full authority")
+        authority_reason = ("broker identity not verified — click TRUST "
+                            "THIS TERMINAL in the blocker panel (one "
+                            "click), or pair via Accounts → Quick Install")
     else:
         authority, authority_reason = "FULL", None
     return {"ea_connected": ea_connected,
@@ -170,6 +167,10 @@ async def contract(db, user_id: str) -> dict:
                      "operational_mode": mode, "effective_state": eff,
                      "state_reason": state_reason(
                          eff=eff, truth=truth, operational_mode=mode),
+                     "trust_eligible": (truth["ea_connected"]
+                                        and truth["execution_authority"]
+                                        == "REDUCED"
+                                        and a.get("mode") != "paper"),
                      "force_trade_allowed":
                          enabled and truth["ea_connected"]
                          and truth["position_truth"] == "FRESH"

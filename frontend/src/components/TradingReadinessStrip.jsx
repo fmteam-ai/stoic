@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertOctagon, ChevronDown, ShieldCheck } from "lucide-react";
-import api from "@/lib/api";
+import { toast } from "sonner";
+import api, { formatApiError } from "@/lib/api";
 
 /**
  * TradingReadinessStrip (audit F-02) — the DOMINANT status layer.
@@ -27,6 +28,21 @@ const ago = (iso) => {
 export function TradingReadinessStrip() {
     const [data, setData] = useState(null);
     const [openList, setOpenList] = useState(false);
+    const [trusting, setTrusting] = useState(null);
+
+    const trustTerminal = async (accountId) => {
+        setTrusting(accountId);
+        try {
+            await api.post(`/accounts/${accountId}/trust-terminal`);
+            toast.success("Terminal trusted — full trading authority restores within a minute");
+            const r = await api.get("/state/readiness");
+            setData(r.data);
+        } catch (e) {
+            toast.error("Could not trust terminal", { description: formatApiError(e) });
+        } finally {
+            setTrusting(null);
+        }
+    };
 
     useEffect(() => {
         let alive = true;
@@ -92,9 +108,19 @@ export function TradingReadinessStrip() {
                             {(r.accounts || []).length > 0 && (
                                 <div className="text-[#52525B] mt-0.5" data-testid={`readiness-reason-accounts-${r.code}`}>
                                     {r.accounts.map(a => (
-                                        <div key={a.account_id}>
-                                            affected: <span className="text-[#A1A1AA]">{a.label || a.account_id.slice(-6)}</span>
-                                            {a.reason ? <span> — {a.reason}</span> : null}
+                                        <div key={a.account_id} className="flex items-center gap-2 flex-wrap">
+                                            <span>
+                                                affected: <span className="text-[#A1A1AA]">{a.label || a.account_id.slice(-6)}</span>
+                                                {a.reason ? <span> — {a.reason}</span> : null}
+                                            </span>
+                                            {a.trust_eligible && (
+                                                <button onClick={() => trustTerminal(a.account_id)}
+                                                    disabled={trusting === a.account_id}
+                                                    data-testid={`trust-terminal-btn-${a.account_id}`}
+                                                    className="font-mono text-[9px] font-bold tracking-widest px-2 py-0.5 border border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/10 disabled:opacity-50 transition-colors">
+                                                    {trusting === a.account_id ? "TRUSTING…" : "TRUST THIS TERMINAL"}
+                                                </button>
+                                            )}
                                         </div>
                                     ))}
                                 </div>

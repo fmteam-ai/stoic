@@ -600,6 +600,99 @@ async def delete_account(account_id: str, force: bool = False,
     return {"ok": True}
 
 
+@router.post("/{account_id}/trust-terminal")
+async def trust_terminal(account_id: str, request: Request,
+                         user=Depends(get_current_user)):
+    """iter-172 — one-click trusted terminal (easy alternative to installer
+    pairing). Heartbeats are already authenticated by the account's secret
+    bridge token; when the reported MT5 login matches, the owner may
+    explicitly trust THIS terminal. Creates a user_trust installation +
+    execution lease and stamps verified identity; subsequent plain
+    heartbeats resolve it through the SAME identity chain. Audited;
+    superseded by any later installer pairing."""
+    import uuid as _uuid
+    from state_contract import effective_connection_state
+    db = get_db()
+    oid = parse_object_id(account_id, "account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if acc.get("mode") == "paper":
+        raise HTTPException(status_code=400,
+                            detail="Paper accounts need no terminal trust")
+    if acc.get("verified_identity"):
+        return {"ok": True, "already_verified": True,
+                "installation_id": (acc.get("verified_identity") or {})
+                .get("installation_id")}
+    conn = effective_connection_state(acc)
+    if not conn["connected"]:
+        raise HTTPException(status_code=409, detail=(
+            "EA is not connected — a fresh heartbeat is required before "
+            f"this terminal can be trusted ({conn['reason']})"))
+    if acc.get("broker_account_mismatch"):
+        raise HTTPException(status_code=409, detail=(
+            "Refusing to trust a mismatched terminal: "
+            + str(acc.get("broker_account_mismatch_reason"))))
+    reported_login = acc.get("broker_account_id_reported")
+    if reported_login is None:
+        raise HTTPException(status_code=409, detail=(
+            "The EA has not reported its MT5 login yet — update the EA "
+            "to v1.24+ or wait for the next heartbeat"))
+    ea_ident = acc.get("ea_identity") or {}
+    broker_server = ea_ident.get("broker_server") or acc.get("server")
+    now = datetime.now(timezone.utc)
+    installation_id = f"inst_{_uuid.uuid4().hex[:12]}"
+    await db.installations.update_many(
+        {"account_id": account_id, "revoked": {"$ne": True}},
+        {"$set": {"revoked": True, "revoked_at": now,
+                  "revoked_reason": "superseded by user-trusted terminal"}})
+    await db.installations.insert_one({
+        "installation_id": installation_id,
+        "user_id": user["id"], "account_id": account_id,
+        "method": "user_trust",
+        "trusted_fingerprint": {
+            "account_login": str(reported_login),
+            "broker_server": broker_server,
+            "terminal_build": ea_ident.get("terminal_build")},
+        "terminal_path": "user-trusted-terminal",
+        "host_fingerprint": f"mt5-login-{reported_login}",
+        "revoked": False, "created_at": now})
+    from vps_agent import LEASE_SECONDS
+    await db.execution_leases.update_one(
+        {"account_id": account_id},
+        {"$set": {"installation_id": installation_id,
+                  "user_id": user["id"], "revoked": False,
+                  "broker_server": broker_server,
+                  "account_number": (acc.get("account_number")
+                                     or str(reported_login)),
+                  "acquired_at": now,
+                  "expires_at": now + timedelta(
+                      seconds=LEASE_SECONDS)}},
+        upsert=True)
+    from identity_model import build_verified_identity
+    ver = build_verified_identity(account_number=reported_login,
+                                  broker_server=broker_server,
+                                  installation_id=installation_id)
+    await db.accounts.update_one(
+        {"_id": oid},
+        {"$set": {"verified_identity": ver,
+                  "ea_identity": {
+                      "installation_id": installation_id,
+                      "broker_server": broker_server,
+                      "terminal_build": ea_ident.get("terminal_build"),
+                      "ea_version": ea_ident.get("ea_version"),
+                      "authoritative": True, "reason": None,
+                      "verified_at": now.isoformat()}}})
+    from step_up import audit_event
+    await audit_event(db, user["id"], "terminal_trusted",
+                      {"account_id": account_id,
+                       "installation_id": installation_id,
+                       "mt5_login": str(reported_login),
+                       "broker_server": broker_server}, request)
+    return {"ok": True, "installation_id": installation_id,
+            "verified_identity": ver}
+
+
 @router.post("/{account_id}/rotate-token")
 async def rotate_token(account_id: str, user=Depends(get_current_user)):
     db = get_db()
