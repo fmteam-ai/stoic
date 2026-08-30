@@ -13,6 +13,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone, timedelta
+from live_target import require_live_base_url
 
 
 def _mock_obs(values):
@@ -184,7 +185,7 @@ async def test_snapshot_endpoint_requires_auth(monkeypatch):
     """GET /macro/snapshot must require authenticated session."""
     import os
     import requests
-    base = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:3000").rstrip("/")
+    base = require_live_base_url()
     r = requests.get(f"{base}/api/macro/snapshot", timeout=10)
     assert r.status_code in (401, 403)
 
@@ -193,7 +194,7 @@ async def test_snapshot_endpoint_requires_auth(monkeypatch):
 async def test_snapshot_endpoint_returns_5_series_for_admin():
     import os
     import requests
-    base = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:3000").rstrip("/")
+    base = require_live_base_url()
     s = requests.Session()
     r = s.post(f"{base}/api/auth/login",
                json={"email": "admin@trading.bot", "password": "admin123"}, timeout=15)

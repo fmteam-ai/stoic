@@ -10,7 +10,8 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 _FRONT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "frontend", ".env")
 if os.path.exists(_FRONT):
     load_dotenv(_FRONT, override=False)
-API = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") + "/api"
+from live_target import require_live_base_url
+API = require_live_base_url() + "/api"
 
 
 def _session():

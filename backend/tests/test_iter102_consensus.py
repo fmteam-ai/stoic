@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from consensus import compute_consensus, WEIGHTS, DEFAULT_THRESHOLD  # noqa: E402
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 
 
 def bullish_ctx(action="BUY"):

@@ -24,6 +24,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), ".env"))
 
 from motor.motor_asyncio import AsyncIOMotorClient
+from live_target import require_live_base_url
 
 
 @pytest.fixture()
@@ -269,7 +270,7 @@ def test_manifest_refuses_without_signing_key(monkeypatch):
 
 def test_ex5_endpoint_and_digest_report(db):
     import httpx
-    base = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+    base = require_live_base_url()
     r = httpx.get(f"{base}/api/ea-script.ex5", timeout=20,
                   follow_redirects=True)
     # no CI binary published in this environment → explicit 409, never a

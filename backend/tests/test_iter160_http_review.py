@@ -203,3 +203,6 @@ def test_status_reports_live_dimensions(admin_session):
                                 else [d.get("name","") for d in dims])}
     # Expect at least a couple of core service dimensions.
     assert len(keys) >= 2, f"expected multiple live components, got: {keys}"
+
+
+pytestmark = pytest.mark.http

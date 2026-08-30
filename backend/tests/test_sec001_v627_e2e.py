@@ -5,7 +5,8 @@ import time
 import pytest
 import requests
 
-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+from live_target import require_live_base_url
+BASE = require_live_base_url()
 
 
 def _login():

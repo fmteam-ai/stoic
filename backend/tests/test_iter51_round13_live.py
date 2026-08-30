@@ -36,17 +36,12 @@ from pathlib import Path
 
 import pytest
 import requests
+from live_target import require_live_base_url
 
 # So we can import scalp.engine directly for the block-registry spot-check.
 sys.path.insert(0, _BACKEND_DIR)
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    # Frontend .env is the source of truth for the external URL.
-    fe_env = Path(_os.path.join(_REPO_DIR, "frontend", ".env")).read_text()
-    m = re.search(r"REACT_APP_BACKEND_URL=(\S+)", fe_env)
-    if m:
-        BASE_URL = m.group(1).rstrip("/")
+BASE_URL = require_live_base_url()
 
 MONGO_URL = os.environ.get("MONGO_URL")
 DB_NAME = os.environ.get("DB_NAME")

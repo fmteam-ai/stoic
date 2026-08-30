@@ -25,6 +25,7 @@ import requests
 from bson import ObjectId
 from pymongo import MongoClient
 from ea_version import current_ea_version
+from live_target import require_live_base_url
 
 _BACKEND_DIR = _BACKEND_DIR
 if _BACKEND_DIR not in sys.path:
@@ -35,14 +36,7 @@ with open(f"{_BACKEND_DIR}/.env") as _f:
             _k, _v = _ln.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip().strip("\"'"))
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL"):
-                BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-if not BASE_URL.startswith("http"):
-    BASE_URL = "https://" + BASE_URL
+BASE_URL = require_live_base_url()
 TIMEOUT = 30
 
 

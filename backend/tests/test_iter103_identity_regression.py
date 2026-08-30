@@ -26,16 +26,12 @@ import pytest
 import requests
 from bson import ObjectId
 from pymongo import MongoClient
+from live_target import require_live_base_url
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ROOT_DIR = os.path.dirname(_BACKEND_DIR)
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(os.path.join(_ROOT_DIR, "frontend", ".env")) as f:
-        for ln in f:
-            if ln.startswith("REACT_APP_BACKEND_URL"):
-                BASE_URL = ln.split("=", 1)[1].strip().strip('"').rstrip("/")
+BASE_URL = require_live_base_url()
 
 TIMEOUT = 30
 
@@ -297,8 +293,11 @@ def test_live_test_trade_identity_gate(fresh_user):
     assert r.status_code == 409, r.text
     body = r.json().get("detail") or {}
     # The route surfaces result["blocked"] as detail.code, with context=result
-    assert body.get("code") == "identity" or (
-        (body.get("context") or {}).get("blocked") == "identity"), body
+    # iter-1xx+: the STOIC certification gate (force_trade_not_certified)
+    # legitimately fires BEFORE the identity gate — both prove the live
+    # test-trade is blocked for an unverified account.
+    _code = body.get("code") or (body.get("context") or {}).get("blocked")
+    assert _code in ("identity", "force_trade_not_certified"), body
 
     # Now seed a verified installation + owned unexpired lease
     inst_id = f"inst_iter103_{uuid.uuid4().hex[:8]}"

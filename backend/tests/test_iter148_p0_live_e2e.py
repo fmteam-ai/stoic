@@ -12,9 +12,9 @@ sys.path.insert(0, os.environ.get("BACKEND_DIR", _BACKEND_DIR))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.environ.get("BACKEND_DIR", _BACKEND_DIR), ".env"))
 from motor.motor_asyncio import AsyncIOMotorClient
+from live_target import require_live_base_url
 
-BASE = os.environ.get("REACT_APP_BACKEND_URL") or open(
-    os.path.join(_REPO_DIR, "frontend", ".env")).read().split("=", 1)[1].strip()
+BASE = require_live_base_url()
 MARK = "iter148_p0_live"
 
 

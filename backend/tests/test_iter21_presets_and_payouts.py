@@ -20,6 +20,7 @@ import requests
 import pytest
 from pymongo import MongoClient
 from bson import ObjectId
+from live_target import require_live_base_url
 
 
 def _detail_text(r):
@@ -38,9 +39,7 @@ def _read_env():
         return None
 
 
-BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _read_env() or "").rstrip("/")
-if not BASE_URL:
-    raise RuntimeError("REACT_APP_BACKEND_URL not set")
+BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "admin@trading.bot"

@@ -17,14 +17,9 @@ from profit_target import (
 )
 from risk import get_profile, compute_lot_for_account
 from circuit_breakers import today_iso
+from live_target import require_live_base_url
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL="):
-                BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
-                break
+BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASSWORD = "admin123"

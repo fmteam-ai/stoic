@@ -21,9 +21,8 @@ import requests
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
-                          "https://stoic-trading-bot.preview.emergentagent.com"
-                          ).rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "ai_trading_bot")
 

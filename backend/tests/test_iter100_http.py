@@ -8,7 +8,8 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 load_dotenv(os.path.join(os.path.dirname(_BACKEND_DIR), "frontend", ".env"))
 
-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") + "/api"
+from live_target import require_live_base_url
+BASE = require_live_base_url() + "/api"
 ADMIN = ("admin@trading.bot", "admin123")
 
 

@@ -24,6 +24,7 @@ from datetime import datetime, timezone, timedelta
 import requests
 from bson import ObjectId
 from pymongo import MongoClient
+from live_target import require_live_base_url
 
 # Load /app/backend/.env so trade_reconciler can be imported directly
 # (it reads MONGO_URL / DB_NAME at module load time via database.get_db()).
@@ -36,14 +37,7 @@ with open(f"{_BACKEND_DIR}/.env") as _f:
             _k, _v = _ln.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip().strip("\"'"))
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL"):
-                BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-if not BASE_URL.startswith("http"):
-    BASE_URL = "https://" + BASE_URL
+BASE_URL = require_live_base_url()
 TIMEOUT = 30
 
 

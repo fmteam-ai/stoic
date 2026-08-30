@@ -7,8 +7,9 @@ import os
 
 import pytest
 import requests
+from live_target import require_live_base_url
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
+BASE_URL = require_live_base_url()
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if not BASE_URL:
     with open(os.path.join(_REPO, "frontend", ".env")) as f:

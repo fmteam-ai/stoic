@@ -152,6 +152,73 @@ async def dimension_verdicts(db, account_id: str) -> tuple:
     return dims, overall
 
 
+async def observability_snapshot(db, st: dict) -> list:
+    """RC review P1 — the canary campaign RECORDS more than block rate:
+    position/risk truth, connection, execution latency, slippage and
+    infrastructure health. Non-halting evidence for now — the P2 roadmap
+    replaces the crude boundary with a statistical divergence model once
+    real canary data exists."""
+    account_id = st["account_id"]
+    since = (datetime.now(timezone.utc)
+             - timedelta(hours=WINDOW_HOURS)).isoformat()
+    out: list = []
+    try:
+        from route_utils import parse_object_id
+        from state_contract import account_truth, effective_connection_state
+        acc = await db.accounts.find_one(
+            {"_id": parse_object_id(account_id)})
+        if acc:
+            local = await db.trades.count_documents(
+                {"account_id": account_id, "status": "open"})
+            t = account_truth(acc, local)
+            conn = effective_connection_state(acc)
+            out.append({"dimension": "position_truth",
+                        "value": t["position_truth"],
+                        "healthy": t["position_truth"] == "FRESH"})
+            out.append({"dimension": "connection", "value": conn["state"],
+                        "healthy": conn["connected"],
+                        "heartbeat_age_seconds":
+                            conn["heartbeat_age_seconds"]})
+    except Exception:  # noqa: BLE001 — observability must never break eval
+        pass
+
+    base = {"opened_at": {"$gte": since}}
+
+    async def _avg(match: dict, path: str, absolute: bool = False) -> dict:
+        q = {**match, path: {"$exists": True, "$ne": None}}
+        vals = []
+        async for t in db.trades.find(q, {path: 1}).limit(200):
+            v = t
+            for part in path.split("."):
+                v = (v or {}).get(part)
+            if isinstance(v, (int, float)):
+                vals.append(abs(v) if absolute else v)
+        return {"samples": len(vals),
+                "avg": round(sum(vals) / len(vals), 2) if vals else None}
+
+    out.append({"dimension": "latency_ms",
+                "canary": await _avg({**base, "account_id": account_id},
+                                     "latency_trace.t9_ms"),
+                "fleet": await _avg(
+                    {**base, "account_id": {"$ne": account_id}},
+                    "latency_trace.t9_ms")})
+    out.append({"dimension": "slippage_abs_pips",
+                "canary": await _avg({**base, "account_id": account_id},
+                                     "slippage_pips", absolute=True),
+                "fleet": await _avg(
+                    {**base, "account_id": {"$ne": account_id}},
+                    "slippage_pips", absolute=True)})
+    try:
+        crit = await db.ops_alerts.count_documents(
+            {"acked_at": None, "severity": "critical",
+             "synthetic": {"$ne": True}})
+        out.append({"dimension": "infrastructure",
+                    "open_critical_alerts": crit, "healthy": crit == 0})
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 async def _halt(db, st: dict, reason: str, rates: dict) -> dict:
     res = await db.bot_configs.update_many(
         {"account_id": st["account_id"], "active": True},
@@ -182,19 +249,21 @@ async def evaluate(db) -> dict:
         return {"evaluated": False, "enabled": True, "halted": True,
                 "halt_reason": st.get("halt_reason")}
     dims, verdict = await dimension_verdicts(db, st["account_id"])
+    obs = await observability_snapshot(db, st)
     rates = next(d["rates"] for d in dims
                  if d["dimension"] == "guard_block_rate")
     if verdict["diverged"]:
         halt = await _halt(db, st, verdict["reason"],
-                           {"dimensions": dims})
+                           {"dimensions": dims, "observability": obs})
         return {"evaluated": True, "rates": rates, "verdict": verdict,
-                "dimensions": dims, **halt}
+                "dimensions": dims, "observability": obs, **halt}
     await db.platform_state.update_one(
         {"_id": STATE_ID},
         {"$set": {"last_evaluated_at": _now(), "last_rates": rates,
-                  "last_verdict": verdict, "last_dimensions": dims}})
+                  "last_verdict": verdict, "last_dimensions": dims,
+                  "last_observability": obs}})
     return {"evaluated": True, "halted": False, "rates": rates,
-            "verdict": verdict, "dimensions": dims}
+            "verdict": verdict, "dimensions": dims, "observability": obs}
 
 
 async def resume(db, actor: str) -> dict:
@@ -218,9 +287,11 @@ async def status(db) -> dict:
     if not st.get("enabled"):
         return {"enabled": False, **st}
     dims, verdict = await dimension_verdicts(db, st["account_id"])
+    obs = await observability_snapshot(db, st)
     rates = next(d["rates"] for d in dims
                  if d["dimension"] == "guard_block_rate")
     return {**st, "rates": rates, "verdict": verdict, "dimensions": dims,
+            "observability": obs,
             "thresholds": {"min_canary_decisions": MIN_CANARY_DECISIONS,
                            "min_canary_executions": MIN_CANARY_EXECUTIONS,
                            "block_rate_tolerance": BLOCK_RATE_TOLERANCE,

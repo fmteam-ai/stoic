@@ -126,3 +126,6 @@ def test_bot_health_score_hard_caps(admin_session):
     assert r.status_code == 200
     body = r.json()
     assert "hard_caps" in body, body
+
+
+pytestmark = pytest.mark.http

@@ -27,9 +27,9 @@ import sys
 import asyncio
 import pytest
 import requests
+from live_target import require_live_base_url
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-assert BASE_URL, "REACT_APP_BACKEND_URL is required"
+BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PW = "admin123"

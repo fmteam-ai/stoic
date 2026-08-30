@@ -26,7 +26,8 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), ".env"))
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASSWORD = "admin123"
 

@@ -22,15 +22,9 @@ import pytest
 import requests
 from bson import ObjectId
 from pymongo import MongoClient
+from live_target import require_live_base_url
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL"):
-                BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-if not BASE_URL.startswith("http"):
-    BASE_URL = "https://" + BASE_URL
+BASE_URL = require_live_base_url()
 TIMEOUT = 30
 
 

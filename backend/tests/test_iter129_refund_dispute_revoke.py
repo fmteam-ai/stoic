@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
+from live_target import require_live_base_url
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), ".env"))
 
@@ -69,7 +70,7 @@ def test_unsigned_refund_webhook_is_ignored_http():
     """No STRIPE_WEBHOOK_SECRET in preview → unsigned revoke must be a no-op
     200 (griefing defense), never a revoke."""
     import requests
-    base = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+    base = require_live_base_url()
     r = requests.post(
         f"{base}/api/webhook/stripe",
         json={"type": "charge.refunded", "id": "evt_r",

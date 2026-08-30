@@ -3,7 +3,8 @@ ObjectId hardening migration."""
 import os
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:3000").rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASSWORD = "admin123"

@@ -2163,3 +2163,14 @@ User-reported batch before the next major gate:
 - Post-test advisories fixed: /verified-performance route alias → /performance; formatApiError maps 429 to a friendly transient message.
 - Testing: iteration_161.json — 100% backend (6/6 pre-gate + live canary dims + attestation + 589 regression + 22 collection-safety) and 100% frontend (attestation seal, canary card). Agent added tests/test_iter163_live_verify.py. Manifest 4,009/390 up to date.
 
+
+## Iter-164 (2026-06) — RC-freeze corrections: canary observability + universal live-target standardization (DONE, self-tested)
+- **P1 canary records more than block rate**: `release_canary.observability_snapshot(db, st)` — NON-HALTING evidence recorded on every evaluate()/status(): position_truth (state_contract.account_truth), connection (effective_connection_state + heartbeat age), latency_ms canary-vs-fleet (trades.latency_trace.t9_ms avg, 200-sample window), slippage_abs_pips canary-vs-fleet, infrastructure (open critical REAL ops_alerts, synthetic excluded). Persisted as platform_state.last_observability; returned in /api/ops/canary/status + evaluate. Halting dimensions unchanged (guard_block_rate + execution_failure_rate, min(+25pp, 3× fleet)). P2 roadmap: replace crude boundary with statistical divergence model once real canary data exists.
+- **P1 universal require_live_base_url()**: ~95 test files standardized (bulk AST/regex rewrite) — every ad-hoc `os.environ["REACT_APP_BACKEND_URL"]`, hardcoded preview-URL default, and frontend/.env file-open block replaced with the shared fixture; `tests/helpers.py::base_url()` now delegates to it (single choke point). PROOF: full-tree collection with NO env and NO frontend/.env = 2696 collected, ZERO errors (was 50 errors); 1758 unit tests pass in that CI-like mode; with env 4369 collected clean.
+- Collateral fixes: tests/test_iter23_reconciler.py + test_iter137_ops_console.py conftest-import collision (importlib fallback); 4 testing-agent files got suite markers; iter103 identity-gate test accepts stricter cert-gate ordering; iter123 admin creds fall back to legacy preview creds; TEST_MANIFEST regenerated (4015 tests, 392 files).
+- New tests: tests/test_iter164_canary_observability.py (4 integration tests, all dims + synthetic alert exclusion + never-raises).
+
+## Roadmap (updated iter-164)
+- P1: Risk Commander explicit confirmations (deterministic preview + confirm before capital-touching commands); Soak memory watch (track worker RSS across 14-day soak checkpoints, alert on monotonic growth).
+- P2: Panel loading timeouts (bounded timeout + retry + last-good snapshot per data panel); Mobile pass (readiness strip/PANIC/account state at phone widths); statistical canary divergence model; multi-strategy PAMM dynamic budgets.
+- Scheduled: Legacy HMAC attestation retirement 2027-01-01 (already enforced in code).

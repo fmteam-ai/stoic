@@ -4,14 +4,14 @@ counters / infra probes, and the AI→proposal→operator-approval flow."""
 import os as _os
 import asyncio
 import requests
+from live_target import require_live_base_url
 _TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 while _os.path.basename(_TESTS_DIR) != "tests":
     _TESTS_DIR = _os.path.dirname(_TESTS_DIR)
 _BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
 _REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 
-BASE = open(_os.path.join(_REPO_DIR, "frontend", ".env")).read().split(
-    "REACT_APP_BACKEND_URL=")[1].splitlines()[0].strip()
+BASE = require_live_base_url()
 
 
 def _login():

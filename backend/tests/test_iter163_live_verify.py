@@ -88,3 +88,6 @@ def test_performance_verified_attestation_and_public_verify(admin):
     else:
         assert blk, "either attestation or attestation_blocked must be set"
         assert "reasons" in blk
+
+
+pytestmark = pytest.mark.http

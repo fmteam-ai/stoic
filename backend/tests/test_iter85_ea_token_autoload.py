@@ -27,16 +27,10 @@ import requests
 
 EA_PATH = _os.path.join(_BACKEND_DIR, "static/EmergentTradingBridge.mq5")
 from ea_version import current_ea_version
+from live_target import require_live_base_url
 EXPECTED_VERSION = current_ea_version()
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL"):
-                BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-if not BASE_URL.startswith("http"):
-    BASE_URL = "https://" + BASE_URL
+BASE_URL = require_live_base_url()
 
 
 def _ea_source() -> str:

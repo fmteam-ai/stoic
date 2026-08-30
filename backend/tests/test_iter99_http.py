@@ -14,7 +14,8 @@ from pymongo import MongoClient
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), ".env"))
 
-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") + "/api"
+from live_target import require_live_base_url
+BASE = require_live_base_url() + "/api"
 METRICS_TOKEN = os.environ["METRICS_TOKEN"]
 ADMIN = ("admin@trading.bot", "admin123")
 

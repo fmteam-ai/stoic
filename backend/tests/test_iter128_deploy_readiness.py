@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), ".env"))
 
-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+from live_target import require_live_base_url
+BASE = require_live_base_url()
 # The K8s health probe hits the BACKEND pod directly on its bind port
 # (logs show "127.0.0.1:<port> - GET /health"), NOT through the /api ingress.
 BACKEND = os.environ.get("BACKEND_INTERNAL_URL", "http://localhost:8001")

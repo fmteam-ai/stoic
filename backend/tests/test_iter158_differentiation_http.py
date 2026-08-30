@@ -14,8 +14,8 @@ import re
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL",
-                          "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 

@@ -16,13 +16,11 @@ _REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 from dotenv import load_dotenv  # noqa: E402
 load_dotenv(_os.path.join(_BACKEND_DIR, ".env"))
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
+from live_target import require_live_base_url
+
+BASE = require_live_base_url()
 
 EA_PATH = _os.path.join(_BACKEND_DIR, "static", "EmergentTradingBridge.mq5")
-try:
-    BASE = open(_os.path.join(_REPO_DIR, "frontend", ".env")).read().split(
-        "REACT_APP_BACKEND_URL=")[1].splitlines()[0].strip()
-except (FileNotFoundError, IndexError):
-    BASE = _os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8001")
 
 
 def _ea():

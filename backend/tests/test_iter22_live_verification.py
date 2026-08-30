@@ -12,8 +12,9 @@ import requests
 from datetime import datetime, timezone
 from bson import ObjectId
 from pymongo import MongoClient
+from live_target import require_live_base_url
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 ADMIN_EMAIL = "admin@trading.bot"
 ADMIN_PASSWORD = "admin123"

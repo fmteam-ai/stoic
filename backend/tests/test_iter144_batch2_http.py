@@ -31,13 +31,9 @@ from bson import ObjectId
 # Make the backend package importable for scalp.order_state / risk_reservations
 sys.path.insert(0, _BACKEND_DIR)
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL="):
-                BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
-                break
+from live_target import require_live_base_url  # noqa: E402
+
+BASE_URL = require_live_base_url()
 
 # Explicitly load backend/.env for MONGO_URL / DB_NAME (pytest doesn't source it)
 from dotenv import load_dotenv

@@ -12,7 +12,17 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
 
 
 def _run(coro):
-    from conftest import run_async
+    try:
+        from conftest import run_async
+    except ImportError:  # collection-order dependent under full-tree runs
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_tests_root_conftest",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "conftest.py"))
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        run_async = _mod.run_async
     return run_async(coro)
 
 

@@ -16,8 +16,9 @@ import uuid
 import time
 import pytest
 import requests
+from live_target import require_live_base_url
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 BYPASS = os.environ.get("RATE_LIMIT_BYPASS_TOKEN")
 

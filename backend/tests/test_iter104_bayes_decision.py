@@ -12,7 +12,8 @@ from bayes_decision import (  # noqa: E402
 )
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 
 SIG = {"session": {"primary": "ny"}, "regime": {"regime": "TRENDING"},
        "mtf_tiers": {"SHORT": {"direction": "UP"}}, "stop_loss": 4090.0}

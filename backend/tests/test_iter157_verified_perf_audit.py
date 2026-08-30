@@ -9,7 +9,8 @@ import os
 import requests
 import pytest
 
-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+from live_target import require_live_base_url
+BASE = require_live_base_url()
 API = f"{BASE}/api"
 
 ADMIN_EMAIL = "admin@trading.bot"

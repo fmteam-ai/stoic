@@ -16,19 +16,10 @@ load_dotenv(os.path.join(BACKEND, ".env"))
 
 
 def base_url() -> str:
-    url = os.environ.get("REACT_APP_BACKEND_URL")
-    if not url:
-        try:
-            with open(os.path.join(os.path.dirname(BACKEND),
-                                   "frontend", ".env")) as f:
-                for line in f:
-                    if line.startswith("REACT_APP_BACKEND_URL="):
-                        url = line.split("=", 1)[1].strip().strip('"')
-        except OSError:
-            pass
-    if not url:
-        raise RuntimeError("REACT_APP_BACKEND_URL not set")
-    return url.rstrip("/")
+    """Shared live-target resolution (RC review P1) — SKIPS the calling
+    suite when no live deployment exists instead of erroring collection."""
+    from live_target import require_live_base_url
+    return require_live_base_url()
 
 
 def mongo_db():

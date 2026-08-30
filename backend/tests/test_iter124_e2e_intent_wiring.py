@@ -11,20 +11,14 @@ from datetime import datetime, timezone, timedelta
 import pytest
 import requests
 from bson import ObjectId
+from live_target import require_live_base_url
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BACKEND_DIR = os.path.dirname(_TESTS_DIR)
 _REPO_DIR = os.path.dirname(_BACKEND_DIR)
 sys.path.insert(0, _BACKEND_DIR)
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    with open(os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL"):
-                BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-if not BASE_URL.startswith("http"):
-    BASE_URL = "https://" + BASE_URL
+BASE_URL = require_live_base_url()
 TIMEOUT = 30
 
 

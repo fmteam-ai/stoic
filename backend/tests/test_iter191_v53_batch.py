@@ -14,7 +14,8 @@ sys.path.insert(0, _BACKEND_DIR)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 ADMIN_A = ("admin@trading.bot", "admin123")
 ADMIN_B = ("admin@stoicaibot.com", "admin123")

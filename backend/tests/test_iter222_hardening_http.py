@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 pytestmark = pytest.mark.http
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 STEP_UP_BYPASS = os.environ.get("STEP_UP_BYPASS_TOKEN", "")

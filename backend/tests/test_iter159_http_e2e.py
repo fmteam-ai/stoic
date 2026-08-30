@@ -15,7 +15,8 @@ import time
 import requests
 import pytest
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
 ADMIN_PASSWORD = "admin123"
@@ -185,3 +186,6 @@ def test_nonadmin_403(nonadmin, method, path, body):
     else:
         r = nonadmin.post(url, json=body or {}, timeout=20)
     assert r.status_code == 403, f"{method} {path} expected 403 got {r.status_code}: {r.text[:200]}"
+
+
+pytestmark = pytest.mark.http

@@ -24,15 +24,6 @@ import requests
 
 # Load BASE_URL from frontend .env
 BASE_URL = ""
-try:
-    with open(_os.path.join(_REPO_DIR, "frontend", ".env")) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL"):
-                BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-                break
-except Exception:
-    pass
-assert BASE_URL, "REACT_APP_BACKEND_URL not configured"
 
 ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
 TAURO_PREFIX = "6a41c0fc"  # protected — do not mutate

@@ -82,7 +82,20 @@ def _run(coro):
 
 
 # Round 9 — shared suite loop from conftest; no deprecated get_event_loop()
-from conftest import run_async as _arun  # noqa: E402
+# Under whole-tree collection `conftest` can resolve to the integration
+# package's conftest — fall back to loading tests/conftest.py by path.
+try:
+    from conftest import run_async as _arun  # noqa: E402
+except ImportError:  # pragma: no cover — collection-order dependent
+    import importlib.util as _ilu
+    import os as _os
+    _spec = _ilu.spec_from_file_location(
+        "_tests_root_conftest",
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                      "conftest.py"))
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _arun = _mod.run_async
 
 
 def test_reconcile_closes_all_when_broker_reports_zero(db, seeded):
