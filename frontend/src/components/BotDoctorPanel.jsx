@@ -5,6 +5,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { Stethoscope, RefreshCw, AlertTriangle, ShieldCheck, Activity, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
+import { formatApiError } from "@/lib/api";
 
 const STATUS_STYLES = {
     healthy:  { color: "#00FF41", bg: "bg-[#00FF41]/5",  border: "border-[#00FF41]/30", Icon: ShieldCheck, label: "HEALTHY" },
@@ -46,7 +47,7 @@ export default function BotDoctorPanel() {
             setDiag(r.data);
             setErr(null);
         } catch (e) {
-            setErr(e?.response?.data?.detail || e.message || "Doctor unavailable");
+            setErr(formatApiError(e));
         } finally {
             setLoading(false);
             setRefreshing(false);

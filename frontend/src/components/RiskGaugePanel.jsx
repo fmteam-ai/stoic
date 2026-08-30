@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { Gauge, ShieldAlert, ShieldCheck, Zap } from "lucide-react";
+import { formatApiError } from "@/lib/api";
 
 /* Per-account P&L vs Circuit-Breaker limit gauge.
    Visualizes how close each account is to its daily / weekly drawdown trip.
@@ -171,7 +172,7 @@ export default function RiskGaugePanel() {
             setData(res.data);
             setErr(null);
         } catch (e) {
-            setErr(e?.response?.data?.detail || e.message || "Failed to load risk gauge");
+            setErr(formatApiError(e));
         } finally {
             setLoading(false);
         }

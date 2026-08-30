@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { BadgeCheck, XCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -25,7 +25,7 @@ export function AccountCertification({ accountId }) {
             setItems(data.items || []);
         } catch (e) {
             toast.error("Certification blocked", {
-                description: e?.response?.data?.detail?.message || "Fix failing checks first.",
+                description: formatApiError(e),
             });
         }
     };

@@ -95,20 +95,44 @@ function makeResponseInterceptor(client) {
 api.interceptors.response.use((r) => r, makeResponseInterceptor(api));
 axios.interceptors.response.use((r) => r, makeResponseInterceptor(axios));
 
+const _TRANSIENT = "Temporarily unreachable — retrying automatically. If this persists, check Bot Health.";
+
+function _sanitizeErrorText(text) {
+    const s = String(text ?? "").trim();
+    if (!s) return null;
+    // Never surface raw edge/proxy error pages (Cloudflare 52x prose, HTML
+    // bodies, nginx pages) to users — they read like the app is broken.
+    const low = s.toLowerCase();
+    if (low.includes("<html") || low.includes("<!doctype")
+        || low.includes("cloudflare") || low.includes("origin web server")
+        || low.includes("bad gateway") || low.includes("nginx"))
+        return _TRANSIENT;
+    return s.length > 240 ? `${s.slice(0, 240)}…` : s;
+}
+
 export function formatApiError(err) {
     // 429s are transient (rate limiting) — never surface a raw axios error
     if (err?.response?.status === 429)
         return "Too many requests — the server is rate limiting. It will recover automatically in a moment.";
+    const status = err?.response?.status;
+    // Edge/gateway failures (Cloudflare 52x, 502/503/504) are transient
+    // infrastructure hiccups, not application errors.
+    if (status >= 502 || (!err?.response && err?.request))
+        return _TRANSIENT;
     const detail = err?.response?.data?.detail;
-    if (detail == null) return err?.message || "Something went wrong.";
-    if (typeof detail === "string") return detail;
+    if (detail == null)
+        return _sanitizeErrorText(
+            typeof err?.response?.data === "string" ? err.response.data
+                : err?.message) || "Something went wrong.";
+    if (typeof detail === "string")
+        return _sanitizeErrorText(detail) || "Something went wrong.";
     if (Array.isArray(detail))
         return detail.map(e => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e))).filter(Boolean).join(" ");
     // Structured error: backend now returns {code, message, ...} for friendly
     // surfaces — duplicate_account, account_suspended, terms_required, etc.
     if (detail && typeof detail.message === "string") return detail.message;
     if (detail && typeof detail.msg === "string") return detail.msg;
-    return String(detail);
+    return _sanitizeErrorText(String(detail)) || "Something went wrong.";
 }
 
 export default api;

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { FlaskConical, Loader2 } from "lucide-react";
 
 const F = ({ label, value, onChange, placeholder }) => (
@@ -34,7 +34,7 @@ export const WhatIfCard = () => {
             const { data } = await api.post("/trades/what-if", body);
             if (data.error) setErr(data.error); else setRes(data);
         } catch (e) {
-            setErr(e?.response?.data?.detail || "what-if failed");
+            setErr(formatApiError(e));
         } finally { setBusy(false); }
     };
 

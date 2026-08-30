@@ -4,6 +4,7 @@ import {
     Newspaper, TrendingUp, TrendingDown, Activity, Wrench, Lightbulb,
     Sparkles, Mail, CheckCircle2, AlertCircle,
 } from "lucide-react";
+import { formatApiError } from "@/lib/api";
 
 /* Weekly AI Digest — a 7-day recap of the user's bot activity.
    Surfaces win rate, P&L, best/worst trade, auto-heal action count, top HOLD
@@ -61,7 +62,7 @@ export default function WeeklyDigestPanel() {
             setData(res.data);
             setErr(null);
         } catch (e) {
-            setErr(e?.response?.data?.detail || e.message || "Failed to load digest");
+            setErr(formatApiError(e));
         } finally {
             setLoading(false);
         }
@@ -88,7 +89,7 @@ export default function WeeklyDigestPanel() {
         } catch (e) {
             setEmailStatus({
                 state: "error",
-                error: e?.response?.data?.detail || e.message || "Email failed",
+                error: formatApiError(e),
             });
         }
     }, []);

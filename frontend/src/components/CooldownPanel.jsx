@@ -4,6 +4,7 @@ import {
     Timer, Flame, ShieldOff, TrendingUp, TrendingDown,
     Clock, AlertOctagon,
 } from "lucide-react";
+import { formatApiError } from "@/lib/api";
 
 /* Per-account Cooldown + Loss-Streak tile.
    Complements BotWatching (which shows global market state) by giving the
@@ -183,7 +184,7 @@ export default function CooldownPanel() {
             setData(res.data);
             setErr(null);
         } catch (e) {
-            setErr(e?.response?.data?.detail || e.message || "Failed to load cooldowns");
+            setErr(formatApiError(e));
         } finally {
             setLoading(false);
         }

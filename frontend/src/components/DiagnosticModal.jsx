@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { X, Play, Wrench, Copy, CheckCircle2, AlertTriangle, XCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -40,7 +40,7 @@ export function DiagnosticModal({ open, onClose }) {
             const { data } = await api.get("/diagnostic/run");
             setReport(data);
         } catch (e) {
-            toast.error(e?.response?.data?.detail || "Diagnostic failed");
+            toast.error(formatApiError(e));
         } finally {
             setLoading(false);
         }
@@ -57,7 +57,7 @@ export function DiagnosticModal({ open, onClose }) {
             toast.success("Auto-fix applied", { description: lines.join(" · ") });
             await run();   // re-run diagnostic to refresh status
         } catch (e) {
-            toast.error(e?.response?.data?.detail || "Auto-fix failed");
+            toast.error(formatApiError(e));
         } finally {
             setFixing(false);
         }

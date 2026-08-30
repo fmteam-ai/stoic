@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { X, Play, Pause, Film } from "lucide-react";
 
 const W = 640, H = 260, PAD = 34;
@@ -14,7 +14,7 @@ export const ReplayModal = ({ trade, onClose }) => {
     useEffect(() => {
         api.get(`/trades/${trade.id}/replay`)
             .then(r => { setD(r.data); setCursor((r.data.ticks?.length || 1) - 1); })
-            .catch(e => setErr(e?.response?.data?.detail || "replay unavailable"));
+            .catch(e => setErr(formatApiError(e)));
     }, [trade.id]);
 
     useEffect(() => {

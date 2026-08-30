@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { Dna, X, BadgeCheck } from "lucide-react";
 
 const Row = ({ label, children }) => (
@@ -19,7 +19,7 @@ export const DnaModal = ({ trade, onClose }) => {
     useEffect(() => {
         api.get(`/trades/${trade.id || trade._id}/dna`)
             .then(({ data }) => setD(data))
-            .catch(e => setErr(e?.response?.data?.detail || "Failed to load DNA"));
+            .catch(e => setErr(formatApiError(e)));
     }, [trade]);
 
     return (

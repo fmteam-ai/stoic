@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { ClipboardCheck, Play, Loader2 } from "lucide-react";
 
 const LABELS = {
@@ -53,7 +53,7 @@ export const ValidationCard = () => {
             setRunSummary({ passed, failed });
             await load();
         } catch (e) {
-            setRunSummary({ error: e?.response?.data?.detail || "run failed" });
+            setRunSummary({ error: formatApiError(e) });
         } finally { setRunning(false); }
     };
 

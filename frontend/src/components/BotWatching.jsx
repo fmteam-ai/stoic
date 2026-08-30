@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { Eye, Activity, TrendingDown, TrendingUp, Minus, Clock, ShieldCheck, ShieldOff } from "lucide-react";
+import { formatApiError } from "@/lib/api";
 
 /* "Bot is patiently watching" tile — explains WHY the bot isn't trading.
    Polls /api/signals/watch-status every 30s. Surfaces live entropy +
@@ -242,7 +243,7 @@ export default function BotWatching() {
             setData(res.data);
             setErr(null);
         } catch (e) {
-            setErr(e?.response?.data?.detail || e.message || "Failed to load watch status");
+            setErr(formatApiError(e));
         } finally {
             setLoading(false);
         }

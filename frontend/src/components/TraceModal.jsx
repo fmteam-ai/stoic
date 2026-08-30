@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { X, Route } from "lucide-react";
 
 const SECTIONS = [
@@ -26,7 +26,7 @@ export const TraceModal = ({ trade, onClose }) => {
     useEffect(() => {
         api.get(`/trades/${trade.id}/trace`)
             .then(r => setD(r.data))
-            .catch(e => setErr(e?.response?.data?.detail || "trace unavailable"));
+            .catch(e => setErr(formatApiError(e)));
         api.get(`/trades/${trade.id}/timeline`)
             .then(r => setTl(r.data))
             .catch(() => {});

@@ -1,0 +1,22 @@
+{
+  "summary": "Frontend regression smoke for Cloudflare-error sweep fix. (1) formatApiError logic verified via node test — 7/7 cases pass: 520+HTML/cloudflare → transient, 502 → transient, network no-response → transient, 400 app detail preserved, detail containing 'origin web server' → sanitized to transient, 429 → rate-limit message, structured {code,message} → message. (2) UI login as admin@trading.bot/admin123 succeeds; dashboard, /accounts, /bot-health, /trades all render real data with NO Cloudflare/nginx/HTML/bad-gateway text and NO 'Temporarily unreachable' banner (preview backend healthy as expected). Expected red banners (TRADING BLOCKED, POSITION TRUTH STALE) present as documented. (3) No PAGEERROR / uncaught JS exceptions on any modified panel (BotPulsePanel, CooldownPanel, WeeklyDigestPanel, AdaptiveModePanel, BotWatching, RiskGaugePanel present in DOM). Console noise = expected HTTP 401/429/503 resource-load messages routed through interceptor/formatter. (4) Grep confirms zero remaining raw `setErr(e?.response?.data?.detail...)` patterns; only OperationalModeCard reads detail (for structured code branch) and correctly falls back to formatApiError.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/tmp/test_formatter.mjs"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "formatApiError logic is correct and robust: status>=502 short-circuit BEFORE reading detail so backend 5xx JSON with a benign detail still gets transient message (intentional per fix — acceptable). If backend ever returns actionable 502/503 details you'd want to surface, revisit priority order.",
+    "OperationalModeCard.jsx line 36 still reads e?.response?.data?.detail directly — but only for structured `code === mode_promotion_blocked` branch, then falls back to formatApiError; safe and intentional."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / admin123",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Cloudflare-error sweep fix (lib/api.js formatApiError + _sanitizeErrorText) verified working. Preview shows healthy backend so transient banners aren't triggered — if you need to exercise the transient path in UI, mock a 520 response or hit a paused backend."
+}

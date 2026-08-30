@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { Activity, Pause, AlertTriangle, Ban, CheckCircle2, Clock, ChevronDown, ChevronUp } from "lucide-react";
 
 // Threshold at which we switch from the full expanded list to a dropdown+preview.
@@ -155,7 +155,7 @@ export default function BotPulsePanel() {
             setData(r.data);
             setErr(null);
         } catch (e) {
-            setErr(e?.response?.data?.detail || "Failed to load bot pulse");
+            setErr(formatApiError(e));
         }
     }, []);
 

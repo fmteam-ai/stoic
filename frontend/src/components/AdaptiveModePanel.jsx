@@ -14,6 +14,7 @@ import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Sparkles, ToggleRight, ToggleLeft, Activity, Target } from "lucide-react";
+import { formatApiError } from "@/lib/api";
 
 const MODE_LABEL = {
     expected_value: "EXPECTED VALUE",
@@ -229,7 +230,7 @@ export default function AdaptiveModePanel() {
             setStatusByAcct(map);
             setErr(null);
         } catch (e) {
-            setErr(e?.response?.data?.detail || e.message || "Failed to load adaptive status");
+            setErr(formatApiError(e));
         } finally {
             setLoading(false);
         }
@@ -247,7 +248,7 @@ export default function AdaptiveModePanel() {
             toast.success(successMsg);
             fetchAll();
         } catch (e) {
-            toast.error(e?.response?.data?.detail || e.message || "Update failed");
+            toast.error(formatApiError(e));
         }
     }, [fetchAll]);
 

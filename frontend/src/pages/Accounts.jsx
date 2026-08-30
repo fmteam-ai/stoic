@@ -665,7 +665,7 @@ export default function Accounts() {
                                                 toast.success(suffix ? `Suffix set: '${suffix}'` : "Suffix cleared (using auto-detected)");
                                                 load();
                                             } catch (e) {
-                                                toast.error(e?.response?.data?.detail || "Failed to update suffix");
+                                                toast.error(formatApiError(e));
                                             }
                                         }} />
                                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2 mt-4">BRIDGE TOKEN · secret — shown once at creation/rotation</div>
@@ -830,7 +830,7 @@ function ImportPositionsModal({ account, onClose, onDone }) {
             const { data } = await api.post(`/accounts/${account.id}/import-positions`, { positions });
             onDone(data.created);
         } catch (e) {
-            setErr(e?.response?.data?.detail || e.message || "Import failed");
+            setErr(formatApiError(e));
         } finally { setBusy(false); }
     };
 
