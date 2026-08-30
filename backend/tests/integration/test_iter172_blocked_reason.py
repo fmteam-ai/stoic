@@ -92,6 +92,19 @@ async def _scenario():
         assert "identity not verified" in exb["recovery"]
         assert exb["accounts"][0]["label"] == "Unpaired"
         assert "identity not verified" in exb["accounts"][0]["reason"]
+
+        # stale heartbeat → POSITION_TRUTH_STALE names each account with
+        # its heartbeat age + the terminal-side recovery action
+        await db.accounts.update_one(
+            {"label": "Unpaired"},
+            {"$set": {"last_heartbeat": _iso(2.7 * 3600)}})
+        rd = await readiness(db, uid)
+        codes = {r["code"]: r for r in rd["reasons"]}
+        stale = codes["POSITION_TRUTH_STALE"]
+        acc = stale["accounts"][0]
+        assert acc["label"] == "Unpaired"
+        assert "last EA heartbeat 2.7h ago" in acc["reason"]
+        assert "MT5 terminal" in acc["reason"]
     finally:
         await db.client.drop_database(DB_NAME)
 

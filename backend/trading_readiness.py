@@ -50,9 +50,22 @@ async def readiness(db, user_id: str) -> dict:
         worst = max((r["position_truth"] for r in bad_truth),
                     key=lambda t: {"STALE": 1, "UNKNOWN": 2,
                                    "CONFLICTED": 3}.get(t, 1))
+
+        def _hb(r):
+            age = r.get("heartbeat_age_seconds")
+            if age is None:
+                return ("no EA heartbeat ever received — attach the STOIC "
+                        "EA to a chart on this account")
+            span = f"{age / 3600:.1f}h" if age >= 3600 else f"{age:.0f}s"
+            return (f"position truth {r['position_truth']} — last EA "
+                    f"heartbeat {span} ago; check the MT5 terminal/VPS is "
+                    "running with the EA attached and AutoTrading ON")
+
+        accs = [{"account_id": r["account_id"], "label": r.get("label"),
+                 "reason": _hb(r)} for r in bad_truth]
         add("POSITION_TRUTH_STALE", "BLOCKED",
             f"{len(bad_truth)} account(s) with {worst} position truth — "
-            "opening orders are blocked", _ids(bad_truth),
+            "opening orders are blocked", accs,
             "Reconnect the MT5 EA; only a fresh broker snapshot plus "
             "successful reconciliation clears this (a restart never does)")
 
