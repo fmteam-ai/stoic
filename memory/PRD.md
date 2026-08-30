@@ -2174,3 +2174,6 @@ User-reported batch before the next major gate:
 - P1: Risk Commander explicit confirmations (deterministic preview + confirm before capital-touching commands); Soak memory watch (track worker RSS across 14-day soak checkpoints, alert on monotonic growth).
 - P2: Panel loading timeouts (bounded timeout + retry + last-good snapshot per data panel); Mobile pass (readiness strip/PANIC/account state at phone widths); statistical canary divergence model; multi-strategy PAMM dynamic budgets.
 - Scheduled: Legacy HMAC attestation retirement 2027-01-01 (already enforced in code).
+
+## Iter-164b (2026-06) — CI backend-integration fix (DONE, CI-repro verified)
+- CI failed 3 attestation tests (ED25519_SIGNING_KEY_B64 absent in CI env). Fix: tests/integration/conftest.py generates an EPHEMERAL Ed25519 key at import when the env var is unset — never overrides a configured key. Verified under exact CI conditions (no backend/frontend .env, only MONGO_URL/DB_NAME): 61 passed, 8 skipped, 0 failed; preview: 74 passed.
