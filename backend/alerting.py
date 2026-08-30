@@ -23,8 +23,11 @@ def _now():
 
 
 async def raise_alert(db, kind: str, severity: str, message: str,
-                      dedup_key: str | None = None, meta: dict | None = None):
-    """Insert an alert unless an unacked one with the same dedup_key is open."""
+                      dedup_key: str | None = None, meta: dict | None = None,
+                      synthetic: bool = False):
+    """Insert an alert unless an unacked one with the same dedup_key is open.
+    synthetic=True (review P1-7) tags QA/chaos/test alerts so operator
+    surfaces can exclude them (scope=real by default)."""
     dedup_key = dedup_key or kind
     now = _now()
     existing = await db.ops_alerts.find_one(
@@ -41,6 +44,7 @@ async def raise_alert(db, kind: str, severity: str, message: str,
         "message": message,
         "dedup_key": dedup_key,
         "meta": meta or {},
+        "synthetic": bool(synthetic),
         "created_at": now,
         "last_seen_at": now,
         "occurrences": 1,
@@ -48,7 +52,7 @@ async def raise_alert(db, kind: str, severity: str, message: str,
         "acked_by": None,
     })
     logger.warning("OPS ALERT [%s] %s: %s", severity, kind, message)
-    if severity == "critical":
+    if severity == "critical" and not synthetic:
         try:  # iter-152 — critical alerts (stale telemetry, dead workers)
             from guard_alerts import queue_ops_alert_email
             queue_ops_alert_email(db, kind, severity, message, dedup_key)
@@ -77,15 +81,17 @@ async def evaluate_ops_alerts(db) -> int:
     async for a in db.accounts.find(
             {"trading_enabled": {"$ne": False}, "dormant": {"$ne": True},
              "status": {"$ne": "deleted"}},
-            {"label": 1, "last_heartbeat": 1}):
+            {"label": 1, "last_heartbeat": 1, "user_id": 1, "synthetic": 1}):
         hb = _parse_ts(a.get("last_heartbeat"))
         if hb and hb_max < (now - hb).total_seconds() <= hb_ceiling:
+            from synthetic_data import is_synthetic_account
             label = a.get("label") or str(a["_id"])[-6:]
             if await raise_alert(
                     db, "ea_heartbeat_stale", "critical",
                     f"EA heartbeat for account '{label}' is "
                     f"{int((now - hb).total_seconds())}s old (limit {hb_max}s)",
-                    dedup_key=f"ea_heartbeat:{a['_id']}"):
+                    dedup_key=f"ea_heartbeat:{a['_id']}",
+                    synthetic=is_synthetic_account(a)):
                 raised += 1
 
     # 2 · worker lease expired / loop crashlooping / loop stalled

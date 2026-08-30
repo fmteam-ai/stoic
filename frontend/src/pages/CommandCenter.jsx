@@ -81,6 +81,16 @@ export default function CommandCenter() {
         return () => clearInterval(t);
     }, [load]);
 
+    const [alertScope, setAlertScope] = useState("real");
+    const [scopedAlerts, setScopedAlerts] = useState(null);
+
+    useEffect(() => {
+        if (alertScope === "real") { setScopedAlerts(null); return; }
+        api.get(`/ops/alerts?scope=${alertScope}&include_acked=true&limit=10`)
+            .then(r => setScopedAlerts(r.data.alerts || []))
+            .catch(() => setScopedAlerts([]));
+    }, [alertScope]);
+
     const act = async (path, body, okMsg) => {
         setActing(path);
         try {
@@ -328,18 +338,33 @@ export default function CommandCenter() {
                 {/* Recent alerts + emails */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="border border-[#1F1F1F] p-4" data-testid="cc-recent-alerts">
-                        <div className="flex items-center gap-2 mb-2">
-                            <AlertTriangle className="w-4 h-4 text-[#FFD700]" />
-                            <span className="text-xs font-mono tracking-widest text-[#A1A1AA] uppercase">Recent ops alerts</span>
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4 text-[#FFD700]" />
+                                <span className="text-xs font-mono tracking-widest text-[#A1A1AA] uppercase">Recent ops alerts</span>
+                            </div>
+                            <div className="flex items-center gap-1" data-testid="cc-alert-scope-toggle">
+                                {["real", "synthetic", "all"].map(s => (
+                                    <button key={s} onClick={() => setAlertScope(s)}
+                                        data-testid={`cc-alert-scope-${s}`}
+                                        className={`px-2 py-0.5 text-[10px] font-mono tracking-widest border ${
+                                            alertScope === s
+                                                ? "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/5"
+                                                : "border-[#1F1F1F] text-[#52525B] hover:text-[#A1A1AA]"}`}>
+                                        {s.toUpperCase()}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                        {(data?.recent_alerts || []).length === 0 && (
+                        {((scopedAlerts ?? data?.recent_alerts) || []).length === 0 && (
                             <div className="text-xs text-[#52525B]" data-testid="cc-alerts-empty">No alerts recorded.</div>
                         )}
-                        {(data?.recent_alerts || []).map((a, i) => (
+                        {((scopedAlerts ?? data?.recent_alerts) || []).map((a, i) => (
                             <div key={i} className="py-1 text-xs border-b border-[#141414] last:border-0">
                                 <span className={`font-mono mr-2 ${a.severity === "critical" ? "text-[#FF3B30]" : "text-[#FFD700]"}`}>
                                     {String(a.severity || "").toUpperCase()}
                                 </span>
+                                {a.synthetic && <span className="font-mono mr-2 text-[#52525B]" data-testid="cc-alert-synthetic-tag">[SYNTHETIC]</span>}
                                 <span className="text-[#A1A1AA]">{a.message}</span>
                                 <span className="text-[#52525B] ml-2">
                                     ×{a.occurrences}{a.acked_at ? " · acked" : ""}

@@ -185,11 +185,14 @@ export default function Login() {
 
                     <form onSubmit={handleSubmit} className="space-y-4" data-testid="login-form">
                         <div>
-                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">EMAIL</label>
+                                <label htmlFor="login-email" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">EMAIL</label>
                             <div className="relative">
                                 <EnvelopeSimple className="w-4 h-4 text-[#52525B] absolute left-3 top-1/2 -translate-y-1/2" />
                                 <input
                                     type="email"
+                                    id="login-email"
+                                    name="email"
+                                    autoComplete="email"
                                     value={email}
                                     onChange={e => setEmail(e.target.value)}
                                     required
@@ -201,11 +204,14 @@ export default function Login() {
                         </div>
 
                         <div>
-                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">PASSWORD</label>
+                                <label htmlFor="login-password" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">PASSWORD</label>
                             <div className="relative">
                                 <LockKey className="w-4 h-4 text-[#52525B] absolute left-3 top-1/2 -translate-y-1/2" />
                                 <input
                                     type="password"
+                                    id="login-password"
+                                    name="password"
+                                    autoComplete="current-password"
                                     value={password}
                                     onChange={e => setPassword(e.target.value)}
                                     required

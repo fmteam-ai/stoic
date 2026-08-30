@@ -114,8 +114,10 @@ async def _drill_alert_dedup(db) -> dict:
     from alerting import raise_alert
     kind = f"chaos_dedup_{uuid.uuid4().hex[:6]}"
     try:
-        await raise_alert(db, kind, "warning", "chaos drill", dedup_key=kind)
-        await raise_alert(db, kind, "warning", "chaos drill", dedup_key=kind)
+        await raise_alert(db, kind, "warning", "chaos drill",
+                          dedup_key=kind, synthetic=True)
+        await raise_alert(db, kind, "warning", "chaos drill",
+                          dedup_key=kind, synthetic=True)
         n = await db.ops_alerts.count_documents({"dedup_key": kind})
         return {"drill": "alert_storm_dedup", "passed": n == 1,
                 "detail": (f"repeated alert deduplicated to a single open "

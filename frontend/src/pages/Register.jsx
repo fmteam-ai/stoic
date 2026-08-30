@@ -154,27 +154,30 @@ export default function Register() {
 
                 <form onSubmit={handleSubmit} className="space-y-4" data-testid="register-form">
                     <div>
-                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">NAME (OPTIONAL)</label>
+                        <label htmlFor="register-name" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">NAME (OPTIONAL)</label>
                         <input
                             type="text" value={name} onChange={e => setName(e.target.value)}
+                            id="register-name" name="name" autoComplete="name"
                             data-testid="register-name-input"
                             className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#00FF41] outline-none px-3 py-3 text-sm transition-colors duration-150"
                             placeholder="Trader Joe"
                         />
                     </div>
                     <div>
-                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">EMAIL</label>
+                        <label htmlFor="register-email" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">EMAIL</label>
                         <input
                             type="email" value={email} onChange={e => setEmail(e.target.value)} required
+                            id="register-email" name="email" autoComplete="email"
                             data-testid="register-email-input"
                             className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#00FF41] outline-none px-3 py-3 text-sm transition-colors duration-150"
                             placeholder="you@example.com"
                         />
                     </div>
                     <div>
-                        <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">PASSWORD</label>
+                        <label htmlFor="register-password" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">PASSWORD</label>
                         <input
                             type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={8}
+                            id="register-password" name="new-password" autoComplete="new-password"
                             data-testid="register-password-input"
                             className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#00FF41] outline-none px-3 py-3 text-sm transition-colors duration-150"
                             placeholder="At least 8 characters"

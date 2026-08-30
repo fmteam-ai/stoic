@@ -48,7 +48,7 @@ def test_canonical_hash_change_sensitive():
 def test_attestation_roundtrip():
     payload = {"overall": {"net_pnl": 431.2}, "max_drawdown": 88.0}
     att = perf_attestation(payload)
-    assert att["key_id"] == "perf-hmac-v1"
+    assert att["key_id"] == "perf-ed25519-v1"  # review P1-4: Ed25519
     assert verify_attestation(att["payload_hash"], att["signature"])
 
 

@@ -554,8 +554,12 @@ export default function Dashboard() {
                             />
                             <StatCell
                                 label="TOTAL P&L"
-                                value={`${stats.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(stats.total_pnl).toFixed(2)}`}
-                                accent={stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}
+                                value={stats.reconciliation?.status === "UNRECONCILED"
+                                    ? "UNRECONCILED"
+                                    : `${stats.total_pnl >= 0 ? "+$" : "-$"}${Math.abs(stats.total_pnl).toFixed(2)}`}
+                                accent={stats.reconciliation?.status === "UNRECONCILED"
+                                    ? "text-[#FF3B30]"
+                                    : stats.total_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}
                             />
                         </div>
                     </div>

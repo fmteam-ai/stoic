@@ -174,8 +174,13 @@ class VerifyBody(BaseModel):
 
 @public_router.post("/performance/verify")
 async def verify_performance(body: VerifyBody):
-    """Anyone can verify a track record wasn't tampered with (Phase 8)."""
+    """Anyone can verify a track record wasn't tampered with (Phase 8).
+    Review P1-4: Ed25519 — independently verifiable without trusting this
+    server (legacy HMAC attestations still accepted)."""
+    from release_signing import public_key_b64
     return {"valid": verify_attestation(body.payload_hash, body.signature),
+            "algo": "Ed25519(sha256-canonical-JSON); legacy HMAC accepted",
+            "public_key_b64": public_key_b64(),
             "key_id": KEY_ID}
 
 

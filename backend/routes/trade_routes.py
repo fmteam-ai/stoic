@@ -326,10 +326,32 @@ async def trade_stats(account_id: Optional[str] = None,
     if account_id:
         closed_q["account_id"] = account_id
         open_q["account_id"] = account_id
-    closed = await db.trades.find(closed_q).to_list(length=1000)
-    open_trades = await db.trades.find(open_q).to_list(length=100)
-    return {**_aggregate_stats(closed), **_split_stats(closed),
-            "open_trades": len(open_trades)}
+    closed = await db.trades.find(closed_q).to_list(length=100000)
+    open_trades = await db.trades.find(open_q).to_list(length=1000)
+    stats = {**_aggregate_stats(closed), **_split_stats(closed),
+             "open_trades": len(open_trades)}
+    # review P1-2 — the headline total must reconcile against the
+    # per-account component sums from the SAME dataset; a number that
+    # doesn't add up is flagged UNRECONCILED so the UI refuses to show it.
+    components: dict = {}
+    for t in closed:
+        key = str(t.get("account_id") or "unassigned")
+        components[key] = components.get(key, 0.0) + (t.get("pnl") or 0)
+    components = {k: round(v, 2) for k, v in components.items()}
+    sum_components = round(sum(components.values()), 2)
+    delta = round(stats["total_pnl"] - sum_components, 2)
+    tolerance = 0.01
+    stats["reconciliation"] = {
+        "total_pnl": stats["total_pnl"],
+        "sum_components": sum_components,
+        "components": components,
+        "delta": delta,
+        "tolerance": tolerance,
+        "closed_trades": len(closed),
+        "status": ("RECONCILED" if abs(delta) <= tolerance
+                   else "UNRECONCILED"),
+    }
+    return stats
 
 
 @router.get("/history")

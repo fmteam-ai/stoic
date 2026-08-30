@@ -737,19 +737,25 @@ async def user_stress_test_runs(request: Request):
 
 @router.get("/ops/alerts")
 async def list_alerts(request: Request, include_acked: bool = False,
+                      scope: str = "real",
                       limit: int = 100):
     allowed, _ = await _ops_actor(request)
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     db = get_db()
-    q = {} if include_acked else {"acked_at": None}
+    from synthetic_data import alert_scope_filter
+    sf = alert_scope_filter(scope)
+    q = {**sf} if include_acked else {"acked_at": None, **sf}
     out = []
     async for a in db.ops_alerts.find(q).sort("created_at", -1).limit(
             max(1, min(limit, 500))):
         a["id"] = str(a.pop("_id"))
         out.append(a)
-    return {"alerts": out,
-            "unacked": await db.ops_alerts.count_documents({"acked_at": None})}
+    return {"alerts": out, "scope": (scope or "real").lower(),
+            "unacked": await db.ops_alerts.count_documents(
+                {"acked_at": None, **sf}),
+            "synthetic_unacked": await db.ops_alerts.count_documents(
+                {"acked_at": None, "synthetic": True})}
 
 
 @router.post("/ops/alerts/{alert_id}/ack")

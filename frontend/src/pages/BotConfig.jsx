@@ -475,10 +475,11 @@ export default function BotConfig() {
                                 Your risk level, symbols, and drawdown limits are <span className="text-[#FFD700]">not</span> captured.
                             </p>
                             <div>
-                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">PRESET NAME</label>
+                                <label htmlFor="preset-name-input" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">PRESET NAME</label>
                                 <input value={presetForm.name}
                                     onChange={e => setPresetForm({ ...presetForm, name: e.target.value })}
                                     data-testid="preset-name-input"
+                                    id="preset-name-input" name="preset_name"
                                     maxLength={40}
                                     autoFocus
                                     className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
@@ -575,6 +576,7 @@ export default function BotConfig() {
                             <input value={newSym} onChange={e => setNewSym(e.target.value.toUpperCase())}
                                 onKeyDown={e => e.key === "Enter" && addSymbol()}
                                 data-testid="add-symbol-input"
+                                id="add-symbol-input" name="add_symbol" aria-label="Add trading symbol"
                                 list="supported-symbols"
                                 className="flex-1 bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none transition-colors"
                                 placeholder="e.g. EURUSD, ETHUSD" />
@@ -598,10 +600,11 @@ export default function BotConfig() {
                     </div>
                     <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">MAX CONCURRENT TRADES</label>
+                            <label htmlFor="max-concurrent-input" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2">MAX CONCURRENT TRADES</label>
                             <input type="number" min="1" max="10" value={cfg.max_concurrent_trades}
                                 onChange={e => setCfg({ ...cfg, max_concurrent_trades: parseInt(e.target.value) || 1 })}
                                 data-testid="max-concurrent-input"
+                                id="max-concurrent-input" name="max_concurrent_trades"
                                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
                         </div>
                         <div>
@@ -625,6 +628,7 @@ export default function BotConfig() {
                             <input type="number" min="0" step="0.01" value={cfg.max_lot_size ?? 0}
                                 onChange={e => setCfg({ ...cfg, max_lot_size: Math.max(0, parseFloat(e.target.value) || 0) })}
                                 data-testid="max-lot-size-input"
+                                id="max-lot-size-input" name="max_lot_size" aria-label="Max lot size per trade"
                                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none"
                                 placeholder="e.g. 0.10  (0 = pure Kelly)" />
                             <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1.5">
@@ -798,10 +802,11 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     {(cfg.friday_flat_enabled ?? true) && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
                             <div>
-                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ACTION</label>
+                                <label htmlFor="friday-flat-mode" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ACTION</label>
                                 <select value={cfg.friday_flat_mode || "close"}
                                     onChange={(e) => setCfg({ ...cfg, friday_flat_mode: e.target.value })}
                                     data-testid="friday-flat-mode"
+                                    id="friday-flat-mode" name="friday_flat_mode"
                                     className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none">
                                     <option value="close">CLOSE ALL POSITIONS</option>
                                     <option value="tighten">TIGHTEN SL (BE / HALF-RISK)</option>
@@ -830,7 +835,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                         </p>
                         <div className="grid grid-cols-2 gap-3">
                             <div>
-                                <label className="font-mono text-[9px] text-[#52525B] tracking-widest block mb-1">CAP % OF EQUITY (0 = use env default)</label>
+                                <label htmlFor="crypto-risk-pct-per-trade" className="font-mono text-[9px] text-[#52525B] tracking-widest block mb-1">CAP % OF EQUITY (0 = use env default)</label>
                                 <input type="number" step="0.05" min="0" max="5"
                                     value={cfg.crypto_risk_pct_per_trade ?? 0}
                                     onChange={(e) => {
@@ -838,6 +843,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                                         setCfg({ ...cfg, crypto_risk_pct_per_trade: (isNaN(v) || v <= 0) ? null : v });
                                     }}
                                     data-testid="crypto-risk-pct-per-trade"
+                                    id="crypto-risk-pct-per-trade" name="crypto_risk_pct_per_trade"
                                     className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
                             </div>
                         </div>
@@ -870,11 +876,12 @@ function PPToggle({ cfg, setCfg, field, label, icon: Icon, desc, color = "#FFD70
 function PPNumInput({ cfg, setCfg, field, label, suffix, step = 0.1, min = 0, max = 100 }) {
     return (
         <div>
-            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
+            <label htmlFor={`input-${field}`} className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
             <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#FFD700]">
                 <input type="number" step={step} min={min} max={max} value={cfg[field] ?? 0}
                     onChange={e => setCfg({ ...cfg, [field]: parseFloat(e.target.value) || 0 })}
                     data-testid={`input-${field}`}
+                    id={`input-${field}`} name={field}
                     className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />
                 {suffix && <span className="font-mono text-[10px] text-[#52525B] tracking-widest px-2">{suffix}</span>}
             </div>
@@ -1099,6 +1106,7 @@ function TradingIntelligenceSection({ cfg, setCfg }) {
                                     <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{sym} · MAX SPREAD (PIPS)</label>
                                     <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#0099FF]">
                                         <input type="number" step="0.1" min="0" value={spreadMap[sym] ?? ""}
+                                            aria-label={`Max spread for ${sym}`}
                                             onChange={e => setSpread(sym, e.target.value)}
                                             data-testid={`spread-cap-${sym}`}
                                             placeholder="e.g. 5"
@@ -1122,6 +1130,7 @@ function TradingIntelligenceSection({ cfg, setCfg }) {
                                     <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{sym} · MAX SLIPPAGE (PIPS)</label>
                                     <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#FF3B30]">
                                         <input type="number" step="1" min="0" value={(cfg.max_slippage_pips || {})[sym] ?? ""}
+                                            aria-label={`Max slippage pips for ${sym}`}
                                             onChange={e => setCfg({ ...cfg, max_slippage_pips: { ...(cfg.max_slippage_pips || {}), [sym]: parseFloat(e.target.value) || 0 } })}
                                             data-testid={`slippage-cap-${sym}`}
                                             placeholder="e.g. 20"

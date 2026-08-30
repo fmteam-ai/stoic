@@ -107,7 +107,8 @@ async def _guard_section(db) -> dict:
             {"$sort": {"n": -1}}, {"$limit": 5}]):
         reasons.append({"reason": r["_id"], "count": r["n"]})
     stale = await db.ops_alerts.count_documents(
-        {"kind": "ea_heartbeat_stale", "acked_at": None})
+        {"kind": "ea_heartbeat_stale", "acked_at": None,
+         "synthetic": {"$ne": True}})
     if stale or unknown_1h:
         color = "RED"
         detail = "; ".join(filter(None, [
@@ -173,7 +174,8 @@ async def _workers_section(db) -> dict:
             if (st or {}).get("consecutive_failures", 0) >= 3:
                 crashloops += 1
     open_critical = await db.ops_alerts.count_documents(
-        {"acked_at": None, "severity": "critical"})
+        {"acked_at": None, "severity": "critical",
+         "synthetic": {"$ne": True}})
     if (total and alive < total) or crashloops:
         color = "RED"
         detail = f"{total - alive} dead worker(s), {crashloops} crashloop(s)"
@@ -203,8 +205,9 @@ async def status(db) -> dict:
                 "canary": await _canary_section(db),
                 "workers": await _workers_section(db)}
     alerts = [a async for a in db.ops_alerts.find(
-        {}, {"_id": 0, "kind": 1, "severity": 1, "message": 1,
-             "created_at": 1, "acked_at": 1, "occurrences": 1})
+        {"synthetic": {"$ne": True}},
+        {"_id": 0, "kind": 1, "severity": 1, "message": 1,
+         "created_at": 1, "acked_at": 1, "occurrences": 1})
         .sort("created_at", -1).limit(10)]
     emails = [e async for e in db.guard_alert_emails.find(
         {}, {"_id": 1, "subject": 1, "last_sent_at": 1, "sends": 1,

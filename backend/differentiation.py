@@ -1,8 +1,10 @@
 """Phase 8/9 — commercial differentiation utilities.
 
-  perf_attestation()   HMAC-SHA256 signed attestation of a canonical
-                       performance payload (verifiable by anyone with the
-                       /performance/verify endpoint — tamper-evident).
+  perf_attestation()   Ed25519-signed attestation (review P1-4) of a
+                       canonical performance payload — independently
+                       verifiable by ANYONE with the published public key,
+                       unlike the legacy HMAC scheme which only the server
+                       could check. Legacy HMAC attestations still verify.
   certify()            broker certification tier from live execution scores.
   feature_evidence()   Phase 9 evidence board: every major feature is
                        measured from REAL data and classified
@@ -14,7 +16,8 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-KEY_ID = "perf-hmac-v1"
+LEGACY_KEY_ID = "perf-hmac-v1"
+KEY_ID = "perf-ed25519-v1"
 
 
 def _signing_key() -> bytes:
@@ -29,14 +32,23 @@ def canonical_hash(payload: dict) -> str:
 
 
 def perf_attestation(payload: dict) -> dict:
+    from release_signing import public_key_b64, sign_hex
     h = canonical_hash(payload)
-    sig = hmac.new(_signing_key(), h.encode(), hashlib.sha256).hexdigest()
+    sig = sign_hex(h.encode())
     return {"payload_hash": h, "signature": sig, "key_id": KEY_ID,
-            "algo": "HMAC-SHA256(canonical-JSON)",
+            "algo": "Ed25519(sha256-canonical-JSON)",
+            "public_key_b64": public_key_b64(),
+            "verify_hint": "Ed25519.verify(public_key_b64, "
+                           "signature_hex, payload_hash_bytes) — "
+                           "no server trust required",
             "signed_at": datetime.now(timezone.utc).isoformat()}
 
 
 def verify_attestation(payload_hash: str, signature: str) -> bool:
+    from release_signing import verify_hex
+    if verify_hex(payload_hash.encode(), signature):
+        return True
+    # legacy HMAC attestations issued before the Ed25519 migration
     want = hmac.new(_signing_key(), payload_hash.encode(),
                     hashlib.sha256).hexdigest()
     return hmac.compare_digest(want, signature)

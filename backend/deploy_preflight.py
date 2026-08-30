@@ -115,14 +115,15 @@ def run_preflight() -> dict:
         s_status, s_cur = "fail", ("local (RELEASE_SIGNER_ALLOW_LOCAL_IN_"
                                    "PROD is no longer supported)")
     else:
-        s_status, s_cur = "warn", "local (KMS/HSM required to sign in prod)"
+        # review P1-9: local signing in production is a FAIL, not a warning
+        s_status, s_cur = "fail", "local (KMS/HSM required to sign in prod)"
     checks.append(_check(
         "release_signer", "RELEASE_SIGNER", s_status, s_cur,
         "external (KMS/HSM) — local signing is never permitted in "
         "production",
-        "Does NOT block boot — but local signing in production errors at "
-        "signing time (audit anchors, release manifests) until an external "
-        "KMS signer is configured. The local override was removed in v56."))
+        "BLOCKS production boot (review P1-9): the API refuses to start "
+        "with RELEASE_SIGNER=local when APP_ENV=production. Configure "
+        "RELEASE_SIGNER=external with RELEASE_SIGNER_URL/TOKEN."))
 
     workers = env.get("BACKGROUND_WORKERS_IN_PROCESS")
     checks.append(_check(

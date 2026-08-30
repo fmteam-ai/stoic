@@ -1759,6 +1759,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         if any(r["effective_state"] == "PANIC" for r in bot_rows):
             hard_caps.append({"cap": 25, "code": "panic_tripped",
                               "label": "Panic switch is tripped"})
+        # synthetic/QA alerts never cap a real health score (review P1-7)
         blocked = [r for r in bot_rows
                    if r["effective_state"] in ("BLOCKED", "DISCONNECTED")]
         if blocked:
@@ -1785,7 +1786,8 @@ async def bot_health_score(user=Depends(get_current_user)):
                     "label": f"{unk} execution(s) UNKNOWN — broker "
                              "reconciliation pending"})
             crit = await db.ops_alerts.count_documents(
-                {"acked_at": None, "severity": "critical"})
+                {"acked_at": None, "severity": "critical",
+                 "synthetic": {"$ne": True}})
             if crit:
                 hard_caps.append({
                     "cap": 45, "code": "critical_alerts_open",
