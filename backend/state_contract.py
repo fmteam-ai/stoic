@@ -85,9 +85,11 @@ def account_truth(acc: dict, open_local: int) -> dict:
     elif not acc.get("verified_identity"):
         authority = "REDUCED"
         authority_reason = ("broker identity not verified — the EA "
-                            "heartbeat has no paired installation; pair "
-                            "this terminal from Setup → EA pairing to "
-                            "restore full authority")
+                            "heartbeat has no paired installation; open "
+                            "Accounts → this account → Quick Install, "
+                            "generate a pairing token, run the PowerShell "
+                            "one-liner on the MT5 host, then reattach the "
+                            "EA to restore full authority")
     else:
         authority, authority_reason = "FULL", None
     return {"ea_connected": ea_connected,
