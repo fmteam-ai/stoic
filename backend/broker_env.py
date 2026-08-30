@@ -17,6 +17,10 @@ def broker_environment(account: dict) -> str:
         return explicit
     if account.get("mode") == "paper":
         return "PAPER"
+    # audit v4 P0-2 — the account's own declared type wins over server-name
+    # heuristics; a record showing TYPE · DEMO must never classify as LIVE.
+    if str(account.get("account_type") or "").lower() == "demo":
+        return "DEMO"
     server = str(account.get("broker_server") or account.get("server")
                  or "").lower()
     if any(t in server for t in _DEMO_TOKENS):

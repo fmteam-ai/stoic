@@ -444,9 +444,14 @@ async def run_drills(db) -> dict:
         await _drill_token_expiry(db),
         _drill_unauthorized_admin_access(),
     ]
-    passed = sum(1 for r in results if r["passed"])
+    # audit v4 P0-5 — a drill whose required assertions were skipped is
+    # PARTIAL evidence, never a full pass.
+    passed = sum(1 for r in results
+                 if r["passed"] and not r.get("skipped_assertions"))
+    partial = sum(1 for r in results
+                  if r["passed"] and r.get("skipped_assertions"))
     doc = {"at": datetime.now(timezone.utc), "results": results,
-           "passed": passed, "total": len(results)}
+           "passed": passed, "partial": partial, "total": len(results)}
     await db.chaos_drills.insert_one(dict(doc))
     doc["at"] = doc["at"].isoformat()
     doc.pop("_id", None)

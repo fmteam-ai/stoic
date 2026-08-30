@@ -141,6 +141,11 @@ async def recovery_status(db, user_id: str) -> dict:
         reason = (f"{GREEN_HOURS}h green period complete "
                   f"({len(samples)} healthy samples) — explicit "
                   f"step-up-approved promotion required")
+    elif not samples:
+        # audit v4 P1-4 — never present a ratio with a zero denominator
+        reason = ("INSUFFICIENT_DATA — no health samples recorded in the "
+                  f"last {GREEN_HOURS}h; recovery cannot be evaluated "
+                  f"(need ≥{MIN_GREEN_SAMPLES} healthy samples)")
     else:
         reason = (f"stable green period required: {len(unhealthy)} "
                   f"unhealthy of {len(samples)} samples in the last "

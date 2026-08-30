@@ -272,10 +272,13 @@ async def release_safety(request: Request):
     scored = [c["score"] for c in comps.values() if c["score"] is not None]
     chaos = await db.chaos_drills.find_one({}, sort=[("at", -1)])
     if chaos:
+        _partial = chaos.get("partial") or 0
         comps["chaos_drills"] = {
             "score": round(chaos["passed"] / max(1, chaos["total"]) * 100),
             "detail": f"{chaos['passed']}/{chaos['total']} failure drills "
-                      f"passed"}
+                      f"passed"
+                      + (f" · {_partial} PARTIAL (skipped assertions "
+                         "are not passes)" if _partial else "")}
         scored.append(comps["chaos_drills"]["score"])
     else:
         comps["chaos_drills"] = {
@@ -330,6 +333,7 @@ async def soak_report(request: Request, days: int = 14):
             "reconciliation_backlog": recon_backlog,
             "suppressed_failures": swallow_counters(),
             "last_chaos": {"passed": chaos.get("passed"),
+                           "partial": chaos.get("partial") or 0,
                            "total": chaos.get("total")},
             "note": ("Samples every ~10min (SOAK_SAMPLE_INTERVAL_SEC); "
                      "TTL 45 days. Run the soak for 14-30 days and watch "
@@ -357,7 +361,9 @@ async def chaos_latest(request: Request):
         return {"results": [], "passed": 0, "total": 0, "at": None}
     at = doc.get("at")
     return {"results": doc.get("results") or [],
-            "passed": doc.get("passed"), "total": doc.get("total"),
+            "passed": doc.get("passed"),
+            "partial": doc.get("partial") or 0,
+            "total": doc.get("total"),
             "at": at.isoformat() if hasattr(at, "isoformat") else at}
 
 
@@ -752,8 +758,12 @@ async def list_alerts(request: Request, include_acked: bool = False,
         a["id"] = str(a.pop("_id"))
         out.append(a)
     return {"alerts": out, "scope": (scope or "real").lower(),
+            "as_of": datetime.now(timezone.utc).isoformat(),
             "unacked": await db.ops_alerts.count_documents(
                 {"acked_at": None, **sf}),
+            "unacked_critical": await db.ops_alerts.count_documents(
+                {"acked_at": None, "severity": "critical",
+                 "synthetic": {"$ne": True}}),
             "synthetic_unacked": await db.ops_alerts.count_documents(
                 {"acked_at": None, "synthetic": True})}
 

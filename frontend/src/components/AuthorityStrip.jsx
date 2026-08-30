@@ -8,6 +8,9 @@ const TONE = {
     PAUSED: "text-[#FF8C00] border-[#FF8C00]/50",
     EMERGENCY: "text-[#FF3B30] border-[#FF3B30]/50",
     LOCKED: "text-[#FF3B30] border-[#FF3B30]/50",
+    STALE: "text-[#FF3B30] border-[#FF3B30]/50",
+    UNKNOWN: "text-[#FF3B30] border-[#FF3B30]/50",
+    CONFLICTED: "text-[#FF3B30] border-[#FF3B30]/50",
 };
 
 const Pill = ({ name, level, testid }) => (

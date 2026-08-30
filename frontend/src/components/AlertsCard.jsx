@@ -10,6 +10,7 @@ const SEV_STYLE = {
 
 export const AlertsCard = () => {
     const [alerts, setAlerts] = useState(null);
+    const [meta, setMeta] = useState({});
     const [hidden, setHidden] = useState(false);
     const [busy, setBusy] = useState(false);
 
@@ -17,6 +18,7 @@ export const AlertsCard = () => {
         try {
             const { data } = await api.get("/ops/alerts");
             setAlerts(data.alerts || []);
+            setMeta({ unacked: data.unacked, unacked_critical: data.unacked_critical, as_of: data.as_of });
         } catch {
             setHidden(true);
         }
@@ -51,8 +53,9 @@ export const AlertsCard = () => {
                     <Siren className={`w-4 h-4 ${alerts.length === 0 ? "text-[#00FF41]" : hasCritical ? "text-[#FF3B30]" : "text-[#FFD700]"}`} />
                     <span className="font-display font-bold text-sm text-white">Ops Alerts</span>
                     <span className="font-mono text-[10px] tracking-widest px-2 py-0.5 border border-[#1F1F1F] text-[#A1A1AA]"
-                        data-testid="ops-alerts-count">
-                        {alerts.length} UNACKED
+                        data-testid="ops-alerts-count"
+                        title={meta.as_of ? `single snapshot as of ${meta.as_of} — synthetic/test alerts excluded` : undefined}>
+                        {meta.unacked ?? alerts.length} UNACKED{meta.unacked_critical ? ` · ${meta.unacked_critical} CRITICAL` : ""}
                     </span>
                 </div>
                 {alerts.length > 0 && (

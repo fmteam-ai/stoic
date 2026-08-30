@@ -34,8 +34,17 @@ async def get_broker_breakdown(db, user_id: str) -> dict:
     """
     cursor = db.accounts.find({"user_id": user_id, "mode": {"$ne": "paper"}})
     accs = await cursor.to_list(length=200)
+    # audit v4 P0-2 — broker caps count LIVE-environment accounts only;
+    # demo/paper/test records never consume live slots.
+    from broker_env import broker_environment
+    env_counts: dict[str, int] = {}
     counts: dict[str, dict] = {}
     for a in accs:
+        env_counts[broker_environment(a)] = \
+            env_counts.get(broker_environment(a), 0) + 1
+    for a in accs:
+        if broker_environment(a) != "LIVE":
+            continue
         broker = (a.get("broker") or "").strip()
         if not broker or broker == PAPER_BROKER_TAG:
             continue
@@ -57,6 +66,7 @@ async def get_broker_breakdown(db, user_id: str) -> dict:
         "brokers_used": len(counts),
         "breakdown": breakdown,
         "total_live_accounts": sum(v["count"] for v in counts.values()),
+        "environment_counts": env_counts,
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 

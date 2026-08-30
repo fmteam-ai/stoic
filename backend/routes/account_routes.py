@@ -47,6 +47,10 @@ def _iso_days_ago(days: int) -> str:
 
 def _serialize(doc: dict) -> dict:
     doc["id"] = str(doc.pop("_id"))
+    # audit v4 P0-2 — server-owned environment classification, separate
+    # from connection state and telemetry freshness.
+    from broker_env import broker_environment
+    doc["environment"] = broker_environment(doc)
     creds = doc.pop("creds", {}) or {}
     doc["has_investor_password"] = bool(creds.get("investor"))
     doc["has_master_password"] = bool(creds.get("master"))

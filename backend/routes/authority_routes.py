@@ -13,28 +13,35 @@ router = APIRouter(prefix="/authority", tags=["authority"])
 async def authority_ep(user=Depends(get_current_user)):
     db = get_db()
     out = await compute_authority(db)
-    # review P0-4 — position truth must NEVER read FULL while the caller's
-    # own enabled accounts carry STALE/UNKNOWN/CONFLICTED positions.
+    # audit v4 P0-1 — the ribbon must derive from the SAME canonical
+    # readiness object as every other surface: position truth can never
+    # read FULL while readiness reports stale truth or pending
+    # reconciliation for the caller's accounts.
     try:
-        from state_contract import contract as state_contract
+        from state_contract import contract as _contract
         from trading_authority import worst as worst_level
-        sc = await state_contract(db, user["id"])
-        rows = [r for r in sc["accounts"] if r.get("account_enabled")]
-        bad = [r for r in rows if r["position_truth"] != "FRESH"]
-        if bad:
-            worst_truth = max((r["position_truth"] for r in bad),
-                              key=lambda t: {"STALE": 1, "UNKNOWN": 2,
-                                             "CONFLICTED": 3}.get(t, 1))
-            reason = (f"{len(bad)} enabled account(s) with {worst_truth} "
-                      "position truth — broker count is not authoritative")
+        from trading_readiness import readiness as _readiness
+        sc = await _contract(db, user["id"])
+        rd = await _readiness(db, user["id"])
+        codes = {r["code"]: r for r in rd.get("reasons", [])}
+        # canonical worst-of truth — the SAME object the OPEN widget shows
+        truth = sc.get("position_truth") or "UNKNOWN"
+        pending = codes.get("RECONCILIATION_PENDING")
+        if truth != "FRESH" or pending:
+            level = truth if truth != "FRESH" else "STALE"
+            reason = (pending["message"] if pending and truth == "FRESH"
+                      else f"canonical position truth is {level} — broker "
+                           "count cannot be confirmed"
+                      + (f"; {pending['message']}" if pending else ""))
             domains = out.setdefault("domains", {})
             domains["position_truth"] = {
-                "level": worst_truth, "enforce_level": "CLOSE_ONLY",
+                "level": level, "enforce_level": "CLOSE_ONLY",
                 "reason": reason}
             out["level"] = worst_level(
                 out.get("level") or "FULL", "CLOSE_ONLY")
             out["restricted"] = True
             out.setdefault("reasons", []).append(reason)
+        out["readiness_level"] = rd.get("level")
     except Exception:  # noqa: BLE001 — display fallback, never 500 the strip
         pass
     return out

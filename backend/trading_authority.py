@@ -50,6 +50,12 @@ async def platform_domain(db) -> dict:
 async def account_domain(db, account: dict | None) -> dict:
     if not account:
         return {"level": "FULL", "reason": "no account context"}
+    # audit v4 P0-2/P0-3 — an EA terminal identity mismatch quarantines the
+    # account: no open authority until it is explicitly re-paired.
+    if account.get("broker_account_mismatch"):
+        return {"level": "LOCKED",
+                "reason": "EA terminal identity mismatch — account "
+                          "quarantined until re-paired"}
     lvl = account.get("trading_authority")
     if lvl in LEVELS and lvl != "FULL":
         return {"level": lvl, "reason": "account-level restriction"}

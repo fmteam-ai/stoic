@@ -179,11 +179,12 @@ async def ops_console(user=Depends(get_current_user)):
     # ── Risk alerts ─────────────────────────────────────────────────────
     sev_counts = {}
     async for row in db.ops_alerts.aggregate(
-            [{"$match": {"acked_at": None}},
+            [{"$match": {"acked_at": None, "synthetic": {"$ne": True}}},
              {"$group": {"_id": "$severity", "n": {"$sum": 1}}}]):
         sev_counts[str(row["_id"])] = row["n"]
     latest_alerts = []
-    async for a in (db.ops_alerts.find({"acked_at": None})
+    async for a in (db.ops_alerts.find(
+            {"acked_at": None, "synthetic": {"$ne": True}})
                     .sort("last_seen_at", -1).limit(8)):
         latest_alerts.append({"kind": a.get("kind"),
                               "severity": a.get("severity"),

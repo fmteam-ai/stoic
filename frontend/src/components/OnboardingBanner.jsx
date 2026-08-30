@@ -12,7 +12,7 @@ async function computeSteps() {
     const [{ data: accs }, { data: cfgs }, { data: trades }] = await Promise.all([
         api.get("/accounts"),
         api.get("/bot/configs"),
-        api.get("/trades?status=open&limit=1"),
+        api.get("/trades?limit=1"),
     ]);
     const liveAccounts = (accs || []).filter(a => (a.mode || "live") !== "paper");
     const hasAccount = liveAccounts.length > 0;

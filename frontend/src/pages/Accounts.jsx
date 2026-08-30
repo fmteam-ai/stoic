@@ -528,6 +528,17 @@ export default function Accounts() {
                                                     }`}>
                                                     {a.trading_enabled === false ? "⏻ TRADING OFF" : "⏻ TRADING ON"}
                                                 </button>
+                                                {a.trading_enabled !== false && (() => {
+                                                    const c = certMap[a.id];
+                                                    if (!c || c.passed >= c.total) return null;
+                                                    return (
+                                                        <span data-testid={`cert-blocked-badge-${a.account_number}`}
+                                                            title="Requested ON is not authority — every go-live certification check must pass before this account can open trades"
+                                                            className="font-mono text-[10px] tracking-widest px-2 py-0.5 border border-[#FF3B30]/40 text-[#FF3B30] bg-[#FF3B30]/10">
+                                                            REQUESTED ON · CERTIFICATION BLOCKED ({c.passed}/{c.total})
+                                                        </span>
+                                                    );
+                                                })()}
                                                 <button onClick={() => editGroup(a)}
                                                     data-testid={`group-badge-${a.account_number}`}
                                                     title="Group accounts for portfolio organisation (click to edit)"
@@ -540,7 +551,16 @@ export default function Accounts() {
                                                 </button>
                                             </div>
                                             <div className="font-mono text-xs text-[#A1A1AA]">{a.broker} · {a.server} · #{a.account_number}</div>
-                                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">TYPE · {a.account_type?.toUpperCase()} · {a.base_currency}</div>
+                                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest flex items-center gap-2 flex-wrap">
+                                                <span>TYPE · {a.account_type?.toUpperCase()} · {a.base_currency}</span>
+                                                {a.environment && (
+                                                    <span data-testid={`account-environment-${a.account_number}`}
+                                                        title="Server-owned capital environment — separate from connection state and telemetry freshness"
+                                                        className={`px-1.5 py-0.5 border ${a.environment === "LIVE" ? "border-[#FF3B30]/40 text-[#FF3B30]" : a.environment === "DEMO" ? "border-[#FFB000]/40 text-[#FFB000]" : "border-[#00BFFF]/40 text-[#00BFFF]"}`}>
+                                                        ENVIRONMENT · {a.environment}
+                                                    </span>
+                                                )}
+                                            </div>
                                             {a.broker_account_id_reported && (
                                                 <div className="font-mono text-[10px] tracking-widest flex items-center gap-1.5 mt-1"
                                                     data-testid={`ea-reading-${a.account_number}`}>
@@ -587,7 +607,7 @@ export default function Accounts() {
                                                             data-testid={`balance-age-${a.account_number}`}>
                                                             <span className={`w-1.5 h-1.5 rounded-full ${fresh ? "bg-[#00FF41] pulse-dot" : "bg-[#52525B]"}`} />
                                                             <span className={fresh ? "text-[#00FF41]" : "text-[#52525B]"}>
-                                                                {age ? `LIVE · UPDATED ${age} AGO` : "NO HEARTBEAT YET"}
+                                                                {age ? `TELEMETRY · ${fresh ? "FRESH" : "STALE"} · ${age} AGO` : "TELEMETRY · NO HEARTBEAT YET"}
                                                             </span>
                                                         </div>
                                                     );

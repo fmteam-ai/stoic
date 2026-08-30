@@ -45,8 +45,11 @@ export function ChaosDrillsCard() {
                 <>
                     <div className="font-mono text-xs mb-2" data-testid="chaos-score">
                         <span className={d.passed === d.total ? "text-[#00FF41]" : "text-[#FFD700]"}>
-                            {d.passed}/{d.total} PASSED
+                            {d.passed}/{d.total} PASSED{d.partial ? ` · ${d.partial} PARTIAL` : ""}
                         </span>
+                        {d.partial ? (
+                            <span className="text-[#FFB000]" title="A drill with skipped assertions is partial evidence, never a full pass"> (skipped assertions are not passes)</span>
+                        ) : null}
                         <span className="text-[#52525B]"> · {String(d.at).slice(0, 16).replace("T", " ")} UTC</span>
                     </div>
                     {d.results.map((r) => (
