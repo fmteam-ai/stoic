@@ -47,34 +47,39 @@ import VerifyEmail from "@/pages/VerifyEmail";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 
+const lazyImport = (imp) => lazy(() =>
+    // review P0-7 — one automatic retry for a failed lazy chunk (transient
+    // network / rate-limit) before the RouteErrorBoundary takes over.
+    imp().catch(() => new Promise((r) => setTimeout(r, 1500)).then(imp)));
+
 // Route-level code splitting — heavy/rarely-visited surfaces load on demand
-const Research = lazy(() => import("@/pages/Research"));
-const Analytics = lazy(() => import("@/pages/Analytics"));
-const Infrastructure = lazy(() => import("@/pages/Infrastructure"));
-const Billing = lazy(() => import("@/pages/Billing"));
-const EnterpriseApi = lazy(() => import("@/pages/EnterpriseApi"));
-const PammGuide = lazy(() => import("@/pages/PammGuide"));
-const Tutorials = lazy(() => import("@/pages/Tutorials"));
-const PublicPerformance = lazy(() => import("@/pages/PublicPerformance"));
-const PublicJournal = lazy(() => import("@/pages/PublicJournal"));
-const AdminUsers = lazy(() => import("@/pages/AdminUsers"));
-const AdminAffiliates = lazy(() => import("@/pages/AdminAffiliates"));
-const AdminMigration = lazy(() => import("@/pages/AdminMigration"));
-const AdminSupport = lazy(() => import("@/pages/AdminSupport"));
-const AdminOps = lazy(() => import("@/pages/AdminOps"));
-const CommandCenter = lazy(() => import("@/pages/CommandCenter"));
-const CertificationCenter = lazy(() => import("@/pages/CertificationCenter"));
-const PublicCertificate = lazy(() => import("@/pages/PublicCertificate"));
-const Connect = lazy(() => import("@/pages/Connect"));
-const AdminBrokers = lazy(() => import("@/pages/AdminBrokers"));
-const AdminRunbooks = lazy(() => import("@/pages/AdminRunbooks"));
-const DeployPreflight = lazy(() => import("@/pages/DeployPreflight"));
-const ManagedStrategy = lazy(() => import("@/pages/ManagedStrategy"));
-const ComingSoon = lazy(() => import("@/pages/ComingSoon"));
-const HelpCenter = lazy(() => import("@/pages/HelpCenter"));
-const Support = lazy(() => import("@/pages/Support"));
-const StatusPage = lazy(() => import("@/pages/StatusPage"));
-const Legal = lazy(() => import("@/pages/Legal"));
+const Research = lazyImport(() => import("@/pages/Research"));
+const Analytics = lazyImport(() => import("@/pages/Analytics"));
+const Infrastructure = lazyImport(() => import("@/pages/Infrastructure"));
+const Billing = lazyImport(() => import("@/pages/Billing"));
+const EnterpriseApi = lazyImport(() => import("@/pages/EnterpriseApi"));
+const PammGuide = lazyImport(() => import("@/pages/PammGuide"));
+const Tutorials = lazyImport(() => import("@/pages/Tutorials"));
+const PublicPerformance = lazyImport(() => import("@/pages/PublicPerformance"));
+const PublicJournal = lazyImport(() => import("@/pages/PublicJournal"));
+const AdminUsers = lazyImport(() => import("@/pages/AdminUsers"));
+const AdminAffiliates = lazyImport(() => import("@/pages/AdminAffiliates"));
+const AdminMigration = lazyImport(() => import("@/pages/AdminMigration"));
+const AdminSupport = lazyImport(() => import("@/pages/AdminSupport"));
+const AdminOps = lazyImport(() => import("@/pages/AdminOps"));
+const CommandCenter = lazyImport(() => import("@/pages/CommandCenter"));
+const CertificationCenter = lazyImport(() => import("@/pages/CertificationCenter"));
+const PublicCertificate = lazyImport(() => import("@/pages/PublicCertificate"));
+const Connect = lazyImport(() => import("@/pages/Connect"));
+const AdminBrokers = lazyImport(() => import("@/pages/AdminBrokers"));
+const AdminRunbooks = lazyImport(() => import("@/pages/AdminRunbooks"));
+const DeployPreflight = lazyImport(() => import("@/pages/DeployPreflight"));
+const ManagedStrategy = lazyImport(() => import("@/pages/ManagedStrategy"));
+const ComingSoon = lazyImport(() => import("@/pages/ComingSoon"));
+const HelpCenter = lazyImport(() => import("@/pages/HelpCenter"));
+const Support = lazyImport(() => import("@/pages/Support"));
+const StatusPage = lazyImport(() => import("@/pages/StatusPage"));
+const Legal = lazyImport(() => import("@/pages/Legal"));
 
 const RouteFallback = () => (
     <div className="min-h-screen bg-[#050505] flex items-center justify-center"

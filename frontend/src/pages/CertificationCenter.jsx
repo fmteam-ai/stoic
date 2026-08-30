@@ -145,12 +145,26 @@ export default function CertificationCenter() {
                                     </div>
                                 </div>
                             </div>
-                            <button onClick={issue} disabled={issuing} data-testid="cert-issue-btn"
-                                className="px-4 py-2 text-xs font-mono tracking-widest border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 flex items-center gap-1.5">
+                            <button onClick={issue}
+                                disabled={issuing || !data.issuable}
+                                data-testid="cert-issue-btn"
+                                title={data.issuable
+                                    ? "Issue a public, hash-chained certificate for this account"
+                                    : `Blocked — mandatory pillars unscored: ${(data.missing_mandatory || []).join(", ") || "insufficient evidence"}`}
+                                className="px-4 py-2 text-xs font-mono tracking-widest border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
                                 {issuing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BadgeCheck className="w-3.5 h-3.5" />}
                                 ISSUE PUBLIC CERTIFICATE
                             </button>
                         </div>
+
+                        {data.certification_note && (
+                            <div className="border border-[#FFD700]/40 bg-[#FFD700]/5 p-3 mb-4 text-xs font-mono text-[#FFD700]"
+                                data-testid="cert-not-live-banner">
+                                {data.certification_note}
+                                {(data.missing_mandatory || []).length > 0 &&
+                                    ` · unscored mandatory pillars: ${data.missing_mandatory.join(", ")}`}
+                            </div>
+                        )}
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6"
                             data-testid="cert-pillar-grid">

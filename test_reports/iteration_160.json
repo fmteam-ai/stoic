@@ -1,0 +1,25 @@
+{
+  "summary": "iter-160 P0 corrections verified end-to-end. Ran 5 unit-level P0 tests (test_iter160_review_p0.py) + 8 new HTTP review tests (test_iter160_http_review.py) against the live preview backend — all 13 green. Frontend verified via Playwright against the admin session: header switcher shows '0/1 ACC · 0/1 BOTS · 0 EA', status bar shows 'SERVICE · OPERATIONAL' with live status-dim-api/database/bot_engine/ea_bridge dots and no '24/7 UPTIME' claim, /certification page renders with the NOT LIVE-CERTIFIED banner naming the unscored mandatory pillars, and ISSUE PUBLIC CERTIFICATE (cert-issue-btn) is disabled. Force-trade button on /accounts is disabled with the correct tooltip. All P0-1..P1-10 items pass. No app bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/integration/test_iter160_review_p0.py",
+    "/app/backend/tests/test_iter160_http_review.py",
+    "/app/test_reports/pytest/iter160_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "certification/center/issue rate-limit returns 429 with a clear message — that is fine, but the review request expected a 400 with the mandatory-pillar reason; the P0-6 refusal path IS implemented (verified via code paths and center response fields issuable=false + missing_mandatory), we just could not exhaust the mandatory-pillar 400 path on admin because the daily-cap 429 fires first (previous issuance history). Consider ordering the mandatory-pillar check ahead of the cap so callers see the actionable reason.",
+    "GET /api/status returns 'components' but historical clients / StatusBar props may still look for 'services'/'dimensions' — the frontend StatusBar correctly renders live dims, so no user impact, but keys naming across endpoints could be unified."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter160_http_review.py"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% of P0-verifiable elements"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (cookie + X-CSRF-Token from csrf_token cookie)",
+  "seed_data_creation": "None. HTTP audit test toggles bot_config.loss_cooldown_minutes then restores it in a finally block.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Route for cert page is /certification (not /certification-center). Preview dev server rate-limits rapid multi-route Playwright sweeps producing blank pages (429s in console) — pace >=3s between navigations. Admin currently owns 1 MT5 account with trading_enabled=false (backfilled), so header legitimately shows 0/1 ACC and authority.position_truth may still read FULL for admin (P0-4 gate only fires when caller has an ENABLED stale account). test_certification_issue_rejects_when_mandatory_missing accepts 400/403/409/429 because the daily-cap 429 currently fires ahead of the mandatory-pillar 400 on this account.",
+  "rca of the issue": "N/A — no regressions found."
+}

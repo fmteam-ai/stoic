@@ -89,16 +89,24 @@ async def _transactions_supported(db) -> bool:
 
 async def _apply(db, user_id, account_id, update, label, source,
                  audit_detail, now, session=None) -> str | None:
+    prev = await db.bot_configs.find_one(_cfg_filter(user_id, account_id),
+                                         session=session) or {}
     await db.bot_configs.update_one(_cfg_filter(user_id, account_id),
                                     {"$set": update}, session=session)
     cfg = await db.bot_configs.find_one(_cfg_filter(user_id, account_id),
                                         session=session)
     vid = await record_version(db, cfg, label=label, source=source,
                                session=session)
+    # review P1-8 — audit only GENUINELY changed fields, with before/after,
+    # and always carry the authenticated actor.
+    changed = {k: {"from": prev.get(k), "to": v}
+               for k, v in update.items() if prev.get(k) != v}
     await db.audit_log.insert_one({
-        "user_id": user_id, "action": "config_change_applied",
+        "user_id": user_id, "actor": user_id,
+        "action": "config_change_applied",
         "detail": {"account_id": account_id,
-                   "fields": sorted(update.keys()), "version_id": vid,
+                   "fields": sorted(changed.keys()),
+                   "changed": changed, "version_id": vid,
                    **(audit_detail or {})},
         "step_up_verified": False, "at": (now.isoformat()
                                           if hasattr(now, "isoformat")

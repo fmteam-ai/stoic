@@ -94,14 +94,21 @@ async def _digital_twin(db, user_id: str, acct_id: str) -> dict:
                        "no closed auto-trades to replay in the twin yet",
                        {"accounts_covered": 0})
     replayed = int((s.get("totals") or {}).get("intercepts_replayed") or 0)
-    score = 100.0 if mine else 75.0
-    return _pillar("digital_twin", score,
+    # review P0-6 — an account NOT covered by the twin cannot receive a
+    # positive twin score; it stays unscored.
+    if not mine:
+        return _pillar("digital_twin", None,
+                       f"twin replaying {covered} other account(s) — THIS "
+                       "account is not yet covered, so it cannot be scored",
+                       {"accounts_covered": covered,
+                        "intercepts_replayed": replayed,
+                        "this_account": False})
+    return _pillar("digital_twin", 100.0,
                    f"twin replaying {covered} account(s), "
-                   f"{replayed} intercepts replayed"
-                   + ("" if mine else " (this account not yet covered)"),
+                   f"{replayed} intercepts replayed",
                    {"accounts_covered": covered,
                     "intercepts_replayed": replayed,
-                    "this_account": bool(mine)})
+                    "this_account": True})
 
 
 _DECAY_SCORE = {"HEALTHY": 100.0, "WATCH": 85.0, "DEGRADED": 60.0,
@@ -129,30 +136,52 @@ async def _broker_intel(db, account: dict) -> dict:
     from broker_intel import score_account
     s = await score_account(db, account)
     score = s.get("score")
-    if score is None:
+    # review P1-3 — a provisional broker score (fewer than the minimum
+    # measured fills / component coverage) must stay UNSCORED here.
+    if score is None or s.get("provisional"):
         return _pillar("broker_intel", None,
-                       "not enough execution telemetry for a broker score",
-                       s)
+                       "not enough execution telemetry for a broker score "
+                       "(minimum measured-fill sample not met)",
+                       {k: v for k, v in s.items() if k != "components"})
     return _pillar("broker_intel", float(score),
                    f"broker execution score {score}/100 from live "
                    "spread/slippage/fill telemetry",
                    {k: v for k, v in s.items() if k != "components"})
 
 
+MANDATORY_PILLARS = ("risk_truth", "position_truth")
+
+
 def grade(pillars: list) -> dict:
+    """Review P0-6 — unscored pillars stay IN the denominator (count as 0)
+    and the mandatory truth pillars are hard gates for any live tier or
+    public certificate."""
+    total = len(pillars) or 1
     scored = [p["score"] for p in pillars if p["score"] is not None]
     coverage = len(scored)
-    overall = round(sum(scored) / coverage, 1) if scored else None
+    overall = round(sum(scored) / total, 1) if scored else None
+    missing_mandatory = sorted(
+        p["pillar"] for p in pillars
+        if p["pillar"] in MANDATORY_PILLARS and p["score"] is None)
     if overall is None:
         tier = "UNCERTIFIED"
-    elif overall >= 85 and coverage >= 5:
+    elif missing_mandatory:
+        tier = "PROVISIONAL"
+    elif overall >= 85 and coverage == total:
         tier = "CERTIFIED_A"
-    elif overall >= 70 and coverage >= 4:
+    elif overall >= 70 and coverage >= total - 1:
         tier = "CERTIFIED_B"
     else:
         tier = "PROVISIONAL"
+    live_certified = tier in ("CERTIFIED_A", "CERTIFIED_B")
     return {"overall_score": overall, "pillars_scored": coverage,
-            "pillars_total": len(pillars), "tier": tier}
+            "pillars_total": len(pillars), "tier": tier,
+            "live_certified": live_certified,
+            "missing_mandatory": missing_mandatory,
+            "issuable": not missing_mandatory and overall is not None,
+            "certification_note": None if live_certified else
+                "NOT LIVE-CERTIFIED — provisional evidence only; this is "
+                "not a safety or performance verification"}
 
 
 async def pillar_scores(db, user_id: str, account: dict) -> dict:
@@ -186,6 +215,16 @@ async def issue_public(db, user: dict, account: dict) -> dict:
     from modules.pamm.strategy_guard import GIT_COMMIT, GUARD_VERSION
     from soak_campaign import evidence_hash
     acct_id = str(account["_id"])
+    scores = await pillar_scores(db, user["id"], account)
+    # review P0-6 — mandatory truth pillars are hard issuance gates,
+    # checked FIRST so callers always see the actionable reason.
+    if not scores.get("issuable"):
+        missing = ", ".join(scores.get("missing_mandatory") or []) or \
+            "no scored pillars"
+        raise ValueError(
+            "public certificate blocked — mandatory pillars unscored: "
+            f"{missing}. Risk Truth and Position Truth must carry current "
+            "evidence before a certificate can be issued.")
     # issuance cap — public certs are append-only records, keep them scarce
     day_ago = (_now_dt() - timedelta(days=1)).isoformat()
     cap = int(os.environ.get("CERT_ISSUE_DAILY_CAP", "10"))
@@ -194,7 +233,6 @@ async def issue_public(db, user: dict, account: dict) -> dict:
     if recent >= cap:
         raise ValueError(f"issuance cap reached — max {cap} certificates "
                          "per account per 24h")
-    scores = await pillar_scores(db, user["id"], account)
     prev = await db.public_certificates.find_one(
         {"account_id": acct_id}, sort=[("seq", -1)])
     seq = int(prev["seq"]) + 1 if prev else 1
@@ -206,8 +244,11 @@ async def issue_public(db, user: dict, account: dict) -> dict:
            "broker": account.get("broker"),
            "account_ref": _mask(account.get("account_number")),
            "tier": scores["tier"],
+           "live_certified": bool(scores.get("live_certified")),
+           "certification_note": scores.get("certification_note"),
            "overall_score": scores["overall_score"],
            "pillars_scored": scores["pillars_scored"],
+           "pillars_total": scores.get("pillars_total"),
            "pillars": [{"pillar": p["pillar"], "score": p["score"],
                         "status": p["status"], "detail": p["detail"]}
                        for p in scores["pillars"]],

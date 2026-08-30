@@ -34,15 +34,40 @@ def _fresh_db():
 
 
 def test_grade_tiers():
+    """Review P0-6 semantics: unscored pillars stay in the denominator and
+    the mandatory truth pillars gate every live tier."""
     from certification_center import grade
-    mk = lambda scores: [{"pillar": f"p{i}", "score": s}
-                         for i, s in enumerate(scores)]
-    assert grade(mk([90, 90, 90, 90, 90, None]))["tier"] == "CERTIFIED_A"
-    assert grade(mk([75, 75, 75, 75, None, None]))["tier"] == "CERTIFIED_B"
-    assert grade(mk([90, 90, None, None, None, None]))["tier"] == "PROVISIONAL"
-    assert grade(mk([None] * 6))["tier"] == "UNCERTIFIED"
-    g = grade(mk([80, 60, None, None, None, None]))
-    assert g["overall_score"] == 70.0 and g["pillars_scored"] == 2
+
+    def mk(named):
+        return [{"pillar": n, "score": s} for n, s in named]
+
+    full = mk([("risk_truth", 90), ("position_truth", 90),
+               ("execution_alpha", 90), ("digital_twin", 90),
+               ("strategy_decay", 90), ("broker_intel", 90)])
+    g = grade(full)
+    assert g["tier"] == "CERTIFIED_A" and g["live_certified"] is True
+    assert g["issuable"] is True and g["certification_note"] is None
+
+    # one non-mandatory pillar unscored → denominator still 6
+    g = grade(mk([("risk_truth", 90), ("position_truth", 90),
+                  ("execution_alpha", 90), ("digital_twin", 90),
+                  ("strategy_decay", 90), ("broker_intel", None)]))
+    assert g["overall_score"] == 75.0          # 450 / 6, NOT 450 / 5
+    assert g["tier"] == "CERTIFIED_B"
+
+    # missing a MANDATORY pillar can never certify, whatever the average
+    g = grade(mk([("risk_truth", None), ("position_truth", 100),
+                  ("execution_alpha", 100), ("digital_twin", 100),
+                  ("strategy_decay", 100), ("broker_intel", 100)]))
+    assert g["tier"] == "PROVISIONAL" and g["live_certified"] is False
+    assert g["issuable"] is False
+    assert g["missing_mandatory"] == ["risk_truth"]
+    assert "NOT LIVE-CERTIFIED" in g["certification_note"]
+
+    g = grade(mk([("risk_truth", None), ("position_truth", None),
+                  ("execution_alpha", None), ("digital_twin", None),
+                  ("strategy_decay", None), ("broker_intel", None)]))
+    assert g["tier"] == "UNCERTIFIED" and g["overall_score"] is None
 
 
 async def _pillars_scenario():
@@ -94,6 +119,18 @@ async def _cert_chain_scenario():
                "account_number": "7654321"}
     user = {"id": "chain_user", "role": "user"}
     try:
+        # review P0-6 — issuance requires scored mandatory pillars; an
+        # empty account must be REFUSED first.
+        with pytest.raises(ValueError):
+            await issue_public(db, user, account)
+        now = _now_dt().isoformat()
+        await db.pamm_risk_decisions.insert_many([
+            {"account_id": "chain_acct", "at": now, "hash": f"ch{i}",
+             "authorized": True} for i in range(3)])
+        await db.trades.insert_one(
+            {"account_id": "chain_acct", "status": "closed",
+             "opened_at": now, "signal_id": "chain_sig",
+             "mt5_ticket": 991, "latency_trace": {"t9_ms": 12}})
         c1 = await issue_public(db, user, account)
         c2 = await issue_public(db, user, account)
         assert c1["seq"] == 1 and c1["prev_hash"] == "genesis"

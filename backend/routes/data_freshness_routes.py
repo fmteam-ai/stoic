@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends
 from auth import get_current_user
 from database import get_db
 from macro_feeds import get_macro_snapshot
+from state_contract import HEARTBEAT_FRESH_S, effective_connection_state
 
 router = APIRouter(prefix="/data-freshness", tags=["health"])
 
@@ -97,7 +98,10 @@ async def data_freshness(user=Depends(get_current_user)):
     hb_ts = max((a.get("last_heartbeat") for a in accts if a.get("last_heartbeat")), default=None)
     ea_entry = _entry("ea", hb_ts)
     ea_entry["account_count"] = len(accts)
-    ea_entry["connected_count"] = sum(1 for a in accts if a.get("status") == "connected")
+    ea_entry["connected_count"] = sum(
+        1 for a in accts
+        if effective_connection_state(a)["connected"])
+    ea_entry["threshold_seconds"] = HEARTBEAT_FRESH_S
     # Rename for clarity — heartbeats aren't "fetches"
     ea_entry["last_heartbeat_at"] = ea_entry.pop("last_fetched_at")
 

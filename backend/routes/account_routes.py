@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from auth import get_current_user, generate_bridge_token, verify_password
 from database import get_db
+from state_contract import HEARTBEAT_FRESH_S
 from models import AccountCreate, AccountCredsUpdate
 from secrets_vault import encrypt as vault_encrypt, decrypt as vault_decrypt
 from route_utils import parse_object_id
@@ -105,14 +106,35 @@ async def accounts_overview(user=Depends(get_current_user)):
         if ca >= today_start:
             b["today"] += p
 
+    # review P0-1 — account_enabled must be an EXPLICIT persisted flag.
+    # One-time backfill: accounts predating the flag inherit it from
+    # whether their bot is enabled (owner-confirmed intent), never from
+    # the mere existence of the account record.
+    from state_contract import effective_connection_state
+    cfgs = {c.get("account_id"): c async for c in
+            db.bot_configs.find({"user_id": user["id"]},
+                                {"account_id": 1, "active": 1})}
+    global_cfg = cfgs.get(None) or {}
+    for a in accounts:
+        if "trading_enabled" not in a:
+            cfg = cfgs.get(str(a["_id"])) or global_cfg
+            a["trading_enabled"] = bool(cfg.get("active"))
+            await db.accounts.update_one(
+                {"_id": a["_id"]},
+                {"$set": {"trading_enabled": a["trading_enabled"],
+                          "trading_enabled_backfilled_at":
+                              now.isoformat()}})
+
     out_accounts, groups = [], set()
     tot = {"balance": 0.0, "equity": 0.0, "connected": 0, "trading_enabled": 0,
+           "bots_enabled": 0,
            "pnl_today": 0.0, "pnl_7d": 0.0, "pnl_30d": 0.0, "open_positions": 0}
     for a in accounts:
         aid = str(a["_id"])
-        connected = (a.get("mode") == "paper") or bool(
-            a.get("last_heartbeat") and a["last_heartbeat"] >= hb_cutoff)
+        conn = effective_connection_state(a, now)
+        connected = conn["connected"]
         enabled = a.get("trading_enabled") is not False
+        bot_on = bool((cfgs.get(aid) or global_cfg).get("active"))
         grp = (a.get("group") or "").strip()
         if grp:
             groups.add(grp)
@@ -122,6 +144,7 @@ async def accounts_overview(user=Depends(get_current_user)):
             "id": aid, "label": a.get("label"), "broker": a.get("broker"),
             "account_number": a.get("account_number"), "mode": a.get("mode"),
             "group": grp or None, "trading_enabled": enabled, "connected": connected,
+            "bot_enabled": bot_on, "connection_state": conn,
             "balance": a.get("balance"), "equity": a.get("equity"),
             "open_positions": a.get("open_positions") or 0,
             "last_heartbeat": a.get("last_heartbeat"),
@@ -132,6 +155,7 @@ async def accounts_overview(user=Depends(get_current_user)):
         tot["equity"] += eq
         tot["connected"] += 1 if connected else 0
         tot["trading_enabled"] += 1 if enabled else 0
+        tot["bots_enabled"] += 1 if bot_on else 0
         tot["open_positions"] += a.get("open_positions") or 0
         tot["pnl_today"] += b["today"]
         tot["pnl_7d"] += b["d7"]
@@ -1028,6 +1052,27 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
                     + "Open MT5 + ensure AutoTrading is ON, then retry."},
         )
 
+    # review P0-5 — FORCE TRADE requires the full per-account go-live
+    # certification. Demo accounts use the CERTIFIED_DEMO_TEST gate (every
+    # check except the demo stamp itself); live accounts need 14/14.
+    from broker_env import broker_environment
+    is_demo = (str(account.get("account_type") or "").lower() == "demo"
+               or broker_environment(account) != "LIVE")
+    cert = await accounts_certification(user=user)
+    item = next((i for i in cert["items"]
+                 if i["account_id"] == account_id), None)
+    required = [c for c in (item or {}).get("checks", [])
+                if not (is_demo and c["key"] == "demo_certified")]
+    failing = [c["key"] for c in required if not c["ok"]]
+    if item is None or failing:
+        raise HTTPException(status_code=409, detail={
+            "code": "force_trade_not_certified",
+            "gate": "CERTIFIED_DEMO_TEST" if is_demo
+            else "GO_LIVE_CERTIFICATION",
+            "message": "FORCE TRADE is locked until every go-live "
+                       "certification check passes for this exact account.",
+            "failing_checks": failing or ["account_not_found"]})
+
     # Pick a base symbol the broker actually offers AND whose market is
     # currently open (weekends: XAUUSD/EURUSD closed → falls to BTCUSD).
     from broker_symbol_detector import resolve_broker_symbol
@@ -1169,7 +1214,7 @@ async def accounts_certification(user=Depends(get_current_user)):
              "ok": bool(a.get("bridge_token"))},
             {"key": "heartbeat", "label": "EA heartbeat",
              "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
-             "ok": hb_age is not None and hb_age < 300},
+             "ok": hb_age is not None and hb_age < HEARTBEAT_FRESH_S},
             {"key": "account_type", "label": "Account type",
              "value": acct_type or "unknown",
              "ok": acct_type in ("hedging", "netting")},

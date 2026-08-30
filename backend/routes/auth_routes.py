@@ -729,5 +729,6 @@ async def my_audit_trail(limit: int = 50, user=Depends(get_current_user)):
     docs = await db.audit_log.find({"user_id": user["id"]}) \
         .sort("at", -1).to_list(length=n)
     return [{"action": d.get("action"), "detail": d.get("detail") or {},
+             "actor": d.get("actor") or d.get("user_id"),
              "step_up_verified": bool(d.get("step_up_verified")),
              "ip": d.get("ip"), "at": d.get("at")} for d in docs]

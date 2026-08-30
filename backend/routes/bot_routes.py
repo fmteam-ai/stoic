@@ -1740,6 +1740,69 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "fix": "Designed protection after consecutive losses. Lower freeze window or disable in Bot Config → Capital Preservation if intentional.",
                        "details": tilt_frozen_accounts})
 
+    # --- review P0-3: FAIL-CLOSED HARD CAPS ------------------------------
+    # A safety score must never read EXCELLENT while truth/reconciliation
+    # is failing. Caps are applied AFTER all deductions.
+    hard_caps: list[dict] = []
+    try:
+        from state_contract import contract as _state_contract
+        sc = await _state_contract(db, user["id"])
+        rows = [r for r in sc["accounts"] if r.get("account_enabled")]
+        bot_rows = [r for r in rows if r.get("bot_enabled")]
+        bad_truth = [r for r in bot_rows if r["position_truth"] != "FRESH"]
+        if bad_truth:
+            hard_caps.append({
+                "cap": 25, "code": "position_truth_not_fresh",
+                "label": f"{len(bad_truth)} bot account(s) with "
+                         f"{bad_truth[0]['position_truth']} position truth "
+                         "— broker state is not verified"})
+        if any(r["effective_state"] == "PANIC" for r in bot_rows):
+            hard_caps.append({"cap": 25, "code": "panic_tripped",
+                              "label": "Panic switch is tripped"})
+        blocked = [r for r in bot_rows
+                   if r["effective_state"] in ("BLOCKED", "DISCONNECTED")]
+        if blocked:
+            hard_caps.append({
+                "cap": 60, "code": "execution_blocked",
+                "label": f"{len(blocked)} enabled bot(s) cannot execute "
+                         f"({blocked[0]['effective_state']})"})
+        reduced = [r for r in bot_rows
+                   if r.get("execution_authority") != "FULL"]
+        if reduced and not blocked:
+            hard_caps.append({
+                "cap": 60, "code": "authority_reduced",
+                "label": f"{len(reduced)} bot account(s) with reduced "
+                         "execution authority"})
+    except Exception:  # noqa: BLE001 — caps degrade gracefully, never 500
+        pass
+    if user.get("role") == "admin":
+        try:
+            unk = await db.execution_intents.count_documents(
+                {"status": "unknown"})
+            if unk:
+                hard_caps.append({
+                    "cap": 25, "code": "reconciliation_pending",
+                    "label": f"{unk} execution(s) UNKNOWN — broker "
+                             "reconciliation pending"})
+            crit = await db.ops_alerts.count_documents(
+                {"acked_at": None, "severity": "critical"})
+            if crit:
+                hard_caps.append({
+                    "cap": 45, "code": "critical_alerts_open",
+                    "label": f"{crit} unacknowledged CRITICAL platform "
+                             "alert(s)"})
+        except Exception:  # noqa: BLE001
+            pass
+    for c in hard_caps:
+        issues.append({
+            "severity": "error" if c["cap"] <= 25 else "warning",
+            "code": c["code"],
+            "label": f"HARD CAP {c['cap']} — {c['label']}",
+            "fix": "Fail-closed rule: health cannot read higher while this "
+                   "condition is active."})
+        if score > c["cap"]:
+            score = c["cap"]
+
     # --- Final score & summary -------------------------------------------
     score = max(0, min(100, int(round(score))))
     if score >= 90:
@@ -1760,6 +1823,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         "status": status,
         "headline": headline,
         "issues": issues,
+        "hard_caps": hard_caps,
         "checked_at": now.isoformat(),
         "context": {
             "accounts_connected": len(connected),

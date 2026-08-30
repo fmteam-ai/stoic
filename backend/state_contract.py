@@ -31,11 +31,42 @@ def _age_s(iso) -> float | None:
         return None
 
 
+def effective_connection_state(acc: dict,
+                               now: datetime | None = None) -> dict:
+    """Review P0-2 — THE single server-side connection-truth rule.
+    Every surface (header, Accounts, Data Freshness, Bot Doctor, Bot
+    Health, go-live checks) must use this, never its own threshold."""
+    now = now or _now_dt()
+    if acc.get("mode") == "paper":
+        return {"state": "PAPER", "connected": True,
+                "heartbeat_age_seconds": None,
+                "threshold_seconds": HEARTBEAT_FRESH_S,
+                "reason": "paper account — no EA required",
+                "evaluated_at": now.isoformat()}
+    age = _age_s(acc.get("last_heartbeat"))
+    if age is None:
+        state, reason = "NEVER_CONNECTED", "no heartbeat ever received"
+    elif age < HEARTBEAT_FRESH_S:
+        state = "CONNECTED"
+        reason = f"fresh heartbeat ({age:.0f}s < {HEARTBEAT_FRESH_S}s)"
+    elif age < 3600:
+        state = "STALE"
+        reason = (f"heartbeat {age:.0f}s old "
+                  f"(threshold {HEARTBEAT_FRESH_S}s)")
+    else:
+        state, reason = "DISCONNECTED", f"heartbeat {age / 3600:.1f}h old"
+    return {"state": state, "connected": state == "CONNECTED",
+            "heartbeat_age_seconds":
+                round(age, 1) if age is not None else None,
+            "threshold_seconds": HEARTBEAT_FRESH_S,
+            "reason": reason, "evaluated_at": now.isoformat()}
+
+
 def account_truth(acc: dict, open_local: int) -> dict:
     """Pure per-account derivation from the account doc + local count."""
     paper = acc.get("mode") == "paper"
     hb_age = _age_s(acc.get("last_heartbeat"))
-    ea_connected = paper or (hb_age is not None and hb_age < HEARTBEAT_FRESH_S)
+    ea_connected = effective_connection_state(acc)["connected"]
     if paper:
         truth, broker = "FRESH", open_local
     elif hb_age is None:

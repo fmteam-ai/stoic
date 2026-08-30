@@ -12,7 +12,32 @@ router = APIRouter(prefix="/authority", tags=["authority"])
 @router.get("")
 async def authority_ep(user=Depends(get_current_user)):
     db = get_db()
-    return await compute_authority(db)
+    out = await compute_authority(db)
+    # review P0-4 — position truth must NEVER read FULL while the caller's
+    # own enabled accounts carry STALE/UNKNOWN/CONFLICTED positions.
+    try:
+        from state_contract import contract as state_contract
+        from trading_authority import worst as worst_level
+        sc = await state_contract(db, user["id"])
+        rows = [r for r in sc["accounts"] if r.get("account_enabled")]
+        bad = [r for r in rows if r["position_truth"] != "FRESH"]
+        if bad:
+            worst_truth = max((r["position_truth"] for r in bad),
+                              key=lambda t: {"STALE": 1, "UNKNOWN": 2,
+                                             "CONFLICTED": 3}.get(t, 1))
+            reason = (f"{len(bad)} enabled account(s) with {worst_truth} "
+                      "position truth — broker count is not authoritative")
+            domains = out.setdefault("domains", {})
+            domains["position_truth"] = {
+                "level": worst_truth, "enforce_level": "CLOSE_ONLY",
+                "reason": reason}
+            out["level"] = worst_level(
+                out.get("level") or "FULL", "CLOSE_ONLY")
+            out["restricted"] = True
+            out.setdefault("reasons", []).append(reason)
+    except Exception:  # noqa: BLE001 — display fallback, never 500 the strip
+        pass
+    return out
 
 
 @router.post("/platform")

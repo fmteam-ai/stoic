@@ -699,6 +699,16 @@ async def on_startup():
             raise RuntimeError(
                 "APP_ENV=production forbids ADMIN_MFA_ENFORCED=false — "
                 "admin accounts must enroll TOTP 2FA.")
+        # review P1-9 — local signing must FAIL at boot in production, not
+        # at first runtime signature. Audit anchors / release manifests /
+        # public certificates must never hit a post-boot signing failure.
+        if os.environ.get("RELEASE_SIGNER", "local").strip().lower() \
+                == "local":
+            raise RuntimeError(
+                "APP_ENV=production forbids RELEASE_SIGNER=local — the "
+                "signing key must not live in the API. Set RELEASE_SIGNER="
+                "external with RELEASE_SIGNER_URL/RELEASE_SIGNER_TOKEN "
+                "(KMS/HSM-backed).")
         if not os.environ.get("ED25519_SIGNING_KEY_B64"):
             raise RuntimeError(
                 "APP_ENV=production requires ED25519_SIGNING_KEY_B64 for "

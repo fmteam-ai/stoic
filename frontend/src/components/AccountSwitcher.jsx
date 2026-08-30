@@ -57,8 +57,8 @@ export function AccountSwitcher() {
                 className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest px-2.5 py-1.5 border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#00BFFF]/40 hover:text-[#00BFFF] transition-colors">
                 <Layers className="w-3 h-3" />
                 <span data-testid="acct-switcher-counts"
-                    title={`${t.trading_enabled}/${t.accounts} accounts enabled · ${t.connected} EA${t.connected === 1 ? "" : "s"} connected (fresh heartbeat)`}>
-                    {t.trading_enabled}/{t.accounts} ON · {t.connected} EA
+                    title={`${t.trading_enabled}/${t.accounts} accounts enabled · ${t.bots_enabled ?? "?"}/${t.accounts} bots ON · ${t.connected} EA${t.connected === 1 ? "" : "s"} connected (fresh heartbeat < 180s)`}>
+                    {t.trading_enabled}/{t.accounts} ACC · {t.bots_enabled ?? "?"}/{t.accounts} BOTS · {t.connected} EA
                 </span>
                 <ChevronDown className={`w-3 h-3 transition-transform ${open ? "rotate-180" : ""}`} />
             </button>

@@ -96,10 +96,16 @@ export default function Accounts() {
     const [err, setErr] = useState("");
     const [msg, setMsg] = useState("");
     const [loading, setLoading] = useState(true);
+    const [certMap, setCertMap] = useState({});
 
     const load = useCallback(async () => {
         try {
-            const [a, l] = await Promise.all([api.get("/accounts"), api.get("/accounts/limits")]);
+            const [a, l, c] = await Promise.all([
+                api.get("/accounts"), api.get("/accounts/limits"),
+                api.get("/accounts/certification").catch(() => ({ data: { items: [] } }))]);
+            const cm = {};
+            (c.data?.items || []).forEach(i => { cm[i.account_id] = i; });
+            setCertMap(cm);
             setAccounts(a.data);
             setLimits(l.data);
         } catch (e) { setErr(formatApiError(e)); }
@@ -654,15 +660,20 @@ export default function Accounts() {
                                             {a.mode !== "paper" && (() => {
                                                 const eaLive = a.last_heartbeat &&
                                                     (Date.now() - new Date(a.last_heartbeat).getTime()) < 180000;
+                                                const cert = certMap[a.id];
+                                                const certOk = !!cert && (cert.certified || cert.can_certify);
+                                                const gateTitle = !eaLive
+                                                    ? "EA disconnected — trade controls are locked. Use TEST for diagnostics and reconnect the terminal first."
+                                                    : !certOk
+                                                        ? `Locked — go-live certification ${cert ? `${cert.passed}/${cert.total}` : "unavailable"}. Every check must pass for this exact account before FORCE TRADE unlocks.`
+                                                        : "Fire a 0.01 lot test trade to validate this broker's execution path";
                                                 return (
                                                 <button onClick={() => forceTestTrade(a.id, a.label)}
-                                                    disabled={!!forcingTest[a.id] || !eaLive}
+                                                    disabled={!!forcingTest[a.id] || !eaLive || !certOk}
                                                     data-testid={`force-test-trade-${a.account_number}`}
-                                                    title={eaLive
-                                                        ? "Fire a 0.01 lot test trade to validate this broker's execution path"
-                                                        : "EA disconnected — trade controls are locked. Use TEST for diagnostics and reconnect the terminal first."}
+                                                    title={gateTitle}
                                                     className="px-3 py-2 border border-[#FFB020]/50 text-[#FFB020] hover:bg-[#FFB020]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-                                                    <Lightning className="w-3.5 h-3.5" /> {forcingTest[a.id] ? "FIRING…" : "FORCE TRADE"}
+                                                    <Lightning className="w-3.5 h-3.5" /> {forcingTest[a.id] ? "FIRING…" : (certOk || !eaLive ? "FORCE TRADE" : `FORCE TRADE · ${cert ? `${cert.passed}/${cert.total}` : "—"}`)}
                                                 </button>
                                                 );
                                             })()}
