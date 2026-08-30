@@ -444,6 +444,9 @@ async def run_drills(db) -> dict:
         await _drill_token_expiry(db),
         _drill_unauthorized_admin_access(),
     ]
+    for r in results:
+        r["status"] = ("PARTIAL" if r["passed"] and r.get("skipped_assertions")
+                       else "PASS" if r["passed"] else "FAIL")
     # audit v4 P0-5 — a drill whose required assertions were skipped is
     # PARTIAL evidence, never a full pass.
     passed = sum(1 for r in results

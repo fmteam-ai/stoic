@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from auth import get_current_user
+from broker_env import broker_environment as _broker_env
 from database import get_db
 from differentiation import (KEY_ID, feature_evidence, perf_attestation,
                              verify_attestation)
@@ -21,7 +22,9 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
     accounts = {}
     async for a in db.accounts.find(
             {"user_id": user_id, "status": {"$ne": "deleted"}},
-            {"label": 1, "broker": 1, "mode": 1, "last_heartbeat": 1}):
+            {"label": 1, "broker": 1, "mode": 1, "account_type": 1,
+             "broker_server": 1, "server": 1, "broker_environment": 1,
+             "last_heartbeat": 1}):
         accounts[str(a["_id"])] = a
 
     per = {}
@@ -79,6 +82,9 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
                       else (a.get("label") or f"ACCOUNT-{i + 1}")),
             "broker": a.get("broker"),
             "mode": a.get("mode"),
+            # audit v5 P0-3 — server-owned environment; never derive "live"
+            # from `not paper` on any surface
+            "environment": (_broker_env(a) if a else "UNKNOWN"),
             **_stats(p)})
 
     # Integrity stamp — how much of the record is broker-verified truth.

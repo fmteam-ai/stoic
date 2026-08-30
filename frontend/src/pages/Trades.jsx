@@ -804,7 +804,7 @@ export default function Trades() {
                                     accountFilter === a.id ? "border-[#FFD700] text-[#FFD700]" : "border-[#1F1F1F] text-[#A1A1AA] hover:border-[#333333]"
                                 }`}>
                                 <span>{(a.label || a.account_number || "—").toUpperCase()}</span>
-                                <span className="font-mono text-[9px] text-[#52525B]">· {(a.mode || "live").toUpperCase()}</span>
+                                <span className="font-mono text-[9px] text-[#52525B]">· {(a.environment || (a.mode === "paper" ? "PAPER" : "UNCLASSIFIED")).toUpperCase()}</span>
                             </button>
                         ))}
                     </div>

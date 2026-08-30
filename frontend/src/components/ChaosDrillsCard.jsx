@@ -55,8 +55,9 @@ export function ChaosDrillsCard() {
                     {d.results.map((r) => (
                         <div key={r.drill} className="flex items-start gap-2 py-1 border-t border-[#141414]"
                             data-testid={`chaos-drill-${r.drill}`}>
-                            <span className={`font-mono text-[9px] px-1.5 py-0.5 border shrink-0 ${r.passed ? "text-[#00FF41] border-[#00FF41]/40" : "text-[#FF3B30] border-[#FF3B30]/40"}`}>
-                                {r.passed ? "PASS" : "FAIL"}
+                            <span className={`font-mono text-[9px] px-1.5 py-0.5 border shrink-0 ${!r.passed ? "text-[#FF3B30] border-[#FF3B30]/40" : (r.status === "PARTIAL" || r.skipped_assertions?.length) ? "text-[#FFB000] border-[#FFB000]/40" : "text-[#00FF41] border-[#00FF41]/40"}`}
+                                title={r.skipped_assertions?.length ? r.skipped_assertions.join("; ") : undefined}>
+                                {!r.passed ? "FAIL" : (r.status === "PARTIAL" || r.skipped_assertions?.length) ? "PARTIAL" : "PASS"}
                             </span>
                             <div className="min-w-0">
                                 <div className="font-mono text-[10px] text-[#A1A1AA]">{r.drill}</div>

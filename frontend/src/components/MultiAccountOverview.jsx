@@ -56,7 +56,7 @@ export default function MultiAccountOverview({ refreshKey = 0 }) {
                     <div>
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest">PORTFOLIO · ALL ACCOUNTS</div>
                         <div className="font-display font-bold text-base tracking-tight">
-                            {t.accounts} accounts · {t.connected} connected · {t.trading_enabled} trading
+                            {t.accounts} accounts · {t.ea_fresh ?? t.connected} EA fresh{t.ea_paper ? ` · ${t.ea_paper} paper` : ""} · {t.trading_enabled} trading
                         </div>
                     </div>
                 </div>

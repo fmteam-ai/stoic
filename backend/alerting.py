@@ -29,6 +29,14 @@ async def raise_alert(db, kind: str, severity: str, message: str,
     synthetic=True (review P1-7) tags QA/chaos/test alerts so operator
     surfaces can exclude them (scope=real by default)."""
     dedup_key = dedup_key or kind
+    if not synthetic:
+        # audit v5 P1-3 — auto-tag alerts that reference known test
+        # identities so operator surfaces (scope=real) stay clean.
+        try:
+            from synthetic_data import mentions_synthetic_identity
+            synthetic = mentions_synthetic_identity(message, meta)
+        except Exception:  # noqa: BLE001
+            pass
     now = _now()
     existing = await db.ops_alerts.find_one(
         {"dedup_key": dedup_key, "acked_at": None})

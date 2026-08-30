@@ -64,7 +64,7 @@ function PulseRow({ item }) {
                 <div className="mt-1 flex flex-wrap gap-1.5">
                     {item.active && !isShadow && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#00FF41]/40 text-[#00FF41] text-[10px] font-mono tracking-widest">
-                            <span className="w-1.5 h-1.5 bg-[#00FF41] rounded-full animate-pulse" /> LIVE
+                            <span className="w-1.5 h-1.5 bg-[#00FF41] rounded-full animate-pulse" /> RUNNING
                         </span>
                     )}
                     {isShadow && (
@@ -249,7 +249,7 @@ export default function BotPulsePanel() {
                         data-testid="bot-pulse-selector"
                         className="bg-[#0A0A0A] border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00FF41] transition-colors max-w-[420px]">
                         {rankedItems.map(i => {
-                            const state = i.active ? "LIVE" : (i.paper_shadow_mode ? "SHADOW" : "OFF");
+                            const state = i.active ? "RUNNING" : (i.paper_shadow_mode ? "SHADOW" : "OFF");
                             const strat = i.strategy_label ? ` · ${i.strategy_label}` : "";
                             const lvl = i.pulse?.level ? ` · ${i.pulse.level.toUpperCase()}` : "";
                             return (

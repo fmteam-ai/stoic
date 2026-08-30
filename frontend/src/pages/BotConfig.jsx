@@ -903,7 +903,7 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                 {/* Break-even */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="breakeven_enabled" label="Break-Even Auto-Shift" icon={Shield}
-                        desc="Once a trade moves +1R in your favor, automatically shift Stop-Loss to entry price. Result: zero risk on the remaining trade." />
+                        desc="Once a trade moves +1R in your favor, automatically shift Stop-Loss to entry price. Result: planned price risk on the remainder is removed (gaps, slippage, swap and commissions can still cost)." />
                     {cfg.breakeven_enabled && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="TRIGGER (R-multiple)" suffix="R" step={0.1} min={0.5} max={5} />
@@ -1194,7 +1194,7 @@ function AccountScopeBar({ accounts, allConfigs, selectedAccountId, onSelect, on
                             active={selectedAccountId === a.id}
                             onClick={() => onSelect(a.id)}
                             title={a.label || a.account_number}
-                            subtitle={`${(a.mode || "live").toUpperCase()} · ${a.broker || "—"}`}
+                            subtitle={`${(a.environment || (a.mode === "paper" ? "PAPER" : "UNCLASSIFIED")).toUpperCase()} · ${a.broker || "—"}`}
                             cfg={cfgByAccount[a.id]}
                             testid={`scope-account-${a.id}`}
                         />

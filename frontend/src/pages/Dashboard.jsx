@@ -494,7 +494,7 @@ export default function Dashboard() {
                     <div className="flex items-center gap-3">
                         <span className={`flex items-center gap-1.5 font-mono text-[10px] tracking-widest ${wsConnected ? "text-[#00FF41]" : "text-[#52525B]"}`} data-testid="ws-status">
                             <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-[#00FF41] pulse-dot" : "bg-[#52525B]"}`} />
-                            {wsConnected ? "LIVE" : "OFFLINE"}
+                            {wsConnected ? "STREAMING" : "OFFLINE"}
                         </span>
                         <button onClick={refreshAll} disabled={refreshing}
                             data-testid="dashboard-refresh-button"

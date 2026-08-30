@@ -1,0 +1,25 @@
+{
+  "summary": "Iter-169 Audit v5 corrections verified end-to-end. Backend pytest suite test_iter169_audit_v5.py (7 tests) all pass. New HTTP suite test_iter169_http.py (3 tests) validating admin cookie sessions all pass. Frontend E2E confirms: (P0-3) Trades page shows RUNNING chips + DEMO/PAPER account labels (only 'LIVE P&L' column header retains 'LIVE' word); Verified Performance table has 8 environment cells (DEMO/PAPER/UNKNOWN, no LIVE); (P0-4) Loss Lab shows 'Suspend XAUUSD BUY in NY Session' with AUTO-REVERTED marker and no XAU/NY guard is active; (P1-2) Bot Health chaos card renders 16 per-drill badges — 15 PASS + 1 PARTIAL (broker_disconnect, weekend/XAUUSD session closed) as expected; (P0-2) Accounts portfolio header reads '6 accounts · 1 EA fresh · 1 paper · 3 trading' (new wording, not ambiguous 'connected'); env + cert-blocked badges render. Regression clean: /execution loads (3153 chars), dashboard shows TRADING · BLOCKED, POSITION TRUTH STALE ribbon, STREAMING ws indicator.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter169_audit_v5.py",
+    "/app/backend/tests/test_iter169_http.py",
+    "/app/test_reports/pytest/iter169_v5.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Rate-limit (429) fires quickly during rapid browser navigation across pages that fan-out API calls (Loss Lab, Bot Health). Consider raising the per-session burst allowance for authenticated admin sessions or debouncing client-side fetches, otherwise UI E2E flows are brittle."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter169_http.py (new — HTTP-level checks for guards/verified env/chaos status)",
+    "/app/docs/TEST_MANIFEST.md (regenerated via /app/scripts/generate_test_manifest.py)"
+  ],
+  "success_rate": {"backend": "100% (10/10 across audit_v5 + http)", "frontend": "100% (7/7 page checks)"},
+  "test_credentials": "admin@trading.bot / admin123 (cookie session).",
+  "seed_data_creation": "None. Read-only tests + a scoped POST /api/ops/chaos/run (synthetic, explicitly permitted).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-169 audit-v5 corrections fully validated (P0-2 wording, P0-3 environment propagation, P0-4 declared-gate revert + auto-apply suspension, P1-2 chaos PARTIAL, P1-3 synthetic auto-tagging). HTTP suite test_iter169_http.py is safe to re-run as regression. Space out requests when navigating multiple admin pages back-to-back to avoid 429s. Preview state (Sunday, no live accounts, truth STALE) means broker_disconnect drill is expected PARTIAL and dashboard readiness is BLOCKED — that is correct, not a bug.",
+  "rca of the issue": "N/A — no defects observed."
+}

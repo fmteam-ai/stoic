@@ -314,10 +314,34 @@ async def _auto_apply_enabled(db, user_id: str) -> bool:
     return bool(s.get("auto_apply_guards", True))
 
 
+async def _auto_apply_suspended(db, user_id: str) -> str | None:
+    """Audit v5 P0-4 — policy learning must never act while position truth
+    is stale or executions are unreconciled. Fail CLOSED."""
+    try:
+        from state_contract import contract
+        sc = await contract(db, user_id)
+        if any(r["position_truth"] != "FRESH"
+               for r in sc["accounts"] if r.get("bot_enabled")):
+            return "position_truth_stale"
+        ids = [r["account_id"] for r in sc["accounts"]]
+        if ids and await db.execution_intents.count_documents(
+                {"status": "unknown", "account_id": {"$in": ids}}):
+            return "reconciliation_pending"
+    except Exception:  # noqa: BLE001 — unknown truth = no policy changes
+        return "truth_unavailable"
+    return None
+
+
 async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
     """Apply qualifying measures: config knobs directly, gate types as
     live auto-guards. Everything logged, notified and reversible."""
     if not await _auto_apply_enabled(db, user_id):
+        return []
+    hold = await _auto_apply_suspended(db, user_id)
+    if hold:
+        review_doc["auto_apply_suspended"] = hold
+        logger.warning("Auto-apply SUSPENDED user=%s reason=%s",
+                       user_id, hold)
         return []
     applied = []
     active_n = await db.auto_guards.count_documents({"user_id": user_id, "active": True})
@@ -391,23 +415,33 @@ async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
 
 
 async def _revalidate_guards(db, user_id: str, ds: dict) -> list:
-    """Re-shadow-test active guards on fresh data; auto-revert when the
-    net effect turns negative."""
+    """Re-shadow-test active guards on fresh data; auto-revert any guard
+    that no longer meets the DECLARED gate (audit v5 P0-4): net effect
+    ≥ $AUTO_APPLY_MIN_NET and losses avoided ≥ ratio × wins missed."""
     reverted = []
     async for g in db.auto_guards.find({"user_id": user_id, "active": True}):
         ev = _shadow_test(g.get("measure") or {}, ds)
         if ev is None:
             continue
         await db.auto_guards.update_one({"_id": g["_id"]}, {"$set": {"latest_evidence": ev}})
-        if ev["net_effect"] < 0:
+        net = float(ev.get("net_effect") or 0)
+        saved = float(ev.get("losses_avoided") or 0)
+        missed = float(ev.get("wins_missed") or 0)
+        below_gate = (net < AUTO_APPLY_MIN_NET
+                      or saved < AUTO_APPLY_RATIO * missed)
+        if below_gate:
+            reason = ("evidence_turned_negative" if net < 0
+                      else "evidence_below_declared_gate")
             await db.auto_guards.update_one({"_id": g["_id"]}, {"$set": {
                 "active": False,
                 "reverted_at": datetime.now(timezone.utc).isoformat(),
-                "revert_reason": "evidence_turned_negative",
+                "revert_reason": reason,
             }})
-            reverted.append({"measure": g.get("measure"), "evidence": ev})
-            logger.warning("Auto-guard reverted (evidence negative) user=%s: %s",
-                           user_id, (g.get("measure") or {}).get("title"))
+            reverted.append({"measure": g.get("measure"), "evidence": ev,
+                             "reason": reason})
+            logger.warning("Auto-guard reverted (%s) user=%s: %s",
+                           reason, user_id,
+                           (g.get("measure") or {}).get("title"))
     if reverted:
         try:
             from notifier import notify_auto_guard

@@ -89,7 +89,7 @@ export function AccountsTable({ accounts }) {
                     <tr className="border-b border-[#1F1F1F] font-mono text-[9px] tracking-widest text-[#52525B]">
                         <th className="p-3 text-left">ACCOUNT</th>
                         <th className="p-3 text-left">BROKER</th>
-                        <th className="p-3 text-left">MODE</th>
+                        <th className="p-3 text-left">ENVIRONMENT</th>
                         <th className="p-3 text-right">NET P&L</th>
                         <th className="p-3 text-right">WIN RATE</th>
                         <th className="p-3 text-right">POSITIONS</th>
@@ -101,7 +101,8 @@ export function AccountsTable({ accounts }) {
                         <tr key={i} className="border-b border-[#1F1F1F]">
                             <td className="p-3 font-mono text-white">{a.label}</td>
                             <td className="p-3 text-[#A1A1AA]">{a.broker || "—"}</td>
-                            <td className="p-3 text-[#A1A1AA] uppercase">{a.mode || "—"}</td>
+                            <td className={`p-3 uppercase font-mono text-[10px] ${a.environment === "LIVE" ? "text-[#FF3B30]" : "text-[#A1A1AA]"}`}
+                                data-testid={`verified-env-${i}`}>{a.environment || "UNKNOWN"}</td>
                             <td className={`p-3 text-right font-mono ${a.net_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
                                 {a.net_pnl >= 0 ? "+" : ""}${a.net_pnl}
                             </td>

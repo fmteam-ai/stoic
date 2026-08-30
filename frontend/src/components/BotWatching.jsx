@@ -282,7 +282,7 @@ export default function BotWatching() {
                             {allHold ? "BOT IS PATIENTLY WATCHING" : "BOT IS ACTIVELY HUNTING"}
                         </div>
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-0.5">
-                            {allHold ? "Every HOLD is a loss avoided." : "Live signals in flight."}
+                            {allHold ? "All signals on HOLD — no qualifying setup right now." : "Live signals in flight."}
                         </div>
                     </div>
                 </div>
