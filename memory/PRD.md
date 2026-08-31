@@ -2293,3 +2293,9 @@ User-reported batch before the next major gate:
 - Fix: lib/api.js formatApiError appends detail.problems/blockers/reasons items joined ' · ' after message — global (BotConfig banner, mode-promotion blockers, toasts).
 - Verified by testing agent: UI repro on spread-test (START BOT → banner lists 3 concrete problems), backend 409 shape, regressions (string details, session-window 422 toast). New regression test: backend/tests/test_iter174_activation_problems.py; manifest updated by agent.
 - Note for user's prod case: after publish, OnEquity's banner will name its exact blockers (likely broker status/heartbeat/EA version on that terminal).
+
+## Iter-179 (2026-06) — Trades page "temporarily unreachable" prod outage (DONE, testing agent iteration_175 PASS)
+- Root cause: GET /api/trades/stats fetched up to 100k FULL trade docs (fat audit/context fields) per Trades page load → memory/CPU spike on the small prod pod → edge 5xx → formatApiError transient banner.
+- Fix (routes/trade_routes.py trade_stats): projection {pnl, origin, signal_id, magic_number, account_id} only; open trades via count_documents; seed.ensure_indexes adds trades(user_id,status) + trades(user_id,closed_at desc).
+- Verified: aggregates byte-identical old vs new; testing agent seeded 50k fat trades on a throwaway user → /stats 0.27s via ingress, RECONCILED, UI loads clean, regressions pass. New regression test: backend/tests/test_iter_trade_stats_perf.py (manifest updated).
+- Out of scope by design: the TRADING EMERGENCY header (panic tripped) and CONFLICTED truth in prod are real safety states requiring user action (verify broker positions → SYNC WITH BROKER → reset panic). Bot Health hard-cap comes from 37 unacknowledged CRITICAL ops alerts.

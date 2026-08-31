@@ -233,6 +233,8 @@ async def ensure_indexes():
         [("user_id", 1), ("credential_id", 1)], unique=True)
     await db.signals.create_index([("user_id", 1), ("created_at", -1)])
     await db.trades.create_index([("user_id", 1), ("opened_at", -1)])
+    await db.trades.create_index([("user_id", 1), ("status", 1)])
+    await db.trades.create_index([("user_id", 1), ("closed_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])
     # Round 15 item 10 — decision updates key on decision_id everywhere;
     # without this index every update is a collection scan (caught by

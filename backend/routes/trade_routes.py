@@ -326,10 +326,15 @@ async def trade_stats(account_id: Optional[str] = None,
     if account_id:
         closed_q["account_id"] = account_id
         open_q["account_id"] = account_id
-    closed = await db.trades.find(closed_q).to_list(length=100000)
-    open_trades = await db.trades.find(open_q).to_list(length=1000)
+    # perf (prod outage) — pull ONLY the fields the aggregates below need.
+    # Full documents at broker-history scale blew past the edge timeout
+    # and the Trades page showed "temporarily unreachable".
+    proj = {"pnl": 1, "origin": 1, "signal_id": 1,
+            "magic_number": 1, "account_id": 1}
+    closed = await db.trades.find(closed_q, proj).to_list(length=100000)
+    open_count = await db.trades.count_documents(open_q)
     stats = {**_aggregate_stats(closed), **_split_stats(closed),
-             "open_trades": len(open_trades)}
+             "open_trades": open_count}
     # review P1-2 — the headline total must reconcile against the
     # per-account component sums from the SAME dataset; a number that
     # doesn't add up is flagged UNRECONCILED so the UI refuses to show it.
