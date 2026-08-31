@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { AlertOctagon, ChevronDown, LifeBuoy, ShieldCheck } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { AlertOctagon, ArrowRight, ChevronDown, LifeBuoy, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import api, { formatApiError } from "@/lib/api";
+import { readinessFixRoute } from "@/lib/fixShortcuts";
 import { UnblockTour } from "@/components/UnblockTour";
 
 /**
@@ -31,6 +33,7 @@ export function TradingReadinessStrip() {
     const [openList, setOpenList] = useState(false);
     const [trusting, setTrusting] = useState(null);
     const [tour, setTour] = useState(null);
+    const navigate = useNavigate();
 
     const trustTerminal = async (accountId) => {
         setTrusting(accountId);
@@ -97,7 +100,9 @@ export function TradingReadinessStrip() {
             </div>
             {openList && (
                 <div className="px-4 md:px-6 pb-2 space-y-1.5" data-testid="trading-readiness-blockers">
-                    {(data.reasons || []).map(r => (
+                    {(data.reasons || []).map(r => {
+                        const fx = readinessFixRoute(r.code, r.accounts);
+                        return (
                         <div key={r.code} className="font-mono text-[10px] border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2"
                             data-testid={`readiness-reason-${r.code}`}>
                             <div className="flex items-center gap-2 flex-wrap">
@@ -106,6 +111,13 @@ export function TradingReadinessStrip() {
                                     className="flex items-center gap-1 font-mono text-[9px] font-bold tracking-widest px-2 py-0.5 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 transition-colors shrink-0">
                                     <LifeBuoy className="w-3 h-3" /> FIX THIS
                                 </button>
+                                {fx && (
+                                    <button onClick={() => navigate(fx.to)}
+                                        data-testid={`goto-fix-btn-${r.code}`}
+                                        className="flex items-center gap-1 font-mono text-[9px] font-bold tracking-widest px-2 py-0.5 border border-[#00BFFF]/50 text-[#00BFFF] hover:bg-[#00BFFF]/10 transition-colors shrink-0">
+                                        {fx.label} <ArrowRight className="w-3 h-3" />
+                                    </button>
+                                )}
                                 <span className={(LEVEL_STYLE[r.level] || LEVEL_STYLE.DEGRADED).text}>{r.level.replace("_", "-")}</span>
                                 <span className="text-[#52525B]">{r.code}</span>
                                 <span className="text-[#A1A1AA]">{r.message}</span>
@@ -133,7 +145,8 @@ export function TradingReadinessStrip() {
                                 </div>
                             )}
                         </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
             {tour && (

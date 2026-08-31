@@ -2306,3 +2306,18 @@ User-reported batch before the next major gate:
 - New UI: BotHealth HeadlineScore renders "ACKNOWLEDGE ALL ALERTS" button (testid ack-all-alerts-btn) on the critical_alerts_open hard-cap issue → POST /ops/alerts/ack-all (admin-only, 403 for non-admin verified) → reload. Useful in PROD where 37 criticals cap health at 45.
 - Testing agent verified full cycle: seed critical → cap 45 + button appears → click → acked + score 95. New regression test backend/tests/test_bot_health_ack_all.py (manifest updated by agent).
 - NOTE for prod: after publish, user should press ACKNOWLEDGE ALL ALERTS on live Bot Health; UNKNOWN execution there needs SYNC WITH BROKER (reconciliation), and panic reset remains manual by design.
+
+## Iter-181 (2026-06) — Fix-It Shortcuts (DONE, self-tested via e2e screenshot)
+- New lib `frontend/src/lib/fixShortcuts.js`: matchFixShortcut(text, accountId) pattern-maps blocker text → {label, to} (EA update / Quick Install / certification / accounts / scalp session / bot config / settings / trades); extractBlockerDetail(err, accountId) parses structured 409 {message, problems|blockers|reasons}; readinessFixRoute(code, accounts) maps readiness codes → direct deep links (accounts-scoped codes get ?focus=<first account>).
+- BotConfig.jsx: save/toggleBot catches use extractBlockerDetail → structured panel (testid activation-blockers-panel) with per-problem tappable FIX buttons (fix-shortcut-{i}) that navigate; dismissible. Falls back to formatApiError string for non-structured errors.
+- TradingReadinessStrip.jsx: each expanded reason row now also has a direct "OPEN …" deep-link button (goto-fix-btn-{code}) next to FIX THIS (tour kept).
+- OperationalModeCard.jsx: mode_promotion_blocked no longer just a toast — inline blockers panel (mode-promotion-blockers-panel) with per-blocker fix shortcuts (mode-fix-shortcut-{i}).
+- Accounts.jsx: supports ?focus=<accountId> — scrolls to and gold-highlights the target account card (id=account-{id}).
+- E2E verified on preview: spread-test START BOT → 409 → panel shows 3 problems each with correct shortcut (OPEN ACCOUNTS / OPEN QUICK INSTALL / UPDATE EA); clicking navigates to /accounts?focus=… and highlights the card.
+
+## Iter-182 (2026-06) — Bot Health 45 re-fire loop (DONE, unit test + live verify)
+- User bug: health dropped to 45 repeatedly after every ACKNOWLEDGE ALL. Cause: abandoned worker_leases doc `tuning` expired 2026-07-21; alerting.evaluate_ops_alerts re-raised critical worker_lease_expired every 60s once the open alert was acked (dedup only spans unacked alerts).
+- Fix (alerting.py): leases expired beyond WORKER_LEASE_ALERT_MAX_AGE_SEC (default 86400s) are decommissioned — whole lease doc skipped (mirrors EA_HEARTBEAT_ALERT_MAX_AGE_SEC rule). Leases expired within ceiling still alert.
+- DB cleanup: deleted stale `tuning` lease, acked residual alert. Verified after an evaluator cycle: unacked=0, score 95 'excellent', hard_caps [].
+- Regression test: backend/tests/test_iter177_worker_lease_ceiling.py (dead lease → no alert; 10-min-expired lease → critical alert). Manifest regenerated (4092 tests / 409 files).
+- NOTE for prod: same fix applies after publish; if prod carries abandoned leases they stop alerting automatically once older than 24h.

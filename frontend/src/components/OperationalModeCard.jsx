@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
+import { matchFixShortcut } from "@/lib/fixShortcuts";
 import { toast } from "sonner";
-import { Eye, Ghost, FlaskConical, Users, Rocket, Shield, AlertOctagon } from "lucide-react";
+import { Eye, Ghost, FlaskConical, Users, Rocket, Shield, AlertOctagon, ArrowRight, X } from "lucide-react";
 
 const MODES = [
     { key: "observe", label: "OBSERVE", icon: Eye, color: "#38BDF8",
@@ -22,11 +24,13 @@ const MODES = [
 
 export const OperationalModeCard = ({ cfg, setCfg, accountQuery }) => {
     const [saving, setSaving] = useState(false);
+    const [blocked, setBlocked] = useState(null);
+    const navigate = useNavigate();
     const current = cfg?.operational_mode || "observe";
 
     const pick = async (key) => {
         if (key === current || saving) return;
-        setSaving(true);
+        setSaving(true); setBlocked(null);
         try {
             const { data } = await api.put(`/bot/config${accountQuery || ""}`,
                 { operational_mode: key });
@@ -35,8 +39,12 @@ export const OperationalModeCard = ({ cfg, setCfg, accountQuery }) => {
         } catch (e) {
             const detail = e?.response?.data?.detail;
             if (detail?.code === "mode_promotion_blocked") {
-                toast.error(`Promotion blocked: ${(detail.blockers || []).join(" · ")}`,
-                    { duration: 9000 });
+                setBlocked({
+                    mode: key,
+                    items: (detail.blockers || []).map(text => ({
+                        text, fix: matchFixShortcut(text),
+                    })),
+                });
             } else toast.error(formatApiError(e));
         }
         finally { setSaving(false); }
@@ -75,6 +83,31 @@ export const OperationalModeCard = ({ cfg, setCfg, accountQuery }) => {
                     );
                 })}
             </div>
+            {blocked && (
+                <div className="mt-3 border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-3 py-2 space-y-2"
+                    data-testid="mode-promotion-blockers-panel">
+                    <div className="flex items-center justify-between gap-3">
+                        <span className="font-mono text-[10px] tracking-widest text-[#FF3B30]">
+                            PROMOTION TO {blocked.mode.replace(/_/g, " ").toUpperCase()} BLOCKED
+                        </span>
+                        <button onClick={() => setBlocked(null)} data-testid="mode-blockers-dismiss"
+                            className="text-[#52525B] hover:text-white shrink-0"><X className="w-3.5 h-3.5" /></button>
+                    </div>
+                    {blocked.items.map((it, i) => (
+                        <div key={i} className="flex items-center justify-between gap-3 border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2"
+                            data-testid={`mode-blocker-${i}`}>
+                            <span className="font-mono text-[11px] text-[#A1A1AA]">{it.text}</span>
+                            {it.fix && (
+                                <button onClick={() => navigate(it.fix.to)}
+                                    data-testid={`mode-fix-shortcut-${i}`}
+                                    className="shrink-0 flex items-center gap-1 font-mono text-[9px] font-bold tracking-widest px-2 py-1 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 transition-colors">
+                                    {it.fix.label} <ArrowRight className="w-3 h-3" />
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };

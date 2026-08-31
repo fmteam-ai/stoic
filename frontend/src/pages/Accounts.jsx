@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import api, { formatApiError, API } from "@/lib/api";
 import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
@@ -98,6 +99,8 @@ export default function Accounts() {
     const [msg, setMsg] = useState("");
     const [loading, setLoading] = useState(true);
     const [certMap, setCertMap] = useState({});
+    const [searchParams] = useSearchParams();
+    const focusId = searchParams.get("focus");
 
     const load = useCallback(async () => {
         try {
@@ -114,6 +117,13 @@ export default function Accounts() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+
+    // Fix-It Shortcuts: ?focus=<accountId> scrolls to and highlights the card
+    useEffect(() => {
+        if (!focusId || loading) return;
+        const el = document.getElementById(`account-${focusId}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, [focusId, loading]);
 
     // Lazy-load broker presets when the form first opens
     useEffect(() => {
@@ -491,7 +501,9 @@ export default function Accounts() {
                         {accounts.map(a => {
                             const live = isFresh(a.last_heartbeat);
                             return (
-                                <div key={a.id} className="border border-[#1F1F1F] bg-[#0A0A0A] p-5" data-testid={`account-row-${a.account_number}`}>
+                                <div key={a.id} id={`account-${a.id}`}
+                                    className={`border ${a.id === focusId ? "border-[#FFD700] shadow-[0_0_0_1px_#FFD700]" : "border-[#1F1F1F]"} bg-[#0A0A0A] p-5`}
+                                    data-testid={`account-row-${a.account_number}`}>
                                     {a.broker_account_mismatch && (
                                         <div className="mb-4 border border-[#FFB000]/40 bg-[#FFB000]/10 px-3 py-2 flex items-start gap-2"
                                             data-testid={`broker-mismatch-${a.account_number}`}>

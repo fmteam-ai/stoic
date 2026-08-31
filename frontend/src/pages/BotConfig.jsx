@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
+import { extractBlockerDetail } from "@/lib/fixShortcuts";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { OperationalModeCard } from "@/components/OperationalModeCard";
 import { ConfigVersionsCard } from "@/components/ConfigVersionsCard";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 
 const RISK_DESCRIPTIONS = {
@@ -45,6 +46,7 @@ export default function BotConfig() {
     const [savingPreset, setSavingPreset] = useState(false);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
+    const [errFix, setErrFix] = useState(null);
     const [msg, setMsg] = useState("");
     const [saveMsg, setSaveMsg] = useState("");
     const [newSym, setNewSym] = useState("");
@@ -59,6 +61,7 @@ export default function BotConfig() {
     //   pulses the matching card so it's obvious which preset is currently
     //   active on the account you came from.
     const [searchParams, setSearchParams] = useSearchParams();
+    const navigate = useNavigate();
     const [highlightPreset, setHighlightPreset] = useState(null);
     const [scrollOptimizer, setScrollOptimizer] = useState(false);
     const deepLinkAppliedRef = useRef(false);
@@ -189,7 +192,7 @@ export default function BotConfig() {
     };
 
     const save = async () => {
-        setSaving(true); setErr(""); setSaveMsg("");
+        setSaving(true); setErr(""); setErrFix(null); setSaveMsg("");
         try {
             const { data } = await api.put(`/bot/config${accountQuery}`, {
                 risk_level: cfg.risk_level,
@@ -247,19 +250,25 @@ export default function BotConfig() {
             setCfg(withFlatDefaults(data)); setSaveMsg("Configuration saved.");
             // refresh allConfigs index so the selector reflects new state
             try { const c = await api.get("/bot/configs"); setAllConfigs(c.data || []); } catch (_e) { /* non-fatal */ }
-        } catch (e) { setErr(formatApiError(e)); }
+        } catch (e) {
+            const structured = extractBlockerDetail(e, selectedAccountId);
+            if (structured) setErrFix(structured); else setErr(formatApiError(e));
+        }
         finally { setSaving(false); }
     };
 
     const toggleBot = async () => {
-        setErr(""); setMsg("");
+        setErr(""); setErrFix(null); setMsg("");
         try {
             const ep = cfg.active ? "/bot/stop" : "/bot/start";
             await api.post(`${ep}${accountQuery}`);
             setCfg({ ...cfg, active: !cfg.active });
             setMsg(cfg.active ? "Bot stopped." : "Bot started.");
             try { const c = await api.get("/bot/configs"); setAllConfigs(c.data || []); } catch (_e) { /* non-fatal */ }
-        } catch (e) { setErr(formatApiError(e)); }
+        } catch (e) {
+            const structured = extractBlockerDetail(e, selectedAccountId);
+            if (structured) setErrFix(structured); else setErr(formatApiError(e));
+        }
     };
 
     const resetAccountConfig = async () => {
@@ -333,6 +342,29 @@ export default function BotConfig() {
 
             <div className="p-4 md:p-8 space-y-6 max-w-4xl">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
+                {errFix && (
+                    <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-3 space-y-2"
+                        data-testid="activation-blockers-panel">
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="text-xs text-[#FF3B30] font-mono">{errFix.message}</div>
+                            <button onClick={() => setErrFix(null)} data-testid="activation-blockers-dismiss"
+                                className="text-[#52525B] hover:text-white shrink-0"><X className="w-3.5 h-3.5" /></button>
+                        </div>
+                        {errFix.items.map((it, i) => (
+                            <div key={i} className="flex items-center justify-between gap-3 border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2"
+                                data-testid={`activation-blocker-${i}`}>
+                                <span className="font-mono text-[11px] text-[#A1A1AA]">{it.text}</span>
+                                {it.fix && (
+                                    <button onClick={() => navigate(it.fix.to)}
+                                        data-testid={`fix-shortcut-${i}`}
+                                        className="shrink-0 flex items-center gap-1 font-mono text-[9px] font-bold tracking-widest px-2 py-1 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 transition-colors">
+                                        {it.fix.label} <ArrowRight className="w-3 h-3" />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
 
                 {/* Account scope selector — switch between the user's DEFAULT bot

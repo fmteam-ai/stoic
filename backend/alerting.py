@@ -103,10 +103,16 @@ async def evaluate_ops_alerts(db) -> int:
                 raised += 1
 
     # 2 · worker lease expired / loop crashlooping / loop stalled
+    # Leases expired beyond the ceiling are decommissioned workers (e.g.
+    # preview/single-process mode), not incidents — otherwise the evaluator
+    # re-raises the same critical alert forever after every acknowledge.
+    lease_ceiling = int(os.environ.get("WORKER_LEASE_ALERT_MAX_AGE_SEC", "86400"))
     async for w in db.worker_leases.find({}):
         name = str(w.get("_id"))
         exp = _parse_ts(w.get("expires_at"))
         if exp and exp < now:
+            if (now - exp).total_seconds() > lease_ceiling:
+                continue  # abandoned lease — decommissioned, skip all checks
             if await raise_alert(
                     db, "worker_lease_expired", "critical",
                     f"Worker '{name}' lease expired at {w.get('expires_at')}",
