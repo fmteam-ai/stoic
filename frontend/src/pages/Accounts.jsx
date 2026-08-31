@@ -756,7 +756,7 @@ export default function Accounts() {
 
                                     {a.mode !== "paper" && (
                                         <div className="mt-4">
-                                            <QuickInstallPanel accountId={a.id} accountLabel={a.label} />
+                                            <QuickInstallPanel accountId={a.id} accountLabel={a.label} account={a} onTrusted={load} />
                                         </div>
                                     )}
 

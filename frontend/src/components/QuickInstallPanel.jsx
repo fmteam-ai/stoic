@@ -15,13 +15,15 @@ import { toast } from "sonner";
  *
  * Token TTL is 15 min; on expiry, the user clicks Generate again.
  */
-export function QuickInstallPanel({ accountId, accountLabel }) {
+export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted }) {
     const [token, setToken] = useState(null);
     const [expiresAt, setExpiresAt] = useState(null);
     const [generating, setGenerating] = useState(false);
     const [pairedAt, setPairedAt] = useState(null);
     const [pairedHost, setPairedHost] = useState(null);
     const [countdown, setCountdown] = useState(null);
+    const [trusting, setTrusting] = useState(false);
+    const [justTrusted, setJustTrusted] = useState(false);
 
     const backendBase = API.replace(/\/api$/, "");
     const oneLiner = token
@@ -80,9 +82,61 @@ export function QuickInstallPanel({ accountId, accountLabel }) {
         }
     };
 
+    // iter-172 — one-click trusted terminal: when the EA is ALREADY
+    // heartbeating but unverified, no PowerShell is needed.
+    const hbAge = account?.last_heartbeat
+        ? (Date.now() - new Date(account.last_heartbeat).getTime()) / 1000
+        : null;
+    const eaConnected = hbAge !== null && hbAge < 180;
+    const verified = justTrusted || !!account?.verified_identity;
+    const trustEligible = !verified && eaConnected
+        && account?.broker_account_id_reported != null
+        && !account?.broker_account_mismatch;
+
+    const trustTerminal = async () => {
+        setTrusting(true);
+        try {
+            await api.post(`/accounts/${accountId}/trust-terminal`);
+            setJustTrusted(true);
+            toast.success("Terminal trusted — full trading authority restores within a minute");
+            onTrusted && onTrusted();
+        } catch (e) {
+            toast.error("Could not trust terminal", { description: formatApiError(e) });
+        } finally { setTrusting(false); }
+    };
+
+    const trustSection = verified ? (
+        <div className="mb-3 flex items-center gap-2 font-mono text-xs text-[#00FF41]"
+             data-testid={`terminal-verified-${accountId}`}>
+            <CheckCircle2 className="w-4 h-4" />
+            TERMINAL VERIFIED — FULL TRADING AUTHORITY
+        </div>
+    ) : trustEligible ? (
+        <div className="mb-4 border border-[#00FF41]/40 bg-[#00FF41]/5 p-3"
+             data-testid={`quick-trust-panel-${accountId}`}>
+            <div className="text-sm text-white font-medium mb-1">
+                EA already connected — no PowerShell needed
+            </div>
+            <div className="text-xs text-[#A1A1AA] mb-2.5">
+                This terminal is heartbeating from MT5 login{" "}
+                <code className="text-[#FFD700] font-mono">{String(account.broker_account_id_reported)}</code>.
+                Trust it with one click to unlock full trading authority.
+            </div>
+            <button
+                onClick={trustTerminal}
+                disabled={trusting}
+                data-testid={`quick-trust-btn-${accountId}`}
+                className="w-full bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-bold py-2.5 text-sm font-mono tracking-widest transition-colors"
+            >
+                {trusting ? "TRUSTING…" : "TRUST THIS TERMINAL — ONE CLICK"}
+            </button>
+        </div>
+    ) : null;
+
     if (pairedAt) {
         return (
             <div className="border border-[#00FF41]/30 bg-[#00FF41]/5 p-4" data-testid="quick-install-paired">
+                {trustSection}
                 <div className="flex items-center gap-2 mb-2">
                     <CheckCircle2 className="w-5 h-5 text-[#00FF41]" />
                     <div className="font-display font-bold tracking-wide text-white">Paired — EA deployed</div>
@@ -107,12 +161,15 @@ export function QuickInstallPanel({ accountId, accountLabel }) {
 
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="quick-install-panel">
+            {trustSection}
             <div className="flex items-center gap-2 mb-2">
                 <TerminalIcon className="w-5 h-5 text-[#FFD700]" />
                 <div className="font-display font-bold tracking-wide text-white">Quick Install (Windows VPS / PC)</div>
             </div>
             <p className="text-sm text-[#A1A1AA] mb-4">
-                Skip MetaEditor, F7 compile, and the WebRequest URL whitelist dance. Generate a one-time token, then paste a single PowerShell command on your MT5 host.
+                {trustEligible
+                    ? "Prefer the strongest pairing instead? Generate a one-time token and paste a single PowerShell command on your MT5 host."
+                    : "Skip MetaEditor, F7 compile, and the WebRequest URL whitelist dance. Generate a one-time token, then paste a single PowerShell command on your MT5 host."}
             </p>
 
             {!token ? (
