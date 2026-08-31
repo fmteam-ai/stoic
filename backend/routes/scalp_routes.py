@@ -311,6 +311,8 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
             r.mode = cfg.get("mode", "shadow")
     out = []
     from scalp import permissions as _perms
+    from state_contract import effective_connection_state
+    from bson import ObjectId
     for r in _runners.values():
         if r.user_id != user["id"]:
             continue
@@ -320,7 +322,31 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
         # kick a (throttled, non-blocking) refresh on status reads so the
         # panel shows current regime/session even when the stream is down.
         _perms.maybe_refresh(db, r.user_id, r.symbol, r.cfg)
-        out.append(r.status())
+        st = r.status()
+        # iter-176 — tick-ingress + terminal facts so the UI can diagnose
+        # an offline stream precisely.
+        ing = await db.scalp_tick_ingress.find_one(
+            {"_id": f"{r.account_id}:{r.symbol}"})
+        if ing:
+            st["ingress"] = {k: ing.get(k) for k in
+                             ("last_batch_at", "last_status",
+                              "last_reason", "last_ticks", "batches")}
+        else:
+            st["ingress"] = None
+        try:
+            acc = await db.accounts.find_one(
+                {"_id": ObjectId(r.account_id)})
+        except Exception:  # noqa: BLE001
+            acc = None
+        if acc:
+            conn = effective_connection_state(acc)
+            st["terminal"] = {
+                "ea_version": acc.get("ea_version"),
+                "heartbeat_age_seconds": conn.get("heartbeat_age_seconds"),
+                "connected": conn.get("connected")}
+        else:
+            st["terminal"] = None
+        out.append(st)
     from scalp.engine import audit_backlog
     return {"runners": out, "audit": audit_backlog()}
 

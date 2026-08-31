@@ -702,6 +702,37 @@ class BridgeTicks(BaseModel):
     ticks: list = []
 
 
+_TICK_INGRESS_LAST: dict = {}   # "{account_id}:{symbol}" → (ts, status, reason)
+
+
+async def _record_tick_ingress(db, account_id: str, symbol: str,
+                               status: str, reason: str | None,
+                               n_ticks: int) -> None:
+    """iter-176 — lightweight per-account tick-ingress ledger so the Scalp
+    page can DIAGNOSE an offline stream (never sent vs rejected vs ignored)
+    instead of showing a generic warning. Throttled to 1 write/15s unless
+    the outcome changes."""
+    import time as _t
+    k = f"{account_id}:{symbol}"
+    prev = _TICK_INGRESS_LAST.get(k)
+    now = _t.time()
+    if prev and prev[1] == status and prev[2] == reason and now - prev[0] < 15:
+        return
+    _TICK_INGRESS_LAST[k] = (now, status, reason)
+    try:
+        await db.scalp_tick_ingress.update_one(
+            {"_id": k},
+            {"$set": {"account_id": account_id, "symbol": symbol,
+                      "last_batch_at":
+                          datetime.now(timezone.utc).isoformat(),
+                      "last_status": status, "last_reason": reason,
+                      "last_ticks": n_ticks},
+             "$inc": {"batches": 1}},
+            upsert=True)
+    except Exception:  # noqa: BLE001 — diagnostics must never break ticks
+        pass
+
+
 @router.post("/ticks")
 async def receive_ticks(payload: BridgeTicks):
     """EA v1.44 — bid/ask tick stream for the scalp fast path."""
@@ -713,9 +744,16 @@ async def receive_ticks(payload: BridgeTicks):
     # distributed lease must not process ticks for this account (locally
     # cached, ~1 DB round-trip per half-TTL — off the per-tick hot path).
     if not await ensure_account_lease(db, str(account["_id"])):
+        await _record_tick_ingress(db, str(account["_id"]), base,
+                                   "rejected",
+                                   "account_owned_by_other_worker",
+                                   len(payload.ticks or []))
         return {"status": "rejected", "reason": "account_owned_by_other_worker"}
     runner = get_runner(str(account["_id"]), account["user_id"], base)
     if runner is None:
+        await _record_tick_ingress(db, str(account["_id"]), base, "ignored",
+                                   f"{base} not in approved scalp universe",
+                                   len(payload.ticks or []))
         return {"status": "ignored", "reason": f"{base} not in approved scalp universe"}
     if not getattr(runner, "_hydrated", False):
         runner._hydrated = True
@@ -724,6 +762,9 @@ async def receive_ticks(payload: BridgeTicks):
         if cfg_doc and cfg_doc.get("removed"):
             from scalp.engine import _runners
             _runners.pop(f"{account['_id']}:{base}", None)
+            await _record_tick_ingress(db, str(account["_id"]), base,
+                                       "ignored", "runner_removed",
+                                       len(payload.ticks or []))
             return {"status": "ignored", "reason": "runner_removed"}
         if cfg_doc:
             runner.enabled = bool(cfg_doc.get("enabled"))
@@ -738,6 +779,8 @@ async def receive_ticks(payload: BridgeTicks):
         from scalp.model import load_persisted
         await load_persisted(db, runner.model_key())
     out = await runner.ingest(db, account, payload.ticks or [], payload.sent_at_ms)
+    await _record_tick_ingress(db, str(account["_id"]), base, "ok", None,
+                               len(payload.ticks or []))
     return {"status": "ok", **out}
 
 

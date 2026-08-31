@@ -57,6 +57,7 @@ async def test_heartbeat_broadcasts_position_ticks(monkeypatch):
            "broker": "MT5", "bridge_token": "tok"}
     fake_db = MagicMock()
     fake_db.accounts.find_one = AsyncMock(return_value=acc)
+    fake_db.installations.find_one = AsyncMock(return_value=None)
     fake_db.accounts.update_one = AsyncMock()
     fake_db.trades.find_one = AsyncMock(return_value=None)  # nothing tracked yet
     fake_db.trades.insert_one = AsyncMock()
@@ -107,6 +108,7 @@ async def test_heartbeat_skips_broadcast_when_no_current_price(monkeypatch):
            "broker": "MT5", "bridge_token": "tok"}
     fake_db = MagicMock()
     fake_db.accounts.find_one = AsyncMock(return_value=acc)
+    fake_db.installations.find_one = AsyncMock(return_value=None)
     fake_db.accounts.update_one = AsyncMock()
     fake_db.trades.find_one = AsyncMock(return_value=None)
     fake_db.trades.insert_one = AsyncMock()
@@ -143,6 +145,7 @@ async def test_heartbeat_skips_broadcast_on_terminal_mismatch(monkeypatch):
            "broker": "MT5", "bridge_token": "tok"}
     fake_db = MagicMock()
     fake_db.accounts.find_one = AsyncMock(return_value=acc)
+    fake_db.installations.find_one = AsyncMock(return_value=None)
     fake_db.accounts.update_one = AsyncMock()
     fake_db.trades.find_one = AsyncMock(return_value=None)
     fake_db.trades.insert_one = AsyncMock()

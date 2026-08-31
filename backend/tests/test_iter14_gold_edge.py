@@ -50,8 +50,8 @@ def _arun(coro_fn):
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@trading.bot")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+from live_target import resolve_admin_credentials
+ADMIN_EMAIL, ADMIN_PASSWORD = resolve_admin_credentials()
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "ai_trading_bot")
 

@@ -21,15 +21,24 @@ API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@trading.bot")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+# The canonical test admin (memory/test_credentials.md) — the .env
+# ADMIN_* values are the PRODUCTION seed and may not match this DB, so
+# try the test admin first to avoid tripping the failed-login lockout.
+_ADMIN_CANDIDATES = [("admin@trading.bot", "admin123"),
+                     (ADMIN_EMAIL, ADMIN_PASSWORD)]
 
 
 # ---------- Fixtures ----------
 @pytest.fixture(scope="session")
 def admin_session():
     s = requests.Session()
-    r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
-    assert r.status_code == 200, f"Admin login failed: {r.status_code} {r.text}"
-    return s
+    r = None
+    for em, pw in _ADMIN_CANDIDATES:
+        r = s.post(f"{API}/auth/login",
+                   json={"email": em, "password": pw}, timeout=30)
+        if r.status_code == 200:
+            return s
+    assert False, f"Admin login failed: {r.status_code} {r.text}"
 
 
 @pytest.fixture(scope="session")
@@ -227,10 +236,17 @@ class TestAccounts:
         assert r.status_code == 200, r.text
         acc = r.json()
         assert acc["label"] == "TEST_Account_1"
-        assert "bridge_token" in acc and len(acc["bridge_token"]) > 10
+        # SEC hardening — bridge_token is never bulk-returned; the owner
+        # fetches a fresh one via rotate-token.
+        assert acc.get("has_bridge_token") is True
+        assert "bridge_token" not in acc
         assert "id" in acc
         acc_id = acc["id"]
-        original_token = acc["bridge_token"]
+        r0 = fresh_user_session.post(
+            f"{API}/accounts/{acc_id}/rotate-token", timeout=10)
+        assert r0.status_code == 200
+        original_token = r0.json()["bridge_token"]
+        assert len(original_token) > 10
 
         # List
         r2 = fresh_user_session.get(f"{API}/accounts", timeout=10)
@@ -330,6 +346,10 @@ class TestTradeBridge:
             "account_type": "microcent",
             "base_currency": "USD",
         }, timeout=10).json()
+        # bridge_token is masked in serialized accounts — fetch a full one
+        acc["bridge_token"] = s.post(
+            f"{API}/accounts/{acc['id']}/rotate-token",
+            timeout=10).json()["bridge_token"]
 
         # Try to generate a non-HOLD signal up to 2 times across BTCUSD/XAUUSD;
         # if still HOLD, deterministically insert a BUY signal directly into Mongo.
@@ -2368,11 +2388,13 @@ class TestSpreadFilter:
                 timeout=15,
             )
             assert r.status_code == 200
-            token = r.json()["bridge_token"]
             acc_id = r.json()["id"]
         else:
-            token = live[0]["bridge_token"]
             acc_id = live[0]["id"]
+        # bridge_token is masked in serialized accounts — rotate for a full one
+        token = admin_session.post(
+            f"{API}/accounts/{acc_id}/rotate-token",
+            timeout=10).json()["bridge_token"]
         # Send a heartbeat carrying spreads
         r = requests.post(
             f"{API}/bridge/heartbeat",
@@ -2410,7 +2432,9 @@ class TestSpreadFilter:
             timeout=15,
         )
         assert r.status_code == 200, r.text
-        token = r.json()["bridge_token"]
+        # bridge_token is masked in serialized accounts — rotate for a full one
+        token = s.post(f"{API}/accounts/{r.json()['id']}/rotate-token",
+                       timeout=10).json()["bridge_token"]
         # No spreads field at all — must still 200
         r2 = requests.post(
             f"{API}/bridge/heartbeat",

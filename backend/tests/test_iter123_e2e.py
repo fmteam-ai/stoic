@@ -23,8 +23,8 @@ from tests.helpers import (base_url, mark_email_verified, mongo_db,
 BASE = base_url()
 API = f"{BASE}/api"
 ORIGIN = os.environ["CHECKOUT_ALLOWED_ORIGINS"].split(",")[0].strip()
-ADMIN_EMAIL = os.environ["ADMIN_EMAIL"]
-ADMIN_PW = os.environ["ADMIN_PASSWORD"]
+from live_target import resolve_admin_credentials
+ADMIN_EMAIL, ADMIN_PW = resolve_admin_credentials()
 
 
 # -------- fixtures --------------------------------------------------------

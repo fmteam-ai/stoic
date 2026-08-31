@@ -345,14 +345,40 @@ export default function Scalp() {
                                 );
                             })()}
                         </div>
-                        {quoteAge(r.quote_age_ms).tier === "OFFLINE" && (
-                            <div className="text-xs text-[#FFB000] mt-2 border border-[#FFB000]/30 bg-[#FFB000]/5 px-2 py-1.5"
-                                 data-testid="scalp-tick-offline">
-                                TICK STREAM OFFLINE — no ticks arriving from this terminal. Check that MT5 is running
-                                with EA v1.48+ attached and <span className="font-mono">TickStreamEnabled=true, TickStreamSymbol={r.symbol}</span>.
-                                Regime &amp; permissions cannot refresh without ticks.
-                            </div>
-                        )}
+                        {quoteAge(r.quote_age_ms).tier === "OFFLINE" && (() => {
+                            const ing = r.ingress;
+                            const term = r.terminal || {};
+                            const hbFresh = term.connected === true;
+                            const batchAgeS = ing?.last_batch_at
+                                ? Math.round((Date.now() - new Date(ing.last_batch_at).getTime()) / 1000)
+                                : null;
+                            let title, detail;
+                            if (ing?.last_status === "rejected") {
+                                title = "TICK STREAM BLOCKED";
+                                detail = `Batches ARE reaching the server (last ${batchAgeS}s ago) but are rejected: ${ing.last_reason}. This usually clears itself within a minute; if it persists, the account is being processed by another worker.`;
+                            } else if (ing?.last_status === "ignored") {
+                                title = "TICK STREAM IGNORED";
+                                detail = `Batches ARE reaching the server (last ${batchAgeS}s ago) but are ignored: ${ing.last_reason}.`;
+                            } else if (ing && batchAgeS !== null && batchAgeS < 120) {
+                                title = "TICKS ARRIVING BUT NOT ACCEPTED";
+                                detail = `A batch reached the server ${batchAgeS}s ago but no valid tick was accepted — quotes may be duplicated/out-of-order (market closed?).`;
+                            } else if (ing && batchAgeS !== null) {
+                                title = "TICK STREAM STOPPED";
+                                detail = `This terminal last delivered ticks ${batchAgeS > 3600 ? `${Math.round(batchAgeS / 3600)}h` : `${Math.round(batchAgeS / 60)}min`} ago${hbFresh ? " while its heartbeat is still fresh — the EA is running but its tick timer stalled; re-attach the EA or restart the terminal" : " and its heartbeat is also stale — start the MT5 terminal/VPS first"}.`;
+                            } else if (hbFresh) {
+                                title = "TICK STREAM NEVER STARTED";
+                                detail = `The EA${term.ea_version ? ` v${term.ea_version}` : ""} is heartbeating but has NEVER sent a tick batch. In the EA inputs (F7): TickStreamEnabled=true, TickStreamSymbol=${r.symbol}. Tick streaming needs EA v1.48+ — if yours is older, re-install from Accounts → Quick Install.`;
+                            } else {
+                                title = "TERMINAL OFFLINE";
+                                detail = `No heartbeat from this terminal${term.heartbeat_age_seconds != null ? ` for ${Math.round(term.heartbeat_age_seconds / 60)}min` : ""} — start MT5 (or the VPS) with the EA attached and AutoTrading ON, then ticks resume automatically.`;
+                            }
+                            return (
+                                <div className="text-xs text-[#FFB000] mt-2 border border-[#FFB000]/30 bg-[#FFB000]/5 px-2 py-1.5"
+                                     data-testid="scalp-tick-offline">
+                                    <span className="font-bold tracking-widest font-mono">{title}</span> — {detail}
+                                </div>
+                            );
+                        })()}
                         {(() => {
                             const s = r.permissions?.session;
                             if (!s || s.open) return null;

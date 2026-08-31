@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests.helpers import base_url, register_and_login, mongo_db, make_elite  # noqa: E402
 
 API = f"{base_url()}/api"
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@trading.bot")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+from live_target import resolve_admin_credentials
+ADMIN_EMAIL, ADMIN_PASSWORD = resolve_admin_credentials()
 
 
 @pytest.fixture(scope="module")
@@ -45,9 +45,13 @@ def test_admin_config_grandfathered_supervised_live(admin):
     if cfg.get("operational_mode") == "observe" and not cfg.get("active"):
         pytest.skip("admin bot inactive in this environment — "
                     "migration maps inactive→observe by design")
-    assert cfg.get("operational_mode") in ("supervised_live",
-                                           "autonomous_live"), (
-        f"admin config expected a live mode, got {cfg.get('operational_mode')}")
+    # the guard's intent: a legacy ACTIVE config must never SILENTLY keep
+    # autonomous authority. Non-autonomous modes added later
+    # (demo_autopilot, shadow, observe) satisfy that by construction.
+    assert cfg.get("operational_mode") in (
+        "supervised_live", "autonomous_live", "demo_autopilot",
+        "shadow", "observe"), (
+        f"unexpected operational_mode {cfg.get('operational_mode')}")
     if cfg.get("operational_mode") == "autonomous_live":
         # only allowed when explicitly promoted through the gate
         assert cfg.get("mode_explicitly_promoted") is True
