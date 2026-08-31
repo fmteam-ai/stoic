@@ -1,0 +1,35 @@
+{
+  "summary": "Backend-only verification of Monday-UTC day-of-week test fixes. Environment date is Mon 2026-08-31 UTC (weekday=0) — exactly the failing CI condition. All requested suites pass 100%.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "results": {
+    "tests/integration/ (backend-integration CI job)": "79 passed in 14.20s (includes test_iter157_composition_invalidation)",
+    "tests/test_iter221_risk_truth_http.py (clean-deploy-cert slice)": "11 passed in 8.45s (r5 & r10 day-aware branches exercised on Monday)",
+    "tests/unit/scalp/ (regression)": "423 passed in 3.93s",
+    "tests/test_iter196_authority_truth.py + tests/test_e2e_v56_authority.py (regression)": "26 passed in 16.13s",
+    "docs/TEST_MANIFEST.md regeneration": "no diff; git status clean (4077 tests, 405 files)"
+  },
+  "day_aware_logic_review": {
+    "iter157": "days_back = min(3, now.weekday()) — on Mon(0) yields 0 so trade is at today; recompute assertion is correctly gated by `if days_back > 0`. On Tue-Sun, days_back in [1,3], trade stays inside current ISO week, so both risk_state_source=='recomputed' and same-week weekly_loss_pct equality are still enforced. Correct on all weekdays.",
+    "iter221_r5": "Monday branch asserts reason=='daily_loss_cap_reached' (since Monday 01:00 UTC seed is also today, and daily cap is checked before weekly). Non-Monday branch still asserts reason=='weekly_loss_cap_reached' AND weekly_loss_pct>=5.0. Correct on all weekdays.",
+    "iter221_r10": "Accepts either cap reason and asserts persisted snapshot.reason == live decision.reason — this preserves the test's intent (snapshot persistence) irrespective of which cap fires first."
+  },
+  "notes": [
+    "Task-destroyed warnings from guard_alerts.py:_send_block_alert are pre-existing noise, not failures (documented).",
+    "http-marker and integration-marker suites run in separate pytest invocations per contract."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/integration/test_iter157_composition_invalidation.py",
+    "/app/backend/tests/test_iter221_risk_truth_http.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (539/539 across requested suites)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@trading.bot / admin123 — not required in this run (no http auth tests hit /api/auth/login directly here)",
+  "seed_data_creation": "None (tests self-seed and cleanup)",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Fixes are Monday-safe and verified on a Monday. Re-verification on other weekdays only possible by reading arithmetic (done above) since system date cannot be changed. Manifest is in sync — no need to regenerate unless test files change.",
+  "rca of the issue": "CI executed on Monday UTC exposed two day-of-week-sensitive tests that assumed a mid-week clock. iter157 seeded a closed trade at 'now - 3 days' which on Mon/Tue/Wed rolls into the prior ISO week, so the weekly-composition fingerprint stayed identical and risk_state_source stayed 'maintained' instead of the expected 'recomputed'. iter221 r5 seeded trades at Monday 01:00 UTC to simulate weekly loss accumulation, but on Monday runs those trades are ALSO today's trades, so the daily cap (evaluated before the weekly cap in modules/pamm) fires with reason 'daily_loss_cap_reached' before the weekly cap is reached. Fix (test-only): (a) iter157 uses days_back=min(3, now.weekday()) to keep the seed inside the current week and gates the move-to-today recompute assertion on days_back>0 (no-op on Monday); (b) iter221 r5 branches its reason assertion on now.weekday()==0 (daily) vs otherwise (weekly + weekly_loss_pct>=5.0); (c) iter221 r10 asserts snapshot.reason == live.reason so the persistence contract is verified regardless of which cap trips."
+}

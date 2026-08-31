@@ -469,9 +469,15 @@ class TestDemoEnvelopeCaps:
                 "symbol": "EURUSD", "action": "BUY", "lot_size": 0.01,
                 "strategy_id": "sniper"}))
             assert out["authorized"] is False, out
-            assert out["reason"] == "weekly_loss_cap_reached", out
-            det = out["checks"][-1]["detail"]
-            assert det["weekly_loss_pct"] >= 5.0, det
+            # On Mondays the seeded Monday-01:00 trades are also TODAY's,
+            # so the daily cap (checked first) fires; any other day the
+            # weekly cap does.
+            if now.weekday() == 0:
+                assert out["reason"] == "daily_loss_cap_reached", out
+            else:
+                assert out["reason"] == "weekly_loss_cap_reached", out
+                det = out["checks"][-1]["detail"]
+                assert det["weekly_loss_pct"] >= 5.0, det
         finally:
             _cleanup_program(mongo, pid)
             _cleanup_account(mongo, acc_id)
@@ -657,7 +663,11 @@ class TestRejectedSnapshotPersisted:
                 "symbol": "EURUSD", "action": "BUY", "lot_size": 0.01,
                 "strategy_id": "sniper"}))
             assert out["authorized"] is False, out
-            assert out["reason"] == "weekly_loss_cap_reached", out
+            # weekly cap normally; on Mondays the same trades are TODAY's
+            # so the daily cap (checked first) fires instead — the snapshot
+            # persistence contract is what this test actually covers.
+            assert out["reason"] in ("weekly_loss_cap_reached",
+                                     "daily_loss_cap_reached"), out
             # Snapshot doc for a rejected decision must still be present
             docs = list(mongo.pamm_risk_decisions.find(
                 {"program_id": pid}))
@@ -665,7 +675,7 @@ class TestRejectedSnapshotPersisted:
             reject_docs = [d for d in docs if d.get("authorized") is False]
             assert len(reject_docs) >= 1, docs
             d = reject_docs[0]
-            assert d["reason"] == "weekly_loss_cap_reached", d
+            assert d["reason"] == out["reason"], d
             assert d["environment"] == "DEMO"
             assert isinstance(d.get("envelope"), dict) and d["envelope"]
             assert isinstance(d.get("telemetry"), dict) and d["telemetry"]

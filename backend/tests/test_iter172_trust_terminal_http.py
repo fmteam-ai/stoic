@@ -48,14 +48,17 @@ def account(session):
                    timeout=TIMEOUT)
 
 
-def _heartbeat(account):
-    r = requests.post(f"{BASE_URL}/api/bridge/heartbeat", json={
+def _heartbeat(account, broker_server="TrustTest-Demo"):
+    body = {
         "bridge_token": account["bridge_token"],
         "balance": 1000.0, "equity": 1000.0, "open_positions": 0,
         "account_login": int(account["login"]),
-        "broker_server": "TrustTest-Demo",
         "ea_version": "1.56", "terminal_build": 4400,
-        "positions": []}, timeout=TIMEOUT)
+        "positions": []}
+    if broker_server is not None:
+        body["broker_server"] = broker_server
+    r = requests.post(f"{BASE_URL}/api/bridge/heartbeat", json=body,
+                      timeout=TIMEOUT)
     assert r.status_code == 200, r.text
 
 
@@ -101,6 +104,13 @@ def test_trust_then_plain_heartbeat_verifies_chain(session, account):
     assert ident.get("authoritative") is True
     assert ident.get("reason") is None
     assert not a.get("broker_account_mismatch")
+
+    # SEC-001 — a heartbeat that OMITS broker_server must NOT resolve the
+    # trusted installation (omitted-server bypass is closed)
+    _heartbeat(account, broker_server=None)
+    a = _find_account(session, account["id"])
+    assert (a.get("ea_identity") or {}).get("authoritative") is not True
+    _heartbeat(account)   # restore verified state for the next test
 
     # idempotent — second click reports already verified
     r = session.post(

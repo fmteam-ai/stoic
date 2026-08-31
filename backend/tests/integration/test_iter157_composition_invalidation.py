@@ -91,8 +91,13 @@ async def _scenarios():
         assert (await _tele(db))["symbol_open_lots"] == 1.0
 
         # 5. daily-loss composition: same WEEK totals, closed_at moved
-        #    from 3 days ago into today → daily loss must refresh NOW
-        old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        #    from earlier this week into today → daily loss must refresh
+        #    NOW. Day-aware: "3 days ago" must stay INSIDE the current
+        #    week (on Mon/Tue/Wed it would fall into last week and the
+        #    weekly composition would not change).
+        now = datetime.now(timezone.utc)
+        days_back = min(3, now.weekday())
+        old = (now - timedelta(days=days_back)).isoformat()
         await db.trades.insert_one(
             {"_id": "closed1", "account_id": "comp_acct",
              "status": "closed", "pnl": -300.0, "closed_at": old,
@@ -105,8 +110,10 @@ async def _scenarios():
         await db.trades.update_one({"_id": "closed1"},
                                    {"$set": {"closed_at": _now()}})
         t = await _tele(db)
-        assert t["risk_state_source"] == "recomputed"
-        assert t["weekly_loss_pct"] == weekly_before   # same week total
+        if days_back > 0:
+            assert t["risk_state_source"] == "recomputed"
+            assert t["weekly_loss_pct"] == weekly_before   # same week total
+        # on Mondays the trade was already today's — the move is a no-op
         assert t["daily_loss_pct"] == 3.0              # -300/10000 today
     finally:
         await db.client.drop_database(DB_NAME)

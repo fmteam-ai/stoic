@@ -646,6 +646,9 @@ async def revoke_installation(account_id: str, installation_id: str,
         raise HTTPException(status_code=404,
                             detail="Installation not found or already "
                                    "revoked")
+    from security import rate_limit
+    await rate_limit(db, "revoke_installation", user["id"], 20, 600,
+                     request=request)
     now = datetime.now(timezone.utc)
     await db.installations.update_one(
         {"_id": inst["_id"]},
@@ -713,23 +716,34 @@ async def trust_terminal(account_id: str, request: Request,
             "to v1.24+ or wait for the next heartbeat"))
     ea_ident = acc.get("ea_identity") or {}
     broker_server = ea_ident.get("broker_server") or acc.get("server")
+    if not broker_server:
+        raise HTTPException(status_code=409, detail=(
+            "The EA has not reported its broker server yet — wait for the "
+            "next heartbeat before trusting this terminal"))
+    from security import rate_limit
+    await rate_limit(db, "trust_terminal", user["id"], 10, 600,
+                     request=request)
     now = datetime.now(timezone.utc)
     installation_id = f"inst_{_uuid.uuid4().hex[:12]}"
     await db.installations.update_many(
         {"account_id": account_id, "revoked": {"$ne": True}},
         {"$set": {"revoked": True, "revoked_at": now,
                   "revoked_reason": "superseded by user-trusted terminal"}})
-    await db.installations.insert_one({
-        "installation_id": installation_id,
-        "user_id": user["id"], "account_id": account_id,
-        "method": "user_trust",
-        "trusted_fingerprint": {
-            "account_login": str(reported_login),
-            "broker_server": broker_server,
-            "terminal_build": ea_ident.get("terminal_build")},
-        "terminal_path": "user-trusted-terminal",
-        "host_fingerprint": f"mt5-login-{reported_login}",
-        "revoked": False, "created_at": now})
+    # fixed _id → concurrent double-clicks collapse into one installation
+    await db.installations.update_one(
+        {"_id": f"user_trust:{account_id}"},
+        {"$set": {
+            "installation_id": installation_id,
+            "user_id": user["id"], "account_id": account_id,
+            "method": "user_trust",
+            "trusted_fingerprint": {
+                "account_login": str(reported_login),
+                "broker_server": broker_server,
+                "terminal_build": ea_ident.get("terminal_build")},
+            "terminal_path": "user-trusted-terminal",
+            "host_fingerprint": f"mt5-login-{reported_login}",
+            "revoked": False, "created_at": now}},
+        upsert=True)
     from vps_agent import LEASE_SECONDS
     await db.execution_leases.update_one(
         {"account_id": account_id},

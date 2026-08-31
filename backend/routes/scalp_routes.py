@@ -48,6 +48,9 @@ async def set_session_window(payload: dict, request: Request,
             {"_id": f"{user['id']}:{sym}"})
         s, e = cfg.session_start_utc, cfg.session_end_utc
     else:
+        from security import rate_limit
+        await rate_limit(db, "scalp_session_window", user["id"], 20, 600,
+                         request=request)
         try:
             s, e = int(payload.get("start_utc")), int(payload.get("end_utc"))
         except (TypeError, ValueError):

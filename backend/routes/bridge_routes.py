@@ -100,9 +100,11 @@ async def heartbeat(payload: BridgeHeartbeat):
             login_ok = (payload.account_login is not None
                         and str(payload.account_login).strip()
                         == str(fp.get("account_login") or "").strip())
-            srv_ok = (not fp.get("broker_server")
-                      or not payload.broker_server
-                      or payload.broker_server == fp["broker_server"])
+            # SEC-001 — broker_server must be PRESENT on both sides and
+            # match exactly; an omitted server must never pass.
+            srv_ok = (bool(fp.get("broker_server"))
+                      and bool(payload.broker_server)
+                      and payload.broker_server == fp["broker_server"])
             if login_ok and srv_ok:
                 effective_installation_id = trusted["installation_id"]
     if effective_installation_id:
@@ -713,7 +715,11 @@ async def _record_tick_ingress(db, account_id: str, symbol: str,
     instead of showing a generic warning. Throttled to 1 write/15s unless
     the outcome changes."""
     import time as _t
-    k = f"{account_id}:{symbol}"
+    # SEC-002 — cap collection growth: unapproved symbols collapse into a
+    # single per-account bucket instead of one doc per caller-chosen name.
+    from scalp.instruments import approved
+    key_sym = symbol if approved(symbol) else "_unapproved"
+    k = f"{account_id}:{key_sym}"
     prev = _TICK_INGRESS_LAST.get(k)
     now = _t.time()
     if prev and prev[1] == status and prev[2] == reason and now - prev[0] < 15:
