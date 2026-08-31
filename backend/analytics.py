@@ -146,7 +146,11 @@ async def compute_attribution(user_id: str) -> dict:
     annotates with session/hour/dow buckets, then aggregates many ways.
     """
     db = get_db()
-    cursor = db.trades.find({"user_id": user_id, "status": "closed"})
+    cursor = db.trades.find(
+        {"user_id": user_id, "status": "closed"},
+        {"pnl": 1, "symbol": 1, "action": 1, "mode": 1, "origin": 1,
+         "signal_id": 1, "opened_at": 1, "closed_at": 1, "partial_closed": 1,
+         "breakeven_set": 1, "trail_active": 1, "close_reason": 1})
     closed = await cursor.to_list(length=5000)
 
     # Join signals to fetch confidence + regime at the time of trade
@@ -258,7 +262,10 @@ async def compute_sessions(user_id: str) -> dict:
     Plus the headline `best_session_by_r` and `best_session_by_pnl`.
     """
     db = get_db()
-    cursor = db.trades.find({"user_id": user_id, "status": "closed"})
+    cursor = db.trades.find(
+        {"user_id": user_id, "status": "closed"},
+        {"opened_at": 1, "pnl": 1, "symbol": 1, "entry_price": 1,
+         "stop_loss": 1, "lot_size": 1})
     closed = await cursor.to_list(length=5000)
 
     enriched = []

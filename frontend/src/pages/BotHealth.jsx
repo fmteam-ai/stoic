@@ -541,26 +541,41 @@ export default function BotHealth() {
         setLoading(true); setErr("");
         try {
             const t0 = performance.now();
+            // Every panel fetch is bounded and individually caught — one slow
+            // or failing endpoint degrades its own panel, never the page.
+            const g = (url, fallback = null) =>
+                api.get(url, { timeout: 15000 }).catch(() => ({ data: fallback, _failed: true }));
             const [hs, diag, pulse, sess, pats, adj, blocks, ahSet, ahLog, execH] = await Promise.all([
-                api.get("/bot/health-score"),
-                api.get("/diagnostic/run"),
-                api.get("/bot/pulse"),
-                api.get("/analytics/sessions"),
-                api.get("/postmortem/patterns"),
-                api.get("/postmortem/adjustments"),
-                api.get("/safety-blocks/stats").catch(() => ({ data: null })),
-                api.get("/auto-heal/settings").catch(() => ({ data: { enabled: false } })),
-                api.get("/auto-heal/log").catch(() => ({ data: { items: [] } })),
-                api.get("/bot/execution-health").catch(() => ({ data: null })),
+                g("/bot/health-score"),
+                g("/diagnostic/run"),
+                g("/bot/pulse"),
+                g("/analytics/sessions"),
+                g("/postmortem/patterns"),
+                g("/postmortem/adjustments"),
+                g("/safety-blocks/stats"),
+                g("/auto-heal/settings", { enabled: false }),
+                g("/auto-heal/log", { items: [] }),
+                g("/bot/execution-health"),
             ]);
-            setData({
-                healthScore: hs.data, diagnostic: diag.data, pulse: pulse.data,
-                sessions: sess.data, patterns: pats.data, adjustments: adj.data,
-                blocks: blocks.data,
-                autoHeal: { settings: ahSet.data, log: ahLog.data?.items || [] },
-                execHealth: execH.data,
+            const failedCount = [hs, diag, pulse, sess, pats, adj].filter(r => r._failed).length;
+            // Keep last-good data for any panel that failed this round.
+            setData(prev => ({
+                healthScore: hs._failed ? prev.healthScore : hs.data,
+                diagnostic: diag._failed ? prev.diagnostic : diag.data,
+                pulse: pulse._failed ? prev.pulse : pulse.data,
+                sessions: sess._failed ? prev.sessions : sess.data,
+                patterns: pats._failed ? prev.patterns : pats.data,
+                adjustments: adj._failed ? prev.adjustments : adj.data,
+                blocks: blocks._failed ? prev.blocks : blocks.data,
+                autoHeal: ahSet._failed && ahLog._failed
+                    ? prev.autoHeal
+                    : { settings: ahSet.data, log: ahLog.data?.items || [] },
+                execHealth: execH._failed ? prev.execHealth : execH.data,
                 apiLatencyMs: Math.round(performance.now() - t0),
-            });
+            }));
+            if (failedCount > 0) {
+                setErr(`${failedCount} panel(s) temporarily unreachable — showing last known data, retrying automatically.`);
+            }
             setLast(new Date());
         } catch (e) {
             setErr(formatApiError(e));
