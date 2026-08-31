@@ -2321,3 +2321,8 @@ User-reported batch before the next major gate:
 - DB cleanup: deleted stale `tuning` lease, acked residual alert. Verified after an evaluator cycle: unacked=0, score 95 'excellent', hard_caps [].
 - Regression test: backend/tests/test_iter177_worker_lease_ceiling.py (dead lease → no alert; 10-min-expired lease → critical alert). Manifest regenerated (4092 tests / 409 files).
 - NOTE for prod: same fix applies after publish; if prod carries abandoned leases they stop alerting automatically once older than 24h.
+
+## Iter-183 (2026-06) — Security Audit round 2 (DONE)
+- security_audit_agent verdict: CONDITIONAL PASS, no new CONFIRMED CRITICAL/HIGH/MEDIUM. Prior SEC-001/SEC-002 fixes intact. Fix-It Shortcuts render paths confirmed safe (React text nodes, fixed route allowlist, ?focus never reaches server / getElementById literal lookup). NoSQL injection, IDOR, CSRF/CORS, admin ops-alert gating all traced positive.
+- Fixed now: P3 heartbeat_watch.py email HTML — title + lines are html.escape()d before interpolation (owner-supplied account label could carry raw HTML). Verified via mocked send_email: <script>/<img> payloads render escaped.
+- Still-open accepted risks (roadmap): KMS/HSM release signer (RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD), single-factor bridge_token on EA bridge surfaces.

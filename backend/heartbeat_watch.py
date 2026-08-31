@@ -7,6 +7,7 @@ so each outage notifies exactly once and re-arms on recovery.
 """
 import logging
 from datetime import datetime, timezone
+from html import escape
 
 logger = logging.getLogger("heartbeat_watch")
 
@@ -46,11 +47,11 @@ async def _notify(db, user_id: str, event_type: str, title: str,
         if is_configured() and severity == "critical":
             email = await _owner_email(db, user_id)
             if email:
-                rows = "".join(f"<p style='margin:4px 0'>{ln}</p>"
+                rows = "".join(f"<p style='margin:4px 0'>{escape(ln)}</p>"
                                for ln in lines)
                 await send_email(
                     to=email, subject=f"STOIC — {title}",
-                    html=(f"<h3 style='margin:0 0 8px'>{title}</h3>{rows}"
+                    html=(f"<h3 style='margin:0 0 8px'>{escape(title)}</h3>{rows}"
                           "<p style='color:#888;font-size:12px'>Sent by the "
                           "STOIC heartbeat watch.</p>"))
     except Exception:  # noqa: BLE001
