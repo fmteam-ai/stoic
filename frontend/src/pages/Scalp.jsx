@@ -3,7 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { ScalpExecutions } from "@/components/ScalpExecutions";
 import { ScalpReview } from "@/components/ScalpReview";
-import { Zap, RefreshCw, ShieldAlert, X } from "lucide-react";
+import { RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
 const fmt = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
@@ -103,6 +103,36 @@ export default function Scalp() {
     const [expanded, setExpanded] = useState(null);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [sess, setSess] = useState(null);
+    const [sessDraft, setSessDraft] = useState({ start: 7, end: 20 });
+    const [sessSaving, setSessSaving] = useState(false);
+
+    const loadSession = useCallback(async () => {
+        try {
+            const { data } = await api.get("/scalp/session-window?symbol=EURUSD");
+            setSess(data);
+            setSessDraft({ start: data.start_utc, end: data.end_utc });
+        } catch { /* silent */ }
+    }, []);
+    useEffect(() => { loadSession(); }, [loadSession]);
+
+    const saveSession = async (reset = false) => {
+        setSessSaving(true);
+        try {
+            await api.post("/scalp/session-window", reset
+                ? { symbol: "EURUSD", reset: true }
+                : { symbol: "EURUSD", start_utc: Number(sessDraft.start), end_utc: Number(sessDraft.end) });
+            toast.success(reset
+                ? "Session window reset to instrument default"
+                : `Session window saved — ${String(sessDraft.start).padStart(2, "0")}:00–${String(sessDraft.end).padStart(2, "0")}:00 UTC`);
+            await loadSession();
+            load();
+        } catch (e) {
+            toast.error("Could not save session window", { description: formatApiError(e) });
+        } finally {
+            setSessSaving(false);
+        }
+    };
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -181,16 +211,16 @@ export default function Scalp() {
     return (
         <AppLayout>
             <PageHeader
-                icon={Zap}
                 title="Scalp Fast Path"
                 subtitle="EURUSD micro-pullback continuation · tick-driven · shadow-first"
-                actions={
+                action={
                     <button onClick={load} data-testid="scalp-refresh-btn"
                             className="p-2 border border-[#1F1F1F] text-[#A1A1AA] hover:text-white">
                         <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
                     </button>
                 }
             />
+            <div className="p-4 md:p-8">
 
             {/* Config */}
             <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4 mb-6" data-testid="scalp-config-card">
@@ -222,6 +252,36 @@ export default function Scalp() {
                     Requires EA v1.48+ attached with <span className="font-mono text-[#A1A1AA]">TickStreamEnabled=true, TickStreamSymbol=EURUSD</span>.
                     Shadow mode runs the full pipeline and logs decisions without sending orders.
                 </p>
+                {sess && (
+                    <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-[#1F1F1F]"
+                         data-testid="scalp-session-window-editor">
+                        <span className="text-[10px] font-mono tracking-widest text-[#52525B]">TRADING SESSION (UTC)</span>
+                        <input type="number" min={0} max={23} value={sessDraft.start}
+                               onChange={(e) => setSessDraft(d => ({ ...d, start: e.target.value }))}
+                               data-testid="scalp-session-start-input"
+                               className="w-16 bg-[#0A0A0A] border border-[#1F1F1F] text-[#E4E4E7] text-sm px-2 py-1.5 font-mono" />
+                        <span className="text-[#52525B] text-xs">to</span>
+                        <input type="number" min={1} max={24} value={sessDraft.end}
+                               onChange={(e) => setSessDraft(d => ({ ...d, end: e.target.value }))}
+                               data-testid="scalp-session-end-input"
+                               className="w-16 bg-[#0A0A0A] border border-[#1F1F1F] text-[#E4E4E7] text-sm px-2 py-1.5 font-mono" />
+                        <button disabled={sessSaving} onClick={() => saveSession(false)}
+                                data-testid="scalp-session-save-btn"
+                                className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#FFD700]/40 text-[#FFD700] hover:bg-[#FFD700]/10 disabled:opacity-50">
+                            {sessSaving ? "SAVING…" : "SAVE WINDOW"}
+                        </button>
+                        {sess.override && (
+                            <button disabled={sessSaving} onClick={() => saveSession(true)}
+                                    data-testid="scalp-session-reset-btn"
+                                    className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:text-white disabled:opacity-50">
+                                RESET TO DEFAULT ({String(sess.default_start_utc).padStart(2, "0")}–{String(sess.default_end_utc).padStart(2, "0")})
+                            </button>
+                        )}
+                        <span className="text-[10px] text-[#52525B]">
+                            Candidates are only evaluated inside this window — ticks keep flowing outside it.
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Runners */}
@@ -293,6 +353,19 @@ export default function Scalp() {
                                 Regime &amp; permissions cannot refresh without ticks.
                             </div>
                         )}
+                        {(() => {
+                            const s = r.permissions?.session;
+                            if (!s || s.open) return null;
+                            const h = Math.floor((s.opens_in_minutes || 0) / 60);
+                            const m = (s.opens_in_minutes || 0) % 60;
+                            return (
+                                <div className="text-xs text-[#FFB000] mt-2 border border-[#FFB000]/30 bg-[#FFB000]/5 px-2 py-1.5 font-mono"
+                                     data-testid="scalp-session-closed">
+                                    SESSION CLOSED — trading window {String(s.start_utc).padStart(2, "0")}:00–{String(s.end_utc).padStart(2, "0")}:00 UTC
+                                    · opens in {h > 0 ? `${h}h ` : ""}{m}m. Ticks keep flowing; candidate evaluation resumes automatically.
+                                </div>
+                            );
+                        })()}
                         {(r.health?.reasons?.length > 0 || r.permissions?.reasons?.length > 0) && (
                             <div className="text-xs text-[#FF9F0A] mt-2" data-testid="scalp-runner-reasons">
                                 {[...(r.health?.reasons || []), ...(r.permissions?.reasons || [])].join(" · ")}
@@ -458,6 +531,7 @@ export default function Scalp() {
             </div>
 
             <ScalpReview />
+            </div>
         </AppLayout>
     );
 }

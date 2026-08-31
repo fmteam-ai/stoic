@@ -1,5 +1,7 @@
 """Scalp subsystem API — config, status, decisions, metrics, retrain."""
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from auth import get_current_user
@@ -7,6 +9,70 @@ from database import get_db
 from route_utils import parse_object_id
 
 router = APIRouter(prefix="/scalp", tags=["scalp"])
+
+
+@router.get("/session-window")
+async def get_session_window(symbol: str = "EURUSD",
+                             user=Depends(get_current_user)):
+    """iter-174 — effective trading-session window (UTC hours) with the
+    instrument default and any per-user override."""
+    from scalp.instruments import approved
+    sym = (symbol or "EURUSD").upper()
+    cfg = approved(sym)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="symbol not approved")
+    db = get_db()
+    ov = await db.scalp_session_windows.find_one({"_id": f"{user['id']}:{sym}"})
+    return {"symbol": sym,
+            "start_utc": int(ov["start_utc"]) if ov else cfg.session_start_utc,
+            "end_utc": int(ov["end_utc"]) if ov else cfg.session_end_utc,
+            "default_start_utc": cfg.session_start_utc,
+            "default_end_utc": cfg.session_end_utc,
+            "override": bool(ov)}
+
+
+@router.post("/session-window")
+async def set_session_window(payload: dict, request: Request,
+                             user=Depends(get_current_user)):
+    """iter-174 — set (or reset) the per-user session window. Bounds:
+    0 <= start < end <= 24 UTC. Audited; permissions cache invalidated so
+    the change takes effect on the next tick."""
+    from scalp.instruments import approved
+    sym = str(payload.get("symbol") or "EURUSD").upper()
+    cfg = approved(sym)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="symbol not approved")
+    db = get_db()
+    if payload.get("reset"):
+        await db.scalp_session_windows.delete_one(
+            {"_id": f"{user['id']}:{sym}"})
+        s, e = cfg.session_start_utc, cfg.session_end_utc
+    else:
+        try:
+            s, e = int(payload.get("start_utc")), int(payload.get("end_utc"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422,
+                                detail="start_utc and end_utc must be "
+                                       "integer UTC hours")
+        if not (0 <= s < e <= 24):
+            raise HTTPException(status_code=422,
+                                detail="window must satisfy 0 <= start < "
+                                       "end <= 24 (UTC hours)")
+        await db.scalp_session_windows.update_one(
+            {"_id": f"{user['id']}:{sym}"},
+            {"$set": {"user_id": user["id"], "symbol": sym,
+                      "start_utc": s, "end_utc": e,
+                      "updated_at":
+                          datetime.now(timezone.utc).isoformat()}},
+            upsert=True)
+    from scalp import permissions
+    permissions.invalidate(user["id"], sym)
+    from step_up import audit_event
+    await audit_event(db, user["id"], "scalp_session_window",
+                      {"symbol": sym, "start_utc": s, "end_utc": e,
+                       "reset": bool(payload.get("reset"))}, request)
+    return {"ok": True, "symbol": sym, "start_utc": s, "end_utc": e,
+            "override": not bool(payload.get("reset"))}
 
 
 class ScalpConfigRequest(BaseModel):

@@ -11,12 +11,42 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 
 
+_CONFTEST = None
+
+
+def _conftest_mod():
+    """Root tests/conftest.py (shared loop), resolved safely even in
+    mixed-directory runs where the bare `conftest` module name collides
+    with tests/integration/conftest.py."""
+    global _CONFTEST
+    if _CONFTEST is not None:
+        return _CONFTEST
+    import importlib.util
+    root_path = os.path.join(_BACKEND_DIR, "tests", "conftest.py")
+    for mod in list(sys.modules.values()):
+        if (getattr(mod, "__file__", None) == root_path
+                and hasattr(mod, "run_async")):
+            _CONFTEST = mod
+            return mod
+    spec = importlib.util.spec_from_file_location(
+        "_root_tests_conftest", root_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _CONFTEST = mod
+    return mod
+
+
 def _run(coro):
-    from conftest import run_async
-    return run_async(coro)
+    return _conftest_mod().run_async(coro)
 
 
 def _db():
+    import asyncio
+    import database
+    mod = _conftest_mod()
+    asyncio.set_event_loop(mod._shared_loop())
+    database._client = None   # rebind to the shared loop (mixed-run safety)
+    database._db = None
     from database import get_db
     return get_db()
 

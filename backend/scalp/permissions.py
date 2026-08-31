@@ -20,6 +20,12 @@ def _key(user_id: str, symbol: str) -> str:
     return f"{user_id}:{symbol}"
 
 
+def invalidate(user_id: str, symbol: str) -> None:
+    """Drop the cached permissions so the next tick recomputes them
+    (used after the user changes the session window)."""
+    _cache.pop(_key(user_id, symbol), None)
+
+
 async def _candle_feed_diagnosis(db, user_id: str, symbol: str,
                                  have: int) -> str:
     """iter-173 — pinpoint WHY M15 history is missing using the per-stage
@@ -87,12 +93,36 @@ async def _compute(db, user_id: str, symbol: str, cfg) -> dict:
     except Exception as e:  # noqa: BLE001
         perms["regime_reason"] = f"classifier error ({type(e).__name__})"
 
-    # session window (UTC)
-    hour = datetime.now(timezone.utc).hour
-    if not (cfg.session_start_utc <= hour < cfg.session_end_utc):
+    # session window (UTC) — iter-174: per-user override (Scalp page)
+    sess_start, sess_end = cfg.session_start_utc, cfg.session_end_utc
+    ov = None
+    try:
+        ov = await db.scalp_session_windows.find_one(
+            {"_id": f"{user_id}:{symbol}"})
+        if ov:
+            s, e = int(ov.get("start_utc")), int(ov.get("end_utc"))
+            if 0 <= s < e <= 24:
+                sess_start, sess_end = s, e
+    except Exception:  # noqa: BLE001
+        ov = None
+    now_dt = datetime.now(timezone.utc)
+    hour = now_dt.hour
+    session_open = sess_start <= hour < sess_end
+    if session_open:
+        opens_in_minutes = 0
+    else:
+        mins_now = hour * 60 + now_dt.minute
+        start_mins = sess_start * 60
+        opens_in_minutes = (start_mins - mins_now if mins_now < start_mins
+                            else 24 * 60 - mins_now + start_mins)
+    perms["session"] = {"start_utc": sess_start, "end_utc": sess_end,
+                        "open": session_open,
+                        "opens_in_minutes": opens_in_minutes,
+                        "override": bool(ov)}
+    if not session_open:
         perms["reasons"].append(
-            f"outside allowed sessions ({cfg.session_start_utc:02d}-"
-            f"{cfg.session_end_utc:02d} UTC)")
+            f"outside allowed sessions ({sess_start:02d}-"
+            f"{sess_end:02d} UTC)")
         return perms
 
     # scheduled-news guard — fail closed on error (news status unknown).
