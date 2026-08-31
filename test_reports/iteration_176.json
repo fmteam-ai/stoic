@@ -1,0 +1,16 @@
+{
+  "summary": "Verified Bot Health page recovery + new ACKNOWLEDGE ALL ALERTS button. Baseline UI shows 95 EXCELLENT with no HARD CAP 25/45 lines. Seeded a critical ops_alert; RE-CHECK dropped score to 45 CRITICAL with the 'HARD CAP 45 — unacknowledged CRITICAL platform alert(s)' issue and rendered the ACKNOWLEDGE ALL ALERTS button (data-testid=ack-all-alerts-btn). Clicking it POSTed /api/ops/alerts/ack-all, seeded alert got acked_at, score reloaded to 95 with hard_caps=[]. Non-admin session correctly gets 403 on ack-all. Regression endpoints (/api/state/readiness, /api/bot/quick-actions) return 200; Release Readiness card and diagnostics still render (WORKER LEASES FAIL 0/6 documented as expected in preview single-process mode). No execution_intents with status='unknown' remain. All 5 pytest cases pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_bot_health_ack_all.py", "/app/test_reports/pytest/iter176.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": ["/app/backend/tests/test_bot_health_ack_all.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (admin cookie session, CSRF via csrf cookie header)",
+  "seed_data_creation": "Inserted one ops_alerts doc (kind=test_seed, severity=critical) for the ack-all flow; deleted at end of run. Also registered/deleted a throwaway user for the 403 authz check.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Background alerting sweep in preview may raise a fresh critical alert during a test run (e.g. ea_heartbeat_stale on an active preview account). Per the review note, ack-all again rather than failing the run — the assertion is that the button works and score recovers. Baseline test may need one ack-all warm-up before running.",
+  "rca of the issue": "Fixes were already applied by main agent: (a) unknown execution intent expired, 661 stale test accounts marked dormant so alerting.py sweep skips them, 104 open critical alerts acked via /api/ops/alerts/ack-all; (b) BotHealth.jsx HeadlineScore renders an ACKNOWLEDGE ALL ALERTS button when hard cap code == 'critical_alerts_open'. Verified end-to-end."
+}

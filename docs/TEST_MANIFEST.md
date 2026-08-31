@@ -8,14 +8,15 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 516 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3482 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3487 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 4086 tests across 407 files.**
+**Total: 4091 tests across 408 files.**
 
 | file | class | tests |
 |------|-------|-------|
 | `backend/tests/test_ai_optimizer.py` | http-live | 6 |
+| `backend/tests/test_bot_health_ack_all.py` | http-live | 5 |
 | `backend/tests/test_chaos_soak.py` | http-live | 2 |
 | `backend/tests/test_e2e_v56_authority.py` | http-live | 12 |
 | `backend/tests/test_iter100_batch_a.py` | http-live | 6 |

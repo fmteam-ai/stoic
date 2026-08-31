@@ -2299,3 +2299,10 @@ User-reported batch before the next major gate:
 - Fix (routes/trade_routes.py trade_stats): projection {pnl, origin, signal_id, magic_number, account_id} only; open trades via count_documents; seed.ensure_indexes adds trades(user_id,status) + trades(user_id,closed_at desc).
 - Verified: aggregates byte-identical old vs new; testing agent seeded 50k fat trades on a throwaway user → /stats 0.27s via ingress, RECONCILED, UI loads clean, regressions pass. New regression test: backend/tests/test_iter_trade_stats_perf.py (manifest updated).
 - Out of scope by design: the TRADING EMERGENCY header (panic tripped) and CONFLICTED truth in prod are real safety states requiring user action (verify broker positions → SYNC WITH BROKER → reset panic). Bot Health hard-cap comes from 37 unacknowledged CRITICAL ops alerts.
+
+## Iter-180 (2026-06) — Preview Bot Health 25→95 + ACK ALL button (DONE, testing agent iteration_176 PASS 100%)
+- Cause: preview state, not code — 1 execution intent stuck status:'unknown' (2026-08-27 test residue; hard cap 25) + 104 unacked critical ops_alerts (ea_heartbeat_stale spam from 661 abandoned ENABLED test accounts; hard cap 45).
+- State fixes: intent resolved via legal transition unknown→expired (operator note); 661 abandoned stale test accounts marked dormant:true (alerting sweep skips dormant); all alerts acked via existing POST /api/ops/alerts/ack-all. Score now 95 'excellent', hard_caps [].
+- New UI: BotHealth HeadlineScore renders "ACKNOWLEDGE ALL ALERTS" button (testid ack-all-alerts-btn) on the critical_alerts_open hard-cap issue → POST /ops/alerts/ack-all (admin-only, 403 for non-admin verified) → reload. Useful in PROD where 37 criticals cap health at 45.
+- Testing agent verified full cycle: seed critical → cap 45 + button appears → click → acked + score 95. New regression test backend/tests/test_bot_health_ack_all.py (manifest updated by agent).
+- NOTE for prod: after publish, user should press ACKNOWLEDGE ALL ALERTS on live Bot Health; UNKNOWN execution there needs SYNC WITH BROKER (reconciliation), and panic reset remains manual by design.

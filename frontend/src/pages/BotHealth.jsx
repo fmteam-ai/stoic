@@ -30,7 +30,7 @@ const SEV_STYLE = {
 };
 const styleFor = k => SEV_STYLE[k] || SEV_STYLE.info;
 
-function HeadlineScore({ data }) {
+function HeadlineScore({ data, onAckAll, acking }) {
     if (!data) return null;
     const score = data.score ?? 0;
     const s = styleFor(score >= 80 ? "excellent" : score >= 60 ? "warning" : "critical");
@@ -61,6 +61,13 @@ function HeadlineScore({ data }) {
                             <div className="flex-1">
                                 <div className={`font-mono ${styleFor(i.severity).fg}`}>{i.label}</div>
                                 {i.fix && <div className="text-[#A1A1AA] leading-relaxed mt-0.5">→ {i.fix}</div>}
+                                {i.code === "critical_alerts_open" && onAckAll && (
+                                    <button onClick={onAckAll} disabled={acking}
+                                        data-testid="ack-all-alerts-btn"
+                                        className="mt-1.5 font-mono text-[10px] font-bold tracking-widest px-2.5 py-1 border border-[#FFB000]/50 text-[#FFB000] hover:bg-[#FFB000]/10 disabled:opacity-50 transition-colors">
+                                        {acking ? "ACKNOWLEDGING…" : "ACKNOWLEDGE ALL ALERTS"}
+                                    </button>
+                                )}
                             </div>
                         </div>
                     ))}
@@ -481,6 +488,21 @@ export default function BotHealth() {
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
     const [last, setLast] = useState(null);
+    const [acking, setAcking] = useState(false);
+
+    const ackAll = useCallback(async () => {
+        setAcking(true);
+        try {
+            const { data: r } = await api.post("/ops/alerts/ack-all");
+            toast.success(`${r.acked} alert(s) acknowledged — re-checking health`);
+            await load();
+        } catch (e) {
+            toast.error("Could not acknowledge alerts", { description: formatApiError(e) });
+        } finally {
+            setAcking(false);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const load = useCallback(async () => {
         setLoading(true); setErr("");
@@ -546,7 +568,7 @@ export default function BotHealth() {
             <div className="p-4 md:p-8 space-y-6">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
 
-                <HeadlineScore data={data.healthScore} />
+                <HeadlineScore data={data.healthScore} onAckAll={ackAll} acking={acking} />
 
                 <ReadinessCard />
                 <ChaosDrillsCard />
