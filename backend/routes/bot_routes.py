@@ -1795,6 +1795,12 @@ async def bot_health_score(user=Depends(get_current_user)):
                      "created_at": 1, "occurrences": 1, "dedup_key": 1}
                 ).sort("last_seen_at", -1).to_list(10)
                 details = []
+                def _utciso(v):
+                    if not v:
+                        return None
+                    if v.tzinfo is None:
+                        v = v.replace(tzinfo=timezone.utc)
+                    return v.isoformat()
                 for d in crit_docs:
                     prior = 0
                     if d.get("dedup_key"):
@@ -1806,10 +1812,8 @@ async def bot_health_score(user=Depends(get_current_user)):
                         "message": d.get("message"),
                         "occurrences": d.get("occurrences", 1),
                         "prior_acked": prior,
-                        "created_at": (d["created_at"].isoformat()
-                                       if d.get("created_at") else None),
-                        "last_seen_at": (d["last_seen_at"].isoformat()
-                                         if d.get("last_seen_at") else None),
+                        "created_at": _utciso(d.get("created_at")),
+                        "last_seen_at": _utciso(d.get("last_seen_at")),
                     })
                 hard_caps.append({
                     "cap": 45, "code": "critical_alerts_open",

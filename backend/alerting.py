@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 
 SEVERITIES = ("info", "warning", "critical")
 
+# Alert kinds whose conditions are re-measured by evaluate_ops_alerts on
+# every run — these AUTO-RESOLVE when the condition clears, instead of
+# sitting unacked and capping Bot Health until someone clicks acknowledge.
+EVALUATOR_KINDS = (
+    "ea_heartbeat_stale", "worker_lease_expired", "worker_loop_crashloop",
+    "worker_loop_stalled", "outbox_backlog", "outbox_failed",
+    "unprotected_positions", "reconciliation_stuck")
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -78,9 +86,12 @@ def _parse_ts(v):
 
 
 async def evaluate_ops_alerts(db) -> int:
-    """Run every production-saving check once; returns alerts raised."""
+    """Run every production-saving check once; returns alerts raised.
+    Tracks the dedup_key of every condition that currently HOLDS; open
+    evaluator-managed alerts whose key is absent are auto-resolved."""
     now = _now()
     raised = 0
+    active: set = set()
 
     # 1 · EA heartbeat stale on enabled accounts (recently-active only —
     #     accounts silent for >24h are decommissioned, not incidents)
@@ -94,6 +105,7 @@ async def evaluate_ops_alerts(db) -> int:
         if hb and hb_max < (now - hb).total_seconds() <= hb_ceiling:
             from synthetic_data import is_synthetic_account
             label = a.get("label") or str(a["_id"])[-6:]
+            active.add(f"ea_heartbeat:{a['_id']}")
             if await raise_alert(
                     db, "ea_heartbeat_stale", "critical",
                     f"EA heartbeat for account '{label}' is "
@@ -113,6 +125,7 @@ async def evaluate_ops_alerts(db) -> int:
         if exp and exp < now:
             if (now - exp).total_seconds() > lease_ceiling:
                 continue  # abandoned lease — decommissioned, skip all checks
+            active.add(f"worker_lease:{name}")
             if await raise_alert(
                     db, "worker_lease_expired", "critical",
                     f"Worker '{name}' lease expired at {w.get('expires_at')}",
@@ -120,6 +133,7 @@ async def evaluate_ops_alerts(db) -> int:
                 raised += 1
         for ln, st in (w.get("loops") or {}).items():
             if (st or {}).get("consecutive_failures", 0) >= 3:
+                active.add(f"crashloop:{name}:{ln}")
                 if await raise_alert(
                         db, "worker_loop_crashloop", "critical",
                         f"Loop '{ln}' in worker '{name}' has "
@@ -132,6 +146,7 @@ async def evaluate_ops_alerts(db) -> int:
             if ivl and done and exp and exp >= now:
                 stall_after = max(3 * int(ivl), 120)
                 if (now - done).total_seconds() > stall_after:
+                    active.add(f"stalled:{name}:{ln}")
                     if await raise_alert(
                             db, "worker_loop_stalled", "critical",
                             f"Loop '{ln}' in worker '{name}' made no progress "
@@ -146,12 +161,14 @@ async def evaluate_ops_alerts(db) -> int:
     aged = await db.outbox.count_documents(
         {"state": "pending", "created_at": {"$lt": backlog_cutoff}})
     if aged:
+        active.add("outbox_backlog")
         if await raise_alert(db, "outbox_backlog", "warning",
                              f"{aged} outbox event(s) pending for >5m",
                              dedup_key="outbox_backlog"):
             raised += 1
     failed = await db.outbox.count_documents({"state": "failed"})
     if failed:
+        active.add("outbox_failed")
         if await raise_alert(db, "outbox_failed", "warning",
                              f"{failed} outbox event(s) in failed state",
                              dedup_key="outbox_failed"):
@@ -164,11 +181,13 @@ async def evaluate_ops_alerts(db) -> int:
     upq = unprotected_open_query({"opened_at": {"$lt": prot_cutoff}})
     unprotected = await db.trades.count_documents(upq)
     if unprotected:
+        active.add("unprotected_positions")
         samples = await db.trades.find(
             upq, {"symbol": 1, "mt5_ticket": 1}).sort(
             "opened_at", 1).to_list(3)
         ids = ", ".join(
-            f"{d.get('symbol') or '?'}#{d.get('mt5_ticket') or str(d['_id'])[-6:]}"
+            f"{str(d.get('symbol') or '?').rstrip('#')}"
+            f"#{d.get('mt5_ticket') or str(d['_id'])[-6:]}"
             for d in samples)
         more = ", …" if unprotected > len(samples) else ""
         if await raise_alert(
@@ -185,11 +204,26 @@ async def evaluate_ops_alerts(db) -> int:
          "submission_state": "broker_accepted_unresolved",
          "updated_at": {"$lt": stale_cutoff}})
     if stuck:
+        active.add("reconciliation_stuck")
         if await raise_alert(
                 db, "reconciliation_stuck", "critical",
                 f"{stuck} broker-accepted order(s) unresolved for >5m",
                 dedup_key="reconciliation_stuck"):
             raised += 1
+
+    # 6 · AUTO-RESOLVE — evaluator-managed alerts whose condition no longer
+    # holds are closed automatically (acked_by system:auto-resolved) so a
+    # transient blip (terminal reconnects, backlog drains, stop confirmed)
+    # never caps Bot Health until a human clicks acknowledge.
+    ts = _now()
+    res = await db.ops_alerts.update_many(
+        {"acked_at": None, "kind": {"$in": list(EVALUATOR_KINDS)},
+         "dedup_key": {"$nin": sorted(active)}},
+        {"$set": {"acked_at": ts, "acked_by": "system:auto-resolved",
+                  "auto_resolved": True, "resolved_at": ts}})
+    if res.modified_count:
+        logger.info("auto-resolved %d ops alert(s) — condition cleared",
+                    res.modified_count)
 
     return raised
 

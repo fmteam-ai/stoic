@@ -1,0 +1,30 @@
+{
+  "summary": "iter-180 regression + new coverage: all backend requirements verified (auto-resolve of evaluator-managed alerts, no-touch on foreign kinds, active-condition alerts stay unacked, unprotected_open_query honors confirmed_stop_loss, unprotected via evaluator raises with mt5_ticket in message, /api/bot/health-score details[] shape with UTC-aware +00:00 ISO timestamps + kind/message/occurrences/prior_acked, baseline score>=75 hard_caps==[], ack-all admin 200 + non-admin 403). Ran 12 pytest cases total across iter-176/177/178/179/180 files — 12/12 passed. Frontend /bot-health smoke: admin login OK, page renders, seeded critical alert drops score to 45, panel data-testid=open-critical-alerts shows the seeded row, alert-fix-shortcut-0 renders 'OPEN TRADES →' and navigates to /trades. All seed data cleaned up.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter180_bothealth_details.py",
+    "/app/backend/tests/test_iter179_auto_resolve.py",
+    "/app/backend/tests/test_iter178_unprotected_confirmed.py",
+    "/app/backend/tests/test_iter177_worker_lease_ceiling.py",
+    "/app/backend/tests/test_bot_health_ack_all.py",
+    "/app/test_reports/pytest/iter180.xml",
+    "/app/test_reports/pytest/iter180_existing.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "alerting.py auto-resolve uses two _now() calls for acked_at and resolved_at within update_many $set — micro-inconsistency (harmless but readable to hoist a single now var).",
+    "bot_routes.py health-score details[] currently caps at 10 rows via to_list(10); if >10 critical alerts pile up the UI won't show every entry. Consider surfacing the truncation or count in the payload."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter180_bothealth_details.py",
+    "/app/docs/TEST_MANIFEST.md"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (httpOnly cookies + X-CSRF-Token from csrf_token cookie).",
+  "seed_data_creation": "Ephemeral: worker_leases _t179_expired_lease, ops_alerts dedup_keys (unprotected_positions, _t179_vps, _qa_iter180_details, _qa_iter180_fe), trades user_id _t178_user + _qa_upq. All deleted at teardown; final DB sweep confirmed 0 leftover critical seeded alerts.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend evaluator loop runs every 60s. When seeding critical alerts for FE smoke of /bot-health, prefer non-evaluator kinds (e.g. kind='test_seed') so auto-resolve doesn't clear them mid-test; message must still match fixShortcuts.js TEXT_RULES regex to render an alert-fix-shortcut-N button (e.g. include 'without a broker-confirmed'). Login rate limiter is sensitive — reuse admin session where possible.",
+  "rca of the issue": "N/A — verification-only iteration. All three root causes from earlier iters (abandoned worker lease ceiling, unprotected_open_query honouring confirmed_stop_loss, evaluator auto-resolve of stale alerts) confirmed working via direct DB seeding + evaluate_ops_alerts() and via HTTP /api/bot/health-score payload assertions."
+}
