@@ -108,3 +108,42 @@ def test_trust_then_plain_heartbeat_verifies_chain(session, account):
         timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     assert r.json().get("already_verified") is True
+
+
+def test_installations_list_and_revoke(session, account):
+    """iter-173 — trusted terminals list + one-tap revoke."""
+    r = session.get(
+        f"{BASE_URL}/api/accounts/{account['id']}/installations",
+        timeout=TIMEOUT)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    insts = body["installations"]
+    assert len(insts) == 1
+    inst = insts[0]
+    assert inst["method"] == "user_trust"
+    assert inst["is_current"] is True
+    assert inst["fingerprint"]["account_login"] == account["login"]
+
+    r = session.post(
+        f"{BASE_URL}/api/accounts/{account['id']}/installations/"
+        f"{inst['installation_id']}/revoke", timeout=TIMEOUT)
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+
+    # identity stripped + list empty + double revoke → 404
+    a = _find_account(session, account["id"])
+    assert not a.get("verified_identity")
+    assert (a.get("ea_identity") or {}).get("authoritative") is False
+    r = session.get(
+        f"{BASE_URL}/api/accounts/{account['id']}/installations",
+        timeout=TIMEOUT)
+    assert r.json()["installations"] == []
+    r = session.post(
+        f"{BASE_URL}/api/accounts/{account['id']}/installations/"
+        f"{inst['installation_id']}/revoke", timeout=TIMEOUT)
+    assert r.status_code == 404
+
+    # a plain heartbeat after revoke stays UNVERIFIED (trust is dead)
+    _heartbeat(account)
+    a = _find_account(session, account["id"])
+    assert (a.get("ea_identity") or {}).get("authoritative") is False

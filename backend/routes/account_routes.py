@@ -600,6 +600,79 @@ async def delete_account(account_id: str, force: bool = False,
     return {"ok": True}
 
 
+@router.get("/{account_id}/installations")
+async def list_installations(account_id: str,
+                             user=Depends(get_current_user)):
+    """iter-173 — trusted-terminal list for the account card."""
+    db = get_db()
+    oid = parse_object_id(account_id, "account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    current = (acc.get("verified_identity") or {}).get("installation_id")
+    out = []
+    async for inst in db.installations.find(
+            {"account_id": account_id,
+             "revoked": {"$ne": True}}).sort("created_at", -1):
+        created = inst.get("created_at")
+        out.append({
+            "installation_id": inst["installation_id"],
+            "method": inst.get("method")
+                      or ("installer" if inst.get("terminal_path")
+                          == "installer" else "pairing"),
+            "created_at": (created.isoformat()
+                           if hasattr(created, "isoformat") else created),
+            "host": inst.get("host_fingerprint"),
+            "fingerprint": inst.get("trusted_fingerprint"),
+            "is_current": inst["installation_id"] == current})
+    return {"installations": out, "current_installation_id": current}
+
+
+@router.post("/{account_id}/installations/{installation_id}/revoke")
+async def revoke_installation(account_id: str, installation_id: str,
+                              request: Request,
+                              user=Depends(get_current_user)):
+    """iter-173 — one-tap revoke: kills the installation + its lease and
+    strips verified identity if it belonged to this terminal. Audited."""
+    db = get_db()
+    oid = parse_object_id(account_id, "account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    inst = await db.installations.find_one(
+        {"installation_id": installation_id, "account_id": account_id,
+         "revoked": {"$ne": True}})
+    if not inst:
+        raise HTTPException(status_code=404,
+                            detail="Installation not found or already "
+                                   "revoked")
+    now = datetime.now(timezone.utc)
+    await db.installations.update_one(
+        {"_id": inst["_id"]},
+        {"$set": {"revoked": True, "revoked_at": now,
+                  "revoked_reason": "revoked by owner"}})
+    await db.execution_leases.update_many(
+        {"account_id": account_id, "installation_id": installation_id},
+        {"$set": {"revoked": True, "revoked_at": now}})
+    update: dict = {}
+    if (acc.get("verified_identity") or {}).get(
+            "installation_id") == installation_id:
+        update.setdefault("$unset", {})["verified_identity"] = ""
+    if (acc.get("ea_identity") or {}).get(
+            "installation_id") == installation_id:
+        update.setdefault("$set", {}).update({
+            "ea_identity.authoritative": False,
+            "ea_identity.reason": "installation revoked by owner"})
+    if update:
+        await db.accounts.update_one({"_id": oid}, update)
+    from step_up import audit_event
+    await audit_event(db, user["id"], "installation_revoked",
+                      {"account_id": account_id,
+                       "installation_id": installation_id,
+                       "method": inst.get("method")}, request)
+    return {"ok": True, "revoked": installation_id}
+
+
 @router.post("/{account_id}/trust-terminal")
 async def trust_terminal(account_id: str, request: Request,
                          user=Depends(get_current_user)):

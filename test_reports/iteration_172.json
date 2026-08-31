@@ -1,0 +1,24 @@
+{
+  "summary": "End-to-end verification of iter-172/173 features: (A) Backend — re-ran /app/backend/tests/test_iter172_trust_terminal_http.py (3/3 pass: trust requires fresh heartbeat/409, trust-then-plain-heartbeat verify chain, list_installations+revoke incl. 404-on-second-revoke) and integration suite test_iter173_heartbeat_watch.py (1/1 pass — transitions-only alerts: heartbeat_lost once per outage, restored info alert, identity_lost on authoritative flip, paper accounts ignored) + test_iter172_blocked_reason.py (3/3 pass). Total 7/7 backend tests green. (B) Frontend — Login as admin@stoicaibot.com/admin123 shows TRADING BLOCKED strip as seeded. Flow 1 Guided Unblock Tour: expanded blockers-btn → fix-this-btn-EXECUTION_BLOCKED opened unblock-tour overlay; reason renders full blocker message; step 1 title 'Open your account panel'; NEXT advances to 'One-click trust (no PowerShell)'; BACK returns; X closes; DONE closes on last step; deep-link 'Open Accounts' navigates to /accounts and dismisses overlay — all 6 sub-flows pass. Flow 2 One-click trust + Trusted Terminals + Revoke: on /accounts the quick-trust-panel-<accId> and quick-trust-btn-<accId> render; click → success toast 'Terminal trusted…', panel flipped to terminal-verified-<accId>, TrustedTerminals section trusted-terminals-<accId> shows one row terminal-row-inst_… with 'ONE-CLICK TRUST' badge + 'VERIFIED', click revoke-terminal-<inst> reveals confirm-revoke-<inst>, confirm removes the row and shows 'Terminal revoked — it can no longer execute live trades' toast. Flow 3 Trust from readiness strip: with account back in unverified+fresh-hb state, blockers panel shows per-account line + trust-terminal-btn-<accId>; plain click → strip flipped from TRADING BLOCKED to TRADING READY within refetch (~3s), toast 'Terminal trusted — full trading authority restores within a minute'. (C) Regression — readiness strip renders reason (level/code/message/since); QuickActionsBar not disturbed (no accidental toggles — used plain clicks); trust-terminal returns error when EA not connected (heartbeat stale) — verified by backend test test_trust_requires_fresh_heartbeat (returns 409 with EA_NOT_CONNECTED). Preview DB restored per instructions (trading_enabled=false, stale heartbeat, verified_identity unset, bot_configs active=false operational_mode=observe tripped_at restored, installations for spread-test deleted).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter172_trust_terminal_http.py",
+    "/app/backend/tests/integration/test_iter173_heartbeat_watch.py",
+    "/app/backend/tests/integration/test_iter172_blocked_reason.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "UnblockTour registry keyed by blocker code (EXECUTION_BLOCKED) is clean — reason/step-title/next/back/done/close/link all wired with data-testids and behave correctly.",
+    "One-click trust round-trip is snappy (~2-3s) and correctly triggers a readiness refetch to flip the strip; toast messages are precise and user-friendly.",
+    "Heartbeat watch loop runs every 60s in-process — since alerts are transition-based with dedup, retest windows may need to wait a minute in the UI; backend unit test covers correctness.",
+    "CSRF middleware correctly blocks direct POST to /api/accounts/{id}/trust-terminal from a fresh session (403 csrf_failed) — good defense in depth; UI-driven flow works via CSRF token."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (all 3 flows + regression)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (preview UI); admin@trading.bot / admin123 (backend test suites)",
+  "seed_data_creation": "Refreshed spread-test heartbeat + set bot_configs active=true during test window; created 2 installations via trust flows. All restored at end per agent_to_agent_context_note.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Feature set is fully verified. Preview DB was restored to pre-test state (spread-test: trading_enabled=false, last_heartbeat=2026-08-27T22:25:41Z, verified_identity unset; bot_configs for admin uid 6a65a1a89d126b87feed2591 active=false operational_mode=observe with tripped_at set; installations for account 6a6667c922a7db8277ca9374 deleted). To re-exercise flows, refresh heartbeat + activate bot_configs (see mongo commands in this iteration script)."
+}

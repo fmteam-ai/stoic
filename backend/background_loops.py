@@ -110,6 +110,24 @@ async def _protection_guard_loop():
             logger.exception("protection guard sweep failed")
 
 
+async def _heartbeat_watch_loop():
+    """iter-173 — EA heartbeat / verification outage alerts (transition
+    based; Telegram + owner email + in-app alert)."""
+    from heartbeat_watch import check_once
+    INTERVAL = int(os.environ.get("HEARTBEAT_WATCH_INTERVAL_SEC", "60"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
+            await check_once(get_db())
+            record_progress("_heartbeat_watch_loop", processed=1,
+                            started_at=t0, interval_sec=INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("heartbeat watch sweep failed")
+
+
 async def _analytics_loop():
     """Phase F — analytics service: DB-only daily aggregation."""
     from analytics_tasks import run_daily_aggregates

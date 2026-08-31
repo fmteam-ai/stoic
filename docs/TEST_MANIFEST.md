@@ -7,11 +7,11 @@ fails when this file drifts from the tree.
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 515 |
-| integration | real MongoDB service container | CI `backend-integration` | 77 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3470 |
+| integration | real MongoDB service container | CI `backend-integration` | 78 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3471 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 4071 tests across 402 files.**
+**Total: 4073 tests across 403 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -150,7 +150,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter171_hardening_batch.py` | http-live | 5 |
 | `backend/tests/test_iter172_kms_mtls.py` | http-live | 11 |
 | `backend/tests/test_iter172_supplementary.py` | http-live | 7 |
-| `backend/tests/test_iter172_trust_terminal_http.py` | http-live | 2 |
+| `backend/tests/test_iter172_trust_terminal_http.py` | http-live | 3 |
 | `backend/tests/test_iter173_ml_oom_guard.py` | http-live | 9 |
 | `backend/tests/test_iter173_scalp_candle_diag.py` | http-live | 5 |
 | `backend/tests/test_iter174_ca_key_at_rest.py` | http-live | 3 |
@@ -385,6 +385,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_iter162_readiness_token.py` | integration | 3 |
 | `backend/tests/integration/test_iter163_pre_gate.py` | integration | 6 |
 | `backend/tests/integration/test_iter172_blocked_reason.py` | integration | 3 |
+| `backend/tests/integration/test_iter173_heartbeat_watch.py` | integration | 1 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 3 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |

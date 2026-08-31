@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { AlertOctagon, ChevronDown, ShieldCheck } from "lucide-react";
+import { AlertOctagon, ChevronDown, LifeBuoy, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import api, { formatApiError } from "@/lib/api";
+import { UnblockTour } from "@/components/UnblockTour";
 
 /**
  * TradingReadinessStrip (audit F-02) — the DOMINANT status layer.
@@ -29,6 +30,7 @@ export function TradingReadinessStrip() {
     const [data, setData] = useState(null);
     const [openList, setOpenList] = useState(false);
     const [trusting, setTrusting] = useState(null);
+    const [tour, setTour] = useState(null);
 
     const trustTerminal = async (accountId) => {
         setTrusting(accountId);
@@ -99,6 +101,11 @@ export function TradingReadinessStrip() {
                         <div key={r.code} className="font-mono text-[10px] border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2"
                             data-testid={`readiness-reason-${r.code}`}>
                             <div className="flex items-center gap-2 flex-wrap">
+                                <button onClick={() => setTour({ code: r.code, reason: r.message })}
+                                    data-testid={`fix-this-btn-${r.code}`}
+                                    className="flex items-center gap-1 font-mono text-[9px] font-bold tracking-widest px-2 py-0.5 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 transition-colors shrink-0">
+                                    <LifeBuoy className="w-3 h-3" /> FIX THIS
+                                </button>
                                 <span className={(LEVEL_STYLE[r.level] || LEVEL_STYLE.DEGRADED).text}>{r.level.replace("_", "-")}</span>
                                 <span className="text-[#52525B]">{r.code}</span>
                                 <span className="text-[#A1A1AA]">{r.message}</span>
@@ -128,6 +135,10 @@ export function TradingReadinessStrip() {
                         </div>
                     ))}
                 </div>
+            )}
+            {tour && (
+                <UnblockTour code={tour.code} reason={tour.reason}
+                    onClose={() => setTour(null)} />
             )}
         </div>
     );

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
+import { TrustedTerminals } from "@/components/TrustedTerminals";
 import PartnerBrokerCard from "@/components/PartnerBrokerCard";
 import MultiAccountOverview from "@/components/MultiAccountOverview";
 
@@ -757,6 +758,7 @@ export default function Accounts() {
                                     {a.mode !== "paper" && (
                                         <div className="mt-4">
                                             <QuickInstallPanel accountId={a.id} accountLabel={a.label} account={a} onTrusted={load} />
+                                            <TrustedTerminals accountId={a.id} refreshKey={a.verified_identity ? 1 : 0} />
                                         </div>
                                     )}
 

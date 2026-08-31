@@ -141,7 +141,8 @@ async def send_telegram(user_id: str, event_type: str, title: str, lines: list) 
         # send (never paywall a warning that protects the user's money).
         SAFETY_EVENTS = {"circuit_breaker", "auto_demotion", "mode_demotion",
                          "panic", "protection", "account_blocked",
-                         "drawdown_warning"}
+                         "drawdown_warning", "heartbeat_lost",
+                         "identity_lost"}
         if event_type not in SAFETY_EVENTS:
             try:
                 from subscription_service import get_user_tier
