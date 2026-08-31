@@ -1,0 +1,25 @@
+{
+  "summary": "Iter-174: Verified the frontend fix in formatApiError (/app/frontend/src/lib/api.js:113) that surfaces detail.problems/blockers/reasons on activation errors. Backend + UI reproduction confirmed. Bug is FIXED.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter174_activation_problems.py",
+    "/app/test_reports/pytest/iter174_activation.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "formatApiError now merges problems/blockers/reasons — correct scope. Consider also surfacing detail.errors for future backend variants, but not blocking.",
+    "BotConfig.jsx renders err as a single-line string; long problems lists work but could be a <ul> for readability. Cosmetic only."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter174_activation_problems.py",
+    "/app/docs/TEST_MANIFEST.md"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (cookie auth)",
+  "seed_data_creation": "None. spread-test account state was not modified — still trading_enabled=false / bot inactive (verified before/after via UI: status pill remained ○ INACTIVE).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend test file /app/backend/tests/test_iter174_activation_problems.py can be reused as a regression for activation_not_ready payload shape. UI selector for the START/STOP toggle: [data-testid=bot-toggle-button]. Account cards in the scope bar are text-matched by label; 'spread-test' account has stale EA heartbeat (~319k s) so activation is always blocked.",
+  "rca of the issue": "RCA: The 409 response body from /api/bot/start and PUT /api/bot/config has shape {detail:{code,message,problems:[...]}}. Old formatApiError only returned detail.message, dropping the problems array — so the UI banner showed a bare 'Live activation blocked — fix these first:' with nothing after the colon. Fix: after picking detail.message, collect string items from detail.problems || detail.blockers || detail.reasons and join with ' · '. Reproduction: login as admin, /bot, pick spread-test, click START BOT → banner shows message + 3 concrete problems (broker disconnected, EA heartbeat stale, EA version unknown). Backend curl verified: POST /api/bot/start?account_id=<spread-test> → 409, detail.problems.length==3."
+}

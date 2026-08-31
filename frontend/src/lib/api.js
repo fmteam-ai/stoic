@@ -130,7 +130,19 @@ export function formatApiError(err) {
         return detail.map(e => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e))).filter(Boolean).join(" ");
     // Structured error: backend now returns {code, message, ...} for friendly
     // surfaces — duplicate_account, account_suspended, terms_required, etc.
-    if (detail && typeof detail.message === "string") return detail.message;
+    if (detail && typeof detail.message === "string") {
+        // Actionable lists (activation problems, certification blockers)
+        // must be surfaced, not dropped — prod bug: "Live activation
+        // blocked — fix these first:" rendered with an empty list.
+        const items = ["problems", "blockers", "reasons"]
+            .flatMap(k => (Array.isArray(detail[k]) ? detail[k] : []))
+            .map(x => (typeof x === "string" ? x
+                : (x?.message || x?.msg || x?.detail || JSON.stringify(x))))
+            .filter(Boolean);
+        return items.length
+            ? `${detail.message} ${items.join(" · ")}`
+            : detail.message;
+    }
     if (detail && typeof detail.msg === "string") return detail.msg;
     return _sanitizeErrorText(String(detail)) || "Something went wrong.";
 }

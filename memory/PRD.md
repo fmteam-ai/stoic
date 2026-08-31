@@ -2287,3 +2287,9 @@ User-reported batch before the next major gate:
   - Hardening: security.rate_limit on trust-terminal (10/10min/user), revoke-installation (20/10min), session-window save (20/10min); user_trust installation uses fixed _id "user_trust:{account_id}" → concurrent double-clicks idempotent.
   - Accepted/known: stolen bridge_token boundary unchanged (token already grants heartbeat/poll); KMS signer still roadmap.
 - All suites re-green after fixes: trust/diagnosis http 5 passed, scalp http 43 passed, integration 79 passed. Manifest 4077/405.
+
+## Iter-178 (2026-06) — "Live activation blocked" empty-list bug (DONE, testing agent iteration_174 PASS)
+- Prod bug: Bot Config red banner "Live activation blocked — fix these first:" showed NO problems. Backend 409 detail={code:'activation_not_ready', message, problems:[...]} (bot_routes._activation_readiness ~857: broker status, heartbeat >120s stale, ea_version missing/<FENCING_MIN_EA, equity unknown); formatApiError returned only detail.message, dropping problems/blockers.
+- Fix: lib/api.js formatApiError appends detail.problems/blockers/reasons items joined ' · ' after message — global (BotConfig banner, mode-promotion blockers, toasts).
+- Verified by testing agent: UI repro on spread-test (START BOT → banner lists 3 concrete problems), backend 409 shape, regressions (string details, session-window 422 toast). New regression test: backend/tests/test_iter174_activation_problems.py; manifest updated by agent.
+- Note for user's prod case: after publish, OnEquity's banner will name its exact blockers (likely broker status/heartbeat/EA version on that terminal).
