@@ -17,7 +17,12 @@ const TEXT_RULES = [
       label: "EDIT SESSION WINDOW", to: () => "/scalp" },
     { re: /panic|tripped|circuit breaker/i, label: "OPEN BOT CONFIG", to: () => "/bot" },
     { re: /step-up|totp|2fa|mfa/i, label: "OPEN SECURITY SETTINGS", to: () => "/settings" },
-    { re: /reconcil|unknown execution/i, label: "OPEN TRADES", to: () => "/trades" },
+    { re: /reconcil|unknown execution|broker-accepted|unresolved|without a broker-confirmed/i,
+      label: "OPEN TRADES", to: () => "/trades" },
+    { re: /worker|lease|crashloop|stalled|outbox/i,
+      label: "OPEN INFRASTRUCTURE", to: () => "/infrastructure" },
+    { re: /heartbeat/i,
+      label: "OPEN QUICK INSTALL", to: a => (a ? `/accounts?focus=${a}` : "/accounts") },
 ];
 
 export function matchFixShortcut(text, accountId = null) {

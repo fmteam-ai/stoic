@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
+import { matchFixShortcut } from "@/lib/fixShortcuts";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { toast } from "sonner";
 import {
@@ -31,6 +32,7 @@ const SEV_STYLE = {
 const styleFor = k => SEV_STYLE[k] || SEV_STYLE.info;
 
 function HeadlineScore({ data, onAckAll, acking }) {
+    const navigate = useNavigate();
     if (!data) return null;
     const score = data.score ?? 0;
     const s = styleFor(score >= 80 ? "excellent" : score >= 60 ? "warning" : "critical");
@@ -61,6 +63,37 @@ function HeadlineScore({ data, onAckAll, acking }) {
                             <div className="flex-1">
                                 <div className={`font-mono ${styleFor(i.severity).fg}`}>{i.label}</div>
                                 {i.fix && <div className="text-[#A1A1AA] leading-relaxed mt-0.5">→ {i.fix}</div>}
+                                {i.code === "critical_alerts_open" && Array.isArray(i.details) && i.details.length > 0 && (
+                                    <div className="mt-2 space-y-1.5" data-testid="open-critical-alerts">
+                                        {i.details.map((a, ai) => {
+                                            const fix = matchFixShortcut(a.message);
+                                            const seen = a.last_seen_at ? new Date(a.last_seen_at).toLocaleString() : null;
+                                            return (
+                                                <div key={ai} className="border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2"
+                                                    data-testid={`open-critical-alert-${ai}`}>
+                                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                                        <span className="font-mono text-[11px] text-[#A1A1AA]">{a.message}</span>
+                                                        {fix && (
+                                                            <button onClick={() => navigate(fix.to)}
+                                                                data-testid={`alert-fix-shortcut-${ai}`}
+                                                                className="shrink-0 font-mono text-[9px] font-bold tracking-widest px-2 py-1 border border-[#FFD700]/50 text-[#FFD700] hover:bg-[#FFD700]/10 transition-colors">
+                                                                {fix.label} →
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest mt-1">
+                                                        {a.kind?.toUpperCase()}{a.occurrences > 1 ? ` · RE-FIRED ×${a.occurrences}` : ""}{a.prior_acked > 0 ? ` · CAME BACK ${a.prior_acked}× AFTER ACKNOWLEDGE` : ""}{seen ? ` · LAST SEEN ${seen}` : ""}
+                                                    </div>
+                                                    {(a.occurrences > 1 || a.prior_acked > 0) && (
+                                                        <div className="text-[10px] text-[#FFB000] mt-0.5">
+                                                            This alert keeps returning because the underlying condition is still active — acknowledging alone won't stop it. Use the fix link.
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                                 {i.code === "critical_alerts_open" && onAckAll && (
                                     <button onClick={onAckAll} disabled={acking}
                                         data-testid="ack-all-alerts-btn"

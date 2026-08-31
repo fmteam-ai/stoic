@@ -2326,3 +2326,11 @@ User-reported batch before the next major gate:
 - security_audit_agent verdict: CONDITIONAL PASS, no new CONFIRMED CRITICAL/HIGH/MEDIUM. Prior SEC-001/SEC-002 fixes intact. Fix-It Shortcuts render paths confirmed safe (React text nodes, fixed route allowlist, ?focus never reaches server / getElementById literal lookup). NoSQL injection, IDOR, CSRF/CORS, admin ops-alert gating all traced positive.
 - Fixed now: P3 heartbeat_watch.py email HTML — title + lines are html.escape()d before interpolation (owner-supplied account label could carry raw HTML). Verified via mocked send_email: <script>/<img> payloads render escaped.
 - Still-open accepted risks (roadmap): KMS/HSM release signer (RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD), single-factor bridge_token on EA bridge surfaces.
+
+## Iter-184 (2026-06) — Prod Bot Health 45 loop: alert transparency (DONE, self-tested)
+- User reported the same 45→ack→100→45 loop on LIVE PRODUCTION + TRADING EMERGENCY banner. Prod DB not accessible; two-part response:
+  1. The iter-182 lease-ceiling fix ships to prod on next publish (silences abandoned worker leases >24h dead).
+  2. Bot Health hard-cap panel now SHOWS the actual open critical alerts: health-score critical_alerts_open issue carries details[] (kind, message, occurrences, prior_acked = count of previously-acked alerts with same dedup_key, timestamps; top 10). BotHealth.jsx renders each with "CAME BACK N× AFTER ACKNOWLEDGE" tag, a warning that acking alone won't stop a live condition, and a Fix-It shortcut (matchFixShortcut) → testids open-critical-alerts / alert-fix-shortcut-{i}.
+- fixShortcuts.js patterns extended for ops-alert shapes: heartbeat → Quick Install; worker/lease/crashloop/stalled/outbox → /infrastructure; unprotected/unresolved/broker-accepted → /trades.
+- Verified e2e on preview: seeded acked+reopened ea_heartbeat_stale alert → score 45, panel shows message + CAME BACK 1× + OPEN QUICK INSTALL shortcut; cleanup → score 95.
+- TRADING EMERGENCY on prod = panic tripped (real safety state, by design): verify broker positions → SYNC WITH BROKER on Trades → reset PANIC in Bot Config (readiness strip FIX THIS tour walks through it).

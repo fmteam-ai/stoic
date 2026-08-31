@@ -1790,10 +1790,34 @@ async def bot_health_score(user=Depends(get_current_user)):
                 {"acked_at": None, "severity": "critical",
                  "synthetic": {"$ne": True}})
             if crit:
+                crit_docs = await db.ops_alerts.find(
+                    {"acked_at": None, "severity": "critical",
+                     "synthetic": {"$ne": True}},
+                    {"kind": 1, "message": 1, "last_seen_at": 1,
+                     "created_at": 1, "occurrences": 1, "dedup_key": 1}
+                ).sort("last_seen_at", -1).to_list(10)
+                details = []
+                for d in crit_docs:
+                    prior = 0
+                    if d.get("dedup_key"):
+                        prior = await db.ops_alerts.count_documents(
+                            {"dedup_key": d["dedup_key"],
+                             "acked_at": {"$ne": None}})
+                    details.append({
+                        "kind": d.get("kind"),
+                        "message": d.get("message"),
+                        "occurrences": d.get("occurrences", 1),
+                        "prior_acked": prior,
+                        "created_at": (d["created_at"].isoformat()
+                                       if d.get("created_at") else None),
+                        "last_seen_at": (d["last_seen_at"].isoformat()
+                                         if d.get("last_seen_at") else None),
+                    })
                 hard_caps.append({
                     "cap": 45, "code": "critical_alerts_open",
                     "label": f"{crit} unacknowledged CRITICAL platform "
-                             "alert(s)"})
+                             "alert(s)",
+                    "details": details})
         except Exception:  # noqa: BLE001
             pass
     for c in hard_caps:
@@ -1802,7 +1826,8 @@ async def bot_health_score(user=Depends(get_current_user)):
             "code": c["code"],
             "label": f"HARD CAP {c['cap']} — {c['label']}",
             "fix": "Fail-closed rule: health cannot read higher while this "
-                   "condition is active."})
+                   "condition is active.",
+            **({"details": c["details"]} if c.get("details") else {})})
         if score > c["cap"]:
             score = c["cap"]
 
