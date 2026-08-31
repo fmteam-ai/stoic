@@ -1154,11 +1154,9 @@ async def safety_status(user=Depends(get_current_user)):
         except (TypeError, ValueError):
             pass
 
-    unprotected = await db.trades.count_documents({
-        "user_id": user["id"], "status": "open",
-        "$or": [{"stop_loss": {"$in": [None, 0]}},
-                {"lifecycle_state": {"$in": ["FILLED_UNPROTECTED",
-                                             "PROTECTION_REQUESTED"]}}]})
+    from protection_guard import unprotected_open_query
+    unprotected = await db.trades.count_documents(
+        unprotected_open_query({"user_id": user["id"]}))
     unresolved = await db.trades.count_documents({
         "user_id": user["id"], "status": "pending",
         "submission_state": "broker_accepted_unresolved"})

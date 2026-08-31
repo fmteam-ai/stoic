@@ -206,6 +206,27 @@ def calculate_emergency_stop(entry: float, direction: str, lot: float,
     return round(sl, rounding_digits(pip) + 1)
 
 
+def unprotected_open_query(extra: dict | None = None) -> dict:
+    """Canonical query for open trades with NO broker-confirmed protection.
+
+    confirmed_stop_loss is written EXCLUSIVELY from broker-confirmed
+    evidence (EA modification ack or heartbeat position snapshot), so any
+    non-zero value resolves the condition even when the original stop_loss
+    field was never populated (emergency-protection path). Without this
+    exclusion the unprotected_positions alert re-fires forever on trades
+    the guard already resolved."""
+    q = {
+        "status": "open",
+        "confirmed_stop_loss": {"$in": [None, 0]},
+        "$or": [{"stop_loss": {"$in": [None, 0]}},
+                {"lifecycle_state": {"$in": ["FILLED_UNPROTECTED",
+                                             "PROTECTION_REQUESTED"]}}],
+    }
+    if extra:
+        q.update(extra)
+    return q
+
+
 async def repair_unprotected_positions(db) -> dict:
     """One sweep of the recovery state machine. Idempotent; safe to run
     every reconcile interval."""

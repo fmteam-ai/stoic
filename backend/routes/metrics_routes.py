@@ -63,11 +63,9 @@ async def metrics(request: Request):
         {"status": "pending",
          "submission_state": "broker_accepted_unresolved"}),
         "Broker-accepted orders awaiting position resolution")
-    gauge("stoic_unprotected_open", await db.trades.count_documents(
-        {"status": "open",
-         "$or": [{"stop_loss": {"$in": [None, 0]}},
-                 {"lifecycle_state": {"$in": ["FILLED_UNPROTECTED",
-                                              "PROTECTION_REQUESTED"]}}]}),
+    from protection_guard import unprotected_open_query
+    gauge("stoic_unprotected_open",
+          await db.trades.count_documents(unprotected_open_query()),
         "Open positions without a broker-confirmed stop")
 
     gauge("stoic_outbox_pending",

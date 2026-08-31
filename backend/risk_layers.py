@@ -244,10 +244,8 @@ async def evaluate_layers(db, user_id: str, account: dict | None) -> list[dict]:
                 "detail": "engine-enforced SL on every entry; payoff + RR guards active"}
 
     async def position_stop():
-        q = {"user_id": user_id, "status": "open",
-             "$or": [{"stop_loss": {"$in": [None, 0]}},
-                     {"lifecycle_state": {"$in": ["FILLED_UNPROTECTED",
-                                                  "PROTECTION_REQUESTED"]}}]}
+        from protection_guard import unprotected_open_query
+        q = unprotected_open_query({"user_id": user_id})
         if acc_id:
             q["account_id"] = acc_id
         n = await db.trades.count_documents(q)

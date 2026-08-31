@@ -86,6 +86,12 @@ def _make_ctx(tag: str):
         "enabled": True, "mode": "shadow"}, timeout=15)
     assert r.status_code == 200, r.text
 
+    # API responses no longer expose bridge_token (security hardening) —
+    # read it straight from the DB for bridge-call payloads.
+    dbacc = mongo_db().accounts.find_one(
+        {"account_number": acc["account_number"]}, {"bridge_token": 1})
+    acc["bridge_token"] = (dbacc or {}).get("bridge_token")
+
     return {"s": s, "email": email, "acc": acc}
 
 

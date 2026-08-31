@@ -2334,3 +2334,11 @@ User-reported batch before the next major gate:
 - fixShortcuts.js patterns extended for ops-alert shapes: heartbeat → Quick Install; worker/lease/crashloop/stalled/outbox → /infrastructure; unprotected/unresolved/broker-accepted → /trades.
 - Verified e2e on preview: seeded acked+reopened ea_heartbeat_stale alert → score 45, panel shows message + CAME BACK 1× + OPEN QUICK INSTALL shortcut; cleanup → score 95.
 - TRADING EMERGENCY on prod = panic tripped (real safety state, by design): verify broker positions → SYNC WITH BROKER on Trades → reset PANIC in Bot Config (readiness strip FIX THIS tour walks through it).
+
+## Iter-185 (2026-06) — Prod 45 loop root cause: unprotected_positions detector bug (DONE, tested)
+- Prod alert identified via iter-184 transparency: "2 open position(s) without a broker-confirmed stop >3m" (UNPROTECTED_POSITIONS, came back 2× after ack).
+- ROOT CAUSE: detector query (duplicated in alerting.py, bot_routes.py doctor, metrics_routes.py, risk_layers.py) counted trades with stop_loss in [None,0] OR lifecycle FILLED_UNPROTECTED/PROTECTION_REQUESTED — but IGNORED confirmed_stop_loss. The protection guard's emergency path resolves protection by writing confirmed_stop_loss (+protection_state=RESOLVED) WITHOUT ever populating stop_loss → such trades alerted forever (ack → re-raise loop).
+- FIX: protection_guard.unprotected_open_query(extra) — canonical query excluding confirmed_stop_loss != 0 (broker-confirmed evidence is the state machine's own resolution criterion). All 4 call sites now use it. Alert message also names up to 3 positions (SYMBOL#ticket).
+- Tests: tests/test_iter178_unprotected_confirmed.py (4-trade matrix) + reran iter151/152/84 suites (32 passed) + in-process evaluator e2e (confirmed trade silent; genuine one alerts with ticket). Manifest regenerated (4093/410).
+- Also repaired pre-existing broken test tests/test_iter48_round12_e2e.py: account-create API no longer returns bridge_token (security hardening) — ctx now reads it from DB; 5/5 pass.
+- If prod's 2 positions are GENUINELY unconfirmed (EA offline/panic), the alert will still fire correctly after publish, now naming the tickets; remediation = reconnect EA / SYNC WITH BROKER / close-protect positions.

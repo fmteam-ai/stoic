@@ -158,18 +158,23 @@ async def evaluate_ops_alerts(db) -> int:
             raised += 1
 
     # 4 · open positions without broker-confirmed protection
+    from protection_guard import unprotected_open_query
     prot_cutoff = (now - timedelta(
         seconds=int(os.environ.get("UNPROTECTED_ALERT_SEC", "180")))).isoformat()
-    unprotected = await db.trades.count_documents(
-        {"status": "open", "opened_at": {"$lt": prot_cutoff},
-         "$or": [{"stop_loss": {"$in": [None, 0]}},
-                 {"lifecycle_state": {"$in": ["FILLED_UNPROTECTED",
-                                              "PROTECTION_REQUESTED"]}}]})
+    upq = unprotected_open_query({"opened_at": {"$lt": prot_cutoff}})
+    unprotected = await db.trades.count_documents(upq)
     if unprotected:
+        samples = await db.trades.find(
+            upq, {"symbol": 1, "mt5_ticket": 1}).sort(
+            "opened_at", 1).to_list(3)
+        ids = ", ".join(
+            f"{d.get('symbol') or '?'}#{d.get('mt5_ticket') or str(d['_id'])[-6:]}"
+            for d in samples)
+        more = ", …" if unprotected > len(samples) else ""
         if await raise_alert(
                 db, "unprotected_positions", "critical",
                 f"{unprotected} open position(s) without a broker-confirmed "
-                f"stop for >3 minutes",
+                f"stop for >3 minutes ({ids}{more})",
                 dedup_key="unprotected_positions"):
             raised += 1
 
