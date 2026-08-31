@@ -5,7 +5,10 @@ allows closing/reconciling, it only blocks NEW entries.
 """
 from scalp.state import now_ms
 
-MAX_CLOCK_DRIFT_MS = 5000
+MAX_CLOCK_DRIFT_MS = 15_000   # residual after TZ snap: broker clock error
+                              # + transport; real staleness is guarded by
+                              # quote_age/DATA_STALE — small-broker clocks
+                              # are routinely seconds off true UTC.
 TZ_SNAP_MS = 1_800_000        # broker clocks sit on 30-min timezone boundaries
 MAX_REJECT_RATE = 0.30
 SLIPPAGE_ANOMALY_MULT = 3.0
@@ -30,8 +33,20 @@ def evaluate(state, cfg, data_quality: dict | None = None) -> dict:
             reasons.append("market-data heartbeat lost")
         elif state.quote_age_ms() > cfg.max_quote_age_ms:
             reasons.append("quote stale")
-        if abs(clock_drift_residual_ms(state.clock_drift_ms)) > MAX_CLOCK_DRIFT_MS:
-            reasons.append("clock drift excessive")
+        drift_residual = clock_drift_residual_ms(state.clock_drift_ms)
+        if (not getattr(state, "_offsets", None)
+                and getattr(state, "last_batch_residual_ms", None)
+                is not None):
+            # no accepted samples — judge the raw batch residual so an
+            # unusable broker clock halts VISIBLY instead of silently
+            # failing the freshness gate.
+            drift_residual = state.last_batch_residual_ms
+        if abs(drift_residual) > MAX_CLOCK_DRIFT_MS:
+            reasons.append(
+                "clock drift excessive "
+                f"(residual {abs(drift_residual) / 1000:.1f}s > "
+                f"{MAX_CLOCK_DRIFT_MS / 1000:.0f}s — broker clock error or "
+                "transport delay)")
     # Phase E — the session data-quality score gates NEW entries: a POOR
     # feed (invalid ticks, gaps, spread anomalies) cannot be traded on.
     if data_quality is not None and data_quality.get("rating") == "POOR":

@@ -22,8 +22,9 @@ import os
 import pytest
 import requests
 
-# Load BASE_URL from frontend .env
-BASE_URL = ""
+# Load BASE_URL from frontend .env (lazy live-target helper — CI safe)
+from live_target import require_live_base_url
+BASE_URL = require_live_base_url()
 
 ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
 TAURO_PREFIX = "6a41c0fc"  # protected — do not mutate

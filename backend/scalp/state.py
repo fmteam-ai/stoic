@@ -46,6 +46,10 @@ class ScalpState:
         # drag the offset and make old data look current (round 4 item 3).
         self._offsets: deque = deque(maxlen=60)
         self.clock_drift_ms: float = 0.0
+        # newest batch's TZ-snapped recv−sent_at residual (iter-175): lets
+        # the kill-switch flag an unusable broker clock even when samples
+        # are rejected and the median never forms.
+        self.last_batch_residual_ms: float | None = None
 
     def update(self, t: TickEvent, trusted: bool = True) -> None:
         mid = (t.bid + t.ask) / 2.0
@@ -58,14 +62,17 @@ class ScalpState:
             self.vwap_ewma = mid
         else:
             self.vwap_ewma += self._vwap_alpha * (mid - self.vwap_ewma)
-        if trusted:
-            off = t.received_time_ms - t.broker_time_ms
-            # reject sudden large jumps once we have a stable estimate
-            if len(self._offsets) < 10 or abs(off - self.clock_drift_ms) < 10_000:
-                self._offsets.append(off)
-                s = sorted(self._offsets)
-                self.clock_drift_ms = float(s[len(s) // 2])
         self.last_tick = t
+
+    def record_offset_sample(self, off: float) -> None:
+        """One drift sample per BATCH against the batch's newest tick
+        (recv − sent_at): per-tick sampling biased the median by the
+        in-batch tick age (iter-175). Sudden large jumps are rejected once
+        the estimate is stable."""
+        if len(self._offsets) < 10 or abs(off - self.clock_drift_ms) < 10_000:
+            self._offsets.append(off)
+            s = sorted(self._offsets)
+            self.clock_drift_ms = float(s[len(s) // 2])
 
     # -------- execution feedback --------
     def record_fill(self, slippage_pips: float) -> None:

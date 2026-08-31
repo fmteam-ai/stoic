@@ -201,9 +201,10 @@ def get_cached(user_id: str, symbol: str) -> dict:
     if ent is None or time.time() - ent["ts"] > STALE_SEC:
         return {"long_enabled": False, "short_enabled": False,
                 "regime": "UNKNOWN",
-                "regime_reason": ("permissions not refreshed recently — the "
-                                  "refresh runs on incoming ticks, so this "
-                                  "usually means the tick stream is offline"),
+                "regime_reason": ("permissions not refreshed recently — "
+                                  "no ticks (or status reads) have "
+                                  "triggered a refresh; if this persists "
+                                  "the tick stream is offline"),
                 "reasons": ["control-plane permissions stale — fail closed"]}
     return ent["perms"]
 

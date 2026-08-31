@@ -309,8 +309,18 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
         if r is not None and not r.enabled and cfg.get("enabled"):
             r.enabled = True
             r.mode = cfg.get("mode", "shadow")
-    out = [r.status() for r in _runners.values() if r.user_id == user["id"]
-           and (not account_id or r.account_id == account_id)]
+    out = []
+    from scalp import permissions as _perms
+    for r in _runners.values():
+        if r.user_id != user["id"]:
+            continue
+        if account_id and r.account_id != account_id:
+            continue
+        # iter-175 — permissions normally refresh on incoming ticks; also
+        # kick a (throttled, non-blocking) refresh on status reads so the
+        # panel shows current regime/session even when the stream is down.
+        _perms.maybe_refresh(db, r.user_id, r.symbol, r.cfg)
+        out.append(r.status())
     from scalp.engine import audit_backlog
     return {"runners": out, "audit": audit_backlog()}
 

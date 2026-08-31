@@ -1973,6 +1973,17 @@ class TestRound13Hardening:
         assert filt["financial_reconciliation_status"] == "pending"
         assert "$or" in filt                     # unclaimed-or-expired guard
 
+    def test_offset_sample_is_batch_level_and_jump_resistant(self):
+        """iter-175: drift samples are recorded per batch (vs the newest
+        broker tick) and sudden jumps are rejected once stable."""
+        from scalp.state import ScalpState
+        st = ScalpState(0.0001)
+        for _ in range(12):
+            st.record_offset_sample(-10_800_000 - 1200)   # UTC+3 broker
+        assert abs(st.clock_drift_ms - (-10_800_000 - 1200)) < 1
+        st.record_offset_sample(-10_800_000 - 900_000)    # absurd jump
+        assert abs(st.clock_drift_ms - (-10_800_000 - 1200)) < 1
+
     def test_clock_drift_ignores_broker_timezone_offset(self):
         """Broker tick clocks are broker-LOCAL (UTC+2/+3 EET, UTC+5:30):
         the constant timezone offset is not drift and must not trip the
@@ -1982,7 +1993,10 @@ class TestRound13Hardening:
         assert abs(clock_drift_residual_ms(-7_200_000 + 1200)) < MAX_CLOCK_DRIFT_MS
         assert abs(clock_drift_residual_ms(-19_800_000)) < MAX_CLOCK_DRIFT_MS
         assert abs(clock_drift_residual_ms(0.0)) < MAX_CLOCK_DRIFT_MS
-        assert abs(clock_drift_residual_ms(-10_800_000 - 8000)) > MAX_CLOCK_DRIFT_MS
+        # iter-175: small-broker clock error + CF transport (≤15s) is
+        # tolerated — real staleness is guarded by quote_age/DATA_STALE.
+        assert abs(clock_drift_residual_ms(-10_800_000 - 8000)) < MAX_CLOCK_DRIFT_MS
+        assert abs(clock_drift_residual_ms(-10_800_000 - 20_000)) > MAX_CLOCK_DRIFT_MS
         assert abs(clock_drift_residual_ms(600_000)) > MAX_CLOCK_DRIFT_MS
 
 

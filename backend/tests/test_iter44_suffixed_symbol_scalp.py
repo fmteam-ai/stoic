@@ -67,6 +67,10 @@ def ctx():
         "base_currency": "USD"}, timeout=15)
     assert r.status_code in (200, 201), r.text
     acc = r.json()
+    # bridge_token is masked in serialized accounts — fetch a full one
+    r = s.post(f"{API}/accounts/{acc['id']}/rotate-token", timeout=15)
+    assert r.status_code == 200, r.text
+    acc["bridge_token"] = r.json()["bridge_token"]
 
     # enable shadow scalp on EURUSD
     r = s.post(f"{API}/scalp/config", json={

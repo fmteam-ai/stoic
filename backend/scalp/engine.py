@@ -841,10 +841,28 @@ class ScalpRunner:
         self.broker = str(account.get("broker") or "")
         self.account_type = str(account.get("account_type") or "")
         recv = now_ms()
-        # round 4 items 3/5: transport age known BEFORE processing; missing
-        # sender timestamp is UNKNOWN, not fresh — fail closed for entries.
-        transport_age = (recv - int(sent_at_ms)) if sent_at_ms else None
-        trusted = transport_age is not None and transport_age <= MAX_BATCH_TRANSPORT_AGE_MS
+        # round 4 items 3/5 + iter-175: the EA's sent_at_ms is the BROKER
+        # time of the newest tick (time_msc), so recv−sent_at embeds the
+        # broker timezone (snapped away) plus broker clock error plus real
+        # transport. Bootstrap the median offset first, then judge each
+        # batch's transport RELATIVE to that median so sloppy-but-constant
+        # broker clocks (≤15s) still trade while delayed batches are
+        # rejected precisely.
+        raw_transport = (recv - int(sent_at_ms)) if sent_at_ms else None
+        if raw_transport is None:
+            batch_residual = None
+            trusted = False
+        else:
+            batch_residual = kill.clock_drift_residual_ms(raw_transport)
+            if abs(batch_residual) <= kill.MAX_CLOCK_DRIFT_MS:
+                self.state.record_offset_sample(float(raw_transport))
+            if len(self.state._offsets) >= 10:
+                trusted = (abs(raw_transport - self.state.clock_drift_ms)
+                           <= MAX_BATCH_TRANSPORT_AGE_MS)
+            else:   # bootstrap — tolerate clock error until median stable
+                trusted = abs(batch_residual) <= kill.MAX_CLOCK_DRIFT_MS
+        self.state.last_batch_residual_ms = batch_residual
+        transport_age = batch_residual
         # round 4 item 4: ordering watermark spans BATCHES, not just this one
         last_tm = (self.state.last_tick.broker_time_ms
                    if self.state.last_tick else None)
@@ -2875,6 +2893,8 @@ class ScalpRunner:
             "spread_pips": self.state.spread_pips(),
             "quote_age_ms": self.state.quote_age_ms(),
             "clock_drift_ms": self.state.clock_drift_ms,
+            "clock_drift_residual_ms": round(
+                kill.clock_drift_residual_ms(self.state.clock_drift_ms)),
             "features": ({k: round(v, 3) for k, v in feats.items()
                           if not k.startswith("_")} if feats else None),
             "risk": {
