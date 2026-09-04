@@ -197,6 +197,43 @@ async def release_readiness(request: Request):
                         "code_version": FEATURE_SCHEMA_VERSION,
                         "db_max_version": db_version}
 
+    # 6 · EA release verification chain (audit item 45) — the exact RC MQ5
+    #     must have a 0-error Windows MetaEditor compile, EX5 SHA-256 and an
+    #     Ed25519 signature recorded in docs/RELEASE_HASHES.json. Always
+    #     reported; counts toward `ready` when REQUIRE_EA_RELEASE_PROOF=true
+    #     (set on the Demo-Production-Proof / soak host) or in production.
+    import os as _os
+    ea_fails = []
+    try:
+        import json as _json
+        _root = _os.path.dirname(_os.path.dirname(
+            _os.path.dirname(_os.path.abspath(__file__))))
+        _hashes = _os.path.join(_root, "docs", "RELEASE_HASHES.json")
+        _ea = (_json.load(open(_hashes)) if _os.path.exists(_hashes)
+               else {}).get("ea") or {}
+        sys_path_added = _os.path.join(_root, "scripts")
+        import sys as _sys
+        if sys_path_added not in _sys.path:
+            _sys.path.insert(0, sys_path_added)
+        from verify_ea_release import check_entry
+        ea_fails = check_entry(_ea)
+    except Exception as e:  # noqa: BLE001
+        ea_fails = [f"verifier unavailable: {e}"]
+    ea_required = (
+        _os.environ.get("REQUIRE_EA_RELEASE_PROOF", "").strip().lower()
+        == "true")
+    from app_env import is_production
+    ea_required = ea_required or is_production()
+    checks["ea_release"] = {
+        "ok": (not ea_fails) if ea_required else True,
+        "verified": not ea_fails,
+        "enforced": ea_required,
+        "failures": ea_fails or None,
+        "note": None if not ea_fails else
+        "MQL5 externally unverified — mandatory before Demo Production "
+        "Proof: compile the exact RC MQ5 in Windows MetaEditor (0 errors), "
+        "then scripts/verify_ea_release.py --sign"}
+
     ready = all(c["ok"] for c in checks.values())
     return JSONResponse(status_code=200 if ready else 503,
                         content={"ready": ready,

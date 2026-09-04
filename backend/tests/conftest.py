@@ -118,14 +118,33 @@ def _ensure_event_loop():
     yield
 
 
-def pytest_collection_modifyitems(config, items):
+def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     """Auto-marks by directory so default suites are self-contained:
         pytest -m unit         → pure unit tests (no DB, no backend)
         pytest -m integration  → MongoDB-backed tests
         pytest -m http         → live-backend HTTP tests (everything else)
+
+    Live-test safety gate (audit item 43): every http-live test that is not
+    explicitly marked `read_only` is treated as mutating —
+      · requires STOIC_ALLOW_MUTATING_TESTS=YES (demo/staging envs only)
+      · is FORBIDDEN against a LIVE environment (APP_ENV=production/prod or
+        STOIC_ENVIRONMENT=live) unless marked `live_authorized`.
+    Unit and integration lanes are never gated.
     """
     from pathlib import Path
     root = Path(__file__).resolve().parent
+    env_live = (
+        os.environ.get("APP_ENV", "").strip().lower() in ("production", "prod")
+        or os.environ.get("STOIC_ENVIRONMENT", "").strip().lower() == "live")
+    allow = os.environ.get(
+        "STOIC_ALLOW_MUTATING_TESTS", "").strip().upper() == "YES"
+    skip_flag = pytest.mark.skip(
+        reason="mutating live test — set STOIC_ALLOW_MUTATING_TESTS=YES "
+               "(safety category: DEMO_MUTATING by default; mark read_only "
+               "for pure-GET tests)")
+    skip_live = pytest.mark.skip(
+        reason="mutating test FORBIDDEN against a LIVE environment — add the "
+               "live_authorized marker only with explicit authorization")
     for item in items:
         try:
             rel = Path(str(item.fspath)).resolve().relative_to(root)
@@ -138,6 +157,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.integration)
         else:
             item.add_marker(pytest.mark.http)
+            if item.get_closest_marker("read_only"):
+                continue
+            if env_live and not item.get_closest_marker("live_authorized"):
+                item.add_marker(skip_live)
+            elif not allow:
+                item.add_marker(skip_flag)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -189,3 +214,4 @@ def _auto_csrf_header():
         yield
     finally:
         requests.sessions.Session.request = original
+

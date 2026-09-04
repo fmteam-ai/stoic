@@ -14,6 +14,10 @@ OUT="../test_reports/pytest/full_suite_${STAMP}.xml"
 mkdir -p ../test_reports/pytest
 
 echo "== STOIC full classified suite → ${OUT} =="
+# Live-test safety gate (audit item 43): the full suite includes mutating
+# tests — explicitly opt in here. The conftest still hard-refuses mutating
+# tests when APP_ENV is production unless individually live_authorized.
+export STOIC_ALLOW_MUTATING_TESTS=${STOIC_ALLOW_MUTATING_TESTS:-YES}
 python -m pytest tests \
   -m "not broker and not external" \
   -q --junitxml="${OUT}" "$@"

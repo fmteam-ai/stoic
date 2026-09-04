@@ -186,6 +186,17 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         await record_failure(db, "login", f"{ip}:{email}", 600)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    # Audit item 44 — no disposable test identity may ever authenticate
+    # against a funded production deployment.
+    from app_env import is_production
+    from test_identity import is_disposable_test_identity
+    if is_production() and is_disposable_test_identity(email):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "test_identity_forbidden",
+                    "message": "Test identities cannot authenticate against "
+                               "the production environment."})
+
     # Block suspended/terminated accounts (Terms §8)
     status = user.get("status") or "active"
     if status == "suspended":
