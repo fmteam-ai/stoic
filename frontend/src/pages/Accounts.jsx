@@ -87,7 +87,7 @@ function SymbolSuffixRow({ account, onSet }) {
     );
 }
 
-const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", base_currency: "USD", mode: "paper", initial_balance: 10000, investor_password: "", master_password: "" };
+const empty = { label: "", broker: "", server: "", account_number: "", account_type: "microcent", account_role: "STANDARD", pamm_provider: "", pamm_program_id: "", pamm_broker_program_id: "", base_currency: "USD", mode: "paper", initial_balance: 10000, investor_password: "", master_password: "" };
 
 export default function Accounts() {
     const [accounts, setAccounts] = useState([]);
@@ -168,7 +168,11 @@ export default function Accounts() {
     const create = async (e) => {
         e.preventDefault(); setErr(""); setMsg("");
         try {
-            await api.post("/accounts", form);
+            const payload = { ...form };
+            for (const k of ["pamm_provider", "pamm_program_id", "pamm_broker_program_id"]) {
+                if (!payload[k] || payload.account_role === "STANDARD") payload[k] = null;
+            }
+            await api.post("/accounts", payload);
             setShowForm(false); setForm(empty); setMsg("Account added.");
             await load();
         } catch (e2) { setErr(formatApiError(e2)); }
@@ -445,6 +449,43 @@ export default function Accounts() {
                                 data-testid="account-currency-input"
                                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
                         </div>
+                        <div>
+                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ACCOUNT ROLE (PAMM)</label>
+                            <select value={form.account_role} onChange={e => setForm({ ...form, account_role: e.target.value })}
+                                data-testid="account-role-select"
+                                className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm outline-none">
+                                <option value="STANDARD">Standard — normal STOIC execution</option>
+                                <option value="PAMM_MASTER">PAMM Master — executes via certified PAMM program</option>
+                                <option value="PAMM_INVESTOR">PAMM Investor — monitor only, never trades</option>
+                            </select>
+                            {form.account_role === "PAMM_INVESTOR" && (
+                                <p className="font-mono text-[10px] text-[#FFB000] mt-1" data-testid="investor-role-note">
+                                    Execution Authority will be LOCKED — STOIC never places orders on investor accounts.
+                                </p>
+                            )}
+                        </div>
+                        {form.account_role !== "STANDARD" && (
+                            <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div>
+                                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">PAMM PROVIDER</label>
+                                    <input value={form.pamm_provider} onChange={e => setForm({ ...form, pamm_provider: e.target.value })}
+                                        data-testid="pamm-provider-input" placeholder="e.g. broker PAMM desk"
+                                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+                                </div>
+                                <div>
+                                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">STOIC PAMM PROGRAM ID</label>
+                                    <input value={form.pamm_program_id} onChange={e => setForm({ ...form, pamm_program_id: e.target.value })}
+                                        data-testid="pamm-program-id-input"
+                                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+                                </div>
+                                <div>
+                                    <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">BROKER PROGRAM ID</label>
+                                    <input value={form.pamm_broker_program_id} onChange={e => setForm({ ...form, pamm_broker_program_id: e.target.value })}
+                                        data-testid="pamm-broker-program-id-input"
+                                        className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+                                </div>
+                            </div>
+                        )}
 
                         {form.mode === "live" && (
                             <div className="md:col-span-2 border-t border-[#1F1F1F] pt-3 mt-1 space-y-3">
@@ -566,6 +607,12 @@ export default function Accounts() {
                                             <div className="font-mono text-xs text-[#A1A1AA]">{a.broker} · {a.server} · #{a.account_number}</div>
                                             <div className="font-mono text-[10px] text-[#52525B] tracking-widest flex items-center gap-2 flex-wrap">
                                                 <span>TYPE · {a.account_type?.toUpperCase()} · {a.base_currency}</span>
+                                                {a.account_role && a.account_role !== "STANDARD" && (
+                                                    <span data-testid={`account-role-badge-${a.account_number}`}
+                                                        className={`px-1.5 py-0.5 border font-mono text-[9px] tracking-widest ${a.account_role === "PAMM_INVESTOR" ? "border-[#FFB000]/50 text-[#FFB000]" : "border-[#00BFFF]/50 text-[#00BFFF]"}`}>
+                                                        {a.account_role === "PAMM_INVESTOR" ? "PAMM INVESTOR · MONITOR ONLY" : "PAMM MASTER"}
+                                                    </span>
+                                                )}
                                                 {a.environment && (
                                                     <span data-testid={`account-environment-${a.account_number}`}
                                                         title="Server-owned capital environment — separate from connection state and telemetry freshness"

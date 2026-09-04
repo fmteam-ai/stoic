@@ -99,7 +99,15 @@ class AccountCreate(BaseModel):
     broker: str
     server: str
     account_number: str
+    # What kind of MT5 account is it? (technical/trading type)
     account_type: Literal["microcent", "cent", "standard", "demo"] = "microcent"
+    # What role does the account play inside PAMM? Separate question —
+    # never mixed into account_type (audit correction).
+    account_role: Literal["STANDARD", "PAMM_MASTER",
+                          "PAMM_INVESTOR"] = "STANDARD"
+    pamm_provider: Optional[str] = None
+    pamm_program_id: Optional[str] = None
+    pamm_broker_program_id: Optional[str] = None
     base_currency: str = "USD"
     mode: Literal["live", "paper"] = "live"
     initial_balance: float = 10000.0  # only used for paper accounts
@@ -119,6 +127,10 @@ class AccountOut(BaseModel):
     server: str
     account_number: str
     account_type: str
+    account_role: str = "STANDARD"
+    pamm_provider: Optional[str] = None
+    pamm_program_id: Optional[str] = None
+    pamm_broker_program_id: Optional[str] = None
     base_currency: str
     bridge_token: str
     status: Literal["disconnected", "connected"] = "disconnected"

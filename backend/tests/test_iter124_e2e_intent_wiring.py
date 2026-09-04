@@ -65,13 +65,22 @@ def _add_and_seed(sess):
     inst_id = f"inst_iter124_{uuid.uuid4().hex[:8]}"
     now = datetime.now(timezone.utc)
     acc = _mongo().accounts.find_one({"_id": ObjectId(aid)})
+    from routes.diagnostic_routes import LATEST_EA
+    specs = {s: {"stops_level_points": 10, "freeze_level_points": 0}
+             for s in ("XAUUSD", "EURUSD", "BTCUSD")}
     _mongo().accounts.update_one({"_id": ObjectId(aid)}, {"$set": {
         "status": "connected", "last_heartbeat": now.isoformat(),
-        "ea_version": "1.55",
+        "ea_version": LATEST_EA,
+        "account_type": "hedging",  # EA-reported margin mode (cert check)
         "available_symbols": ["XAUUSD", "EURUSD", "BTCUSD"],
         "balance": 10000.0, "equity": 10000.0,
+        "symbol_specs": specs,
+        "symbol_specs_updated_at": now.isoformat(),
+        "spreads_updated_at": now.isoformat(),
+        "broker_utc_offset_sec": 0,
+        "last_full_sync_at": now.isoformat(),
         "ea_identity": {"installation_id": inst_id,
-                        "authoritative": True, "ea_version": "1.55",
+                        "authoritative": True, "ea_version": LATEST_EA,
                         "verified_at": now.isoformat()}}})
     _mongo().installations.insert_one({
         "installation_id": inst_id, "user_id": acc["user_id"],

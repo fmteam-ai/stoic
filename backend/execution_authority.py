@@ -15,7 +15,25 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("execution.authority")
 
-EXECUTION_POLICY_VERSION = "v56.3"
+EXECUTION_POLICY_VERSION = "v56.4"
+
+
+def account_execution_lock(account: dict) -> str | None:
+    """Account-role execution rule (audit correction) — pure, unit-testable.
+
+        STANDARD      → normal STOIC execution rules
+        PAMM_MASTER   → must flow through the PAMM strategy guard
+                        (certification → risk truth → authority → intent)
+        PAMM_INVESTOR → MONITOR ONLY: Execution Authority LOCKED,
+                        STOIC never places an order on investor accounts.
+
+    Returns the lock reason, or None when execution may proceed."""
+    role = str((account or {}).get("account_role") or "STANDARD").upper()
+    if role == "PAMM_INVESTOR":
+        return ("account_role=PAMM_INVESTOR is MONITOR ONLY — Execution "
+                "Authority is LOCKED; STOIC never places orders on "
+                "investor accounts")
+    return None
 
 
 def _validate(signal: dict, account: dict) -> list:
@@ -65,6 +83,15 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
     db = get_db()
     _acct_id = str(account.get("_id") or account.get("account_id")
                    or cfg_account_id or "")
+    # 00 — ACCOUNT ROLE LOCK (audit correction): enforced in the backend
+    # execution plane, never merely hidden in the UI. Refused before any
+    # intent is minted — a monitor-only account must leave zero execution
+    # artifacts.
+    _role_lock = account_execution_lock(account)
+    if _role_lock:
+        logger.warning("execution REFUSED — %s (account=%s user=%s sym=%s)",
+                       _role_lock, _acct_id, user_id, signal.get("symbol"))
+        return {"blocked": "account_role_locked", "reason": _role_lock}
     _side = str(signal.get("action") or signal.get("side") or "").upper()
     minute = datetime.now(timezone.utc).isoformat()[:16]
     _sig_ref = (signal.get("intent_ref") or signal.get("signal_id")
@@ -77,8 +104,23 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
     try:
         from modules.pamm.strategy_guard import resolve_program
         _pamm_program = await resolve_program(db, _acct_id, signal)
+        # account-declared program binding (PAMM role model)
+        if _pamm_program is None and account.get("pamm_program_id"):
+            _pamm_program = await db.pamm_programs.find_one(
+                {"program_id": str(account["pamm_program_id"])})
     except (TypeError, AttributeError):  # isolated unit-test db mock
         _pamm_program = None
+    # A PAMM_MASTER account may ONLY execute through a certified PAMM
+    # program (strategy guard chain). No resolved program = no execution.
+    if (str(account.get("account_role") or "STANDARD").upper()
+            == "PAMM_MASTER" and _pamm_program is None):
+        logger.warning("execution REFUSED — PAMM_MASTER account %s has no "
+                       "resolvable PAMM program (user=%s sym=%s)",
+                       _acct_id, user_id, signal.get("symbol"))
+        return {"blocked": "pamm_master_unbound",
+                "reason": "account_role=PAMM_MASTER may only execute "
+                          "through a certified PAMM program — no program "
+                          "resolved for this account/signal"}
     # 1 — CANONICAL INTENT FIRST (the input to execution)
     try:
         intent = await create_intent(

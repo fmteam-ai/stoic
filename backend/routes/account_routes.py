@@ -541,6 +541,16 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         "server": "paper-virtual" if is_paper else payload.server,
         "account_number": payload.account_number,
         "account_type": payload.account_type,
+        # PAMM role model (audit correction) — account_role answers "what
+        # role does this account play inside PAMM", never account_type.
+        "account_role": payload.account_role,
+        "pamm_provider": (payload.pamm_provider
+                          if payload.account_role != "STANDARD" else None),
+        "pamm_program_id": (payload.pamm_program_id
+                            if payload.account_role != "STANDARD" else None),
+        "pamm_broker_program_id": (payload.pamm_broker_program_id
+                                   if payload.account_role != "STANDARD"
+                                   else None),
         "base_currency": payload.base_currency,
         "mode": payload.mode,
         "bridge_token": generate_bridge_token(),  # unused for paper but harmless

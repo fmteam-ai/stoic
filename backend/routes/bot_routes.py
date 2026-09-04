@@ -860,6 +860,10 @@ async def _activation_readiness(db, account) -> list:
     if not account or (account.get("mode") or "live").lower() == "paper":
         return []
     problems = []
+    if str(account.get("account_role") or "STANDARD").upper() == "PAMM_INVESTOR":
+        problems.append("Account role is PAMM_INVESTOR — monitor only; "
+                        "Execution Authority is locked and the bot can "
+                        "never be activated on investor accounts")
     if (account.get("status") or "").lower() not in ("connected", "ok"):
         problems.append(f"Broker account is not connected "
                         f"(status: {account.get('status') or 'unknown'})")
