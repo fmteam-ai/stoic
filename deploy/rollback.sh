@@ -7,6 +7,7 @@
 # to finish silently broken.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. deploy/lib.sh
 
 RELEASES_LOG="deploy/releases.log"
 REF="${1:-}"
@@ -31,8 +32,8 @@ echo "-- checking out ${REF}"
 git fetch --all --tags --quiet || true
 git checkout --detach "${REF}"
 
-echo "-- rebuilding + restarting stack"
-docker compose build
+echo "-- rebuilding (with provenance) + restarting stack"
+build_with_provenance || { echo "ERROR: build failed during rollback"; exit 1; }
 docker compose up -d
 
 if [ -n "${WITH_DB}" ]; then
@@ -41,12 +42,9 @@ if [ -n "${WITH_DB}" ]; then
 fi
 
 echo "-- verifying API health"
-for i in $(seq 1 30); do
-  curl -fsS http://localhost:8001/api/health >/dev/null 2>&1 && { OK=1; break; }
-  sleep 2
-done
-[ "${OK:-0}" = 1 ] || { echo "!! API never became healthy after rollback — inspect: docker compose logs backend"; exit 1; }
+wait_api_health 30 || { echo "!! API never became healthy after rollback — inspect: docker compose logs backend"; exit 1; }
 echo "   API healthy"
+verify_running_sha || exit 1
 
 echo "-- verifying full release readiness"
 if [ -f secrets/metrics_token ]; then

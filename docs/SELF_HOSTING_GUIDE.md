@@ -1,5 +1,8 @@
 # STOIC — Self-Hosting Guide (migrating from Emergent to your own server)
 
+> **Step-by-step runbook for the AlmaLinux 8.10 / 64 GB server, including the
+> one-command update flow and zero-touch GitHub deploys: `docs/PUBLISH_RUNBOOK.md`.**
+
 This is the end-to-end playbook for running STOIC on your own hardware and
 pointing **www.stoicaibot.com** at it. It complements `docs/DEPLOYMENT.md`
 (reference) with the exact migration order. Time budget: ~1–2 hours, with a

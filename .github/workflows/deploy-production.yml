@@ -1,0 +1,65 @@
+# Zero-touch re-publish to YOUR server (opt-in).
+#
+# Trigger: push a release tag (v1.2.3) — or run manually from the Actions
+# tab with any ref. The job SSHes into the server and runs deploy/update.sh,
+# which backs up, rebuilds with provenance, verifies the full topology and
+# auto-rolls back on failure. Nothing here can weaken that gate.
+#
+# Required repository secrets (Settings → Secrets → Actions):
+#   DEPLOY_HOST         server IP or hostname
+#   DEPLOY_USER         SSH user that owns the stoic checkout (in docker group)
+#   DEPLOY_SSH_KEY      private key (ed25519) whose public key is in
+#                       ~DEPLOY_USER/.ssh/authorized_keys on the server
+#   DEPLOY_PATH         absolute path of the checkout, e.g. /opt/stoic
+# Optional:
+#   DEPLOY_PORT         SSH port (default 22)
+name: deploy-production
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "git ref to publish (tag, branch or SHA)"
+        required: false
+        default: "origin/main"
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 40
+    steps:
+      - name: Resolve target ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "target=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Publish on server (deploy/update.sh)
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
+              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+              "cd '${{ secrets.DEPLOY_PATH }}' && git fetch --all --tags --prune && deploy/update.sh '${{ steps.ref.outputs.target }}'"
+
+      - name: Report
+        if: always()
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
+              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+              "cd '${{ secrets.DEPLOY_PATH }}' && tail -3 deploy/releases.log && docker compose ps --format '{{.Name}}\t{{.Status}}'" || true

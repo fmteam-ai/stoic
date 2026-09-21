@@ -1,5 +1,5 @@
 # STOIC engineering entry points — every lane is one command.
-.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest
+.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest publish rollback status backup
 
 test-unit:            ## reproducible 516-test unit lane (env doctor included)
 	./scripts/test_unit.sh
@@ -21,3 +21,18 @@ verify-ea:            ## validate the signed EX5 release entry (see --help)
 
 manifest:             ## regenerate docs/TEST_MANIFEST.md
 	python scripts/generate_test_manifest.py
+
+# ── server operations (run ON the server, inside the checkout) ──────────────
+publish:              ## re-publish latest origin/main (or REF=v1.2.3): backup → build → verify → auto-rollback
+	deploy/update.sh $(REF)
+
+rollback:             ## roll back to the previous verified release (or REF=<tag|sha>)
+	deploy/rollback.sh $(REF)
+
+status:               ## containers, running build SHA, last releases
+	@docker compose ps --format '{{.Name}}\t{{.Status}}'
+	@curl -fsS http://127.0.0.1:8001/api/health | python3 -c 'import sys,json;d=json.load(sys.stdin);print("build_sha:",d.get("build_sha"),"| policy:",d.get("execution_policy_version"),"| ea:",d.get("ea_version"))'
+	@tail -3 deploy/releases.log 2>/dev/null || true
+
+backup:               ## timestamped Mongo backup into ./backups
+	deploy/backup.sh backup

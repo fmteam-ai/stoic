@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# STOIC update: backup → pull target ref → rebuild → restart → verify the
-# COMPLETE trading topology (API, 6 workers, Mongo round trip, reconciliation
-# lag, outbox backlog, schema compatibility, frontend), with automatic
-# rollback to the previous ref if any verification fails.
-# Usage: deploy/update.sh [git-ref]   (default: latest origin/main)
+# STOIC update (re-publish): backup → pull target ref → rebuild WITH build
+# provenance → restart → verify the COMPLETE trading topology (API, running
+# build SHA, 6 workers, Mongo round trip, reconciliation lag, outbox backlog,
+# schema compatibility, frontend), with automatic rollback to the previous
+# ref if any verification fails.
+#   deploy/update.sh             → latest origin/main
+#   deploy/update.sh v1.4.2      → a tag
+#   deploy/update.sh <sha>       → an exact commit
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. deploy/lib.sh
 
 REF="${1:-origin/main}"
 PREV=$(git rev-parse HEAD)
+LOCK=/tmp/stoic-deploy.lock
+exec 9>"${LOCK}"; flock -n 9 || { echo "ERROR: another deploy is running (${LOCK})"; exit 1; }
 
 echo "== STOIC update: $(git rev-parse --short HEAD) -> ${REF} =="
 
@@ -16,60 +22,49 @@ echo "-- pre-update backup"
 deploy/backup.sh backup
 
 echo "-- fetching ${REF}"
-git fetch --all --tags
+git fetch --all --tags --prune
 git checkout --detach "${REF}"
+if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
+  echo "   already on $(git rev-parse --short HEAD) — nothing to publish"
+  exit 0
+fi
 
 rollback() {
   echo "!! verification failed — rolling back to ${PREV}"
   git checkout --detach "${PREV}"
-  docker compose build
+  build_with_provenance || true
   docker compose up -d
-  echo "!! rolled back. Inspect logs: docker compose logs backend"
+  echo "!! rolled back to $(git rev-parse --short HEAD). Inspect: docker compose logs backend --tail 100"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-from=${REF}" >> deploy/releases.log
   exit 1
 }
 
-echo "-- rebuilding images"
-docker compose build
+echo "-- rebuilding images (with provenance)"
+build_with_provenance || rollback
 
 echo "-- restarting stack"
-docker compose up -d
+docker compose up -d --remove-orphans
 
 echo "-- verifying API health"
-API_OK=0
-for i in $(seq 1 30); do
-  if curl -fsS http://localhost:8001/api/health >/dev/null 2>&1; then
-    API_OK=1; break
-  fi
-  sleep 2
-done
-[ "$API_OK" = 1 ] || rollback
+wait_api_health 30 || rollback
 echo "   API healthy"
+verify_running_sha || rollback
 
 echo "-- verifying frontend"
-curl -fsS -o /dev/null http://localhost:3000 || rollback
+curl -fsS -o /dev/null http://127.0.0.1:3000 || rollback
 echo "   frontend serving"
 
 echo "-- verifying release readiness (workers, leases, Mongo, reconciliation, outbox, schema)"
-if [ -f secrets/metrics_token ]; then
-  METRICS_TOKEN=$(cat secrets/metrics_token)
-else
-  METRICS_TOKEN=$(grep -E '^METRICS_TOKEN=' backend/.env | cut -d= -f2- | tr -d '"')
+BODY=$(wait_release_ready 45) || rollback
+echo "   release-readiness: ${BODY}"
+
+if grep -q 'docker-compose.forecast.yml' .env 2>/dev/null; then
+  echo "-- verifying forecast profile"
+  docker compose exec -T worker-trading python ops/verify_forecast_profile.py || rollback
 fi
-[ -n "${METRICS_TOKEN}" ] || { echo "ERROR: metrics token missing (secrets/metrics_token or backend/.env)"; rollback; }
-READY=0
-for i in $(seq 1 45); do   # workers need time to acquire leases (~45s lease TTL)
-  BODY=$(curl -fsS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
-         http://localhost:8001/api/ops/release-readiness 2>/dev/null) && READY=1 && break
-  sleep 4
-done
-if [ "$READY" = 1 ]; then
-  echo "   release-readiness: ${BODY}"
-else
-  echo "!! release-readiness never returned ready:"
-  curl -sS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
-    http://localhost:8001/api/ops/release-readiness || true
-  rollback
-fi
+
+echo "-- pruning dangling images"
+docker image prune -f >/dev/null 2>&1 || true
 
 echo "   API + frontend + full topology verified on $(git rev-parse --short HEAD)"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-from=$(git rev-parse --short "${PREV}")" >> deploy/releases.log
