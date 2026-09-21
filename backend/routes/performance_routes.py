@@ -128,6 +128,19 @@ ATTESTATION_POLICY_VERSION = "attest-v2"
 ATTESTATION_MAX_DATA_AGE_S = 6 * 3600
 
 
+def _attestation_environment(a: dict) -> str:
+    """Audit #4 P3 — a public LIVE claim needs EVIDENCE, not a heuristic
+    default: LIVE only when the classifier says LIVE AND the EA identity
+    chain verified the broker server. Anything ambiguous → UNKNOWN (which
+    the gate refuses). Demo/paper classifications pass through."""
+    env = _broker_env(a) or "UNKNOWN"
+    if env != "LIVE":
+        return env
+    if a.get("mode") == "paper" or not a.get("verified_identity"):
+        return "UNKNOWN"
+    return "LIVE"
+
+
 async def _attestation_gate(db, user_id: str) -> list:
     """Review P1 / audit P1-2 — an attestation is a signed claim of truth.
     PROHIBITED while P&L is UNRECONCILED, position truth is not FRESH on an
@@ -160,11 +173,12 @@ async def _attestation_gate(db, user_id: str) -> list:
             {"user_id": user_id, "status": {"$ne": "deleted"}},
             {"label": 1, "user_id": 1, "synthetic": 1, "mode": 1,
              "account_type": 1, "server": 1, "broker_server": 1,
-             "broker_environment": 1, "trading_enabled": 1}):
+             "broker_environment": 1, "trading_enabled": 1,
+             "verified_identity": 1}):
         if is_synthetic_account(a):
             reasons.append("SYNTHETIC_ACCOUNT_DATA")
         if a.get("trading_enabled") is True:
-            envs.add(_broker_env(a) or "UNKNOWN")
+            envs.add(_attestation_environment(a))
     if envs - {"LIVE"}:
         reasons.append("NON_LIVE_ENVIRONMENT:" + ",".join(
             sorted(envs - {"LIVE"})))

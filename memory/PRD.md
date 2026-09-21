@@ -2404,3 +2404,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Tests: unit `tests/unit/test_authority_matrix.py` (59: 8 domains × 6 levels + raising domain + fail-closed + no-bypass guard), HTTP `tests/test_iter193_audit_p0.py` (5). Fixtures updated: iter198/iter200 ACCOUNT → `mode: paper`; iter157/158 share/attestation tests use `helpers.seed_attestation_eligible_user` (+`make_elite`), key_id → perf-ed25519-v1. Manifest 4,126 tests / 419 files.
 - Preview DB: archived 6 stale `buf-*` broker_uncertain PAMM test programs (they were forcing global CLOSE_ONLY).
 - DEFERRED to ROADMAP: P1-4 TradingDecisionSnapshot unification, P1-5 tenant-scoping lint, P1-7 API/ML process split, P2-2 hermetic suite, P2-3 exception taxonomy, P2-4 legal review, P0-3 deploy SHA-mismatch auto-rollback.
+
+## Iter-194 (2026-06) — Security audit #4: PASS (no P0–P2). P3 applied
+- Audit verified iter-193 corrections end-to-end (account-scoped authority has no caller-influenced relaxation, `str()`-coerced fields → no NoSQL injection, fail-closed holds; zero authorization-without-intent paths; AccountUpdate can't self-declare broker_environment; UI renders reasons as escaped text; test seeding helper unreachable from app).
+- Applied P3: attestation gate now uses `_attestation_environment()` — LIVE only when classifier says LIVE AND `verified_identity` present AND mode != paper; ambiguous → UNKNOWN → refused. `broker_env.broker_environment` default (LIVE on ambiguity) deliberately UNCHANGED: broker caps / PAMM guards rely on the conservative "count as LIVE" default (flipping it would LOOSEN caps).
+- Not changed (accepted): /api/health provenance is public by design (audit P0-3); preview CORS wildcard has allow_credentials=False.

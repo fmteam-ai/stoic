@@ -63,3 +63,16 @@ def test_redact_program_hides_governance_and_limits():
     assert r["risk_breach"] is True
     assert r["position_truth_status"] == "in_sync"
     assert r["op_state"] == "running"
+
+
+def test_attestation_environment_requires_verified_identity():
+    """Audit #4 P3 — ambiguous/heuristic LIVE never backs a public claim."""
+    from routes.performance_routes import _attestation_environment as env
+    live = {"mode": "live", "server": "Broker-Real7",
+            "verified_identity": {"account_number": "1"}}
+    assert env(live) == "LIVE"
+    assert env({"mode": "live", "server": "Broker-Real7"}) == "UNKNOWN"
+    assert env({"mode": "paper"}) == "PAPER"
+    assert env({"server": "Broker-Demo", "verified_identity": {}}) == "DEMO"
+    assert env({"account_type": "demo",
+                "verified_identity": {"a": 1}}) == "DEMO"
