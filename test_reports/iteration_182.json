@@ -1,0 +1,34 @@
+{
+  "summary": "iter-223 Host Migration wizard: extended iter-203 with a full rehearsal end-to-end suite (12 new tests) exercising every gate (preflight → start → freeze → cutover_check retries → decommission) against the loopback migrator sidecar in MIGRATOR_DRY_RUN=1. All 12 new tests + 6 existing iter-203 tests + 11 unit tests pass (29/29). Frontend admin wizard verified live: header, sidebar link, target form, ssh-ed25519 public key + copy button, 10 preflight check rows all green, timeline with REHEARSAL badge and all 8 steps, gate panel, live log with follow checkbox, StepUpDialog correctly surfaces mfa_enrollment_required (admin has no TOTP enrolled) with a clean 'ENABLE 2FA IN SETTINGS' CTA — page remains fully intact after click.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/host-migration @ 390px", "issues": ["Initial measurement showed document scrollWidth=726 vs clientWidth=390 (horizontal scroll). Follow-up scoped check on the marketing homepage attributed overflow to landing-page testimonial-card-* elements, not the wizard. Retest inside the wizard alone was blocked by a transient 'STOIC failed to load' bundle fetch error. Needs a fresh mobile pass with a scoped check on the wizard container to confirm whether the wizard content itself overflows (candidates: the two <pre> blocks in TargetForm — public key, root-setup snippet — and status/simulated badge row)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter223_host_migration_full_flow.py",
+    "/app/test_reports/pytest/iter223_full_flow.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: verify wizard mobile layout at 390px in isolation (login → /admin/host-migration → measure overflow on wizard container only). Likely fix if confirmed: add `overflow-x-auto` or `break-all` on the two <pre> blocks in TargetForm.jsx and let the simulated badge wrap on small screens.",
+    "OPTIONAL: enroll admin TOTP once in the preview DB to also validate the interactive path (hm-freeze-confirm requires typing FREEZE, cutover_check, decommission confirmation). Currently all state transitions are already validated via the API rehearsal flow with the X-Step-Up-Bypass header."
+  ],
+  "critical_code_review_comments": [
+    "host_migration_routes.py cleanly enforces the step-up gate before contacting the sidecar for start/freeze/decommission/abort (cutover_check + retry correctly skipped). Input validation is regex-based and applied before the sidecar call — good defense in depth against shell injection into ssh/rsync commands. All endpoints require admin. _call() maps sidecar 409 → 409 and other errors → 502 — correct semantics.",
+    "deploy/migrator/migrator.py stdlib-only sidecar, HMAC-safe token compare, state persisted atomically via tmp+rename. simulated_run() gives deterministic dry-run output; cutover heartbeats are gated on time.time()%60>20 so real retries are exercised. Nice.",
+    "AdminHostMigration.jsx polls every 4s; consider stopping the polling when tab is hidden to save resources (document.visibilityState). Non-blocking."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter223_host_migration_full_flow.py",
+    "/app/docs/TEST_MANIFEST.md (generated)"
+  ],
+  "success_rate": {"backend": "100% (29/29: 12 new + 6 iter-203 + 11 unit)", "frontend": "~95% (all data-testids and flows verified on desktop; mobile-only overflow ambiguity)"},
+  "test_credentials": "Admin: admin@stoicaibot.com / admin123; STEP_UP_BYPASS_TOKEN auto-added by conftest.",
+  "seed_data_creation": "test_non_admin_forbidden_on_all_endpoints creates and deletes an ephemeral hm_<uuid>@example.com user each run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Sidecar runs on 127.0.0.1:8790 as PID (see `ps aux | grep migrator`). Current state after this run: awaiting install. Reset by POSTing abort or deleting /tmp/migsim/release/migration/state.json. Auth header for direct sidecar calls: X-Migrator-Token: <METRICS_TOKEN from backend/.env>. New test file /app/backend/tests/test_iter223_host_migration_full_flow.py is idempotent and re-entrant — run with STOIC_ALLOW_MUTATING_TESTS=YES."
+}
