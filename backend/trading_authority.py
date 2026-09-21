@@ -40,7 +40,8 @@ def _ago(seconds: int) -> str:
             - timedelta(seconds=seconds)).isoformat()
 
 
-async def platform_domain(db) -> dict:
+async def platform_domain(db, account: dict | None = None) -> dict:
+    """Platform-global: the ops kill switch applies to every account."""
     doc = await db.platform_state.find_one({"_id": "trading_authority"})
     if doc and doc.get("level") in LEVELS and doc["level"] != "FULL":
         return {"level": doc["level"],
@@ -49,7 +50,7 @@ async def platform_domain(db) -> dict:
     return {"level": "FULL", "reason": "no platform restriction"}
 
 
-async def account_domain(db, account: dict | None) -> dict:
+async def account_domain(db, account: dict | None = None) -> dict:
     if not account:
         return {"level": "FULL", "reason": "no account context"}
     # audit v4 P0-2/P0-3 — an EA terminal identity mismatch quarantines the
@@ -200,9 +201,38 @@ _DOMAINS = {
     "pamm": pamm_domain,
     "execution": execution_domain,
     "position_truth": position_truth_domain,
+    "infrastructure": infrastructure_domain,
+    "account": account_domain,
 }
+# Typed registry contract (audit v5 P0-1): every domain is
+# `async def domain(db, account=None) -> dict` and declares its scope.
+# Argument errors are NEVER control flow — conformance is asserted at
+# import time so a malformed domain fails the process, not the trade.
+DOMAIN_SCOPE = {"platform": "platform_global", "broker": "account_bound",
+                "risk": "account_bound", "pamm": "account_bound",
+                "execution": "account_bound",
+                "position_truth": "account_bound",
+                "infrastructure": "account_bound", "account": "account_bound"}
 # domains whose FRESH/FULL state is a precondition for RESIZING (REDUCED)
 HARD_TRUTH_DOMAINS = ("position_truth", "broker", "execution")
+
+
+def assert_domain_protocol(domains: dict | None = None) -> None:
+    import inspect
+    reg = domains if domains is not None else _DOMAINS
+    for name, fn in reg.items():
+        if not inspect.iscoroutinefunction(fn):
+            raise TypeError(f"authority domain '{name}' must be async")
+        params = list(inspect.signature(fn).parameters.values())
+        if len(params) < 2 or params[1].name != "account" \
+                or params[1].default is not None:
+            raise TypeError(f"authority domain '{name}' must accept "
+                            f"(db, account=None); got {params}")
+        if name not in DOMAIN_SCOPE:
+            raise TypeError(f"authority domain '{name}' has no scope entry")
+
+
+assert_domain_protocol()
 
 
 async def compute_authority(db, account: dict | None = None) -> dict:
@@ -213,26 +243,17 @@ async def compute_authority(db, account: dict | None = None) -> dict:
     domains = {}
     for name, fn in _DOMAINS.items():
         try:
-            domains[name] = (await fn(db) if name == "platform"
-                             else await fn(db, account))
+            domains[name] = await fn(db, account)
         except Exception as e:
             logger.error("authority domain %s failed: %s", name, e)
             domains[name] = dict(_UNAVAILABLE)
-    try:
-        domains["infrastructure"] = await infrastructure_domain(db, account)
-    except Exception as e:
-        logger.error("authority domain infrastructure failed: %s", e)
-        domains["infrastructure"] = dict(_UNAVAILABLE)
-    try:
-        domains["account"] = await account_domain(db, account)
-    except Exception:
-        domains["account"] = dict(_UNAVAILABLE)
     effective = worst(*(d["level"] for d in domains.values()))
     unavailable = [k for k, v in domains.items()
                    if v.get("reason") == _UNAVAILABLE["reason"]]
     return {"snapshot_id": f"authsnap_{uuid.uuid4().hex[:12]}",
             "level": effective, "enforced_level": effective,
             "restricted": effective != "FULL", "domains": domains,
+            "domain_scope": DOMAIN_SCOPE,
             "unavailable_domains": unavailable,
             "hard_truth_fresh": all(domains[k]["level"] == "FULL"
                                     for k in HARD_TRUTH_DOMAINS),

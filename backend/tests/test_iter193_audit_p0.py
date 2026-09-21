@@ -121,3 +121,61 @@ def test_missing_trading_enabled_reads_disabled():
         finally:
             await db.accounts.delete_many({"user_id": uid})
     _run(scenario())
+
+
+def _uid(db, email):
+    return str(db.users.find_one({"email": email})["_id"])
+
+
+def test_attestation_gate_populations():
+    """audit v5 P1-3 — population matrix on a real user:
+    mixed enabled/disabled rows · demo+live · UNKNOWN (unverified) live ·
+    stale newest deal. Disabled rows never influence the verdict."""
+    import time
+    from bson import ObjectId
+    email = f"pop_{TAG}@example.com"
+    s = seed_attestation_eligible_user(email)
+    db = MongoClient(MONGO_URL)[DB_NAME]
+    uid = _uid(db, email)
+
+    def gate():
+        return s.get(f"{BASE}/api/performance/verified",
+                     timeout=30).json().get("attestation_blocked")
+    try:
+        assert gate() is None                      # baseline eligible
+
+        # a DISABLED demo row must not affect the verdict
+        demo_id = ObjectId()
+        db.accounts.insert_one({"_id": demo_id, "user_id": uid,
+                                "label": "Demo (off)", "server": "X-Demo",
+                                "mode": "live", "trading_enabled": False,
+                                "status": "connected",
+                                "bridge_token": f"qa_{TAG}_demo"})
+        assert gate() is None
+
+        # ENABLE the demo row → demo + live population is refused
+        db.accounts.update_one({"_id": demo_id},
+                               {"$set": {"trading_enabled": True}})
+        b = gate()
+        assert b and any(r.startswith("NON_LIVE_ENVIRONMENT") and "DEMO" in r
+                         for r in b["reasons"])
+        db.accounts.delete_one({"_id": demo_id})
+
+        # LIVE-classified but NOT identity-verified → UNKNOWN → refused
+        db.accounts.update_many({"user_id": uid},
+                                {"$unset": {"verified_identity": ""}})
+        b = gate()
+        assert b and any("UNKNOWN" in r for r in b["reasons"])
+        db.accounts.update_many({"user_id": uid}, {"$set": {
+            "verified_identity": {"account_number": "1",
+                                  "broker_server": "QABroker-Live"}}})
+        assert gate() is None
+
+        # newest deal older than 6h → stale
+        db.broker_deals.update_many(
+            {"user_id": uid},
+            {"$set": {"deal_time": int(time.time()) - 7 * 3600}})
+        b = gate()
+        assert b and "BROKER_DATA_STALE" in b["reasons"]
+    finally:
+        cleanup_attestation_user(email)

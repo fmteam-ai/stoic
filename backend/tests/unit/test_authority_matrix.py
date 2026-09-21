@@ -24,37 +24,55 @@ def _run(coro):
 
 
 def _patch_all_full(monkeypatch):
-    async def full(*_a, **_k):
+    async def full(db, account=None):
         return {"level": "FULL", "reason": "test"}
-    for name in ("platform_domain", "broker_domain", "risk_domain",
-                 "pamm_domain", "execution_domain",
-                 "position_truth_domain", "infrastructure_domain",
-                 "account_domain"):
-        monkeypatch.setattr(ta, name, full)
-    # _DOMAINS holds references — rebind
-    monkeypatch.setattr(ta, "_DOMAINS", {
-        "platform": ta.platform_domain, "broker": ta.broker_domain,
-        "risk": ta.risk_domain, "pamm": ta.pamm_domain,
-        "execution": ta.execution_domain,
-        "position_truth": ta.position_truth_domain})
+    monkeypatch.setattr(ta, "_DOMAINS", {name: full for name in DOMAINS})
 
 
 def _set(monkeypatch, domain: str, level: str):
-    async def fn(*_a, **_k):
+    async def fn(db, account=None):
         return {"level": level, "reason": f"{domain} forced {level}"}
-    if domain in ta._DOMAINS:
-        ta._DOMAINS[domain] = fn
-    else:
-        monkeypatch.setattr(ta, f"{domain}_domain", fn)
+    ta._DOMAINS[domain] = fn
 
 
 def _raise(monkeypatch, domain: str):
-    async def fn(*_a, **_k):
+    async def fn(db, account=None):
         raise RuntimeError("boom")
-    if domain in ta._DOMAINS:
-        ta._DOMAINS[domain] = fn
-    else:
-        monkeypatch.setattr(ta, f"{domain}_domain", fn)
+    ta._DOMAINS[domain] = fn
+
+
+def test_registry_protocol_conforms():
+    # audit v5 P0-1 — uniform (db, account=None) signature on EVERY domain
+    ta.assert_domain_protocol()
+    assert set(ta._DOMAINS) == set(DOMAINS) == set(ta.DOMAIN_SCOPE)
+
+
+def test_registry_rejects_nonconforming_domain():
+    async def legacy(db):  # missing `account`
+        return {"level": "FULL", "reason": "x"}
+    with pytest.raises(TypeError):
+        ta.assert_domain_protocol({"platform": legacy})
+
+    def sync_fn(db, account=None):
+        return {"level": "FULL", "reason": "x"}
+    with pytest.raises(TypeError):
+        ta.assert_domain_protocol({"platform": sync_fn})
+
+
+def test_real_domains_accept_account_without_type_error():
+    """The dispatcher never relies on argument errors: each REAL domain
+    receives (db, account) and fails only on the db access, not on the
+    call signature."""
+    class _Db:
+        def __getattr__(self, name):
+            raise RuntimeError(f"db.{name} touched")
+    for name, fn in ta._DOMAINS.items():
+        try:
+            _run(fn(_Db(), {"_id": "acc1", "mode": "live"}))
+        except TypeError as e:  # pragma: no cover
+            pytest.fail(f"domain {name} raised TypeError: {e}")
+        except RuntimeError:
+            pass
 
 
 @pytest.mark.parametrize("domain", DOMAINS)

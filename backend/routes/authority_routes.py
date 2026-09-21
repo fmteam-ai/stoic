@@ -63,17 +63,20 @@ async def authority_ep(user=Depends(get_current_user)):
         out["enforced_level"] = out["level"]
     except Exception as e:  # noqa: BLE001 — audit P1-1: typed UNKNOWN, never
         # the optimistic pre-merge verdict.
-        logger.error("authority merge failed for user %s: %s",
-                     user.get("id"), e)
+        import uuid
+        corr = f"authfail_{uuid.uuid4().hex[:12]}"
+        logger.error("authority merge failed for user %s [%s]: %s",
+                     user.get("id"), corr, e)
         from trading_authority import worst as _worst
         out["authority_state"] = "UNKNOWN"
+        out["correlation_id"] = corr
         out["level"] = _worst(out.get("level") or "FULL", "CLOSE_ONLY")
         out["enforced_level"] = _worst(out.get("enforced_level") or "FULL",
                                        "CLOSE_ONLY")
         out["restricted"] = True
         out.setdefault("reasons", []).append(
             "canonical readiness could not be merged — authority UNKNOWN, "
-            "new trades refused until it can be confirmed")
+            f"new trades refused until it can be confirmed [{corr}]")
         return out
     out["authority_state"] = "KNOWN"
     return out
