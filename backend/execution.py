@@ -275,14 +275,18 @@ class MT5BridgeEngine(ExecutionEngine):
                     "safety_audit": safety["audit"]}
 
         # GLOBAL TRADING AUTHORITY (v56 §16) — normally enforced upstream
-        # by the Execution Authority. This fallback only runs on the
-        # legacy/no-intent path (isolated unit tests bypassing the shim).
+        # by the Execution Authority. Legacy/no-intent path: evaluation
+        # failure FAILS CLOSED (audit P0-2), never assumes FULL.
         if intent is None:
             try:
                 from trading_authority import enforce_new_trade
                 gate = await enforce_new_trade(db, account=account)
-            except (TypeError, AttributeError):  # isolated unit-test db mock
-                gate = {"ok": True}
+            except Exception as e:  # noqa: BLE001
+                logger.critical("authority evaluation failed on legacy "
+                                "path — REFUSING user=%s sym=%s: %s",
+                                user_id, signal.get("symbol"), e)
+                gate = {"ok": False, "level": "CLOSE_ONLY",
+                        "reasons": [f"authority evaluation error: {e}"]}
             if not gate.get("ok"):
                 logger.warning(
                     "execute blocked by TRADING AUTHORITY level=%s user=%s "
@@ -494,12 +498,12 @@ class MT5BridgeEngine(ExecutionEngine):
                                           or 0),
                         nonce=str(order_auth.get("nonce") or "")),
                     account_id=_acct_id, actor=user_id)
-            except (TypeError, AttributeError):  # isolated unit-test db mock
-                logger.critical(
-                    "execution intent creation SKIPPED — non-Motor db "
-                    "object; at-most-once guard inactive for this call "
-                    "(must never happen in production)")
-                _intent = None
+            except Exception as e:  # noqa: BLE001 — FAIL CLOSED (audit P0-2)
+                logger.critical("execution intent creation FAILED — "
+                                "REFUSING dispatch user=%s sym=%s: %s",
+                                user_id, signal.get("symbol"), e)
+                return {"blocked": "intent_pipeline_error",
+                        "reason": f"{type(e).__name__}: {str(e)[:200]}"}
             if _intent and _intent.get("duplicate"):
                 logger.warning("MT5 execute blocked — duplicate execution "
                                "intent user=%s sym=%s intent=%s status=%s",
@@ -544,8 +548,12 @@ class PaperEngine(ExecutionEngine):
             _acct = str(account.get("_id") or account.get("account_id")
                         or cfg_account_id or "")
             _prog = await resolve_program(db, _acct, signal)
-        except (TypeError, AttributeError):  # isolated unit-test db mock
-            _prog = None
+        except Exception as e:  # noqa: BLE001 — FAIL CLOSED (audit P0-2)
+            logger.critical("PAMM resolution failed on paper path — "
+                            "REFUSING user=%s sym=%s: %s", user_id,
+                            signal.get("symbol"), e)
+            return {"blocked": "pamm_resolution_error",
+                    "reason": f"{type(e).__name__}: {str(e)[:200]}"}
         if _prog is not None:
             from modules.pamm.strategy_guard import \
                 authorize_pamm_strategy_execution

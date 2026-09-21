@@ -72,6 +72,31 @@ async def _finalize_pre_dispatch(db, intent_id: str, to: str,
         {"intent_id": intent_id}, {"$unset": {"dedupe_key": ""}})
 
 
+async def _fail_closed(db, code: str, exc: Exception, user_id, acct_id,
+                       signal: dict) -> dict:
+    """Audit P0-2 — the execution plane never fails open. Refuse, page
+    operations (critical ops alert), return a typed BLOCKED outcome with
+    a correlation id. Zero engine calls, zero authorization minted."""
+    import uuid
+    corr = f"execfail_{uuid.uuid4().hex[:12]}"
+    logger.critical("EXECUTION REFUSED (%s) %s — %s: %s user=%s acct=%s "
+                    "sym=%s", code, corr, type(exc).__name__, exc, user_id,
+                    acct_id, signal.get("symbol"))
+    try:
+        from alerting import raise_alert
+        await raise_alert(
+            db, "execution_pipeline_failure", "critical",
+            f"execution plane refused a trade ({code}): "
+            f"{type(exc).__name__}: {str(exc)[:160]} [{corr}]",
+            dedup_key=f"execution_pipeline_failure:{code}",
+            meta={"correlation_id": corr, "user_id": str(user_id),
+                  "account_id": acct_id, "symbol": signal.get("symbol")})
+    except Exception as ae:  # noqa: BLE001 — alert path must not mask refusal
+        logger.error("could not raise execution failure alert: %s", ae)
+    return {"blocked": code, "correlation_id": corr,
+            "reason": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
 async def submit_intent(*, user_id, account: dict, signal: dict, engine,
                         max_concurrent: int = 0,
                         cfg_account_id: str = None) -> dict:
@@ -108,8 +133,9 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
         if _pamm_program is None and account.get("pamm_program_id"):
             _pamm_program = await db.pamm_programs.find_one(
                 {"program_id": str(account["pamm_program_id"])})
-    except (TypeError, AttributeError):  # isolated unit-test db mock
-        _pamm_program = None
+    except Exception as e:  # noqa: BLE001 — FAIL CLOSED (audit P0-2)
+        return await _fail_closed(db, "pamm_resolution_error", e,
+                                  user_id, _acct_id, signal)
     # A PAMM_MASTER account may ONLY execute through a certified PAMM
     # program (strategy guard chain). No resolved program = no execution.
     if (str(account.get("account_role") or "STANDARD").upper()
@@ -158,16 +184,12 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
             program_id=(str(_pamm_program.get("program_id"))
                         if _pamm_program else None),
             account_id=_acct_id, actor=user_id)
-    except (TypeError, AttributeError):  # isolated unit-test db mock
-        logger.critical("execution authority BYPASSED — non-Motor db "
-                        "object; intent pipeline inactive for this call "
-                        "(must never happen in production)")
-        from execution_authorization import mint_authorization
-        return await engine.execute_authorized(
-            user_id=user_id, account=account, signal=signal,
-            max_concurrent=max_concurrent,
-            cfg_account_id=cfg_account_id, intent=None,
-            authorization=mint_authorization(""))
+    except Exception as e:  # noqa: BLE001 — FAIL CLOSED (audit P0-2)
+        # Any intent-pipeline failure (db wrapper, programming error,
+        # dependency) refuses execution: no intent, no authorization,
+        # no engine call. Test doubles must implement the real protocol.
+        return await _fail_closed(db, "intent_pipeline_error", e,
+                                  user_id, _acct_id, signal)
     if intent.get("duplicate"):
         logger.warning("authority blocked duplicate intent user=%s sym=%s "
                        "intent=%s status=%s", user_id,
@@ -235,7 +257,13 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
     await transition(db, iid, "validated")
     # 3 — AUTHORIZED (Global Trading Authority decides, not the strategy)
     from trading_authority import enforce_new_trade
-    gate = await enforce_new_trade(db, account=account)
+    try:
+        gate = await enforce_new_trade(db, account=account)
+    except Exception as e:  # noqa: BLE001 — FAIL CLOSED (audit P0-2)
+        await _finalize_pre_dispatch(db, iid, "cancelled",
+                                     f"authority evaluation error: {e}")
+        return await _fail_closed(db, "authority_evaluation_error", e,
+                                  user_id, _acct_id, signal)
     if not gate.get("ok"):
         logger.warning("authority refused intent %s level=%s reasons=%s",
                        iid, gate.get("level"), gate.get("reasons"))
@@ -291,12 +319,14 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
     try:
         import uuid as _uuid
         _now_iso = datetime.now(timezone.utc).isoformat()
-        auth_snap_id = f"authsnap_{_uuid.uuid4().hex[:12]}"
+        auth_snap_id = gate.get("snapshot_id") or \
+            f"authsnap_{_uuid.uuid4().hex[:12]}"
         await db.authority_snapshots.insert_one(
             {"snapshot_id": auth_snap_id, "intent_id": iid,
              "user_id": user_id, "at": _now_iso,
              "gate": {k: gate.get(k) for k in
-                      ("ok", "level", "reasons", "reduce_factor")},
+                      ("ok", "level", "reasons", "reduce_factor",
+                       "domains")},
              "execution_policy_version": EXECUTION_POLICY_VERSION})
         mkt_snap_id = f"mktsnap_{_uuid.uuid4().hex[:12]}"
         _tick = await db.price_ticks.find_one(

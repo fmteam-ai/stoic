@@ -83,7 +83,10 @@ class TestAuthorityAPI:
                    timeout=TIMEOUT)
         assert r.status_code == 200, r.text
         body2 = s.get(f"{API}/authority", timeout=TIMEOUT).json()
-        assert body2["enforced_level"] == "FULL"
+        # audit P0-1: every domain is enforced — enforced_level mirrors the
+        # effective level; the platform override itself is back to FULL.
+        assert body2["domains"]["platform"]["level"] == "FULL"
+        assert body2["enforced_level"] == body2["level"]
 
     def test_relax_without_stepup_bypass_is_blocked(self):
         s = _login()

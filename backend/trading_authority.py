@@ -6,9 +6,11 @@ decide executability — the authority does, at the single execution
 choke point (MT5BridgeEngine.execute).
 
 Levels (ordered): FULL < REDUCED < CLOSE_ONLY < PAUSED < EMERGENCY < LOCKED
-Enforcement: platform + account domains BLOCK at the choke point; the
-remaining domains are computed and surfaced (dashboard / ops) and feed
-their own native enforcement paths (PAMM op-states, safety guardian).
+Enforcement (audit P0-1): EVERY domain is enforced at the choke point via
+the SAME canonical snapshot the UI renders — enforced_level == level.
+With an account the snapshot is account-scoped (PAMM/broker/position-truth
+domains restrict only the accounts bound to the affected program); without
+an account it is the platform-wide ops view.
 A domain whose state cannot be evaluated degrades to CLOSE_ONLY — the
 system never infers safety from missing information."""
 import logging
@@ -64,6 +66,9 @@ async def account_domain(db, account: dict | None) -> dict:
 
 async def infrastructure_domain(db, account: dict | None = None) -> dict:
     if account is not None:
+        if account.get("mode") == "paper":
+            return {"level": "FULL", "reason": "paper account — no "
+                                                "terminal dependency"}
         hb = str(account.get("last_heartbeat") or "")
         if hb and hb >= _ago(180):
             return {"level": "FULL", "reason": "terminal heartbeat fresh"}
@@ -79,23 +84,50 @@ async def infrastructure_domain(db, account: dict | None = None) -> dict:
             "reason": "no live terminal heartbeats in 10m"}
 
 
-async def broker_domain(db) -> dict:
-    inc = await db.pamm_incidents.count_documents(
-        {"status": "open", "type": "flatten_failed"})
+def _acct_id(account: dict | None) -> str:
+    return str((account or {}).get("_id") or (account or {}).get("account_id")
+               or "")
+
+
+async def _bound_programs(db, account: dict) -> list:
+    """PAMM programs this account executes for (master binding or the
+    account-declared program). Tenant scoping (audit P1-5): a PAMM state
+    only restricts the accounts bound to that program."""
+    ors = [{"master_account_id": _acct_id(account)}]
+    if account.get("pamm_program_id"):
+        ors.append({"program_id": str(account["pamm_program_id"])})
+    return [p async for p in db.pamm_programs.find(
+        {"$or": ors, "status": {"$nin": ["archived", "closed"]}},
+        {"program_id": 1, "op_state": 1, "name": 1, "partner_id": 1})]
+
+
+async def broker_domain(db, account: dict | None = None) -> dict:
+    inc_q: dict = {"status": "open", "type": "flatten_failed"}
+    partner_q: dict = {"status": {"$nin": ["active"]}}
+    if account is not None:
+        progs = await _bound_programs(db, account)
+        if not progs:
+            return {"level": "FULL",
+                    "reason": "no broker-partner dependency"}
+        inc_q["program_id"] = {"$in": [p["program_id"] for p in progs]}
+        partner_q["partner_id"] = {"$in": [p.get("partner_id")
+                                           for p in progs]}
+    inc = await db.pamm_incidents.count_documents(inc_q)
     if inc:
         return {"level": "CLOSE_ONLY",
                 "reason": f"{inc} open flatten-failed incident(s)"}
-    down = await db.broker_partners.count_documents(
-        {"status": {"$nin": ["active"]}})
+    down = await db.broker_partners.count_documents(partner_q)
     if down:
         return {"level": "REDUCED",
                 "reason": f"{down} broker partner(s) inactive"}
     return {"level": "FULL", "reason": "broker links healthy"}
 
 
-async def risk_domain(db) -> dict:
-    n = await db.safety_blocks.count_documents(
-        {"blocked_at": {"$gte": _ago(1800)}})
+async def risk_domain(db, account: dict | None = None) -> dict:
+    q: dict = {"blocked_at": {"$gte": _ago(1800)}}
+    if account is not None:
+        q["account_id"] = _acct_id(account)
+    n = await db.safety_blocks.count_documents(q)
     if n:
         return {"level": "REDUCED",
                 "reason": f"safety guardian refused {n} trade(s) in 30m"}
@@ -109,10 +141,16 @@ _PAMM_MAP = {"running": "FULL", "risk_reduced": "REDUCED",
              "emergency_flatten": "EMERGENCY", "locked": "LOCKED"}
 
 
-async def pamm_domain(db) -> dict:
+async def pamm_domain(db, account: dict | None = None) -> dict:
     lvl, why = "FULL", "all programs running"
-    async for p in db.pamm_programs.find({"status": "active"},
-                                         {"op_state": 1, "name": 1}):
+    if account is not None:
+        progs = await _bound_programs(db, account)
+        if not progs:
+            return {"level": "FULL", "reason": "account not PAMM-bound"}
+    else:
+        progs = [p async for p in db.pamm_programs.find(
+            {"status": "active"}, {"op_state": 1, "name": 1})]
+    for p in progs:
         mapped = _PAMM_MAP.get(p.get("op_state") or "running", "CLOSE_ONLY")
         if level_severity(mapped) > level_severity(lvl):
             lvl = mapped
@@ -121,8 +159,11 @@ async def pamm_domain(db) -> dict:
     return {"level": lvl, "reason": why}
 
 
-async def execution_domain(db) -> dict:
-    n = await db.execution_intents.count_documents({"status": "unknown"})
+async def execution_domain(db, account: dict | None = None) -> dict:
+    q: dict = {"status": "unknown"}
+    if account is not None:
+        q["account_id"] = _acct_id(account)
+    n = await db.execution_intents.count_documents(q)
     if n:
         return {"level": "REDUCED",
                 "reason": f"{n} execution(s) UNKNOWN — broker "
@@ -130,12 +171,25 @@ async def execution_domain(db) -> dict:
     return {"level": "FULL", "reason": "all executions reconciled"}
 
 
-async def position_truth_domain(db) -> dict:
-    n = await db.pamm_incidents.count_documents(
-        {"status": "open", "type": "position_drift"})
+async def position_truth_domain(db, account: dict | None = None) -> dict:
+    q: dict = {"status": "open", "type": "position_drift"}
+    if account is not None:
+        progs = await _bound_programs(db, account)
+        q["program_id"] = {"$in": [p["program_id"] for p in progs]}
+    n = await db.pamm_incidents.count_documents(q)
     if n:
         return {"level": "CLOSE_ONLY",
                 "reason": f"{n} open position drift incident(s)"}
+    if account is not None:
+        # the SAME canonical per-account truth the readiness UI shows
+        from state_contract import account_truth
+        open_local = await db.trades.count_documents(
+            {"account_id": _acct_id(account), "status": "open"})
+        truth = account_truth(account, open_local)["position_truth"]
+        if truth != "FRESH":
+            return {"level": "CLOSE_ONLY",
+                    "reason": f"canonical position truth is {truth} — "
+                              "broker count cannot be confirmed"}
     return {"level": "FULL", "reason": "positions reconciled"}
 
 
@@ -147,13 +201,20 @@ _DOMAINS = {
     "execution": execution_domain,
     "position_truth": position_truth_domain,
 }
+# domains whose FRESH/FULL state is a precondition for RESIZING (REDUCED)
+HARD_TRUTH_DOMAINS = ("position_truth", "broker", "execution")
 
 
 async def compute_authority(db, account: dict | None = None) -> dict:
+    """ONE canonical snapshot. With an account it is account-scoped (the
+    decision the choke point enforces); without, it is the platform-wide
+    ops view. enforced_level == level: every domain is enforced."""
+    import uuid
     domains = {}
     for name, fn in _DOMAINS.items():
         try:
-            domains[name] = await fn(db)
+            domains[name] = (await fn(db) if name == "platform"
+                             else await fn(db, account))
         except Exception as e:
             logger.error("authority domain %s failed: %s", name, e)
             domains[name] = dict(_UNAVAILABLE)
@@ -167,28 +228,49 @@ async def compute_authority(db, account: dict | None = None) -> dict:
     except Exception:
         domains["account"] = dict(_UNAVAILABLE)
     effective = worst(*(d["level"] for d in domains.values()))
-    enforced = worst(domains["platform"]["level"],
-                     domains["account"]["level"])
-    return {"level": effective, "enforced_level": enforced,
+    unavailable = [k for k, v in domains.items()
+                   if v.get("reason") == _UNAVAILABLE["reason"]]
+    return {"snapshot_id": f"authsnap_{uuid.uuid4().hex[:12]}",
+            "level": effective, "enforced_level": effective,
             "restricted": effective != "FULL", "domains": domains,
+            "unavailable_domains": unavailable,
+            "hard_truth_fresh": all(domains[k]["level"] == "FULL"
+                                    for k in HARD_TRUTH_DOMAINS),
+            "scope": "account" if account is not None else "platform",
+            "account_id": _acct_id(account) or None,
             "reasons": [f"{k}: {v['reason']}" for k, v in domains.items()
                         if v["level"] != "FULL"],
             "computed_at": _now()}
 
 
 async def enforce_new_trade(db, account: dict | None = None) -> dict:
-    """Blocking gate at the execution choke point. CLOSE_ONLY and above
-    refuse new exposure; REDUCED halves requested volume."""
-    p = await platform_domain(db)
-    a = await account_domain(db, account)
-    lvl = worst(p["level"], a["level"])
-    reasons = [d["reason"] for d in (p, a) if d["level"] != "FULL"]
+    """Blocking gate at the execution choke point — consumes the SAME
+    canonical snapshot the UI shows (audit P0-1). Any domain at CLOSE_ONLY
+    or worse refuses new exposure; an unavailable domain refuses (never
+    infer safety); REDUCED halves volume ONLY while every hard-truth
+    domain (position truth / broker / execution) is FULL."""
+    snap = await compute_authority(db, account)
+    lvl = snap["level"]
+    reasons = list(snap["reasons"])
+    base = {"level": lvl, "reasons": reasons,
+            "snapshot_id": snap["snapshot_id"],
+            "domains": {k: v["level"] for k, v in snap["domains"].items()}}
     if level_severity(lvl) >= level_severity("CLOSE_ONLY"):
-        return {"ok": False, "level": lvl, "reasons": reasons}
+        return {"ok": False, **base}
+    if snap["unavailable_domains"]:
+        return {"ok": False, **base, "level": "CLOSE_ONLY",
+                "reasons": reasons + [
+                    f"domain(s) unavailable: "
+                    f"{', '.join(snap['unavailable_domains'])} — "
+                    "refusing new exposure"]}
     if lvl == "REDUCED":
-        return {"ok": True, "level": lvl, "reduce_factor": 0.5,
-                "reasons": reasons}
-    return {"ok": True, "level": "FULL", "reasons": []}
+        if not snap["hard_truth_fresh"]:
+            return {"ok": False, **base, "level": "CLOSE_ONLY",
+                    "reasons": reasons + [
+                        "REDUCED requires fresh position/broker/"
+                        "execution truth — refusing new exposure"]}
+        return {"ok": True, **base, "reduce_factor": 0.5}
+    return {"ok": True, **base, "level": "FULL", "reasons": []}
 
 
 async def set_platform_level(db, level: str, reason: str,

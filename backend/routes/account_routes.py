@@ -137,7 +137,7 @@ async def accounts_overview(user=Depends(get_current_user)):
         aid = str(a["_id"])
         conn = effective_connection_state(a, now)
         connected = conn["connected"]
-        enabled = a.get("trading_enabled") is not False
+        enabled = a.get("trading_enabled") is True  # audit P1-6
         bot_on = bool((cfgs.get(aid) or global_cfg).get("active"))
         grp = (a.get("group") or "").strip()
         if grp:

@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 529 |
+| unit | pure logic, no external I/O | every CI job | 534 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3499 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3504 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 4116 tests across 417 files.**
+**Total: 4126 tests across 419 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -180,6 +180,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter18_diagnostic_safety_guardian.py` | http-live | 2 |
 | `backend/tests/test_iter191_v53_batch.py` | http-live | 10 |
 | `backend/tests/test_iter192_v54_batch.py` | http-live | 7 |
+| `backend/tests/test_iter193_audit_p0.py` | http-live | 5 |
 | `backend/tests/test_iter193_e2e_external.py` | http-live | 14 |
 | `backend/tests/test_iter193_v55_batch.py` | http-live | 23 |
 | `backend/tests/test_iter194_security_audit.py` | http-live | 8 |
@@ -427,6 +428,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/scalp/test_round16_slots.py` | unit | 7 |
 | `backend/tests/unit/scalp/test_scalp_unit.py` | unit | 162 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
+| `backend/tests/unit/test_authority_matrix.py` | unit | 5 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
 | `backend/tests/unit/test_investor_view.py` | unit | 6 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |

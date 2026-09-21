@@ -46,7 +46,8 @@ def _signal(**over):
     return doc
 
 
-ACCOUNT = {"_id": "acct-cutover", "account_number": "555", "server": "Demo"}
+ACCOUNT = {"_id": "acct-cutover", "account_number": "555", "server": "Demo",
+           "mode": "paper"}  # paper: no terminal dependency, truth FRESH
 
 
 def _cleanup():

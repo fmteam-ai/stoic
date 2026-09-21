@@ -1,10 +1,14 @@
 """Global Trading Authority API — /api/authority"""
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
 from database import get_db
 from trading_authority import (LEVELS, compute_authority, level_severity,
                                set_platform_level)
+
+logger = logging.getLogger("trading.authority.api")
 
 router = APIRouter(prefix="/authority", tags=["authority"])
 
@@ -55,8 +59,23 @@ async def authority_ep(user=Depends(get_current_user)):
                 out["restricted"] = True
                 out.setdefault("reasons", []).append(exb["message"])
         out["readiness_level"] = rd.get("level")
-    except Exception:  # noqa: BLE001 — display fallback, never 500 the strip
-        pass
+        # audit P0-1 — one decision: what is shown is what is enforced
+        out["enforced_level"] = out["level"]
+    except Exception as e:  # noqa: BLE001 — audit P1-1: typed UNKNOWN, never
+        # the optimistic pre-merge verdict.
+        logger.error("authority merge failed for user %s: %s",
+                     user.get("id"), e)
+        from trading_authority import worst as _worst
+        out["authority_state"] = "UNKNOWN"
+        out["level"] = _worst(out.get("level") or "FULL", "CLOSE_ONLY")
+        out["enforced_level"] = _worst(out.get("enforced_level") or "FULL",
+                                       "CLOSE_ONLY")
+        out["restricted"] = True
+        out.setdefault("reasons", []).append(
+            "canonical readiness could not be merged — authority UNKNOWN, "
+            "new trades refused until it can be confirmed")
+        return out
+    out["authority_state"] = "KNOWN"
     return out
 
 

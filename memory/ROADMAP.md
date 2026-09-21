@@ -56,3 +56,12 @@
 - **P1** Alert Test Button (notification settings) · Drift Gauge on runner cards · Risk Commander explicit confirmations · Soak memory watch.
 - **P2** Metric scope labels on P&L totals · External KMS release signer.
 - **P0 (manual)** MQL5 RC compile on Windows → signed EX5 hash via scripts/verify_ea_release.py.
+
+### Post iter-193 (external audit) — deferred architectural items
+- **P1-4** TradingDecisionSnapshot: one immutable per-user/account snapshot (inventory, broker freshness, position truth, UNKNOWN executions, EA state, health caps, certification, PAMM, release policy); all UI + execution APIs reference its ID/policy version.
+- **P1-5** Tenant scoping: declare platform-global vs tenant-scoped domains; require user_id/tenant_id in schemas/indexes/query helpers; lint against unscoped reads.
+- **P1-7** Split ML inference out of the API process; container CPU/mem limits, startup vs readiness probes, bounded queues, restart/rollback alerts.
+- **P0-3** Deployment provenance: fail + auto-rollback when running SHA ≠ signed release; image digest / schema version on /api/status; Admin provenance card.
+- **P2-2** Hermetic <5-min safety suite on public deps (authority, state contract, reconciliation, risk invariants).
+- **P2-3** Exception taxonomy: replace safety-path `pass` with typed outcomes + correlation IDs.
+- **P2-4** Jurisdiction-specific legal review before public launch.

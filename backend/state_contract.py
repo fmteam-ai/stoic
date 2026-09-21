@@ -139,6 +139,28 @@ def state_reason(*, eff: str, truth: dict, operational_mode: str) -> str | None:
     return None
 
 
+async def backfill_trading_enabled(db) -> int:
+    """Audit P1-6 — explicit enablement migration. Accounts lacking
+    `trading_enabled` are stamped from their owner-confirmed bot config
+    (active → True) so nothing running today silently switches off; from
+    now on a MISSING flag reads as disabled everywhere."""
+    n = 0
+    async for a in db.accounts.find({"trading_enabled": {"$exists": False}},
+                                    {"user_id": 1}):
+        cfg = await db.bot_configs.find_one(
+            {"user_id": a.get("user_id"), "account_id": str(a["_id"])},
+            {"active": 1}) or await db.bot_configs.find_one(
+            {"user_id": a.get("user_id"), "account_id": None},
+            {"active": 1}) or {}
+        await db.accounts.update_one(
+            {"_id": a["_id"]},
+            {"$set": {"trading_enabled": bool(cfg.get("active")),
+                      "trading_enabled_backfilled_at":
+                          _now_dt().isoformat()}})
+        n += 1
+    return n
+
+
 async def contract(db, user_id: str) -> dict:
     """Full per-account state contract + totals, from ONE read."""
     accounts = [a async for a in db.accounts.find({"user_id": user_id})]
@@ -160,7 +182,7 @@ async def contract(db, user_id: str) -> dict:
         mode = str(cfg.get("operational_mode") or "observe")
         eff = effective_state(bot_enabled=bot_on, tripped=tripped,
                               truth=truth, operational_mode=mode)
-        enabled = a.get("trading_enabled") is not False
+        enabled = a.get("trading_enabled") is True  # audit P1-6: missing = OFF
         rows.append({"account_id": aid, "label": a.get("label"),
                      "mode": a.get("mode"),
                      "account_enabled": enabled, "bot_enabled": bot_on,

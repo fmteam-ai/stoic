@@ -218,14 +218,23 @@ _startup_error: str | None = None
 @api_router.get("/health")
 async def health():
     db = get_db()
+    # audit P0-3 — immutable provenance on the public health probe.
+    from execution_authority import EXECUTION_POLICY_VERSION
+    from modules.pamm.strategy_guard import GIT_COMMIT
+    from routes.diagnostic_routes import LATEST_EA
+    prov = {"build_sha": GIT_COMMIT or None,
+            "execution_policy_version": EXECUTION_POLICY_VERSION,
+            "ea_version": LATEST_EA,
+            "app_env": os.environ.get("APP_ENV") or "development"}
     try:
         await db.command("ping")
-        return {"status": "ok", "db": "connected"}
+        return {"status": "ok", "db": "connected", **prov}
     except Exception as e:
         # Never leak connection topology / driver internals publicly.
         cid = uuid.uuid4().hex[:12]
         logger.error("health degraded [cid=%s]: %s", cid, e)
-        return {"status": "degraded", "db": "unavailable", "cid": cid}
+        return {"status": "degraded", "db": "unavailable", "cid": cid,
+                **prov}
 
 
 @api_router.get("/health/live")
@@ -353,7 +362,12 @@ async def public_trust_stats():
             {"at": {"$gte": start.replace(tzinfo=None)}})
         uptime = round(min(100.0, got * 100.0 / expected), 2)
     data = {"accounts_protected": accounts, "signals_vetoed": vetoed,
-            "uptime_30d_pct": uptime, "as_of": now.isoformat()}
+            "uptime_30d_pct": uptime, "as_of": now.isoformat(),
+            # audit P1-3 — the landing "live" label binds to this contract
+            "source": "platform_db_aggregate", "environment": "ALL",
+            "population": "all registered accounts · all HOLD verdicts",
+            "reconciliation": "not_applicable_aggregate",
+            "ttl_seconds": 900}
     _trust_stats_cache.update(at=_time.time(), data=data)
     return data
 
@@ -767,6 +781,12 @@ async def on_startup():
         # expected_identity / verified_identity). Idempotent.
         from identity_model import backfill_identity_structure
         await backfill_identity_structure(get_db())
+        # audit P1-6 — explicit account enablement (missing flag = OFF).
+        from state_contract import backfill_trading_enabled
+        _n_te = await backfill_trading_enabled(get_db())
+        if _n_te:
+            logger.warning("Startup: stamped trading_enabled on %d "
+                           "account(s) lacking it", _n_te)
         from seed import dependency_health_check
         await dependency_health_check()
         logger.info("Startup: indexes ensured, admin seeded.")

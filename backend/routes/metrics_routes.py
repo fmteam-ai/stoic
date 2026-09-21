@@ -209,7 +209,7 @@ async def metrics(request: Request):
             pass
 
     async for a in db.accounts.find(
-            {"trading_enabled": {"$ne": False}, "dormant": {"$ne": True},
+            {"trading_enabled": True, "dormant": {"$ne": True},  # audit P1-6
              "status": {"$ne": "deleted"}},
             {"label": 1, "last_heartbeat": 1, "broker_utc_offset_sec": 1}):
         label = a.get("label") or str(a["_id"])[-6:]

@@ -25,6 +25,18 @@ def admin_session():
     return s
 
 
+@pytest.fixture(scope="module")
+def eligible_session():
+    """audit P1-2 — public share creation is gated on the attestation
+    gate; use a seeded LIVE/fresh/reconciled user for share flows."""
+    import uuid
+    from helpers import cleanup_attestation_user, seed_attestation_eligible_user
+    email = f"attest157_{uuid.uuid4().hex[:8]}@example.com"
+    s = seed_attestation_eligible_user(email)
+    yield s
+    cleanup_attestation_user(email)
+
+
 # --- B1: verified track record --------------------------------------------
 class TestVerifiedPerformance:
     def test_verified_shape(self, admin_session):
@@ -69,12 +81,12 @@ class TestVerifiedPerformance:
 
 # --- B2: share lifecycle ---------------------------------------------------
 class TestShareLifecycle:
-    def test_share_create_rotate_public_and_revoke(self, admin_session):
+    def test_share_create_rotate_public_and_revoke(self, eligible_session):
         # start clean
-        admin_session.delete(f"{API}/performance/share")
+        eligible_session.delete(f"{API}/performance/share")
 
         # 1. create share
-        r = admin_session.post(f"{API}/performance/share")
+        r = eligible_session.post(f"{API}/performance/share")
         assert r.status_code == 200
         sid1 = r.json()["share_id"]
         assert sid1 and len(sid1) > 10
@@ -92,7 +104,7 @@ class TestShareLifecycle:
         assert "overall" in d and "integrity" in d and "equity_curve" in d
 
         # 3. rotate — new POST returns new id, and old id 404s
-        r = admin_session.post(f"{API}/performance/share")
+        r = eligible_session.post(f"{API}/performance/share")
         assert r.status_code == 200
         sid2 = r.json()["share_id"]
         assert sid2 != sid1
@@ -102,16 +114,16 @@ class TestShareLifecycle:
         assert r_new.status_code == 200
 
         # 4. verified endpoint should show current share
-        v = admin_session.get(f"{API}/performance/verified").json()
+        v = eligible_session.get(f"{API}/performance/verified").json()
         assert v["share"] is not None
         assert v["share"]["share_id"] == sid2
 
         # 5. revoke → new id 404s
-        r = admin_session.delete(f"{API}/performance/share")
+        r = eligible_session.delete(f"{API}/performance/share")
         assert r.status_code == 200
         r_after = pub.get(f"{API}/public/performance/{sid2}")
         assert r_after.status_code == 404
-        v2 = admin_session.get(f"{API}/performance/verified").json()
+        v2 = eligible_session.get(f"{API}/performance/verified").json()
         assert v2["share"] is None
 
     def test_bogus_share_id_404(self):
@@ -119,17 +131,17 @@ class TestShareLifecycle:
         r = pub.get(f"{API}/public/performance/not-a-real-share-id-xxxxx")
         assert r.status_code == 404
 
-    def test_public_endpoint_needs_no_auth(self, admin_session):
+    def test_public_endpoint_needs_no_auth(self, eligible_session):
         # create then verify with a completely new session (no cookies)
-        admin_session.delete(f"{API}/performance/share")
-        sid = admin_session.post(f"{API}/performance/share").json()["share_id"]
+        eligible_session.delete(f"{API}/performance/share")
+        sid = eligible_session.post(f"{API}/performance/share").json()["share_id"]
         try:
             fresh = requests.Session()  # no auth
             r = fresh.get(f"{API}/public/performance/{sid}")
             assert r.status_code == 200
             assert r.json().get("shared") is True
         finally:
-            admin_session.delete(f"{API}/performance/share")
+            eligible_session.delete(f"{API}/performance/share")
 
 
 # --- B3: audit log ---------------------------------------------------------

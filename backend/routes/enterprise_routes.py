@@ -224,7 +224,7 @@ async def v1_accounts(key=Depends(require_scope("read:accounts"))):
         "base_currency": a.get("base_currency"),
         "mode": a.get("mode"),
         "group": a.get("group"),
-        "trading_enabled": a.get("trading_enabled") is not False,
+        "trading_enabled": a.get("trading_enabled") is True,  # audit P1-6
         "balance": a.get("balance"),
         "equity": a.get("equity"),
         "open_positions": a.get("open_positions") or 0,

@@ -124,10 +124,17 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             "integrity": integrity}
 
 
+ATTESTATION_POLICY_VERSION = "attest-v2"
+ATTESTATION_MAX_DATA_AGE_S = 6 * 3600
+
+
 async def _attestation_gate(db, user_id: str) -> list:
-    """Review P1 — an attestation is a signed claim of truth. It is
-    PROHIBITED while P&L is UNRECONCILED, position truth is not FRESH on
-    an enabled account, or the dataset includes synthetic/test accounts."""
+    """Review P1 / audit P1-2 — an attestation is a signed claim of truth.
+    PROHIBITED while P&L is UNRECONCILED, position truth is not FRESH on an
+    enabled account, the dataset includes synthetic/test accounts, any
+    enabled account is not classified LIVE (DEMO/PAPER/UNKNOWN rows never
+    back a live-performance claim), no broker deals exist, or the newest
+    broker deal is older than the max data age."""
     reasons = []
     try:
         from routes.trade_routes import trade_stats
@@ -141,29 +148,58 @@ async def _attestation_gate(db, user_id: str) -> list:
         from state_contract import contract
         sc = await contract(db, user_id)
         rows = [r for r in sc["accounts"] if r.get("account_enabled")]
+        if not rows:
+            reasons.append("NO_ENABLED_ACCOUNTS")
         if any(r["position_truth"] != "FRESH" for r in rows):
             reasons.append("POSITION_TRUTH_NOT_FRESH")
     except Exception:  # noqa: BLE001
         reasons.append("POSITION_TRUTH_UNAVAILABLE")
     from synthetic_data import is_synthetic_account
+    envs = set()
     async for a in db.accounts.find(
             {"user_id": user_id, "status": {"$ne": "deleted"}},
-            {"label": 1, "user_id": 1, "synthetic": 1}):
+            {"label": 1, "user_id": 1, "synthetic": 1, "mode": 1,
+             "account_type": 1, "server": 1, "broker_server": 1,
+             "broker_environment": 1, "trading_enabled": 1}):
         if is_synthetic_account(a):
             reasons.append("SYNTHETIC_ACCOUNT_DATA")
-            break
-    return reasons
+        if a.get("trading_enabled") is True:
+            envs.add(_broker_env(a) or "UNKNOWN")
+    if envs - {"LIVE"}:
+        reasons.append("NON_LIVE_ENVIRONMENT:" + ",".join(
+            sorted(envs - {"LIVE"})))
+    newest = await db.broker_deals.find_one(
+        {"user_id": user_id}, {"deal_time": 1}, sort=[("deal_time", -1)])
+    if not newest:
+        reasons.append("NO_BROKER_DEALS")
+    else:
+        try:
+            dt = newest["deal_time"]
+            if isinstance(dt, (int, float)):
+                dt = datetime.fromtimestamp(int(dt), tz=timezone.utc)
+            elif isinstance(dt, str):
+                dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - dt).total_seconds()
+            if age > ATTESTATION_MAX_DATA_AGE_S:
+                reasons.append("BROKER_DATA_STALE")
+        except Exception:  # noqa: BLE001 — unparseable = not fresh
+            reasons.append("BROKER_DATA_AGE_UNKNOWN")
+    return sorted(set(reasons))
 
 
 async def _attach_attestation(db, user_id: str, payload: dict) -> dict:
     blockers = await _attestation_gate(db, user_id)
+    payload["attestation_policy_version"] = ATTESTATION_POLICY_VERSION
     if blockers:
         payload["attestation"] = None
         payload["attestation_blocked"] = {
             "reasons": blockers,
             "note": "Attestation withheld — a signed performance claim "
-                    "requires reconciled P&L, FRESH position truth and a "
-                    "dataset free of synthetic/test accounts."}
+                    "requires reconciled P&L, FRESH position truth, "
+                    "LIVE-classified accounts only, fresh broker deals and "
+                    "a dataset free of synthetic/test accounts."}
     else:
         payload["attestation"] = perf_attestation(payload)
         payload["attestation_blocked"] = None
@@ -185,8 +221,19 @@ async def verified(user=Depends(get_current_user)):
 
 @router.post("/share")
 async def create_share(user=Depends(get_current_user)):
-    """Create (or rotate) the public read-only share link."""
+    """Create (or rotate) the public read-only share link. Audit P1-2:
+    a PUBLIC financial claim is refused unless the attestation gate
+    passes — the public page can never show unverified headline P&L."""
     db = get_db()
+    blockers = await _attestation_gate(db, user["id"])
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "attestation_gate_failed", "reasons": blockers,
+                    "policy_version": ATTESTATION_POLICY_VERSION,
+                    "message": "Public share refused — performance is "
+                               "UNVERIFIED until every attestation gate "
+                               "passes."})
     share_id = secrets.token_urlsafe(16)
     await db.performance_shares.update_many(
         {"user_id": user["id"]}, {"$set": {"revoked": True}})
@@ -216,6 +263,18 @@ async def public_performance(share_id: str):
     payload = await _verified_payload(db, share["user_id"], mask=True)
     payload = await _attach_attestation(db, share["user_id"], payload)
     payload["shared"] = True
+    if payload.get("attestation_blocked"):
+        # audit P1-2 — an existing link whose gate no longer passes must
+        # not present financial headline metrics as verified.
+        payload["verification_status"] = "UNVERIFIED — NOT LIVE PERFORMANCE"
+        payload["overall"] = None
+        payload["max_drawdown"] = None
+        payload["equity_curve"] = []
+        for row in payload.get("accounts") or []:
+            for k in ("net", "wins", "losses", "win_rate", "profit_factor"):
+                row.pop(k, None)
+    else:
+        payload["verification_status"] = "VERIFIED"
     return payload
 
 

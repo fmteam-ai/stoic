@@ -64,16 +64,23 @@ const Stat = ({ label, value, suffix = "", decimals = 0, testId }) => {
     );
 };
 
-const TrustBar = () => {
+const statsAreLive = (s) => {
+    if (!s || !s.as_of) return false;
+    const age = (Date.now() - new Date(s.as_of).getTime()) / 1000;
+    return Number.isFinite(age) && age <= (s.ttl_seconds || 900)
+        && s.accounts_protected != null && s.signals_vetoed != null;
+};
+
+const TrustBar = ({ onStatus }) => {
     const [stats, setStats] = useState(null);
     const [visible, setVisible] = useState(false);
     const ref = useRef(null);
     useEffect(() => {
         fetch(`${API}/api/public/trust-stats`)
             .then(r => (r.ok ? r.json() : null))
-            .then(setStats)
-            .catch(() => setStats(null));
-    }, []);
+            .then(s => { setStats(s); onStatus?.(statsAreLive(s) ? "live" : "unavailable"); })
+            .catch(() => { setStats(null); onStatus?.("unavailable"); });
+    }, [onStatus]);
     useEffect(() => {
         const el = ref.current;
         if (!el) return;
@@ -83,9 +90,15 @@ const TrustBar = () => {
         obs.observe(el);
         return () => obs.disconnect();
     }, [stats]);
-    if (!stats) return null;
+    if (!statsAreLive(stats)) {
+        return (
+            <div className="tst-trustbar" data-testid="trust-bar-unavailable">
+                <div className="tst-stat-label">Live statistics unavailable</div>
+            </div>
+        );
+    }
     return (
-        <div ref={ref} className="tst-trustbar" data-testid="trust-bar">
+        <div ref={ref} className="tst-trustbar" data-testid="trust-bar" title={`as of ${stats.as_of} · ${stats.source} · ${stats.population}`}>
             <Stat label="Accounts protected" testId="trust-stat-accounts"
                   value={visible ? stats.accounts_protected : null} />
             <div className="tst-stat-divider" />
@@ -130,6 +143,10 @@ const Card = ({ t, idx }) => (
 export const LandingTestimonials = () => {
     const rowA = TESTIMONIALS.filter((_, i) => i % 2 === 0);
     const rowB = TESTIMONIALS.filter((_, i) => i % 2 === 1);
+    const [statsStatus, setStatsStatus] = useState("loading");
+    const statsLine = statsStatus === "live"
+        ? "The stats are live platform data (aggregate, refreshed every 15 minutes)."
+        : "Live statistics unavailable.";
     return (
         <section className="tst-section" data-testid="testimonials-section">
             <div className="kicker">Wall of trust</div>
@@ -141,9 +158,9 @@ export const LandingTestimonials = () => {
             </p>
             <p className="tst-illustrative-note" data-testid="testimonials-illustrative-label">
                 The quotes below are illustrative examples, not real customer reviews.
-                The stats are live platform data.
+                {" "}<span data-testid="testimonials-stats-status">{statsLine}</span>
             </p>
-            <TrustBar />
+            <TrustBar onStatus={setStatsStatus} />
             <div className="tst-marquee" data-testid="testimonials-marquee">
                 <div className="tst-track">
                     {[...rowA, ...rowA].map((t, i) => (
@@ -163,8 +180,8 @@ export const LandingTestimonials = () => {
             </div>
             <p className="tst-honesty" data-testid="testimonials-disclaimer">
                 Quotes are illustrative examples, not real customer reviews.
-                Platform stats are live data. Not a promise of performance —
-                trading involves risk.
+                {" "}{statsStatus === "live" ? "Platform stats are live aggregate data." : "Live statistics unavailable."}
+                {" "}Not a promise of performance — trading involves risk.
             </p>
         </section>
     );

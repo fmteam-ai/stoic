@@ -22,10 +22,16 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 @pytest.fixture(scope="module")
 def sess():
-    s = requests.Session()
-    r = s.post(f"{BASE_URL}/api/auth/login", json=ADMIN, timeout=15)
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
-    return s
+    # audit P1-2 — the hardened attestation gate requires LIVE-classified,
+    # fresh, reconciled data; seed a dedicated eligible user.
+    import uuid
+    from helpers import (cleanup_attestation_user, make_elite,
+                         seed_attestation_eligible_user)
+    email = f"attest_{uuid.uuid4().hex[:8]}@example.com"
+    s = seed_attestation_eligible_user(email)
+    make_elite(email)  # broker-intel rows are tier-gated (trader+)
+    yield s
+    cleanup_attestation_user(email)
 
 
 # ------------------------------------------------------------ attestation
@@ -44,10 +50,10 @@ class TestAttestation:
         assert j["integrity"]["source"] == "broker_deals"
 
         att = j["attestation"]
-        assert att["key_id"] == "perf-hmac-v1"
-        assert att["algo"] == "HMAC-SHA256(canonical-JSON)"
+        assert att["key_id"] == "perf-ed25519-v1"
+        assert att["algo"] == "Ed25519(sha256-canonical-JSON)"
         assert HEX64.match(att["payload_hash"]), att["payload_hash"]
-        assert HEX64.match(att["signature"]), att["signature"]
+        assert re.match(r"^[0-9a-f]{128}$", att["signature"]), att["signature"]  # Ed25519 = 64 bytes
         assert "signed_at" in att
 
     def test_public_verify_valid(self, sess):
@@ -60,7 +66,7 @@ class TestAttestation:
         assert r.status_code == 200, r.text
         j = r.json()
         assert j["valid"] is True
-        assert j["key_id"] == "perf-hmac-v1"
+        assert j["key_id"] == "perf-ed25519-v1"
 
     def test_public_verify_tampered_hash(self, sess):
         att = sess.get(f"{BASE_URL}/api/performance/verified",
@@ -110,7 +116,7 @@ class TestShareFlow:
         assert "attestation" in j
         att = j["attestation"]
         assert HEX64.match(att["payload_hash"])
-        assert HEX64.match(att["signature"])
+        assert re.match(r"^[0-9a-f]{128}$", att["signature"])
         # Verify the masked payload's attestation
         v = requests.post(f"{BASE_URL}/api/public/performance/verify",
                           json={"payload_hash": att["payload_hash"],
