@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="4" failures="0" skipped="0" tests="6" time="2.646" timestamp="2026-09-21T17:35:56.800335+00:00" hostname="agent-env-568b791d-28f4-4d9b-bd55-2a2590691f93"><testcase classname="tests.test_iter202_repair_ledger" name="test_list_shape_and_filters" time="1.009"><error message="failed on setup with &quot;ValueError: The future belongs to a different loop than the one specified as the loop argument&quot;">backend/tests/test_iter202_repair_ledger.py:50: in seeded
+    run_async(get_db().repair_ledger.insert_many(rows))
+backend/tests/conftest.py:100: in run_async
+    return _shared_loop().run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:633: in run_until_complete
+    future = tasks.ensure_future(future, loop=self)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:659: in ensure_future
+    return _ensure_future(coro_or_future, loop=loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:665: in _ensure_future
+    raise ValueError('The future belongs to a different loop than '
+E   ValueError: The future belongs to a different loop than the one specified as the loop argument</error></testcase><testcase classname="tests.test_iter202_repair_ledger" name="test_pagination_and_limit_clamp" time="0.000"><error message="failed on setup with &quot;ValueError: The future belongs to a different loop than the one specified as the loop argument&quot;">backend/tests/test_iter202_repair_ledger.py:50: in seeded
+    run_async(get_db().repair_ledger.insert_many(rows))
+backend/tests/conftest.py:100: in run_async
+    return _shared_loop().run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:633: in run_until_complete
+    future = tasks.ensure_future(future, loop=self)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:659: in ensure_future
+    return _ensure_future(coro_or_future, loop=loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:665: in _ensure_future
+    raise ValueError('The future belongs to a different loop than '
+E   ValueError: The future belongs to a different loop than the one specified as the loop argument</error></testcase><testcase classname="tests.test_iter202_repair_ledger" name="test_kinds_summary" time="0.000"><error message="failed on setup with &quot;ValueError: The future belongs to a different loop than the one specified as the loop argument&quot;">backend/tests/test_iter202_repair_ledger.py:50: in seeded
+    run_async(get_db().repair_ledger.insert_many(rows))
+backend/tests/conftest.py:100: in run_async
+    return _shared_loop().run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:633: in run_until_complete
+    future = tasks.ensure_future(future, loop=self)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:659: in ensure_future
+    return _ensure_future(coro_or_future, loop=loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:665: in _ensure_future
+    raise ValueError('The future belongs to a different loop than '
+E   ValueError: The future belongs to a different loop than the one specified as the loop argument</error></testcase><testcase classname="tests.test_iter202_repair_ledger" name="test_sweep_detail_groups_rows" time="0.000"><error message="failed on setup with &quot;ValueError: The future belongs to a different loop than the one specified as the loop argument&quot;">backend/tests/test_iter202_repair_ledger.py:50: in seeded
+    run_async(get_db().repair_ledger.insert_many(rows))
+backend/tests/conftest.py:100: in run_async
+    return _shared_loop().run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:633: in run_until_complete
+    future = tasks.ensure_future(future, loop=self)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:659: in ensure_future
+    return _ensure_future(coro_or_future, loop=loop)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/tasks.py:665: in _ensure_future
+    raise ValueError('The future belongs to a different loop than '
+E   ValueError: The future belongs to a different loop than the one specified as the loop argument</error></testcase><testcase classname="tests.test_iter202_repair_ledger" name="test_non_admin_forbidden" time="1.400" /><testcase classname="tests.test_iter202_repair_ledger" name="test_ledger_endpoints_are_read_only" time="0.001" /></testsuite></testsuites>
