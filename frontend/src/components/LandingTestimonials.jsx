@@ -192,14 +192,14 @@ export const LandingTestimonials = () => {
                         // audit F-19 — animation clones hidden from AT
                         i < rowA.length
                             ? <Card key={`a${i}`} t={t} idx={i * 2} />
-                            : <div key={`a${i}`} aria-hidden="true" role="presentation" inert="" data-marquee-clone="true"><Card t={t} /></div>
+                            : <div key={`a${i}`} aria-hidden="true" role="presentation" inert={true} data-marquee-clone="true"><Card t={t} /></div>
                     ))}
                 </div>
                 <div className="tst-track reverse">
                     {[...rowB, ...rowB].map((t, i) => (
                         i < rowB.length
                             ? <Card key={`b${i}`} t={t} idx={i * 2 + 1} />
-                            : <div key={`b${i}`} aria-hidden="true" role="presentation" inert="" data-marquee-clone="true"><Card t={t} /></div>
+                            : <div key={`b${i}`} aria-hidden="true" role="presentation" inert={true} data-marquee-clone="true"><Card t={t} /></div>
                     ))}
                 </div>
             </div>

@@ -9,7 +9,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
 from bson import ObjectId

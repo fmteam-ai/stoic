@@ -81,9 +81,11 @@ def test_at07_crash_after_pending_row_is_replayed_exactly_once(sdb, uid):
     assert row["state"] == "pending"
     assert sdb.trades.count_documents({"_id": {"$in": ids}, "ghost_acknowledged": True}) == 0
     # too young → not replayed yet (avoid racing an in-flight repair)
-    assert run_async(hr.replay_incomplete(get_db(), older_than_sec=3600)) == 0
-    sdb.repair_ledger.update_one({"_id": row["_id"]}, {"$set": {"at": _iso(datetime.now(timezone.utc) - timedelta(minutes=5))}})
-    assert run_async(hr.replay_incomplete(get_db(), older_than_sec=60)) == 1
+    assert sdb.repair_ledger.count_documents({"_id": row["_id"], "state": "pending"}) == 1
+    run_async(hr.replay_incomplete(get_db(), older_than_sec=3600))
+    assert sdb.repair_ledger.count_documents({"_id": row["_id"], "state": "pending"}) == 1
+    # old enough (cutoff = now) → replayed; `at` is a chained field so age is never mutated here
+    run_async(hr.replay_incomplete(get_db(), older_than_sec=0))
     done = sdb.repair_ledger.find_one({"_id": row["_id"]})
     assert done["state"] == "completed" and done["replayed"] is True and done["after"]["modified"] == 2
     assert sdb.trades.count_documents({"_id": {"$in": ids}, "ghost_acknowledged": True}) == 2
@@ -104,8 +106,7 @@ def test_at07_crash_after_mutation_before_completion_does_not_reapply(sdb, uid):
     row = run_async(hr._open_pending(get_db(), corr, uid, "ghost_ack_old", ids, {}))
     col, flt, upd = hr._mutation("ghost_ack_old", row, "2026-01-01T00:00:00+00:00")
     sdb[col].update_many(flt, {**upd, "$addToSet": {"repair_ids": row["repair_id"]}})   # mutation happened
-    sdb.repair_ledger.update_one({"_id": row["_id"]}, {"$set": {"at": _iso(datetime.now(timezone.utc) - timedelta(minutes=5))}})
-    assert run_async(hr.replay_incomplete(get_db(), older_than_sec=60)) == 1
+    run_async(hr.replay_incomplete(get_db(), older_than_sec=0))
     done = sdb.repair_ledger.find_one({"_id": row["_id"]})
     assert done["state"] == "completed" and done["after"]["modified"] == 0 and done["after"]["stamped"] == 2
     for t in sdb.trades.find({"_id": {"$in": ids}}):
@@ -266,7 +267,7 @@ def test_at11_sli_published_and_frontend_hides_uptime_until_reconciled():
     assert 'availability?.status === "reconciled"' in fe
     assert "Verified active accounts with safety policy enabled" in fe
     assert "Execution intents blocked by risk policy" in fe
-    assert 'role="presentation" inert=""' in fe          # P2-4 marquee clones out of the AT
+    assert 'role="presentation" inert={true}' in fe          # P2-4 marquee clones out of the AT
 
 
 # ── AT-15 · signed release: static portion ───────────────────────────────────

@@ -1,0 +1,43 @@
+{
+  "summary": "iter-224 audit round P1-1..P1-5 + P2-4 validation. Added 7 HTTP-level tests (test_iter224_audit_http.py) exercising /api/public/trust-stats, /api/public/edge-probe, /api/admin/repair-ledger/verify (admin & non-admin), /api/admin/repair-ledger, /api/ops/release-readiness. Found + FIXED one critical bug: missing HTTPException import in server.py caused /api/public/edge-probe to return 500 instead of 401 when token invalid/missing. All 7 HTTP tests now pass. Frontend landing page verified: trust bar shows exactly two stats (accounts + vetoed), NO uptime/availability elements, no 'Platform uptime' string, footnote contains reconciled-window text, testimonials-stats-status mentions 'defined, versioned populations'. Marquee clones have aria-hidden+role=presentation and Tab focus never enters them (functional a11y intact), but React strips the empty-string `inert=\"\"` prop at runtime so the DOM attribute is missing — reported to main agent. Admin /admin/repair-ledger renders, VERIFY CHAIN button emits repair-chain-result banner (TAMPERING DETECTED — 10 anomalies from prior tampering tests in preview DB, expected). Mobile 390px: no horizontal overflow on landing or repair-ledger.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LandingTestimonials marquee clones", "issue": "Source JSX uses inert=\"\" (empty string). React 18+/19 strips empty-string boolean attributes at render time — DOM elements with [data-marquee-clone] end up WITHOUT the inert attribute at runtime (getAttribute('inert') returns null on all 10 clones; React logs 'Received an empty string for a boolean attribute inert' warning). Functionally a11y is preserved (Tab never focuses clone contents thanks to aria-hidden+role=presentation), but P2-4 spec requirement 'every [data-marquee-clone] has the inert attribute' fails. Fix: use inert={true} (React 19 supports it) or set el.inert = true via ref/useEffect for older React.", "selector": "[data-marquee-clone]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Landing /", "issues": ["axe-core (wcag2a+wcag2aa) reported 1 SERIOUS color-contrast violation on the landing DOM. Scan fell back to <body> (no [data-testid=\"landing-testimonials\"] wrapper matched). Node target not captured — main agent should re-run axe with node.target expanded to determine whether it is inside the testimonials section (P2-4 acceptance) or elsewhere."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter224_audit_http.py",
+    "/app/test_reports/pytest/iter224_audit_http.xml"
+  ],
+  "action_items": [
+    "FIXED by testing agent: added HTTPException to fastapi import in /app/backend/server.py (was raising NameError → 500 on /api/public/edge-probe without valid token). Verify the fix is acceptable.",
+    "Fix P2-4 marquee clone `inert` attribute — change `inert=\"\"` to `inert={true}` (React 19 supports the boolean prop) in /app/frontend/src/components/LandingTestimonials.jsx lines 195 & 202. Currently the attribute is missing on rendered DOM.",
+    "Re-run axe-core landing scan with node.target detail to confirm whether the 1 serious color-contrast violation is inside the testimonials section; if yes, adjust illustrative-example badge / caption colors."
+  ],
+  "critical_code_review_comments": [
+    "server.py: /api/public/edge-probe raised HTTPException without importing it — smoke test-worthy regression not caught by unit tests because iter-204 tests bypass the route and call the module directly. Suggest adding a guard `pytest --import-mode=importlib backend/ -k 'import'` style import check.",
+    "trust_stats.py + /api/public/trust-stats response is well-structured: population_version='trust-stats/v2', SLI object with definition/eligible_endpoints/interval_seconds/exclusions, availability.reconciled=false + value_pct=null in preview, legacy keys retained with uptime_30d_pct null. Good design.",
+    "health_repairs.verify_repair_chain returns append-only ledger class + anomalies array — /admin/repair-ledger/verify surfaces it cleanly. Preview DB currently shows 10 anomalies (expected: iter-204 acceptance tests intentionally tamper rows).",
+    "ops/release_truth: checks.release_attestation exposes enforced/attestation_present/running_build_sha/ok/note; in preview attestation_present=false but ok=true because APP_ENV!=production. Correct fail-open behavior for non-prod.",
+    "LandingTestimonials.jsx marquee clone attribute pattern (inert=\"\") is a well-known React footgun — should always be inert={true} in modern React."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (added HTTPException to fastapi import — fixes /api/public/edge-probe 500 → 401)",
+    "/app/backend/tests/test_iter224_audit_http.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7 iter-224 HTTP + iter-204 13/13 already green)", "frontend": "~92% (all spec-listed testids/text present; inert attribute stripped by React is the one deviation)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (preview); METRICS_TOKEN from backend/.env",
+  "seed_data_creation": "test_repair_ledger_verify_non_admin_forbidden registers + verifies + deletes an ephemeral nonadm_<uuid>@example.com user each run. NO ledger rows inserted or deleted (chain integrity preserved per agent-to-agent note).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Preview repair-ledger chain is INTENTIONALLY broken (10 anomalies) from iter-204 acceptance tampering tests — VERIFY CHAIN banner will say 'TAMPERING DETECTED' until preview DB is reset. Do NOT delete ledger rows. HTTPException import in server.py line 12 is now included — do not accidentally remove it in refactors.",
+  "rca_of_the_issue": "P1-1 edge-probe bug: /api/public/edge-probe used `raise HTTPException(...)` for the token check but server.py imported only `FastAPI, APIRouter, Request, WebSocket, WebSocketDisconnect` from fastapi. NameError bubbled to a 500. Unit acceptance tests in iter-204 exercised the trust_stats module directly (never routed through the endpoint) so the regression slipped through. Repro: `curl -X POST $BACKEND/api/public/edge-probe -d '{}' -H 'content-type:application/json'` → 500 pre-fix / 401 post-fix. Mitigation applied: added HTTPException to the from-fastapi import list at server.py:12."
+}
