@@ -25,6 +25,54 @@ _model_failed = False
 _cache: dict = {}    # base_symbol -> (expires, payload)
 _lock = asyncio.Lock()
 
+# Runtime telemetry for the Bot Health "Forecast" card. Persisted per process
+# (API and each worker load their own model) in db.forecast_runtime so the
+# API can report what worker-trading is actually doing.
+_stats: dict = {"model_loaded": False, "model_failed": False,
+                "load_ms": None, "loaded_at": None, "last_error": None,
+                "forecasts_total": 0, "inference_errors": 0,
+                "last_forecast_at": None, "last_latency_ms": None,
+                "last_symbol": None, "last_source": None,
+                "cache_hits": 0, "cache_misses": 0}
+
+
+def _process_role() -> str:
+    import os
+    return os.environ.get("STOIC_PROCESS_ROLE") or "api"
+
+
+def runtime_status() -> dict:
+    import os
+    import socket
+    from ml_runtime import _memory_budget_gb, ml_runtime_enabled
+    budget = _memory_budget_gb()
+    return {**_stats, "model": MODEL_NAME, "role": _process_role(),
+            "holder": f"{socket.gethostname()}:{os.getpid()}",
+            "cache_entries": len(_cache), "cache_ttl_s": CACHE_TTL,
+            "agent_enabled": os.environ.get("FORECAST_AGENT_ENABLED",
+                                            "true").lower() == "true",
+            "ml_runtime_enabled": ml_runtime_enabled(),
+            "memory_budget_gb": None if budget == float("inf")
+            else round(budget, 1),
+            "torch_available": _torch_available(),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                        time.gmtime())}
+
+
+def _torch_available() -> bool:
+    import importlib.util
+    return (importlib.util.find_spec("torch") is not None
+            and importlib.util.find_spec("chronos") is not None)
+
+
+async def _persist_status(db) -> None:
+    try:
+        st = runtime_status()
+        await db.forecast_runtime.update_one(
+            {"_id": st["role"]}, {"$set": st}, upsert=True)
+    except Exception as e:  # noqa: BLE001 — telemetry never breaks trading
+        logger.debug("forecast runtime persist failed: %s", e)
+
 
 def _load_model():
     global _model, _model_failed
@@ -35,16 +83,25 @@ def _load_model():
         logger.info("Chronos forecast model skipped — heavy ML disabled "
                     "(container memory budget)")
         _model_failed = True
+        _stats["last_error"] = "heavy ML disabled (memory gate)"
         return None
     try:
         import torch
         from chronos import BaseChronosPipeline
+        t0 = time.time()
         _model = BaseChronosPipeline.from_pretrained(
             MODEL_NAME, device_map="cpu", torch_dtype=torch.float32)
+        _stats.update({"model_loaded": True, "model_failed": False,
+                       "load_ms": round((time.time() - t0) * 1000),
+                       "loaded_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                                  time.gmtime()),
+                       "last_error": None})
         logger.info("Chronos forecast model loaded: %s", MODEL_NAME)
     except Exception as e:  # noqa: BLE001
         logger.warning("Chronos model unavailable (%s) — forecast agent disabled", e)
         _model_failed = True
+        _stats.update({"model_failed": True,
+                       "last_error": f"{type(e).__name__}: {str(e)[:200]}"})
     return _model
 
 
@@ -94,11 +151,14 @@ async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
     now = time.time()
     hit = _cache.get(base)
     if hit and hit[0] > now:
+        _stats["cache_hits"] += 1
         return hit[1]
     async with _lock:
         hit = _cache.get(base)
         if hit and hit[0] > now:
+            _stats["cache_hits"] += 1
             return hit[1]
+        _stats["cache_misses"] += 1
         closes, source, horizon = None, None, None
         cdoc = await db.intraday_candles.find_one({"user_id": user_id, "symbol": base})
         bars = (cdoc or {}).get("bars") or []
@@ -118,12 +178,22 @@ async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
         if closes:
             try:
                 loop = asyncio.get_running_loop()
+                t0 = time.time()
                 q = await loop.run_in_executor(None, _forecast_sync, closes, horizon)
                 if q:
                     payload = summarize(closes, q, source, horizon, base)
+                    _stats.update({
+                        "forecasts_total": _stats["forecasts_total"] + 1,
+                        "last_forecast_at": time.strftime(
+                            "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                        "last_latency_ms": round((time.time() - t0) * 1000),
+                        "last_symbol": base, "last_source": source})
             except Exception as e:  # noqa: BLE001
                 logger.warning("forecast inference failed: %s", e)
+                _stats["inference_errors"] += 1
+                _stats["last_error"] = f"{type(e).__name__}: {str(e)[:200]}"
         _cache[base] = (now + CACHE_TTL, payload)
+        await _persist_status(db)
         return payload
 
 

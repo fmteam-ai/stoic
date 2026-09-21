@@ -154,6 +154,7 @@ async def run_worker(name: str, loop_factories: list) -> None:
     zero-arg callables returning coroutines."""
     db = get_db()
     logger.info("worker %s starting (holder=%s)", name, HOLDER)
+    os.environ.setdefault("STOIC_PROCESS_ROLE", f"worker-{name}")
     while not await _try_acquire(db, name):
         logger.info("worker %s standing by — another holder owns the lease",
                     name)

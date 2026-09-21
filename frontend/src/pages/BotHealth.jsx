@@ -10,6 +10,7 @@ import {
     Wrench, Loader2,
 } from "lucide-react";
 import { ExecutionHealthPanel } from "../components/ExecutionHealthPanel";
+import { ForecastHealthCard } from "../components/ForecastHealthCard";
 import { ReadinessCard } from "../components/ReadinessCard";
 import { ChaosDrillsCard } from "../components/ChaosDrillsCard";
 import { StressTestCard } from "../components/StressTestCard";
@@ -545,7 +546,7 @@ export default function BotHealth() {
             // or failing endpoint degrades its own panel, never the page.
             const g = (url, fallback = null) =>
                 api.get(url, { timeout: 15000 }).catch(() => ({ data: fallback, _failed: true }));
-            const [hs, diag, pulse, sess, pats, adj, blocks, ahSet, ahLog, execH] = await Promise.all([
+            const [hs, diag, pulse, sess, pats, adj, blocks, ahSet, ahLog, execH, fcst] = await Promise.all([
                 g("/bot/health-score"),
                 g("/diagnostic/run"),
                 g("/bot/pulse"),
@@ -556,6 +557,7 @@ export default function BotHealth() {
                 g("/auto-heal/settings", { enabled: false }),
                 g("/auto-heal/log", { items: [] }),
                 g("/bot/execution-health"),
+                g("/bot/forecast-status"),
             ]);
             const failedCount = [hs, diag, pulse, sess, pats, adj].filter(r => r._failed).length;
             // Keep last-good data for any panel that failed this round.
@@ -571,6 +573,7 @@ export default function BotHealth() {
                     ? prev.autoHeal
                     : { settings: ahSet.data, log: ahLog.data?.items || [] },
                 execHealth: execH._failed ? prev.execHealth : execH.data,
+                forecast: fcst._failed ? prev.forecast : fcst.data,
                 apiLatencyMs: Math.round(performance.now() - t0),
             }));
             if (failedCount > 0) {
@@ -636,6 +639,8 @@ export default function BotHealth() {
                 <AutoHealPanel data={data.autoHeal} onChange={load} />
 
                 <ExecutionHealthPanel data={data.execHealth} apiLatencyMs={data.apiLatencyMs} />
+
+                <ForecastHealthCard data={data.forecast} />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <DiagnosticPanel diag={data.diagnostic} onReload={load} />

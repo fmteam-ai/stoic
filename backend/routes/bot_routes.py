@@ -1430,6 +1430,69 @@ async def execution_health(user=Depends(get_current_user)):
             "costs": costs}
 
 
+@router.get("/forecast-status")
+async def forecast_status(user=Depends(get_current_user)):
+    """Forecast Health card — is the Chronos forecaster actually running?
+    Merges this process's live status with the persisted status of every
+    other process (worker-trading loads its own model in production)."""
+    db = get_db()
+    from forecast_agent import runtime_status
+    local = runtime_status()
+    procs = {local["role"]: local}
+    async for d in db.forecast_runtime.find({}, {"_id": 0}):
+        role = d.get("role")
+        if not role:
+            continue
+        if role != local["role"]:
+            procs[role] = d
+        elif not local.get("last_forecast_at"):
+            # this process restarted since its last forecast — keep the
+            # persisted history visible, but report the live load state.
+            for k in ("last_forecast_at", "last_latency_ms", "last_symbol",
+                      "last_source", "load_ms"):
+                if local.get(k) is None:
+                    local[k] = d.get(k)
+            local["forecasts_total"] = max(local["forecasts_total"],
+                                           d.get("forecasts_total") or 0)
+            local["since_restart"] = True
+    now = datetime.now(timezone.utc)
+
+    def _age_s(ts):
+        if not ts:
+            return None
+        try:
+            return max(0, int((now - datetime.fromisoformat(
+                ts.replace("Z", "+00:00"))).total_seconds()))
+        except Exception:  # noqa: BLE001
+            return None
+
+    rows = []
+    for role, p in procs.items():
+        rows.append({**p, "last_forecast_age_s": _age_s(p.get("last_forecast_at")),
+                     "status_age_s": _age_s(p.get("updated_at"))})
+    # the process that actually forecasts is the freshest forecaster
+    active = sorted([r for r in rows if r.get("last_forecast_at")],
+                    key=lambda r: r["last_forecast_age_s"])
+    lead = active[0] if active else next(
+        (r for r in rows if r.get("model_loaded")), rows[0])
+    if not local["agent_enabled"]:
+        state = "disabled"
+    elif lead.get("model_failed") and not lead.get("model_loaded"):
+        state = "failed" if lead.get("torch_available") else "not_installed"
+    elif not any(r.get("ml_runtime_enabled") for r in rows):
+        state = "gated_off"
+    elif lead.get("last_forecast_at") and lead["last_forecast_age_s"] <= 1800:
+        state = "running"
+    elif lead.get("model_loaded"):
+        state = "idle"
+    else:
+        state = "not_loaded"
+    return {"state": state, "model": local["model"],
+            "cache_ttl_s": local["cache_ttl_s"], "lead": lead,
+            "processes": sorted(rows, key=lambda r: r["role"]),
+            "checked_at": now.isoformat()}
+
+
 @router.get("/health-score")
 async def bot_health_score(user=Depends(get_current_user)):
     """Single 0-100 score summarising "is the bot actually working right now?".
