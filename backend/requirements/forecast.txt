@@ -2,9 +2,11 @@
 # OPT-IN: installed only when the backend image is built with
 # ML_FORECAST=1 (docker-compose.forecast.yml). Needs ~2 GB RAM resident;
 # never install on a memory-constrained pod.
-# Install: pip install -c ../requirements.txt -r forecast.txt
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.12.1+cpu
+# Install (two steps — torch from its EXCLUSIVE CPU index, the rest from
+# PyPI; mirrors the dependency-confusion hardening used for
+# emergentintegrations in Dockerfile.backend):
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.1+cpu
+#   pip install -c ../requirements.txt -r forecast.txt
 chronos-forecasting==2.3.1
 transformers>=4.41,<6
 accelerate>=1.1,<2

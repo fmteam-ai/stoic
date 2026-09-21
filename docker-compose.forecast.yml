@@ -93,7 +93,10 @@ services:
 
   mongo:
     # Cap WiredTiger so Mongo doesn't grab the RAM the ML plane needs.
-    command: ["mongod", "--wiredTigerCacheSizeGB", "6"]
+    # --bind_ip_all mirrors the image default (containers connect over the
+    # compose network); --auth is injected by the entrypoint from the root
+    # credentials, so authentication is unchanged.
+    command: ["mongod", "--bind_ip_all", "--wiredTigerCacheSizeGB", "6"]
     deploy:
       resources:
         limits: { memory: 12g, cpus: "2.0" }

@@ -1487,10 +1487,22 @@ async def forecast_status(user=Depends(get_current_user)):
         state = "idle"
     else:
         state = "not_loaded"
-    return {"state": state, "model": local["model"],
-            "cache_ttl_s": local["cache_ttl_s"], "lead": lead,
-            "processes": sorted(rows, key=lambda r: r["role"]),
-            "checked_at": now.isoformat()}
+    out = {"state": state, "model": local["model"],
+           "cache_ttl_s": local["cache_ttl_s"], "lead": lead,
+           "processes": sorted(rows, key=lambda r: r["role"]),
+           "checked_at": now.isoformat()}
+    if user.get("role") != "admin":
+        # audit #5 SEC-001 — ops internals (host:pid, memory budget, raw
+        # error strings, process topology) are admin-only; customers get
+        # the functional verdict.
+        keep = ("model_loaded", "model_failed", "load_ms", "last_forecast_at",
+                "last_forecast_age_s", "last_latency_ms", "last_symbol",
+                "last_source", "forecasts_total", "cache_entries",
+                "cache_hits", "cache_misses", "ml_runtime_enabled",
+                "agent_enabled")
+        out["lead"] = {k: lead.get(k) for k in keep}
+        out["processes"] = []
+    return out
 
 
 @router.get("/health-score")

@@ -2428,3 +2428,9 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - `GET /api/bot/forecast-status`: merges live local status with persisted docs of other processes; local role restarted → history fields filled from persisted doc (`since_restart`). `state` ∈ running (forecast ≤30m) / idle / not_loaded / gated_off / not_installed / failed / disabled; `lead` = freshest forecaster.
 - UI: `components/ForecastHealthCard.jsx` (testids forecast-health-card, forecast-state, forecast-model, forecast-cache, forecast-latency, forecast-last, forecast-total, forecast-result-cache, forecast-ml-gate, forecast-errors, forecast-processes) wired into BotHealth.jsx below Execution Health via `/bot/forecast-status` in the bounded Promise.all.
 - Verified: preview shows RUNNING · loaded 483 ms (warm) · 3.81 s inference · XAUUSD/daily; desktop+mobile no overflow. Unit tests tests/unit/test_forecast_status.py (3). Manifest 4,134 / 420.
+
+## Iter-198 (2026-06) — Security audit #5: PASS (no P0–P2). P3 hardening applied
+- `GET /bot/forecast-status`: non-admins get a redacted `lead` (functional fields only — no holder host:pid, memory budget, role, raw last_error) and an empty `processes` list; admins see everything. Card degrades gracefully (per-process section hidden).
+- torch now installed from its EXCLUSIVE index (`--index-url https://download.pytorch.org/whl/cpu torch==2.12.1+cpu`) in a separate Dockerfile step before the forecast plane (dependency-confusion hardening parity with emergentintegrations); forecast.txt no longer carries an extra-index line.
+- docker-compose.forecast.yml mongo override restores `--bind_ip_all` alongside the WiredTiger cap (auth unchanged — entrypoint injects --auth).
+- Verified clean by auditor: verified_identity / broker_environment NOT user-settable anywhere (LIVE attestation unforgeable); typed authority registry fail-closed; correlation ids random; ForecastHealthCard JSX-escaped; install.sh arg parsing safe.
