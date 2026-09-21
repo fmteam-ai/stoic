@@ -57,4 +57,4 @@ migrator-off:         ## remove the migration sidecar, destroy its token and ver
 
 # ── staging acceptance drills (AT-01 boundary · AT-15 rollback) ─────────────
 staging-acceptance:   ## AT-01 six-account boundary drill; ROLLBACK=1 adds the AT-15 forced-failure rollback drill (downtime)
-	@if [ "$(ROLLBACK)" = "1" ]; then EXPECT="$(EXPECT)" scripts/staging_acceptance.sh --rollback --yes; else EXPECT="$(EXPECT)" scripts/staging_acceptance.sh; fi
+	@EXPECT="$(EXPECT)" scripts/staging_acceptance.sh $(if $(filter 1,$(ROLLBACK)),--rollback --yes) $(if $(filter 1,$(DRILLS)),--readiness-drills)

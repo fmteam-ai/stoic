@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-ALLOWED_ENDPOINTS = ("/api/health", "/")
+ALLOWED_ENDPOINTS = ("/api/health", "/", "/welcome", "/login", "/dashboard")
 INTERVAL_S = 60
 
 

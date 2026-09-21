@@ -273,7 +273,9 @@ async def public_performance(share_id: str):
     share = await db.performance_shares.find_one(
         {"share_id": share_id, "revoked": {"$ne": True}})
     if not share:
-        raise HTTPException(status_code=404, detail="Share link not found or revoked")
+        # no-store on the negative path too: a revoked share must never be served from an edge/browser cache
+        raise HTTPException(status_code=404, detail="Share link not found or revoked",
+                            headers={"Cache-Control": "no-store, max-age=0"})
     payload = await _verified_payload(db, share["user_id"], mask=True)
     payload = await _attach_attestation(db, share["user_id"], payload)
     payload["shared"] = True
@@ -289,7 +291,8 @@ async def public_performance(share_id: str):
                 row.pop(k, None)
     else:
         payload["verification_status"] = "VERIFIED"
-    return payload
+    from fastapi.responses import JSONResponse
+    return JSONResponse(payload, headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"})
 
 
 class VerifyBody(BaseModel):

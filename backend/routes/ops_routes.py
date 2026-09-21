@@ -246,6 +246,12 @@ async def release_readiness(request: Request):
         checks["repair_ledger_anchor"] = await verify_anchor(db)
     except Exception as e:  # noqa: BLE001
         checks["repair_ledger_anchor"] = {"ok": False, "detail": f"anchor verification failed: {e}"}
+    # round-5 P1 — broker truth: unresolved executions past threshold / position mismatch → fail closed
+    try:
+        from execution_truth import execution_truth_check
+        checks["execution_truth"] = await execution_truth_check(db)
+    except Exception as e:  # noqa: BLE001
+        checks["execution_truth"] = {"ok": False, "detail": f"execution truth unavailable: {e}"}
     # AT-15 rollback drill hook — can ONLY force a failure (fail-closed), never a pass.
     if os.environ.get("STOIC_DRILL_FORCE_READINESS_FAIL") == "1":
         checks["drill_forced_failure"] = {"ok": False,

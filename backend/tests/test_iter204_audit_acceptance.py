@@ -420,3 +420,69 @@ def test_p22_public_section_withheld_until_legal_approval(monkeypatch):
     assert run_async(ts.build_trust_stats(get_db()))["published"] is True
     fe = open(os.path.join(REPO, "frontend", "src", "components", "LandingTestimonials.jsx")).read()
     assert "s.published !== true" in fe and "pending compliance review" in fe
+
+
+# ── round 5 · broker truth / readiness fail-closed / share revocation ────────
+def test_r5_execution_truth_fails_closed_on_unknown_and_position_mismatch(sdb, uid):
+    from database import get_db
+    import execution_truth as et
+    now = datetime.now(timezone.utc)
+    old = _iso(now - timedelta(seconds=et.UNKNOWN_MAX_AGE_S + 60))
+    base = run_async(et.execution_truth_check(get_db()))
+    sdb.execution_intents.insert_one({"intent_id": f"{uid}_u", "status": "unknown", "kind": "open_trade", "account_id": uid,
+                                      "created_at": old, "request_id": "r1", "broker_ticket": None, "user_id": uid})
+    sdb.execution_intents.insert_one({"intent_id": f"{uid}_fresh", "status": "submitted", "kind": "open_trade", "account_id": uid,
+                                      "created_at": _iso(now), "user_id": uid})      # young → not counted
+    sdb.execution_intents.insert_one({"intent_id": f"{uid}_done", "status": "filled", "kind": "open_trade", "account_id": uid,
+                                      "created_at": old, "user_id": uid})           # terminal → not counted
+    chk = run_async(et.execution_truth_check(get_db()))
+    assert chk["ok"] is False and chk["unresolved_executions"] == base["unresolved_executions"] + 1
+    assert any(u["intent_id"] == f"{uid}_u" and u["age_s"] >= et.UNKNOWN_MAX_AGE_S for u in run_async(et.unresolved_executions(get_db(), now)))
+    assert "CLOSE_ONLY" in chk["authority_if_failed"]
+    sdb.execution_intents.delete_many({"user_id": uid})
+    # position mismatch on a fresh enabled account; stale/no-snapshot accounts are NOT collapsed to zero
+    acc = sdb.accounts.insert_one({"user_id": uid, "label": "mm", "status": "connected", "trading_enabled": True,
+                                   "last_heartbeat": _iso(now), "open_positions": 3, "bridge_token": f"{uid}_bt",
+                                   "verified_identity": {"account_number": "1"}}).inserted_id
+    sdb.accounts.insert_one({"user_id": uid, "label": "stale", "status": "connected", "trading_enabled": True,
+                             "last_heartbeat": _iso(now - timedelta(hours=2)), "open_positions": 9, "bridge_token": f"{uid}_bt2"})
+    sdb.accounts.insert_one({"user_id": uid, "label": "nosnap", "status": "connected", "trading_enabled": True,
+                             "last_heartbeat": _iso(now), "bridge_token": f"{uid}_bt3"})
+    mm = run_async(et.position_mismatches(get_db(), now))
+    mine = [m for m in mm if m["account_id"] == str(acc)]
+    assert len(mine) == 1 and mine[0]["broker_open"] == 3 and mine[0]["local_open"] == 0 and mine[0]["position_hash"]
+    assert not any(m["label"] in ("stale", "nosnap") for m in mm)
+    ops = open(os.path.join(ROOT, "routes", "ops_routes.py")).read()
+    assert 'checks["execution_truth"]' in ops
+
+
+def test_r5_readiness_drills_catch_every_injected_fault():
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "ops", "readiness_drills.py")], capture_output=True, text=True,
+                       timeout=240, env={**os.environ, "DRILL_EVIDENCE_DIR": "/tmp/readiness_drills"})
+    out = r.stdout
+    rep = json.loads(out[:out.rindex("}") + 1])
+    assert r.returncode == 0, out[-2000:] + r.stderr[-1000:]
+    by = {f["fault"]: f for f in rep["faults"]}
+    for fault in ("unresolved_unknown_execution", "position_mismatch", "missing_external_anchor"):
+        assert by[fault]["result"] == "CAUGHT" and by[fault]["status"] == 503, by[fault]
+    for fault in ("stale_worker_lease", "stalled_loop", "deleted_ledger_tail"):
+        assert by[fault]["result"] == "CAUGHT" or by[fault].get("absence_fails") is True, by[fault]
+
+
+def test_r5_topology_gate_and_monitor_wiring():
+    upd = open(os.path.join(REPO, "deploy", "update.sh")).read()
+    assert "RECONCILE_EXPECT" in upd and "production_reconcile.py --expect" in upd and "release/evidence/production-reconcile-" in upd
+    i = upd.index("production_reconcile.py --expect")
+    assert "rollback" in upd[i:i + 600]
+    mon = open(os.path.join(REPO, ".github", "workflows", "synthetic-monitor.yml")).read()
+    for ep in ("/welcome", "/login", "/dashboard", "/api/health", "/api/auth/login", "edge-probe"):
+        assert ep in mon
+    assert "welcome-page" in mon                     # /dashboard must never fall back to the welcome page
+    import edge_probes as ep
+    assert set(("/welcome", "/login", "/dashboard")) <= set(ep.ALLOWED_ENDPOINTS)
+    runner = open(os.path.join(REPO, "scripts", "staging_acceptance.sh")).read()
+    assert "ops/readiness_drills.py" in runner
+    perf = open(os.path.join(ROOT, "routes", "performance_routes.py")).read()
+    assert perf.count("no-store") >= 2                # revoked share can never be served from a cache

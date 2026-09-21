@@ -100,7 +100,7 @@ async def main() -> int:
     except OSError:
         pass
     print(json.dumps(body, indent=1, default=str))
-    print(f"RECONCILE {body['result']} accounts={totals['accounts']} enabled={totals['explicitly_enabled']} bots={totals['bots_enabled_on_enabled_accounts']} fresh={totals['fresh_ea_on_enabled']}")
+    print(f"RECONCILE {body['result']} accounts={totals['accounts']} enabled={totals['explicitly_enabled']} bots={totals['bots_enabled_on_enabled_accounts']} fresh={totals['fresh_ea_on_enabled']}", file=sys.stderr)
     return 0 if ok else 1
 
 

@@ -67,6 +67,21 @@ if grep -q 'docker-compose.forecast.yml' .env 2>/dev/null; then
   docker compose exec -T worker-trading python ops/verify_forecast_profile.py || rollback
 fi
 
+# round-5 P1 — topology policy gate: RECONCILE_EXPECT=accounts/enabled/bots in ./.env
+# (e.g. 6/3/3). The signed read-only reconciliation must PASS on THIS database
+# for THIS release or the deployment is rolled back. Evidence kept in release/evidence/.
+RECONCILE_EXPECT=$(grep -E '^RECONCILE_EXPECT=' .env 2>/dev/null | cut -d= -f2-)
+if [ -n "${RECONCILE_EXPECT}" ]; then
+  echo "-- verifying production topology policy (${RECONCILE_EXPECT}, signed read-only reconciliation)"
+  mkdir -p release/evidence
+  if docker compose exec -T -e GIT_SHA="${GIT_SHA}" backend python ops/production_reconcile.py --expect "${RECONCILE_EXPECT}" \
+       > "release/evidence/production-reconcile-$(git rev-parse --short HEAD).json" 2>/dev/null; then
+    echo "   topology policy ${RECONCILE_EXPECT}: PASS (release/evidence/production-reconcile-$(git rev-parse --short HEAD).json)"
+  else
+    echo "!! topology policy ${RECONCILE_EXPECT} NOT met on this database — refusing this release"; rollback
+  fi
+fi
+
 echo "-- pruning dangling images"
 docker image prune -f >/dev/null 2>&1 || true
 

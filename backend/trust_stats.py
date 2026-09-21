@@ -27,7 +27,7 @@ from synthetic_data import is_synthetic_account
 POPULATION_VERSION = "trust-stats/v2"
 SLI = {"name": "edge_availability_30d",
        "definition": "successful eligible requests / total eligible requests",
-       "eligible_endpoints": ["/api/health", "/"],
+       "eligible_endpoints": ["/api/health", "/", "/welcome", "/login", "/dashboard"],
        "success": "HTTP 200 within 10s from an external region",
        "sample_rule": "one server-bucketed sample per (region, endpoint, minute); region derived from the prober token; duplicates ignored",
        "interval_seconds": 60, "window_days": 30, "min_coverage_pct_per_series": 95.0,

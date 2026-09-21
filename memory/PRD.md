@@ -2501,3 +2501,12 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - **P2-2** `TRUST_STATS_LEGAL_APPROVED=true` gate → `published`; landing withholds section ("pending compliance review"), `context` disclaimer in footnote.
 - **P1-4** `ops/production_reconcile.py` (read-only, signed evidence, `--expect 6/3/3`) wired into `make staging-acceptance EXPECT=6/3/3`.
 - Tests: unit/test_host_migrator (17), test_iter204 (19), testing-agent test_iter225_audit_p1p2 (14). Manifest 4,240 / 430. Docs: HOST_MIGRATION.md security section, RELEASE_ACCEPTANCE_CHECKLIST round-4 table. P2-4 (model quality) documented as out of deploy-pipeline scope — `docs/MODEL_PROMOTION.md` still to write.
+
+## Iter-208 (2026-06) — Audit round 5 (DONE; 22/22 acceptance tests)
+- `execution_truth.py` → readiness `checks.execution_truth` (non-terminal intents older than UNKNOWN_MAX_AGE_S=900, position mismatch on fresh enabled accounts; stale/no-snapshot never collapsed to zero) + report data.
+- `ops/readiness_drills.py` (staging fail-closed drills: stale lease, stalled loop, UNKNOWN execution, position mismatch, missing anchor, deleted ledger tail; injects+restores; evidence JSON) — wired `make staging-acceptance DRILLS=1`; passes against preview.
+- `deploy/update.sh` topology policy gate: `RECONCILE_EXPECT=6/3/3` in ./.env → signed `production_reconcile.py --expect` must PASS post-deploy or rollback; evidence `release/evidence/production-reconcile-<sha>.json`.
+- `.github/workflows/synthetic-monitor.yml` external prober (GH cron 5 min) → `/api/public/edge-probe`; allowlist extended with /welcome,/login,/dashboard; flags /dashboard→welcome fallback.
+- Public performance share responses `Cache-Control: no-store` (200 and revoked 404).
+- Preview: ledger anchored once (seq current) so `repair_ledger_anchor` is honest; workers still absent → readiness 503 by design.
+- Still PRODUCTION-ONLY: real 6/3/3 evidence, broker-backed UNKNOWN closure, Turnstile edge paths, anchor custody (object storage/SIEM), frontend CI artifacts.

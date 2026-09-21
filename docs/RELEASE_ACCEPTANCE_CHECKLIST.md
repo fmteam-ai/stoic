@@ -53,3 +53,27 @@ Evidence bundle: `release/drills/summary-<ts>.json` + per-drill files — attach
 | AT-13 migration rollback/data integrity | PARTIAL | abort restores source once + stops target workers (unit); collection count/hash comparison → **DEPLOYED-ONLY** |
 | P1-4 live 3-of-6 | STAGING/PROD RUN | `make staging-acceptance EXPECT=6/3/3` → signed read-only `ops/production_reconcile.py` evidence |
 | P2-4 model quality | OUT OF SCOPE of the deploy pipeline — see `docs/MODEL_PROMOTION.md` (to write): walk-forward/OOS, leakage, costs, regime, calibration drift, capacity; model promotion stays independent from application deployment |
+
+## Round 5 — "exact acceptance tests before release" mapping
+| # | Test | How | Status |
+|---|------|-----|--------|
+| 1 | `production_reconcile.py --expect 6/3/3` exit 0, sets identical, no non-boolean flags, no bots on disabled, 3 fresh EAs | `make staging-acceptance EXPECT=6/3/3`; **enforced on every deploy** when `RECONCILE_EXPECT=6/3/3` is in `./.env` (`deploy/update.sh` → rollback on mismatch, signed JSON in `release/evidence/`) | PRODUCTION RUN REQUIRED — not in this package |
+| 2 | stale EA heartbeat → reconciliation failure + authority BLOCKED/CLOSE_ONLY | position-truth STALE state (`tests/test_iter200_release_review.py`), readiness `reconciliation` check | AUTOMATED (unit) / drill |
+| 3 | broker-accepted unresolved execution older than threshold → no new exposure + UNKNOWN alert | `execution_truth.py` → readiness `execution_truth` 503 (`test_r5_execution_truth_*`, `readiness_drills.py: unresolved_unknown_execution`) | AUTOMATED |
+| 4 | broker/API timeout after submission → idempotent retry, exactly one order | `tests/unit/test_authority_matrix.py`, `tests/test_iter193_audit_p0.py` (UNKNOWN never re-dispatches) | AUTOMATED (unit) |
+| 5 | corrupt/delete latest repair-ledger row → chain/anchor failure + readiness 503 | `test_at06_anchor_*`, `readiness_drills.py: deleted_ledger_tail` | AUTOMATED |
+| 6 | remove external anchor with non-empty ledger → readiness failure | `readiness_drills.py: missing_external_anchor` | AUTOMATED |
+| 7 | two edge probes same region/endpoint/minute → one counted, one duplicate | `test_at08_edge_probe_*` | AUTOMATED |
+| 8 | forged region/endpoint/eligible → rejected or server-derived | `test_at08_edge_probe_*` | AUTOMATED |
+| 9 | wrong fingerprint → no SSH login, no trusted known_hosts, failed preflight | `unit/test_host_migrator.py` (refuse/mismatch/rotation), `test_iter225_audit_p1p2.py` | AUTOMATED |
+| 10 | one missing expected EA → decommission blocked | `test_full_happy_path_with_gates`, `test_iter225` | AUTOMATED |
+| 11 | DISABLE MISSING → OFF state, 2FA, journal, re-check before decommission | `test_cutover_exception_*`, `test_iter225` | AUTOMATED |
+| 12 | expired migration window → 410, no further action | `test_token_guard_and_expiry` | AUTOMATED |
+| 13 | stale worker lease + stalled loop → readiness 503, no "ready" UI | `readiness_drills.py` (`stale_worker_lease`, `stalled_loop`); UI reads the same endpoint | AUTOMATED (drill) |
+| 14 | attestation for a different SHA/digest → promotion refused | `tests/unit/test_release_attestation.py` (sha/digest mismatch → rc 2), `deploy/lib.sh verify_attestation` | AUTOMATED |
+| 15 | revoke performance share + cache invalidation → 404 / unverified payload | revoke → 404 with `Cache-Control: no-store` on both paths (`test_r5_topology_gate_and_monitor_wiring`), performance gate tests | AUTOMATED |
+| 16 | frontend build/lint/typecheck/Vitest/E2E/axe | CI `release.yml` frontend job (build+lint); axe + keyboard via testing-agent Playwright runs (iteration_181–184) | PARTIAL — attach CI artifacts |
+| 17 | Turnstile pass/fail/timeout/retry, no /welcome fallback for authed routes | `tests/test_iter15x_turnstile*.py`; `synthetic-monitor.yml` flags `/dashboard` rendering the welcome page | PARTIAL — edge paths DEPLOYED-ONLY |
+| 18 | public financial claims labeled as platform activity unless legal-approved artifact present | `TRUST_STATS_LEGAL_APPROVED` gate + `context` disclaimer (`test_p22_*`) | AUTOMATED |
+
+**External monitor**: `.github/workflows/synthetic-monitor.yml` (every 5 min from GitHub runners) probes `/api/health`, `/`, `/welcome`, `/login`, `/dashboard` and the login-failure path and feeds `/api/public/edge-probe` with a per-region token (`EDGE_PROBE_TOKENS="gha:<token>"`). Anchor custody beyond the local JSONL + collection (object storage / SIEM shipping, key rotation) remains an ops task.
