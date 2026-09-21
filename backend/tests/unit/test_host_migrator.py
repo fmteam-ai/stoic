@@ -269,6 +269,7 @@ def test_cutover_exception_disables_missing_then_unlocks(mig):
     assert mig.state["facts"]["cutover_exception"]["disabled_account_ids"] == missing
     assert mig.state["facts"]["cutover"]["ok"] is True          # re-check with the reduced expected set
     assert len(mig.state["expected_accounts"]) == 2
+    assert mig.state["awaiting"] == "decommission"              # gate opens directly after the audited exception
 
 
 def test_log_redaction_and_abort_wipes_keys(mig):

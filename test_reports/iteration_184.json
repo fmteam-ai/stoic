@@ -1,0 +1,44 @@
+{
+  "summary": "iter-225 audit round 4 corrections — P1-1 two-phase host-key trust (SCAN + type-exact + TRUST KEY+PREFLIGHT), P1-2 per-account cutover gate with audited DISABLE MISSING exception, P1-5 dedicated migration token, P2-2 trust-stats withheld+edge-probe 401. Added /app/backend/tests/test_iter225_audit_p1p2.py with 14 tests, all passing against the live preview backend + rehearsal sidecar (MIGRATOR_DRY_RUN=1). Frontend live-verified on desktop + 390px: trust-bar-unavailable shown, no trust-stat-accounts; wizard hm-scan-btn labelled 'SCAN HOST KEY (NO LOGIN)'; hm-preflight-btn disabled before scan, still disabled after picking radio + typing wrong string, enabled only when typed string exactly matches picked fingerprint; clicking TRUST KEY (2FA) + RUN PREFLIGHT triggers StepUpDialog ('This sensitive action is a live-sensitive operation. 2FA required … ENABLE 2FA IN SETTINGS'), page remains intact. Cutover-check + per-account table UI is JSX-verified (hm-cutover-result, hm-cut-ea, hm-cut-accounts, hm-cut-acc-<id>, hm-exception, hm-exception-confirm requiring 'DISABLE MISSING', hm-exception-btn; hm-decommission-btn only rendered when aw==='decommission'). Discovered ONE minor sidecar UX/state bug in disable_missing_on_target: after the exception clears cutover.ok=true, state.awaiting frequently stays 'cutover_check' instead of transitioning to 'decommission' — the user must click CHECK CUTOVER once more (which does transition via _bg completion logic). Test handles both timings.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/host-migration/disable-missing", "issue": "After the exception path succeeds (state.facts.cutover.ok=true, cutover_exception recorded), state.awaiting stays 'cutover_check' rather than transitioning to 'decommission'. Root cause: Migrator.disable_missing_on_target() invokes self.cutover_check() synchronously (bypassing _bg), so the completion logic in _bg that sets awaiting=GATES[last]='decommission' never runs. Effect: an immediate POST /advance {step: 'decommission'} returns 409 'migration is not awaiting decommission (awaiting: cutover_check)'. Workaround: user must click CHECK CUTOVER once more, which chains through _bg and correctly transitions to awaiting='decommission'. Suggested fix: at the end of disable_missing_on_target, when cutover.ok is true and expected_accounts is now empty of missing, set state.awaiting='decommission' + state.current_step='cutover_check' explicitly, matching what _bg would do."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/host-migration @ 390px", "issues": ["Wizard form (data-testid=hm-target-form) has horizontal overflow at 390px: form.scrollWidth=726 vs clientWidth=390 (document.scrollWidth also 726). Same overflow observed in iter-182. Likely culprits: the two <pre> blocks in TargetForm.jsx (public key with overflow-auto but long single tokens; root-setup snippet with overflow-auto). The hm-fingerprints panel itself is fine (682 self-scroll, contained by its own container). Fix: enforce max-width + word-break: break-word / overflow-wrap: anywhere on the <pre> blocks and ensure the parent grid columns collapse under lg breakpoint."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter225_audit_p1p2.py",
+    "/app/test_reports/pytest/iter225_audit.xml"
+  ],
+  "action_items": [
+    "Fix disable-missing not advancing state.awaiting to 'decommission' — see backend_issues.minor above. Small change in deploy/migrator/migrator.py::disable_missing_on_target (would require an ops-side rebuild but improves UX and matches spec-implied direct decommission path).",
+    "Fix mobile 390px horizontal overflow on /admin/host-migration wizard: add break-all/overflow-wrap:anywhere and remove overflow-auto side-effects on the two <pre> tags in /app/frontend/src/components/hostmigration/TargetForm.jsx (public key block already has break-all whitespace-pre-wrap; the root-setup <pre> at lines 69-73 is the primary offender because it contains long single tokens like the mkdir/echo/chown lines)."
+  ],
+  "critical_code_review_comments": [
+    "host_migration_routes.py cleanly separates SCAN (no step-up, no SSH trust) from PREFLIGHT (step-up + strict SHA256:<43-base64>|MD5:<hex:16> fingerprint regex + mandatory accept_fingerprint). Journal writes 'host_key_observed' after scan and 'host_key_accepted' with both observed and accepted fingerprints — good audit trail.",
+    "migrator.py::trust_host does a FRESH scan_host inside the trust step, which defeats a mid-flight key swap between the operator's SCAN and TRUST clicks (defense-in-depth against TOCTOU) — nice.",
+    "migrator.py::snapshot_expected_accounts + cutover_check per-account comparison enforces identity (account_number + broker_server + bridge_token_tail) AND version (ea_version + policy_version) match; missing_account_ids surfaces exact ids, unexpected_identities surfaces rogue enabled ids — this is exactly the P1-2 requirement.",
+    "P1-5 dedicated token: routes.py::_migrator_token() reads MIGRATOR_TOKEN_FILE with fallback to MIGRATOR_TOKEN env; migrator.py::_token() explicitly SystemExit's if MIGRATOR_TOKEN_FILE ends with 'metrics_token'. Backend/.env exposes MIGRATOR_TOKEN which is NOT equal to METRICS_TOKEN — verified.",
+    "P2-2: trust_stats.legal_approved() gates published=True and legal_review='approved'; without TRUST_STATS_LEGAL_APPROVED=true the endpoint returns published=false + legal_review='pending — section withheld …' + context mentioning 'not profitability'. Verified.",
+    "edge_probes.py: no EDGE_PROBE_TOKENS in preview.env → 401 for any token (verified) — good default deny.",
+    "GatePanel.jsx: hm-cutover-check-btn always available while aw=cutover_check; hm-exception panel rendered only when cutover.ok=false AND missing_account_ids present; hm-decommission-btn rendered only when aw==='decommission' — matches spec.",
+    "MINOR (BUG): Migrator.disable_missing_on_target does not update state.awaiting, so the state-machine invariant 'cutover.ok=true ⇒ awaiting=decommission' can be violated. Recommend explicit transition inside the method."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter225_audit_p1p2.py (new — 14 tests)"
+  ],
+  "success_rate": {"backend": "100% (14/14 iter-225 audit tests) + all prior iter-203/223/224 remain green", "frontend": "~93% (all P1-1 + P2-2 UI acceptance verified; mobile 390 wizard overflow persists as flagged in iter-182)"},
+  "test_credentials": "admin@stoicaibot.com / admin123 (preview); MIGRATOR_TOKEN + STEP_UP_BYPASS_TOKEN from backend/.env (conftest auto-adds bypass)",
+  "seed_data_creation": "None (no DB writes). Rehearsal sidecar state at /tmp/migsim/release/migration/state.json is naturally mutated by the flow tests (preflight → decommission → wiped) — this is idempotent and re-runnable.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Rehearsal sidecar must be running (pgrep -f deploy/migrator/migrator.py). Preview state may be left in 'done' or 'aborted' after this run — tests self-reset via /abort or by starting a fresh /preflight. When testing the cutover exception path, the SIM-2 heartbeat only appears when time.time()%60 > 20; the test waits for time%60 <= 18 to guarantee a failing cutover_check window. Do NOT delete /tmp/migsim/release/migration/state.json without also being ready to re-run preflight. If disable-missing → decommission transition bug is fixed, remove the fallback advance cutover_check loop in test_cutover_missing_blocks_decommission_and_exception_unblocks (lines ~200-205).",
+  "rca_of_the_issue": "Minor bug: disable_missing_on_target() invokes cutover_check() synchronously in-process instead of through the _bg thread orchestration. The _bg completion block is the ONLY place state.awaiting is transitioned according to GATES; therefore a synchronous invocation of cutover_check() leaves awaiting untouched. Two possible fixes: (a) call _bg(None, 'cutover_check') from disable_missing_on_target so the standard completion path runs; (b) set state.awaiting='decommission' explicitly inside disable_missing_on_target when the resulting cutover.ok is True. Option (b) is safer (no thread races) and matches the semantics of the direct call. Reproduction: run advance freeze → let SIM-2 window drop → advance cutover_check (fails) → disable-missing (200) → immediate advance decommission returns 409. Mitigation currently required at test/UI level: run advance cutover_check one extra time."
+}

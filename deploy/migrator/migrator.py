@@ -517,7 +517,12 @@ echo "READY="; curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/o
                 self.state["facts"]["cutover_exception"] = {"disabled_account_ids": missing, "at": now_iso()}
                 self.state["expected_accounts"] = [e for e in self.state.get("expected_accounts", []) if e["id"] not in missing]
                 self._save()
-        self.cutover_check()
+        res = self.cutover_check()
+        with self.lock:
+            if self.state["status"] != "running":
+                self.state["status"] = "awaiting"
+                self.state["awaiting"] = "decommission" if res.get("ok") else "cutover_check"
+                self._save()
         return missing
 
     def decommission(self):
