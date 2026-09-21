@@ -185,6 +185,11 @@ echo "-- building images"
 # Immutable Git + image provenance (deploy/lib.sh) — the backend image build
 # HARD-FAILS without the commit SHA; production boot requires the digest.
 . deploy/lib.sh
+if [ "${MODE}" = "--production" ]; then
+  # First production install: the checkout must be a signed, attested release.
+  # Override consciously with ATTESTATION_REQUIRED=false in ./.env (not advised).
+  verify_attestation || { echo "ERROR: release attestation gate failed — refusing production install"; exit 1; }
+fi
 build_with_provenance || exit 1
 echo "-- starting stack"
 docker compose up -d

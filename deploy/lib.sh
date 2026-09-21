@@ -88,3 +88,61 @@ verify_running_sha() {
   fi
   echo "   running build_sha verified: ${running}"
 }
+
+# ── Release attestation gate (release review P1-2) ──────────────────────────
+# Production deploys consume ONLY commits that carry a signed
+# release-attestation (CI: SHA, image digests, test counts, scan results,
+# gates, promotion decision). Verification = cosign keyless signature
+# (Sigstore, identity pinned to this repo's workflows) + content gate.
+# Controlled by ATTESTATION_REQUIRED in ./.env (default: true when the TLS
+# production profile is active, false for --dev).
+_repo_slug() {
+  git remote get-url origin 2>/dev/null \
+    | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##'
+}
+
+ensure_cosign() {
+  command -v cosign >/dev/null 2>&1 && return 0
+  echo "   installing cosign (release signature verification)"
+  local ver=v2.5.3 arch
+  arch=$(uname -m); case "$arch" in x86_64) arch=amd64;; aarch64) arch=arm64;; esac
+  curl -sSfL -o /tmp/cosign "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-${arch}" \
+    && sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
+}
+
+attestation_required() {
+  local v
+  v=$(grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null | cut -d= -f2-)
+  if [ -n "${v}" ]; then [ "${v}" = "true" ]; return; fi
+  grep -q 'docker-compose.tls.yml' .env 2>/dev/null
+}
+
+verify_attestation() {
+  resolve_git_sha || return 1
+  if ! attestation_required; then
+    echo "   attestation gate: not required (ATTESTATION_REQUIRED=false / dev)"; return 0
+  fi
+  local repo tag dest=release/attestation
+  repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${repo}" ] || repo=$(_repo_slug)
+  tag=$(git tag --points-at "${GIT_SHA}" | grep -E '^v[0-9]' | head -1 || true)
+  if [ -z "${tag}" ]; then
+    echo "!! attestation gate: ${GIT_SHA} carries no v* release tag — production deploys only tagged, attested releases"
+    return 1
+  fi
+  echo "-- attestation gate: ${tag} @ ${GIT_SHA} (repo ${repo})"
+  rm -rf "${dest}"
+  # GITHUB_TOKEN from ./.env is exported for private-repo asset downloads
+  GITHUB_TOKEN="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}" \
+    python3 scripts/release_attestation.py fetch --repo "${repo}" --tag "${tag}" --dest "${dest}" || return 1
+  ensure_cosign || { echo "!! cosign unavailable — cannot verify the release signature"; return 1; }
+  cosign verify-blob "${dest}/release-attestation.json" \
+      --signature "${dest}/release-attestation.json.sig" \
+      --certificate "${dest}/release-attestation.json.pem" \
+      --certificate-identity-regexp "^https://github.com/${repo}/" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    || { echo "!! attestation SIGNATURE invalid or not issued by ${repo} workflows"; return 1; }
+  python3 scripts/release_attestation.py verify --file "${dest}/release-attestation.json" \
+      --sha "${GIT_SHA}" --tag "${tag}" || return 1
+  cp "${dest}/release-attestation.json" release/attestation.current.json
+  echo "   attestation gate: PASSED — recorded at release/attestation.current.json"
+}

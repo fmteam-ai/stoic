@@ -102,8 +102,15 @@ jobs:
             tests/test_iter148_p0_exec_truth.py \
             tests/test_iter149_netting_truth.py \
             tests/test_iter150_netting_hedging.py::TestEaSourceScenarios \
-            -q
-          python -m pytest tests/integration -m integration -q
+            -q --junitxml=/tmp/junit-unit.xml
+          python -m pytest tests/integration -m integration -q --junitxml=/tmp/junit-integration.xml
+      - name: Upload test evidence (consumed by the signed release attestation)
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: junit-evidence
+          path: |
+            /tmp/junit-unit.xml
+            /tmp/junit-integration.xml
 
   install-from-archive:
     # A fresh deployment must succeed from the exact exported archive: run
@@ -199,6 +206,11 @@ jobs:
         with:
           name: EmergentTradingBridge-ex5
           path: backend/static/
+      - name: Download test evidence (junit)
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6
+        with:
+          name: junit-evidence
+          path: evidence/
       - name: Export release archive (BUILD_SHA generated from GITHUB_SHA)
         # github context passes through env vars — never interpolated
         # directly into the shell (CWE-78 defense-in-depth).
@@ -376,6 +388,43 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
           done
 
+      - name: Dependency + image scan results as machine-readable evidence
+        run: |
+          pip install -q pip-audit
+          grep -vE '^--|^#|\+cpu|^emergentintegrations' backend/requirements.txt > /tmp/audit-reqs.txt
+          pip-audit -r /tmp/audit-reqs.txt --no-deps --strict -f json -o evidence/pip-audit.json
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.110.0
+          grype "stoic-backend:${{ github.ref_name }}" --only-fixed -o json --file evidence/grype-backend.json --fail-on critical
+
+      - name: Emit signed release attestation (SHA · digests · test counts · scan results · gates)
+        env:
+          BACKEND_DIGEST: ${{ steps.push.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.push.outputs.frontend_digest }}
+        run: |
+          python3 scripts/release_attestation.py emit \
+            --sha "${COMMIT_SHA}" --tag "${{ github.ref_name }}" \
+            --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" \
+            --junit evidence/junit-unit.xml --junit evidence/junit-integration.xml \
+            --pip-audit evidence/pip-audit.json --grype evidence/grype-backend.json \
+            --manifest release-manifest.json --install-ready --ea-compiled \
+            --command "pytest tests/unit + exec-truth suites (archive env)" \
+            --command "pytest tests/integration -m integration" \
+            --command "pip-audit --strict (pinned public deps)" \
+            --command "grype --only-fixed --fail-on critical (backend image)" \
+            --command "deploy/install.sh --dev + /api/ops/release-readiness READY" \
+            --command "MetaEditor compile → verified .ex5" \
+            --out release-attestation.json
+          cosign sign-blob --yes release-attestation.json \
+            --output-signature release-attestation.json.sig \
+            --output-certificate release-attestation.json.pem
+          cosign verify-blob release-attestation.json \
+            --signature release-attestation.json.sig \
+            --certificate release-attestation.json.pem \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          python3 scripts/release_attestation.py verify --file release-attestation.json \
+            --sha "${COMMIT_SHA}" --tag "${{ github.ref_name }}" --backend-digest "${BACKEND_DIGEST}"
+
       - name: Immutable release evidence record (signed)
         env:
           BACKEND_DIGEST: ${{ steps.push.outputs.backend_digest }}
@@ -445,5 +494,12 @@ jobs:
             release-evidence.json
             release-evidence.json.sig
             release-evidence.json.pem
+            release-attestation.json
+            release-attestation.json.sig
+            release-attestation.json.pem
+            evidence/pip-audit.json
+            evidence/grype-backend.json
+            evidence/junit-unit.xml
+            evidence/junit-integration.xml
             sbom-backend.spdx.json
             sbom-frontend.spdx.json

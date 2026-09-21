@@ -171,7 +171,20 @@ crontab -e                    # paste them; set BACKUP_PASSPHRASE_FILE / BACKUP_
 
 ## Publishing updates — the easy way
 
-Everything funnels into **one command on the server**: `deploy/update.sh` (alias `make publish`). It always does, in order: **backup → fetch → rebuild with provenance → restart → verify API + running SHA + frontend + full readiness (+ forecast plane) → auto-rollback on any failure → append to `deploy/releases.log`**. Only one publish can run at a time (lock).
+Everything funnels into **one command on the server**: `deploy/update.sh` (alias `make publish`). It always does, in order: **backup → fetch → release-attestation gate → rebuild with provenance → restart → verify API + running SHA + frontend + full readiness (+ forecast plane) → auto-rollback on any failure → append to `deploy/releases.log`**. Only one publish can run at a time (lock).
+
+### The release-attestation gate (what "signed release" means here)
+
+Every `vX.Y.Z` tag makes CI (`release.yml`) emit **`release-attestation.json`** — commit SHA, GHCR image digests, exact test counts (unit + integration junit), `pip-audit` and `grype` results, every gate (tests, dependency audit, image scan, clean-install readiness, EA compile) and a `promotion_decision`. CI signs it **keyless with cosign/Sigstore** (identity = this repo's workflow) and attaches it, its `.sig`/`.pem`, and the raw evidence files to the GitHub Release.
+
+On the server, `deploy/update.sh` and a first `--production` install **refuse to build** unless:
+
+1. the commit carries a `v*` tag (branches are never deployable to production),
+2. the attestation for that tag downloads from the GitHub Release (`GITHUB_TOKEN` in `./.env` for private repos),
+3. `cosign verify-blob` proves it was signed by **your** repo's GitHub workflow,
+4. the content gate passes: SHA matches, 0 failed/errored tests, ≥ 500 tests, 0 pip-audit vulns, 0 fixable critical image vulns, all gates green, decision `APPROVED`.
+
+The verified record is kept at `release/attestation.current.json`. `ATTESTATION_REQUIRED=false` in `./.env` disables the gate (dev only). cosign is installed automatically on first use.
 
 ### Option A — two clicks + one command (recommended to start)
 
@@ -206,6 +219,8 @@ GitHub → repo → Settings → Secrets and variables → Actions:
 | `DEPLOY_PATH` | `/home/stoic/stoic` |
 | `DEPLOY_SSH_KEY` | the private key above |
 | `DEPLOY_PORT` | `22` (optional) |
+
+And in the server's `./.env` (for a **private** repo, so the attestation can be downloaded): `GITHUB_TOKEN=<fine-grained PAT, Contents: read-only>` and optionally `GITHUB_REPO=yourname/stoic`.
 
 Then publishing is: GitHub → Releases → new tag `v1.4.2` → the workflow deploys, verifies, and auto-rolls back if anything fails. The Actions log shows `deploy/releases.log` and container status at the end.
 

@@ -39,6 +39,9 @@ rollback() {
   exit 1
 }
 
+echo "-- release attestation gate (signed CI record: SHA · tests · scans · gates)"
+verify_attestation || rollback
+
 echo "-- rebuilding images (with provenance)"
 build_with_provenance || rollback
 
