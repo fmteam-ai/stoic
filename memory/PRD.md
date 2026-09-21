@@ -2441,3 +2441,15 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - `.github/workflows/deploy-production.yml` (opt-in): on `v*` tag or manual dispatch, SSH → `deploy/update.sh <ref>`; secrets DEPLOY_HOST/USER/PATH/SSH_KEY[/PORT]; concurrency-guarded; `production` environment.
 - Makefile: `publish [REF=]`, `rollback [REF=]`, `status`, `backup`.
 - Facts checked: Stripe webhook path is `/api/webhook/stripe`; Telegram tokens are per-user in-app (vault) — no env var.
+
+## Iter-201 (2026-06) — Release review corrections (P0 + P1/P2), DONE & tested
+- **P0-1 REAL, FIXED**: worker/selection sites still used `{"trading_enabled": {"$ne": False}}` / `is False` (bot_runner._connected_accounts, default-profile path & per-account check, bot_routes 1130/1372, alerting 101). All now `== True` / `is not True` (missing = OFF). New accounts are created with explicit `trading_enabled: False`. Accounts.jsx toggle uses `!== true`. Static guard test forbids the old patterns; behavioural test proves worker selection == state contract on a legacy record.
+- **P1-1 FIXED (root cause)**: TrustBar rendered "—" until IntersectionObserver fired (never in headless clients) while the live label was asserted. Values now render immediately; count-up is cosmetic only; `statsAreLive` also requires uptime non-null.
+- **P1-4 FIXED**: GET /bot/health-score is READ-ONLY (static test: no update/insert/delete in the handler). Repairs moved to `health_repairs.py` (revive dormant, mark dormant, expire stale pending mods, ack ghosts >24h, ack orphan ghosts) — idempotent, every mutation ledgered in `repair_ledger` {correlation_id, kind, affected_ids}. Runs every HEALTH_REPAIR_INTERVAL_SEC (120) inside `_analytics_loop` (analytics worker / in-process mode). Tests iter70/iter88 updated to call the repair job.
+- **P1-5 FIXED**: both broad excepts around hard-cap construction now append `{"cap":25,"code":"health_truth_unavailable","correlation_id":healthcap_…}`.
+- **P1-3 FIXED**: forecast status/API/card labelled "ADVISORY · FAIL-OPEN" with notice; `forecast_agent.record_decision(fc)` called from bot_runner at decision time → card shows whether the LAST trading decision consumed a forecast + with/without counters.
+- **P2-1 FIXED**: soak `UNKNOWN_RATE_MAX_LIVE=0.0` (LIVE-classified campaign account → also requires 0 UNKNOWN execution_intents) vs `UNKNOWN_RATE_MAX_RESEARCH=0.2`; invariants report `unknown_rate_max`, `unknown_rate_lane`, `unknown_executions`.
+- **P2-2 FIXED**: forecast-status drops processes with no status in 15 min from the active topology → `stale_processes` (+ `process_ttl_s`).
+- **P2-3 FIXED**: deploy-production workflow resolves the ref IN CI to a 40-hex SHA, REQUIRES a `v*` tag pointing at it (branches refused), validates ref charset, transmits only the SHA; manual input now required.
+- P1-2 (CI attestation with SBOM/coverage, attested-digest-only deploys) remains ROADMAP.
+- Tests: tests/test_iter201_release_review.py (7) + updated iter70/iter88/iter126b; 595 unit green; manifest 4,141.

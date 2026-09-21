@@ -19,7 +19,18 @@ from uuid import uuid4
 DEFAULT_DAYS = 14
 MIN_CHECKPOINT_COVERAGE = 1.0   # iter-213 P1: every campaign day, no gaps
 MAX_MAJOR_INCIDENTS = 2
-UNKNOWN_RATE_MAX = 0.2
+# Release review P2-1 — two explicit thresholds, never conflated:
+#   RESEARCH  (paper/demo soak, exploratory): up to 20% untraced opens tolerated
+#   LIVE PROMOTION: ZERO UNKNOWN broker executions and ZERO untraced opens.
+UNKNOWN_RATE_MAX_RESEARCH = 0.2
+UNKNOWN_RATE_MAX_LIVE = 0.0
+UNKNOWN_RATE_MAX = UNKNOWN_RATE_MAX_RESEARCH   # legacy alias (research lane)
+
+
+def unknown_rate_threshold(scope_env: str | None) -> float:
+    """LIVE-classified campaign scope → 0.0; anything else → research."""
+    return (UNKNOWN_RATE_MAX_LIVE if (scope_env or "").upper() == "LIVE"
+            else UNKNOWN_RATE_MAX_RESEARCH)
 
 SEVERITIES = {
     "critical": "Money-impacting or trust-destroying: wrong/duplicate "
@@ -324,9 +335,25 @@ async def _account_invariants(db, account_id: str | None,
     rejects = await db.trades.count_documents(
         {**scope, "status": {"$in": ["rejected", "failed"]},
          "opened_at": {"$gte": since}})
+    unknown_env = None
+    acc_id = account_id
+    if acc_id:
+        try:
+            from broker_env import broker_environment
+            from bson import ObjectId as _OID
+            _acc = await db.accounts.find_one({"_id": _OID(acc_id)})
+            unknown_env = broker_environment(_acc) if _acc else None
+        except Exception:  # noqa: BLE001 — unknown env → research lane
+            unknown_env = None
+    unknown_max = unknown_rate_threshold(unknown_env)
+    unknown_executions = await db.execution_intents.count_documents(
+        {**({"account_id": acc_id} if acc_id else {}), "status": "unknown"})
     return {"trades_24h": opened, "unknown_rate": unknown_rate,
-            "unknown_rate_ok": unknown_rate is None
-            or unknown_rate <= UNKNOWN_RATE_MAX,
+            "unknown_rate_max": unknown_max,
+            "unknown_rate_lane": "live_promotion" if unknown_max == 0 else "research",
+            "unknown_executions": unknown_executions,
+            "unknown_rate_ok": (unknown_rate is None or unknown_rate <= unknown_max)
+            and (unknown_max > 0 or unknown_executions == 0),
             "duplicate_executions": dup, "duplicates_ok": dup == 0,
             "unconfirmed_ghosts": ghosts, "reconciliation_ok": ghosts == 0,
             "rejects_24h": rejects}

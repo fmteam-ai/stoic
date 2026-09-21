@@ -98,7 +98,7 @@ async def evaluate_ops_alerts(db) -> int:
     hb_max = int(os.environ.get("EA_HEARTBEAT_ALERT_SEC", "300"))
     hb_ceiling = int(os.environ.get("EA_HEARTBEAT_ALERT_MAX_AGE_SEC", "86400"))
     async for a in db.accounts.find(
-            {"trading_enabled": {"$ne": False}, "dormant": {"$ne": True},
+            {"trading_enabled": True, "dormant": {"$ne": True},  # P0: missing = OFF
              "status": {"$ne": "deleted"}},
             {"label": 1, "last_heartbeat": 1, "user_id": 1, "synthetic": 1}):
         hb = _parse_ts(a.get("last_heartbeat"))

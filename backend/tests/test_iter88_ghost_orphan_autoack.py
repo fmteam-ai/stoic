@@ -79,12 +79,22 @@ def test_health_score_auto_acks_orphan_ghost():
     })
 
     try:
-        # Hit health-score — it should auto-ack the orphan and report 0 ghosts.
+        # Release review P1-4: GET is READ-ONLY — it must not count the orphan
+        # (its account is gone) and must not write; the ledgered repair job
+        # performs the acknowledgement.
         r = sess.get(f"{BASE_URL}/api/bot/health-score", timeout=TIMEOUT)
         assert r.status_code == 200, r.text
         body = r.json()
         ghost_issues = [i for i in body.get("issues", []) if i.get("code") == "ghost_trades"]
-        assert ghost_issues == [], f"orphan should have been auto-acked, got: {ghost_issues}"
+        assert ghost_issues == [], f"orphan must not be counted, got: {ghost_issues}"
+        assert db.trades.find_one({"_id": trade_id}).get("ghost_acknowledged") is not True
+
+        import asyncio
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from health_repairs import run_health_repairs
+        uid = str(db.trades.find_one({"_id": trade_id})["user_id"])
+        adb = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+        asyncio.new_event_loop().run_until_complete(run_health_repairs(adb, uid))
 
         # And the trade row should be tagged with the new reason.
         doc = db.trades.find_one({"_id": trade_id})

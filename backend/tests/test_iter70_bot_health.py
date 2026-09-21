@@ -124,6 +124,15 @@ def test_dormant_auto_flip_and_softer_penalty(admin_session):
         data = r.json()
         codes = {i["code"] for i in data["issues"]}
         assert "dormant_accounts" in codes
+        # release review P1-4: GET is READ-ONLY — persistence happens in the
+        # ledgered repair job (analytics worker). Run it explicitly here.
+        untouched = asyncio.run(_with_db(_verify))
+        assert untouched.get("dormant") is not True
+        from health_repairs import run_health_repairs
+        async def _repair(db):
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
+            return await run_health_repairs(db, str(u["_id"]))
+        asyncio.run(_with_db(_repair))
         updated = asyncio.run(_with_db(_verify))
         assert updated.get("dormant") is True
         assert updated.get("status") == "disconnected"
@@ -160,6 +169,13 @@ def test_old_ghost_trades_auto_acknowledged(admin_session):
     try:
         r = admin_session.get(f"{BASE_URL}/api/bot/health-score", timeout=15)
         assert r.status_code == 200
+        old, recent = asyncio.run(_with_db(_verify))
+        assert old.get("ghost_acknowledged") is not True   # GET is read-only
+        from health_repairs import run_health_repairs
+        async def _repair(db):
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
+            return await run_health_repairs(db, str(u["_id"]))
+        asyncio.run(_with_db(_repair))
         old, recent = asyncio.run(_with_db(_verify))
         assert old.get("ghost_acknowledged") is True
         assert old.get("ghost_auto_ack_reason") == "older_than_24h"

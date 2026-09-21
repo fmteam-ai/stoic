@@ -33,7 +33,23 @@ _stats: dict = {"model_loaded": False, "model_failed": False,
                 "forecasts_total": 0, "inference_errors": 0,
                 "last_forecast_at": None, "last_latency_ms": None,
                 "last_symbol": None, "last_source": None,
-                "cache_hits": 0, "cache_misses": 0}
+                "cache_hits": 0, "cache_misses": 0,
+                # did the last trading DECISION actually consume a forecast?
+                "last_decision_at": None, "last_decision_consumed": None,
+                "decisions_with_forecast": 0, "decisions_without_forecast": 0}
+
+ADVISORY_NOTICE = ("Advisory forecast — FAIL-OPEN. A missing, gated or failed "
+                   "forecast never blocks or authorises a trade; it is not a "
+                   "trading-authority domain.")
+
+
+def record_decision(fc: dict | None) -> None:
+    """Called by the trading loop at decision time (release review P1-3)."""
+    _stats["last_decision_at"] = time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                               time.gmtime())
+    _stats["last_decision_consumed"] = bool(fc)
+    key = "decisions_with_forecast" if fc else "decisions_without_forecast"
+    _stats[key] += 1
 
 
 def _process_role() -> str:
@@ -47,6 +63,7 @@ def runtime_status() -> dict:
     from ml_runtime import _memory_budget_gb, ml_runtime_enabled
     budget = _memory_budget_gb()
     return {**_stats, "model": MODEL_NAME, "role": _process_role(),
+            "advisory": True, "fail_open": True, "notice": ADVISORY_NOTICE,
             "holder": f"{socket.gethostname()}:{os.getpid()}",
             "cache_entries": len(_cache), "cache_ttl_s": CACHE_TTL,
             "agent_enabled": os.environ.get("FORECAST_AGENT_ENABLED",

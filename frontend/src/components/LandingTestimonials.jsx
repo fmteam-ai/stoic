@@ -33,10 +33,14 @@ const TESTIMONIALS = [
 
 const API = BACKEND_URL;
 
-const useCountUp = (target, duration = 1600) => {
-    const [val, setVal] = useState(0);
+// Cosmetic count-up only: the REAL value is always rendered (starts at the
+// target, animates from 0 once the bar scrolls into view). Placeholders are
+// never shown next to a "live" claim (release review P1-1).
+const useCountUp = (target, animate, duration = 1600) => {
+    const [val, setVal] = useState(target ?? 0);
     useEffect(() => {
         if (target == null) return;
+        if (!animate) { setVal(target); return; }
         let raf; const t0 = performance.now();
         const tick = (now) => {
             const p = Math.min(1, (now - t0) / duration);
@@ -45,17 +49,17 @@ const useCountUp = (target, duration = 1600) => {
         };
         raf = requestAnimationFrame(tick);
         return () => cancelAnimationFrame(raf);
-    }, [target, duration]);
+    }, [target, animate, duration]);
     return val;
 };
 
-const Stat = ({ label, value, suffix = "", decimals = 0, testId }) => {
-    const v = useCountUp(value);
+const Stat = ({ label, value, animate, suffix = "", decimals = 0, testId }) => {
+    const v = useCountUp(value, animate);
     return (
         <div className="tst-stat" data-testid={testId}>
             <div className="tst-stat-value">
                 {value == null ? "—"
-                    : v.toLocaleString(undefined, {
+                    : (animate ? v : value).toLocaleString(undefined, {
                         minimumFractionDigits: decimals,
                         maximumFractionDigits: decimals })}{suffix}
             </div>
@@ -68,7 +72,8 @@ const statsAreLive = (s) => {
     if (!s || !s.as_of) return false;
     const age = (Date.now() - new Date(s.as_of).getTime()) / 1000;
     return Number.isFinite(age) && age <= (s.ttl_seconds || 900)
-        && s.accounts_protected != null && s.signals_vetoed != null;
+        && s.accounts_protected != null && s.signals_vetoed != null
+        && s.uptime_30d_pct != null;
 };
 
 const TrustBar = ({ onStatus }) => {
@@ -100,13 +105,13 @@ const TrustBar = ({ onStatus }) => {
     return (
         <div ref={ref} className="tst-trustbar" data-testid="trust-bar" title={`as of ${stats.as_of} · ${stats.source} · ${stats.population}`}>
             <Stat label="Accounts protected" testId="trust-stat-accounts"
-                  value={visible ? stats.accounts_protected : null} />
+                  value={stats.accounts_protected} animate={visible} />
             <div className="tst-stat-divider" />
             <Stat label="Trades vetoed by governance" testId="trust-stat-vetoed"
-                  value={visible ? stats.signals_vetoed : null} />
+                  value={stats.signals_vetoed} animate={visible} />
             <div className="tst-stat-divider" />
             <Stat label="Platform uptime · 30d" testId="trust-stat-uptime"
-                  value={visible ? stats.uptime_30d_pct : null}
+                  value={stats.uptime_30d_pct} animate={visible}
                   suffix="%" decimals={1} />
         </div>
     );

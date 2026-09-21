@@ -1,9 +1,12 @@
 # Zero-touch re-publish to YOUR server (opt-in).
 #
 # Trigger: push a release tag (v1.2.3) — or run manually from the Actions
-# tab with any ref. The job SSHes into the server and runs deploy/update.sh,
-# which backs up, rebuilds with provenance, verifies the full topology and
-# auto-rolls back on failure. Nothing here can weaken that gate.
+# tab. Either way the ref is resolved IN CI to a 40-hex commit SHA that MUST
+# be pointed at by a v* release tag (branches are refused), and only that
+# SHA is transmitted to the server. deploy/update.sh then backs up, rebuilds
+# with provenance, verifies the full topology and auto-rolls back on failure.
+# Protect the `production` GitHub Environment with a required reviewer for a
+# manual approval step; use a least-privilege deploy user (docker group only).
 #
 # Required repository secrets (Settings → Secrets → Actions):
 #   DEPLOY_HOST         server IP or hostname
@@ -21,9 +24,8 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "git ref to publish (tag, branch or SHA)"
-        required: false
-        default: "origin/main"
+        description: "release tag (vX.Y.Z) or the SHA of a tagged release"
+        required: true
 
 concurrency:
   group: deploy-production
@@ -35,14 +37,26 @@ jobs:
     environment: production
     timeout-minutes: 40
     steps:
-      - name: Resolve target ref
+      - name: Checkout (full history for tag reachability)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve ref → immutable SHA reachable from a signed release tag
         id: ref
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "target=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "target=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then REQ="${GITHUB_REF_NAME}"; else REQ="${{ inputs.ref }}"; fi
+          # only tags, branches or hex SHAs — no shell metacharacters ever reach the server
+          echo "${REQ}" | grep -qE '^[A-Za-z0-9._/-]{1,128}$' || { echo "::error::invalid ref '${REQ}'"; exit 1; }
+          SHA=$(git rev-parse --verify "${REQ}^{commit}")
+          echo "${SHA}" | grep -qE '^[0-9a-f]{40}$' || { echo "::error::could not resolve '${REQ}' to a commit"; exit 1; }
+          # release-path guard: the commit must be pointed at by a v* tag
+          TAG=$(git tag --points-at "${SHA}" | grep -E '^v[0-9]' | head -1 || true)
+          [ -n "${TAG}" ] || { echo "::error::${SHA} is not a tagged release (v*). Tag it first — branches are not deployable."; exit 1; }
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "deploying ${TAG} @ ${SHA}"
 
       - name: Prepare SSH
         run: |
@@ -55,7 +69,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
               "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-              "cd '${{ secrets.DEPLOY_PATH }}' && git fetch --all --tags --prune && deploy/update.sh '${{ steps.ref.outputs.target }}'"
+              "cd '${{ secrets.DEPLOY_PATH }}' && git fetch --all --tags --prune && deploy/update.sh ${{ steps.ref.outputs.sha }}"
 
       - name: Report
         if: always()

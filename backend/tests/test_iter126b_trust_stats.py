@@ -27,8 +27,12 @@ def test_trust_stats_public_no_auth():
 
 def test_trust_stats_no_per_user_data():
     d = requests.get(f"{BASE}/api/public/trust-stats", timeout=20).json()
+    # aggregate metrics + the live-label provenance contract (audit P1-3);
+    # never any per-user field.
     assert set(d.keys()) == {"accounts_protected", "signals_vetoed",
-                             "uptime_30d_pct", "as_of"}
+                             "uptime_30d_pct", "as_of", "source",
+                             "environment", "population", "reconciliation",
+                             "ttl_seconds"}
 
 
 def test_alerts_endpoints_require_auth():

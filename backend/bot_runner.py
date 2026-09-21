@@ -195,7 +195,7 @@ async def _connected_accounts(db, user_id: str) -> list:
     - LIVE accounts must have an EA heartbeat in the last 5 minutes
     """
     cursor = db.accounts.find({"user_id": user_id,
-                               "trading_enabled": {"$ne": False}})
+                               "trading_enabled": True})  # P0: missing = OFF
     accs = await cursor.to_list(length=50)
     fresh = []
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
@@ -305,7 +305,7 @@ async def _process_user_account_locked(db, cfg: dict):
             {"user_id": user_id, "_id": ObjectId(cfg_account_id)}
         ).to_list(length=1)
         # iter-137 · Multi-account manager: per-account trading kill-switch.
-        if all_accounts and all_accounts[0].get("trading_enabled") is False:
+        if all_accounts and all_accounts[0].get("trading_enabled") is not True:  # P0: missing = OFF
             await _record_pulse(db, cfg,
                 action="BLOCKED", level="block",
                 reason=("Trading is DISABLED on this account (Accounts page "
@@ -314,7 +314,7 @@ async def _process_user_account_locked(db, cfg: dict):
             return
     else:
         all_accounts = await db.accounts.find(
-            {"user_id": user_id, "trading_enabled": {"$ne": False}}
+            {"user_id": user_id, "trading_enabled": True}  # P0: missing = OFF
         ).to_list(length=50)
         if all_accounts:
             # Filter out accounts that have their OWN active/inactive override config —
@@ -1260,6 +1260,11 @@ async def _process_user_account_locked(db, cfg: dict):
                 fc = await get_forecast(db, user_id, sym)
             except Exception as e:  # noqa: BLE001
                 logger.debug("forecast agent skipped: %s", e)
+            try:
+                from forecast_agent import record_decision
+                record_decision(fc)
+            except Exception:  # noqa: BLE001 — telemetry only
+                pass
             if fc:
                 signal["forecast"] = fc
                 # iter-64 · Probabilistic trade evaluation — outcome

@@ -129,12 +129,26 @@ async def _heartbeat_watch_loop():
 
 
 async def _analytics_loop():
-    """Phase F — analytics service: DB-only daily aggregation."""
+    """Phase F — analytics service: DB-only daily aggregation + the
+    idempotent health repairs (moved out of GET /bot/health-score)."""
     from analytics_tasks import run_daily_aggregates
+    from health_repairs import run_all_users as run_health_repairs_all
     INTERVAL = int(os.environ.get("ANALYTICS_INTERVAL_SEC", "300"))
+    REPAIR_EVERY = int(os.environ.get("HEALTH_REPAIR_INTERVAL_SEC", "120"))
+    last_repair = 0.0
     while True:
         try:
-            await asyncio.sleep(INTERVAL)
+            await asyncio.sleep(min(INTERVAL, REPAIR_EVERY))
+            import time as _t
+            if _t.time() - last_repair >= REPAIR_EVERY:
+                await run_health_repairs_all(get_db())
+                last_repair = _t.time()
+                record_progress("_health_repair_loop", processed=1,
+                                started_at=datetime.now(timezone.utc),
+                                interval_sec=REPAIR_EVERY)
+            if _t.time() - getattr(_analytics_loop, "_last", 0) < INTERVAL:
+                continue
+            _analytics_loop._last = _t.time()
             t0 = datetime.now(timezone.utc)
             await run_daily_aggregates(get_db())
             record_progress("_analytics_loop", processed=1,

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+import logging
 import os
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,6 +22,7 @@ from user_presets import (
 )
 
 router = APIRouter(prefix="/bot", tags=["bot"])
+logger = logging.getLogger("bot.routes")
 
 
 def _config_filter(user_id: str, account_id: Optional[str]) -> dict:
@@ -1127,7 +1129,7 @@ async def safety_status(user=Depends(get_current_user)):
             {"user_id": user["id"], "status": {"$ne": "deleted"}},
             {"label": 1, "mode": 1, "trading_enabled": 1,
              "last_heartbeat": 1, "dormant": 1}):
-        if a.get("dormant") or a.get("trading_enabled") is False:
+        if a.get("dormant") or a.get("trading_enabled") is not True:  # P0: missing = OFF
             continue
         if str(a.get("mode") or "").lower() == "live":
             live_accounts.append(a.get("label"))
@@ -1369,7 +1371,7 @@ async def execution_health(user=Depends(get_current_user)):
     await db.command("ping")
     heartbeats = []
     async for a in db.accounts.find(
-            {"user_id": user["id"], "trading_enabled": {"$ne": False},
+            {"user_id": user["id"], "trading_enabled": True,  # P0: missing = OFF
              "dormant": {"$ne": True}, "status": {"$ne": "deleted"}},
             {"label": 1, "last_heartbeat": 1, "broker_utc_offset_sec": 1}):
         hb_age = None
@@ -1469,7 +1471,14 @@ async def forecast_status(user=Depends(get_current_user)):
     rows = []
     for role, p in procs.items():
         rows.append({**p, "last_forecast_age_s": _age_s(p.get("last_forecast_at")),
-                     "status_age_s": _age_s(p.get("updated_at"))})
+                     "status_age_s": _age_s(p.get("updated_at")),
+                     "last_decision_age_s": _age_s(p.get("last_decision_at"))})
+    # Release review P2-2 — dead/restarted processes leave the ACTIVE
+    # topology after a short TTL (they are reported under stale_processes).
+    PROCESS_TTL_S = 15 * 60
+    stale = [r for r in rows if r["role"] != local["role"]
+             and (r.get("status_age_s") is None or r["status_age_s"] > PROCESS_TTL_S)]
+    rows = [r for r in rows if r not in stale]
     # the process that actually forecasts is the freshest forecaster
     active = sorted([r for r in rows if r.get("last_forecast_at")],
                     key=lambda r: r["last_forecast_age_s"])
@@ -1487,9 +1496,13 @@ async def forecast_status(user=Depends(get_current_user)):
         state = "idle"
     else:
         state = "not_loaded"
+    from forecast_agent import ADVISORY_NOTICE
     out = {"state": state, "model": local["model"],
+           "advisory": True, "fail_open": True, "notice": ADVISORY_NOTICE,
            "cache_ttl_s": local["cache_ttl_s"], "lead": lead,
            "processes": sorted(rows, key=lambda r: r["role"]),
+           "stale_processes": sorted(stale, key=lambda r: r["role"]),
+           "process_ttl_s": PROCESS_TTL_S,
            "checked_at": now.isoformat()}
     if user.get("role") != "admin":
         # audit #5 SEC-001 — ops internals (host:pid, memory budget, raw
@@ -1499,9 +1512,12 @@ async def forecast_status(user=Depends(get_current_user)):
                 "last_forecast_age_s", "last_latency_ms", "last_symbol",
                 "last_source", "forecasts_total", "cache_entries",
                 "cache_hits", "cache_misses", "ml_runtime_enabled",
-                "agent_enabled")
+                "agent_enabled", "last_decision_at", "last_decision_age_s",
+                "last_decision_consumed", "decisions_with_forecast",
+                "decisions_without_forecast")
         out["lead"] = {k: lead.get(k) for k in keep}
         out["processes"] = []
+        out["stale_processes"] = []
     return out
 
 
@@ -1550,12 +1566,9 @@ async def bot_health_score(user=Depends(get_current_user)):
         # Fresh heartbeat (< 5 min) AND status is back to connected? Revive.
         if age < 300 and a.get("status") == "connected":
             revived_ids.append(a.get("_id"))
-            a["dormant"] = False  # mirror in-memory so the rest of this call sees reality
-    if revived_ids:
-        await db.accounts.update_many(
-            {"_id": {"$in": revived_ids}},
-            {"$set": {"dormant": False, "revived_at": now.isoformat()}},
-        )
+            a["dormant"] = False  # in-memory view only — the persistent
+            # repair runs in health_repairs (analytics worker). GET is
+            # READ-ONLY (release review P1-4).
     non_dormant_accs = [a for a in accs if not a.get("dormant")]
     if not accs:
         score -= 40
@@ -1597,13 +1610,9 @@ async def bot_health_score(user=Depends(get_current_user)):
             continue
         stale_accounts.append(a.get("label"))
 
-    # Auto-mark dormant accounts as disconnected so reality reflects state.
+    # Dormant accounts are reported here and REPAIRED (status→disconnected,
+    # dormant→true, ledgered) by health_repairs in the analytics worker.
     if dormant_account_ids:
-        await db.accounts.update_many(
-            {"_id": {"$in": dormant_account_ids}},
-            {"$set": {"status": "disconnected", "dormant": True}},
-        )
-        # Refresh `connected` view to match the new reality.
         connected = [a for a in connected if a.get("_id") not in dormant_account_ids]
 
     if stale_accounts:
@@ -1652,22 +1661,16 @@ async def bot_health_score(user=Depends(get_current_user)):
     # ack is stale — the EA either ignored it or the queue is broken. Either
     # way, repeatedly penalising the score for it is noise. Clear, then count
     # only the genuinely-recent ones.
+    # Pending modifications older than 10 min are expired by health_repairs
+    # (ledgered); this READ-ONLY view counts only the 5–10 min window so the
+    # score matches what the repair job will leave in place.
     ten_min_ago_iso = (now - timedelta(minutes=10)).isoformat()
-    await db.trades.update_many({
-        "user_id": user["id"], "status": "open",
-        "pending_modification": {"$ne": None},
-        "$or": [
-            {"pending_modification.requested_at": {"$lt": ten_min_ago_iso}},
-            {"pending_modification.requested_at": {"$exists": False}},
-        ],
-    }, {"$set": {"pending_modification": None,
-                  "pending_modification_expired": True}})
-
     five_min_ago_iso = (now - timedelta(minutes=5)).isoformat()
     stuck = await db.trades.count_documents({
         "user_id": user["id"], "status": "open",
         "pending_modification": {"$ne": None},
-        "pending_modification.requested_at": {"$lt": five_min_ago_iso},
+        "pending_modification.requested_at": {"$lt": five_min_ago_iso,
+                                              "$gte": ten_min_ago_iso},
     })
     if stuck > 0:
         score -= min(15, 5 * stuck)
@@ -1682,53 +1685,28 @@ async def bot_health_score(user=Depends(get_current_user)):
     # AUTO-CLEAN: ghosts older than 24h are unrecoverable — the EA history
     # sweep on connection only backfills recent state. Mark them
     # ghost_acknowledged so they stop polluting the score.
+    # Ghost closes >24h old and ghosts on deleted accounts are acknowledged
+    # by health_repairs (ledgered). READ-ONLY view: recent, unacked ghosts on
+    # accounts that still exist.
     day_ago_iso = (now - timedelta(hours=24)).isoformat()
-    await db.trades.update_many({
+    _ghost_rows = await db.trades.find({
         "user_id": user["id"], "status": "closed", "exit_price": None,
-        "ghost_acknowledged": {"$ne": True},
-        "closed_at": {"$lt": day_ago_iso},
-    }, {"$set": {"ghost_acknowledged": True, "ghost_auto_ack_reason": "older_than_24h"}})
-
-    # AUTO-CLEAN: ghosts attached to an account that no longer exists are
-    # also unrecoverable — the EA on that account is gone (deleted/replaced),
-    # so the history sweep can never reach the broker to fill exit_price.
-    # Common cause: testing-agent synthetic accounts cleaned up after a run
-    # but leaving orphan trade rows behind.
-    candidate_orphans = await db.trades.find({
-        "user_id": user["id"], "status": "closed", "exit_price": None,
-        "ghost_acknowledged": {"$ne": True},
-    }, {"_id": 1, "account_id": 1}).to_list(length=200)
-    if candidate_orphans:
-        acct_ids = {t.get("account_id") for t in candidate_orphans if t.get("account_id")}
-        live_oids = set()
-        if acct_ids:
-            # Resolve which account_ids still exist (account_id is stored as str,
-            # accounts._id is ObjectId — convert defensively).
-            from bson.errors import InvalidId
-            try_oids = []
-            for aid in acct_ids:
-                try:
-                    try_oids.append(ObjectId(aid))
-                except (InvalidId, TypeError):
-                    pass
-            if try_oids:
-                live_docs = await db.accounts.find(
-                    {"_id": {"$in": try_oids}}, {"_id": 1}
-                ).to_list(length=len(try_oids))
-                live_oids = {str(d["_id"]) for d in live_docs}
-        orphan_ids = [t["_id"] for t in candidate_orphans
-                      if t.get("account_id") and t["account_id"] not in live_oids]
-        if orphan_ids:
-            await db.trades.update_many(
-                {"_id": {"$in": orphan_ids}},
-                {"$set": {"ghost_acknowledged": True,
-                          "ghost_auto_ack_reason": "account_deleted"}},
-            )
-
-    ghosts = await db.trades.count_documents({
-        "user_id": user["id"], "status": "closed", "exit_price": None,
-        "ghost_acknowledged": {"$ne": True},
-    })
+        "ghost_acknowledged": {"$ne": True}, "closed_at": {"$gte": day_ago_iso},
+    }, {"account_id": 1}).to_list(length=200)
+    _live_acct = set()
+    if _ghost_rows:
+        from bson.errors import InvalidId
+        _oids = []
+        for _aid in {t.get("account_id") for t in _ghost_rows if t.get("account_id")}:
+            try:
+                _oids.append(ObjectId(_aid))
+            except (InvalidId, TypeError):
+                pass
+        if _oids:
+            _live_acct = {str(d["_id"]) for d in await db.accounts.find(
+                {"_id": {"$in": _oids}}, {"_id": 1}).to_list(length=len(_oids))}
+    ghosts = sum(1 for t in _ghost_rows
+                 if not t.get("account_id") or t["account_id"] in _live_acct)
     if ghosts > 0:
         score -= min(10, 2 * ghosts)
         issues.append({"severity": "info", "code": "ghost_trades",
@@ -1852,8 +1830,14 @@ async def bot_health_score(user=Depends(get_current_user)):
                 "cap": 60, "code": "authority_reduced",
                 "label": f"{len(reduced)} bot account(s) with reduced "
                          "execution authority"})
-    except Exception:  # noqa: BLE001 — caps degrade gracefully, never 500
-        pass
+    except Exception as _e:  # noqa: BLE001 — FAIL CLOSED (release review P1-5)
+        import uuid as _uuid
+        _cid = f"healthcap_{_uuid.uuid4().hex[:12]}"
+        logger.error("health hard-cap evaluation failed [%s]: %s", _cid, _e)
+        hard_caps.append({"cap": 25, "code": "health_truth_unavailable",
+                          "label": "Canonical state could not be evaluated — "
+                                   "health capped until truth is confirmed",
+                          "correlation_id": _cid})
     if user.get("role") == "admin":
         try:
             unk = await db.execution_intents.count_documents(
@@ -1899,8 +1883,14 @@ async def bot_health_score(user=Depends(get_current_user)):
                     "label": f"{crit} unacknowledged CRITICAL platform "
                              "alert(s)",
                     "details": details})
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _e:  # noqa: BLE001 — FAIL CLOSED (release review P1-5)
+            import uuid as _uuid
+            _cid = f"healthcap_{_uuid.uuid4().hex[:12]}"
+            logger.error("reconciliation hard-cap evaluation failed [%s]: %s", _cid, _e)
+            hard_caps.append({"cap": 25, "code": "health_truth_unavailable",
+                              "label": "Reconciliation truth could not be evaluated — "
+                                       "health capped until truth is confirmed",
+                              "correlation_id": _cid})
     for c in hard_caps:
         issues.append({
             "severity": "error" if c["cap"] <= 25 else "warning",

@@ -569,18 +569,18 @@ export default function Accounts() {
                                                     {live ? <><PlugsConnected className="w-3 h-3 inline mr-1" /> CONNECTED</> : "● DISCONNECTED"}
                                                 </span>
                                                 <button
-                                                    onClick={() => patchAccount(a.id, { trading_enabled: a.trading_enabled === false },
-                                                        a.trading_enabled === false ? `Trading enabled on ${a.label}` : `Trading disabled on ${a.label}`)}
+                                                    onClick={() => patchAccount(a.id, { trading_enabled: a.trading_enabled !== true },
+                                                        a.trading_enabled !== true ? `Trading enabled on ${a.label}` : `Trading disabled on ${a.label}`)}
                                                     data-testid={`trading-toggle-${a.account_number}`}
-                                                    title={a.trading_enabled === false
+                                                    title={a.trading_enabled !== true
                                                         ? "Trading is OFF — the bot skips this account. Click to enable."
                                                         : "Trading is ON — click to exclude this account from all bot trading."}
                                                     className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border transition-colors ${
-                                                        a.trading_enabled === false
+                                                        a.trading_enabled !== true
                                                             ? "border-[#FF3B30]/40 text-[#FF3B30] bg-[#FF3B30]/10 hover:bg-[#FF3B30]/20"
                                                             : "border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10"
                                                     }`}>
-                                                    {a.trading_enabled === false ? "⏻ TRADING OFF" : "⏻ TRADING ON"}
+                                                    {a.trading_enabled !== true ? "⏻ TRADING OFF" : "⏻ TRADING ON"}
                                                 </button>
                                                 {a.trading_enabled !== false && (() => {
                                                     const c = certMap[a.id];

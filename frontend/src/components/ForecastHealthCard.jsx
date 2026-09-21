@@ -40,6 +40,7 @@ export function ForecastHealthCard({ data }) {
                 <Brain className="w-3.5 h-3.5 text-[#0099FF]" />
                 <span className="font-display font-bold text-sm">Forecast Health</span>
                 <span className={`px-2 py-0.5 border font-mono text-[10px] tracking-widest ${TONES[st.tone]}`} data-testid="forecast-state">{st.label}</span>
+                <span className="px-2 py-0.5 border border-[#1F1F1F] font-mono text-[9px] tracking-widest text-[#52525B]" title={data.notice || ""} data-testid="forecast-advisory-label">ADVISORY · FAIL-OPEN</span>
                 <span className="ml-auto font-mono text-[9px] tracking-widest text-[#52525B]">CHRONOS · {lead.role ? lead.role.toUpperCase() : "—"}</span>
             </div>
             <div className="p-4 space-y-3">
@@ -57,7 +58,21 @@ export function ForecastHealthCard({ data }) {
                     <Chip label="ML GATE" tone={lead.ml_runtime_enabled ? "good" : "warn"} value={`${lead.ml_runtime_enabled ? "ON" : "OFF"}${lead.memory_budget_gb != null ? ` · ${lead.memory_budget_gb} GB budget` : " · unlimited"}`} testid="forecast-ml-gate" />
                     <Chip label="ERRORS" tone={lead.inference_errors ? "warn" : "neutral"} value={lead.inference_errors ?? 0} testid="forecast-errors" />
                 </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                    <Chip label="LAST TRADING DECISION" testid="forecast-last-decision"
+                        tone={lead.last_decision_consumed == null ? "neutral" : lead.last_decision_consumed ? "good" : "warn"}
+                        value={lead.last_decision_at == null ? "no decision recorded yet"
+                            : `${ago(lead.last_decision_age_s)} · ${lead.last_decision_consumed ? "consumed a forecast" : "made WITHOUT a forecast (fail-open)"}`} />
+                    <Chip label="DECISIONS WITH / WITHOUT FORECAST" testid="forecast-decision-split"
+                        value={`${lead.decisions_with_forecast ?? 0} / ${lead.decisions_without_forecast ?? 0}`} />
+                </div>
                 <div className="font-mono text-[10px] text-[#52525B]" data-testid="forecast-note">{st.note}{lead.last_error ? <span className="text-[#FF3B30]"> · {lead.last_error}</span> : null}</div>
+                <div className="font-mono text-[10px] text-[#FFB000]/80" data-testid="forecast-advisory-note">{data.notice || "Advisory forecast — fail-open. Never a trading-readiness guarantee; safety lives in the Trading Authority strip."}</div>
+                {(data.stale_processes || []).length > 0 && (
+                    <div className="font-mono text-[9px] text-[#52525B]" data-testid="forecast-stale-processes">
+                        stale (no status in {Math.round((data.process_ttl_s || 900) / 60)}m): {data.stale_processes.map(p => p.role).join(", ")}
+                    </div>
+                )}
                 {(data.processes || []).length > 1 && (
                     <div className="border-t border-[#141414] pt-2 space-y-1" data-testid="forecast-processes">
                         {data.processes.map(p => (

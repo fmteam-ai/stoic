@@ -555,6 +555,9 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         "mode": payload.mode,
         "bridge_token": generate_bridge_token(),  # unused for paper but harmless
         "status": "connected" if is_paper else "disconnected",
+        # P0 (release review): enablement is ALWAYS an explicit boolean —
+        # new accounts start OFF until the owner turns trading on.
+        "trading_enabled": False,
         "balance": starting,
         "equity": starting,
         "initial_balance": starting,
