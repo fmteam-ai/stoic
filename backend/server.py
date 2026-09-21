@@ -498,6 +498,8 @@ from routes.ops_routes import router as ops_router  # noqa: E402
 api_router.include_router(ops_router)
 from routes.repair_ledger_routes import router as repair_ledger_router  # noqa: E402
 api_router.include_router(repair_ledger_router)
+from routes.host_migration_routes import router as host_migration_router  # noqa: E402
+api_router.include_router(host_migration_router)
 from routes.validation_routes import router as validation_router  # noqa: E402
 api_router.include_router(validation_router)
 from routes.risk_layers_routes import router as risk_layers_router  # noqa: E402

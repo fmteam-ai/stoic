@@ -74,6 +74,7 @@ const Connect = lazyImport(() => import("@/pages/Connect"));
 const AdminBrokers = lazyImport(() => import("@/pages/AdminBrokers"));
 const AdminRunbooks = lazyImport(() => import("@/pages/AdminRunbooks"));
 const AdminRepairLedger = lazyImport(() => import("@/pages/AdminRepairLedger"));
+const AdminHostMigration = lazyImport(() => import("@/pages/AdminHostMigration"));
 const DeployPreflight = lazyImport(() => import("@/pages/DeployPreflight"));
 const ManagedStrategy = lazyImport(() => import("@/pages/ManagedStrategy"));
 const InvestorMonitor = lazyImport(() => import("@/pages/InvestorMonitor"));
@@ -124,6 +125,7 @@ function App() {
                         <Route path="/admin/migration" element={<ProtectedRoute requireAdmin><AdminMigration /></ProtectedRoute>} />
                         <Route path="/admin/ops" element={<ProtectedRoute requireAdmin><AdminOps /></ProtectedRoute>} />
                         <Route path="/admin/repair-ledger" element={<ProtectedRoute requireAdmin><AdminRepairLedger /></ProtectedRoute>} />
+                        <Route path="/admin/host-migration" element={<ProtectedRoute requireAdmin><AdminHostMigration /></ProtectedRoute>} />
                         <Route path="/admin/command-center" element={<ProtectedRoute requireAdmin><CommandCenter /></ProtectedRoute>} />
                         <Route path="/admin/brokers" element={<ProtectedRoute requireAdmin><AdminBrokers /></ProtectedRoute>} />
                         <Route path="/admin/support" element={<ProtectedRoute requireAdmin><AdminSupport /></ProtectedRoute>} />

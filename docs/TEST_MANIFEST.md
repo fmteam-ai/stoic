@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 553 |
+| unit | pure logic, no external I/O | every CI job | 564 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3524 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3530 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 4165 tests across 424 files.**
+**Total: 4182 tests across 426 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -198,6 +198,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter202_brain_phase_a.py` | http-live | 12 |
 | `backend/tests/test_iter202_repair_ledger.py` | http-live | 6 |
 | `backend/tests/test_iter202_repair_ledger_live.py` | http-live | 6 |
+| `backend/tests/test_iter203_host_migration_http.py` | http-live | 6 |
 | `backend/tests/test_iter204_brain_phase_b.py` | http-live | 19 |
 | `backend/tests/test_iter204_brain_phase_b_integration.py` | http-live | 5 |
 | `backend/tests/test_iter205_execution_intelligence.py` | http-live | 19 |
@@ -434,6 +435,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
+| `backend/tests/unit/test_host_migrator.py` | unit | 11 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 12 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |

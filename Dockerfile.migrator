@@ -1,0 +1,11 @@
+# STOIC host migrator — ops sidecar (docker CLI + compose plugin + ssh + rsync).
+# Runs beside the stack, talks to the host docker socket, drives the target
+# host over SSH. Only the API container can reach it (compose network, no
+# host port). Enable with `make migrator-on`, disable with `make migrator-off`.
+FROM docker:27-cli
+RUN apk add --no-cache python3 bash openssh-client rsync curl coreutils
+WORKDIR /stoic
+COPY deploy/migrator/migrator.py /usr/local/bin/stoic-migrator.py
+ENV MIGRATOR_PORT=8790 MIGRATOR_TOKEN_FILE=/run/secrets/metrics_token
+EXPOSE 8790
+ENTRYPOINT ["python3", "/usr/local/bin/stoic-migrator.py"]

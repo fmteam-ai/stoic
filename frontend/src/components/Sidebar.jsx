@@ -131,6 +131,7 @@ const ADMIN_SECTION = {
         { to: "/admin/repair-ledger", label: "Repair Ledger", icon: Wrench, testid: "nav-admin-repair-ledger" },
         { to: "/admin/affiliates", label: "Affiliate Mgmt", icon: ShieldAlert, testid: "nav-admin-affiliates" },
         { to: "/admin/migration", label: "Migration", icon: DatabaseBackup, testid: "nav-admin-migration" },
+        { to: "/admin/host-migration", label: "Host Migration", icon: Server, testid: "nav-admin-host-migration" },
     ],
 };
 

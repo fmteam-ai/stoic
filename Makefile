@@ -1,5 +1,5 @@
 # STOIC engineering entry points — every lane is one command.
-.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest publish rollback status backup
+.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest publish rollback status backup migrator-on migrator-off
 
 test-unit:            ## reproducible 516-test unit lane (env doctor included)
 	./scripts/test_unit.sh
@@ -36,3 +36,16 @@ status:               ## containers, running build SHA, last releases
 
 backup:               ## timestamped Mongo backup into ./backups
 	deploy/backup.sh backup
+
+# ── host migration (admin wizard at /admin/host-migration) ──────────────────
+migrator-on:          ## enable the migration sidecar (docker socket + SSH) next to the stack
+	@. deploy/lib.sh; set_kv .env STOIC_ROOT "$$(pwd)"; \
+	CF=$$(grep '^COMPOSE_FILE=' .env | cut -d= -f2-); [ -n "$$CF" ] || CF=docker-compose.yml; \
+	case ":$$CF:" in *:docker-compose.migrator.yml:*) ;; *) set_kv .env COMPOSE_FILE "$$CF:docker-compose.migrator.yml";; esac
+	docker compose up -d --build migrator backend
+	@echo "migrator enabled — open /admin/host-migration. Disable afterwards with: make migrator-off"
+
+migrator-off:         ## remove the migration sidecar again
+	docker compose stop migrator 2>/dev/null || true; docker compose rm -f migrator 2>/dev/null || true
+	@. deploy/lib.sh; CF=$$(grep '^COMPOSE_FILE=' .env | cut -d= -f2- | sed 's/:docker-compose.migrator.yml//'); set_kv .env COMPOSE_FILE "$$CF"
+	docker compose up -d backend

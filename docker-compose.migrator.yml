@@ -1,0 +1,31 @@
+# Host migration sidecar (opt-in: `make migrator-on` appends this file to
+# COMPOSE_FILE and pins STOIC_ROOT). Gives the admin wizard at
+# /admin/host-migration a privileged worker that can stop/start this stack
+# (docker socket) and drive the NEW host over SSH. The API container itself
+# never gets docker or SSH access — it only proxies to this service with the
+# shared METRICS_TOKEN. Remove after the migration: `make migrator-off`.
+services:
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrator
+    restart: unless-stopped
+    working_dir: ${STOIC_ROOT:?run `make migrator-on` (pins the checkout path)}
+    environment:
+      STOIC_ROOT: ${STOIC_ROOT}
+      MIGRATOR_TOKEN_FILE: /run/secrets/metrics_token
+      # MIGRATOR_DRY_RUN=1 make migrator-on → rehearsal: the wizard runs end to
+      # end with simulated commands, nothing is touched on either host
+      MIGRATOR_DRY_RUN: ${MIGRATOR_DRY_RUN:-0}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # same absolute path inside and outside so `docker compose` resolves
+      # bind mounts / secrets exactly like the host does
+      - ${STOIC_ROOT}:${STOIC_ROOT}
+    secrets:
+      - metrics_token
+    # no `ports:` — reachable only from the compose network (API → migrator)
+
+  backend:
+    environment:
+      MIGRATOR_URL: http://migrator:8790
