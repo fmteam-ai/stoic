@@ -149,8 +149,10 @@ def cmd_fetch(a) -> int:
     assets = {x["name"]: x["url"] for x in rel.get("assets", [])}
     os.makedirs(a.dest, exist_ok=True)
     for name in ("release-attestation.json", "release-attestation.json.sig",
-                 "release-attestation.json.pem"):
+                 "release-attestation.json.pem", "release-attestation.json.bundle"):
         if name not in assets:
+            if name.endswith(".bundle"):
+                continue   # Rekor bundle is optional (older releases)
             print(f"fetch failed: asset {name} missing on release {a.tag}",
                   file=sys.stderr)
             return 3

@@ -350,6 +350,13 @@
     font-size: 10.5px; letter-spacing: 0.28em; text-transform: uppercase;
     color: rgba(250,250,250,0.5);
 }
+.tst-stat-footnote {
+    flex-basis: 100%; margin-top: 0.6rem;
+    font-family: 'Space Grotesk', monospace;
+    font-size: 10px; letter-spacing: 0.04em; line-height: 1.5;
+    color: rgba(250,250,250,0.42); text-align: center;
+}
+.tst-stat-label { max-width: 220px; margin-left: auto; margin-right: auto; }
 .tst-stat-divider {
     width: 1px; align-self: stretch;
     background: linear-gradient(180deg, transparent, rgba(0,255,65,0.25), transparent);

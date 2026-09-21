@@ -275,7 +275,8 @@ jobs:
           for d in "${{ steps.push.outputs.backend_digest }}" \
                    "${{ steps.push.outputs.frontend_digest }}"; do
             cosign verify "$d" \
-              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+              --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}" \
+              --certificate-github-workflow-repository "${{ github.repository }}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
           done
 
@@ -384,7 +385,8 @@ jobs:
           for f in release-manifest.json SHA256SUMS; do
             cosign verify-blob "$f" \
               --signature "$f.sig" --certificate "$f.pem" \
-              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+              --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}" \
+              --certificate-github-workflow-repository "${{ github.repository }}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
           done
 
@@ -416,11 +418,13 @@ jobs:
             --out release-attestation.json
           cosign sign-blob --yes release-attestation.json \
             --output-signature release-attestation.json.sig \
-            --output-certificate release-attestation.json.pem
+            --output-certificate release-attestation.json.pem \
+            --bundle release-attestation.json.bundle   # Rekor bundle → offline verification (audit P2-2)
           cosign verify-blob release-attestation.json \
             --signature release-attestation.json.sig \
             --certificate release-attestation.json.pem \
-            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}" \
+              --certificate-github-workflow-repository "${{ github.repository }}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
           python3 scripts/release_attestation.py verify --file release-attestation.json \
             --sha "${COMMIT_SHA}" --tag "${{ github.ref_name }}" \
@@ -477,7 +481,8 @@ jobs:
           cosign verify-blob release-evidence.json \
             --signature release-evidence.json.sig \
             --certificate release-evidence.json.pem \
-            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}" \
+              --certificate-github-workflow-repository "${{ github.repository }}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
       - name: Publish GitHub release
@@ -498,6 +503,7 @@ jobs:
             release-attestation.json
             release-attestation.json.sig
             release-attestation.json.pem
+            release-attestation.json.bundle
             evidence/pip-audit.json
             evidence/grype-backend.json
             evidence/junit-unit.xml

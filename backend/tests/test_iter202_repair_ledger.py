@@ -36,8 +36,9 @@ def admin():
 def seeded():
     """Insert a synthetic sweep directly (the ledger is append-only, written
     by the analytics worker — there is deliberately no POST endpoint)."""
-    from conftest import run_async
-    from database import get_db
+    import os
+    from pymongo import MongoClient
+    db = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
     corr = f"repair_test{uuid.uuid4().hex[:8]}"
     uid = f"ledgertest_{uuid.uuid4().hex[:6]}"
     now = datetime.now(timezone.utc).isoformat()
@@ -47,9 +48,9 @@ def seeded():
         {"correlation_id": corr, "user_id": uid, "kind": "ghost_ack_old",
          "affected_ids": ["t1"], "count": 1, "detail": {}, "source": "health_repairs", "at": now},
     ]
-    run_async(get_db().repair_ledger.insert_many(rows))
+    db.repair_ledger.insert_many(rows)
     yield {"corr": corr, "uid": uid}
-    run_async(get_db().repair_ledger.delete_many({"correlation_id": corr}))
+    db.repair_ledger.delete_many({"correlation_id": corr})
 
 
 def test_list_shape_and_filters(admin, seeded):

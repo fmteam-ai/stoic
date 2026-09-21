@@ -145,12 +145,17 @@ verify_attestation() {
   GITHUB_TOKEN="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}" \
     python3 scripts/release_attestation.py fetch --repo "${repo}" --tag "${tag}" --dest "${dest}" || return 1
   ensure_cosign || { echo "!! cosign unavailable — cannot verify the release signature"; return 1; }
+  # audit P2-2 — identity pinned to the EXACT release workflow at THIS tag
+  # (not any workflow in the repo); the Rekor bundle is kept for offline DR verification.
+  local ident="https://github.com/${repo}/.github/workflows/release.yml@refs/tags/${tag}"
   cosign verify-blob "${dest}/release-attestation.json" \
       --signature "${dest}/release-attestation.json.sig" \
       --certificate "${dest}/release-attestation.json.pem" \
-      --certificate-identity-regexp "^https://github.com/${repo}/" \
+      --certificate-identity "${ident}" \
+      --certificate-github-workflow-repository "${repo}" \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    || { echo "!! attestation SIGNATURE invalid or not issued by ${repo} workflows"; return 1; }
+    || { echo "!! attestation SIGNATURE invalid or not issued by ${ident}"; return 1; }
+  [ -f "${dest}/release-attestation.json.bundle" ] && cp "${dest}/release-attestation.json.bundle" release/attestation.current.bundle
   python3 scripts/release_attestation.py verify --file "${dest}/release-attestation.json" \
       --sha "${GIT_SHA}" --tag "${tag}" || return 1
   cp "${dest}/release-attestation.json" release/attestation.current.json
@@ -189,13 +194,16 @@ pull_attested_images() {
     || { echo "${chk}"; return 1; }
   eval "$(python3 scripts/release_attestation.py images --file "${att}")" || return 1
   be="${ATT_BACKEND_IMAGE}"; fe="${ATT_FRONTEND_IMAGE}"
+  local tag; tag=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("tag",""))' "${att}")
+  [ -n "${tag}" ] || { echo "!! attestation carries no release tag"; return 1; }
   ensure_cosign || { echo "!! cosign unavailable — cannot verify image signatures"; return 1; }
   registry_login
   for d in "${be}" "${fe}"; do
     echo "${d}" | grep -qE '^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$' \
       || { echo "!! attested image reference is not digest-pinned: ${d}"; return 1; }
     cosign verify "${d}" \
-        --certificate-identity-regexp "^https://github.com/${repo}/" \
+        --certificate-identity "https://github.com/${repo}/.github/workflows/release.yml@refs/tags/${tag}" \
+        --certificate-github-workflow-repository "${repo}" \
         --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null \
       || { echo "!! image SIGNATURE invalid or not issued by ${repo} workflows: ${d}"; return 1; }
     echo "   image signature verified: ${d}"

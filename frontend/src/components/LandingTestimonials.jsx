@@ -68,13 +68,19 @@ const Stat = ({ label, value, animate, suffix = "", decimals = 0, testId }) => {
     );
 };
 
+// audit P1-1/P1-2 — "live" means: fresh payload, versioned populations,
+// both counts present. Availability is a SEPARATE claim shown ONLY when the
+// backend reports a complete, reconciled 30-day edge-probe window.
 const statsAreLive = (s) => {
-    if (!s || !s.as_of) return false;
+    if (!s || !s.as_of || !s.population_version) return false;
     const age = (Date.now() - new Date(s.as_of).getTime()) / 1000;
     return Number.isFinite(age) && age <= (s.ttl_seconds || 900)
-        && s.accounts_protected != null && s.signals_vetoed != null
-        && s.uptime_30d_pct != null;
+        && s.verified_active_accounts?.count != null
+        && s.execution_intents_blocked?.count != null;
 };
+const availabilityIsPublishable = (s) =>
+    s?.availability?.status === "reconciled" && s.availability.reconciled === true
+    && typeof s.availability.value_pct === "number";
 
 const TrustBar = ({ onStatus }) => {
     const [stats, setStats] = useState(null);
@@ -102,17 +108,31 @@ const TrustBar = ({ onStatus }) => {
             </div>
         );
     }
+    const acc = stats.verified_active_accounts;
+    const blk = stats.execution_intents_blocked;
+    const env = acc.environment || {};
+    const envLine = ["LIVE", "DEMO", "PAPER"].filter(k => env[k]).map(k => `${env[k]} ${k.toLowerCase()}`).join(" · ") || "no environment breakdown";
     return (
-        <div ref={ref} className="tst-trustbar" data-testid="trust-bar" title={`as of ${stats.as_of} · ${stats.source} · ${stats.population}`}>
-            <Stat label="Accounts protected" testId="trust-stat-accounts"
-                  value={stats.accounts_protected} animate={visible} />
+        <div ref={ref} className="tst-trustbar" data-testid="trust-bar"
+             data-population-version={stats.population_version}
+             title={`${stats.population_version} · as of ${stats.as_of} · ${stats.source} · period ${stats.period?.days}d · ${stats.reconciliation}`}>
+            <Stat label="Verified active accounts with safety policy enabled" testId="trust-stat-accounts"
+                  value={acc.count} animate={visible} />
             <div className="tst-stat-divider" />
-            <Stat label="Trades vetoed by governance" testId="trust-stat-vetoed"
-                  value={stats.signals_vetoed} animate={visible} />
-            <div className="tst-stat-divider" />
-            <Stat label="Platform uptime · 30d" testId="trust-stat-uptime"
-                  value={stats.uptime_30d_pct} animate={visible}
-                  suffix="%" decimals={1} />
+            <Stat label="Execution intents blocked by risk policy · 30d" testId="trust-stat-vetoed"
+                  value={blk.count} animate={visible} />
+            {availabilityIsPublishable(stats) && (
+                <>
+                    <div className="tst-stat-divider" />
+                    <Stat label="Edge availability · 30d (SLI)" testId="trust-stat-availability"
+                          value={stats.availability.value_pct} animate={visible}
+                          suffix="%" decimals={2} />
+                </>
+            )}
+            <div className="tst-stat-footnote" data-testid="trust-stat-footnote">
+                {envLine} · {acc.definition} · blocked = {blk.definition}
+                {!availabilityIsPublishable(stats) && " · availability: published only after a complete, reconciled 30-day edge-probe window"}
+            </div>
         </div>
     );
 };
@@ -150,7 +170,7 @@ export const LandingTestimonials = () => {
     const rowB = TESTIMONIALS.filter((_, i) => i % 2 === 1);
     const [statsStatus, setStatsStatus] = useState("loading");
     const statsLine = statsStatus === "live"
-        ? "The stats are live platform data (aggregate, refreshed every 15 minutes)."
+        ? "The counts are live platform data with defined, versioned populations (aggregate, refreshed every 15 minutes). Availability is shown only from an independent, reconciled 30-day edge-probe window."
         : "Live statistics unavailable.";
     return (
         <section className="tst-section" data-testid="testimonials-section">
@@ -172,14 +192,14 @@ export const LandingTestimonials = () => {
                         // audit F-19 — animation clones hidden from AT
                         i < rowA.length
                             ? <Card key={`a${i}`} t={t} idx={i * 2} />
-                            : <div key={`a${i}`} aria-hidden="true"><Card t={t} /></div>
+                            : <div key={`a${i}`} aria-hidden="true" role="presentation" inert="" data-marquee-clone="true"><Card t={t} /></div>
                     ))}
                 </div>
                 <div className="tst-track reverse">
                     {[...rowB, ...rowB].map((t, i) => (
                         i < rowB.length
                             ? <Card key={`b${i}`} t={t} idx={i * 2 + 1} />
-                            : <div key={`b${i}`} aria-hidden="true"><Card t={t} /></div>
+                            : <div key={`b${i}`} aria-hidden="true" role="presentation" inert="" data-marquee-clone="true"><Card t={t} /></div>
                     ))}
                 </div>
             </div>

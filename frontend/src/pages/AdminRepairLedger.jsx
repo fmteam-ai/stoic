@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Wrench, ChevronDown, ChevronRight, X, Copy } from "lucide-react";
+import { Loader2, RefreshCw, Wrench, ChevronDown, ChevronRight, X, Copy, ShieldCheck } from "lucide-react";
 
 const KIND_LABEL = {
     account_revived: "Account revived",
@@ -60,7 +60,9 @@ function Row({ r, onSweep }) {
                 onClick={() => setOpen(o => !o)} data-testid={`repair-row-toggle-${r.id}`}>
                 <span className="text-[#52525B]">{open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}</span>
                 <span className="font-mono text-[#71717A] hidden sm:block">{fmt(r.at)}</span>
-                <span className="text-[#E4E4E7] truncate">{label(r.kind)}<span className="sm:hidden text-[#52525B] font-mono"> · {fmt(r.at)}</span></span>
+                <span className="text-[#E4E4E7] truncate">{label(r.kind)}
+                    {r.state === "pending" && <span className="ml-2 px-1 text-[9px] font-mono border border-[#FFB020]/50 text-[#FFB020]" data-testid={`repair-row-pending-${r.id}`}>PENDING</span>}
+                    <span className="sm:hidden text-[#52525B] font-mono"> · {fmt(r.at)}</span></span>
                 <span className="font-mono text-[#A1A1AA] truncate hidden sm:block" title={r.user_id}>{r.user_email || r.user_id || "—"}</span>
                 <span className="font-mono text-[#00FF41] text-right hidden sm:block" data-testid={`repair-row-count-${r.id}`}>{r.count}</span>
             </div>
@@ -136,6 +138,12 @@ export default function AdminRepairLedger() {
     const [skip, setSkip] = useState(0);
     const [sweep, setSweep] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [chain, setChain] = useState(null);
+    const verify = async () => {
+        setChain("loading");
+        try { setChain((await api.get("/admin/repair-ledger/verify")).data); }
+        catch (e) { setChain(null); toast.error(formatApiError(e)); }
+    };
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -157,12 +165,25 @@ export default function AdminRepairLedger() {
     return (
         <AppLayout>
             <PageHeader title="Admin · Repair Ledger" testid="admin-repair-ledger-header"
-                subtitle="Every automated state repair, with its correlation id and the exact records it touched. Read-only — GET endpoints never mutate."
-                action={
+                subtitle="Append-only application ledger of every automated state repair: PENDING row first, conditional mutation stamped with the repair id, then COMPLETED — sha256 hash-chained. Read-only here; DB-level WORM is not enforced by the app."
+                action={<div className="flex gap-2">
+                    <button onClick={verify} data-testid="repair-ledger-verify-btn"
+                        className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#00FF41]/50 hover:text-[#00FF41] flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5" /> VERIFY CHAIN
+                    </button>
                     <button onClick={load} data-testid="repair-ledger-refresh-btn"
                         className="px-3 py-1.5 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#00FF41]/50 hover:text-[#00FF41] flex items-center gap-1.5">
                         {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} REFRESH
-                    </button>} />
+                    </button></div>} />
+            {chain && chain !== "loading" && (
+                <div data-testid="repair-chain-result"
+                    className={`mb-5 border px-4 py-3 text-xs font-mono flex items-center gap-2 ${chain.ok ? "border-[#00FF41]/40 bg-[#00FF41]/5 text-[#00FF41]" : "border-[#FF3B30]/40 bg-[#FF3B30]/5 text-[#FF3B30]"}`}>
+                    {chain.ok ? `CHAIN INTACT — ${chain.chained_entries} chained rows · ${chain.legacy_unchained_entries} legacy unchained · ${chain.pending_incomplete} pending`
+                              : `TAMPERING DETECTED — ${chain.anomalies.length} anomalies (first at seq ${chain.anomalies[0]?.seq})`}
+                    <span className="text-[#52525B] ml-auto hidden sm:inline">{chain.ledger_class}</span>
+                </div>
+            )}
+            {chain === "loading" && <div className="mb-5 text-xs font-mono text-[#52525B]">VERIFYING…</div>}
 
             {kinds && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5" data-testid="repair-ledger-summary">

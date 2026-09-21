@@ -234,6 +234,12 @@ async def release_readiness(request: Request):
         "Proof: compile the exact RC MQ5 in Windows MetaEditor (0 errors), "
         "then scripts/verify_ea_release.py --sign"}
 
+    # audit P1-5 — runtime release truth: the signed CI attestation that
+    # deploy/lib.sh verified for THIS checkout (release/attestation.current.json)
+    # is exposed here and compared with the running build SHA / image digest.
+    from release_truth import release_attestation_check
+    checks["release_attestation"] = release_attestation_check(is_production())
+
     ready = all(c["ok"] for c in checks.values())
     return JSONResponse(status_code=200 if ready else 503,
                         content={"ready": ready,

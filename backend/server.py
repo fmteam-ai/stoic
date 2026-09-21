@@ -338,38 +338,36 @@ _trust_stats_cache = {"at": 0.0, "data": None}
 
 @api_router.get("/public/trust-stats")
 async def public_trust_stats():
-    """Anonymous aggregate stats for the landing-page trust bar.
-    No per-user data; cached in-process for 5 minutes."""
+    """Anonymous aggregate stats for the landing-page trust bar — defined,
+    versioned populations (audit P1-1/P1-2, see trust_stats.py). No
+    per-user data; cached in-process for 5 minutes."""
     import time as _time
     if _trust_stats_cache["data"] and _time.time() - _trust_stats_cache["at"] < 300:
         return _trust_stats_cache["data"]
-    db = get_db()
-    accounts = await db.accounts.count_documents({})
-    vetoed = await db.signals.count_documents({"action": "HOLD"})
-    # Uptime: coverage of the 30-min ops soak sampler over the last 30 days
-    # (or since the first sample), clamped to 100.
-    now = datetime.now(timezone.utc)
-    first = await db.ops_soak_samples.find_one({}, sort=[("at", 1)],
-                                               projection={"at": 1})
-    uptime = None
-    if first and first.get("at"):
-        start = first["at"]
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
-        start = max(start, now - timedelta(days=30))
-        expected = max(1, int((now - start).total_seconds() // 1800))
-        got = await db.ops_soak_samples.count_documents(
-            {"at": {"$gte": start.replace(tzinfo=None)}})
-        uptime = round(min(100.0, got * 100.0 / expected), 2)
-    data = {"accounts_protected": accounts, "signals_vetoed": vetoed,
-            "uptime_30d_pct": uptime, "as_of": now.isoformat(),
-            # audit P1-3 — the landing "live" label binds to this contract
-            "source": "platform_db_aggregate", "environment": "ALL",
-            "population": "all registered accounts · all HOLD verdicts",
-            "reconciliation": "not_applicable_aggregate",
-            "ttl_seconds": 900}
+    from trust_stats import build_trust_stats
+    data = await build_trust_stats(get_db())
     _trust_stats_cache.update(at=_time.time(), data=data)
     return data
+
+
+@api_router.post("/public/edge-probe")
+async def public_edge_probe(request: Request):
+    """Independent edge prober writes one sample per (region, endpoint,
+    minute). Authenticated with EDGE_PROBE_TOKEN; the availability SLI in
+    trust_stats.py is computed ONLY from these rows."""
+    import hmac as _hmac
+    expected = os.environ.get("EDGE_PROBE_TOKEN")
+    got = request.headers.get("X-Edge-Probe-Token", "")
+    if not expected or not _hmac.compare_digest(got, expected):
+        raise HTTPException(status_code=401, detail="edge probe token invalid")
+    body = await request.json()
+    doc = {"at": datetime.now(timezone.utc), "region": str(body.get("region") or "unknown")[:40],
+           "endpoint": str(body.get("endpoint") or "/api/health")[:80],
+           "ok": bool(body.get("ok")), "status_code": body.get("status_code"),
+           "latency_ms": body.get("latency_ms"), "eligible": bool(body.get("eligible", True)),
+           "prober_error": bool(body.get("prober_error", False))}
+    await get_db().edge_probes.insert_one(doc)
+    return {"recorded": True}
 
 
 @api_router.get("/ea-script.ex5")

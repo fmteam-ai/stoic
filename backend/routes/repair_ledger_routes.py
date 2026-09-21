@@ -1,5 +1,6 @@
-"""Admin · Repair Ledger — read-only view over `repair_ledger`, the immutable
-record every automated repair writes (health_repairs.py). Each row carries a
+"""Admin · Repair Ledger — read-only view over `repair_ledger`, the
+APPEND-ONLY APPLICATION LEDGER every automated repair writes
+(health_repairs.py: PENDING→COMPLETED outbox rows, sha256 hash-chained). Each row carries a
 correlation id (one per sweep), the repair kind, the owning user and the
 exact affected record ids, so any state mutation can be traced back.
 
@@ -68,6 +69,15 @@ async def list_repair_ledger(limit: int = 100, skip: int = 0, kind: str = "",
     for r in rows:
         r["user_email"] = emails.get(r.get("user_id"))
     return {"rows": rows, "total": total, "limit": limit, "skip": skip, "filters": q}
+
+
+@router.get("/admin/repair-ledger/verify")
+async def repair_ledger_verify(user=Depends(get_current_user)):
+    """Append-only application ledger integrity: sha256 chain + incomplete
+    (PENDING) outbox rows. DB-level WORM is NOT enforced (audit P1-4)."""
+    require_admin(user)
+    from health_repairs import verify_repair_chain
+    return await verify_repair_chain(get_db())
 
 
 @router.get("/admin/repair-ledger/kinds")
