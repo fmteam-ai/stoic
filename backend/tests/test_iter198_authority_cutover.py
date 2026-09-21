@@ -47,7 +47,7 @@ def _signal(**over):
 
 
 ACCOUNT = {"_id": "acct-cutover", "account_number": "555", "server": "Demo",
-           "mode": "paper"}  # paper: no terminal dependency, truth FRESH
+           "mode": "paper", "trading_enabled": True}  # paper: no terminal dependency, truth FRESH
 
 
 def _cleanup():

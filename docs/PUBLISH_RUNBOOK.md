@@ -249,6 +249,10 @@ What `provision_images` does in registry mode (`deploy/lib.sh::pull_attested_ima
 
 Private GHCR packages: put `GITHUB_TOKEN=<PAT with read:packages + Contents: read>` in `./.env`; `registry_login` uses it for `docker login ghcr.io`. Public packages need nothing. Rollback (`deploy/rollback.sh` / auto-rollback) re-verifies and re-pulls the previous release's digests the same way. Switch back any time with `DEPLOY_MODE=build`.
 
+### Staging acceptance drills (before promoting a release)
+
+`make staging-acceptance` runs AT-01 (six-account execution boundary, no downtime); `make staging-acceptance ROLLBACK=1` adds AT-15 (signed-release verification + forced readiness failure → automatic rollback, causes a few minutes of downtime — staging only). Evidence lands in `release/drills/`. See `docs/RELEASE_ACCEPTANCE_CHECKLIST.md`.
+
 ### Moving to another server
 
 Use the admin wizard **/admin/host-migration** (enable the sidecar first with `make migrator-on`). It installs the same release on the new host, carries secrets/env/backups/TLS certs, warm-syncs the database while the old host keeps trading, then freezes, final-syncs, verifies and waits for EA heartbeats on the new host before you decommission the old one. Details: `docs/HOST_MIGRATION.md`.

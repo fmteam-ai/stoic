@@ -1,5 +1,5 @@
 # STOIC engineering entry points — every lane is one command.
-.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest publish rollback status backup migrator-on migrator-off
+.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest publish rollback status backup migrator-on migrator-off staging-acceptance
 
 test-unit:            ## reproducible 516-test unit lane (env doctor included)
 	./scripts/test_unit.sh
@@ -49,3 +49,7 @@ migrator-off:         ## remove the migration sidecar again
 	docker compose stop migrator 2>/dev/null || true; docker compose rm -f migrator 2>/dev/null || true
 	@. deploy/lib.sh; CF=$$(grep '^COMPOSE_FILE=' .env | cut -d= -f2- | sed 's/:docker-compose.migrator.yml//'); set_kv .env COMPOSE_FILE "$$CF"
 	docker compose up -d backend
+
+# ── staging acceptance drills (AT-01 boundary · AT-15 rollback) ─────────────
+staging-acceptance:   ## AT-01 six-account boundary drill; ROLLBACK=1 adds the AT-15 forced-failure rollback drill (downtime)
+	@if [ "$(ROLLBACK)" = "1" ]; then scripts/staging_acceptance.sh --rollback --yes; else scripts/staging_acceptance.sh; fi

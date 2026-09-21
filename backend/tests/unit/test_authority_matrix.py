@@ -145,7 +145,7 @@ def test_submit_intent_fails_closed_on_broken_db(monkeypatch):
                         raising=False)
     _NeverEngine.calls = 0
     out = _run(ea.submit_intent(
-        user_id="u1", account={"_id": "acc1", "account_role": "STANDARD"},
+        user_id="u1", account={"_id": "acc1", "account_role": "STANDARD", "trading_enabled": True},
         signal={"symbol": "XAUUSD", "action": "BUY", "lot_size": 0.1},
         engine=_NeverEngine()))
     assert out["blocked"] in ("pamm_resolution_error",

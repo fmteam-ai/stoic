@@ -80,7 +80,7 @@ def test_investor_execution_locked_no_intent_minted():
         before = await db.execution_intents.count_documents({})
         res = await submit_intent(
             user_id="_t182", engine=_NeverEngine(),
-            account={"_id": f"_t182acc_{TAG}", "account_number": "1",
+            account={"_id": f"_t182acc_{TAG}", "account_number": "1", "trading_enabled": True,
                      "server": "s", "account_role": "PAMM_INVESTOR"},
             signal={"symbol": "EURUSD", "action": "BUY", "lot_size": 0.01})
         after = await db.execution_intents.count_documents({})
@@ -98,7 +98,7 @@ def test_pamm_master_unbound_refused():
         db = AsyncIOMotorClient(MONGO_URL)[DB_NAME]
         return await submit_intent(
             user_id="_t182", engine=_NeverEngine(),
-            account={"_id": f"_t182m_{TAG}", "account_number": "2",
+            account={"_id": f"_t182m_{TAG}", "account_number": "2", "trading_enabled": True,
                      "server": "s", "account_role": "PAMM_MASTER"},
             signal={"symbol": "EURUSD", "action": "BUY", "lot_size": 0.01})
     res = _run(scenario())

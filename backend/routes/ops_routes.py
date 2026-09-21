@@ -1,5 +1,6 @@
 """Release-readiness probe — verifies the complete trading topology before a
 deployment is accepted (used by deploy/update.sh). METRICS_TOKEN gated."""
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -239,6 +240,10 @@ async def release_readiness(request: Request):
     # is exposed here and compared with the running build SHA / image digest.
     from release_truth import release_attestation_check
     checks["release_attestation"] = release_attestation_check(is_production())
+    # AT-15 rollback drill hook — can ONLY force a failure (fail-closed), never a pass.
+    if os.environ.get("STOIC_DRILL_FORCE_READINESS_FAIL") == "1":
+        checks["drill_forced_failure"] = {"ok": False,
+                                          "detail": "STOIC_DRILL_FORCE_READINESS_FAIL=1 — rollback drill in progress"}
 
     ready = all(c["ok"] for c in checks.values())
     return JSONResponse(status_code=200 if ready else 503,

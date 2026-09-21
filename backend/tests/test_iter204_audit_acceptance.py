@@ -225,10 +225,10 @@ def test_at11_populations_exclude_deleted_disabled_paper_demo_qa_duplicates(sdb,
     created = _iso(now - timedelta(days=1))
     acct = sdb.accounts.find_one({"user_id": uid, "label": "REAL LIVE"})
     sdb.execution_intents.insert_many([
-        {"intent_id": f"i{uuid.uuid4().hex[:6]}", "user_id": uid, "account_id": str(acct["_id"]), "status": "rejected", "kind": "open", "created_at": created},
-        {"intent_id": f"i{uuid.uuid4().hex[:6]}", "user_id": uid, "account_id": str(acct["_id"]), "status": "filled", "kind": "open", "created_at": created},
+        {"intent_id": f"i{uuid.uuid4().hex[:6]}", "user_id": uid, "account_id": str(acct["_id"]), "status": "rejected", "kind": "open_trade", "created_at": created},
+        {"intent_id": f"i{uuid.uuid4().hex[:6]}", "user_id": uid, "account_id": str(acct["_id"]), "status": "filled", "kind": "open_trade", "created_at": created},
         {"intent_id": f"i{uuid.uuid4().hex[:6]}", "user_id": uid, "account_id": str(acct["_id"]), "status": "rejected", "kind": "close", "created_at": created},
-        {"intent_id": f"i{uuid.uuid4().hex[:6]}", "user_id": "qa_bot", "account_id": None, "status": "rejected", "kind": "open", "created_at": created},
+        {"intent_id": f"i{uuid.uuid4().hex[:6]}", "user_id": "qa_bot", "actor": "qa_bot", "account_id": None, "status": "rejected", "kind": "open_trade", "created_at": created},
     ])
     before_qa = run_async(ts.execution_intents_blocked(get_db(), now))["count"]
     sdb.execution_intents.delete_many({"user_id": "qa_bot"})
@@ -289,3 +289,46 @@ def test_at15_workflow_pins_and_exact_identity():
     assert "--certificate-github-workflow-repository" in lib
     ops = open(os.path.join(ROOT, "routes", "ops_routes.py")).read()
     assert 'checks["release_attestation"]' in ops
+
+
+# ── AT-01 · six-account execution boundary (the staging drill, run here) ─────
+def test_at01_drill_passes_against_this_stack():
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "ops", "at01_account_boundary.py")],
+                       capture_output=True, text=True, timeout=180,
+                       env={**os.environ, "DRILL_EVIDENCE_DIR": "/tmp/at01_drills"})
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+    ev = json.loads(r.stdout[:r.stdout.rindex("}") + 1])
+    exp = set(ev["expected_enabled_ids"])
+    assert len(exp) == 3
+    for surface in ("state_contract", "worker_selection", "authority_full"):
+        assert set(ev["surfaces"][surface]) == exp, surface
+    assert set(ev["surfaces"]["intents_created"]) <= exp
+    disabled = [k for k, v in ev["choke_point_results"].items() if k not in exp]
+    assert len(disabled) == 3 and all(ev["choke_point_results"][k] == "account_not_enabled" for k in disabled)
+    assert all(ev["intents_per_account"][k] == 0 for k in disabled)
+    assert ev["broker_requests"] <= 3 and ev["result"] == "PASS"
+
+
+def test_at01_choke_point_and_authority_refuse_non_explicit_enablement():
+    from execution_authority import account_enablement_lock
+    assert account_enablement_lock({"trading_enabled": True}) is None
+    for bad in ({"trading_enabled": False}, {}, None, {"trading_enabled": "true"}, {"trading_enabled": 1}):
+        assert account_enablement_lock(bad), bad
+    from database import get_db
+    from trading_authority import account_domain
+    assert run_async(account_domain(get_db(), {"_id": "x", "trading_enabled": True}))["level"] == "FULL"
+    assert run_async(account_domain(get_db(), {"_id": "x", "trading_enabled": False}))["level"] == "LOCKED"
+    assert run_async(account_domain(get_db(), {"_id": "x"}))["level"] == "LOCKED"
+
+
+def test_at15_rollback_drill_wiring():
+    drill = open(os.path.join(REPO, "deploy", "drills", "at15_rollback_drill.sh")).read()
+    assert "STOIC_DRILL_FORCE_READINESS_FAIL" in drill and "deploy/update.sh" in drill
+    assert "auto-rollback-from" in drill and "release_attestation.py verify" in drill
+    ops = open(os.path.join(ROOT, "routes", "ops_routes.py")).read()
+    assert 'checks["drill_forced_failure"] = {"ok": False' in ops      # hook can only fail, never pass
+    runner = open(os.path.join(REPO, "scripts", "staging_acceptance.sh")).read()
+    assert "ops/at01_account_boundary.py" in runner and "at15_rollback_drill.sh --yes" in runner
+    assert "staging-acceptance:" in open(os.path.join(REPO, "Makefile")).read()

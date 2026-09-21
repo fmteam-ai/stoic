@@ -110,7 +110,7 @@ def _create_program(admin_session, suffix):
 def _insert_account(mongo, admin_id, broker_env="LIVE", balance=10000.0):
     acc_id = ObjectId()
     mongo.accounts.insert_one({
-        "_id": acc_id, "user_id": admin_id,
+        "_id": acc_id, "user_id": admin_id, "trading_enabled": True,
         "broker": "TestBroker222", "server": "TestServer222-A",
         "mode": "paper", "broker_environment": broker_env,
         "balance": balance, "equity": balance,

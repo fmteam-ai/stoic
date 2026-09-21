@@ -59,6 +59,11 @@ async def account_domain(db, account: dict | None = None) -> dict:
         return {"level": "LOCKED",
                 "reason": "EA terminal identity mismatch — account "
                           "quarantined until re-paired"}
+    # AT-01 — authority agrees with worker selection and the execution choke
+    # point: enablement must be EXPLICITLY true (missing/false = OFF).
+    if "_id" in account and account.get("trading_enabled") is not True:
+        return {"level": "LOCKED",
+                "reason": "trading_enabled is not explicitly true — account OFF"}
     lvl = account.get("trading_authority")
     if lvl in LEVELS and lvl != "FULL":
         return {"level": lvl, "reason": "account-level restriction"}

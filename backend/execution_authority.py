@@ -36,6 +36,17 @@ def account_execution_lock(account: dict) -> str | None:
     return None
 
 
+def account_enablement_lock(account: dict | None) -> str | None:
+    """AT-01 — the canonical choke point refuses any account whose
+    `trading_enabled` is not EXPLICITLY True (False, missing or any other
+    type = OFF). Worker selection filters the same predicate; this makes the
+    intent layer agree even if a caller bypasses selection."""
+    if (account or {}).get("trading_enabled") is not True:
+        return ("trading_enabled is not explicitly true on this account — "
+                "execution refused (missing/false = OFF)")
+    return None
+
+
 def _validate(signal: dict, account: dict) -> list:
     problems = []
     if not signal.get("symbol"):
@@ -112,6 +123,11 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
     # execution plane, never merely hidden in the UI. Refused before any
     # intent is minted — a monitor-only account must leave zero execution
     # artifacts.
+    _enable_lock = account_enablement_lock(account)
+    if _enable_lock:
+        logger.warning("execution refused: account %s user %s symbol %s — %s",
+                       _acct_id, user_id, signal.get("symbol"), _enable_lock)
+        return {"blocked": "account_not_enabled", "reason": _enable_lock}
     _role_lock = account_execution_lock(account)
     if _role_lock:
         logger.warning("execution REFUSED — %s (account=%s user=%s sym=%s)",

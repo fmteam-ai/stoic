@@ -29,7 +29,7 @@ def _db():
 
 
 ACCOUNT = {"_id": "acct-iter200", "account_number": "777", "server": "Demo",
-           "mode": "paper",  # paper: no terminal dependency, truth FRESH
+           "mode": "paper", "trading_enabled": True,  # paper: no terminal dependency, truth FRESH
            "ea_version": "1.56"}
 
 

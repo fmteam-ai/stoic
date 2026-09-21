@@ -66,8 +66,8 @@ async def execution_intents_blocked(db, now: datetime) -> dict:
     since = _iso(now - timedelta(days=30))
     pipeline = [
         {"$match": {"status": "rejected", "created_at": {"$gte": since},
-                    "kind": {"$in": ["open", "new_exposure", "entry", None]}}},
-        {"$group": {"_id": "$intent_id", "user_id": {"$first": "$user_id"},
+                    "kind": {"$in": ["open_trade", "open", "new_exposure", "entry"]}}},
+        {"$group": {"_id": "$intent_id", "actor": {"$first": "$actor"},
                     "account_id": {"$first": "$account_id"}}}]
     rows = await db.execution_intents.aggregate(pipeline).to_list(length=100000)
     if not rows:
@@ -87,7 +87,7 @@ async def execution_intents_blocked(db, now: datetime) -> dict:
         acc = accs.get(r.get("account_id"))
         if acc is not None and is_synthetic_account(acc):
             continue
-        if str(r.get("user_id") or "").startswith(("test_", "qa_", "synthetic_", "chaos_")):
+        if str(r.get("actor") or "").startswith(("test_", "qa_", "synthetic_", "chaos_")):
             continue
         n += 1
     return {"count": n, "period_days": 30, "definition": _BLOCKED_DEF, "exclusions": _BLOCKED_EXCL}
