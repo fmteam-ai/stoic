@@ -1053,7 +1053,9 @@ async def modification_ack(payload: BridgeModificationAck):
     command can never be retried under the same intent."""
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
-    trade = await db.trades.find_one({"_id": ObjectId(payload.trade_id)})
+    from route_utils import parse_object_id
+    trade = await db.trades.find_one(
+        {"_id": parse_object_id(payload.trade_id, "Trade")})
     if not trade or trade["account_id"] != str(acc["_id"]):
         raise HTTPException(status_code=404, detail="Trade not found")
 
@@ -1262,7 +1264,9 @@ async def modification_ack(payload: BridgeModificationAck):
 async def report_trade(payload: BridgeTradeReport):
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
-    trade = await db.trades.find_one({"_id": ObjectId(payload.trade_id)})
+    from route_utils import parse_object_id
+    trade = await db.trades.find_one(
+        {"_id": parse_object_id(payload.trade_id, "Trade")})
     if not trade or trade["account_id"] != str(acc["_id"]):
         raise HTTPException(status_code=404, detail="Trade not found")
 

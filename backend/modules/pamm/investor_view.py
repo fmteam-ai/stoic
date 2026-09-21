@@ -8,7 +8,7 @@ from execution_authority import account_execution_lock
 PROGRAM_PUBLIC_FIELDS = (
     "program_id", "name", "currency", "status", "trading", "op_state",
     "emergency_stop", "investor_count", "aum", "last_nav", "manager_fee_pct",
-    "created_at", "last_reconciled_at", "partner_id",
+    "created_at", "last_reconciled_at",
 )
 
 

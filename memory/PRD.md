@@ -2382,3 +2382,7 @@ User-reported batch before the next major gate:
 - Tests: tests/unit/test_investor_view.py (6) + tests/test_iter183_investor_view.py (1 e2e, mutating lane). Manifest → 4,116 tests / 417 files.
 - NOTE: preview DB has a seeded approved join request `jrq_smoke_investor` (admin → pgm_c270193fed, inv_003977c283) so /investor renders live data for admin. Delete it if a clean state is wanted.
 - Overflow offenders seen on 390px are pre-existing mobile top-nav items (whitespace-nowrap), not this page.
+
+## Iter-191 (2026-06) — Security audit #3: PASS (no P0–P2). P3 hardening applied
+- Audit scope: iter-189 account_role (role immutable on update, lock in execution plane) + iter-190 Investor Monitor (404 for strangers, allowlist redaction, read-only) + core auth/CSRF/CORS/bridge/webhook/secrets — all clean.
+- Applied: `partner_id` dropped from investor_view PROGRAM_PUBLIC_FIELDS; dead `AccountOut.bridge_token` field removed (models.py; `_serialize` was already popping it); bridge `/modification-ack` + `/report` now `parse_object_id` → clean 404 instead of 500 on malformed trade_id (verified via curl).

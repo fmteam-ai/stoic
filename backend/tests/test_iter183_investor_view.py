@@ -146,7 +146,7 @@ def test_investor_mirroring_view():
         assert len(v["my_allocations"]) == 1
         assert len(v["linked_accounts"]) == 1
         # redaction
-        for k in ("risk_limits", "governance", "manager_id"):
+        for k in ("risk_limits", "governance", "manager_id", "partner_id"):
             assert k not in v["program"]
 
         # 3. stranger → 404 (no enumeration), admin → allowed

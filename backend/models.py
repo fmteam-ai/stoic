@@ -132,7 +132,6 @@ class AccountOut(BaseModel):
     pamm_program_id: Optional[str] = None
     pamm_broker_program_id: Optional[str] = None
     base_currency: str
-    bridge_token: str
     status: Literal["disconnected", "connected"] = "disconnected"
     balance: float = 0.0
     equity: float = 0.0
