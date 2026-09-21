@@ -1,0 +1,10 @@
+# Forecast plane — Chronos-Bolt probabilistic forecaster (torch, CPU only).
+# OPT-IN: installed only when the backend image is built with
+# ML_FORECAST=1 (docker-compose.forecast.yml). Needs ~2 GB RAM resident;
+# never install on a memory-constrained pod.
+# Install: pip install -c ../requirements.txt -r forecast.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.12.1+cpu
+chronos-forecasting==2.3.1
+transformers>=4.41,<6
+accelerate>=1.1,<2

@@ -2416,3 +2416,9 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - P1-3: population matrix HTTP test added (`test_attestation_gate_populations`: disabled demo row ignored · enabled demo+live refused · LIVE-unverified → UNKNOWN refused · stale newest deal refused). helpers seed sets a unique `bridge_token` (accounts has a unique index on it — null dup key otherwise).
 - P0-2 "preview failed to start 3 weekly checks": NOT reproducible here — /api/health 200 with provenance; likely the reviewer's environment. Deploy-SHA gate remains roadmap.
 - P1-2/P1-4/P1-5/P1-6/P2-x: architectural → ROADMAP (unchanged).
+
+## Iter-196 (2026-06) — OPT-IN forecast compose profile for self-hosting (DONE, verified)
+- `docker-compose.forecast.yml` override: builds backend image with `ML_FORECAST=1` (Dockerfile.backend installs `backend/requirements/forecast.txt` = torch 2.12.1+cpu + chronos-forecasting 2.3.1, constrained by master lockfile; dry-run resolves clean), sets ML_ENSEMBLE_ENABLED/FORECAST_AGENT_ENABLED=true on backend/worker-trading/worker-model/worker-tuning, `hf_cache` volume for the Chronos model, explicit `deploy.resources` per container (trading 8g, model 8g, API 4g, tuning 6g, others 2–3g, mongo 12g + wiredTigerCacheSizeGB 6).
+- `deploy/install.sh --with-forecast` (any position) appends the profile to COMPOSE_FILE, sets ML_FORECAST=1, and runs `ops/verify_forecast_profile.py` in worker-trading post-start (fails install if the plane isn't live). Also now writes COMPOSE_FILE for --dev.
+- `backend/ops/verify_forecast_profile.py` — 4-step probe (gate → imports → model load → live quantile forecast). Ran green in preview (model loads in 0.5s cached, forecast 0.39s).
+- Docs: SELF_HOSTING_GUIDE §9½; requirements/README forecast row. Default deployment unchanged (ML_FORECAST=0).

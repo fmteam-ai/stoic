@@ -31,6 +31,15 @@ RUN grep -v '^emergentintegrations' requirements.txt > /tmp/reqs.txt \
 
 COPY backend/ ./
 
+# OPT-IN forecast plane (docker-compose.forecast.yml sets ML_FORECAST=1):
+# torch CPU + Chronos-Bolt, constrained by the master lockfile. Default 0
+# keeps the image lean for small hosts.
+ARG ML_FORECAST=0
+RUN if [ "${ML_FORECAST}" = "1" ]; then \
+      pip install --no-cache-dir -c requirements.txt -r requirements/forecast.txt \
+      && python -c "import torch, chronos; print('forecast plane:', torch.__version__)" ; \
+    else echo "forecast plane: skipped (ML_FORECAST=0)"; fi
+
 # Immutable build provenance — the image knows EXACTLY which commit built it.
 # Production builds FAIL without a valid 40-hex Git SHA.
 ARG GIT_SHA

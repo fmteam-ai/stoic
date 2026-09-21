@@ -1,0 +1,102 @@
+# STOIC — OPT-IN forecast profile (Chronos-Bolt + GBM ensemble)
+#
+# Layer this over docker-compose.yml on hosts with spare RAM (≥16 GB; your
+# 64 GB box is ideal). It:
+#   · builds the backend image WITH the torch/Chronos forecast plane
+#   · explicitly enables the heavy-ML gate + forecast agent
+#   · gives each container an explicit memory/CPU budget (OOM-safe)
+#   · persists the Hugging Face model cache so the model downloads once
+#
+# Enable:  deploy/install.sh --production <domain> --with-forecast
+#   (or)   COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.forecast.yml
+# Verify:  docker compose exec worker-trading python ops/verify_forecast_profile.py
+
+x-forecast-build: &forecast-build
+  build:
+    context: .
+    dockerfile: Dockerfile.backend
+    args:
+      GIT_SHA: ${GIT_SHA:-}
+      ML_FORECAST: "1"
+
+x-forecast-env: &forecast-env
+  ML_ENSEMBLE_ENABLED: "true"
+  FORECAST_AGENT_ENABLED: "true"
+  HF_HOME: /home/stoic/.cache/huggingface
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  OMP_NUM_THREADS: "2"
+
+services:
+  backend:
+    <<: *forecast-build
+    environment:
+      <<: *forecast-env
+      BACKGROUND_WORKERS_IN_PROCESS: "false"
+    volumes:
+      - hf_cache:/home/stoic/.cache/huggingface
+    deploy:
+      resources:
+        limits: { memory: 4g, cpus: "2.0" }
+        reservations: { memory: 1g }
+
+  # The forecaster runs inside the trading loop (bot_runner → forecast_agent)
+  worker-trading:
+    <<: *forecast-build
+    environment:
+      <<: *forecast-env
+    volumes:
+      - hf_cache:/home/stoic/.cache/huggingface
+    deploy:
+      resources:
+        limits: { memory: 8g, cpus: "3.0" }
+        reservations: { memory: 2g }
+
+  # Nightly retraining / model registry — GBM zoo needs headroom
+  worker-model:
+    <<: *forecast-build
+    environment:
+      <<: *forecast-env
+    volumes:
+      - hf_cache:/home/stoic/.cache/huggingface
+    deploy:
+      resources:
+        limits: { memory: 8g, cpus: "2.0" }
+
+  worker-tuning:
+    <<: *forecast-build
+    environment:
+      <<: *forecast-env
+    deploy:
+      resources:
+        limits: { memory: 6g, cpus: "2.0" }
+
+  # Remaining workers share the same image (single build, cached layers)
+  # but keep heavy ML OFF — they never train or forecast.
+  worker-protection:
+    <<: *forecast-build
+    deploy:
+      resources:
+        limits: { memory: 2g, cpus: "1.0" }
+
+  worker-reconciliation:
+    <<: *forecast-build
+    deploy:
+      resources:
+        limits: { memory: 2g, cpus: "1.0" }
+
+  worker-analytics:
+    <<: *forecast-build
+    deploy:
+      resources:
+        limits: { memory: 3g, cpus: "1.0" }
+
+  mongo:
+    # Cap WiredTiger so Mongo doesn't grab the RAM the ML plane needs.
+    command: ["mongod", "--wiredTigerCacheSizeGB", "6"]
+    deploy:
+      resources:
+        limits: { memory: 12g, cpus: "2.0" }
+
+volumes:
+  hf_cache:

@@ -205,6 +205,50 @@ Rollback at any time: point the DNS records back at the Emergent target.
 - Mongo will happily use spare RAM for cache; cap it if you prefer:
   add `--wiredTigerCacheSizeGB 2` to the mongo command in compose.
 
+## 9½. OPT-IN forecast profile (Chronos-Bolt + GBM ensemble) — for ≥16 GB hosts
+
+The Emergent preview pod (1 GB) had to strip the torch/Chronos forecaster.
+On a 64 GB server you can run it. It is a compose **override profile**, so
+the default deployment is untouched unless you ask for it.
+
+What it does (`docker-compose.forecast.yml`):
+
+| piece | effect |
+|---|---|
+| `ML_FORECAST=1` build arg | backend image additionally installs `backend/requirements/forecast.txt` (torch 2.12.1 **CPU** wheels + `chronos-forecasting` 2.3.1, constrained by the master lockfile) |
+| `ML_ENSEMBLE_ENABLED=true`, `FORECAST_AGENT_ENABLED=true` | explicit ON for the heavy-ML gate and the forecast agent in `backend`, `worker-trading`, `worker-model`, `worker-tuning` |
+| `hf_cache` volume | Hugging Face model cache — `amazon/chronos-bolt-tiny` downloads once, then survives restarts/rebuilds |
+| `deploy.resources` | explicit per-container memory/CPU budgets (trading 8 GB, model 8 GB, API 4 GB, tuning 6 GB, others 2–3 GB, Mongo 12 GB with a 6 GB WiredTiger cap) so nothing can OOM its neighbour |
+
+Enable it at install time:
+
+```bash
+deploy/install.sh --production stoicaibot.com --with-forecast
+```
+
+or on an existing deployment:
+
+```bash
+# append the profile to COMPOSE_FILE in ./.env, then rebuild
+sed -i 's|^COMPOSE_FILE=.*|COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.forecast.yml|' .env
+echo "ML_FORECAST=1" >> .env
+deploy/update.sh
+```
+
+Verify (also run automatically by the installer):
+
+```bash
+docker compose exec worker-trading python ops/verify_forecast_profile.py
+# [1/4] memory budget · [2/4] torch/chronos import · [3/4] model load · [4/4] live quantile forecast → READY
+```
+
+Disable again: remove `:docker-compose.forecast.yml` from `COMPOSE_FILE`,
+delete `ML_FORECAST`, run `deploy/update.sh`. The forecaster is fail-open
+by design — without it the bot simply trades without the forecast veto.
+
+Notes: CPU-only torch (no CUDA needed); first model load ≈ 5–20 s, later
+loads < 1 s from the cache; the extra image weight is ≈ 1.5 GB.
+
 ## 10. Decommissioning the Emergent deployment
 
 After a week of stable soak on your server: keep the Emergent deployment as

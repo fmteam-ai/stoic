@@ -4,11 +4,21 @@
 # Idempotent. A deployment MODE is required — no accidental public deploys:
 #   deploy/install.sh --dev                     local/dev (loopback-only ports)
 #   deploy/install.sh --production <domain>     public TLS deployment via Caddy
+#   … --with-forecast                           OPT-IN Chronos/GBM forecast
+#                                               profile (≥16 GB RAM hosts)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MODE="${1:-}"
-DOMAIN="${2:-}"
+WITH_FORECAST=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --with-forecast) WITH_FORECAST=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+MODE="${ARGS[0]:-}"
+DOMAIN="${ARGS[1]:-}"
 case "${MODE}" in
   --dev) ;;
   --production)
@@ -123,6 +133,17 @@ if [ "${MODE}" = "--production" ]; then
   set_kv .env DOMAIN "${DOMAIN}"
   set_kv .env REACT_APP_BACKEND_URL ""      # same-origin behind the TLS ingress
   set_kv .env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+else
+  set_kv .env COMPOSE_FILE "docker-compose.yml"
+fi
+if [ "${WITH_FORECAST}" = "1" ]; then
+  echo "-- forecast profile ENABLED (torch CPU + Chronos-Bolt; ~+1.5 GB image)"
+  CF=$(grep '^COMPOSE_FILE=' .env | cut -d= -f2-)
+  case ":${CF}:" in
+    *:docker-compose.forecast.yml:*) ;;
+    *) set_kv .env COMPOSE_FILE "${CF}:docker-compose.forecast.yml" ;;
+  esac
+  set_kv .env ML_FORECAST 1
 fi
 
 # 2 · backend/.env — non-secret config (credentials arrive via Docker secrets)
@@ -252,6 +273,15 @@ fi
 
 echo "-- worker status"
 docker compose ps --format '{{.Name}}\t{{.Status}}' | grep worker || true
+
+if [ "${WITH_FORECAST}" = "1" ]; then
+  echo "-- verifying forecast profile (loads Chronos-Bolt once; model is cached in the hf_cache volume)"
+  if docker compose exec -T worker-trading python ops/verify_forecast_profile.py; then
+    echo "   forecast plane READY in worker-trading"
+  else
+    echo "ERROR: forecast profile verification failed — see output above"; exit 1
+  fi
+fi
 
 echo ""
 echo "== install complete =="

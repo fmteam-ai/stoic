@@ -15,6 +15,7 @@ Install a plane:  `pip install -c ../requirements.txt -r api.txt`
 | research / ML   | research.txt    | workers + torch, xgboost, lightgbm, sklearn |
 | LLM services    | llm.txt         | api + emergentintegrations             |
 | maintenance     | maintenance.txt | migrations & tooling                   |
+| forecast (OPT-IN)| forecast.txt   | torch CPU + chronos-forecasting; installed only with `ML_FORECAST=1` (docker-compose.forecast.yml) |
 
 Unused heavy dependencies found in the lockfile (imported nowhere in
 `backend/`): pandas, matplotlib, plotly, litellm, openai (direct SDK),
