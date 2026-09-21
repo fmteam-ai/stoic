@@ -10,7 +10,7 @@ import {
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
     Shield, Zap, Brain, Bitcoin, Eye, FlaskConical, Stethoscope, ChevronDown, ChevronRight, Layers, BadgeCheck,
     FileText, ShieldAlert, DatabaseBackup, Trophy, Scale, KeyRound, Store, Server, Rocket,
-    Bot, Briefcase, GraduationCap,
+    Bot, Briefcase, GraduationCap, Wrench,
 } from "lucide-react";
 
 const SUPPORT_TELEGRAM_URL = "https://t.me/+rhr2qxcNW90zYjg0";
@@ -128,6 +128,7 @@ const ADMIN_SECTION = {
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
         { to: "/admin/support", label: "Support Queue", icon: LifeBuoy, testid: "nav-admin-support" },
         { to: "/admin/runbooks", label: "Runbooks", icon: BookOpen, testid: "nav-admin-runbooks" },
+        { to: "/admin/repair-ledger", label: "Repair Ledger", icon: Wrench, testid: "nav-admin-repair-ledger" },
         { to: "/admin/affiliates", label: "Affiliate Mgmt", icon: ShieldAlert, testid: "nav-admin-affiliates" },
         { to: "/admin/migration", label: "Migration", icon: DatabaseBackup, testid: "nav-admin-migration" },
     ],

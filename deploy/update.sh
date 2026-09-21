@@ -32,8 +32,9 @@ fi
 rollback() {
   echo "!! verification failed — rolling back to ${PREV}"
   git checkout --detach "${PREV}"
-  build_with_provenance || true
-  docker compose up -d
+  if [ "$(deploy_mode)" = "registry" ]; then verify_attestation >/dev/null 2>&1 || true; fi
+  provision_images || true
+  compose_up
   echo "!! rolled back to $(git rev-parse --short HEAD). Inspect: docker compose logs backend --tail 100"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-from=${REF}" >> deploy/releases.log
   exit 1
@@ -42,11 +43,11 @@ rollback() {
 echo "-- release attestation gate (signed CI record: SHA · tests · scans · gates)"
 verify_attestation || rollback
 
-echo "-- rebuilding images (with provenance)"
-build_with_provenance || rollback
+echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
+provision_images || rollback
 
 echo "-- restarting stack"
-docker compose up -d --remove-orphans
+compose_up
 
 echo "-- verifying API health"
 wait_api_health 30 || rollback

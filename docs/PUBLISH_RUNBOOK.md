@@ -226,6 +226,29 @@ Then publishing is: GitHub → Releases → new tag `v1.4.2` → the workflow de
 
 > Tip: protect the `production` environment in GitHub (Settings → Environments) with a required reviewer if you want a manual approval click before anything reaches the server.
 
+### Option C — registry image deploys (no rebuild on the server)
+
+By default the server **rebuilds** the images from the checkout. In **registry mode** it instead pulls the *exact* images CI built, signed and recorded in the attestation — byte-for-byte what passed the test/scan gates, and no build CPU/RAM on the server.
+
+```bash
+# fresh install
+deploy/install.sh --production trade.example.com --registry
+# or switch an existing server
+echo "DEPLOY_MODE=registry" >> .env   # (set_kv semantics — one line, no duplicates)
+make publish REF=v1.4.2
+```
+
+What `provision_images` does in registry mode (`deploy/lib.sh::pull_attested_images`):
+
+1. the release-attestation gate is **always** required (it is the only source of the digests — `ATTESTATION_REQUIRED` is ignored),
+2. reads `images.backend` / `images.frontend` from the verified `release/attestation.current.json` and refuses anything that is not `…@sha256:<64 hex>`,
+3. `cosign verify` on **each image digest** (keyless, identity pinned to `https://github.com/<you>/<repo>/` workflows),
+4. `docker pull` **by digest**, then checks the pulled `RepoDigests` equals the attested one,
+5. pins `STOIC_BACKEND_IMAGE` / `STOIC_FRONTEND_IMAGE` / `STOIC_IMAGE_DIGEST` / `GIT_SHA` into `./.env` and adds `docker-compose.registry.yml` to `COMPOSE_FILE` (`pull_policy: never` — compose can only run what the gate pulled),
+6. `docker compose up -d --no-build` — a local build can never sneak in.
+
+Private GHCR packages: put `GITHUB_TOKEN=<PAT with read:packages + Contents: read>` in `./.env`; `registry_login` uses it for `docker login ghcr.io`. Public packages need nothing. Rollback (`deploy/rollback.sh` / auto-rollback) re-verifies and re-pulls the previous release's digests the same way. Switch back any time with `DEPLOY_MODE=build`.
+
 ### Rolling back
 
 ```bash

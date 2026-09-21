@@ -1,0 +1,30 @@
+# Registry image deploys (opt-in: DEPLOY_MODE=registry in ./.env).
+#
+# The server does NOT rebuild. deploy/lib.sh::pull_attested_images reads the
+# backend/frontend digests from the cosign-verified release attestation,
+# `cosign verify`s each image (identity pinned to this repo's workflows),
+# pulls them BY DIGEST and pins them here via STOIC_BACKEND_IMAGE /
+# STOIC_FRONTEND_IMAGE. pull_policy: never guarantees compose can only run
+# what that gate already pulled — an unverified tag can never sneak in.
+x-registry-image: &registry-image
+  image: ${STOIC_BACKEND_IMAGE:?registry mode — run deploy/update.sh so the attested digest is pinned}
+  pull_policy: never
+
+services:
+  backend:
+    <<: *registry-image
+  worker-trading:
+    <<: *registry-image
+  worker-protection:
+    <<: *registry-image
+  worker-reconciliation:
+    <<: *registry-image
+  worker-analytics:
+    <<: *registry-image
+  worker-model:
+    <<: *registry-image
+  worker-tuning:
+    <<: *registry-image
+  frontend:
+    image: ${STOIC_FRONTEND_IMAGE:?registry mode — run deploy/update.sh so the attested digest is pinned}
+    pull_policy: never

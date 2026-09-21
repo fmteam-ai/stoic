@@ -423,7 +423,8 @@ jobs:
             --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
           python3 scripts/release_attestation.py verify --file release-attestation.json \
-            --sha "${COMMIT_SHA}" --tag "${{ github.ref_name }}" --backend-digest "${BACKEND_DIGEST}"
+            --sha "${COMMIT_SHA}" --tag "${{ github.ref_name }}" \
+            --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" --require-images
 
       - name: Immutable release evidence record (signed)
         env:

@@ -35,7 +35,8 @@ def _emit(tmp, junit=JUNIT_OK, pip=PIP_CLEAN, grype=GRYPE_CLEAN, extra=()):
     g = tmp / "grype.json"; g.write_text(json.dumps(grype))
     out = tmp / "att.json"
     r = subprocess.run([sys.executable, SCRIPT, "emit", "--sha", SHA,
-                        "--tag", "v9.9.9", "--backend-digest", "ghcr.io/x@sha256:1",
+                        "--tag", "v9.9.9", "--backend-digest", "ghcr.io/x/stoic-backend@sha256:" + "1" * 64,
+                        "--frontend-digest", "ghcr.io/x/stoic-frontend@sha256:" + "2" * 64,
                         "--junit", str(j), "--pip-audit", str(p), "--grype", str(g),
                         "--install-ready", "--ea-compiled", "--out", str(out),
                         *extra], capture_output=True, text=True)
@@ -59,7 +60,9 @@ def test_emit_approved_and_verify_ok(tmp_path):
     assert att["scans"]["grype_backend"]["fixable_critical"] == 0
     assert all(att["gates"].values())
     rc, msg = _verify(out, "--sha", SHA, "--tag", "v9.9.9",
-                      "--backend-digest", "ghcr.io/x@sha256:1")
+                      "--backend-digest", "ghcr.io/x/stoic-backend@sha256:" + "1" * 64,
+                      "--frontend-digest", "ghcr.io/x/stoic-frontend@sha256:" + "2" * 64,
+                      "--require-images")
     assert rc == 0 and "VERIFY OK" in msg
 
 
@@ -108,3 +111,58 @@ def test_deploy_scripts_enforce_the_gate():
     rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml")).read()
     assert "release_attestation.py emit" in rel
     assert "release-attestation.json.sig" in rel
+
+
+# ── Registry image deploys (pull attested digests, no local rebuild) ─────────
+def _images(out):
+    r = subprocess.run([sys.executable, SCRIPT, "images", "--file", str(out)],
+                       capture_output=True, text=True)
+    return r.returncode, r.stdout
+
+
+def test_images_prints_shell_assignments_for_deploy_lib(tmp_path):
+    _, out = _emit(tmp_path)
+    rc, txt = _images(out)
+    assert rc == 0
+    assert "ATT_BACKEND_IMAGE=ghcr.io/x/stoic-backend@sha256:" + "1" * 64 in txt
+    assert "ATT_FRONTEND_IMAGE=ghcr.io/x/stoic-frontend@sha256:" + "2" * 64 in txt
+
+
+def test_frontend_digest_mismatch_rejects(tmp_path):
+    _, out = _emit(tmp_path)
+    rc, msg = _verify(out, "--sha", SHA, "--frontend-digest", "ghcr.io/x/stoic-frontend@sha256:" + "f" * 64)
+    assert rc == 2 and "frontend image digest" in msg
+
+
+def test_require_images_rejects_tag_or_missing_refs(tmp_path):
+    _, out = _emit(tmp_path)
+    att = json.loads(out.read_text())
+    att["images"]["frontend"] = "ghcr.io/x/stoic-frontend:v9.9.9"   # tag, not digest
+    out.write_text(json.dumps(att))
+    rc, msg = _verify(out, "--sha", SHA, "--require-images")
+    assert rc == 2 and "not a digest-pinned" in msg
+    rc, txt = _images(out)
+    assert rc == 2 and "false" in txt
+    att["images"]["frontend"] = None
+    out.write_text(json.dumps(att))
+    assert _verify(out, "--sha", SHA, "--require-images")[0] == 2
+    assert _verify(out, "--sha", SHA)[0] == 0   # build mode: digests optional
+
+
+def test_registry_mode_wiring():
+    lib = open(os.path.join(ROOT, "deploy", "lib.sh")).read()
+    assert "pull_attested_images()" in lib and "provision_images()" in lib
+    assert 'cosign verify "${d}"' in lib and "docker pull -q" in lib
+    assert "--require-images" in lib
+    # registry mode forces the attestation gate regardless of ATTESTATION_REQUIRED
+    assert '[ "$(deploy_mode)" = "registry" ] && return 0' in lib
+    for f in ("update.sh", "install.sh", "rollback.sh"):
+        body = open(os.path.join(ROOT, "deploy", f)).read()
+        assert "provision_images ||" in body, f
+        assert "compose_up" in body, f
+        assert "build_with_provenance ||" not in body, f"{f} must go through provision_images"
+    reg = open(os.path.join(ROOT, "docker-compose.registry.yml")).read()
+    assert "STOIC_BACKEND_IMAGE" in reg and "STOIC_FRONTEND_IMAGE" in reg
+    assert "pull_policy: never" in reg
+    rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml")).read()
+    assert "--require-images" in rel

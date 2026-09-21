@@ -16,6 +16,7 @@ stdlib only (runs on a bare server before any image is built).
 Exit codes: 0 ok · 2 content gate failed · 3 fetch failed · 4 bad input.
 """
 import argparse
+import re
 import hashlib
 import json
 import os
@@ -193,10 +194,15 @@ def cmd_verify(a) -> int:
         problems.append(f"gates not green: {', '.join(bad)}")
     if att.get("promotion_decision") != "APPROVED":
         problems.append(f"promotion_decision={att.get('promotion_decision')}")
-    if a.backend_digest:
-        want = (att.get("images") or {}).get("backend")
-        if want and want != a.backend_digest:
-            problems.append(f"backend image digest {a.backend_digest} != attested {want}")
+    images = att.get("images") or {}
+    for name, got in (("backend", a.backend_digest), ("frontend", a.frontend_digest)):
+        want = images.get(name)
+        if got and want and want != got:
+            problems.append(f"{name} image digest {got} != attested {want}")
+    if a.require_images:
+        for name in ("backend", "frontend"):
+            if not _digest_pinned(images.get(name)):
+                problems.append(f"{name} image is not a digest-pinned reference: {images.get(name)!r}")
     if problems:
         print("VERIFY FAIL:")
         for p in problems:
@@ -206,6 +212,27 @@ def cmd_verify(a) -> int:
           f"{t.get('passed')}/{t.get('tests')} tests passed · "
           f"pip-audit clean · 0 fixable critical image vulns · "
           f"decision {att['promotion_decision']}")
+    return 0
+
+
+def _digest_pinned(ref) -> bool:
+    return bool(ref) and bool(re.fullmatch(r"[a-z0-9./_-]+@sha256:[0-9a-f]{64}", str(ref)))
+
+
+def cmd_images(a) -> int:
+    """Print the attested image refs as shell assignments (eval'd by deploy/lib.sh)."""
+    try:
+        att = json.load(open(a.file))
+    except Exception as e:  # noqa: BLE001
+        print(f"echo 'IMAGES FAIL: unreadable attestation: {e}'; false")
+        return 4
+    images = att.get("images") or {}
+    for name in ("backend", "frontend"):
+        if not _digest_pinned(images.get(name)):
+            print(f"echo 'IMAGES FAIL: {name} image not digest-pinned in attestation'; false")
+            return 2
+    print(f"ATT_BACKEND_IMAGE={images['backend']}")
+    print(f"ATT_FRONTEND_IMAGE={images['frontend']}")
     return 0
 
 
@@ -236,9 +263,15 @@ def main() -> int:
     v.add_argument("--sha")
     v.add_argument("--tag")
     v.add_argument("--backend-digest")
+    v.add_argument("--frontend-digest")
+    v.add_argument("--require-images", action="store_true",
+                   help="fail unless both images are digest-pinned (registry deploys)")
     v.add_argument("--min-tests", type=int, default=MIN_TESTS_DEFAULT)
+    i = sub.add_parser("images", help="print attested image refs as shell assignments")
+    i.add_argument("--file", required=True)
     a = ap.parse_args()
-    return {"emit": cmd_emit, "fetch": cmd_fetch, "verify": cmd_verify}[a.cmd](a)
+    return {"emit": cmd_emit, "fetch": cmd_fetch, "verify": cmd_verify,
+            "images": cmd_images}[a.cmd](a)
 
 
 if __name__ == "__main__":

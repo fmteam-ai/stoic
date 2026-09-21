@@ -110,7 +110,17 @@ ensure_cosign() {
     && sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
 }
 
+# build (default): rebuild images locally from the checkout.
+# registry: pull the exact CI-built GHCR images by attested digest (no rebuild).
+deploy_mode() {
+  local v
+  v=$(grep -E '^DEPLOY_MODE=' .env 2>/dev/null | cut -d= -f2-)
+  case "${v}" in registry) echo registry;; *) echo build;; esac
+}
+
 attestation_required() {
+  # registry mode has no other source of truth for the digests — always required
+  [ "$(deploy_mode)" = "registry" ] && return 0
   local v
   v=$(grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null | cut -d= -f2-)
   if [ -n "${v}" ]; then [ "${v}" = "true" ]; return; fi
@@ -145,4 +155,83 @@ verify_attestation() {
       --sha "${GIT_SHA}" --tag "${tag}" || return 1
   cp "${dest}/release-attestation.json" release/attestation.current.json
   echo "   attestation gate: PASSED — recorded at release/attestation.current.json"
+}
+
+# ── Registry image deploys (DEPLOY_MODE=registry) ───────────────────────────
+# Pull the EXACT CI-built images by the digests recorded in the verified
+# attestation. Every digest is cosign-verified (keyless, identity pinned to
+# this repo's workflows) BEFORE it is pulled, then pinned into ./.env for
+# docker-compose.registry.yml. Nothing is built on the server.
+ensure_registry_compose_file() {
+  local cf
+  cf=$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | cut -d= -f2-); [ -n "${cf}" ] || cf=docker-compose.yml
+  case ":${cf}:" in
+    *:docker-compose.registry.yml:*) ;;
+    *) set_kv .env COMPOSE_FILE "${cf}:docker-compose.registry.yml" ;;
+  esac
+}
+
+registry_login() {
+  local tok user
+  tok="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}"
+  [ -n "${tok}" ] || return 0   # public packages need no login
+  user=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2- | cut -d/ -f1); [ -n "${user}" ] || user=$(_repo_slug | cut -d/ -f1)
+  echo "${tok}" | docker login ghcr.io -u "${user:-stoic}" --password-stdin >/dev/null 2>&1 \
+    || echo "   (ghcr.io login failed — continuing; public images still pull)"
+}
+
+pull_attested_images() {
+  local att=release/attestation.current.json repo be fe d id
+  [ -f "${att}" ] || { echo "ERROR: registry mode needs the verified attestation (${att}) — run verify_attestation first"; return 1; }
+  repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${repo}" ] || repo=$(_repo_slug)
+  local chk
+  chk=$(python3 scripts/release_attestation.py verify --file "${att}" --sha "${GIT_SHA}" --require-images 2>&1) \
+    || { echo "${chk}"; return 1; }
+  eval "$(python3 scripts/release_attestation.py images --file "${att}")" || return 1
+  be="${ATT_BACKEND_IMAGE}"; fe="${ATT_FRONTEND_IMAGE}"
+  ensure_cosign || { echo "!! cosign unavailable — cannot verify image signatures"; return 1; }
+  registry_login
+  for d in "${be}" "${fe}"; do
+    echo "${d}" | grep -qE '^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$' \
+      || { echo "!! attested image reference is not digest-pinned: ${d}"; return 1; }
+    cosign verify "${d}" \
+        --certificate-identity-regexp "^https://github.com/${repo}/" \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null \
+      || { echo "!! image SIGNATURE invalid or not issued by ${repo} workflows: ${d}"; return 1; }
+    echo "   image signature verified: ${d}"
+    docker pull -q "${d}" >/dev/null || { echo "!! pull failed: ${d}"; return 1; }
+    id=$(docker inspect --format '{{index .RepoDigests 0}}' "${d}" 2>/dev/null || true)
+    [ "${id}" = "${d}" ] || { echo "!! pulled digest ${id:-none} != attested ${d}"; return 1; }
+  done
+  touch .env
+  ensure_registry_compose_file
+  set_kv .env DEPLOY_MODE registry
+  set_kv .env STOIC_BACKEND_IMAGE "${be}"
+  set_kv .env STOIC_FRONTEND_IMAGE "${fe}"
+  set_kv .env STOIC_IMAGE_DIGEST "${be#*@}"
+  set_kv .env GIT_SHA "${GIT_SHA}"
+  export STOIC_BACKEND_IMAGE="${be}" STOIC_FRONTEND_IMAGE="${fe}" STOIC_IMAGE_DIGEST="${be#*@}"
+  echo "   image provenance (registry): ${be#*@}"
+}
+
+# Make the images for the checked-out commit available: build locally
+# (default) or pull the attested digests (DEPLOY_MODE=registry).
+provision_images() {
+  resolve_git_sha || return 1
+  if [ "$(deploy_mode)" = "registry" ]; then
+    echo "   deploy mode: registry — pulling CI-built images by attested digest (no local build)"
+    pull_attested_images
+  else
+    build_with_provenance
+  fi
+}
+
+# `docker compose up` for the active deploy mode — registry mode must never
+# fall back to a local build of an unverified tree.
+compose_up() {
+  if [ "$(deploy_mode)" = "registry" ]; then
+    docker compose up -d --no-build --remove-orphans "$@"
+  else
+    docker compose up -d --remove-orphans "$@"
+  fi
 }

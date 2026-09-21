@@ -37,6 +37,15 @@ def accounts(session):
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data, list)
+    # self-seeding: the suite needs >= 2 accounts; a clean DB has fewer
+    while len(data) < 2:
+        import uuid
+        c = session.post(f"{API}/accounts", json={
+            "label": f"MULTI_ACC_{len(data)}", "broker": "Exness", "server": "Exness-Trial",
+            "account_number": uuid.uuid4().hex[:8], "account_type": "microcent",
+            "base_currency": "USD", "mode": "paper"}, timeout=15)
+        assert c.status_code in (200, 201), f"seed account failed: {c.status_code} {c.text}"
+        data = session.get(f"{API}/accounts", timeout=15).json()
     assert len(data) >= 2, "Need >= 2 accounts on the admin user"
     return data
 

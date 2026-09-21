@@ -10,10 +10,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 WITH_FORECAST=0
+REGISTRY=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
     --with-forecast) WITH_FORECAST=1 ;;
+    --registry) REGISTRY=1 ;;
     *) ARGS+=("$a") ;;
   esac
 done
@@ -145,6 +147,10 @@ if [ "${WITH_FORECAST}" = "1" ]; then
   esac
   set_kv .env ML_FORECAST 1
 fi
+if [ "${REGISTRY}" = "1" ]; then
+  echo "-- deploy mode: REGISTRY (pull CI-built GHCR images by attested digest — no local build)"
+  set_kv .env DEPLOY_MODE registry
+fi
 
 # 2 · backend/.env — non-secret config (credentials arrive via Docker secrets)
 if [ ! -f backend/.env ]; then
@@ -190,9 +196,13 @@ if [ "${MODE}" = "--production" ]; then
   # Override consciously with ATTESTATION_REQUIRED=false in ./.env (not advised).
   verify_attestation || { echo "ERROR: release attestation gate failed — refusing production install"; exit 1; }
 fi
-build_with_provenance || exit 1
+if [ "$(deploy_mode)" = "registry" ] && [ "${MODE}" != "--production" ]; then
+  # registry mode is digest-driven: the attestation is the ONLY source of the digests
+  verify_attestation || { echo "ERROR: release attestation gate failed — registry mode cannot resolve images"; exit 1; }
+fi
+provision_images || exit 1
 echo "-- starting stack"
-docker compose up -d
+compose_up
 
 # 5 · full release-readiness verification — an install that cannot prove the
 #     complete trading topology (HTTPS/frontend, Mongo round trip, all six

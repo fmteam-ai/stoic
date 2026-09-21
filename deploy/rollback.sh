@@ -32,9 +32,12 @@ echo "-- checking out ${REF}"
 git fetch --all --tags --quiet || true
 git checkout --detach "${REF}"
 
-echo "-- rebuilding (with provenance) + restarting stack"
-build_with_provenance || { echo "ERROR: build failed during rollback"; exit 1; }
-docker compose up -d
+echo "-- provisioning images ($(deploy_mode)) + restarting stack"
+if [ "$(deploy_mode)" = "registry" ]; then
+  verify_attestation || { echo "ERROR: ${REF} is not an attested release — registry rollback needs its digests"; exit 1; }
+fi
+provision_images || { echo "ERROR: image provisioning failed during rollback"; exit 1; }
+compose_up
 
 if [ -n "${WITH_DB}" ]; then
   echo "-- restoring database from ${WITH_DB}"
