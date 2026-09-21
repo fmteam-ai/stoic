@@ -73,6 +73,7 @@ const Stat = ({ label, value, animate, suffix = "", decimals = 0, testId }) => {
 // backend reports a complete, reconciled 30-day edge-probe window.
 const statsAreLive = (s) => {
     if (!s || !s.as_of || !s.population_version) return false;
+    if (s.published !== true) return false;            // P2-2: withheld until legal/compliance approval
     const age = (Date.now() - new Date(s.as_of).getTime()) / 1000;
     return Number.isFinite(age) && age <= (s.ttl_seconds || 900)
         && s.verified_active_accounts?.count != null
@@ -104,7 +105,7 @@ const TrustBar = ({ onStatus }) => {
     if (!statsAreLive(stats)) {
         return (
             <div className="tst-trustbar" data-testid="trust-bar-unavailable">
-                <div className="tst-stat-label">Live statistics unavailable</div>
+                <div className="tst-stat-label">{stats && stats.published === false ? "Platform statistics pending compliance review" : "Live statistics unavailable"}</div>
             </div>
         );
     }
@@ -130,7 +131,7 @@ const TrustBar = ({ onStatus }) => {
                 </>
             )}
             <div className="tst-stat-footnote" data-testid="trust-stat-footnote">
-                {envLine} · {acc.definition} · blocked = {blk.definition}
+                <b>{stats.context}</b> · {envLine} · {acc.definition} · blocked = {blk.definition}
                 {!availabilityIsPublishable(stats) && " · availability: published only after a complete, reconciled 30-day edge-probe window"}
             </div>
         </div>

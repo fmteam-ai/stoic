@@ -80,7 +80,7 @@ def test_public_key_starts_with_ssh_ed25519(admin):
 
 def test_preflight_success_and_awaiting_install(admin):
     _reset_if_needed(admin)
-    body = {"host": "203.0.113.10", "user": "stoic", "port": 22, "path": "/home/stoic/stoic"}
+    body = {"host": "203.0.113.10", "user": "stoic", "port": 22, "path": "/home/stoic/stoic", "accept_fingerprint": "SHA256:Simulated0Fingerprint0Rehearsal0Mode0000000"}
     r = admin.post(f"{HM}/preflight", json=body, timeout=60)
     assert r.status_code == 200, r.text
     facts = r.json()
@@ -113,7 +113,7 @@ def test_full_rehearsal_flow(admin):
     st = _status(admin)
     if not (st["status"] == "awaiting" and st["awaiting"] == "install"):
         _reset_if_needed(admin)
-        body = {"host": "203.0.113.10", "user": "stoic", "port": 22, "path": "/home/stoic/stoic"}
+        body = {"host": "203.0.113.10", "user": "stoic", "port": 22, "path": "/home/stoic/stoic", "accept_fingerprint": "SHA256:Simulated0Fingerprint0Rehearsal0Mode0000000"}
         r = admin.post(f"{HM}/preflight", json=body, timeout=60)
         assert r.status_code == 200
 
@@ -169,7 +169,7 @@ def test_new_preflight_after_done_resets_state(admin):
     prev = _status(admin)
     assert prev["status"] == "done"
     prev_id = prev["id"]
-    body = {"host": "203.0.113.10", "user": "stoic", "port": 22, "path": "/home/stoic/stoic"}
+    body = {"host": "203.0.113.10", "user": "stoic", "port": 22, "path": "/home/stoic/stoic", "accept_fingerprint": "SHA256:Simulated0Fingerprint0Rehearsal0Mode0000000"}
     r = admin.post(f"{HM}/preflight", json=body, timeout=60)
     assert r.status_code == 200
     st = _status(admin)
@@ -258,7 +258,7 @@ def test_non_admin_forbidden_on_all_endpoints():
     s = _login(email, pw)
     for path in ("status", "public-key", "events"):
         assert s.get(f"{HM}/{path}", timeout=15).status_code == 403, path
-    for path, body in (("preflight", {"host": "203.0.113.10", "user": "stoic", "path": "/home/stoic/stoic"}),
+    for path, body in (("preflight", {"host": "203.0.113.10", "user": "stoic", "path": "/home/stoic/stoic", "accept_fingerprint": "SHA256:Simulated0Fingerprint0Rehearsal0Mode0000000"}),
                        ("start", {}), ("advance", {"step": "cutover_check"}),
                        ("retry", {}), ("abort", {})):
         assert s.post(f"{HM}/{path}", json=body, timeout=15).status_code == 403, path

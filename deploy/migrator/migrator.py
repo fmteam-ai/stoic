@@ -50,6 +50,25 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _secure_dir():
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.chmod(STATE_DIR, 0o700)
+
+
+def _write_private(path: str, text: str):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.chmod(path, 0o600)
+
+
+_REDACT = re.compile(r"((?:password|passwd|token|secret|api[_-]?key|authorization)[=:\s\"']+|\s-p\s+[\"']?)([^\s\"']{4,})", re.I)
+
+
+def redact(line: str) -> str:
+    return _REDACT.sub(lambda m: m.group(1) + "***", line)
+
+
 def _fresh_state() -> dict:
     return {"id": None, "status": "idle", "target": {}, "source": {}, "facts": {},
             "current_step": None, "awaiting": None, "downtime_started_at": None,
@@ -75,10 +94,32 @@ class Migrator:
 
     def _save(self):
         self.state["updated_at"] = now_iso()
-        os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+        d = os.path.dirname(self.state_file)
+        os.makedirs(d, exist_ok=True)
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
         tmp = self.state_file + ".tmp"
-        json.dump(self.state, open(tmp, "w"), indent=1)
+        _write_private(tmp, json.dumps(self.state, indent=1))
         os.replace(tmp, self.state_file)
+
+    def wipe_key_material(self, reason: str):
+        """P1-5/P2-3 — destroy the SSH key + pinned host keys once the
+        migration is over (decommission or abort); state stays for audit
+        with logs truncated."""
+        for f in (KEY_FILE, KEY_FILE + ".pub", KNOWN_HOSTS, KNOWN_HOSTS + ".scan"):
+            try:
+                if os.path.exists(f):
+                    _write_private(f, "\0" * os.path.getsize(f))
+                    os.remove(f)
+            except OSError:
+                pass
+        with self.lock:
+            self.state["key_material_destroyed_at"] = now_iso()
+            self.state["log"] = self.state["log"][-300:]
+            self._save()
+        self.log("cleanup", f"ssh key material destroyed ({reason})")
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -89,7 +130,7 @@ class Migrator:
 
     def log(self, step: str, line: str):
         with self.lock:
-            self.state["log"].append({"at": now_iso(), "step": step, "line": line[:2000]})
+            self.state["log"].append({"at": now_iso(), "step": step, "line": redact(line)[:2000]})
             del self.state["log"][:-LOG_CAP]
             self._save()
 
@@ -150,7 +191,7 @@ class Migrator:
 
     # ── keys / hosts ────────────────────────────────────────────────────
     def public_key(self) -> str:
-        os.makedirs(STATE_DIR, exist_ok=True)
+        _secure_dir()
         if not os.path.exists(KEY_FILE):
             self._run(f"ssh-keygen -q -t ed25519 -N '' -C stoic-migrator -f {shlex.quote(KEY_FILE)}",
                       "keys", 60)
@@ -160,15 +201,41 @@ class Migrator:
             return ""
 
     def scan_host(self, host: str, port: int) -> dict:
+        """Phase 1 — observe the host keys WITHOUT authenticating. Nothing is
+        trusted: keys go to a scratch file, fingerprints are returned for
+        out-of-band comparison (provider console) and journaled."""
+        scratch = KNOWN_HOSTS + ".scan"
         rc, out = self._run(f"ssh-keyscan -p {int(port)} -T 10 -t ed25519,ecdsa,rsa {shlex.quote(host)} 2>/dev/null",
-                            "preflight", 30)
+                            "scan", 30)
         keys = [l for l in out.splitlines() if l and not l.startswith("#")]
         if not keys:
             raise RuntimeError(f"ssh-keyscan: no host key from {host}:{port} — is SSH reachable?")
-        os.makedirs(STATE_DIR, exist_ok=True)
-        open(KNOWN_HOSTS, "w").write("\n".join(keys) + "\n")
-        rc, fp = self._run(f"ssh-keygen -lf {shlex.quote(KNOWN_HOSTS)}", "preflight", 30)
-        return {"fingerprints": [l.split()[1] for l in fp.splitlines() if len(l.split()) > 1], "keys": len(keys)}
+        _secure_dir()
+        _write_private(scratch, "\n".join(keys) + "\n")
+        rc, fp = self._run(f"ssh-keygen -lf {shlex.quote(scratch)}", "scan", 30)
+        fps = [{"fingerprint": l.split()[1], "type": l.split()[-1].strip("()")} for l in fp.splitlines() if len(l.split()) > 1]
+        scan = {"host": host, "port": int(port), "fingerprints": fps, "keys": len(keys), "scanned_at": now_iso()}
+        with self.lock:
+            self.state["host_key_scan"] = scan
+            self._save()
+        self.log("scan", f"observed host keys for {host}:{port}: " + ", ".join(f["fingerprint"] for f in fps))
+        return scan
+
+    def trust_host(self, host: str, port: int, accept_fingerprint: str) -> dict:
+        """Phase 2 — the admin confirmed ONE exact fingerprint out-of-band.
+        Only now is known_hosts written (pinned; StrictHostKeyChecking=yes)."""
+        scan = self.scan_host(host, port)                     # fresh scan: defeats key swap between phases
+        fps = [f["fingerprint"] for f in scan["fingerprints"]]
+        if not accept_fingerprint or accept_fingerprint not in fps:
+            raise RuntimeError(f"host key fingerprint not confirmed: accepted={accept_fingerprint!r} observed={fps}")
+        os.replace(KNOWN_HOSTS + ".scan", KNOWN_HOSTS)
+        os.chmod(KNOWN_HOSTS, 0o600)
+        trust = {"host": host, "port": int(port), "observed": fps, "accepted": accept_fingerprint, "at": now_iso()}
+        with self.lock:
+            self.state["host_key_trust"] = trust
+            self._save()
+        self.log("scan", f"host key TRUSTED by admin: {accept_fingerprint}")
+        return trust
 
     # ── source facts ────────────────────────────────────────────────────
     def _env(self, path: str) -> dict:
@@ -198,12 +265,18 @@ class Migrator:
 
     # ── steps ───────────────────────────────────────────────────────────
     def preflight(self, target: dict, accept_fingerprint: str | None = None) -> dict:
+        if not accept_fingerprint:
+            raise RuntimeError("out-of-band host key confirmation is mandatory — scan first, "
+                               "compare with the provider console, then confirm the exact fingerprint")
         with self.lock:
             if self.state["status"] == "running":
                 raise RuntimeError("a migration step is running")
             if self.state["status"] in ("awaiting",) and self.state["current_step"] not in (None, "preflight"):
                 raise RuntimeError("a migration is in progress — abort it before starting a new preflight")
+            prev_scan, prev_log = self.state.get("host_key_scan"), self.state["log"][-200:]
             self.state = _fresh_state()
+            self.state["log"] = prev_log
+            self.state["host_key_scan"] = prev_scan
             self.state["id"] = f"mig_{uuid.uuid4().hex[:10]}"
             self.state["target"] = {"host": target["host"], "user": target["user"],
                                     "port": int(target.get("port", 22)), "path": target["path"]}
@@ -211,10 +284,8 @@ class Migrator:
             self._save()
         self._mark("preflight", "running")
         try:
-            scan = self.scan_host(target["host"], int(target.get("port", 22)))
-            facts = {"host_key": scan}
-            if accept_fingerprint and accept_fingerprint not in scan["fingerprints"]:
-                raise RuntimeError(f"host key fingerprint mismatch: got {scan['fingerprints']}")
+            trust = self.trust_host(target["host"], int(target.get("port", 22)), accept_fingerprint)
+            facts = {"host_key": {"fingerprints": trust["observed"], "accepted": trust["accepted"]}}
             facts["source"] = self.source_facts()
             self.state["source"] = facts["source"]
             path = shlex.quote(target["path"])
@@ -310,8 +381,34 @@ echo "PUBLIC_IP=$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || hostname -
         self._dump_restore("warm_sync")
         self._mark("warm_sync", "done")
 
+    def _mongo_eval(self, js: str, step: str, remote: bool = False) -> str:
+        cmd = "docker compose exec -T mongo sh -c " + shlex.quote(
+            f"mongosh {MONGO_AUTH} --quiet \"$DB_NAME\" --eval {shlex.quote(js)}")
+        return self.remote_cd(cmd, step, 120, check=False) if remote else self.sh(cmd, step, 120, check=False)
+
+    def snapshot_expected_accounts(self) -> list:
+        """Before freeze: the EXACT set of enabled accounts (id, verified
+        broker identity, bridge token hash, EA build/policy) that must all
+        report to the new host before decommission."""
+        js = ("JSON.stringify(db.accounts.find({trading_enabled:true,status:{$ne:'deleted'}},"
+              "{label:1,verified_identity:1,ea_version:1,policy_version:1,bridge_token:1}).toArray()"
+              ".map(a=>({id:String(a._id),label:a.label,account_number:(a.verified_identity||{}).account_number||null,"
+              "broker_server:(a.verified_identity||{}).broker_server||null,ea_version:a.ea_version||null,"
+              "policy_version:a.policy_version||null,bridge_token_tail:a.bridge_token?String(a.bridge_token).slice(-6):null})))")
+        out = self._mongo_eval(js, "freeze")
+        line = next((l for l in out.splitlines() if l.strip().startswith("[")), "[]")
+        try:
+            return json.loads(line)
+        except ValueError:
+            return []
+
     def freeze(self):
         self._mark("freeze", "running")
+        expected = self.snapshot_expected_accounts()
+        with self.lock:
+            self.state["expected_accounts"] = expected
+            self._save()
+        self.log("freeze", f"snapshotted {len(expected)} enabled account identities that must all reconnect on the new host")
         self.sh("docker compose stop " + " ".join(APP_SERVICES), "freeze", 300)
         with self.lock:
             self.state["downtime_started_at"] = now_iso()
@@ -363,14 +460,41 @@ echo "READY="; curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/o
             rc, out = self._run(f"curl -fsS -m 10 https://{shlex.quote(domain)}/api/health", sid, 30)
             res["public_health"] = rc == 0
         since = self.state.get("downtime_started_at") or "1970"
-        out = self.remote_cd("docker compose exec -T mongo sh -c " + shlex.quote(
-            f"mongosh {MONGO_AUTH} --quiet \"$DB_NAME\" --eval "
-            f"'db.accounts.countDocuments({{last_heartbeat:{{$gt:\"{since}\"}}}})'"), sid, 120, check=False)
-        digits = [l.strip() for l in out.splitlines() if l.strip().isdigit()]
-        res["ea_heartbeats_on_target"] = int(digits[-1]) if digits else 0
+        expected = self.state.get("expected_accounts") or []
+        js = ("JSON.stringify(db.accounts.find({last_heartbeat:{$gt:'" + since + "'}},"
+              "{label:1,verified_identity:1,ea_version:1,policy_version:1,bridge_token:1,trading_enabled:1}).toArray()"
+              ".map(a=>({id:String(a._id),account_number:(a.verified_identity||{}).account_number||null,"
+              "broker_server:(a.verified_identity||{}).broker_server||null,ea_version:a.ea_version||null,"
+              "policy_version:a.policy_version||null,bridge_token_tail:a.bridge_token?String(a.bridge_token).slice(-6):null,"
+              "trading_enabled:a.trading_enabled===true})))")
+        out = self._mongo_eval(js, sid, remote=True)
+        line = next((l for l in out.splitlines() if l.strip().startswith("[")), "[]")
+        try:
+            arrived = json.loads(line)
+        except ValueError:
+            arrived = []
+        by_id = {a["id"]: a for a in arrived}
+        accounts = []
+        for e in expected:
+            got = by_id.get(e["id"])
+            ident_ok = bool(got) and got.get("account_number") == e.get("account_number") \
+                and got.get("broker_server") == e.get("broker_server") \
+                and got.get("bridge_token_tail") == e.get("bridge_token_tail")
+            version_ok = bool(got) and (not e.get("ea_version") or got.get("ea_version") == e.get("ea_version")) \
+                and (not e.get("policy_version") or got.get("policy_version") == e.get("policy_version"))
+            accounts.append({**e, "heartbeat_on_target": bool(got), "identity_match": ident_ok,
+                             "version_match": version_ok, "ok": bool(got) and ident_ok and version_ok,
+                             "target_ea_version": (got or {}).get("ea_version")})
+        unexpected = [a for a in arrived if a["id"] not in {e["id"] for e in expected} and a.get("trading_enabled")]
+        res["expected_accounts"] = len(expected)
+        res["accounts"] = accounts
+        res["arrived"] = sum(1 for a in accounts if a["heartbeat_on_target"])
+        res["unexpected_identities"] = unexpected
+        res["ea_heartbeats_on_target"] = len(arrived)
         res["connected_accounts_at_source"] = src.get("connected_accounts")
-        res["ok"] = res["ea_heartbeats_on_target"] > 0 or (src.get("connected_accounts") == 0
-                                                          and res.get("public_health", True))
+        res["missing_account_ids"] = [a["id"] for a in accounts if not a["ok"]]
+        res["ok"] = bool(expected) and all(a["ok"] for a in accounts) and not unexpected \
+            or (not expected and res.get("public_health", True))
         res["checked_at"] = now_iso()
         self._mark(sid, "done" if res["ok"] else "pending", **res)
         with self.lock:
@@ -378,13 +502,32 @@ echo "READY="; curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/o
             self._save()
         return res
 
+    def disable_missing_on_target(self) -> list:
+        """Audited exception path — sets every expected account that did not
+        reconnect to trading_enabled=false on the NEW host, then re-checks."""
+        cut = self.state["facts"].get("cutover") or {}
+        missing = list(cut.get("missing_account_ids") or [])
+        if missing:
+            ids = ",".join(f"ObjectId('{i}')" for i in missing if re.fullmatch(r"[0-9a-f]{24}", i))
+            js = ("db.accounts.updateMany({_id:{$in:[" + ids + "]}},{$set:{trading_enabled:false,"
+                  "migration_disabled_at:new Date().toISOString(),migration_disabled_reason:'no heartbeat on new host at cutover'}}).modifiedCount")
+            out = self._mongo_eval(js, "cutover_check", remote=True)
+            self.log("cutover_check", f"EXCEPTION: disabled {len(missing)} account(s) on the new host: {missing} → {out.strip()[-40:]}")
+            with self.lock:
+                self.state["facts"]["cutover_exception"] = {"disabled_account_ids": missing, "at": now_iso()}
+                self.state["expected_accounts"] = [e for e in self.state.get("expected_accounts", []) if e["id"] not in missing]
+                self._save()
+        self.cutover_check()
+        return missing
+
     def decommission(self):
         sid = "decommission"
         self._mark(sid, "running")
         self.sh("docker compose stop", sid, 600)
-        open(os.path.join(STATE_DIR, "DECOMMISSIONED"), "w").write(
-            json.dumps({"at": now_iso(), "target": self.state["target"], "id": self.state["id"]}))
+        _write_private(os.path.join(STATE_DIR, "DECOMMISSIONED"),
+                       json.dumps({"at": now_iso(), "target": self.state["target"], "id": self.state["id"]}))
         self._mark(sid, "done")
+        self.wipe_key_material("decommissioned")
 
     # ── orchestration ───────────────────────────────────────────────────
     def _bg(self, fn, *steps):
@@ -425,7 +568,7 @@ echo "READY="; curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/o
         if step not in allowed:
             raise RuntimeError(f"unknown step {step}")
         if step == "decommission" and not self.state["facts"].get("cutover", {}).get("ok"):
-            raise RuntimeError("cutover not confirmed — EA heartbeats have not reached the new host")
+            raise RuntimeError("cutover not confirmed — not every expected account identity has reconnected on the new host")
         if self.state["awaiting"] != step:
             raise RuntimeError(f"migration is not awaiting '{step}' (awaiting: {self.state['awaiting']})")
         self._bg(None, *allowed[step])
@@ -464,12 +607,18 @@ echo "READY="; curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/o
             self.state["error"] = None
             self._save()
         self.log("abort", f"migration aborted — source {'restarted' if restarted else 'was never frozen'}")
+        self.wipe_key_material("aborted")
         return {"restarted_source": restarted}
 
 
 # ── Rehearsal mode (MIGRATOR_DRY_RUN=1): no command touches anything ────────
 _SIM = [("ssh-keyscan", "203.0.113.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISIMULATEDKEY"),
-        ("ssh-keygen -lf", "256 SHA256:SIMULATED-FINGERPRINT 203.0.113.10 (ED25519)"),
+        ("ssh-keygen -lf", "256 SHA256:Simulated0Fingerprint0Rehearsal0Mode0000000 203.0.113.10 (ED25519)"),
+        ("trading_enabled:true,status", '[{"id":"6a0000000000000000000001","label":"SIM-1","account_number":"111","broker_server":"Sim","ea_version":"1.56","policy_version":"v56.4","bridge_token_tail":"aaaaaa"},'
+                                        '{"id":"6a0000000000000000000002","label":"SIM-2","account_number":"222","broker_server":"Sim","ea_version":"1.56","policy_version":"v56.4","bridge_token_tail":"bbbbbb"}]'),
+        ("last_heartbeat:{$gt", lambda: '[{"id":"6a0000000000000000000001","account_number":"111","broker_server":"Sim","ea_version":"1.56","policy_version":"v56.4","bridge_token_tail":"aaaaaa","trading_enabled":true}'
+                                        + (',{"id":"6a0000000000000000000002","account_number":"222","broker_server":"Sim","ea_version":"1.56","policy_version":"v56.4","bridge_token_tail":"bbbbbb","trading_enabled":true}' if time.time() % 60 > 20 else "") + "]"),
+        ("updateMany", "1"),
         ("git rev-parse", "f" * 40), ("git tag --points-at", "v0.0.0-rehearsal"),
         ("du -sb /data/db", "1500000000"), ("du -sb backups", "200000000"),
         ("countDocuments({status", "2"), ("countDocuments({last_heartbeat", lambda: "2" if time.time() % 60 > 20 else "0"),
@@ -495,11 +644,25 @@ def simulated_run(cmd: str, step: str, timeout: int) -> tuple:
 
 # ── HTTP ────────────────────────────────────────────────────────────────
 def _token() -> str:
-    f = os.environ.get("MIGRATOR_TOKEN_FILE", "/run/secrets/metrics_token")
+    """Dedicated one-time migration token (secrets/migrator_token, minted by
+    `make migrator-on`). NEVER the metrics token."""
+    f = os.environ.get("MIGRATOR_TOKEN_FILE", "/run/secrets/migrator_token")
+    if f.endswith("metrics_token"):
+        raise SystemExit("refusing to run with METRICS_TOKEN as migration authority")
     try:
         return open(f).read().strip()
     except FileNotFoundError:
         return os.environ.get("MIGRATOR_TOKEN", "")
+
+
+def _expired() -> bool:
+    until = os.environ.get("MIGRATOR_ENABLED_UNTIL", "")
+    if not until:
+        return False
+    try:
+        return datetime.now(timezone.utc) > datetime.fromisoformat(until.replace("Z", "+00:00"))
+    except ValueError:
+        return True
 
 
 def make_handler(mig: Migrator, token: str):
@@ -514,6 +677,9 @@ def make_handler(mig: Migrator, token: str):
 
         def _auth(self) -> bool:
             import hmac
+            if _expired():
+                self._send(410, {"error": "migration window expired — run `make migrator-on` again"})
+                return False
             got = self.headers.get("X-Migrator-Token", "")
             return bool(token) and hmac.compare_digest(got, token)
 
@@ -522,7 +688,7 @@ def make_handler(mig: Migrator, token: str):
 
         def do_GET(self):
             if not self._auth():
-                return self._send(401, {"error": "unauthorized"})
+                return None if _expired() else self._send(401, {"error": "unauthorized"})
             if self.path == "/status":
                 return self._send(200, mig.snapshot())
             if self.path == "/public-key":
@@ -531,12 +697,16 @@ def make_handler(mig: Migrator, token: str):
 
         def do_POST(self):
             if not self._auth():
-                return self._send(401, {"error": "unauthorized"})
+                return None if _expired() else self._send(401, {"error": "unauthorized"})
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}") if n else {}
             try:
+                if self.path == "/scan":
+                    return self._send(200, mig.scan_host(body["host"], int(body.get("port", 22))))
                 if self.path == "/preflight":
                     return self._send(200, mig.preflight(body["target"], body.get("accept_fingerprint")))
+                if self.path == "/disable-missing":
+                    return self._send(200, {"disabled": mig.disable_missing_on_target(), "state": mig.snapshot()})
                 if self.path == "/start":
                     mig.start()
                 elif self.path == "/advance":

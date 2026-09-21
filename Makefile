@@ -38,18 +38,23 @@ backup:               ## timestamped Mongo backup into ./backups
 	deploy/backup.sh backup
 
 # ── host migration (admin wizard at /admin/host-migration) ──────────────────
-migrator-on:          ## enable the migration sidecar (docker socket + SSH) next to the stack
+migrator-on:          ## enable the migration sidecar for 24h (dedicated one-time token, docker socket + SSH)
 	@. deploy/lib.sh; set_kv .env STOIC_ROOT "$$(pwd)"; \
+	mkdir -p secrets release/migration && chmod 700 release/migration; \
+	umask 077; head -c 32 /dev/urandom | base64 | tr -d '/+=\n' > secrets/migrator_token; chmod 600 secrets/migrator_token; \
+	set_kv .env MIGRATOR_ENABLED_UNTIL "$$(date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+24H +%Y-%m-%dT%H:%M:%SZ)"; \
 	CF=$$(grep '^COMPOSE_FILE=' .env | cut -d= -f2-); [ -n "$$CF" ] || CF=docker-compose.yml; \
 	case ":$$CF:" in *:docker-compose.migrator.yml:*) ;; *) set_kv .env COMPOSE_FILE "$$CF:docker-compose.migrator.yml";; esac
 	docker compose up -d --build migrator backend
-	@echo "migrator enabled — open /admin/host-migration. Disable afterwards with: make migrator-off"
+	@echo "migrator enabled until $$(grep '^MIGRATOR_ENABLED_UNTIL=' .env | cut -d= -f2-) — open /admin/host-migration. Disable with: make migrator-off"
 
-migrator-off:         ## remove the migration sidecar again
+migrator-off:         ## remove the migration sidecar, destroy its token and verify it is gone
 	docker compose stop migrator 2>/dev/null || true; docker compose rm -f migrator 2>/dev/null || true
-	@. deploy/lib.sh; CF=$$(grep '^COMPOSE_FILE=' .env | cut -d= -f2- | sed 's/:docker-compose.migrator.yml//'); set_kv .env COMPOSE_FILE "$$CF"
+	@. deploy/lib.sh; CF=$$(grep '^COMPOSE_FILE=' .env | cut -d= -f2- | sed 's/:docker-compose.migrator.yml//'); set_kv .env COMPOSE_FILE "$$CF"; set_kv .env MIGRATOR_ENABLED_UNTIL ""
+	@rm -f secrets/migrator_token release/migration/id_ed25519 release/migration/id_ed25519.pub release/migration/known_hosts release/migration/known_hosts.scan
 	docker compose up -d backend
+	@docker compose ps --status running --format '{{.Service}}' | grep -q '^migrator$$' && { echo "!! migrator still running"; exit 1; } || echo "migrator disabled and verified gone"
 
 # ── staging acceptance drills (AT-01 boundary · AT-15 rollback) ─────────────
 staging-acceptance:   ## AT-01 six-account boundary drill; ROLLBACK=1 adds the AT-15 forced-failure rollback drill (downtime)
-	@if [ "$(ROLLBACK)" = "1" ]; then scripts/staging_acceptance.sh --rollback --yes; else scripts/staging_acceptance.sh; fi
+	@if [ "$(ROLLBACK)" = "1" ]; then EXPECT="$(EXPECT)" scripts/staging_acceptance.sh --rollback --yes; else EXPECT="$(EXPECT)" scripts/staging_acceptance.sh; fi

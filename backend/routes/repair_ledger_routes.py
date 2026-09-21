@@ -76,8 +76,11 @@ async def repair_ledger_verify(user=Depends(get_current_user)):
     """Append-only application ledger integrity: sha256 chain + incomplete
     (PENDING) outbox rows. DB-level WORM is NOT enforced (audit P1-4)."""
     require_admin(user)
-    from health_repairs import verify_repair_chain
-    return await verify_repair_chain(get_db())
+    from health_repairs import verify_anchor, verify_repair_chain
+    out = await verify_repair_chain(get_db())
+    out["anchor"] = await verify_anchor(get_db())
+    out["ok"] = out["ok"] and out["anchor"]["ok"]
+    return out
 
 
 @router.get("/admin/repair-ledger/kinds")

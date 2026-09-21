@@ -13,19 +13,31 @@ services:
     working_dir: ${STOIC_ROOT:?run `make migrator-on` (pins the checkout path)}
     environment:
       STOIC_ROOT: ${STOIC_ROOT}
-      MIGRATOR_TOKEN_FILE: /run/secrets/metrics_token
+      # dedicated one-time token (secrets/migrator_token) — NEVER the metrics token
+      MIGRATOR_TOKEN_FILE: /run/secrets/migrator_token
+      # hard expiry written by `make migrator-on` (24h); requests → 410 afterwards
+      MIGRATOR_ENABLED_UNTIL: ${MIGRATOR_ENABLED_UNTIL:-}
       # MIGRATOR_DRY_RUN=1 make migrator-on → rehearsal: the wizard runs end to
       # end with simulated commands, nothing is touched on either host
       MIGRATOR_DRY_RUN: ${MIGRATOR_DRY_RUN:-0}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # same absolute path inside and outside so `docker compose` resolves
-      # bind mounts / secrets exactly like the host does
-      - ${STOIC_ROOT}:${STOIC_ROOT}
+      # bind mounts / secrets exactly like the host does — READ-ONLY; only the
+      # migration state directory (key, known_hosts, state.json, mode 0700) is writable
+      - ${STOIC_ROOT}:${STOIC_ROOT}:ro
+      - ${STOIC_ROOT}/release/migration:${STOIC_ROOT}/release/migration
     secrets:
-      - metrics_token
+      - migrator_token
     # no `ports:` — reachable only from the compose network (API → migrator)
 
   backend:
     environment:
       MIGRATOR_URL: http://migrator:8790
+      MIGRATOR_TOKEN_FILE: /run/secrets/migrator_token
+    secrets:
+      - migrator_token
+
+secrets:
+  migrator_token:
+    file: ./secrets/migrator_token

@@ -71,7 +71,28 @@ export function GatePanel({ state, refresh }) {
                             <Check ok={cut.target_serves_domain_tls} label={`New host answers https://${cut.domain} with a valid certificate`} testid="hm-cut-tls" />
                             <Check ok={cut.public_health} label="Public https://domain/api/health responds" testid="hm-cut-public" />
                             <Check ok={cut.dns_points_to_target || cut.dns_proxied} label={`DNS resolves (${(cut.dns || []).join(", ") || "unresolved"})${cut.dns_proxied ? " — proxied, IP hidden" : ""}`} testid="hm-cut-dns" />
-                            <Check ok={cut.ea_heartbeats_on_target > 0} label={`EA heartbeats on new host since freeze: ${cut.ea_heartbeats_on_target} (source had ${cut.connected_accounts_at_source ?? "?"} connected)`} testid="hm-cut-ea" />
+                            <Check ok={cut.accounts?.length > 0 && cut.accounts.every(a => a.ok) && !(cut.unexpected_identities || []).length}
+                                label={`All ${cut.expected_accounts ?? 0} expected account identities reconnected (${cut.arrived ?? 0} arrived · ${(cut.unexpected_identities || []).length} unexpected)`} testid="hm-cut-ea" />
+                            {cut.accounts?.length > 0 && (
+                                <table className="w-full text-[10px] font-mono mt-2" data-testid="hm-cut-accounts">
+                                    <thead><tr className="text-[#52525B] text-left"><th>account</th><th>broker id</th><th>heartbeat</th><th>identity</th><th>build</th></tr></thead>
+                                    <tbody>{cut.accounts.map(a => (
+                                        <tr key={a.id} className={a.ok ? "text-[#A1A1AA]" : "text-[#FF3B30]"} data-testid={`hm-cut-acc-${a.id}`}>
+                                            <td className="pr-2 truncate max-w-[120px]">{a.label || a.id}</td><td className="pr-2">{a.account_number}@{a.broker_server}</td>
+                                            <td>{a.heartbeat_on_target ? "✓" : "—"}</td><td>{a.identity_match ? "✓" : "✗"}</td><td>{a.version_match ? "✓" : `✗ ${a.target_ea_version || ""}`}</td>
+                                        </tr>))}</tbody>
+                                </table>
+                            )}
+                            {(cut.unexpected_identities || []).length > 0 && <div className="text-[10px] font-mono text-[#FF3B30]" data-testid="hm-cut-unexpected">Unexpected enabled identities on the new host: {cut.unexpected_identities.map(u => u.account_number || u.id).join(", ")} — investigate before decommission.</div>}
+                        </div>
+                    )}
+                    {cut && !cut.ok && (cut.missing_account_ids || []).length > 0 && (
+                        <div className="border border-[#FF3B30]/40 p-3 space-y-2" data-testid="hm-exception">
+                            <div className="text-[10px] font-mono tracking-widest text-[#FF3B30]">AUDITED EXCEPTION</div>
+                            <p className="text-[11px] text-[#A1A1AA]">{cut.missing_account_ids.length} expected account(s) have not reconnected. You may continue ONLY by setting them <b className="text-[#E4E4E7]">trading_enabled = false</b> on the new host (separately journaled, 2FA). They stay OFF until re-enabled by hand.</p>
+                            <input value={confirm} onChange={e => setConfirm(e.target.value)} placeholder='type DISABLE MISSING to confirm' data-testid="hm-exception-confirm"
+                                className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-xs font-mono text-[#E4E4E7] outline-none focus:border-[#FF3B30]/50" />
+                            <Btn danger disabled={confirm !== "DISABLE MISSING"} onClick={() => post("disable-missing", {}, "exc", "Missing accounts disabled on new host")} busy={busy === "exc"} icon={XCircle} testid="hm-exception-btn">DISABLE MISSING ACCOUNTS + RE-CHECK</Btn>
                         </div>
                     )}
                     <div className="flex flex-wrap gap-2">

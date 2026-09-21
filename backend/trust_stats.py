@@ -18,6 +18,7 @@ reconciliation status. Nothing here is a marketing estimate:
   `null` with `status: "window_incomplete"`. The old ops_soak_samples ratio
   is published as `ops_monitoring_coverage_pct` (internal), never as uptime.
 """
+import os
 from datetime import datetime, timedelta, timezone
 
 from broker_env import broker_environment
@@ -28,9 +29,10 @@ SLI = {"name": "edge_availability_30d",
        "definition": "successful eligible requests / total eligible requests",
        "eligible_endpoints": ["/api/health", "/"],
        "success": "HTTP 200 within 10s from an external region",
-       "interval_seconds": 60, "window_days": 30, "min_regions": 1,
-       "exclusions": ["announced maintenance windows (ops_maintenance)",
-                      "prober-side network failures (probe.prober_error=true)"]}
+       "sample_rule": "one server-bucketed sample per (region, endpoint, minute); region derived from the prober token; duplicates ignored",
+       "interval_seconds": 60, "window_days": 30, "min_coverage_pct_per_series": 95.0,
+       "exclusions": ["prober-side network failures (prober_error=true)",
+                      "endpoints outside the allowlist (rejected at ingestion)"]}
 
 
 def _iso(dt: datetime) -> str:
@@ -100,28 +102,32 @@ _BLOCKED_EXCL = ["HOLD verdicts (no trade attempted)", "synthetic/QA accounts an
 
 
 async def availability_30d(db, now: datetime) -> dict:
+    from edge_probes import ALLOWED_ENDPOINTS, configured_regions, coverage
     start = now - timedelta(days=30)
-    first = await db.edge_probes.find_one({}, sort=[("at", 1)], projection={"at": 1})
-    out = {"sli": SLI, "value_pct": None, "status": "no_probes", "window_start": _iso(start),
-           "window_end": _iso(now), "reconciled": False}
+    out = {"sli": {**SLI, "eligible_endpoints": list(ALLOWED_ENDPOINTS), "configured_regions": configured_regions()},
+           "value_pct": None, "status": "no_probes", "window_start": _iso(start), "window_end": _iso(now),
+           "reconciled": False, "per_region": [], "gaps": []}
+    if not configured_regions():
+        out["status"] = "no_regions_configured"
+        return out
+    first = await db.edge_probes.find_one({}, sort=[("minute", 1)], projection={"minute": 1})
     if not first:
         return out
-    first_at = first["at"] if isinstance(first["at"], datetime) else datetime.fromisoformat(str(first["at"]).replace("Z", "+00:00"))
-    if first_at.tzinfo is None:
-        first_at = first_at.replace(tzinfo=timezone.utc)
+    first_at = first["minute"] if first["minute"].tzinfo else first["minute"].replace(tzinfo=timezone.utc)
     if first_at > start:
         out["status"] = "window_incomplete"
         out["window_covered_days"] = round((now - first_at).total_seconds() / 86400, 1)
         return out
-    match = {"at": {"$gte": start}, "eligible": True, "prober_error": {"$ne": True}}
-    total = await db.edge_probes.count_documents(match)
-    expected = 30 * 86400 // SLI["interval_seconds"] * SLI["min_regions"]
-    if total < expected * 0.95:
-        out.update(status="window_incomplete", probes=total, expected=expected)
+    cov = await coverage(db, start, now)
+    out["per_region"] = cov["series"]
+    out["gaps"] = cov["gaps"]
+    if cov["gaps"]:
+        out["status"] = "window_incomplete"
         return out
-    ok = await db.edge_probes.count_documents({**match, "ok": True})
-    out.update(value_pct=round(ok * 100.0 / total, 3), status="reconciled", reconciled=True,
-               probes=total, successful=ok, regions=sorted(await db.edge_probes.distinct("region", match)))
+    total = sum(s["samples"] for s in cov["series"])
+    ok = sum(s["ok"] for s in cov["series"])
+    out.update(value_pct=round(ok * 100.0 / max(1, total), 3), status="reconciled", reconciled=True,
+               probes=total, successful=ok, regions=cov["configured_regions"])
     return out
 
 
@@ -140,6 +146,10 @@ async def ops_monitoring_coverage(db, now: datetime) -> dict:
 
 _COV_DEF = ("share of expected 30-minute ops soak samples that were recorded — measures the "
             "internal sampler, NOT public availability; never shown as uptime")
+
+
+def legal_approved() -> bool:
+    return os.environ.get("TRUST_STATS_LEGAL_APPROVED", "").lower() == "true"
 
 
 async def build_trust_stats(db) -> dict:
@@ -162,6 +172,8 @@ async def build_trust_stats(db) -> dict:
         "as_of": _iso(now), "period": {"days": 30, "start": _iso(now - timedelta(days=30)), "end": _iso(now)},
         "source": "platform_db_aggregate", "environment_breakdown": acc["environment"],
         "reconciliation": "reconciled" if avail["reconciled"] else "availability_window_incomplete",
-        "legal_review": "pending — do not use in paid marketing until approved",
+        "legal_review": "approved" if legal_approved() else "pending — section withheld from the public page until TRUST_STATS_LEGAL_APPROVED=true",
+        "published": legal_approved(),
+        "context": "demo/paper environments included where shown; figures describe platform activity, not profitability or customer capital protection",
         "ttl_seconds": 900,
     }

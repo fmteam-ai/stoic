@@ -21,6 +21,7 @@ than the PENDING→COMPLETED transition. DB-level WORM is out of app scope.
 import hashlib
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -293,4 +294,70 @@ async def run_all_users(db) -> int:
             n += 1
         except Exception as e:  # noqa: BLE001 — one user must not stop the sweep
             logger.warning("health repairs failed for user %s: %s", uid, e)
+    try:
+        await anchor_ledger(db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ledger anchoring failed: %s", e)
     return n
+
+
+# ── P2-1 · external anchors: prove tail completeness ─────────────────────────
+ANCHOR_FILE = os.environ.get("LEDGER_ANCHOR_FILE", "/app/release/ledger-anchors.jsonl")
+
+
+def _anchor_key() -> bytes | None:
+    k = os.environ.get("LEDGER_ANCHOR_KEY") or os.environ.get("JWT_SECRET")
+    return k.encode() if k else None
+
+
+def _anchor_sig(body: dict) -> str | None:
+    key = _anchor_key()
+    if not key:
+        return None
+    import hmac
+    return hmac.new(key, json.dumps(body, sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256).hexdigest()
+
+
+async def anchor_ledger(db, build: str | None = None) -> dict:
+    """Sign (last_seq, last_hash, at, build) and export it OUTSIDE the ledger
+    collection: `repair_ledger_anchors` + append-only JSONL file (ship to
+    SIEM/object storage). Deleting the ledger tail then becomes detectable."""
+    last = await db.repair_ledger.find_one({"entry_hash": {"$exists": True}}, sort=[("seq", -1)])
+    body = {"last_seq": last["seq"] if last else 0, "last_hash": last["entry_hash"] if last else GENESIS,
+            "at": _now().isoformat(), "build": build or os.environ.get("GIT_SHA") or "unknown"}
+    doc = {**body, "sig": _anchor_sig(body), "algo": "hmac-sha256(LEDGER_ANCHOR_KEY)"}
+    await db.repair_ledger_anchors.insert_one(dict(doc))
+    try:
+        os.makedirs(os.path.dirname(ANCHOR_FILE), exist_ok=True)
+        with open(ANCHOR_FILE, "a") as f:
+            f.write(json.dumps(doc, default=str) + "\n")
+    except OSError:
+        pass
+    doc.pop("_id", None)
+    return doc
+
+
+async def verify_anchor(db) -> dict:
+    """Readiness check: the latest anchor must still be reachable in the
+    ledger (no sequence regression, hash at anchored seq unchanged) and its
+    signature must verify. Missing anchor = not ok once the ledger has rows."""
+    anchor = await db.repair_ledger_anchors.find_one({}, sort=[("at", -1)])
+    last = await db.repair_ledger.find_one({"entry_hash": {"$exists": True}}, sort=[("seq", -1)])
+    cur_seq = last["seq"] if last else 0
+    if not anchor:
+        return {"ok": cur_seq == 0, "detail": "no anchor yet" if cur_seq == 0 else "ledger has rows but no anchor",
+                "current_seq": cur_seq}
+    body = {k: anchor[k] for k in ("last_seq", "last_hash", "at", "build")}
+    sig_ok = anchor.get("sig") is None or _anchor_key() is None or _anchor_sig(body) == anchor.get("sig")
+    row = await db.repair_ledger.find_one({"seq": anchor["last_seq"]}) if anchor["last_seq"] else None
+    regression = cur_seq < anchor["last_seq"]
+    hash_ok = anchor["last_seq"] == 0 or (row is not None and row.get("entry_hash") == anchor["last_hash"])
+    problems = []
+    if regression:
+        problems.append("ledger_sequence_regression")
+    if not hash_ok:
+        problems.append("anchored_entry_missing_or_changed")
+    if not sig_ok:
+        problems.append("anchor_signature_invalid")
+    return {"ok": not problems, "problems": problems, "anchor_seq": anchor["last_seq"], "current_seq": cur_seq,
+            "anchored_at": anchor["at"], "signed": anchor.get("sig") is not None}

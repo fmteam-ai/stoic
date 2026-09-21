@@ -39,3 +39,17 @@ Evidence bundle: `release/drills/summary-<ts>.json` + per-drill files — attach
 - P2-2 cosign identity pinned to `…/.github/workflows/release.yml@refs/tags/<tag>` + workflow-repository claim; Rekor bundle published/kept.
 - P2-3 sweep enumerates accounts ∪ users owning repair candidates.
 - P2-4 marquee clones `role="presentation" aria-hidden inert`; axe assertion delegated to the Playwright/testing-agent run.
+
+## Round 4 additions (AT numbering of the round-4 audit)
+| AT | Status | Evidence |
+|----|--------|----------|
+| AT-05 repair outbox fault injection | AUTOMATED | `test_at07_*` (before/after mutation, replay exactly once, timestamps preserved, unledgered mutation impossible) |
+| AT-06 repair-chain anchoring | AUTOMATED (app) | `test_at06_anchor_*`: tail deletion → `ledger_sequence_regression`, forged anchor signature, middle edit; anchors exported to `release/ledger-anchors.jsonl` (+ `repair_ledger_anchors`), readiness check `repair_ledger_anchor`. DB-credential denial → **DEPLOYED-ONLY** |
+| AT-07 trust-stat populations | AUTOMATED | `test_at11_*`, `test_p22_*` (published only with `TRUST_STATS_LEGAL_APPROVED=true`) |
+| AT-08 availability integrity | AUTOMATED | `test_at08_edge_probe_*`: region from token, allowlist, forged eligibility ignored, duplicate minute deduped, per-region coverage gate withholds % |
+| AT-10 signed release + rollback | STAGING DRILL | `make staging-acceptance ROLLBACK=1` |
+| AT-11 migration host identity | AUTOMATED (unit) | `test_preflight_refuses_without_out_of_band_fingerprint`, `test_scan_observes_without_trusting_then_trust_pins`, `test_host_key_rotation_between_scan_and_trust_is_caught`, step-up on preflight/start/freeze/decommission/abort (`test_iter203/223`) |
+| AT-12 migration account reconciliation | AUTOMATED (unit) | `test_full_happy_path_with_gates` (0/1/2/3, wrong identity, unexpected identity → blocked; exact 3 → unlock), `test_cutover_exception_disables_missing_then_unlocks` |
+| AT-13 migration rollback/data integrity | PARTIAL | abort restores source once + stops target workers (unit); collection count/hash comparison → **DEPLOYED-ONLY** |
+| P1-4 live 3-of-6 | STAGING/PROD RUN | `make staging-acceptance EXPECT=6/3/3` → signed read-only `ops/production_reconcile.py` evidence |
+| P2-4 model quality | OUT OF SCOPE of the deploy pipeline — see `docs/MODEL_PROMOTION.md` (to write): walk-forward/OOS, leakage, costs, regime, calibration drift, capacity; model promotion stays independent from application deployment |

@@ -246,12 +246,18 @@ def test_at11_availability_never_claimed_without_reconciled_window(sdb):
     now = datetime.now(timezone.utc)
     sdb.edge_probes.delete_many({"region": "at11"})
     a = run_async(ts.availability_30d(get_db(), now))
-    assert a["value_pct"] is None and a["reconciled"] is False and a["status"] in ("no_probes", "window_incomplete")
+    assert a["value_pct"] is None and a["reconciled"] is False and a["status"] in ("no_probes", "window_incomplete", "no_regions_configured")
     # partial window (probes started yesterday) → still no number
-    sdb.edge_probes.insert_one({"at": now - timedelta(days=1), "region": "at11", "endpoint": "/api/health", "ok": True, "eligible": True})
+    import os as _os
+    _os.environ["EDGE_PROBE_TOKENS"] = "at11:" + "x" * 32
+    sdb.edge_probes.insert_one({"at": now - timedelta(days=1), "minute": now - timedelta(days=1), "region": "at11", "endpoint": "/api/health", "ok": True, "eligible": True})
     a = run_async(ts.availability_30d(get_db(), now))
     assert a["value_pct"] is None and a["status"] == "window_incomplete"
     sdb.edge_probes.delete_many({"region": "at11"})
+    _os.environ.pop("EDGE_PROBE_TOKENS", None)
+    _os.environ.pop("EDGE_PROBE_TOKENS", None)
+    _os.environ.pop("EDGE_PROBE_TOKENS", None)
+    _os.environ.pop("EDGE_PROBE_TOKENS", None)
     payload = run_async(ts.build_trust_stats(get_db()))
     assert payload["uptime_30d_pct"] is None and payload["population_version"] == "trust-stats/v2"
     assert payload["ops_monitoring_coverage_definition"].startswith("share of expected")
@@ -332,3 +338,85 @@ def test_at15_rollback_drill_wiring():
     runner = open(os.path.join(REPO, "scripts", "staging_acceptance.sh")).read()
     assert "ops/at01_account_boundary.py" in runner and "at15_rollback_drill.sh --yes" in runner
     assert "staging-acceptance:" in open(os.path.join(REPO, "Makefile")).read()
+
+
+# ── AT-06 (round 4) · anchor detects tail deletion / regression ──────────────
+def test_at06_anchor_detects_tail_deletion_and_verifies_signature(sdb, uid, monkeypatch):
+    from database import get_db
+    import health_repairs as hr
+    monkeypatch.setenv("LEDGER_ANCHOR_KEY", "anchor-test-key")
+    monkeypatch.setattr(hr, "ANCHOR_FILE", "/tmp/at06-anchors.jsonl")
+    _seed_ghosts(sdb, uid, 1)
+    run_async(hr.run_health_repairs(get_db(), uid))
+    anchor = run_async(hr.anchor_ledger(get_db(), build="test"))
+    assert anchor["sig"] and anchor["last_seq"] >= 1
+    assert run_async(hr.verify_anchor(get_db()))["ok"] is True
+    tail = sdb.repair_ledger.find_one({"seq": anchor["last_seq"]})
+    sdb.repair_ledger.delete_one({"_id": tail["_id"]})              # delete the TAIL → chain alone looks valid
+    chain = run_async(hr.verify_repair_chain(get_db()))
+    assert chain["ok"] is True or chain["anomalies"] == []           # internal chain cannot see it …
+    v = run_async(hr.verify_anchor(get_db()))
+    assert v["ok"] is False and "ledger_sequence_regression" in v["problems"]      # … the anchor can
+    sdb.repair_ledger.insert_one(tail)                                # restore
+    assert run_async(hr.verify_anchor(get_db()))["ok"] is True
+    sdb.repair_ledger.update_one({"_id": tail["_id"]}, {"$set": {"affected_ids": ["x"]}})  # then edit tail → still caught by chain
+    assert run_async(hr.verify_repair_chain(get_db()))["ok"] is False
+    sdb.repair_ledger.replace_one({"_id": tail["_id"]}, tail)
+    # forged anchor signature
+    sdb.repair_ledger_anchors.update_one({"at": anchor["at"]}, {"$set": {"sig": "0" * 64}})
+    assert "anchor_signature_invalid" in run_async(hr.verify_anchor(get_db()))["problems"]
+    sdb.repair_ledger_anchors.update_one({"at": anchor["at"]}, {"$set": {"sig": anchor["sig"]}})
+    assert any(l.strip() for l in open("/tmp/at06-anchors.jsonl"))     # exported outside the DB
+    ops = open(os.path.join(ROOT, "routes", "ops_routes.py")).read()
+    assert 'checks["repair_ledger_anchor"]' in ops
+
+
+# ── AT-08 · availability integrity ───────────────────────────────────────────
+def test_at08_edge_probe_ingestion_region_from_token_allowlist_dedupe(sdb, monkeypatch):
+    from database import get_db
+    import edge_probes as ep
+    from fastapi import HTTPException
+    monkeypatch.setenv("EDGE_PROBE_TOKENS", "fra:" + "f" * 32 + ",iad:" + "i" * 32)
+    monkeypatch.delenv("EDGE_PROBE_TOKEN", raising=False)
+    sdb.edge_probes.delete_many({"region": {"$in": ["fra", "iad", "forged"]}})
+    sdb.edge_probe_rejects.delete_many({"region": {"$in": ["fra", "iad"]}})
+    with pytest.raises(HTTPException) as e:                                   # invalid token
+        run_async(ep.ingest_probe(get_db(), "nope", {"endpoint": "/api/health", "ok": True}))
+    assert e.value.status_code == 401
+    with pytest.raises(HTTPException) as e:                                   # unknown endpoint
+        run_async(ep.ingest_probe(get_db(), "f" * 32, {"endpoint": "/admin", "ok": True}))
+    assert e.value.status_code == 422
+    # forged region/eligibility in the body is ignored; region comes from the token
+    r = run_async(ep.ingest_probe(get_db(), "f" * 32, {"endpoint": "/api/health", "ok": True, "region": "forged", "eligible": True, "prober_error": True}))
+    assert r["region"] == "fra" and r["eligible"] is False and r["recorded"] is True
+    row = sdb.edge_probes.find_one({"region": "fra", "endpoint": "/api/health"}, sort=[("minute", -1)])
+    assert row["ok"] is False and row["eligible"] is False and row["prober_error"] is True
+    assert sdb.edge_probes.count_documents({"region": "forged"}) == 0
+    # duplicate minute → not counted twice
+    r2 = run_async(ep.ingest_probe(get_db(), "f" * 32, {"endpoint": "/api/health", "ok": True}))
+    assert r2["duplicate"] is True and r2["recorded"] is False
+    assert sdb.edge_probes.count_documents({"region": "fra", "endpoint": "/api/health", "minute": row["minute"]}) == 1
+    assert sdb.edge_probe_rejects.count_documents({"region": "fra", "reason": "duplicate_minute"}) >= 1
+    idx = {i["name"] for i in sdb.edge_probes.list_indexes()}
+    assert "uniq_region_endpoint_minute" in idx
+    # coverage gate: iad has no samples → gaps → percentage withheld
+    import trust_stats as ts
+    a = run_async(ts.availability_30d(get_db(), datetime.now(timezone.utc)))
+    assert a["value_pct"] is None and a["status"] in ("window_incomplete", "no_probes")
+    if a["gaps"]:
+        assert any(g["region"] == "iad" for g in a["gaps"])
+    sdb.edge_probes.delete_many({"region": {"$in": ["fra", "iad"]}})
+    sdb.edge_probe_rejects.delete_many({"region": {"$in": ["fra", "iad"]}})
+
+
+def test_p22_public_section_withheld_until_legal_approval(monkeypatch):
+    from database import get_db
+    import trust_stats as ts
+    monkeypatch.delenv("TRUST_STATS_LEGAL_APPROVED", raising=False)
+    p = run_async(ts.build_trust_stats(get_db()))
+    assert p["published"] is False and p["legal_review"].startswith("pending")
+    assert "not profitability" in p["context"]
+    monkeypatch.setenv("TRUST_STATS_LEGAL_APPROVED", "true")
+    assert run_async(ts.build_trust_stats(get_db()))["published"] is True
+    fe = open(os.path.join(REPO, "frontend", "src", "components", "LandingTestimonials.jsx")).read()
+    assert "s.published !== true" in fe and "pending compliance review" in fe

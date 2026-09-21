@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { Copy, Loader2, KeyRound, Radar, CheckCircle2, XCircle } from "lucide-react";
+import { Copy, Loader2, KeyRound, Radar, CheckCircle2, XCircle, Fingerprint } from "lucide-react";
 import { fmtBytes } from "./Shared";
 
 const CHECK_LABEL = {
@@ -29,11 +29,26 @@ export function TargetForm({ state, onPreflight }) {
 
     useEffect(() => { api.get("/admin/host-migration/public-key").then(r => setPub(r.data.public_key)).catch(() => {}); }, []);
 
+    const [scan, setScan] = useState(null);
+    const [picked, setPicked] = useState("");
+    const [typed, setTyped] = useState("");
+
+    const doScan = async () => {
+        setBusy(true); setScan(null); setPicked(""); setTyped("");
+        try {
+            const { data } = await api.post("/admin/host-migration/scan", { host: f.host, port: Number(f.port) });
+            setScan(data);
+            toast.success(`Observed ${data.fingerprints.length} host key(s) — compare with your provider console`);
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    const confirmed = picked && typed.trim() === picked;
     const run = async () => {
+        if (!confirmed) return;
         setBusy(true);
         try {
-            await api.post("/admin/host-migration/preflight", { ...f, port: Number(f.port) });
-            toast.success("Preflight finished");
+            await api.post("/admin/host-migration/preflight", { ...f, port: Number(f.port), accept_fingerprint: picked });
+            toast.success("Host key pinned · preflight finished");
             onPreflight();
         } catch (e) { toast.error(formatApiError(e)); onPreflight(); }
         finally { setBusy(false); }
@@ -64,9 +79,28 @@ curl -fsSL https://get.docker.com | sh && dnf install -y rsync   # if docker/rsy
                     <Field label="SSH USER" testid="hm-user" value={f.user} onChange={e => setF({ ...f, user: e.target.value })} />
                     <Field label="INSTALL PATH" testid="hm-path" value={f.path} onChange={e => setF({ ...f, path: e.target.value })} />
                 </div>
-                <button onClick={run} disabled={busy || busyState || !f.host} data-testid="hm-preflight-btn"
+                <button onClick={doScan} disabled={busy || busyState || !f.host} data-testid="hm-scan-btn"
+                    className="w-full py-2.5 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#00FF41]/50 hover:text-[#00FF41] disabled:opacity-40 flex items-center justify-center gap-2">
+                    {busy && !scan ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Fingerprint className="w-3.5 h-3.5" />} SCAN HOST KEY (NO LOGIN)
+                </button>
+                {scan && (
+                    <div className="border border-[#FFB020]/40 bg-[#FFB020]/5 p-3 space-y-2" data-testid="hm-fingerprints">
+                        <div className="text-[10px] font-mono tracking-widest text-[#FFB020]">3 · CONFIRM THE HOST KEY OUT-OF-BAND</div>
+                        <p className="text-[11px] text-[#A1A1AA]">Nothing has been trusted yet. Open the server's console at your provider and run
+                            <code className="text-[#E4E4E7]"> ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. Pick the matching fingerprint below and re-type it exactly.</p>
+                        {scan.fingerprints.map(fp => (
+                            <label key={fp.fingerprint} className={`flex items-start gap-2 text-[11px] font-mono cursor-pointer ${picked === fp.fingerprint ? "text-[#00FF41]" : "text-[#A1A1AA]"}`}>
+                                <input type="radio" name="fp" checked={picked === fp.fingerprint} onChange={() => setPicked(fp.fingerprint)} data-testid={`hm-fp-${fp.type}`} className="mt-0.5" />
+                                <span className="break-all">{fp.fingerprint} <span className="text-[#52525B]">({fp.type})</span></span>
+                            </label>
+                        ))}
+                        <input value={typed} onChange={e => setTyped(e.target.value)} placeholder="re-type the chosen fingerprint exactly" data-testid="hm-fp-confirm"
+                            className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-[11px] font-mono text-[#E4E4E7] outline-none focus:border-[#00FF41]/50" />
+                    </div>
+                )}
+                <button onClick={run} disabled={busy || busyState || !confirmed} data-testid="hm-preflight-btn"
                     className="w-full py-2.5 text-xs font-mono tracking-widest border border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/10 disabled:opacity-40 flex items-center justify-center gap-2">
-                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Radar className="w-3.5 h-3.5" />} {busy ? "CHECKING NEW HOST…" : "RUN PREFLIGHT"}
+                    {busy && scan ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Radar className="w-3.5 h-3.5" />} {busy && scan ? "PINNING KEY · CHECKING NEW HOST…" : "TRUST KEY (2FA) + RUN PREFLIGHT"}
                 </button>
             </div>
             <PreflightResult facts={facts} error={state?.status === "failed" ? state?.error : null} />
@@ -90,7 +124,7 @@ function PreflightResult({ facts, error }) {
                         </div>
                     ))}
                     <div className="grid grid-cols-2 gap-2 pt-3 text-[11px] font-mono text-[#71717A]">
-                        <span>host key <span className="text-[#A1A1AA] break-all">{facts.host_key?.fingerprints?.[0]}</span></span>
+                        <span>trusted host key <span className="text-[#00FF41] break-all">{facts.host_key?.accepted || facts.host_key?.fingerprints?.[0]}</span></span>
                         <span>target OS <span className="text-[#A1A1AA]">{facts.target?.OS || "?"}</span></span>
                         <span>free disk <span className="text-[#A1A1AA]">{fmtBytes(Number(facts.target?.DISK_AVAIL))} / need {fmtBytes(facts.target?.disk_needed)}</span></span>
                         <span>public IP <span className="text-[#A1A1AA]">{facts.target?.public_ip || "?"}</span></span>

@@ -20,7 +20,25 @@ browser ──HTTPS──▶ API container ──http://migrator:8790──▶ m
 * Admin session **plus fresh 2FA step-up** for `start`, `freeze`, `decommission`, `abort`.
   Every wizard action is journaled in `host_migration_events`.
 * The sidecar generates its **own ed25519 key** on first use; only the public key is
-  shown. Target host key is pinned on preflight (`StrictHostKeyChecking=yes`).
+  shown. **Host-key trust is two-phase (audit P1-1)**: *Scan* observes the target's
+  fingerprints without authenticating; the admin compares them with the provider console
+  (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), picks and re-types ONE exact
+  fingerprint and confirms with fresh 2FA step-up. Only then is `known_hosts` pinned
+  (`StrictHostKeyChecking=yes`) and SSH/rsync used. A fresh scan at confirmation time
+  defeats key swaps between the phases; observed and accepted fingerprints are journaled.
+* **Dedicated one-time token** (`secrets/migrator_token`, minted by `make migrator-on`),
+  never the metrics token; **24 h hard expiry** (`MIGRATOR_ENABLED_UNTIL` → HTTP 410);
+  checkout mounted **read-only**, only `release/migration` (mode 0700, files 0600) is
+  writable; logs are redacted; SSH key + pinned host keys are **destroyed** on
+  decommission/abort; `make migrator-off` removes the sidecar, deletes the token and
+  verifies the container is gone.
+* **Exact account reconciliation at cutover (audit P1-2)**: at freeze the sidecar
+  snapshots every enabled account (id, verified broker identity, bridge-token tail,
+  EA/policy version). Decommission unlocks only when *every* expected identity has a
+  fresh heartbeat on the new host with matching identity and versions and **no
+  unexpected enabled identity** appeared. Missing accounts can only be handled through
+  the separately journaled exception *"disable missing accounts"* (2FA), which sets them
+  `trading_enabled=false` on the new host before continuing.
 * Enable only for the migration, remove afterwards:
 
 ```bash
@@ -52,7 +70,7 @@ Open ports 22, 80 and 443. Nothing else is needed — the wizard installs STOIC.
 | 4 | **Freeze** | `docker compose stop` API + 6 workers — **downtime starts** | — | — |
 | 5 | **Final sync** | second dump (delta since warm sync; fast) | restore | — |
 | 6 | **Verify** | — | `docker compose up -d`, wait for `/api/ops/release-readiness` READY, `/api/health` | admin moves DNS |
-| 7 | **Cutover check** | resolves domain, `curl --resolve` against the new IP (TLS/cert), public health | counts accounts with `last_heartbeat` newer than the freeze → **EAs arrived** | ≥1 heartbeat (or 0 connected accounts) |
+| 7 | **Cutover check** | resolves domain, `curl --resolve` against the new IP (TLS/cert), public health | every expected enabled account has a post-freeze heartbeat with matching identity + versions; no unexpected identities | **all** expected identities (or audited exception) |
 | 8 | **Decommission** | `docker compose stop` (everything; data kept on disk) | live | admin types `DECOMMISSION` |
 
 **Abort** (any time before decommission): restarts the source stack if it was frozen and

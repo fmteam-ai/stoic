@@ -240,6 +240,12 @@ async def release_readiness(request: Request):
     # is exposed here and compared with the running build SHA / image digest.
     from release_truth import release_attestation_check
     checks["release_attestation"] = release_attestation_check(is_production())
+    # P2-1 — repair-ledger anchor: latest signed anchor must still be reachable (no tail deletion)
+    try:
+        from health_repairs import verify_anchor
+        checks["repair_ledger_anchor"] = await verify_anchor(db)
+    except Exception as e:  # noqa: BLE001
+        checks["repair_ledger_anchor"] = {"ok": False, "detail": f"anchor verification failed: {e}"}
     # AT-15 rollback drill hook — can ONLY force a failure (fail-closed), never a pass.
     if os.environ.get("STOIC_DRILL_FORCE_READINESS_FAIL") == "1":
         checks["drill_forced_failure"] = {"ok": False,

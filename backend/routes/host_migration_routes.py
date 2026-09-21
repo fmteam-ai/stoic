@@ -6,7 +6,9 @@ action to `host_migration_events`.
 
     GET  /api/admin/host-migration/status
     GET  /api/admin/host-migration/public-key
-    POST /api/admin/host-migration/preflight   {host,user,port,path,accept_fingerprint?}
+    POST /api/admin/host-migration/scan        {host,port}      → observed fingerprints (no auth, nothing trusted)
+    POST /api/admin/host-migration/preflight   {host,user,port,path,accept_fingerprint}   (step-up; fingerprint mandatory)
+    POST /api/admin/host-migration/disable-missing                (step-up; audited cutover exception)
     POST /api/admin/host-migration/start                          (step-up)
     POST /api/admin/host-migration/advance     {step}             (step-up)
     POST /api/admin/host-migration/retry
@@ -31,12 +33,18 @@ USER_RE = re.compile(r"^[a-z_][a-z0-9_\-]{0,31}$")
 PATH_RE = re.compile(r"^/[A-Za-z0-9._/\-]{1,200}$")
 
 
+class ScanBody(BaseModel):
+    host: str
+    port: int = Field(22, ge=1, le=65535)
+
+
 class PreflightBody(BaseModel):
     host: str
     user: str = "stoic"
     port: int = Field(22, ge=1, le=65535)
     path: str = "/home/stoic/stoic"
-    accept_fingerprint: Optional[str] = None
+    accept_fingerprint: str = Field(..., min_length=10, max_length=120,
+                                    description="exact host-key fingerprint confirmed out-of-band")
 
 
 class AdvanceBody(BaseModel):
@@ -53,10 +61,22 @@ def _migrator_url() -> str:
     return url.rstrip("/")
 
 
+def _migrator_token() -> str:
+    """Dedicated one-time migration token (P1-5) — never METRICS_TOKEN."""
+    f = os.environ.get("MIGRATOR_TOKEN_FILE")
+    if f:
+        try:
+            return open(f).read().strip()
+        except OSError:
+            pass
+    return os.environ.get("MIGRATOR_TOKEN", "")
+
+
 def _headers() -> dict:
-    tok = os.environ.get("METRICS_TOKEN")
+    tok = _migrator_token()
     if not tok:
-        raise HTTPException(status_code=503, detail="METRICS_TOKEN missing — migrator auth unavailable")
+        raise HTTPException(status_code=503, detail={"code": "migrator_token_missing",
+                                                     "message": "no migration token — run `make migrator-on`"})
     return {"X-Migrator-Token": tok}
 
 
@@ -73,7 +93,9 @@ async def _call(method: str, path: str, body: dict | None = None, timeout: float
             det = r.json()
         except ValueError:
             det = {"error": r.text[:500]}
-        raise HTTPException(status_code=409 if r.status_code == 409 else 502, detail=det)
+        if r.status_code == 410:
+            det = {"code": "migrator_expired", **det}
+        raise HTTPException(status_code=r.status_code if r.status_code in (409, 410) else 502, detail=det)
     return r.json()
 
 
@@ -103,17 +125,48 @@ async def hm_public_key(user=Depends(get_current_user)):
     return await _call("GET", "/public-key")
 
 
+@router.post("/admin/host-migration/scan")
+async def hm_scan(body: ScanBody, user=Depends(get_current_user)):
+    """Phase 1 — observe host keys only (no authentication, nothing trusted)."""
+    require_admin(user)
+    if not HOST_RE.match(body.host):
+        raise HTTPException(status_code=422, detail="invalid host")
+    scan = await _call("POST", "/scan", {"host": body.host, "port": body.port}, timeout=60.0)
+    await _journal(user, "host_key_observed", {"host": body.host, "port": body.port,
+                                               "fingerprints": [f["fingerprint"] for f in scan.get("fingerprints", [])]})
+    return scan
+
+
 @router.post("/admin/host-migration/preflight")
-async def hm_preflight(body: PreflightBody, user=Depends(get_current_user)):
+async def hm_preflight(body: PreflightBody, request: Request, user=Depends(get_current_user)):
+    """Phase 2 — admin confirmed ONE exact fingerprint out-of-band (fresh
+    step-up MFA); only then known_hosts is pinned and SSH is used."""
     require_admin(user)
     if not HOST_RE.match(body.host) or not USER_RE.match(body.user) or not PATH_RE.match(body.path):
         raise HTTPException(status_code=422, detail="invalid host, user or path")
+    if not re.match(r"^(SHA256:[A-Za-z0-9+/=]{40,50}|MD5:([0-9a-f]{2}:){15}[0-9a-f]{2})$", body.accept_fingerprint):
+        raise HTTPException(status_code=422, detail="accept_fingerprint must be an exact SHA256:… host-key fingerprint")
+    await _step_up(request, user)
     target = {"host": body.host, "user": body.user, "port": body.port, "path": body.path}
     facts = await _call("POST", "/preflight", {"target": target, "accept_fingerprint": body.accept_fingerprint},
                         timeout=240.0)
+    await _journal(user, "host_key_accepted", {"host": body.host, "accepted": body.accept_fingerprint,
+                                               "observed": (facts.get("host_key") or {}).get("fingerprints")})
     await _journal(user, "preflight", {"target": target, "ok": facts.get("ok"),
                                        "checks": (facts.get("target") or {}).get("checks")})
     return facts
+
+
+@router.post("/admin/host-migration/disable-missing")
+async def hm_disable_missing(request: Request, user=Depends(get_current_user)):
+    """Audited EXCEPTION — set the expected accounts that never reconnected
+    on the new host to trading_enabled=false so decommission can proceed
+    with those accounts explicitly OFF. Step-up + separate journal entry."""
+    require_admin(user)
+    await _step_up(request, user)
+    res = await _call("POST", "/disable-missing", {}, timeout=180.0)
+    await _journal(user, "cutover_exception_disable_missing", {"disabled_account_ids": res.get("disabled")})
+    return res
 
 
 @router.post("/admin/host-migration/start")

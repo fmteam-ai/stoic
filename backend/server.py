@@ -352,22 +352,14 @@ async def public_trust_stats():
 
 @api_router.post("/public/edge-probe")
 async def public_edge_probe(request: Request):
-    """Independent edge prober writes one sample per (region, endpoint,
-    minute). Authenticated with EDGE_PROBE_TOKEN; the availability SLI in
-    trust_stats.py is computed ONLY from these rows."""
-    import hmac as _hmac
-    expected = os.environ.get("EDGE_PROBE_TOKEN")
-    got = request.headers.get("X-Edge-Probe-Token", "")
-    if not expected or not _hmac.compare_digest(got, expected):
-        raise HTTPException(status_code=401, detail="edge probe token invalid")
+    """Independent edge prober ingestion (audit P1-3): per-region rotating
+    tokens (EDGE_PROBE_TOKENS="region:token,…") — region is DERIVED from the
+    token, endpoint must be on the server-side allowlist, eligibility is
+    never caller-supplied, one sample per (region, endpoint, minute) via
+    upsert on a unique index; duplicates/unknowns are counted and alerted."""
+    from edge_probes import ingest_probe
     body = await request.json()
-    doc = {"at": datetime.now(timezone.utc), "region": str(body.get("region") or "unknown")[:40],
-           "endpoint": str(body.get("endpoint") or "/api/health")[:80],
-           "ok": bool(body.get("ok")), "status_code": body.get("status_code"),
-           "latency_ms": body.get("latency_ms"), "eligible": bool(body.get("eligible", True)),
-           "prober_error": bool(body.get("prober_error", False))}
-    await get_db().edge_probes.insert_one(doc)
-    return {"recorded": True}
+    return await ingest_probe(get_db(), request.headers.get("X-Edge-Probe-Token", ""), body)
 
 
 @api_router.get("/ea-script.ex5")
