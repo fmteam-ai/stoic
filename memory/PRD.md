@@ -2386,3 +2386,8 @@ User-reported batch before the next major gate:
 ## Iter-191 (2026-06) — Security audit #3: PASS (no P0–P2). P3 hardening applied
 - Audit scope: iter-189 account_role (role immutable on update, lock in execution plane) + iter-190 Investor Monitor (404 for strangers, allowlist redaction, read-only) + core auth/CSRF/CORS/bridge/webhook/secrets — all clean.
 - Applied: `partner_id` dropped from investor_view PROGRAM_PUBLIC_FIELDS; dead `AccountOut.bridge_token` field removed (models.py; `_serialize` was already popping it); bridge `/modification-ack` + `/report` now `parse_object_id` → clean 404 instead of 500 on malformed trade_id (verified via curl).
+
+## Iter-192 (2026-06) — CI red: anyio 4.14.0 CVEs (security-scan + container-build) — FIXED
+- Both failing jobs had ONE root cause: anyio 4.14.0 (CVE-2026-63374/-64847/-63349; grype rates GHSA-82r6-8w77-94w6 Critical → fixable-critical gate). Bumped to anyio==4.14.2 in backend/requirements.txt; `release/rc_lock.json` regenerated via `python scripts/freeze_rc_lock.py` (hash-bearing — never hand-edit) and `--check` passes.
+- Verified locally with the exact CI commands: pip-audit --strict → "No known vulnerabilities"; grype v0.110.0 --only-fixed --fail-on critical → clean. Backend restarted (health 200), 529 unit tests green.
+- Reproduce tooling: grype installs to /tmp/bin via the anchore install.sh; scan `dir:` of the filtered requirements when Docker isn't available.
