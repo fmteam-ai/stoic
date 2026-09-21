@@ -427,6 +427,27 @@ async def my_requests_ep(user=Depends(get_current_user)):
     return {"requests": await my_requests(db, user["id"])}
 
 
+@router.get("/investor/programs")
+async def investor_programs_ep(user=Depends(get_current_user)):
+    """Investor Mirroring View — programs this user is allocated to
+    (PAMM_INVESTOR accounts + approved marketplace requests). READ-ONLY."""
+    db = get_db()
+    from modules.pamm.investor_view import investor_programs
+    return {"programs": await investor_programs(db, user["id"]),
+            "read_only": True}
+
+
+@router.get("/investor/programs/{program_id}")
+async def investor_program_ep(program_id: str,
+                              user=Depends(get_current_user)):
+    db = get_db()
+    from modules.pamm.investor_view import investor_program_view
+    view = await investor_program_view(db, user, program_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Program not found")
+    return view
+
+
 @router.post("/programs/{program_id}/publish")
 async def publish_ep(program_id: str, payload: dict, request: Request,
                      user=Depends(get_current_user)):

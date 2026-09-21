@@ -32,6 +32,7 @@ const SECTIONS = [
             { to: "/connect", label: "Connect MT5", icon: Zap, testid: "nav-product-connect" },
             { to: "/managed", label: "Managed Strategy", icon: Briefcase, testid: "nav-product-managed", adminOnly: true },
             { to: "/marketplace", label: "Marketplace", icon: Store, testid: "nav-product-marketplace" },
+            { to: "/investor", label: "Investor Monitor", icon: Eye, testid: "nav-product-investor" },
             { to: "/vps", label: "VPS", icon: Server, testid: "nav-product-vps" },
             { to: "/analytics", label: "Analytics", icon: BarChart3, testid: "nav-product-analytics" },
         ],

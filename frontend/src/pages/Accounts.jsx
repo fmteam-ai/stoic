@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import api, { formatApiError, API } from "@/lib/api";
 import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
@@ -612,6 +612,13 @@ export default function Accounts() {
                                                         className={`px-1.5 py-0.5 border font-mono text-[9px] tracking-widest ${a.account_role === "PAMM_INVESTOR" ? "border-[#FFB000]/50 text-[#FFB000]" : "border-[#00BFFF]/50 text-[#00BFFF]"}`}>
                                                         {a.account_role === "PAMM_INVESTOR" ? "PAMM INVESTOR · MONITOR ONLY" : "PAMM MASTER"}
                                                     </span>
+                                                )}
+                                                {a.account_role === "PAMM_INVESTOR" && (
+                                                    <Link to={`/investor${a.pamm_program_id ? `?program=${encodeURIComponent(a.pamm_program_id)}` : ""}`}
+                                                        data-testid={`account-investor-monitor-${a.account_number}`}
+                                                        className="px-1.5 py-0.5 border border-[#FFB000]/50 text-[#FFB000] hover:bg-[#FFB000]/10 font-mono text-[9px] tracking-widest flex items-center gap-1">
+                                                        <Eye className="w-3 h-3" /> OPEN MONITOR
+                                                    </Link>
                                                 )}
                                                 {a.environment && (
                                                     <span data-testid={`account-environment-${a.account_number}`}

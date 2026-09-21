@@ -75,6 +75,7 @@ const AdminBrokers = lazyImport(() => import("@/pages/AdminBrokers"));
 const AdminRunbooks = lazyImport(() => import("@/pages/AdminRunbooks"));
 const DeployPreflight = lazyImport(() => import("@/pages/DeployPreflight"));
 const ManagedStrategy = lazyImport(() => import("@/pages/ManagedStrategy"));
+const InvestorMonitor = lazyImport(() => import("@/pages/InvestorMonitor"));
 const ComingSoon = lazyImport(() => import("@/pages/ComingSoon"));
 const HelpCenter = lazyImport(() => import("@/pages/HelpCenter"));
 const Support = lazyImport(() => import("@/pages/Support"));
@@ -147,6 +148,7 @@ function App() {
                         <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
                         <Route path="/marketplace" element={<ProtectedRoute><Marketplace /></ProtectedRoute>} />
                         <Route path="/managed" element={<ProtectedRoute requireAdmin><ManagedStrategy /></ProtectedRoute>} />
+                        <Route path="/investor" element={<ProtectedRoute><InvestorMonitor /></ProtectedRoute>} />
                         <Route path="/pamm-guide" element={<ProtectedRoute><PammGuide /></ProtectedRoute>} />
                         <Route path="/vps" element={<ProtectedRoute><ComingSoon title="VPS Hosting" subtitle="Low-latency trading VPS, managed by STOIC." blurb="Dedicated low-latency VPS instances co-located near broker servers, with one-click EA deployment and 24/7 uptime monitoring. This product is on the roadmap." testid="vps-page" /></ProtectedRoute>} />
                         <Route path="/brokers" element={<ProtectedRoute><BrokerComparison /></ProtectedRoute>} />

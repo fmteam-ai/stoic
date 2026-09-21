@@ -49,3 +49,10 @@
 - Add risk_snapshot_id to Outcome Attribution and Trade Intelligence joins.
 - Create a stable global risk/error taxonomy (single registry of reason codes).
 - Begin O(1) risk-state aggregation design (incremental counters) for Fast/Nitro scale.
+
+### Post iter-190 (Investor Mirroring View DONE 2026-06)
+- ~~P1 Investor Mirroring View (read-only /investor)~~ DONE iter-190
+- **P1** Investor statements — monthly PDF/CSV of mirrored share + master trades, emailed via Resend.
+- **P1** Alert Test Button (notification settings) · Drift Gauge on runner cards · Risk Commander explicit confirmations · Soak memory watch.
+- **P2** Metric scope labels on P&L totals · External KMS release signer.
+- **P0 (manual)** MQL5 RC compile on Windows → signed EX5 hash via scripts/verify_ea_release.py.

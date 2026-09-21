@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 523 |
+| unit | pure logic, no external I/O | every CI job | 529 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3498 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3499 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
 
-**Total: 4109 tests across 415 files.**
+**Total: 4116 tests across 417 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -168,6 +168,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter180_bothealth_details.py` | http-live | 4 |
 | `backend/tests/test_iter181_deploy_preflight.py` | http-live | 8 |
 | `backend/tests/test_iter182_account_role.py` | http-live | 4 |
+| `backend/tests/test_iter183_investor_view.py` | http-live | 1 |
 | `backend/tests/test_iter183_runtime_watchdog.py` | http-live | 4 |
 | `backend/tests/test_iter185_pamm_m1.py` | http-live | 5 |
 | `backend/tests/test_iter185_pamm_m1_extended.py` | http-live | 13 |
@@ -427,6 +428,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/scalp/test_scalp_unit.py` | unit | 162 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
+| `backend/tests/unit/test_investor_view.py` | unit | 6 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |
