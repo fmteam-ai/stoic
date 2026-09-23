@@ -2547,3 +2547,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Sweep safety: `environment_marker.py` (signed env marker on /api/health, `mutation_guard`), exact `tests/public_routes_manifest.json`, all sensitive params seeded, signed cleanup manifest + `cleanup_from_manifest`. Re-run 638 ops / 0 leaks.
 - `ops/prepromotion_evidence.py` signed bundle wired into deploy/update.sh (production). `execution_truth.unresolved_backlog` exact counts. Browser synthetic strict states + console classification. Monitor jobs schedule-gated. `scripts/verify_release.sh` hermetic command.
 - GOTCHA: never run the sweep concurrently with other live suites (it mutates shared collections briefly); the sweep needs ALLOW_MUTATING_AUTH_SWEEP/AUTH_SWEEP_RUN_TOKEN (preview defaults them).
+
+## Iter-231 (2026-06) — CI frontend-e2e fixed
+- `e2e/tests/auth.spec.ts` still asserted the retired `/welcome` fallback for protected routes. Replaced with the round-6 contract: `/trades` → `/login` boundary (login-form visible, no welcome-page), `/` → `/welcome` for logged-out visitors, `/dashboard` with `/api/auth/me` aborted → `backend-outage-screen` with correlation id. All three verified live on the preview via Playwright.
+- `e2e/tests/helpers.ts`: removed the `admin123` default (E2E_ADMIN_PASSWORD is required; CI already generates it per run). Credential-literal scans now include `*.ts` and `e2e/tests`.
+- NOTE: local `npx playwright test` in this pod lacks the browser binaries (/pw-browsers) — verify e2e specs with the screenshot tool or in CI.

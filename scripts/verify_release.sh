@@ -38,7 +38,7 @@ step frontend_build bash -c 'cd frontend && CI=true yarn build --silent >/dev/nu
 # test manifest must match the tree
 step test_manifest_current bash -c 'python scripts/generate_test_manifest.py >/dev/null && git diff --quiet -- docs/TEST_MANIFEST.md'
 # no credential literals anywhere in source (audit round 7 P1)
-step no_default_credentials bash -c "! grep -rn --include='*.py' --include='*.js' --include='*.jsx' --include='*.sh' --include='*.yml' --include='*.ps1' -E \"['\\\"]admin123['\\\"]\" backend frontend/src deploy scripts ops .github | grep -v __pycache__"
+step no_default_credentials bash -c "! grep -rn --include='*.py' --include='*.js' --include='*.jsx' --include='*.sh' --include='*.yml' --include='*.ps1' --include='*.ts' -E \"['\\\"]admin123['\\\"]\" backend frontend/src deploy scripts ops .github | grep -v __pycache__"
 if [ "$WITH_SWEEP" = 1 ]; then
   step route_auth_sweep bash -c 'cd backend && python -m pytest tests/test_iter228_route_auth_sweep.py -q -p no:cacheprovider'
 fi

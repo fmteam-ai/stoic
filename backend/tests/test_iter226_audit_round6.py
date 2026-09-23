@@ -370,7 +370,7 @@ def test_r7_backlog_counts_exact_and_truncation_flagged(sdb, uid):
 def test_r7_no_default_credential_literals_in_source():
     import subprocess as sp
     r = sp.run(["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.jsx", "--include=*.sh", "--include=*.yml",
-                "--include=*.ps1", "-E", "['\"]admin123['\"]", "backend", "frontend/src", "deploy", "scripts", "ops", ".github"],
+                "--include=*.ps1", "--include=*.ts", "-E", "['\"]admin123['\"]", "backend", "frontend/src", "deploy", "scripts", "ops", ".github", "e2e/tests"],
                capture_output=True, text=True, cwd=REPO)
     hits = [l for l in r.stdout.splitlines() if "__pycache__" not in l]
     assert not hits, "default credential literals in source:\n" + "\n".join(hits)
