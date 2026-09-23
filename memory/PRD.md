@@ -2561,3 +2561,6 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - `hermetic-verify` job (clean archive tree + Mongo service) runs `scripts/verify_release.sh`; signed results (`RELEASE_EVIDENCE_KEY` secret → LEDGER_ANCHOR_KEY) uploaded as `hermetic-verification` artifact; `release` job needs it, re-verifies HMAC/PASS/commit, passes `--hermetic-verification` to `release_attestation.py emit` → new gate `hermetic_verification` (REJECTED otherwise); SBOMs + results are release assets.
 - verify_release.sh fixes: emergentintegrations exclusive-index install with sha pin, `yarn --silent build`, manifest check without git, `VERIFY_RESULTS_PATH` (NOT `*_FILE` — secrets_loader treats `*_FILE` env vars as secret pointers!), `REQUIRE_SIGNED_RESULTS`.
 - Local full run: all 11 steps PASS, signed. Tests: tests/unit/test_release_attestation.py::test_hermetic_verification_gate. Manifest 4,273.
+
+## Iter-234 (2026-06) — synthetic-monitor probe job: checkout git exit 128
+- Cause: workflow-level `permissions: {}` stripped `contents: read`, so actions/checkout could not fetch. Fixed to `permissions: contents: read` (nothing else granted). Secrets flow unchanged.

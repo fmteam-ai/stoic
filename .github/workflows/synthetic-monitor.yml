@@ -20,7 +20,10 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
-permissions: {}
+# checkout needs contents:read — the previous `permissions: {}` left the job token
+# unable to fetch the repository (git exit 128). Nothing else is granted.
+permissions:
+  contents: read
 
 jobs:
   probe:
