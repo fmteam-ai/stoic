@@ -751,6 +751,17 @@ async def on_startup():
             raise RuntimeError(
                 "APP_ENV=production requires ED25519_SIGNING_KEY_B64 for "
                 "release manifest signing.")
+        # security audit #7 SEC-001 — key separation: no signer may share
+        # the auth secret in production (one leak must never span auth +
+        # order authorization + ledger/attestation trust domains).
+        jwt_secret = os.environ.get("JWT_SECRET", "")
+        for name in ("ORDER_AUTH_SECRET", "LEDGER_ANCHOR_KEY"):
+            val = os.environ.get(name, "")
+            if not val or val == jwt_secret:
+                raise RuntimeError(
+                    f"APP_ENV=production requires a dedicated {name} "
+                    "distinct from JWT_SECRET (signing keys must not fall "
+                    "back to the auth secret).")
     # iter-183 — runtime watchdog & crash forensics (RSS, loop-blockage
     # stacks, restart history) — must start before anything heavy.
     from runtime_watchdog import start_watchdog

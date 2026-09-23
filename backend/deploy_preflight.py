@@ -96,6 +96,18 @@ def run_preflight() -> dict:
         "set (" + _mask(ed) + ")" if ed else "(not set)", "set",
         "Required for release manifest signing — refuses boot when missing."))
 
+    # security audit #7 SEC-001 — key separation (mirrors the boot guard)
+    jwt = env.get("JWT_SECRET") or ""
+    for cid, name in (("order_auth_key", "ORDER_AUTH_SECRET"), ("ledger_anchor_key", "LEDGER_ANCHOR_KEY")):
+        val = env.get(name) or ""
+        ok = bool(val) and val != jwt
+        checks.append(_check(
+            cid, name, "pass" if ok else "fail",
+            ("set (" + _mask(val) + ")" if val else "(not set)") + ("" if ok or not val else " — equals JWT_SECRET"),
+            "set, distinct from JWT_SECRET",
+            f"Give {name} its own random 32+ byte value — signers must never fall back to the auth secret; "
+            "production refuses boot otherwise."))
+
     kvm = env.get("KEY_VAULT_MASTER") or ""
     checks.append(_check(
         "key_vault", "KEY_VAULT_MASTER", "pass" if kvm else "fail",

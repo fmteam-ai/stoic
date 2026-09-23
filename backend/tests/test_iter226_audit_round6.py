@@ -319,3 +319,28 @@ def test_r6_monitor_separates_cadences_and_telemetry_failures():
     br = open(os.path.join(REPO, "ops", "synthetic_browser.py")).read()
     for needle in ("backend-outage-screen", "welcome-page", "login-form", "/dashboard"):
         assert needle in br
+
+
+# ── security audit #7 · SEC-001 key separation ───────────────────────────────
+def test_sec7_production_refuses_signers_sharing_jwt_secret():
+    src = open(os.path.join(ROOT, "server.py")).read()
+    i = src.index("security audit #7 SEC-001")
+    seg = src[i:i + 900]
+    assert '"ORDER_AUTH_SECRET", "LEDGER_ANCHOR_KEY"' in seg and "val == jwt_secret" in seg and "RuntimeError" in seg
+    from deploy_preflight import run_preflight
+    import deploy_preflight as dp
+    saved = dict(os.environ)
+    try:
+        os.environ.update({"JWT_SECRET": "same-secret-value-0123456789", "ORDER_AUTH_SECRET": "same-secret-value-0123456789"})
+        os.environ.pop("LEDGER_ANCHOR_KEY", None)
+        out = run_preflight()
+        by = {c["id"]: c for c in out["checks"]}
+        assert by["order_auth_key"]["status"] == "fail" and "equals JWT_SECRET" in by["order_auth_key"]["current"]
+        assert by["ledger_anchor_key"]["status"] == "fail"
+        os.environ.update({"ORDER_AUTH_SECRET": "o" * 40, "LEDGER_ANCHOR_KEY": "l" * 40})
+        by = {c["id"]: c for c in run_preflight()["checks"]}
+        assert by["order_auth_key"]["status"] == "pass" and by["ledger_anchor_key"]["status"] == "pass"
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    assert "ORDER_AUTH_SECRET=" in open(os.path.join(ROOT, ".env.example")).read()

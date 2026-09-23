@@ -92,13 +92,18 @@ def test_preflight_csrf_and_cors_need_no_secret(monkeypatch):
     assert out["verdict"] == "will_crash"
 
 
-def test_preflight_local_signer_never_blocks_boot(monkeypatch):
+def test_preflight_local_signer_fails_in_production(monkeypatch):
+    """v56 / review P1-9: local signing in production is a FAIL (KMS/HSM
+    required); the old acknowledgment escape hatch is a misconfiguration."""
     from deploy_preflight import run_preflight
     _apply(monkeypatch, {"RELEASE_SIGNER": "local",
                          "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": None})
     out = run_preflight()
-    assert _by_id(out)["release_signer"]["status"] == "warn"
-    assert out["verdict"] != "will_crash"
+    assert _by_id(out)["release_signer"]["status"] == "fail"
+    assert "KMS/HSM" in _by_id(out)["release_signer"]["current"]
+    _apply(monkeypatch, {"RELEASE_SIGNER": "local",
+                         "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": "true"})
+    assert _by_id(run_preflight())["release_signer"]["status"] == "fail"
 
 
 def test_csrf_origin_auto_enforced_in_production(monkeypatch):
