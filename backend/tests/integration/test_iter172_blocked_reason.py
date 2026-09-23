@@ -73,9 +73,11 @@ async def _scenario():
     db = get_db()
     uid = "blkreason_user"
     try:
-        # fresh EA heartbeat, bot ON, but identity NOT verified → BLOCKED
+        # fresh EA heartbeat, bot ON, account explicitly ENABLED, but
+        # identity NOT verified → BLOCKED
         a = await db.accounts.insert_one(
             {"user_id": uid, "label": "Unpaired", "mode": "live",
+             "trading_enabled": True,
              "last_heartbeat": _iso(5), "open_positions": 0})
         await db.bot_configs.insert_one(
             {"user_id": uid, "account_id": str(a.inserted_id),

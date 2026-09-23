@@ -85,8 +85,10 @@ async def _contract_scenario():
     uid = "state_user"
     try:
         # 2 accounts: one fresh+verified with bot ON, one never connected
+        # (audit P1-6: `trading_enabled` MUST be explicit — missing = OFF)
         a1 = await db.accounts.insert_one(
             {"user_id": uid, "label": "Live A", "mode": "live",
+             "trading_enabled": True,
              "last_heartbeat": _iso(5), "open_positions": 1,
              "verified_identity": {"broker_server": "X"}})
         await db.accounts.insert_one(

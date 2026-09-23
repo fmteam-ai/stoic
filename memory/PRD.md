@@ -2510,3 +2510,9 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Public performance share responses `Cache-Control: no-store` (200 and revoked 404).
 - Preview: ledger anchored once (seq current) so `repair_ledger_anchor` is honest; workers still absent → readiness 503 by design.
 - Still PRODUCTION-ONLY: real 6/3/3 evidence, broker-backed UNKNOWN closure, Turnstile edge paths, anchor custody (object storage/SIEM), frontend CI artifacts.
+
+## Iter-225 (2026-06) — CI green again: stale test seeds aligned with enforced rules
+- backend-unit: `tests/unit/test_host_migrator.py::test_api_proxy_status_and_not_enabled` hit real Mongo via `hm._journal` (CI unit job has no MONGO_URL). Test now monkeypatches `_journal` with an in-memory recorder and asserts the `host_key_observed` journal entry. NO production change.
+- backend-integration (4 stale tests): iter158/161/172 seeded accounts without `trading_enabled: True` (audit P1-6: missing = OFF) → now explicit. iter163 "clean user" now seeds an enabled LIVE account (verified identity, fresh heartbeat, broker_server) + fresh `broker_deals` row so the positive attestation path is asserted against the REAL gate (LIVE-only + fresh deals + FRESH truth).
+- Verified locally exactly like CI: `env -u MONGO_URL pytest tests/unit` → 624 passed; `pytest tests/integration -m integration` → 79 passed. Manifest regenerated (4,243 tests / 430 files).
+- RULE: any test seeding an account that must count as enabled/alertable MUST set `trading_enabled: True` explicitly.

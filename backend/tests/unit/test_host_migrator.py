@@ -372,6 +372,11 @@ async def test_api_proxy_status_and_not_enabled(mig, monkeypatch):
     app = FastAPI()
     app.include_router(hm.router)
     app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "role": "admin", "email": "a@x", "two_factor_enabled": True}
+    journal = []
+
+    async def _fake_journal(user, action, detail=None):
+        journal.append((action, detail or {}))
+    monkeypatch.setattr(hm, "_journal", _fake_journal)   # unit job has no Mongo
     monkeypatch.setenv("ADMIN_MFA_ENFORCED", "false")
     monkeypatch.delenv("MIGRATOR_URL", raising=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
@@ -392,6 +397,7 @@ async def test_api_proxy_status_and_not_enabled(mig, monkeypatch):
         assert r.status_code == 422                     # fingerprint is mandatory at the API too
         r = await c.post("/admin/host-migration/scan", json={"host": "203.0.113.10"})
         assert r.status_code == 200 and r.json()["fingerprints"][0]["fingerprint"] == FP
+        assert journal[-1][0] == "host_key_observed" and journal[-1][1]["fingerprints"] == [FP]
         r = await c.post("/admin/host-migration/advance", json={"step": "nuke"})
         assert r.status_code == 422
         monkeypatch.setenv("MIGRATOR_TOKEN", "wrong")

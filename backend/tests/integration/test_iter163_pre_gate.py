@@ -125,10 +125,21 @@ async def _attestation_gate_scenario():
     from routes.performance_routes import _attach_attestation
     now = _now_dt()
     try:
-        # clean user (reconciled, no stale truth, no synthetic) → signed
+        # clean user: ONE enabled LIVE account, verified identity, FRESH
+        # heartbeat agreeing with the local projection, fresh broker deal,
+        # reconciled (empty) P&L, nothing synthetic → signed
+        await db.accounts.insert_one(
+            {"_id": ObjectId(), "user_id": "clean_user", "label": "Real IC",
+             "mode": "live", "trading_enabled": True,
+             "broker_server": "ICMarkets-Live01", "open_positions": 0,
+             "last_heartbeat": (now - timedelta(seconds=5)).isoformat(),
+             "verified_identity": {"broker_server": "ICMarkets-Live01"}})
+        await db.broker_deals.insert_one(
+            {"user_id": "clean_user", "deal_id": 1, "account_id": "x",
+             "deal_time": int((now - timedelta(minutes=5)).timestamp())})
         out = await _attach_attestation(db, "clean_user", {"overall": {}})
-        assert out["attestation"] is not None
         assert out["attestation_blocked"] is None
+        assert out["attestation"] is not None
 
         # synthetic/test account data → PROHIBITED
         await db.accounts.insert_one(

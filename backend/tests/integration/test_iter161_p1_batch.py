@@ -133,13 +133,14 @@ async def _synthetic_alert_scenario():
         assert kinds == {"real_incident"}
         assert out["sections"]["workers"]["open_critical_alerts"] == 1
 
-        # heartbeat evaluator tags alerts for synthetic accounts
+        # heartbeat evaluator tags alerts for synthetic accounts (only
+        # explicitly ENABLED accounts are evaluated — missing flag = OFF)
         stale_hb = (_now_dt() - timedelta(seconds=600)).isoformat()
         await db.accounts.insert_many([
             {"_id": ObjectId(), "label": "chaos_hb", "user_id": "qa_x",
-             "last_heartbeat": stale_hb},
+             "trading_enabled": True, "last_heartbeat": stale_hb},
             {"_id": ObjectId(), "label": "Real FTMO", "user_id": "human1",
-             "last_heartbeat": stale_hb}])
+             "trading_enabled": True, "last_heartbeat": stale_hb}])
         await evaluate_ops_alerts(db)
         hb_alerts = [a async for a in db.ops_alerts.find(
             {"kind": "ea_heartbeat_stale"})]
