@@ -22,7 +22,7 @@ APP = os.environ.get("TUTGEN_APP") or os.popen(
 ).read().strip() or "http://localhost:3000"
 OUT = Path("/app/backend/static/tutorials")
 BUILD = OUT / "build"
-ADMIN = ("admin@stoicaibot.com", "admin123")
+ADMIN = (os.environ.get("TEST_ADMIN_EMAIL", "admin@stoicaibot.com"), os.environ.get("TEST_ADMIN_PASSWORD", ""))
 VOICE, MODEL = "onyx", "tts-1-hd"
 
 TUTORIALS = [

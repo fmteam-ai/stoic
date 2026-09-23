@@ -3,6 +3,7 @@ new authority pipeline: after POST /api/accounts/{id}/test-trade the
 persisted trade has execution_intent_id, and the referenced intent has
 history containing created → validated → authorized → submitted."""
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 import os
 import sys
 import uuid
@@ -139,8 +140,8 @@ def test_authority_and_intents_admin_endpoints(cleanup):
     for admin."""
     sess = requests.Session()
     r = sess.post(f"{BASE_URL}/api/auth/login",
-                  json={"email": "admin@trading.bot",
-                        "password": "admin123"}, timeout=TIMEOUT)
+                  json={"email": ADMIN_EMAIL,
+                        "password": ADMIN_PASSWORD}, timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     r1 = sess.get(f"{BASE_URL}/api/authority", timeout=TIMEOUT)
     assert r1.status_code == 200, r1.text

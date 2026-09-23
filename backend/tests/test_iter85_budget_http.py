@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-85 HTTP tests for GET /api/risk/budget (independent verification)."""
 import os
 import time
@@ -8,10 +9,8 @@ import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 API = f"{BASE_URL}/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 def _login(session: requests.Session, email: str, password: str) -> bool:
     r = session.post(f"{API}/auth/login",
                      json={"email": email, "password": password}, timeout=15)

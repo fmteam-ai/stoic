@@ -83,7 +83,7 @@ integration keys (see `.env.example` for every key):
 
 | Key | Value / note |
 |---|---|
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | the installer GENERATES a strong admin password — read it from `backend/.env` after install (or set your own: ≥12 chars, not `admin123`) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | the installer GENERATES a strong admin password — read it from `backend/.env` after install (or set your own: ≥12 chars, not a well-known default) |
 | `ADMIN_MFA_ENFORCED` | `true` |
 | `CORS_ORIGINS` | `https://stoicaibot.com,https://www.stoicaibot.com` (installer sets both from the domain; Caddy serves apex + www) |
 | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | same Cloudflare widget — hostnames unchanged, nothing to re-whitelist |

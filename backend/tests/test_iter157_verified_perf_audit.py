@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-157 — Verified Live Performance + Audit Log endpoints.
 
 Covers backend acceptance criteria:
@@ -13,10 +14,8 @@ from live_target import require_live_base_url
 BASE = require_live_base_url()
 API = f"{BASE}/api"
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()

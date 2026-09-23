@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter25l — full regression suite mandated by the review_request for
 STOIC AI Trading Bot. Validates all API contracts listed by the user and
 asserts shape of new strips (BotHealthScore + QuickActionsBar + SizingPreview).
@@ -36,8 +37,8 @@ BASE_URL = os.environ.get(
 ).rstrip("/")
 WS_URL = BASE_URL.replace("https://", "wss://").replace("http://", "ws://") + "/api/ws"
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASS = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PASS = ADMIN_PASSWORD
 
 
 # ---------------- fixtures ----------------

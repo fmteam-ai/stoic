@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter18 regression — verify /api/diagnostic/run surfaces Safety Guardian checks.
 
 Validates:
@@ -28,10 +29,8 @@ if not BASE_URL:
     except Exception:
         pass
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()

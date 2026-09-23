@@ -8,7 +8,11 @@ Raw HTML cannot prove SPA routing, so this drives a real Chromium session:
     backend-outage screen — NEVER the public welcome page.
   * /welcome must render the welcome page (public surface healthy).
   * /login must render the login form.
-  * no uncaught console errors / failed API responses with 5xx.
+  * console errors are CLASSIFIED (uncaught exception, React boundary/hydration,
+    CSP violation, failed request) and FAIL the run; only documented benign
+    patterns (BENIGN_CONSOLE) are ignored. Any 5xx API response fails too.
+  * exactly ONE settled state per protected route (AMBIGUOUS_STATE otherwise);
+    conflicting authority banners fail.
   * a bad login must produce a visible 4xx boundary, not a redirect loop.
 Exit 0 = every assertion held.
 """
@@ -16,6 +20,22 @@ import argparse
 import json
 import sys
 import time
+
+
+BENIGN_CONSOLE = ("favicon", "download the react devtools", "[vite] connecting", "[vite] connected", "websocket connection to 'ws")
+
+
+def _classify(msg: str) -> str:
+    m = msg.lower()
+    if "content security policy" in m or "refused to" in m and "csp" in m:
+        return "csp_violation"
+    if "hydrat" in m or "error boundary" in m or "the above error occurred" in m:
+        return "react_boundary"
+    if "uncaught" in m or "unhandled" in m or "typeerror" in m or "referenceerror" in m:
+        return "uncaught_exception"
+    if "failed to fetch" in m or "net::err" in m or "/api/" in m:
+        return "failed_request"
+    return "console_error"
 
 
 def run(base: str) -> dict:
@@ -48,10 +68,21 @@ def run(base: str) -> dict:
 
         r = settle("/dashboard", '[data-testid="login-form"], [data-testid="backend-outage-screen"], input[type="password"], nav')
         states = [k for k in ("login", "outage", "app") if r[k]]
-        r["verdict"] = "PASS" if (not r["welcome"] and states and "/welcome" not in r["final_url"]) else "FAIL"
-        if r["verdict"] == "FAIL":
-            errors.append(f"/dashboard settled on {r['final_url']} welcome={r['welcome']} states={states} — protected route must show login, app or outage")
         r["states"] = states
+        # route state machine: /dashboard unauthenticated → exactly ONE of login|outage|app
+        if r["welcome"] or "/welcome" in r["final_url"]:
+            r["verdict"], r["code"] = "FAIL", "WELCOME_FALLBACK"
+            errors.append(f"/dashboard fell back to the public welcome page ({r['final_url']})")
+        elif len(states) != 1:
+            r["verdict"], r["code"] = "FAIL", "AMBIGUOUS_STATE" if states else "NO_STATE"
+            errors.append(f"/dashboard settled with states={states} — exactly one of login|outage|app is required ({r['code']})")
+        else:
+            r["verdict"] = "PASS"
+        # conflicting authority banners (e.g. READY and BLOCKED/OUTAGE markers at once) are an ambiguity too
+        banners = page.locator('[data-testid*="authority-badge"], [data-testid*="readiness-badge"], [data-testid="backend-outage-screen"]').all_inner_texts()
+        levels = {b.strip().upper() for b in banners if b.strip()}
+        if {"READY", "FULL"} & levels and ({"BLOCKED", "OUTAGE", "CLOSE_ONLY"} & levels or r["outage"]):
+            errors.append(f"AMBIGUOUS_STATE: conflicting authority banners {sorted(levels)}")
         results.append(r)
 
         r = settle("/welcome", '[data-testid="welcome-page"]')
@@ -84,10 +115,23 @@ def run(base: str) -> dict:
         srv5xx = [b for b in bad_responses if "/api/" in b[0]]
         if srv5xx:
             errors.append(f"5xx API responses during session: {srv5xx[:5]}")
-        real_console = [c for c in console_errors if "favicon" not in c.lower()]
+        # console classification: uncaught exceptions, hydration/React boundary, CSP violations and
+        # failed critical fetches FAIL the synthetic; only narrowly documented benign patterns are ignored
+        real_console = [c for c in console_errors if not any(b in c.lower() for b in BENIGN_CONSOLE)]
+        classified = [(_classify(c), c[:300]) for c in real_console]
+        fatal = [(k, c) for k, c in classified if k != "benign"]
+        if fatal:
+            errors.append(f"console errors ({len(fatal)}): " + "; ".join(f"[{k}] {c[:120]}" for k, c in fatal[:5]))
         browser.close()
-    return {"synthetic": "browser-route-settlement", "base": base, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "results": results, "api_5xx": srv5xx, "console_errors": real_console[:10],
+    build = None
+    try:
+        import json as _j, urllib.request
+        build = _j.load(urllib.request.urlopen(f"{base}/api/health", timeout=10)).get("build_sha")
+    except Exception:  # noqa: BLE001
+        pass
+    return {"synthetic": "browser-route-settlement", "base": base, "build_sha": build,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "results": results, "api_5xx": srv5xx, "console_errors": classified[:10],
             "errors": errors, "result": "PASS" if not errors else "FAIL"}
 
 

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-171 — hardening batch: signed single-use order authorizations (#10),
 externally-anchorable audit log (#8), slow-query monitoring + ops endpoints
 (#9). Host-agent key pinning (#4) and CI random creds (#2) are verified out of
@@ -32,7 +33,7 @@ def _db():
 def _admin():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@stoicaibot.com", "password": "admin123"},
+               json={"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD},
                timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     return s

@@ -1,0 +1,194 @@
+{
+ "_doc": "EXACT public-route manifest for the route-auth sweep (audit round 7 P1). Any anonymous 2xx/3xx on an operation NOT listed here fails the sweep. Adding a route under /api/setup/, /api/auth/, /api/public/ etc. requires an explicit entry here (method + path template + expected statuses + data classification).",
+ "routes": [
+  {
+   "method": "GET",
+   "path": "/api/",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/auth/csrf",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "POST",
+   "path": "/api/auth/logout",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/auth/turnstile-config",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/bridge/download-ea",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/ea-script",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/entitlements/tiers",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/health",
+   "expected_status": [
+    200
+   ],
+   "classification": "liveness",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/health/live",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/health/ready",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/infra/artifacts/manifest",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/public/trust-stats",
+   "expected_status": [
+    200
+   ],
+   "classification": "marketing-stats(reconciled only)",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/r/{code}",
+   "expected_status": [
+    307
+   ],
+   "classification": "affiliate redirect",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/release-key",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/setup/installer.ps1",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/status",
+   "expected_status": [
+    200
+   ],
+   "classification": "status",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/subscription/plans",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "POST",
+   "path": "/api/telegram/incoming/{secret}",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/api/terms",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/health",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  },
+  {
+   "method": "GET",
+   "path": "/healthz",
+   "expected_status": [
+    200
+   ],
+   "classification": "public",
+   "reviewed": "audit-r7"
+  }
+ ]
+}

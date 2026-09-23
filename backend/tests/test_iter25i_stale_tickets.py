@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter 25i — Detect stale `open_tickets` from buggy EAs.
 
 Some EA builds (pre-v1.26) cache the tickets list and never purge entries
@@ -65,7 +66,7 @@ def mongo_db():
 def admin_session():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200
     return s

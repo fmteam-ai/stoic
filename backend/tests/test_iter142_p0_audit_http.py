@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-142 · P0 audit — HTTP-level verification through the public API.
 
 Covers:
@@ -33,7 +34,7 @@ TIMEFRAME = "M15"
 def _admin_session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
     csrf = s.cookies.get("csrf_token")

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP tests for the Bot Watching widget (iter-61).
 
 Verifies GET /api/signals/watch-status — used by the
@@ -16,10 +17,8 @@ from live_target import require_live_base_url
 
 BASE_URL = require_live_base_url()
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def session():
     s = requests.Session()

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-117 backlog: SilentBotBanner (bot/pulse+notable), AgentReportCard, PartnerBroker.
 
 Covers:
@@ -29,7 +30,7 @@ API = f"{BASE_URL}/api"
 def admin_sess():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
     return s

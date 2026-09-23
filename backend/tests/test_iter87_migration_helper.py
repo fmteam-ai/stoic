@@ -9,6 +9,7 @@ Covers:
   · Non-admin → 403 on both endpoints.
 """
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 import os as _os  # iter-148 — repo-relative paths (release-audit P0)
 _TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 while _os.path.basename(_TESTS_DIR) != "tests":
@@ -38,7 +39,7 @@ def _mongo():
 def _admin_session() -> requests.Session:
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     return s
@@ -85,8 +86,8 @@ def test_export_state_returns_admin_state():
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["schema_version"] == 1
-    assert body["exported_by"] == "admin@trading.bot"
-    assert body["user"]["email"] == "admin@trading.bot"
+    assert body["exported_by"] == ADMIN_EMAIL
+    assert body["user"]["email"] == ADMIN_EMAIL
     # Should NOT leak password_hash.
     assert "password_hash" not in body["user"]
     assert set(body["collections"].keys()) >= {"accounts", "bot_configs", "user_presets"}
@@ -146,7 +147,7 @@ def test_import_state_new_account_lands_in_admin_collection():
     }
     payload = {
         "schema_version": 1,
-        "user": {"email": "admin@trading.bot"},
+        "user": {"email": ADMIN_EMAIL},
         "collections": {"accounts": [synthetic], "bot_configs": [], "user_presets": []},
     }
     r = sess.post(f"{BASE_URL}/api/admin/import-state", json=payload, timeout=TIMEOUT)
@@ -156,7 +157,7 @@ def test_import_state_new_account_lands_in_admin_collection():
 
     # Verify the doc landed with user_id remapped to the admin's id
     db = _mongo()
-    admin = db.users.find_one({"email": "admin@trading.bot"})
+    admin = db.users.find_one({"email": ADMIN_EMAIL})
     doc = db.accounts.find_one({"_id": ObjectId(fake_oid)})
     assert doc is not None
     assert doc["user_id"] == str(admin["_id"])

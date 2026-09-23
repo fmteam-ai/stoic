@@ -235,11 +235,11 @@ class TestRegression:
         if r.status_code == 401:
             # Preview DB uses the documented legacy test credentials while
             # backend/.env carries the production recovery password.
-            r = s.post(f"{API}/auth/login", json={"email": "admin@trading.bot", "password": "admin123"}, timeout=10)
+            r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=10)
         assert r.status_code == 200, r.text
         me = s.get(f"{API}/auth/me", timeout=10)
         assert me.status_code == 200
-        assert me.json()["email"] in (ADMIN_EMAIL, "admin@trading.bot")
+        assert me.json()["email"] in (ADMIN_EMAIL, ADMIN_EMAIL)
 
 
 import pytest as _pytest  # noqa: E402

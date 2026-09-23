@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter21 regression suite: Strategy Presets (built-in + custom), Affiliate
 Payout self-service flow, and a Copilot smoke check.
 
@@ -42,9 +43,8 @@ def _read_env():
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "ai_trading_bot")
 

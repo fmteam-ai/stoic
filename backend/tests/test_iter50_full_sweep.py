@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """
 Iter-50 full sweep — verifies all endpoints listed in review_request without opening any live trades.
 Covers: auth, bot pulse, bot health page panels, auto-heal, simple mode toggle, postmortem,
@@ -9,10 +10,8 @@ import pytest
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def session():
     s = requests.Session()

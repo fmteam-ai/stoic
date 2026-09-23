@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Audit v3 (2026-08-30) corrections — truth consistency + fail-closed.
 
 Covers:
@@ -76,7 +77,7 @@ class TestCanonicalInventory:
     def test_inventory_shape_and_consistency(self):
         async def go():
             db = _db()
-            u = await db.users.find_one({"email": "admin@trading.bot"})
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
             from state_contract import contract, inventory
             uid = str(u["_id"])
             return await inventory(db, uid), await contract(db, uid)
@@ -101,7 +102,7 @@ class TestCanonicalInventory:
         """Audit v3 P0-2 — intended state: accounts ON ⇔ bots ON."""
         async def go():
             db = _db()
-            u = await db.users.find_one({"email": "admin@trading.bot"})
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
             from state_contract import inventory
             return await inventory(db, str(u["_id"]))
         inv = _run(go())
@@ -113,7 +114,7 @@ class TestCapitalStageHardGate:
     def test_autonomous_live_blocked_on_failed_statistics(self):
         async def go():
             db = _db()
-            u = await db.users.find_one({"email": "admin@trading.bot"})
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
             from operational_modes import promotion_gate
             return await promotion_gate(db, str(u["_id"]), None,
                                         "autonomous_live")
@@ -131,7 +132,7 @@ class TestCapitalStageHardGate:
     def test_supervised_live_not_blocked_by_capital_stage(self):
         async def go():
             db = _db()
-            u = await db.users.find_one({"email": "admin@trading.bot"})
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
             from operational_modes import promotion_gate
             return await promotion_gate(db, str(u["_id"]), None,
                                         "supervised_live")

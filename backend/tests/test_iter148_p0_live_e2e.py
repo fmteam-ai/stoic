@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-148 · Live E2E for EA v1.52 bridge/report + register password policy + execution-health.
 Seeds one trade + one account bridge_token directly in MongoDB, POSTs a v1.52-style report,
 verifies mutation, and confirms the duplicate-ticket guard tolerates order_ticket==stored mt5.
@@ -31,7 +32,7 @@ def test_health_ready():
 def _login():
     s = requests.Session()
     r = s.post(f"{BASE}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
     return s

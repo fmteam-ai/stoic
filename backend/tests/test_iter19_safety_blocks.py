@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter19 — Safety Blocks page API tests.
 
 Verifies the user-facing /api/safety-blocks/* endpoints:
@@ -14,10 +15,8 @@ from bson import ObjectId
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 def _login(email, password):
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": password}, timeout=15)

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-135 HTTP/e2e tests: public status, legal, support tickets, onboarding.
 
 Exercises the actual HTTP surface (with CSRF double-submit on cookie-auth)
@@ -96,7 +97,7 @@ def other_session():
 
 @pytest.fixture(scope="module")
 def admin_session():
-    return _login("admin@stoicaibot.com", "admin123")
+    return _login("admin@stoicaibot.com", ADMIN_PASSWORD)
 
 
 def test_ticket_create_and_get(owner_session):

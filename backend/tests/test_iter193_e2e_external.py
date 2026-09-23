@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-193 e2e — hits the external REACT_APP_BACKEND_URL over real HTTP.
 Covers: partners listing/creation, mock broker auth, certification,
 position-truth flow (baseline→in_sync→drift→ack), drift-tolerance
@@ -18,7 +19,7 @@ load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN = ("admin@trading.bot", "admin123")
+ADMIN = (ADMIN_EMAIL, ADMIN_PASSWORD)
 TIMEOUT = 30
 
 

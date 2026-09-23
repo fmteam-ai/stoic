@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter-81 — v1.6.0 release verification.
 
 Covers:
@@ -36,7 +37,7 @@ def mongo():
 def admin_session():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
     return s, r.json()
@@ -50,7 +51,7 @@ class TestAdminLogin:
         assert "must_change_password" in body, "must_change_password field missing on login"
         assert body["must_change_password"] is False, \
             f"Expected must_change_password=False in preview, got {body['must_change_password']}"
-        assert body["email"] == "admin@trading.bot"
+        assert body["email"] == ADMIN_EMAIL
         assert body["role"] == "admin"
 
     def test_admin_me_carries_flag(self, admin_session):
@@ -246,7 +247,7 @@ class TestRegressionSmoke:
         r = s.get(f"{API}/auth/me", timeout=10)
         assert r.status_code == 200
         me = r.json()
-        assert me["email"] == "admin@trading.bot"
+        assert me["email"] == ADMIN_EMAIL
         assert me["role"] == "admin"
 
     def test_accounts_list(self, admin_session):

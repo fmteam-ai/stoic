@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-44 · Verify broker-suffixed FX symbols (EURUSD#) now route correctly
 into the scalp fast path.
 
@@ -241,7 +242,7 @@ def test_permissions_transition_away_from_stale(ctx):
 def admin_session():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=30)
     if r.status_code != 200:
         pytest.skip(f"admin login failed: {r.status_code} {r.text}")

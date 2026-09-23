@@ -24,6 +24,8 @@ permissions: {}
 
 jobs:
   probe:
+    # only the 5-minute schedule (or manual) — the 15-minute cron must not double-submit probes
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

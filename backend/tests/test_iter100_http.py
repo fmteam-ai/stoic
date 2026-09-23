@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-100 HTTP smoke: Batch A — Digital Twin, Strategy Genetics, Calibration."""
 import os
 import pytest
@@ -10,7 +11,7 @@ load_dotenv(os.path.join(os.path.dirname(_BACKEND_DIR), "frontend", ".env"))
 
 from live_target import require_live_base_url
 BASE = require_live_base_url() + "/api"
-ADMIN = ("admin@trading.bot", "admin123")
+ADMIN = (ADMIN_EMAIL, ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")

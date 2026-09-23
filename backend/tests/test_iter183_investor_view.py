@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-183 — PAMM Investor Mirroring View (read-only).
 
 1. A user with a PAMM_INVESTOR account linked via pamm_program_id sees the
@@ -19,7 +20,7 @@ BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 ADMIN_EMAIL = os.environ.get("STOIC_TEST_ADMIN_EMAIL", "admin@stoicaibot.com")
-ADMIN_PWD = os.environ.get("STOIC_TEST_ADMIN_PASSWORD", "admin123")
+ADMIN_PWD = os.environ.get("STOIC_TEST_ADMIN_PASSWORD", ADMIN_PASSWORD)
 TAG = uuid.uuid4().hex[:8]
 PWD = "Kd5#Zt9mW2xVpR7c"
 

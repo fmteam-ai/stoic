@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter-35 backend HTTP smoke test — Binance Spot CCXT routes.
 
 Tests the live /api/crypto/* HTTP surface (no real exchange calls):
@@ -34,8 +35,8 @@ if not BASE_URL:
 
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASS = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PASS = ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")

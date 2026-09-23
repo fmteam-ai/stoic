@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-185 PAMM M1 — Extended coverage per review request:
 API contract, allocations/nav/master, reconciliation history, risk gates,
 authz negative paths, webhook negative paths, input validation, regressions.
@@ -20,8 +21,8 @@ from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_EMAIL_FALLBACK = "admin@trading.bot"
-ADMIN_PW = "admin123"
+ADMIN_EMAIL_FALLBACK = ADMIN_EMAIL
+ADMIN_PW = ADMIN_PASSWORD
 TIMEOUT = 25
 
 

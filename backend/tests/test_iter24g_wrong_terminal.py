@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter 24g — Wrong-terminal detection + /test-connection URL fix.
 
 Bugs being fixed:
@@ -47,7 +48,7 @@ API = f"{BASE_URL}/api"
 def admin_session():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200
     return s

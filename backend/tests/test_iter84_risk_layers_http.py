@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-84 HTTP-level tests for GET /api/risk/layers.
 
 Independent verification (additional to test_iter84_risk_layers.py) of:
@@ -19,8 +20,8 @@ from tests.helpers import base_url, register_and_login, mongo_db, mark_email_ver
 
 
 API = f"{base_url()}/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASS = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PASS = ADMIN_PASSWORD
 VALID_LAYER_STATUS = {"armed", "tripped", "degraded", "error"}
 EXPECTED_LAYER_KEYS = {
     "strategy_stop", "position_stop", "portfolio_stop",

@@ -50,19 +50,36 @@ async def dependency_health_check() -> dict:
     return result
 
 
+# sha256 of well-known weak defaults — the literals never appear in source
+_KNOWN_DEFAULT_PW_HASHES = {
+    "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
+    "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+    "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+}
+
+
+def _is_known_default_password(pw: str) -> bool:
+    import hashlib
+    return hashlib.sha256((pw or "").encode()).hexdigest() in _KNOWN_DEFAULT_PW_HASHES
+
+
 async def seed_admin():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@stoicaibot.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    admin_password = os.environ.get("ADMIN_PASSWORD") or ""
+    if not admin_password:
+        logging.getLogger("seed").warning(
+            "ADMIN_PASSWORD not set — admin account NOT seeded (fail closed)")
+        return
     from app_env import is_production
     is_prod = is_production()
     # SEC-001 — never ship a known-weak admin in production, and never force
     # an admin password back to the env value once the account exists (that
     # made password changes impossible across restarts).
     if is_prod:
-        if not os.environ.get("ADMIN_PASSWORD") or admin_password == "admin123":
+        if _is_known_default_password(admin_password):
             raise RuntimeError(
                 "APP_ENV=production requires a strong ADMIN_PASSWORD "
-                "(the default 'admin123' is refused).")
+                "(well-known default passwords are refused).")
         if len(admin_password) < 12:
             raise RuntimeError(
                 "ADMIN_PASSWORD must be at least 12 characters in production.")

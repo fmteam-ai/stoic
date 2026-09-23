@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-177 — WebAuthn passkeys for administrators (step-up factor).
 
 Uses a minimal software authenticator (EC P-256, attestation fmt "none")
@@ -25,8 +26,8 @@ from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 ORIGIN = BASE_URL
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PW = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PW = ADMIN_PASSWORD
 TIMEOUT = 25
 
 

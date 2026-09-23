@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iteration 105 live HTTP checks — Shadow Readiness endpoints via preview URL.
 
 Covers: /shadow/health, /shadow/benchmark, /shadow/validation, /twin/stress,
@@ -21,10 +22,8 @@ if not BASE_URL:
             if line.startswith("REACT_APP_BACKEND_URL="):
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 def _read_env(key):
     try:
         with open(os.path.join(_REPO, "backend", ".env")) as f:

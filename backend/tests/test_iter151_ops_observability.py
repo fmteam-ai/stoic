@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-151 · Ops observability + Risk-Commander proposal gate:
 safety-status banner endpoint, account certification, execution latency /
 counters / infra probes, and the AI→proposal→operator-approval flow."""
@@ -17,7 +18,7 @@ BASE = require_live_base_url()
 def _login():
     s = requests.Session()
     r = s.post(f"{BASE}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, r.text
     return s

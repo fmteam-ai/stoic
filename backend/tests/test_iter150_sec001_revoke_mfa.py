@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-150 SEC-001 fix verification — cross-tenant revoke_public now
 enforces require_admin (mirrors issue/view). Preview has
 ADMIN_MFA_ENFORCED=false so admin flow still works end-to-end via HTTP;
@@ -12,7 +13,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/") or "http://lo
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASS = "admin123"
+ADMIN_PASS = ADMIN_PASSWORD
 NON_ADMIN_EMAIL = "ccnon_11613bd0@example.com"
 NON_ADMIN_PASS = "Kd5#Zt9mW2xVpR7c"
 

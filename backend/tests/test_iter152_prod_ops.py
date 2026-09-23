@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-152 · Production ops round: Prometheus metrics endpoint, request IDs
 + structured access logs, execution-health infra extras (clock skew, feeds,
 ws clients), certification round 2 (stop/freeze levels + demo certification
@@ -20,7 +21,7 @@ BASE = require_live_base_url()
 def _login():
     s = requests.Session()
     r = s.post(f"{BASE}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, r.text
     return s

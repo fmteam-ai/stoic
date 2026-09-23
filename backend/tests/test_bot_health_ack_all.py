@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Bot Health hard-caps + /api/ops/alerts/ack-all authz regression (iter 176)."""
 import os
 import time
@@ -12,7 +13,7 @@ MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "test_database")
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PWD = "admin123"
+ADMIN_PWD = ADMIN_PASSWORD
 
 
 def _admin_session():

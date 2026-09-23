@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP-level audit v5 checks via public URL with admin cookie."""
 import pytest
 import requests
@@ -13,7 +14,7 @@ BASE_URL = require_live_base_url()
 def session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, r.text
     return s

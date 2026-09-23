@@ -171,12 +171,12 @@ async def execution_domain(db, account: dict | None = None) -> dict:
     their state SLA and any position mismatch enforce CLOSE_ONLY here, in
     release readiness and in user readiness alike."""
     from execution_truth import (authority_for, position_mismatches,
-                                 unresolved_executions)
+                                 unresolved_backlog)
     now = datetime.now(timezone.utc)
     ids = [_acct_id(account)] if account is not None else None
-    unresolved = await unresolved_executions(db, now, account_ids=ids)
+    backlog = await unresolved_backlog(db, now, account_ids=ids)
     mismatches = await position_mismatches(db, now, account_ids=ids)
-    return authority_for(unresolved, mismatches)
+    return authority_for(backlog["exemplars"], mismatches, backlog["by_status"])
 
 
 async def position_truth_domain(db, account: dict | None = None) -> dict:

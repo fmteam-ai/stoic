@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-161 HTTP review — hits the live preview backend as admin.
 Covers: P&L reconciliation, Ed25519 attestation, ops alerts scope, cc_status.
 """
@@ -12,9 +13,7 @@ from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter 25j — Friendly UX endpoints: Bot Health Score + Quick Actions.
 
 Two new aggregator endpoints power the Dashboard's friendly-UX overhaul:
@@ -45,7 +46,7 @@ def _strip(v: str) -> str:
 def admin_session():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200
     return s
@@ -98,7 +99,7 @@ class TestHealthScore:
     def test_health_score_flags_outdated_ea(self, admin_session, mongo_db):
         """Force one of the admin's connected accounts to report a pre-v1.26
         EA — health score must surface an `ea_outdated` advisory."""
-        admin = mongo_db.users.find_one({"email": "admin@trading.bot"})
+        admin = mongo_db.users.find_one({"email": ADMIN_EMAIL})
         accs = list(mongo_db.accounts.find({
             "user_id": str(admin["_id"]), "status": "connected",
         }))
@@ -132,7 +133,7 @@ class TestQuickActions:
         assert isinstance(body["todays_closed_count"], int)
 
     def test_quick_actions_open_trades_matches_db(self, admin_session, mongo_db):
-        admin = mongo_db.users.find_one({"email": "admin@trading.bot"})
+        admin = mongo_db.users.find_one({"email": ADMIN_EMAIL})
         db_count = mongo_db.trades.count_documents({
             "user_id": str(admin["_id"]), "status": "open",
         })

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-55 · Daily Auto-Learning — evidence-gated auto-apply / auto-revert
 (loss_advisor.py) + settings/guards HTTP API."""
 import os
@@ -14,10 +15,8 @@ from loss_advisor import (  # noqa: E402
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ----------------------------------------------------------- evidence bar
 class TestQualifies:
     def _m(self, net, saved, missed, testable=True):

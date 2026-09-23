@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-167 — 4th-audit fix: automatic rollback trusts ONLY operator-designated
 release-trusted agents/tenants. Untrusted tenant telemetry (health score OR
 corroboration) can never move fleet release state."""
@@ -33,7 +34,7 @@ def _db():
 def _admin():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     return s

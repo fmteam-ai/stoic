@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-211 — HTTP end-to-end tests for the NEW/CHANGED brain + latency
 endpoints introduced by the 10 architectural corrections.
 
@@ -31,10 +32,8 @@ BASE_URL = require_live_base_url()
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ─────────────────────────── fixtures ────────────────────────────────────
 
 

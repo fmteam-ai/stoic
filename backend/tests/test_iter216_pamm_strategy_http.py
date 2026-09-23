@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-216 / v62.1 — HTTP end-to-end tests for PAMM Strategy Profiles.
 
 Covers:
@@ -37,9 +38,7 @@ DB_NAME = os.environ["DB_NAME"]
 STEP_UP_BYPASS = os.environ.get("STEP_UP_BYPASS_TOKEN", "")
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_PASSWORD comes from live_target
 # ─────────────────────────── fixtures ────────────────────────────────────
 
 @pytest.fixture(scope="module")

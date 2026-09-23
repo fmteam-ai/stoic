@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP smoke tests for iter-37 multi-bot targeting (live preview URL).
 
 Verifies the HTTP surface end-to-end with admin login:
@@ -32,10 +33,8 @@ if not BASE_URL:
     except Exception:
         pass
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ---------- fixtures ----------
 @pytest.fixture(scope="module")
 def session():

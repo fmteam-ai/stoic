@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Tests for iter-65 daily profit target with lock-profit semantics."""
 import os as _os  # iter-148 — repo-relative paths (release-audit P0)
 _TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
@@ -21,10 +22,8 @@ from live_target import require_live_base_url
 
 BASE_URL = require_live_base_url()
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ──────────────────── pure helper tests ────────────────────
 def test_r_dollar_value_matches_risk_pct_of_equity():
     # 1R = risk_pct × equity. Medium profile risk_pct = 1.0% by default

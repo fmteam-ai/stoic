@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP E2E tests for iter-159 Soak Tracker & Release Canary against the public preview URL.
 
 Covers:
@@ -19,7 +20,7 @@ from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
+pass  # ADMIN_PASSWORD comes from live_target
 NONADMIN_EMAIL = "ccnon_11613bd0@example.com"
 NONADMIN_PASSWORD = "Kd5#Zt9mW2xVpR7c"
 DEMO_ACCOUNT_ID = "6a39653e0760995b7e966183"

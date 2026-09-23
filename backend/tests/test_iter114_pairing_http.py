@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-114 HTTP contract: pairing digest-only, atomic claim + terminal
 binding + token rotation, execution-owner lease, deployment ladder,
 progress endpoint, install_ea guard, EX5 manifest, no irm|iex."""
@@ -23,7 +24,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 from live_target import require_live_base_url
 BASE = require_live_base_url()
 API = f"{BASE}/api"
-ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
+ADMIN = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
 TAG = f"TEST_iter114_{uuid.uuid4().hex[:6]}"
 
 

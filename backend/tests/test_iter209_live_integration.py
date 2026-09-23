@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-209 live-DB integration tests for the six corrections.
 Tests exercise the real Mongo, use TEST_iter209_* seeds, and clean up.
 
@@ -27,8 +28,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL") \
     or "https://stoic-trading-bot.preview.emergentagent.com"
 BASE_URL = BASE_URL.rstrip("/")
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
+pass  # ADMIN_PASSWORD comes from live_target
 TAG = f"TEST_iter209_{os.getpid()}"
 USR_DECISION = f"{TAG}_decision"
 USR_TENANT_OTHER = f"{TAG}_other"

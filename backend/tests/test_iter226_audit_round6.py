@@ -344,3 +344,112 @@ def test_sec7_production_refuses_signers_sharing_jwt_secret():
         os.environ.clear()
         os.environ.update(saved)
     assert "ORDER_AUTH_SECRET=" in open(os.path.join(ROOT, ".env.example")).read()
+
+
+# ── audit round 7 P2 · exact backlog accounting under a large incident ───────
+def test_r7_backlog_counts_exact_and_truncation_flagged(sdb, uid):
+    from database import get_db
+    import execution_truth as et
+    now = datetime.now(timezone.utc)
+    acc = f"{uid}_big"
+    old = now - timedelta(minutes=30)
+    docs = [{"intent_id": f"{uid}_s{i}", "status": "submitted", "account_id": acc, "created_at": old, "user_id": uid} for i in range(5200)]
+    docs.append({"intent_id": f"{uid}_fresh_unknown", "status": "unknown", "account_id": acc, "created_at": now, "user_id": uid})
+    sdb.execution_intents.insert_many(docs, ordered=False)
+    b = run_async(et.unresolved_backlog(get_db(), now, account_ids=[acc]))
+    assert b["total"] == 5201 and b["by_status"] == {"submitted": 5200, "unknown": 1}
+    assert b["truncated"] is True and len(b["exemplars"]) == et.EXEMPLAR_LIMIT
+    assert b["newest_unknown_age_s"] is not None and b["newest_unknown_age_s"] <= 5      # the recent UNKNOWN is still visible
+    chk = run_async(et.execution_truth_check(get_db(), account_ids=[acc]))
+    assert chk["unresolved_executions"] == 5201 and chk["unresolved_truncated"] is True and chk["authority"] == "CLOSE_ONLY"
+    assert "1 execution(s) UNKNOWN" in chk["authority_reason"] and "5200 broker-accepted" in chk["authority_reason"]
+    sdb.execution_intents.delete_many({"account_id": acc})
+
+
+# ── audit round 7 · credentials, environment marker, evidence bundle, monitor ─
+def test_r7_no_default_credential_literals_in_source():
+    import subprocess as sp
+    r = sp.run(["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.jsx", "--include=*.sh", "--include=*.yml",
+                "--include=*.ps1", "-E", "['\"]admin123['\"]", "backend", "frontend/src", "deploy", "scripts", "ops", ".github"],
+               capture_output=True, text=True, cwd=REPO)
+    hits = [l for l in r.stdout.splitlines() if "__pycache__" not in l]
+    assert not hits, "default credential literals in source:\n" + "\n".join(hits)
+    from live_target import is_known_default_password, admin_credentials
+    assert is_known_default_password("admin" + "123") and not is_known_default_password("T" + "x" * 30)
+    saved = {k: os.environ.pop(k) for k in ("TEST_ADMIN_EMAIL", "TEST_ADMIN_PASSWORD", "ADMIN_EMAIL", "ADMIN_PASSWORD") if k in os.environ}
+    try:
+        with pytest.raises(RuntimeError):
+            admin_credentials(strict=True)                          # pre-network refusal
+        os.environ.update({"TEST_ADMIN_EMAIL": "a@b", "TEST_ADMIN_PASSWORD": "admin" + "123"})
+        with pytest.raises(RuntimeError, match="KNOWN DEFAULT"):
+            admin_credentials(strict=True)
+    finally:
+        for k in ("TEST_ADMIN_EMAIL", "TEST_ADMIN_PASSWORD"):
+            os.environ.pop(k, None)
+        os.environ.update(saved)
+    seed_src = open(os.path.join(ROOT, "seed.py")).read()
+    assert ('"admin' + '123"') not in seed_src and "_is_known_default_password" in seed_src
+    ci = open(os.path.join(REPO, ".github", "workflows", "ci.yml")).read()
+    assert ('ADMIN_PASSWORD="admin' + '123"') not in ci and "TEST_ADMIN_PASSWORD" in ci
+
+
+def test_r7_environment_marker_signature():
+    from environment_marker import mutation_guard, sign_environment, verify_environment
+    key = "k" * 32
+    saved = os.environ.get("LEDGER_ANCHOR_KEY")
+    os.environ["LEDGER_ANCHOR_KEY"] = key
+    try:
+        m = sign_environment("Staging", "abc123")
+        assert m["environment"] == "staging" and len(m["env_sig"]) == 64
+        assert verify_environment({**m, "build_sha": "abc123"}, key)
+        assert not verify_environment({**m, "build_sha": "other"}, key)
+        assert not verify_environment({**m, "build_sha": "abc123"}, "wrong")
+        good = {**m, "build_sha": "abc123"}
+        env = {"ALLOW_X": "true", "TOK": "t" * 20, "LEDGER_ANCHOR_KEY": key, "DB_NAME": "stoic_staging"}
+        assert mutation_guard("https://staging.example.test", good, env, allow_flag="ALLOW_X", token_var="TOK") == []
+        p = mutation_guard("https://stoicaibot.com", {**good, "environment": "production"}, env, allow_flag="ALLOW_X", token_var="TOK")
+        assert any("production hostname" in x for x in p) and any("environment='production'" in x for x in p)
+    finally:
+        if saved is None:
+            os.environ.pop("LEDGER_ANCHOR_KEY", None)
+        else:
+            os.environ["LEDGER_ANCHOR_KEY"] = saved
+    health = __import__("requests").get(f"{os.environ['REACT_APP_BACKEND_URL']}/api/health", timeout=15).json()
+    assert health.get("environment") and health.get("env_sig")
+
+
+def test_r7_prepromotion_bundle_refuses_and_fails_closed():
+    env = {**os.environ, "GIT_SHA": "unknown", "LEDGER_ANCHOR_KEY": ""}
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "ops", "prepromotion_evidence.py"), "--expect", "6/3/3"],
+                       capture_output=True, text=True, timeout=120, env=env)
+    assert r.returncode == 2 and json.loads(r.stdout)["result"] == "REFUSED"
+    joined = r.stdout
+    assert "scope-user" in joined and "GIT_SHA" in joined and "LEDGER_ANCHOR_KEY" in joined
+    # a tenant with NO enabled accounts can never PASS (fail closed), yet the bundle is signed + build-bound
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "ops", "prepromotion_evidence.py"), "--expect", "6/3/3",
+                        "--scope-user", "nobody_" + uuid.uuid4().hex[:6]],
+                       capture_output=True, text=True, timeout=180, env={**os.environ, "GIT_SHA": "deadbeef", "LEDGER_ANCHOR_KEY": "k" * 32,
+                                                                          "DRILL_EVIDENCE_DIR": "/tmp/pp"})
+    out = r.stdout[:r.stdout.rindex("}") + 1]
+    d = json.loads(out)
+    assert r.returncode == 1 and d["result"] == "FAIL" and d["build"] == "deadbeef" and len(d["signature"]) == 64
+    for g in ("topology_reconciliation", "all_enabled_live", "zero_unresolved_executions", "platform_authority_full",
+              "authority_ui_enforced_agree", "bot_health_caps_clear", "performance_reconciled_attestable"):
+        assert g in d["gates"], g
+    assert "all_enabled_live" in d["failed_gates"]
+    upd = open(os.path.join(REPO, "deploy", "update.sh")).read()
+    assert "prepromotion_evidence.py" in upd and "pre-promotion evidence FAILED" in upd
+
+
+def test_r7_monitor_and_browser_synthetic_strictness():
+    mon = open(os.path.join(REPO, ".github", "workflows", "synthetic-monitor.yml")).read()
+    assert "github.event.schedule == '*/5 * * * *'" in mon and "github.event.schedule == '*/15 * * * *'" in mon
+    br = open(os.path.join(REPO, "ops", "synthetic_browser.py")).read()
+    for needle in ("AMBIGUOUS_STATE", "len(states) != 1", "_classify", "BENIGN_CONSOLE", "uncaught_exception", "csp_violation", "build_sha"):
+        assert needle in br, needle
+    sys.path.insert(0, os.path.join(REPO, "ops"))
+    from synthetic_browser import _classify
+    assert _classify("Uncaught TypeError: x is not a function") == "uncaught_exception"
+    assert _classify("Refused to load the script because it violates the Content Security Policy") == "csp_violation"
+    assert _classify("Failed to fetch /api/health") == "failed_request"
+    assert os.path.exists(os.path.join(REPO, "scripts", "verify_release.sh"))

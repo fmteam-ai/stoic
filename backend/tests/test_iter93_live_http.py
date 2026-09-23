@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iteration 93 live HTTP checks against preview URL — safety-corrections batch.
 
 Covers: operational mode migration outcome, allocator authority, ops/swallowed,
@@ -21,10 +22,8 @@ if not BASE_URL:
     except Exception:
         pass
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 def _read_env(key):
     try:
         with open(os.path.join(_REPO, "backend", ".env")) as f:

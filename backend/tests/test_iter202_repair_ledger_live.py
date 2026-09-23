@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-202 · Admin Repair Ledger — live HTTP tests against preview,
 using direct motor client (bypasses shared-loop conftest fixture issues)."""
 import asyncio
@@ -26,7 +27,7 @@ BASE_URL = (BASE_URL or "").rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PW = "admin123"
+ADMIN_PW = ADMIN_PASSWORD
 
 # Read Mongo config from backend/.env
 def _read_env():

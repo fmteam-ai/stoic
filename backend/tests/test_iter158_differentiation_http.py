@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-158 HTTP integration tests — Phase 8/9 differentiation endpoints.
 
 Covers:
@@ -16,7 +17,7 @@ import requests
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
+ADMIN = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 

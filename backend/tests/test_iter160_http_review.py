@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-160 HTTP-level review tests against the live preview backend.
 
 Covers the endpoints in the review request:
@@ -22,7 +23,7 @@ from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASS = "admin123"
+ADMIN_PASS = ADMIN_PASSWORD
 
 
 # ---------------------------------------------------------------- fixtures

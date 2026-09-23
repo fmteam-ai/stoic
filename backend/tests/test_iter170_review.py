@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-170 review — login flow, turnstile-diag, CORS regression (preview).
 
 Verifies user-reported 'Human verification failed' bug is not reproducible
@@ -14,8 +15,8 @@ pytestmark = pytest.mark.http
 
 BASE_URL = require_live_base_url()
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASS = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PASS = ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")

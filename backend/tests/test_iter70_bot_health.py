@@ -9,6 +9,7 @@ Verifies the diagnostic upgrades that took the user's admin score from
   • All-dormant accounts do NOT trigger the -35 "no_connected_account" panic
 """
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 import os as _os  # iter-148 — repo-relative paths (release-audit P0)
 _TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 while _os.path.basename(_TESTS_DIR) != "tests":
@@ -36,10 +37,8 @@ if "REACT_APP_BACKEND_URL" not in os.environ:
     except Exception:
         pass
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()

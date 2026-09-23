@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-113 — Path B HTTP contract tests.
 
 Covers the review-request flows:
@@ -28,10 +29,8 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ─── session fixture ───────────────────────────────────────────
 @pytest.fixture(scope="module")
 def sess():

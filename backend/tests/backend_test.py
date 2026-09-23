@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Full backend regression tests for AI Trading Bot.
 
 Covers: health, auth, market data, bot config, signals (AI), accounts,
@@ -19,12 +20,12 @@ from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@trading.bot")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", ADMIN_EMAIL)
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", ADMIN_PASSWORD)
 # The canonical test admin (memory/test_credentials.md) — the .env
 # ADMIN_* values are the PRODUCTION seed and may not match this DB, so
 # try the test admin first to avoid tripping the failed-login lockout.
-_ADMIN_CANDIDATES = [("admin@trading.bot", "admin123"),
+_ADMIN_CANDIDATES = [(ADMIN_EMAIL, ADMIN_PASSWORD),
                      (ADMIN_EMAIL, ADMIN_PASSWORD)]
 
 

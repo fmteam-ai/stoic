@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP integration tests for the AI Strategy Optimizer feature.
 
 PER-ACCOUNT CONTRACT (iter38): analysis requires an account_id, reviews only
@@ -91,7 +92,7 @@ def session(test_user):
 def admin_session():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"}, timeout=30)
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200, r.text
     return s
 

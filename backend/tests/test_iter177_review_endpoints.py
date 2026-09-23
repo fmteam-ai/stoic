@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-177 review — endpoint contract/authz/negative-path tests for
    WebAuthn passkeys, ops (agent-certs, turnstile-diag), and infra
    rotate-credentials. Positive full-passkey ceremony already covered by
@@ -20,7 +21,7 @@ def _login(email: str, password: str) -> requests.Session:
 
 @pytest.fixture(scope="module")
 def admin() -> requests.Session:
-    return _login("admin@stoicaibot.com", "admin123")
+    return _login("admin@stoicaibot.com", ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")

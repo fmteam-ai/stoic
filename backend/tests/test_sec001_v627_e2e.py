@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """End-to-end verification: normal manual BUY still executes, and HTTP
 layer drops fraudulent risk-reducing flags (Pydantic strict model)."""
 import os
@@ -12,7 +13,7 @@ BASE = require_live_base_url()
 def _login():
     s = requests.Session()
     r = s.post(f"{BASE}/api/auth/login",
-               json={"email": "admin@stoicaibot.com", "password": "admin123"},
+               json={"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, r.text
     csrf = s.cookies.get("csrf_token")

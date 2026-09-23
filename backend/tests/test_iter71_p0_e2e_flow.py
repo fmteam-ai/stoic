@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-71 · E2E verification of the P0-1 unresolved -> open -> replay lifecycle.
 
 Uses an EXISTING account with bridge_token so we never leak account docs (a
@@ -37,7 +38,7 @@ def db():
 @pytest.fixture(scope="module")
 def admin_cookies():
     r = requests.post(f"{BASE_URL}/api/auth/login",
-                      json={"email": "admin@trading.bot", "password": "admin123"},
+                      json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                       timeout=15)
     assert r.status_code == 200, r.text
     return r.cookies

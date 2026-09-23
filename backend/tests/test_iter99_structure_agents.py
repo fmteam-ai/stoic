@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-60 · Market Structure agent + Range forecast + Fed tone + Posture."""
 import os
 import sys
@@ -161,7 +162,7 @@ class TestFedToneGate:
 def session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"}, timeout=15)
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=15)
     assert r.status_code == 200
     return s
 

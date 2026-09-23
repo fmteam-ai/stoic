@@ -157,7 +157,9 @@ jobs:
           cd backend
           export JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export KEY_VAULT_MASTER=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
-          export ADMIN_PASSWORD="admin123"
+          export ADMIN_PASSWORD="Ci9!$(python -c "import secrets; print(secrets.token_urlsafe(24))")"
+          echo "TEST_ADMIN_PASSWORD=${ADMIN_PASSWORD}" >> "$GITHUB_ENV"
+          echo "TEST_ADMIN_EMAIL=${ADMIN_EMAIL:-admin@stoicaibot.com}" >> "$GITHUB_ENV"
           # Test-suite bypasses (server-side secrets, refused when
           # APP_ENV=production): step-up MFA + volume rate limits. The
           # pytest conftest auto-injects them as headers when set, so the

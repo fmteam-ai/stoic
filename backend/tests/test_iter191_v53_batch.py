@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-191 — v53 review batch: flatten verification (A), configurable
 scaling curves (B), extended dual-auth kinds (C), held-out calibration (D)."""
 import os
@@ -17,8 +18,8 @@ load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN_A = ("admin@trading.bot", "admin123")
-ADMIN_B = ("admin@stoicaibot.com", "admin123")
+ADMIN_A = (ADMIN_EMAIL, ADMIN_PASSWORD)
+ADMIN_B = ("admin@stoicaibot.com", ADMIN_PASSWORD)
 TIMEOUT = 25
 
 

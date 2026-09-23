@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP integration tests for iter-154 Certification Center + Connect + v1 API.
 
 Runs against the deployed backend at REACT_APP_BACKEND_URL. Uses admin cookie
@@ -29,9 +30,7 @@ except Exception:
     pass
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_PASSWORD comes from live_target
 def setup_module(_m):
     """Idempotency pre-clean — repeated runs otherwise trip the per-broker
     account limit, the API-key cap and the daily cert-issuance cap."""
@@ -79,8 +78,8 @@ def admin_session():
     if r.status_code != 200:
         # try legacy admin
         r = s.post(f"{API}/auth/login",
-                   json={"email": "admin@trading.bot",
-                         "password": "admin123"}, timeout=30)
+                   json={"email": ADMIN_EMAIL,
+                         "password": ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200, f"login failed: {r.status_code} {r.text[:200]}"
     csrf = s.cookies.get("csrf_token")
     assert csrf, "csrf_token cookie missing"

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-83 verification suite:
 * Journal card flow (create/edit/share/public/moderation/rate-limit)
 * BSON UTC dates in ops_alerts / worker_leases
@@ -26,7 +27,7 @@ RL_BYPASS = os.environ.get("RATE_LIMIT_BYPASS_TOKEN")
 def admin_session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=30)
     assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
     if RL_BYPASS:
@@ -41,7 +42,7 @@ def admin_id():
 
     async def _go():
         c = AsyncIOMotorClient(os.environ["MONGO_URL"])
-        u = await c[os.environ["DB_NAME"]].users.find_one({"email": "admin@trading.bot"})
+        u = await c[os.environ["DB_NAME"]].users.find_one({"email": ADMIN_EMAIL})
         c.close()
         return str(u["_id"])
     return asyncio.get_event_loop().run_until_complete(_go()) if False else asyncio.new_event_loop().run_until_complete(_go())
@@ -346,7 +347,7 @@ class TestRegressionSmoke:
     def test_auth_me(self, admin_session):
         r = admin_session.get(f"{BASE_URL}/api/auth/me", timeout=15)
         assert r.status_code == 200
-        assert r.json().get("email") == "admin@trading.bot"
+        assert r.json().get("email") == ADMIN_EMAIL
 
 
 import pytest as _pytest  # noqa: E402

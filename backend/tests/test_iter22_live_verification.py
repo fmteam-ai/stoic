@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter22 — LIVE HTTP verification of security hardening.
 Extra checks for the testing agent beyond the iter22 spec:
   - CORS evil-origin preflight against the actual deployed backend
@@ -16,10 +17,8 @@ from live_target import require_live_base_url
 
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()

@@ -226,6 +226,11 @@ async def health():
             "execution_policy_version": EXECUTION_POLICY_VERSION,
             "ea_version": LATEST_EA,
             "app_env": os.environ.get("APP_ENV") or "development"}
+    # audit round 7 P1 — deployment-signed environment marker so mutating
+    # test runners (route sweep, drills) can PROVE they are not on production
+    # before their first login. HMAC(LEDGER_ANCHOR_KEY, "env|build").
+    from environment_marker import sign_environment
+    prov.update(sign_environment(prov["app_env"], prov["build_sha"]))
     try:
         await db.command("ping")
         return {"status": "ok", "db": "connected", **prov}

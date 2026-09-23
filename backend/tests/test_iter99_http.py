@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-99 HTTP smoke: /api/trades/{id}/dna, /api/bot/market-state,
 /api/ops/release-safety. Session-cookie auth for user endpoints;
 METRICS_TOKEN header for ops."""
@@ -17,7 +18,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
 from live_target import require_live_base_url
 BASE = require_live_base_url() + "/api"
 METRICS_TOKEN = os.environ["METRICS_TOKEN"]
-ADMIN = ("admin@trading.bot", "admin123")
+ADMIN = (ADMIN_EMAIL, ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")

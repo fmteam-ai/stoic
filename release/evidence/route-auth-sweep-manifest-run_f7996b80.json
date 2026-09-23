@@ -1,0 +1,371 @@
+{
+ "manifest": "route-auth-sweep",
+ "run_token": "run_f7996b80bf2444f18b580443252edbfd",
+ "base": "https://stoic-trading-bot.preview.emergentagent.com",
+ "items": [
+  {
+   "collection": "users",
+   "query": {
+    "_id": "6ab37cabb1f62e30a2051b29"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:55.955419+00:00"
+  },
+  {
+   "collection": "subscriptions",
+   "query": {
+    "user_id": "6ab37cabb1f62e30a2051b29"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:55.955715+00:00"
+  },
+  {
+   "collection": "users",
+   "query": {
+    "_id": "6ab37cacb1f62e30a2051b2b"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:56.944023+00:00"
+  },
+  {
+   "collection": "subscriptions",
+   "query": {
+    "user_id": "6ab37cacb1f62e30a2051b2b"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:56.944312+00:00"
+  },
+  {
+   "collection": "accounts",
+   "query": {
+    "_id": "6ab37cadb1f62e30a2051b2d"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.369331+00:00"
+  },
+  {
+   "collection": "bot_configs",
+   "query": {
+    "user_id": "6ab37cabb1f62e30a2051b29"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.369657+00:00"
+  },
+  {
+   "collection": "trading_readiness",
+   "query": {
+    "user_id": "6ab37cabb1f62e30a2051b29"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.370243+00:00"
+  },
+  {
+   "collection": "notifications",
+   "query": {
+    "user_id": "6ab37cabb1f62e30a2051b29"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.370656+00:00"
+  },
+  {
+   "collection": "trades",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a462b"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.372978+00:00"
+  },
+  {
+   "collection": "signals",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a462c"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.373568+00:00"
+  },
+  {
+   "collection": "support_tickets",
+   "query": {
+    "user_id": "6ab37cabb1f62e30a2051b29"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.586988+00:00"
+  },
+  {
+   "collection": "improvement_proposals",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a462d"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.588675+00:00"
+  },
+  {
+   "collection": "optimizer_reports",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a462e"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.589213+00:00"
+  },
+  {
+   "collection": "vps_deployments",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a462f"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.589747+00:00"
+  },
+  {
+   "collection": "installations",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4630"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.590320+00:00"
+  },
+  {
+   "collection": "bugs",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4631"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.590885+00:00"
+  },
+  {
+   "collection": "copilot_sessions",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4632"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.591418+00:00"
+  },
+  {
+   "collection": "safety_blocks",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4633"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.599253+00:00"
+  },
+  {
+   "collection": "governed_changes",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4634"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.600091+00:00"
+  },
+  {
+   "collection": "pamm_change_requests",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4634"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.600785+00:00"
+  },
+  {
+   "collection": "meta_decisions",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4635"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.601590+00:00"
+  },
+  {
+   "collection": "decision_contexts",
+   "query": {
+    "decision_id": "6ab37cadc60c8933ef3a4635"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.607976+00:00"
+  },
+  {
+   "collection": "loss_reviews",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4637"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.610826+00:00"
+  },
+  {
+   "collection": "execution_intents",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4638"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.611531+00:00"
+  },
+  {
+   "collection": "api_keys",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4639"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.616639+00:00"
+  },
+  {
+   "collection": "shadow_models",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a463a"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.617877+00:00"
+  },
+  {
+   "collection": "tuning_proposals",
+   "query": {
+    "model_id": "6ab37cadc60c8933ef3a463a"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.623331+00:00"
+  },
+  {
+   "collection": "bot_presets",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a463c"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.638730+00:00"
+  },
+  {
+   "collection": "strategies",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a463d"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.639810+00:00"
+  },
+  {
+   "collection": "traces",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a463e"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.651628+00:00"
+  },
+  {
+   "collection": "conditional_triggers",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a463f"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.652593+00:00"
+  },
+  {
+   "collection": "vps_agents",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4640"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.653332+00:00"
+  },
+  {
+   "collection": "mt5_discovered",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4641"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.654193+00:00"
+  },
+  {
+   "collection": "broker_installers",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4642"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.654951+00:00"
+  },
+  {
+   "collection": "affiliates",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4643"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.657217+00:00"
+  },
+  {
+   "collection": "affiliate_commissions",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4644"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.661680+00:00"
+  },
+  {
+   "collection": "affiliate_payout_requests",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4645"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.664393+00:00"
+  },
+  {
+   "collection": "ops_alerts",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4646"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.665208+00:00"
+  },
+  {
+   "collection": "repair_ledger",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4647"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.666185+00:00"
+  },
+  {
+   "collection": "pamm_join_requests",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4648"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.675428+00:00"
+  },
+  {
+   "collection": "pamm_partners",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a4649"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.688127+00:00"
+  },
+  {
+   "collection": "partner_brokers",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a464a"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.690836+00:00"
+  },
+  {
+   "collection": "broker_registry",
+   "query": {
+    "_id": "6ab37cadc60c8933ef3a464b"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.694776+00:00"
+  },
+  {
+   "collection": "pamm_programs",
+   "query": {
+    "program_id": "pgm_560a7a5b9b"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.774381+00:00"
+  },
+  {
+   "collection": "pamm_managers",
+   "query": {
+    "user_id": "6ab37cacb1f62e30a2051b2b"
+   },
+   "kind": "created",
+   "at": "2026-09-23T07:15:57.840440+00:00"
+  }
+ ],
+ "signature": "f91569149d86e15b183f72762d87f378999e07fed737017b6d5f9c77a30567d6",
+ "evidence_hash": "a5ea37e4941d2b959e68e52440470f2e6012928792d5f9e87a2017926f33ecee",
+ "cleaned_at": "2026-09-23T07:19:55.332954+00:00",
+ "removed_last_run": 0
+}

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """
 Iter-53 full sweep — verifies iter-51 (Correlation-aware Kelly + CVaR) and iter-52
 (ADWIN drift + Platt calibration) are wired correctly + global backend smoke.
@@ -11,10 +12,8 @@ import requests
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ---------- session / auth fixtures ----------
 @pytest.fixture(scope="session")
 def session():

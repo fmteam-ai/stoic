@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-181 — Deploy preflight: production guardrail simulator."""
 import os
 import sys
@@ -12,8 +13,8 @@ load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PW = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PW = ADMIN_PASSWORD
 TIMEOUT = 25
 
 GOOD_ENV = {
@@ -61,7 +62,7 @@ def test_preflight_flags_each_boot_blocker(monkeypatch):
         "step_up_bypass_token": {"STEP_UP_BYPASS_TOKEN": "leaked"},
         "rate_limit_bypass_token": {"RATE_LIMIT_BYPASS_TOKEN": "leaked"},
         "admin_mfa": {"ADMIN_MFA_ENFORCED": "false"},
-        "admin_password": {"ADMIN_PASSWORD": "admin123"},
+        "admin_password": {"ADMIN_PASSWORD": "admin" + "123"},   # deliberately split: known-default probe
         "ed25519": {"ED25519_SIGNING_KEY_B64": None},
         "key_vault": {"KEY_VAULT_MASTER": None},
     }

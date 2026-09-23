@@ -118,6 +118,20 @@ def _ensure_event_loop():
     yield
 
 
+def _refuse_live_without_env_credentials(items):
+    """audit round 7 P1 — live HTTP suites need env-provided admin credentials.
+    Hard, non-zero, pre-network refusal (never a silent skip)."""
+    live = [i for i in items if "/tests/integration/" not in str(i.fspath).replace("\\", "/")
+            and "/tests/unit/" not in str(i.fspath).replace("\\", "/")]
+    if not live or not os.environ.get("REACT_APP_BACKEND_URL"):
+        return
+    from live_target import admin_credentials
+    try:
+        admin_credentials(strict=True)
+    except RuntimeError as e:
+        pytest.exit(f"live suites refused: {e}", returncode=3)
+
+
 def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     """Auto-marks by directory so default suites are self-contained:
         pytest -m unit         → pure unit tests (no DB, no backend)
@@ -132,6 +146,7 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     Unit and integration lanes are never gated.
     """
     from pathlib import Path
+    _refuse_live_without_env_credentials(items)
     root = Path(__file__).resolve().parent
     env_live = (
         os.environ.get("APP_ENV", "").strip().lower() in ("production", "prod")
@@ -214,4 +229,5 @@ def _auto_csrf_header():
         yield
     finally:
         requests.sessions.Session.request = original
+
 

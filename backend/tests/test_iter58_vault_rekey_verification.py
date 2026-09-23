@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-58 · Independent verification of Phase 1 hardening + vault re-key fix.
 
 Focus areas (from review_request):
@@ -23,10 +24,8 @@ BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
 BYPASS = os.environ.get("RATE_LIMIT_BYPASS_TOKEN")
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 def _headers(csrf=None, bypass=True, extra=None):
     h = {"Content-Type": "application/json"}
     if csrf:

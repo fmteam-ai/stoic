@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-144 · Architectural hardening Batch 2 (audit r3) — HTTP/live verification.
 
 Covers 5 items requested by the review:
@@ -48,7 +49,7 @@ TEST_MARKER = "iter144_batch2_http"
 def _admin_session() -> requests.Session:
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
     csrf = s.cookies.get("csrf_token")
@@ -126,13 +127,13 @@ class TestRegressionSmoke:
     def test_admin_login_works(self):
         s = requests.Session()
         r = s.post(f"{BASE_URL}/api/auth/login",
-                   json={"email": "admin@trading.bot", "password": "admin123"},
+                   json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                    timeout=15)
         assert r.status_code == 200, r.text
         data = r.json()
         # response echoes user identity — accept either flat or nested shape
         email = data.get("email") or (data.get("user") or {}).get("email")
-        assert email == "admin@trading.bot", data
+        assert email == ADMIN_EMAIL, data
 
     def test_bridge_heartbeat_valid_token_200(self, bridge_token):
         r = requests.post(

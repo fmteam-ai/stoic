@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP API tests for STOIC Brain Phase A endpoints."""
 import os
 import requests
@@ -15,7 +16,7 @@ if os.path.exists(_FRONTEND_ENV):
             if line.startswith("REACT_APP_BACKEND_URL"):
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
 
-ADMIN = {"email": "admin@stoicaibot.com", "password": "admin123"}
+ADMIN = {"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD}
 
 
 @pytest.fixture(scope="module")

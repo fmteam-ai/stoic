@@ -29,8 +29,8 @@ def admin():
         # Preview DB uses the documented legacy test credentials while
         # backend/.env carries the production recovery password.
         r = s.post(f"{API}/auth/login",
-                   json={"email": "admin@trading.bot",
-                         "password": "admin123"}, timeout=30)
+                   json={"email": ADMIN_EMAIL,
+                         "password": ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200, r.text
     return s
 

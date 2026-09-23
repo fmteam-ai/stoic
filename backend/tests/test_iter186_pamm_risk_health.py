@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-186 — PAMM Phase 9 Risk Engine + Phase 10 Broker Health Monitor.
 Loss caps / drawdown / exposure / correlation gates, halt vs flatten,
 news blackout, heartbeat + 0-100 health score."""
@@ -16,8 +17,8 @@ load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PW = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PW = ADMIN_PASSWORD
 TIMEOUT = 25
 
 
@@ -184,7 +185,7 @@ class TestRiskEvaluation:
             s2 = requests.Session()  # SECOND admin approves
             r2 = s2.post(f"{API}/auth/login",
                          json={"email": "admin@stoicaibot.com",
-                               "password": "admin123"}, timeout=TIMEOUT)
+                               "password": ADMIN_PASSWORD}, timeout=TIMEOUT)
             assert r2.status_code == 200, r2.text
             r2 = s2.post(f"{API}/pamm/change-requests/{change_id}/approve",
                          timeout=TIMEOUT)

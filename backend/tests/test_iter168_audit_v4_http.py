@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP-level verification for Audit v4 corrections (iter-168).
 
 Covers the endpoints listed in the review request:
@@ -26,7 +27,7 @@ BASE_URL = require_live_base_url()
 def admin_session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, f"login failed: {r.status_code} {r.text[:200]}"
     time.sleep(0.4)

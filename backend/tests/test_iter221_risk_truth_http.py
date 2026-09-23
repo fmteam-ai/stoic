@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-221 / v62.6 — PAMM Risk Truth & Production Gate HTTP + direct-guard tests.
 
 Covers the previously untested v62.6 semantics:
@@ -50,9 +51,7 @@ DB_NAME = os.environ["DB_NAME"]
 STEP_UP_BYPASS = os.environ.get("STEP_UP_BYPASS_TOKEN", "")
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_PASSWORD comes from live_target
 # ─────────── fixtures & helpers ──────────────────────────────────────────
 
 @pytest.fixture(scope="module")

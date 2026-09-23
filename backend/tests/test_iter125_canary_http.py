@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter125: HTTP E2E — canary promote/rollback for admin user via cookie auth."""
 import asyncio
 import os
@@ -23,7 +24,7 @@ def _run(coro):
 def admin_session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@stoicaibot.com", "password": "admin123"},
+               json={"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD},
                timeout=10)
     assert r.status_code == 200, r.text
     # csrf

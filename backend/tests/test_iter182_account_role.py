@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-182 — PAMM account-role model end-to-end.
 
 1. AccountCreate accepts account_role + pamm_* fields; STANDARD normalizes
@@ -18,7 +19,7 @@ BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 ADMIN_EMAIL = os.environ.get("STOIC_TEST_ADMIN_EMAIL", "admin@stoicaibot.com")
-ADMIN_PWD = os.environ.get("STOIC_TEST_ADMIN_PASSWORD", "admin123")
+ADMIN_PWD = os.environ.get("STOIC_TEST_ADMIN_PASSWORD", ADMIN_PASSWORD)
 
 TAG = uuid.uuid4().hex[:8]
 

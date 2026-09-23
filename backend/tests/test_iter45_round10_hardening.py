@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-45 · Round 10 hardening — end-to-end verification.
 
 Covers the two P0 fixes on live HTTP + Mongo:
@@ -407,7 +408,7 @@ def test_crash_recovery_reconstructs_missing_ledger_event(ctx):
 def test_scalp_status_admin_shows_service_block_null():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=30)
     if r.status_code != 200:
         pytest.skip(f"admin login failed: {r.status_code}")

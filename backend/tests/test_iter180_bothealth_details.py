@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-180 — /api/bot/health-score details[] shape + unprotected via evaluator.
 
 Covers the review request's specific new assertions:
@@ -23,7 +24,7 @@ BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PWD = "admin123"
+ADMIN_PWD = ADMIN_PASSWORD
 
 UID = "_qa_upq"
 TICKET_CONFIRMED = 900101

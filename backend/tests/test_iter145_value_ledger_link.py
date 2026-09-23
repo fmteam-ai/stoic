@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-145 verification: AI Value Ledger link to Risk Decision Snapshots."""
 import os
 import uuid
@@ -13,9 +14,7 @@ BASE_URL = require_live_base_url()
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_PASSWORD comes from live_target
 def _allow_http_cookies(s):
     orig = s.prepare_request
 

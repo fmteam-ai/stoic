@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-96 (reviews iter-111): HTTP verification of the six safety
 corrections against the live preview backend.
 
@@ -9,8 +10,8 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASS = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PASS = ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")

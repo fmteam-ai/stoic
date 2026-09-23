@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter-223 · Trades stats perf/correctness regression.
 
 Reproduces the production incident where GET /api/trades/stats fetched full
@@ -28,9 +29,7 @@ BASE_URL = BASE_URL.rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_PASSWORD comes from live_target
 def _mongo():
     return MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
 

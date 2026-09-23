@@ -88,7 +88,7 @@ async def main():
     ap.add_argument("--users", type=int, default=20)
     ap.add_argument("--seconds", type=int, default=30)
     ap.add_argument("--email", default="admin@trading.bot")
-    ap.add_argument("--password", default="admin123")
+    ap.add_argument("--password", default=os.environ.get("TEST_ADMIN_PASSWORD"), help="or TEST_ADMIN_PASSWORD env (no default)")
     ap.add_argument("--record-baseline", action="store_true")
     args = ap.parse_args()
 

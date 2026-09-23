@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-96 + iter-97 HTTP endpoint tests — autopilot autonomy stack.
 
 Covers regime probabilities, failure taxonomy, learning records/speeds,
@@ -19,8 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from helpers import base_url  # noqa: E402
 
 API = f"{base_url()}/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PW = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PW = ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="module")

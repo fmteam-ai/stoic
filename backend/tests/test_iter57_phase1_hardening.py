@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-57 · Phase 1 security & reliability hardening verification.
 
 Covers:
@@ -94,7 +95,7 @@ class TestBaselineAndHealth:
             hdrs["X-RateLimit-Bypass"] = BYPASS
         r = requests.post(
             f"{API}/auth/login",
-            json={"email": "admin@trading.bot", "password": "admin123"},
+            json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
             headers=hdrs,
             timeout=15,
         )
@@ -108,7 +109,7 @@ class TestBaselineAndHealth:
 # ---------- 2: CSRF enforcement ----------
 class TestCSRFEnforcement:
     def test_cookie_auth_mutating_without_csrf_returns_403(self):
-        r = _login("admin@trading.bot", "admin123")
+        r = _login(ADMIN_EMAIL, ADMIN_PASSWORD)
         assert r.status_code == 200
         # Use urllib directly to bypass the conftest's auto-CSRF injection on requests.Session
         import urllib.request as _u
@@ -147,7 +148,7 @@ class TestCSRFEnforcement:
             assert detail.get("code") == "csrf_failed", body
 
     def test_cookie_auth_mutating_with_csrf_header_passes(self):
-        r = _login("admin@trading.bot", "admin123")
+        r = _login(ADMIN_EMAIL, ADMIN_PASSWORD)
         assert r.status_code == 200
         csrf = r.cookies.get("csrf_token")
         cookies = {
@@ -165,7 +166,7 @@ class TestCSRFEnforcement:
 # ---------- 3: Refresh rotation + family revocation ----------
 class TestRefreshRotation:
     def test_replay_rotated_refresh_returns_401(self):
-        r = _login("admin@trading.bot", "admin123")
+        r = _login(ADMIN_EMAIL, ADMIN_PASSWORD)
         assert r.status_code == 200
         old_refresh = r.cookies.get("refresh_token")
         csrf_a = r.cookies.get("csrf_token")

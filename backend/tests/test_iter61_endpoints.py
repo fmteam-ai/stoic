@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter-61 HTTP verification of /api/scalp/exec-calibration and
 /api/scalp/broker-stats. Uses admin login + CSRF + rate-limit bypass."""
 import os
@@ -14,7 +15,7 @@ def admin_client():
     s = requests.Session()
     # Login sets httpOnly access_token cookie
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
     return s

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter 26 endpoint regression — wraps the unit-level max_concurrent race fix
 with API-level regression checks for the new diagnostic + status surfaces.
 
@@ -23,8 +24,8 @@ def _market_always_open(monkeypatch):
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASS = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PASS = ADMIN_PASSWORD
 
 
 # ---------- shared fixtures --------------------------------------------------

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-224 · HTTP-level verification of P1-1..P1-5 audit changes.
 
 Complements iter-204 unit-level acceptance tests by exercising the public HTTP
@@ -16,7 +17,7 @@ METRICS_TOKEN = os.environ.get("METRICS_TOKEN") or open(os.path.join(os.path.dir
 def admin_session():
     s = requests.Session()
     r = s.post(f"{BASE}/api/auth/login",
-               json={"email": "admin@stoicaibot.com", "password": "admin123"},
+               json={"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD},
                timeout=15)
     assert r.status_code == 200, r.text
     return s

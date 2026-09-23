@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter24 positive-path verifications — happy paths must still work after the
 ObjectId hardening migration."""
 import os
@@ -6,8 +7,8 @@ import requests
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 VALID_ACCOUNT_HEX = "6a3ad0ef17f40ac1dd3eb3ef"
 
 

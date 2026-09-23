@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter26 — FRED macro feeds integration.
 
 Covers:
@@ -197,7 +198,7 @@ async def test_snapshot_endpoint_returns_5_series_for_admin():
     base = require_live_base_url()
     s = requests.Session()
     r = s.post(f"{base}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"}, timeout=15)
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=15)
     assert r.status_code == 200
     r = s.get(f"{base}/api/macro/snapshot", timeout=20)
     assert r.status_code == 200

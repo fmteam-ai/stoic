@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-163 live-stack verification of P0/P1 fixes (review request).
 
 Covers:
@@ -21,7 +22,7 @@ CANARY_ACCT = "6a39653e0760995b7e966183"
 def admin():
     s = requests.Session()
     r = s.post(f"{BASE}/api/auth/login",
-               json={"email": "admin@stoicaibot.com", "password": "admin123"},
+               json={"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD},
                timeout=15)
     if r.status_code != 200:
         pytest.skip(f"admin login failed: {r.status_code} {r.text[:200]}")

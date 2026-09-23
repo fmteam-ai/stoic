@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """
 E2E API tests for iter-158 P0 Phase A review request.
 
@@ -19,9 +22,7 @@ from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 
 ADMIN_EMAIL = "admin@stoicaibot.com"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_PASSWORD comes from live_target
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()

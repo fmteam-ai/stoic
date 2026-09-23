@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """
 iter-126 tests: OPTION A simplification — single-engine MTF cascade only.
 
@@ -31,8 +32,8 @@ from live_target import require_live_base_url
 
 BASE_URL = require_live_base_url()
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PW = "admin123"
+pass  # ADMIN_EMAIL comes from live_target
+ADMIN_PW = ADMIN_PASSWORD
 
 REMOVED_FIELDS = {"aggressive_mode", "range_scalp_enabled",
                   "mtf_confluence_enabled", "mtf_strict"}

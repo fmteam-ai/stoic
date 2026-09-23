@@ -44,7 +44,7 @@ async def main() -> int:
     from playwright.async_api import async_playwright
     base = _base_url()
     email = os.environ.get("ROUTE_MATRIX_EMAIL", "admin@stoicaibot.com")
-    password = os.environ.get("ROUTE_MATRIX_PASSWORD", "admin123")
+    password = os.environ.get("ROUTE_MATRIX_PASSWORD") or os.environ.get("TEST_ADMIN_PASSWORD") or ""
     failures = []
     async with async_playwright() as pw:
         browser = await pw.chromium.launch()

@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Iter-82 verification — Phases B/D/E backend (metrics gauges, ops alerts,
 validation ledger, stage machine, bot start regression). Runs against the
 public preview URL using METRICS_TOKEN + STEP_UP_BYPASS from backend/.env.
@@ -38,7 +39,7 @@ def metrics_headers():
 def admin_session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"})
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
     assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
     return s
 
@@ -265,7 +266,7 @@ class TestBotRegression:
     def test_auth_me_still_works(self, admin_session):
         r = admin_session.get(f"{BASE_URL}/api/auth/me")
         assert r.status_code == 200
-        assert r.json().get("email") == "admin@trading.bot"
+        assert r.json().get("email") == ADMIN_EMAIL
 
 
 import pytest as _pytest  # noqa: E402

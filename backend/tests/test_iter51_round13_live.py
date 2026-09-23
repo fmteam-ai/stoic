@@ -20,6 +20,7 @@ backend, do NOT touch /api/panic, and do NOT create/close broker trades.
 """
 
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 import os as _os  # iter-148 — repo-relative paths (release-audit P0)
 _TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 while _os.path.basename(_TESTS_DIR) != "tests":
@@ -53,10 +54,8 @@ if not MONGO_URL or not DB_NAME:
         elif line.startswith("DB_NAME=") and not DB_NAME:
             DB_NAME = line.split("=", 1)[1].strip().strip('"')
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

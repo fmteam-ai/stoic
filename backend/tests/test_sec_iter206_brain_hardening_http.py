@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-206 SEC-001/002/003 — HTTP verification against preview URL.
 
 Covers:
@@ -44,7 +45,7 @@ def _login(session: requests.Session, email: str, pw: str):
 @pytest.fixture(scope="module")
 def admin_session():
     s = requests.Session()
-    _login(s, "admin@stoicaibot.com", "admin123")
+    _login(s, "admin@stoicaibot.com", ADMIN_PASSWORD)
     return s
 
 

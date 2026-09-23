@@ -2,6 +2,7 @@
 /api/signals/generate and the two /api/insights/weekly-digest variants
 + POST /api/insights/weekly-digest/email through the live backend."""
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 import os as _os  # iter-148 — repo-relative paths (release-audit P0)
 _TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 while _os.path.basename(_TESTS_DIR) != "tests":
@@ -17,9 +18,8 @@ BASE_URL = require_live_base_url()
 if not BASE_URL.startswith("http"):
     BASE_URL = "https://" + BASE_URL
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # Load REACT_APP_BACKEND_URL from frontend/.env if not in env
 if "REACT_APP_BACKEND_URL" not in os.environ:
     try:

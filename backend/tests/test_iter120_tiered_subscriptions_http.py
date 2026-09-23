@@ -13,6 +13,7 @@ Covers the E1 review request:
   • Admin bypasses ALL gates.
 """
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 import os
 import secrets
 import time
@@ -26,10 +27,8 @@ from tests.helpers import (
 )
 
 API = base_url() + "/api"
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 # ============================================================================
 # Fixtures
 # ============================================================================

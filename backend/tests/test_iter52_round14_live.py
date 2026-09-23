@@ -12,6 +12,7 @@ Verifies over the external REACT_APP_BACKEND_URL:
     signature has the injected `oid_parser` param
 """
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 import os as _os  # iter-148 — repo-relative paths (release-audit P0)
 _TESTS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 while _os.path.basename(_TESTS_DIR) != "tests":
@@ -29,7 +30,7 @@ import requests
 
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
-ADMIN = {"email": "admin@trading.bot", "password": "admin123"}
+ADMIN = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
 
 
 # --------------------------------------------------------------------------

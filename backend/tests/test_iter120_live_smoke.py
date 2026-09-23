@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Live external URL smoke tests for v53 batch A+B+C+D — iter120."""
 import os
 import time
@@ -25,12 +26,12 @@ def _login(email, password):
 
 @pytest.fixture(scope="module")
 def admin_a():
-    return _login("admin@trading.bot", "admin123")
+    return _login(ADMIN_EMAIL, ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")
 def admin_b():
-    return _login("admin@stoicaibot.com", "admin123")
+    return _login("admin@stoicaibot.com", ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")

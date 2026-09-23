@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Audit v4 (2026-08-30) corrections — authoritative truth + honest evidence.
 
 Covers:
@@ -48,7 +49,7 @@ class TestEnvironmentClassification:
     def test_caps_count_live_environment_only(self):
         async def go():
             db = _db()
-            u = await db.users.find_one({"email": "admin@trading.bot"})
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
             from account_limits import get_broker_breakdown
             from broker_env import broker_environment
             bd = await get_broker_breakdown(db, str(u["_id"]))

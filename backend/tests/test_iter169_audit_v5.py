@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """Audit v5 (2026-08-30) corrections — governance + truth propagation.
 
 Covers:
@@ -80,7 +81,7 @@ class TestLossLabGate:
         async def go():
             db = _db()
             from loss_advisor import _auto_apply_suspended
-            u = await db.users.find_one({"email": "admin@trading.bot"})
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
             return await _auto_apply_suspended(db, str(u["_id"]))
         hold = _run(go())
         # preview truth is stale + 1 UNKNOWN execution — must be suspended
@@ -131,7 +132,7 @@ class TestVerifiedEnvironment:
         async def go():
             db = _db()
             from routes.performance_routes import _verified_payload
-            u = await db.users.find_one({"email": "admin@trading.bot"})
+            u = await db.users.find_one({"email": ADMIN_EMAIL})
             return await _verified_payload(db, str(u["_id"]))
         p = _run(go())
         rows = p.get("accounts") or []

@@ -71,34 +71,54 @@ def sla_for(status: str) -> int:
     return SLA_S.get(status, SLA_S["unknown"])
 
 
-async def unresolved_executions(db, now: datetime, max_age_s: int | None = None,
-                                account_ids: list | None = None) -> list:
-    """Non-terminal intents older than their STATE-SPECIFIC SLA (or
-    `max_age_s` for every state when given). Fetches in Python because the
-    timestamp field/type varies per intent."""
+EXEMPLAR_LIMIT = 500
+
+
+async def unresolved_backlog(db, now: datetime, max_age_s: int | None = None,
+                             account_ids: list | None = None) -> dict:
+    """EXACT backlog accounting (round 7 P2): streams every non-terminal
+    intent (no source cap), counts aged ones by status/account exactly and
+    keeps the OLDEST `EXEMPLAR_LIMIT` as actionable exemplars. `truncated`
+    tells the reader the exemplar list is partial; counts never are."""
     q: dict = {"status": {"$in": list(NON_TERMINAL_AFTER_BROKER)}}
     if account_ids is not None:
         q["account_id"] = {"$in": list(account_ids)}
-    rows = await db.execution_intents.find(
-        q, {"intent_id": 1, "status": 1, "account_id": 1, "created_at": 1, "updated_at": 1,
-            "broker_ticket": 1, "request_id": 1, "response_id": 1, "transitions": 1, "symbol": 1}
-    ).sort("created_at", 1).to_list(length=5000)
-    out = []
-    for r in rows:
+    proj = {"intent_id": 1, "status": 1, "account_id": 1, "created_at": 1, "updated_at": 1, "broker_ticket": 1,
+            "request_id": 1, "response_id": 1, "transitions": 1, "symbol": 1}
+    total, by_status, by_account, scanned = 0, {}, {}, 0
+    exemplars: list = []
+    newest_unknown_age = None
+    async for r in db.execution_intents.find(q, proj).sort("created_at", 1):
+        scanned += 1
         if r.get("status") in TERMINAL:
             continue
         age = _age(last_transition_at(r), now)
         if age is None:
-            age = float("inf")            # untimestamped non-terminal intent = unknown age → fail closed
+            age = float("inf")
         sla = sla_for(r.get("status")) if max_age_s is None else max_age_s
         if age < sla:
             continue
-        out.append({"intent_id": r.get("intent_id"), "status": r.get("status"), "account_id": r.get("account_id"),
-                    "symbol": r.get("symbol"), "age_s": None if age == float("inf") else round(age),
-                    "sla_s": sla, "broker_ticket": r.get("broker_ticket"), "request_id": r.get("request_id"),
-                    "response_id": r.get("response_id"),
-                    "transitions": [t.get("to") if isinstance(t, dict) else t for t in (r.get("transitions") or [])][-6:]})
-    return out[:500]
+        total += 1
+        by_status[r.get("status")] = by_status.get(r.get("status"), 0) + 1
+        by_account[str(r.get("account_id"))] = by_account.get(str(r.get("account_id")), 0) + 1
+        if r.get("status") == "unknown" and age != float("inf"):
+            newest_unknown_age = age if newest_unknown_age is None else min(newest_unknown_age, age)
+        if len(exemplars) < EXEMPLAR_LIMIT:
+            exemplars.append({"intent_id": r.get("intent_id"), "status": r.get("status"), "account_id": r.get("account_id"),
+                              "symbol": r.get("symbol"), "age_s": None if age == float("inf") else round(age),
+                              "sla_s": sla, "broker_ticket": r.get("broker_ticket"), "request_id": r.get("request_id"),
+                              "response_id": r.get("response_id"),
+                              "transitions": [t.get("to") if isinstance(t, dict) else t for t in (r.get("transitions") or [])][-6:]})
+    return {"total": total, "by_status": by_status, "by_account": by_account, "scanned": scanned,
+            "exemplars": exemplars, "truncated": total > len(exemplars), "exemplar_limit": EXEMPLAR_LIMIT,
+            "newest_unknown_age_s": None if newest_unknown_age is None else round(newest_unknown_age)}
+
+
+async def unresolved_executions(db, now: datetime, max_age_s: int | None = None,
+                                account_ids: list | None = None) -> list:
+    """Oldest actionable exemplars (≤ EXEMPLAR_LIMIT). Non-empty iff the exact
+    backlog is non-empty — authority decisions may rely on that."""
+    return (await unresolved_backlog(db, now, max_age_s=max_age_s, account_ids=account_ids))["exemplars"]
 
 
 async def position_mismatches(db, now: datetime, account_ids: list | None = None) -> list:
@@ -129,19 +149,25 @@ async def position_mismatches(db, now: datetime, account_ids: list | None = None
     return out
 
 
-def authority_for(unresolved: list, mismatches: list) -> dict:
+def authority_for(unresolved: list, mismatches: list, by_status: dict | None = None) -> dict:
     """The ONE mapping every surface uses: any mismatch or expired
-    broker-accepted state → CLOSE_ONLY; UNKNOWN blocks immediately."""
+    broker-accepted state → CLOSE_ONLY; UNKNOWN blocks immediately.
+    `by_status` (exact counts) makes the reason exact even when the exemplar
+    list is truncated."""
     if not unresolved and not mismatches:
         return {"level": "FULL", "reason": "all executions terminal and positions reconciled"}
     parts = []
-    unk = [u for u in unresolved if u["status"] == "unknown"]
-    aged = [u for u in unresolved if u["status"] != "unknown"]
-    if unk:
-        parts.append(f"{len(unk)} execution(s) UNKNOWN after broker uncertainty — blocked immediately")
-    if aged:
-        parts.append(f"{len(aged)} broker-accepted execution(s) past their settlement SLA "
-                     f"({', '.join(sorted({u['status'] for u in aged}))})")
+    if by_status is None:
+        by_status = {}
+        for u in unresolved:
+            by_status[u["status"]] = by_status.get(u["status"], 0) + 1
+    n_unk = by_status.get("unknown", 0)
+    aged_states = {k: v for k, v in by_status.items() if k != "unknown" and v}
+    if n_unk:
+        parts.append(f"{n_unk} execution(s) UNKNOWN after broker uncertainty — blocked immediately")
+    if aged_states:
+        parts.append(f"{sum(aged_states.values())} broker-accepted execution(s) past their settlement SLA "
+                     f"({', '.join(sorted(aged_states))})")
     if mismatches:
         parts.append(f"{len(mismatches)} account(s) with broker/local open-position mismatch")
     return {"level": "CLOSE_ONLY", "reason": "; ".join(parts) + " — no new exposure until broker truth is terminal and positions reconcile"}
@@ -149,10 +175,13 @@ def authority_for(unresolved: list, mismatches: list) -> dict:
 
 async def execution_truth_check(db, account_ids: list | None = None) -> dict:
     now = datetime.now(timezone.utc)
-    unresolved = await unresolved_executions(db, now, account_ids=account_ids)
+    backlog = await unresolved_backlog(db, now, account_ids=account_ids)
+    unresolved = backlog["exemplars"]
     mismatches = await position_mismatches(db, now, account_ids=account_ids)
-    auth = authority_for(unresolved, mismatches)
-    return {"ok": auth["level"] == "FULL", "unresolved_executions": len(unresolved),
+    auth = authority_for(unresolved, mismatches, backlog["by_status"])
+    return {"ok": auth["level"] == "FULL", "unresolved_executions": backlog["total"],
+            "unresolved_by_status": backlog["by_status"], "unresolved_truncated": backlog["truncated"],
+            "unresolved_exemplars_shown": len(unresolved), "newest_unknown_age_s": backlog["newest_unknown_age_s"],
             "position_mismatches": len(mismatches), "sla_s": dict(SLA_S),
             "max_unknown_age_s": UNKNOWN_MAX_AGE_S,
             "authority": auth["level"], "authority_reason": auth["reason"],

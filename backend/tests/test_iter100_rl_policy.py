@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-61 · Offline RL policy layer — reward shaping, state extraction,
 distributional decisions, trainer + HTTP API."""
 import os
@@ -103,7 +104,7 @@ class TestDecide:
 def session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"}, timeout=15)
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=15)
     assert r.status_code == 200
     return s
 

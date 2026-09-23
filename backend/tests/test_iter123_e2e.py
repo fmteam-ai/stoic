@@ -1,3 +1,4 @@
+from live_target import ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-123 E2E HTTP tests — 3-phase commercial hardening (billing / entitlement / VPS).
 
 Covers behaviors NOT exercised by iter122 service-level unit tests:
@@ -36,8 +37,8 @@ def _admin_session() -> requests.Session:
         # Preview DB uses the documented legacy test credentials while
         # backend/.env carries the production recovery password.
         r = s.post(f"{API}/auth/login",
-                   json={"email": "admin@trading.bot",
-                         "password": "admin123"}, timeout=30)
+                   json={"email": ADMIN_EMAIL,
+                         "password": ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200, r.text
     return s
 

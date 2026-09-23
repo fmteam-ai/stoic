@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-193 — v55 batch: execution intents (at-most-once idempotency),
 real broker adapters (generic REST + MT5 Manager) with certification,
 and Position Truth reconciliation (drift → freeze new exposure)."""
@@ -16,7 +17,7 @@ load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
 from live_target import require_live_base_url
 BASE_URL = require_live_base_url()
 API = f"{BASE_URL}/api"
-ADMIN = ("admin@trading.bot", "admin123")
+ADMIN = (ADMIN_EMAIL, ADMIN_PASSWORD)
 TIMEOUT = 30
 
 

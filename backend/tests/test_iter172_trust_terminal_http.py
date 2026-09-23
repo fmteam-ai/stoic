@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """HTTP e2e — iter-172 one-click trusted terminal.
 
 Flow: create account → EA heartbeat (no installation_id, unverified) →
@@ -22,7 +23,7 @@ TIMEOUT = 20
 def session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     return s

@@ -15,6 +15,7 @@ corrections review request. Runs the exact scenarios listed in the review:
     passes once installation + lease + verified ea_identity are seeded.
 """
 from __future__ import annotations
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 
 import os
 import re
@@ -48,7 +49,7 @@ def _mongo():
 def admin_session():
     s = requests.Session()
     r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"},
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
                timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     # attach CSRF header for mutating requests
@@ -98,7 +99,7 @@ def fresh_user():
 def test_admin_login_and_me(admin_session):
     r = admin_session.get(f"{BASE_URL}/api/auth/me", timeout=TIMEOUT)
     assert r.status_code == 200
-    assert r.json().get("email") == "admin@trading.bot"
+    assert r.json().get("email") == ADMIN_EMAIL
 
 
 # ─── 2) WebSocket smoke: with cookie → connected; no cookie → 4401 ─

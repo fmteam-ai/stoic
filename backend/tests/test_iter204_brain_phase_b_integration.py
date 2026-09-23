@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-204 Brain Phase B — DATA-LEVEL integration tests (T1 review).
 
 Complements tests/test_iter204_brain_phase_b.py (pure unit tests) by
@@ -86,7 +87,7 @@ def test_decision_context_mint_record_and_tenant_isolation():
     if BASE_URL:
         s = requests.Session()
         r = s.post(f"{BASE_URL}/api/auth/login",
-                   json={"email": "admin@stoicaibot.com", "password": "admin123"},
+                   json={"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD},
                    timeout=15)
         assert r.status_code == 200
         # admin has admin flag → will bypass tenant filter (admin=True)

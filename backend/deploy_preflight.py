@@ -77,17 +77,18 @@ def run_preflight() -> dict:
         "=false. Admins must enroll TOTP 2FA."))
 
     pw = env.get("ADMIN_PASSWORD") or ""
-    if pw and pw != "admin123" and len(pw) >= 12:
+    from seed import _is_known_default_password
+    if pw and not _is_known_default_password(pw) and len(pw) >= 12:
         pw_status, pw_cur = "pass", f"set ({len(pw)} chars)"
     else:
         pw_status = "fail"
         pw_cur = ("(not set)" if not pw
-                  else "default admin123" if pw == "admin123"
+                  else "well-known default password" if _is_known_default_password(pw)
                   else f"too short ({len(pw)} chars)")
     checks.append(_check(
         "admin_password", "ADMIN_PASSWORD", pw_status, pw_cur,
-        "strong, ≥12 chars, not admin123",
-        "Set a strong ADMIN_PASSWORD in Secrets — the default 'admin123' and "
+        "strong, ≥12 chars, not a well-known default",
+        "Set a strong ADMIN_PASSWORD in Secrets — well-known defaults and "
         "passwords under 12 characters refuse boot in production."))
 
     ed = env.get("ED25519_SIGNING_KEY_B64") or ""

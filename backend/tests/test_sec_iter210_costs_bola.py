@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-210 SEC — BOLA fix on GET /api/brain/costs?account_id=...
 
 Verifies:
@@ -68,7 +69,7 @@ def user_b():
 def admin():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@stoicaibot.com", "password": "admin123"},
+               json={"email": "admin@stoicaibot.com", "password": ADMIN_PASSWORD},
                timeout=30)
     assert r.status_code == 200, r.text
     return s

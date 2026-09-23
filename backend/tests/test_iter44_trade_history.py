@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-44 · Trade History endpoint — /api/trades/history."""
 import os
 import sys
@@ -17,7 +18,7 @@ API = require_live_base_url() + "/api"
 def _session():
     s = requests.Session()
     r = s.post(f"{API}/auth/login",
-               json={"email": "admin@trading.bot", "password": "admin123"}, timeout=30)
+               json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200, r.text
     return s
 

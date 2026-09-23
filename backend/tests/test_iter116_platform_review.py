@@ -1,3 +1,4 @@
+from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-provided, never literals
 """iter-116 · Platform-wide review test suite
 
 Complements iteration_38 (which verified the 11 intelligence layers).
@@ -35,10 +36,8 @@ if not BASE_URL:
     except OSError:
         pass
 
-ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "admin123"
-
-
+pass  # ADMIN_EMAIL comes from live_target
+pass  # ADMIN_PASSWORD comes from live_target
 def _bridge_token() -> str:
     """Load the Exness#3 test-account bridge token from Mongo at runtime —
     never hardcode pairing tokens in source (they leak via git)."""

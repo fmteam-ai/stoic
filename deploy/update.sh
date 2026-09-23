@@ -102,6 +102,16 @@ ok = d.get("result") == "PASS" and isinstance(d.get("signature"), str) and len(d
 sys.exit(0 if ok else 1)
 PY
     echo "   topology policy ${RECONCILE_EXPECT}: PASS, signed (${EVIDENCE})"
+    if [ "${APP_ENV_VAL}" = "production" ]; then
+      # round-7 P1 — the signed pre-promotion bundle proves the FULL trading truth for THIS build
+      PP="release/evidence/prepromotion-$(git rev-parse --short HEAD).json"
+      if docker compose exec -T -e GIT_SHA="${GIT_SHA}" -e APP_ENV=production backend \
+           python ops/prepromotion_evidence.py --expect "${RECONCILE_EXPECT}" --scope-user "${RECONCILE_SCOPE}" > "${PP}" 2>/dev/null; then
+        echo "   pre-promotion evidence: PASS, signed (${PP})"
+      else
+        echo "!! pre-promotion evidence FAILED (see ${PP}: failed_gates) — refusing this release"; rollback
+      fi
+    fi
   else
     echo "!! topology policy ${RECONCILE_EXPECT} NOT met on this database — refusing this release"; rollback
   fi
