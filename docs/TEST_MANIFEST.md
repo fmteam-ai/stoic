@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 570 |
+| unit | pure logic, no external I/O | every CI job | 571 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3612 |
-| ui-e2e | real browser via Playwright | CI `frontend-e2e` | 9 |
+| ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4270 tests across 432 files.**
+**Total: 4273 tests across 432 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -409,7 +409,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_iter173_heartbeat_watch.py` | integration | 1 |
 | `backend/tests/integration/test_iter174_scalp_session.py` | integration | 1 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
-| `e2e/tests/auth.spec.ts` | ui-e2e | 3 |
+| `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |
 | `e2e/tests/helpers.ts` | ui-e2e | 0 |
 | `e2e/tests/pages.spec.ts` | ui-e2e | 2 |
@@ -443,7 +443,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
 | `backend/tests/unit/test_host_migrator.py` | unit | 17 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
-| `backend/tests/unit/test_release_attestation.py` | unit | 12 |
+| `backend/tests/unit/test_release_attestation.py` | unit | 13 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |

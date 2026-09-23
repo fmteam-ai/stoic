@@ -111,3 +111,9 @@ Still outside the repo's reach (needs the operator): live backend availability e
 
 Operator env additions: `TEST_ADMIN_EMAIL`, `TEST_ADMIN_PASSWORD` (CI/staging runners), `ALLOW_MUTATING_AUTH_SWEEP`, `AUTH_SWEEP_RUN_TOKEN`.
 Financial-marketing/compliance items remain governed by `trust_stats.legal_review` + attestation gates (no claim is published when reconciliation is stale/incomplete/mixed/unsigned); legal sign-off is external.
+
+## Hermetic verification in the release workflow (round 7 P2 follow-up)
+- New `hermetic-verify` job in `.github/workflows/release.yml`: exports the exact archive to a clean runner, then runs `scripts/verify_release.sh` (locked backend + frontend deps, SBOMs, compile/syntax, unit + integration suites, lint + build, test-manifest currency, credential-literal scan). Results are HMAC-signed with the `RELEASE_EVIDENCE_KEY` secret (mapped to `LEDGER_ANCHOR_KEY`), bound to the release commit, and `REQUIRE_SIGNED_RESULTS=1` makes an unsigned run a failure.
+- The `release` job needs `hermetic-verify`, re-verifies the signature + PASS + commit binding, feeds the file into `release_attestation.py emit --hermetic-verification`, which adds the `hermetic_verification` gate (REJECTED unless ran · PASS · signed · build matches · zero failed steps). `verify` refuses attestations whose gate is not green. Results and SBOMs ship as release assets (`evidence/hermetic/*`).
+- Operator setup: add repository secret `RELEASE_EVIDENCE_KEY` (32+ random bytes; may equal the production `LEDGER_ANCHOR_KEY` so `update.sh` can re-verify evidence on the host).
+- Local reproduction: `LEDGER_ANCHOR_KEY=… REQUIRE_SIGNED_RESULTS=1 scripts/verify_release.sh` (≈2 min on a warm machine).

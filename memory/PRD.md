@@ -2556,3 +2556,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## Iter-232 (2026-06) — "STOIC FAILED TO LOAD" overlay stuck after slow boot
 - Root cause: `frontend/index.html` boot fallback fired at 12 s when #root was still empty (cold Vite dev-server / slow chunk fetch) and was NEVER removed once the app mounted → users saw a permanent "failed to load" screen over a working app. Preview itself was healthy (welcome renders in ~1 s).
 - Fix: overlay self-dismisses via MutationObserver + 500 ms poll on #root; copy changed to "taking longer than usual… will appear automatically". Verified with a 15 s delayed main.jsx: overlay at 12.5 s, app mounted at 17.8 s, overlay gone. `data-testid="boot-fallback"` added.
+
+## Iter-233 (2026-06) — Hermetic verification wired into release.yml
+- `hermetic-verify` job (clean archive tree + Mongo service) runs `scripts/verify_release.sh`; signed results (`RELEASE_EVIDENCE_KEY` secret → LEDGER_ANCHOR_KEY) uploaded as `hermetic-verification` artifact; `release` job needs it, re-verifies HMAC/PASS/commit, passes `--hermetic-verification` to `release_attestation.py emit` → new gate `hermetic_verification` (REJECTED otherwise); SBOMs + results are release assets.
+- verify_release.sh fixes: emergentintegrations exclusive-index install with sha pin, `yarn --silent build`, manifest check without git, `VERIFY_RESULTS_PATH` (NOT `*_FILE` — secrets_loader treats `*_FILE` env vars as secret pointers!), `REQUIRE_SIGNED_RESULTS`.
+- Local full run: all 11 steps PASS, signed. Tests: tests/unit/test_release_attestation.py::test_hermetic_verification_gate. Manifest 4,273.

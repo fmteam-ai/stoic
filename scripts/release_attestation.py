@@ -83,6 +83,21 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 
+def _hermetic(path, sha) -> dict:
+    """scripts/verify_release.sh results: every step PASS, signed with the
+    dedicated evidence key, bound to THIS commit."""
+    out = {"ran": False, "result": None, "signed": False, "build": None, "build_matches": False,
+           "steps": {}, "failed_steps": [], "sha256": None}
+    if not path or not os.path.exists(path):
+        return out
+    d = json.load(open(path))
+    steps = d.get("steps") or {}
+    out.update(ran=True, result=d.get("result"), signed=bool(d.get("signature")) and len(str(d.get("signature"))) == 64,
+               build=d.get("build"), build_matches=(d.get("build") == sha), steps=steps,
+               failed_steps=sorted(k for k, v in steps.items() if v != "PASS"), sha256=_sha256(path))
+    return out
+
+
 def cmd_emit(a) -> int:
     manifest = json.load(open(a.manifest)) if a.manifest and os.path.exists(a.manifest) else {}
     att = {
@@ -99,7 +114,9 @@ def cmd_emit(a) -> int:
             "image_scan": None,
             "clean_install_readiness": bool(a.install_ready),
             "ea_compile": bool(a.ea_compiled),
+            "hermetic_verification": None,     # filled below
         },
+        "hermetic_verification": _hermetic(a.hermetic_verification, a.sha),
         "artifacts": {"release_manifest_sha256": _sha256(a.manifest)
                       if a.manifest and os.path.exists(a.manifest) else None,
                       "ea_version": manifest.get("ea_version")},
@@ -122,6 +139,9 @@ def cmd_emit(a) -> int:
     att["gates"]["dependency_audit"] = bool(pa["ran"] and pa["vulnerable_packages"] == 0)
     gr = att["scans"]["grype_backend"]
     att["gates"]["image_scan"] = bool(gr["ran"] and gr["fixable_critical"] == 0)
+    hv = att["hermetic_verification"]
+    att["gates"]["hermetic_verification"] = bool(hv["ran"] and hv["result"] == "PASS" and hv["signed"]
+                                                 and hv["build_matches"] and not hv["failed_steps"])
     att["promotion_decision"] = ("APPROVED" if all(att["gates"].values())
                                  else "REJECTED")
     json.dump(att, open(a.out, "w"), indent=2, sort_keys=True)
@@ -254,6 +274,7 @@ def main() -> int:
     e.add_argument("--install-ready", action="store_true")
     e.add_argument("--ea-compiled", action="store_true")
     e.add_argument("--command", action="append")
+    e.add_argument("--hermetic-verification", help="signed results JSON from scripts/verify_release.sh")
     e.add_argument("--min-tests", type=int, default=MIN_TESTS_DEFAULT)
     e.add_argument("--out", default="release-attestation.json")
     f = sub.add_parser("fetch")

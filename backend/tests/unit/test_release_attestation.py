@@ -29,18 +29,46 @@ def _mod():
     return m
 
 
-def _emit(tmp, junit=JUNIT_OK, pip=PIP_CLEAN, grype=GRYPE_CLEAN, extra=()):
+def _hermetic_results(tmp, sha=None, result="PASS", steps=None, signed=True):
+    """A scripts/verify_release.sh results file (HMAC-signed like the script does)."""
+    import hashlib, hmac
+    body = {"verification": "release", "build": sha or SHA, "at": "t",
+            "steps": steps or {"backend_unit": "PASS", "frontend_build": "PASS"}, "result": result}
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    if signed:
+        body["signature"] = hmac.new(b"k" * 32, payload, hashlib.sha256).hexdigest()
+        body["evidence_hash"] = hashlib.sha256(payload).hexdigest()
+    h = tmp / "hermetic.json"; h.write_text(json.dumps(body))
+    return h
+
+
+def _emit(tmp, junit=JUNIT_OK, pip=PIP_CLEAN, grype=GRYPE_CLEAN, extra=(), hermetic=None):
     j = tmp / "junit.xml"; j.write_text(junit)
     p = tmp / "pip.json"; p.write_text(json.dumps(pip))
     g = tmp / "grype.json"; g.write_text(json.dumps(grype))
     out = tmp / "att.json"
+    h = hermetic if hermetic is not None else _hermetic_results(tmp)
     r = subprocess.run([sys.executable, SCRIPT, "emit", "--sha", SHA,
                         "--tag", "v9.9.9", "--backend-digest", "ghcr.io/x/stoic-backend@sha256:" + "1" * 64,
                         "--frontend-digest", "ghcr.io/x/stoic-frontend@sha256:" + "2" * 64,
                         "--junit", str(j), "--pip-audit", str(p), "--grype", str(g),
-                        "--install-ready", "--ea-compiled", "--out", str(out),
+                        "--install-ready", "--ea-compiled", "--hermetic-verification", str(h), "--out", str(out),
                         *extra], capture_output=True, text=True)
     return r.returncode, out
+
+
+def test_hermetic_verification_gate(tmp_path):
+    """Release evidence must include a PASS, signed, commit-bound hermetic run."""
+    rc, out = _emit(tmp_path)
+    assert rc == 0 and json.load(open(out))["gates"]["hermetic_verification"] is True
+    for bad in (_hermetic_results(tmp_path, result="FAIL", steps={"backend_unit": "FAIL"}),
+                _hermetic_results(tmp_path, signed=False),
+                _hermetic_results(tmp_path, sha="f" * 40),
+                tmp_path / "missing.json"):
+        rc, out = _emit(tmp_path, hermetic=bad)
+        att = json.load(open(out))
+        assert rc == 2 and att["gates"]["hermetic_verification"] is False and att["promotion_decision"] == "REJECTED"
+        assert _verify(out)[0] != 0
 
 
 def _verify(out, *args):
