@@ -19,17 +19,26 @@
         <div id="root"></div>
         <script>
             // review P0-7 — a failed app boot (bundle fetch blocked / rate
-            // limited) must never leave a silent blank page.
-            setTimeout(function () {
-                var r = document.getElementById("root");
-                if (r && !r.hasChildNodes() && !document.getElementById("boot-fallback")) {
-                    document.body.insertAdjacentHTML("beforeend",
-                        '<div id="boot-fallback" style="position:fixed;inset:0;background:#050505;color:#FAFAFA;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:99999;text-align:center;padding:24px">' +
-                        '<div style="font-size:15px;letter-spacing:2px">STOIC FAILED TO LOAD</div>' +
-                        '<div style="font-size:12px;color:#A1A1AA;max-width:440px">The application bundle could not be fetched — usually a transient network issue or rate limiting. Your account and funds are unaffected.</div>' +
-                        '<button onclick="location.reload()" style="padding:10px 24px;background:none;border:1px solid #00FF41;color:#00FF41;font-family:monospace;letter-spacing:2px;cursor:pointer">RETRY</button></div>');
+            // limited) must never leave a silent blank page. The overlay
+            // self-dismisses the moment the app actually mounts (a slow
+            // cold dev-server / CDN load is not an outage).
+            (function () {
+                var root = document.getElementById("root");
+                function dismiss() { var f = document.getElementById("boot-fallback"); if (f) f.remove(); }
+                function mounted() { return root && root.hasChildNodes(); }
+                if (root && window.MutationObserver) {
+                    new MutationObserver(function () { if (mounted()) dismiss(); }).observe(root, { childList: true });
                 }
-            }, 12000);
+                setTimeout(function () {
+                    if (mounted() || document.getElementById("boot-fallback")) return;
+                    document.body.insertAdjacentHTML("beforeend",
+                        '<div id="boot-fallback" data-testid="boot-fallback" style="position:fixed;inset:0;background:#050505;color:#FAFAFA;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:99999;text-align:center;padding:24px">' +
+                        '<div style="font-size:15px;letter-spacing:2px">STOIC IS TAKING LONGER THAN USUAL</div>' +
+                        '<div style="font-size:12px;color:#A1A1AA;max-width:440px">The application bundle has not arrived yet — usually a slow network, a cold cache or rate limiting. It will appear automatically as soon as it loads. Your account and funds are unaffected.</div>' +
+                        '<button onclick="location.reload()" style="padding:10px 24px;background:none;border:1px solid #00FF41;color:#00FF41;font-family:monospace;letter-spacing:2px;cursor:pointer">RETRY</button></div>');
+                    var poll = setInterval(function () { if (mounted()) { dismiss(); clearInterval(poll); } }, 500);
+                }, 12000);
+            })();
         </script>
         <script type="module" src="/src/main.jsx"></script>
         <script>

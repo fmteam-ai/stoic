@@ -2552,3 +2552,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - `e2e/tests/auth.spec.ts` still asserted the retired `/welcome` fallback for protected routes. Replaced with the round-6 contract: `/trades` → `/login` boundary (login-form visible, no welcome-page), `/` → `/welcome` for logged-out visitors, `/dashboard` with `/api/auth/me` aborted → `backend-outage-screen` with correlation id. All three verified live on the preview via Playwright.
 - `e2e/tests/helpers.ts`: removed the `admin123` default (E2E_ADMIN_PASSWORD is required; CI already generates it per run). Credential-literal scans now include `*.ts` and `e2e/tests`.
 - NOTE: local `npx playwright test` in this pod lacks the browser binaries (/pw-browsers) — verify e2e specs with the screenshot tool or in CI.
+
+## Iter-232 (2026-06) — "STOIC FAILED TO LOAD" overlay stuck after slow boot
+- Root cause: `frontend/index.html` boot fallback fired at 12 s when #root was still empty (cold Vite dev-server / slow chunk fetch) and was NEVER removed once the app mounted → users saw a permanent "failed to load" screen over a working app. Preview itself was healthy (welcome renders in ~1 s).
+- Fix: overlay self-dismisses via MutationObserver + 500 ms poll on #root; copy changed to "taking longer than usual… will appear automatically". Verified with a 15 s delayed main.jsx: overlay at 12.5 s, app mounted at 17.8 s, overlay gone. `data-testid="boot-fallback"` added.
