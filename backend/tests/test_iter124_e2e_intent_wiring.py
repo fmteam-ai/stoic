@@ -70,6 +70,7 @@ def _add_and_seed(sess):
              for s in ("XAUUSD", "EURUSD", "BTCUSD")}
     _mongo().accounts.update_one({"_id": ObjectId(aid)}, {"$set": {
         "status": "connected", "last_heartbeat": now.isoformat(),
+        "trading_enabled": True,     # audit P1-6: execution requires the explicit flag
         "ea_version": LATEST_EA,
         "account_type": "hedging",  # EA-reported margin mode (cert check)
         "available_symbols": ["XAUUSD", "EURUSD", "BTCUSD"],

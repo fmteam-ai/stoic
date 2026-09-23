@@ -133,7 +133,11 @@ function App() {
                         <Route path="/admin/preflight" element={<ProtectedRoute requireAdmin><DeployPreflight /></ProtectedRoute>} />
                         <Route path="/help" element={<ProtectedRoute><HelpCenter /></ProtectedRoute>} />
                         <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />
-                        <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                        {/* Root is the marketing entrypoint: logged-out visitors get the public trailer.
+                            Every OTHER protected URL (incl. /dashboard) renders exactly one of:
+                            app · login boundary · explicit outage screen — never /welcome. */}
+                        <Route path="/" element={<ProtectedRoute publicFallback="/welcome"><Dashboard /></ProtectedRoute>} />
+                        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/signals" element={<ProtectedRoute><Signals /></ProtectedRoute>} />
                         <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
                         {/* One canonical Bot Configuration route (review P0-6):

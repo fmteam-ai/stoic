@@ -1,9 +1,13 @@
 import { Navigate } from "react-router-dom";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { BackendOutage } from "@/components/BackendOutage";
 
-export function ProtectedRoute({ children, requireAdmin = false }) {
-    const { user } = useAuth();
+export function ProtectedRoute({ children, requireAdmin = false, publicFallback = "/login" }) {
+    const { user, outage, refresh } = useAuth();
+    // Round-6 P0: exactly three explicit states — outage screen, login
+    // boundary, or the authenticated app. NEVER the public welcome page.
+    if (outage && !user) return <BackendOutage outage={outage} onRetry={refresh} />;
     if (user === null) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-[#050505]" data-testid="route-loading-screen">
@@ -14,7 +18,7 @@ export function ProtectedRoute({ children, requireAdmin = false }) {
             </div>
         );
     }
-    if (user === false) return <Navigate to="/welcome" replace />;
+    if (user === false) return <Navigate to={publicFallback} replace state={{ from: window.location.pathname }} />;
     if (requireAdmin && user?.role !== "admin") return <Navigate to="/" replace />;
     if (requireAdmin && user?.admin_mfa_enforced && !user?.two_factor_enabled) {
         return (

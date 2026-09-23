@@ -160,7 +160,7 @@ export default function WelcomeTrailer() {
     };
 
     return (
-        <div className="trailer-stage" data-testid="trailer-stage">
+        <div className="trailer-stage" data-testid="welcome-page" data-page="welcome">
             <div className="particle-field" />
             {/* Ticker rails for ambient motion */}
             <div ref={tickerRef} className="ticker-rail" style={{ left: "12%" }} />

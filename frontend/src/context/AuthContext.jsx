@@ -4,21 +4,49 @@ import api, { formatApiError } from "@/lib/api";
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-    // null = checking, false = logged out, object = user
+    // null = checking, false = logged out (explicit 401/403), object = user
     const [user, setUser] = useState(null);
+    // Round-6 P0: a protected route must render ONE of three explicit states —
+    // app, login boundary, or OUTAGE. A backend/network failure on /auth/me is
+    // NOT "logged out": keep user=null and expose the outage with correlation id.
+    const [outage, setOutage] = useState(null);
 
     const refresh = useCallback(async () => {
         try {
             const { data } = await api.get("/auth/me");
+            setOutage(null);
             setUser(data);
             return data;
-        } catch {
-            setUser(false);
+        } catch (err) {
+            const status = err?.response?.status;
+            if (status === 401 || status === 403) {
+                setOutage(null);
+                setUser(false);
+                return null;
+            }
+            const headers = err?.response?.headers || {};
+            setOutage((prev) => ({
+                status: status || 0,
+                correlationId: headers["x-request-id"] || headers["x-trace-id"]
+                    || `client_${Math.random().toString(16).slice(2, 14)}`,
+                message: status ? `backend responded ${status}` : "backend unreachable (network error / timeout)",
+                at: new Date().toISOString(),
+                attempt: (prev?.attempt || 0) + 1,
+            }));
+            setUser(null);
             return null;
         }
     }, []);
 
     useEffect(() => { refresh(); }, [refresh]);
+
+    // automatic bounded retry while in outage (5s → 10s → 20s → 30s cap)
+    useEffect(() => {
+        if (!outage) return undefined;
+        const delay = Math.min(30000, 5000 * 2 ** Math.min(3, outage.attempt - 1));
+        const id = setTimeout(() => { refresh(); }, delay);
+        return () => clearTimeout(id);
+    }, [outage, refresh]);
 
     const login = useCallback(async (email, password, totp_code, email_otp, turnstile_token) => {
         const body = { email, password };
@@ -56,8 +84,8 @@ export function AuthProvider({ children }) {
     }, []);
 
     const value = useMemo(
-        () => ({ user, login, register, verifyEmail, resendActivation, logout, refresh, formatApiError }),
-        [user, login, register, verifyEmail, resendActivation, logout, refresh],
+        () => ({ user, outage, login, register, verifyEmail, resendActivation, logout, refresh, formatApiError }),
+        [user, outage, login, register, verifyEmail, resendActivation, logout, refresh],
     );
 
     return (

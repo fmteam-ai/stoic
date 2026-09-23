@@ -14,7 +14,30 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 ALLOWED_ENDPOINTS = ("/api/health", "/", "/welcome", "/login", "/dashboard")
-INTERVAL_S = 60
+INTERVAL_S = 60                 # the ONE-MINUTE SLI cadence (default per region)
+
+
+def region_cadences() -> dict:
+    """region → expected sample cadence in seconds. Round 6 P1: cadence is
+    EXPLICIT per prober (EDGE_PROBE_CADENCE="gha=300,fra=60"); a region not
+    listed samples at INTERVAL_S. Unlike cadences are never mixed into one
+    percentage — trust_stats publishes one SLI per cadence class."""
+    out = {r: INTERVAL_S for r in probe_tokens()}
+    for part in os.environ.get("EDGE_PROBE_CADENCE", "").split(","):
+        if "=" in part:
+            r, v = part.split("=", 1)
+            r = r.strip().lower()[:24]
+            try:
+                secs = int(v)
+            except ValueError:
+                continue
+            if r in out and secs >= INTERVAL_S and secs % INTERVAL_S == 0:
+                out[r] = secs
+    return out
+
+
+def region_cadence(region: str) -> int:
+    return region_cadences().get(region, INTERVAL_S)
 
 
 def probe_tokens() -> dict:
@@ -80,27 +103,35 @@ async def ingest_probe(db, token: str, body: dict) -> dict:
                                             "message": f"{dups} duplicate edge-probe submissions today (region {region})",
                                             "at": now.isoformat(), "acknowledged": False, "synthetic": False})
     return {"recorded": not duplicate, "duplicate": duplicate, "region": region, "endpoint": endpoint,
-            "minute": minute.isoformat(), "eligible": doc["eligible"]}
+            "minute": minute.isoformat(), "eligible": doc["eligible"], "cadence_s": region_cadence(region)}
 
 
 async def coverage(db, start: datetime, now: datetime) -> dict:
-    """Per-region/endpoint sample coverage over the window (for the SLI gate)."""
-    expected_per_series = int((now - start).total_seconds() // INTERVAL_S)
+    """Per-region/endpoint sample coverage over the window (for the SLI
+    gate). `expected` is derived from THAT region's declared cadence."""
+    window_s = (now - start).total_seconds()
+    cadences = region_cadences()
     pipeline = [{"$match": {"minute": {"$gte": start}, "eligible": True}},
                 {"$group": {"_id": {"region": "$region", "endpoint": "$endpoint"},
                             "n": {"$sum": 1}, "ok": {"$sum": {"$cond": ["$ok", 1, 0]}}}}]
     rows = await db.edge_probes.aggregate(pipeline).to_list(length=500)
     series = {}
     for r in rows:
-        key = f"{r['_id']['region']}|{r['_id']['endpoint']}"
-        series[key] = {"region": r["_id"]["region"], "endpoint": r["_id"]["endpoint"], "samples": r["n"],
-                       "ok": r["ok"], "expected": expected_per_series,
-                       "coverage_pct": round(r["n"] * 100.0 / max(1, expected_per_series), 2)}
+        region = r["_id"]["region"]
+        cad = cadences.get(region, INTERVAL_S)
+        expected = int(window_s // cad)
+        key = f"{region}|{r['_id']['endpoint']}"
+        series[key] = {"region": region, "endpoint": r["_id"]["endpoint"], "samples": r["n"],
+                       "ok": r["ok"], "expected": expected, "cadence_s": cad,
+                       "coverage_pct": round(r["n"] * 100.0 / max(1, expected), 2)}
     gaps = []
     for region in configured_regions():
         for ep in ALLOWED_ENDPOINTS:
             s = series.get(f"{region}|{ep}")
             if not s or s["coverage_pct"] < 95.0:
-                gaps.append({"region": region, "endpoint": ep, "coverage_pct": (s or {}).get("coverage_pct", 0.0)})
-    return {"series": list(series.values()), "gaps": gaps, "expected_per_series": expected_per_series,
-            "configured_regions": configured_regions()}
+                gaps.append({"region": region, "endpoint": ep, "cadence_s": cadences.get(region, INTERVAL_S),
+                             "coverage_pct": (s or {}).get("coverage_pct", 0.0)})
+    return {"series": list(series.values()), "gaps": gaps,
+            "expected_per_series": int(window_s // INTERVAL_S),
+            "expected_by_cadence": {str(c): int(window_s // c) for c in sorted(set(cadences.values()) | {INTERVAL_S})},
+            "cadences": cadences, "configured_regions": configured_regions()}

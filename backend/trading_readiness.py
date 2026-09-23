@@ -88,17 +88,44 @@ async def readiness(db, user_id: str) -> dict:
             "Each affected account below lists its exact blocking "
             "condition — resolve it to restore execution")
 
-    # user-scoped unknown executions → reconciliation pending
+    # user-scoped execution truth — the SAME policy as the canonical
+    # authority: UNKNOWN blocks immediately, broker-accepted states past
+    # their settlement SLA and position mismatches block too (round 6 P1)
     acct_ids = [r["account_id"] for r in rows]
     if acct_ids:
-        unknown = await db.execution_intents.count_documents(
-            {"status": "unknown", "account_id": {"$in": acct_ids}})
-        if unknown:
+        from datetime import datetime as _dt, timezone as _tz
+        from execution_truth import (position_mismatches,
+                                     unresolved_executions)
+        _now_dt = _dt.now(_tz.utc)
+        unresolved = await unresolved_executions(db, _now_dt,
+                                                 account_ids=acct_ids)
+        mism = await position_mismatches(db, _now_dt, account_ids=acct_ids)
+        if unresolved or mism:
+            unk = sum(1 for u in unresolved if u["status"] == "unknown")
+            aged = len(unresolved) - unk
+            bits = []
+            if unk:
+                bits.append(f"{unk} execution(s) in UNKNOWN state")
+            if aged:
+                bits.append(f"{aged} broker-accepted execution(s) past "
+                            "their settlement SLA")
+            if mism:
+                bits.append(f"{len(mism)} account(s) with broker/local "
+                            "open-position mismatch")
             add("RECONCILIATION_PENDING", "BLOCKED",
-                f"{unknown} execution(s) in UNKNOWN state — broker "
-                "reconciliation pending", [],
-                "Run broker reconciliation; UNKNOWN executions must reach "
-                "a terminal state before new risk is allowed")
+                " · ".join(bits) + " — broker reconciliation pending",
+                [{"account_id": m["account_id"], "label": m.get("label"),
+                  "reason": f"broker reports {m['broker_open']} open, "
+                            f"local projection {m['local_open']}"}
+                 for m in mism]
+                + [{"account_id": u.get("account_id"), "label": None,
+                    "reason": f"intent {u.get('intent_id')} "
+                              f"{u['status']} for {u.get('age_s')}s "
+                              f"(SLA {u['sla_s']}s)"}
+                   for u in unresolved[:10]],
+                "Run broker reconciliation; every broker-accepted execution "
+                "must reach a terminal state and broker positions must "
+                "match the local projection before new risk is allowed")
 
     reduced = [r for r in rows
                if r.get("bot_enabled")

@@ -166,15 +166,17 @@ async def pamm_domain(db, account: dict | None = None) -> dict:
 
 
 async def execution_domain(db, account: dict | None = None) -> dict:
-    q: dict = {"status": "unknown"}
-    if account is not None:
-        q["account_id"] = _acct_id(account)
-    n = await db.execution_intents.count_documents(q)
-    if n:
-        return {"level": "REDUCED",
-                "reason": f"{n} execution(s) UNKNOWN — broker "
-                          f"reconciliation pending"}
-    return {"level": "FULL", "reason": "all executions reconciled"}
+    """Round 6 P1 — the execution-truth policy IS the canonical decision:
+    UNKNOWN blocks immediately, broker-accepted non-terminal states past
+    their state SLA and any position mismatch enforce CLOSE_ONLY here, in
+    release readiness and in user readiness alike."""
+    from execution_truth import (authority_for, position_mismatches,
+                                 unresolved_executions)
+    now = datetime.now(timezone.utc)
+    ids = [_acct_id(account)] if account is not None else None
+    unresolved = await unresolved_executions(db, now, account_ids=ids)
+    mismatches = await position_mismatches(db, now, account_ids=ids)
+    return authority_for(unresolved, mismatches)
 
 
 async def position_truth_domain(db, account: dict | None = None) -> dict:

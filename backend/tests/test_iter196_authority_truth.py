@@ -159,7 +159,9 @@ class TestGlobalTradingAuthority:
             {"$set": {"status": "unknown"}}))
         try:
             d = _run(execution_domain(db))
-            assert d["level"] == "REDUCED"
+            # round 6 P1 — UNKNOWN after broker uncertainty blocks
+            # immediately at the canonical authority (CLOSE_ONLY, not REDUCED)
+            assert d["level"] == "CLOSE_ONLY"
             assert "UNKNOWN" in d["reason"]
         finally:
             _run(db.execution_intents.delete_many(

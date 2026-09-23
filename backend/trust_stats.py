@@ -102,32 +102,61 @@ _BLOCKED_EXCL = ["HOLD verdicts (no trade attempted)", "synthetic/QA accounts an
 
 
 async def availability_30d(db, now: datetime) -> dict:
-    from edge_probes import ALLOWED_ENDPOINTS, configured_regions, coverage
+    """Round 6 P1 — one SLI per cadence class. `value_pct` is ONLY the
+    one-minute SLI (regions sampling at INTERVAL_S). Regions with another
+    declared cadence (e.g. gha=300 s) are published under
+    `secondary_slis["edge_availability_30d_<cadence>s"]` with their own
+    coverage math. Unlike cadences are never merged into one percentage."""
+    from edge_probes import (ALLOWED_ENDPOINTS, INTERVAL_S, configured_regions,
+                             coverage, region_cadences)
     start = now - timedelta(days=30)
-    out = {"sli": {**SLI, "eligible_endpoints": list(ALLOWED_ENDPOINTS), "configured_regions": configured_regions()},
+    cadences = region_cadences()
+    primary_regions = sorted(r for r, c in cadences.items() if c == INTERVAL_S)
+    out = {"sli": {**SLI, "eligible_endpoints": list(ALLOWED_ENDPOINTS), "configured_regions": configured_regions(),
+                   "regions_in_this_sli": primary_regions, "region_cadences_s": cadences},
            "value_pct": None, "status": "no_probes", "window_start": _iso(start), "window_end": _iso(now),
-           "reconciled": False, "per_region": [], "gaps": []}
+           "reconciled": False, "per_region": [], "gaps": [], "secondary_slis": {}}
     if not configured_regions():
         out["status"] = "no_regions_configured"
         return out
+    if not primary_regions:
+        out["status"] = "no_one_minute_prober_configured"
     first = await db.edge_probes.find_one({}, sort=[("minute", 1)], projection={"minute": 1})
     if not first:
         return out
     first_at = first["minute"] if first["minute"].tzinfo else first["minute"].replace(tzinfo=timezone.utc)
-    if first_at > start:
-        out["status"] = "window_incomplete"
-        out["window_covered_days"] = round((now - first_at).total_seconds() / 86400, 1)
-        return out
     cov = await coverage(db, start, now)
     out["per_region"] = cov["series"]
     out["gaps"] = cov["gaps"]
-    if cov["gaps"]:
-        out["status"] = "window_incomplete"
+    window_incomplete = first_at > start
+    if window_incomplete:
+        out["window_covered_days"] = round((now - first_at).total_seconds() / 86400, 1)
+
+    def _sli_for(regions: list, cadence: int) -> dict:
+        series = [s for s in cov["series"] if s["region"] in regions]
+        gaps = [g for g in cov["gaps"] if g["region"] in regions]
+        res = {"cadence_s": cadence, "regions": regions, "value_pct": None, "reconciled": False,
+               "status": "window_incomplete" if (window_incomplete or gaps or not series) else "reconciled",
+               "gaps": gaps, "expected_per_series": int((now - start).total_seconds() // cadence)}
+        if res["status"] == "reconciled":
+            total = sum(s["samples"] for s in series)
+            ok = sum(s["ok"] for s in series)
+            res.update(value_pct=round(ok * 100.0 / max(1, total), 3), reconciled=True, probes=total, successful=ok)
+        return res
+
+    for cad in sorted(set(cadences.values()) - {INTERVAL_S}):
+        regs = sorted(r for r, c in cadences.items() if c == cad)
+        out["secondary_slis"][f"edge_availability_30d_{cad}s"] = {
+            **_sli_for(regs, cad),
+            "definition": f"{SLI['definition']} — {cad}-second cadence series only; NOT part of the one-minute SLI"}
+    if not primary_regions:
         return out
-    total = sum(s["samples"] for s in cov["series"])
-    ok = sum(s["ok"] for s in cov["series"])
-    out.update(value_pct=round(ok * 100.0 / max(1, total), 3), status="reconciled", reconciled=True,
-               probes=total, successful=ok, regions=cov["configured_regions"])
+    prim = _sli_for(primary_regions, INTERVAL_S)
+    out["status"] = prim["status"]
+    out["gaps"] = prim["gaps"]
+    if prim["reconciled"]:
+        out.update(value_pct=prim["value_pct"], reconciled=True, probes=prim["probes"],
+                   successful=prim["successful"], regions=primary_regions)
     return out
 
 

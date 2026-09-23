@@ -67,16 +67,41 @@ if grep -q 'docker-compose.forecast.yml' .env 2>/dev/null; then
   docker compose exec -T worker-trading python ops/verify_forecast_profile.py || rollback
 fi
 
-# round-5 P1 — topology policy gate: RECONCILE_EXPECT=accounts/enabled/bots in ./.env
-# (e.g. 6/3/3). The signed read-only reconciliation must PASS on THIS database
-# for THIS release or the deployment is rolled back. Evidence kept in release/evidence/.
-RECONCILE_EXPECT=$(grep -E '^RECONCILE_EXPECT=' .env 2>/dev/null | cut -d= -f2-)
+# round-5 P1 / round-6 P1 — topology policy gate. RECONCILE_EXPECT=accounts/enabled/bots
+# in ./.env (e.g. 6/3/3). In PRODUCTION the gate is MANDATORY and fail-closed:
+# the variable must exist, match N/N/N, equal the approved policy
+# (RECONCILE_APPROVED_POLICY, default 6/3/3), the reconciliation must be scoped
+# to the production tenant (RECONCILE_SCOPE_USER_ID) and the evidence must carry
+# a non-null signature from the dedicated key. Any missing element → rollback.
+_envval() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"; }
+APP_ENV_VAL=$(_envval APP_ENV)
+RECONCILE_EXPECT=$(_envval RECONCILE_EXPECT)
+RECONCILE_SCOPE=$(_envval RECONCILE_SCOPE_USER_ID)
+APPROVED_POLICY=$(_envval RECONCILE_APPROVED_POLICY); APPROVED_POLICY="${APPROVED_POLICY:-6/3/3}"
+if [ "${APP_ENV_VAL}" = "production" ]; then
+  [ -n "${RECONCILE_EXPECT}" ] || { echo "!! production requires RECONCILE_EXPECT in .env (approved policy ${APPROVED_POLICY})"; rollback; }
+  echo "${RECONCILE_EXPECT}" | grep -Eq '^[0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N)"; rollback; }
+  [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY}"; rollback; }
+  [ -n "${RECONCILE_SCOPE}" ] || { echo "!! production requires RECONCILE_SCOPE_USER_ID (explicit tenant scope)"; rollback; }
+  [ -n "$(_envval LEDGER_ANCHOR_KEY)" ] || { echo "!! production requires LEDGER_ANCHOR_KEY (dedicated evidence signing key)"; rollback; }
+fi
 if [ -n "${RECONCILE_EXPECT}" ]; then
   echo "-- verifying production topology policy (${RECONCILE_EXPECT}, signed read-only reconciliation)"
   mkdir -p release/evidence
-  if docker compose exec -T -e GIT_SHA="${GIT_SHA}" backend python ops/production_reconcile.py --expect "${RECONCILE_EXPECT}" \
-       > "release/evidence/production-reconcile-$(git rev-parse --short HEAD).json" 2>/dev/null; then
-    echo "   topology policy ${RECONCILE_EXPECT}: PASS (release/evidence/production-reconcile-$(git rev-parse --short HEAD).json)"
+  EVIDENCE="release/evidence/production-reconcile-$(git rev-parse --short HEAD).json"
+  SCOPE_ARGS=(); [ -n "${RECONCILE_SCOPE}" ] && SCOPE_ARGS=(--scope-user "${RECONCILE_SCOPE}")
+  STRICT_ARGS=(); [ "${APP_ENV_VAL}" = "production" ] && STRICT_ARGS=(--strict)
+  if docker compose exec -T -e GIT_SHA="${GIT_SHA}" -e APP_ENV="${APP_ENV_VAL}" backend \
+       python ops/production_reconcile.py --expect "${RECONCILE_EXPECT}" "${SCOPE_ARGS[@]}" "${STRICT_ARGS[@]}" \
+       > "${EVIDENCE}" 2>/dev/null; then
+    # the evidence itself must be signed with a real key — never accept an unsigned PASS
+    python3 - "${EVIDENCE}" <<'PY' || { echo "!! reconciliation evidence unsigned or malformed — refusing this release"; rollback; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+ok = d.get("result") == "PASS" and isinstance(d.get("signature"), str) and len(d["signature"]) == 64 and d.get("build") not in (None, "", "unknown")
+sys.exit(0 if ok else 1)
+PY
+    echo "   topology policy ${RECONCILE_EXPECT}: PASS, signed (${EVIDENCE})"
   else
     echo "!! topology policy ${RECONCILE_EXPECT} NOT met on this database — refusing this release"; rollback
   fi

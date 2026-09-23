@@ -1,14 +1,23 @@
 name: synthetic-monitor
-# External synthetic monitor (audit round 5 P1): probes the public routes from
-# GitHub's runners (independent of the platform host) and feeds the edge
-# availability SLI. One sample per (region, endpoint, minute) is enforced
-# server-side; the region is derived from the prober token.
+# External synthetic monitor (audit round 5 P1, round 6 P1/P2).
+#
+# Two probers, two SLIs — never mixed:
+#   * `probe` (cron */5): curl transport probes from GitHub runners. This is
+#     the FIVE-MINUTE cadence series: the server must list this region with
+#     EDGE_PROBE_CADENCE="gha=300" so it is published as
+#     `edge_availability_30d_300s`, separately from the one-minute SLI. The
+#     one-minute SLI needs a persistent external prober (deploy/prober/).
+#   * `browser` (cron */15): real browser (Playwright) route-settlement test —
+#     protected routes must land on the app, the login boundary or the
+#     explicit outage screen; never on the public welcome page.
+# Telemetry delivery failures are alerted SEPARATELY from route failures.
 #
 # Secrets: MONITOR_BASE_URL (https://your-domain), EDGE_PROBE_TOKEN_GHA (the
 # token configured as `gha:<token>` in EDGE_PROBE_TOKENS on the server).
 on:
   schedule:
     - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -18,14 +27,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe public routes and report
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: ops
+      - name: Probe public routes and report (300 s cadence series)
         env:
           BASE: ${{ secrets.MONITOR_BASE_URL }}
           TOKEN: ${{ secrets.EDGE_PROBE_TOKEN_GHA }}
         run: |
           set -u
           [ -n "${BASE}" ] && [ -n "${TOKEN}" ] || { echo "monitor secrets not configured"; exit 0; }
-          fail=0
+          route_fail=0; telemetry_fail=0
           for ep in /api/health / /welcome /login /dashboard; do
             start=$(date +%s%3N)
             code=$(curl -sS -o /tmp/body -w '%{http_code}' -m 10 -L "${BASE}${ep}" || echo 000)
@@ -33,13 +46,42 @@ jobs:
             ok=false; [ "$code" = "200" ] && ok=true
             perr=false; [ "$code" = "000" ] && perr=true
             echo "${ep} → ${code} in ${ms}ms"
-            # authenticated routes must not silently fall back to /welcome
-            if [ "$ep" = "/dashboard" ] && grep -qi 'data-testid="welcome-page"' /tmp/body; then echo "!! /dashboard rendered the welcome page"; ok=false; fi
-            curl -sS -m 10 -X POST "${BASE}/api/public/edge-probe" -H "X-Edge-Probe-Token: ${TOKEN}" -H 'Content-Type: application/json' \
-              -d "{\"endpoint\":\"${ep}\",\"ok\":${ok},\"status_code\":${code#0},\"latency_ms\":${ms},\"prober_error\":${perr}}" >/dev/null || true
-            [ "$ok" = true ] || fail=1
+            # transport-level only: raw HTML cannot prove SPA routing (see the browser job)
+            if [ "$ep" = "/dashboard" ] && grep -qi 'data-testid="welcome-page"' /tmp/body; then echo "!! /dashboard served welcome markup"; ok=false; fi
+            resp=$(curl -sS -m 10 -w '\n%{http_code}' -X POST "${BASE}/api/public/edge-probe" -H "X-Edge-Probe-Token: ${TOKEN}" -H 'Content-Type: application/json' \
+              -d "{\"endpoint\":\"${ep}\",\"ok\":${ok},\"status_code\":${code#0},\"latency_ms\":${ms},\"prober_error\":${perr}}" 2>/dev/null) || resp=$'\n000'
+            tcode=$(printf '%s' "$resp" | tail -n1); tbody=$(printf '%s' "$resp" | sed '$d')
+            # the ingestion response must confirm THIS sample: recorded|duplicate, same endpoint, region gha, cadence 300
+            if ! printf '%s' "$tbody" | python3 ops/verify_probe_ack.py "$ep" gha 300 2>/tmp/terr; then
+              echo "!! telemetry delivery failed for ${ep}: HTTP ${tcode} — $(cat /tmp/terr | tail -n1)"; telemetry_fail=1
+            fi
+            [ "$ok" = true ] || route_fail=1
           done
-          # negative auth path must be an explicit 401/403/429 — never a 5xx or a redirect to /welcome
+          # negative auth path must be an explicit 4xx — never a 5xx or a redirect to /welcome
           code=$(curl -sS -o /dev/null -w '%{http_code}' -m 10 -X POST "${BASE}/api/auth/login" -H 'Content-Type: application/json' -d '{"email":"monitor@invalid.test","password":"x"}' || echo 000)
-          echo "login-failure → ${code}"; case "$code" in 400|401|403|422|429) ;; *) echo "!! unexpected login failure code"; fail=1;; esac
-          exit $fail
+          echo "login-failure → ${code}"; case "$code" in 400|401|403|422|429) ;; *) echo "!! unexpected login failure code"; route_fail=1;; esac
+          [ "$route_fail" = 0 ] || echo "::error title=ROUTE FAILURE::one or more public routes failed"
+          [ "$telemetry_fail" = 0 ] || echo "::error title=TELEMETRY FAILURE::edge-probe ingestion rejected or unreachable — SLI coverage is degrading"
+          exit $(( route_fail + telemetry_fail ))
+
+  browser:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"
+      - name: Install Playwright
+        run: |
+          pip install --quiet playwright==1.47.0
+          python -m playwright install --with-deps chromium
+      - name: Browser route-settlement synthetic
+        env:
+          BASE: ${{ secrets.MONITOR_BASE_URL }}
+        run: |
+          [ -n "${BASE}" ] || { echo "monitor secrets not configured"; exit 0; }
+          python ops/synthetic_browser.py --base "${BASE}"

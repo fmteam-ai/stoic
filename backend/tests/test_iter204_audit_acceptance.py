@@ -456,19 +456,29 @@ def test_r5_execution_truth_fails_closed_on_unknown_and_position_mismatch(sdb, u
     assert 'checks["execution_truth"]' in ops
 
 
+def _drill_env(**extra):
+    """Guard-satisfying env for the PREVIEW stack: the approved suffix list is
+    operator-defined, so the test approves the actual preview DB name."""
+    return {**os.environ, "DRILL_EVIDENCE_DIR": "/tmp/readiness_drills", "APP_ENV": "staging",
+            "ALLOW_DESTRUCTIVE_DRILLS": "true", "DRILL_DB_SUFFIXES": os.environ.get("DB_NAME", ""),
+            "DRILL_STEP_UP_TOKEN": "drill-step-up-token-0123456789", "DRILL_STEP_UP_TOKEN_EXPECTED": "drill-step-up-token-0123456789",
+            **extra}
+
+
 def test_r5_readiness_drills_catch_every_injected_fault():
     import subprocess
     import sys
     r = subprocess.run([sys.executable, os.path.join(ROOT, "ops", "readiness_drills.py")], capture_output=True, text=True,
-                       timeout=240, env={**os.environ, "DRILL_EVIDENCE_DIR": "/tmp/readiness_drills"})
+                       timeout=240, env=_drill_env())
     out = r.stdout
     rep = json.loads(out[:out.rindex("}") + 1])
     assert r.returncode == 0, out[-2000:] + r.stderr[-1000:]
     by = {f["fault"]: f for f in rep["faults"]}
-    for fault in ("unresolved_unknown_execution", "position_mismatch", "missing_external_anchor"):
+    for fault in ("fresh_unknown_execution_blocks_immediately", "position_mismatch", "anchor_sequence_regression"):
         assert by[fault]["result"] == "CAUGHT" and by[fault]["status"] == 503, by[fault]
-    for fault in ("stale_worker_lease", "stalled_loop", "deleted_ledger_tail"):
+    for fault in ("stale_worker_lease", "stalled_loop", "anchored_hash_mismatch"):
         assert by[fault]["result"] == "CAUGHT" or by[fault].get("absence_fails") is True, by[fault]
+    assert rep["leftover_rows_removed"] == 0            # every tagged row restored by the faults themselves
 
 
 def test_r5_topology_gate_and_monitor_wiring():

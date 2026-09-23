@@ -50,8 +50,14 @@ fi
 tail -1 release/drills/reconcile-${TS}.log
 
 if [ "${DRILLS}" = 1 ]; then
-  echo "== readiness fail-closed drills (stale lease · stalled loop · UNKNOWN execution · position mismatch · missing anchor · deleted ledger tail)"
-  if docker compose exec -T backend python ops/readiness_drills.py > release/drills/readiness-${TS}.log 2>&1; then RRD=PASS; else RRD=FAIL; fi
+  echo "== readiness fail-closed drills (stale lease · stalled loop · fresh UNKNOWN execution · position mismatch · anchor regression · anchored-hash mismatch)"
+  # round-6 P1 hard guard: the drill refuses before its first write unless the runner
+  # proves staging (APP_ENV=staging, ALLOW_DESTRUCTIVE_DRILLS=true, approved DB suffix,
+  # matching step-up token). Supply DRILL_STEP_UP_TOKEN in the operator shell.
+  if docker compose exec -T -e APP_ENV=staging -e ALLOW_DESTRUCTIVE_DRILLS=true \
+       -e DRILL_STEP_UP_TOKEN="${DRILL_STEP_UP_TOKEN:-}" -e DRILL_STEP_UP_TOKEN_EXPECTED="${DRILL_STEP_UP_TOKEN_EXPECTED:-${DRILL_STEP_UP_TOKEN:-}}" \
+       -e DRILL_DB_SUFFIXES="${DRILL_DB_SUFFIXES:-_staging,_drill}" \
+       backend python ops/readiness_drills.py > release/drills/readiness-${TS}.log 2>&1; then RRD=PASS; else RRD=FAIL; fi
   tail -1 release/drills/readiness-${TS}.log
 fi
 
