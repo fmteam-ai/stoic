@@ -342,6 +342,8 @@ async def revoke_card(trade_id: str, user=Depends(get_current_user)):
     res = await db.trade_journal_cards.update_one(
         {"trade_id": trade_id, "user_id": user["id"]},
         {"$set": {"revoked": True}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Card not found")
     return {"revoked": res.modified_count > 0}
 
 

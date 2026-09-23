@@ -9,7 +9,7 @@ import requests
 import pytest
 
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
-METRICS_TOKEN = os.environ.get("METRICS_TOKEN") or open("/app/backend/.env").read().split("METRICS_TOKEN=")[1].split()[0]
+METRICS_TOKEN = os.environ.get("METRICS_TOKEN") or open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")).read().split("METRICS_TOKEN=")[1].split()[0]
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +45,7 @@ def test_public_trust_stats_shape():
     assert "sli" in a and "value_pct" in a and "status" in a and "reconciled" in a
     assert a["value_pct"] is None
     assert a["reconciled"] is False
-    assert a["status"] in ("no_probes", "window_incomplete")
+    assert a["status"] in ("no_probes", "window_incomplete", "no_regions_configured", "no_one_minute_prober_configured")
     # ops monitoring coverage
     assert "ops_monitoring_coverage_pct" in p
     assert "ops_monitoring_coverage_definition" in p

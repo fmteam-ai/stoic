@@ -266,10 +266,12 @@ async def list_triggers(user=Depends(get_current_user)):
 @router.delete("/triggers/{trigger_id}")
 async def delete_trigger(trigger_id: str, user=Depends(get_current_user)):
     db = get_db()
-    await db.conditional_triggers.update_one(
+    res = await db.conditional_triggers.update_one(
         {"_id": parse_object_id(trigger_id, "Trigger"), "user_id": user["id"]},
         {"$set": {"active": False}},
     )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Trigger not found")
     return {"ok": True}
 
 

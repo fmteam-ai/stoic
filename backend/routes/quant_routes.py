@@ -59,6 +59,10 @@ async def allocator_weights(user=Depends(get_current_user)):
         {"user_id": user["id"], "active": True}, {"rl_allocator_mode": 1}) or {}
     return {
         "mode": str(cfg.get("rl_allocator_mode") or "advisory"),
+        # capital authority of this surface: advisory weights never move
+        # capital; only `enforce` lets the sizing layer scale by weight
+        "authority": {"off": "none", "advisory": "limited", "enforce": "full"}.get(
+            str(cfg.get("rl_allocator_mode") or "advisory"), "none"),
         "params": {"lookback_days": LOOKBACK_DAYS, "min_trades": MIN_TRADES,
                    "min_weight": MIN_WEIGHT},
         "allocations": sorted(allocs.values(), key=lambda a: a["weight"]),

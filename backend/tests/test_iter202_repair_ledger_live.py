@@ -8,11 +8,14 @@ from datetime import datetime, timezone
 import pytest
 import requests
 
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))      # backend/
+_REPO = os.path.dirname(_ROOT)
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL") or os.environ.get("BACKEND_URL")
 if not BASE_URL:
     # Try to read frontend/.env
     try:
-        with open("/app/frontend/.env") as f:
+        with open(os.path.join(_REPO, "frontend", ".env")) as f:
             for line in f:
                 if line.startswith("REACT_APP_BACKEND_URL="):
                     BASE_URL = line.split("=", 1)[1].strip().strip('"')
@@ -29,7 +32,7 @@ ADMIN_PW = "admin123"
 def _read_env():
     env = {}
     try:
-        with open("/app/backend/.env") as f:
+        with open(os.path.join(_ROOT, ".env")) as f:
             for line in f:
                 if "=" in line and not line.strip().startswith("#"):
                     k, v = line.strip().split("=", 1)

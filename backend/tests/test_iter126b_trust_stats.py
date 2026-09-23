@@ -32,7 +32,18 @@ def test_trust_stats_no_per_user_data():
     assert set(d.keys()) == {"accounts_protected", "signals_vetoed",
                              "uptime_30d_pct", "as_of", "source",
                              "environment", "population", "reconciliation",
-                             "ttl_seconds"}
+                             "ttl_seconds",
+                             # trust-stats/v2 populations + availability SLI
+                             "population_version", "verified_active_accounts",
+                             "execution_intents_blocked", "availability",
+                             "ops_monitoring_coverage_pct",
+                             "ops_monitoring_coverage_definition",
+                             "period", "environment_breakdown",
+                             "legal_review", "published", "context"}
+    # never any per-user identifier anywhere in the payload
+    blob = str(d).lower()
+    for needle in ("user_id", "email", "@", "bridge_token"):
+        assert needle not in blob, needle
 
 
 def test_alerts_endpoints_require_auth():

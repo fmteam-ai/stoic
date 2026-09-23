@@ -611,6 +611,9 @@ async def agent_discovery_ep(payload: dict, cert_fp: str = _FP_HEADER):
 async def list_discovery(deployment_id: str,
                          user=Depends(get_current_user)):
     db = get_db()
+    if not await db.vps_deployments.find_one(
+            {"user_id": user["id"], "deployment_id": deployment_id}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="deployment not found")
     out = []
     async for d in db.mt5_discovered.find(
             {"user_id": user["id"], "deployment_id": deployment_id}):

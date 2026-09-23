@@ -75,8 +75,12 @@ async def metrics(request: Request):
           await db.outbox.count_documents({"state": "failed"}))
 
     now_iso = now.isoformat()
-    async for w in db.worker_leases.find({}):
-        wname = str(w.get("_id"))
+    leases = {str(w.get("_id")): w async for w in db.worker_leases.find({})}
+    # every EXPECTED worker is always reported — an absent lease is 0 (dead),
+    # never a missing series that dashboards silently ignore
+    from routes.ops_routes import EXPECTED_WORKERS
+    for wname in sorted(set(EXPECTED_WORKERS) | set(leases)):
+        w = leases.get(wname) or {}
         gauge("stoic_worker_lease_alive",
               1 if str(w.get("expires_at") or "") >= now_iso else 0,
               None, {"worker": wname})

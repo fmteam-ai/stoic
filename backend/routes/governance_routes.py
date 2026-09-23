@@ -3,7 +3,7 @@
 Hardening: approvals of risk-increasing changes require fresh step-up MFA
 (TOTP), a written reason, and produce immutable config-version snapshots +
 append-only audit events. Material changes need dual approval."""
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel
 
 from auth import get_current_user
@@ -102,4 +102,6 @@ async def reject_change(change_id: str, request: Request,
                       {"change_id": change_id,
                        "result": result.get("status") or result.get("error")},
                       request)
+    if result.get("error") == "change not found":
+        raise HTTPException(status_code=404, detail="change not found")
     return result

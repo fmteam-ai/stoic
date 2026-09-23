@@ -270,7 +270,9 @@ async def generate_all(account_id: Optional[str] = None,
 @router.delete("/{signal_id}")
 async def delete_signal(signal_id: str, user=Depends(get_current_user)):
     db = get_db()
-    await db.signals.delete_one({"_id": parse_object_id(signal_id, "Signal"), "user_id": user["id"]})
+    res = await db.signals.delete_one({"_id": parse_object_id(signal_id, "Signal"), "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Signal not found")
     return {"ok": True}
 
 
