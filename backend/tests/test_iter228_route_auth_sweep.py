@@ -13,7 +13,8 @@ operation:
                   resource ids: must NOT return 2xx.
   C. BFLA       — user B calls every admin/ops surface: must NOT return 2xx.
 
-Only 2xx counts as a leak; 401/403/404/400/422 are all refusals. Evidence is
+A leak is any 2xx, any 3xx, or a non-2xx body echoing the owner's email or
+bridge token; 401/403/404/400/422 with generic bodies are refusals. Evidence is
 written to release/evidence/route-auth-sweep-<ts>.json (per-op verdicts +
 coverage counters). Mutating calls are made with an EMPTY body by a throwaway
 user against a throwaway user's ids, so no real data can be affected.
@@ -121,6 +122,7 @@ def _seed_owner_resources(uid, s, admin):
                                         "base_currency": "USD", "mode": "live"}, headers=_csrf(s), timeout=TIMEOUT)
     assert r.status_code == 200, r.text
     ids["account_id"] = r.json()["id"]
+    ids["bridge_token"] = (db.accounts.find_one({"_id": ObjectId(ids["account_id"])}) or {}).get("bridge_token")
     ids["trade_id"] = str(db.trades.insert_one({"user_id": uid, "account_id": ids["account_id"], "status": "closed", "symbol": "XAUUSD",
                                                 "pnl": 1.0, "closed_at": now, "opened_at": now, "origin": "auto"}).inserted_id)
     ids["signal_id"] = str(db.signals.insert_one({"user_id": uid, "account_id": ids["account_id"], "symbol": "XAUUSD", "action": "BUY",
@@ -171,6 +173,15 @@ def _fill(path, ids):
     return re.sub(r"\{(\w+)\}", rep, path), unknown
 
 
+def _leaky(code, snippet, secrets):
+    """Audit #8 P3: a leak is any 2xx, any 3xx (Location may carry state), or a
+    non-2xx body that echoes the owner's identifiers/secrets."""
+    if 200 <= code < 400:
+        return True
+    low = (snippet or "").lower()
+    return any(sec and sec.lower() in low for sec in secrets)
+
+
 def _call(session, method, url, body_json=True):
     hdrs = _csrf(session) if session else {}
     kw = {"timeout": TIMEOUT, "headers": hdrs, "allow_redirects": False}
@@ -180,7 +191,10 @@ def _call(session, method, url, body_json=True):
     for _ in range(2):                       # one retry on transport errors (status 0 is inconclusive)
         try:
             r = (session or requests).request(method.upper(), url, **kw)
-            return r.status_code, (r.text or "")[:200]
+            snippet = (r.text or "")[:400]
+            if 300 <= r.status_code < 400:
+                snippet = f"Location: {r.headers.get('location', '')} " + snippet
+            return r.status_code, snippet
         except requests.RequestException as e:  # noqa: BLE001
             last = (0, str(e)[:200])
             time.sleep(1)
@@ -214,9 +228,11 @@ def _openapi_paths():
 def sweep():
     paths = _openapi_paths()
     admin = _admin()
-    uid_a, sess_a, _ = _user("owner")
+    uid_a, sess_a, email_a = _user("owner")
     uid_b, sess_b, _ = _user("attacker")
     ids = _seed_owner_resources(uid_a, sess_a, admin)
+    # identifiers/secrets of A that must never appear in ANY response to B or to anonymous callers
+    a_secrets = [email_a, ids.get("bridge_token") or ""]
     # grant B the PAMM manager role so manager-scoped routes are really exercised
     admin.post(f"{API}/pamm/managers", json={"user_id": uid_b, "grant": True}, headers=_csrf(admin), timeout=TIMEOUT)
     ops = []
@@ -233,7 +249,7 @@ def sweep():
         public = _is_public(op["path"])
         # A · anonymous
         code, snippet = _call(None, op["method"], url)
-        leak = 200 <= code < 300 and not public
+        leak = (_leaky(code, snippet, a_secrets) if not public else any(sec and sec.lower() in snippet.lower() for sec in a_secrets))
         results["anonymous"].append({**op, "url": url_path, "status": code, "public_allowlisted": public,
                                      "machine_surface": op["path"].startswith(MACHINE_PREFIX), "verdict": "LEAK" if leak else "OK"})
         if op["path"] == "/api/auth/logout":
@@ -242,13 +258,13 @@ def sweep():
         obj_params = set(re.findall(r"\{(\w+)\}", op["path"])) - NON_OBJECT_PARAMS
         if obj_params and not public:
             code, snippet = _call(sess_b, op["method"], url)
-            leak = 200 <= code < 300
+            leak = _leaky(code, snippet, a_secrets)
             results["idor"].append({**op, "url": url_path, "status": code, "unseeded_params": unknown,
                                     "verdict": "LEAK" if leak else "OK", "snippet": snippet if leak else ""})
         # C · non-admin on admin surfaces
         if _is_admin_surface(op["path"], op["tags"]) and not public:
             code, snippet = _call(sess_b, op["method"], url)
-            leak = 200 <= code < 300
+            leak = _leaky(code, snippet, a_secrets)
             results["bfla"].append({**op, "url": url_path, "status": code, "verdict": "LEAK" if leak else "OK",
                                     "snippet": snippet if leak else ""})
     report = {"sweep": "route-authorization", "base": BASE_URL, "at": datetime.now(timezone.utc).isoformat(),
@@ -281,7 +297,7 @@ def test_no_anonymous_leak(sweep):
     assert not leaks, "anonymous 2xx on non-public routes:\n" + "\n".join(f"{l['method'].upper()} {l['path']} → {l['status']}" for l in leaks)
     # machine-token surfaces refused without their token
     machine = [r for r in sweep["results"]["anonymous"] if r["machine_surface"] and not r["public_allowlisted"]]
-    assert machine and all(r["status"] not in range(200, 300) for r in machine)
+    assert machine and all(r["status"] not in range(200, 400) for r in machine)
 
 
 def test_no_cross_user_object_access(sweep):

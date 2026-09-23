@@ -1,8 +1,8 @@
 {
  "sweep": "route-authorization",
  "base": "https://stoic-trading-bot.preview.emergentagent.com",
- "at": "2026-09-23T06:25:32.580573+00:00",
- "duration_s": 182.0,
+ "at": "2026-09-23T06:47:11.631219+00:00",
+ "duration_s": 154.6,
  "operations_total": 638,
  "coverage": {
   "anonymous": 638,
@@ -57,6 +57,7 @@
  ],
  "seeded_params": [
   "account_id",
+  "bridge_token",
   "bug_id",
   "deployment_id",
   "installation_id",
@@ -157,7 +158,7 @@
     "method": "get",
     "path": "/api/artifacts/{sha256}",
     "tags": [],
-    "url": "/api/artifacts/6ab370271bc2613807ed2794",
+    "url": "/api/artifacts/6ab37556f363e04583a7f698",
     "status": 400,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -305,7 +306,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -317,7 +318,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/suspend",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/suspend",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -329,7 +330,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/unsuspend",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/unsuspend",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -341,7 +342,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/terminate",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/terminate",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -353,7 +354,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/restore",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/restore",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -377,7 +378,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2795/suspend",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f699/suspend",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -389,7 +390,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2796/unsuspend",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f69a/unsuspend",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -401,7 +402,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2797/terminate",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f69b/terminate",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -473,7 +474,7 @@
     "tags": [
      "setup"
     ],
-    "url": "/api/setup/pairing-status/6ab370263602e5367383f5af",
+    "url": "/api/setup/pairing-status/6ab3755479a0baa68be71054",
     "status": 401,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -773,7 +774,7 @@
     "tags": [
      "webauthn"
     ],
-    "url": "/api/auth/webauthn/credentials/6ab3702f1bc2613807ed2798",
+    "url": "/api/auth/webauthn/credentials/6ab37560f363e04583a7f69c",
     "status": 401,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -833,7 +834,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d",
+    "url": "/api/pamm/programs/pgm_586f858922",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -845,7 +846,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/pause",
+    "url": "/api/pamm/programs/pgm_586f858922/pause",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -857,7 +858,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/resume",
+    "url": "/api/pamm/programs/pgm_586f858922/resume",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -869,7 +870,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/emergency-stop",
+    "url": "/api/pamm/programs/pgm_586f858922/emergency-stop",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -881,7 +882,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/clear-emergency-stop",
+    "url": "/api/pamm/programs/pgm_586f858922/clear-emergency-stop",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -893,7 +894,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/investors",
+    "url": "/api/pamm/programs/pgm_586f858922/investors",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -905,7 +906,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/allocations",
+    "url": "/api/pamm/programs/pgm_586f858922/allocations",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -917,7 +918,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/nav",
+    "url": "/api/pamm/programs/pgm_586f858922/nav",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -929,7 +930,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/master",
+    "url": "/api/pamm/programs/pgm_586f858922/master",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -941,7 +942,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/reconcile",
+    "url": "/api/pamm/programs/pgm_586f858922/reconcile",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -953,7 +954,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/reconciliation",
+    "url": "/api/pamm/programs/pgm_586f858922/reconciliation",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -989,7 +990,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-limits",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-limits",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1001,7 +1002,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-limits",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-limits",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1013,7 +1014,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-status",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-status",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1025,7 +1026,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-check",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-check",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1037,7 +1038,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/clear-risk-breach",
+    "url": "/api/pamm/programs/pgm_586f858922/clear-risk-breach",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1097,7 +1098,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/marketplace/pgm_34b654ac8d/join",
+    "url": "/api/pamm/marketplace/pgm_586f858922/join",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1133,7 +1134,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/investor/programs/pgm_34b654ac8d",
+    "url": "/api/pamm/investor/programs/pgm_586f858922",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1145,7 +1146,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/publish",
+    "url": "/api/pamm/programs/pgm_586f858922/publish",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1157,7 +1158,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/join-requests",
+    "url": "/api/pamm/programs/pgm_586f858922/join-requests",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1169,7 +1170,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/join-requests/6ab370351bc2613807ed2799/6ab370351bc2613807ed279a",
+    "url": "/api/pamm/join-requests/6ab37566f363e04583a7f69d/6ab37566f363e04583a7f69e",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1181,7 +1182,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/op-state",
+    "url": "/api/pamm/programs/pgm_586f858922/op-state",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1193,7 +1194,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/trade-verdict",
+    "url": "/api/pamm/programs/pgm_586f858922/trade-verdict",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1205,7 +1206,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/change-requests",
+    "url": "/api/pamm/programs/pgm_586f858922/change-requests",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1217,7 +1218,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/change-requests",
+    "url": "/api/pamm/programs/pgm_586f858922/change-requests",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1229,7 +1230,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/change-requests/6ab370361bc2613807ed279b/6ab370361bc2613807ed279c",
+    "url": "/api/pamm/change-requests/6ab37567f363e04583a7f69f/6ab37567f363e04583a7f6a0",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1241,7 +1242,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/partners/6ab370361bc2613807ed279d/certify",
+    "url": "/api/pamm/partners/6ab37567f363e04583a7f6a1/certify",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1277,7 +1278,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/webhooks/6ab370371bc2613807ed279e",
+    "url": "/api/pamm/webhooks/6ab37567f363e04583a7f6a2",
     "status": 400,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -1313,7 +1314,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/position-truth",
+    "url": "/api/pamm/programs/pgm_586f858922/position-truth",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1325,7 +1326,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/position-truth/check",
+    "url": "/api/pamm/programs/pgm_586f858922/position-truth/check",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1337,7 +1338,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/position-truth/acknowledge",
+    "url": "/api/pamm/programs/pgm_586f858922/position-truth/acknowledge",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1349,7 +1350,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/drift-tolerance",
+    "url": "/api/pamm/programs/pgm_586f858922/drift-tolerance",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1385,7 +1386,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1397,7 +1398,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1409,7 +1410,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1421,7 +1422,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/validate",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/validate",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1433,7 +1434,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/activate",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/activate",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1445,7 +1446,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/suspend",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/suspend",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1457,7 +1458,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/change",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/change",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1469,7 +1470,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy-ownership",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy-ownership",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1481,7 +1482,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification",
+    "url": "/api/pamm/programs/pgm_586f858922/certification",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1493,7 +1494,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/evidence",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/evidence",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1505,7 +1506,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/start",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/start",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1517,7 +1518,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/checkpoint",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/checkpoint",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1529,7 +1530,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/evaluate",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/evaluate",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1541,7 +1542,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/advance",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/advance",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1553,7 +1554,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/revoke",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/revoke",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1589,7 +1590,7 @@
     "tags": [
      "execution"
     ],
-    "url": "/api/execution/intents/6ab3703b1bc2613807ed279f",
+    "url": "/api/execution/intents/6ab3756cf363e04583a7f6a3",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1649,7 +1650,7 @@
     "tags": [
      "attribution"
     ],
-    "url": "/api/attribution/trades/6ab370261bc2613807ed278c",
+    "url": "/api/attribution/trades/6ab37554f363e04583a7f690",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1793,7 +1794,7 @@
     "tags": [
      "brain"
     ],
-    "url": "/api/brain/decisions/6ab3703e1bc2613807ed27a0",
+    "url": "/api/brain/decisions/6ab3756ef363e04583a7f6a4",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -1853,7 +1854,7 @@
     "tags": [
      "brain"
     ],
-    "url": "/api/brain/challenger/6ab3703e1bc2613807ed27a1/qualify",
+    "url": "/api/brain/challenger/6ab3756ff363e04583a7f6a5/qualify",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2225,7 +2226,7 @@
     "tags": [
      "certification-center"
     ],
-    "url": "/api/public/certificate/6ab370441bc2613807ed27a2",
+    "url": "/api/public/certificate/6ab37573f363e04583a7f6a6",
     "status": 404,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -2249,7 +2250,7 @@
     "tags": [
      "stoic-connect"
     ],
-    "url": "/api/connect/6ab370263602e5367383f5af/status",
+    "url": "/api/connect/6ab3755479a0baa68be71054/status",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2309,7 +2310,7 @@
     "tags": [
      "tutorials"
     ],
-    "url": "/api/tutorials/media/6ab370451bc2613807ed27a3",
+    "url": "/api/tutorials/media/6ab37574f363e04583a7f6a7",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2345,7 +2346,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/master",
+    "url": "/api/mockbroker/programs/pgm_586f858922/master",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2357,7 +2358,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/nav",
+    "url": "/api/mockbroker/programs/pgm_586f858922/nav",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2369,7 +2370,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/positions",
+    "url": "/api/mockbroker/programs/pgm_586f858922/positions",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2381,7 +2382,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/positions",
+    "url": "/api/mockbroker/programs/pgm_586f858922/positions",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2393,7 +2394,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/investors",
+    "url": "/api/mockbroker/programs/pgm_586f858922/investors",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2405,7 +2406,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/allocations",
+    "url": "/api/mockbroker/programs/pgm_586f858922/allocations",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2417,7 +2418,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/pause",
+    "url": "/api/mockbroker/programs/pgm_586f858922/pause",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2429,7 +2430,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/resume",
+    "url": "/api/mockbroker/programs/pgm_586f858922/resume",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2441,7 +2442,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/close-all",
+    "url": "/api/mockbroker/programs/pgm_586f858922/close-all",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -2465,7 +2466,7 @@
     "tags": [
      "market"
     ],
-    "url": "/api/market/quote/6ab370481bc2613807ed27a4",
+    "url": "/api/market/quote/6ab37577f363e04583a7f6a8",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2489,7 +2490,7 @@
     "tags": [
      "market"
     ],
-    "url": "/api/market/history/6ab370481bc2613807ed27a5",
+    "url": "/api/market/history/6ab37577f363e04583a7f6a9",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2681,7 +2682,7 @@
     "tags": [
      "bot"
     ],
-    "url": "/api/bot/preset/6ab3704b1bc2613807ed27a6",
+    "url": "/api/bot/preset/6ab37579f363e04583a7f6aa",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2705,7 +2706,7 @@
     "tags": [
      "bot"
     ],
-    "url": "/api/bot/my-presets/6ab3704b1bc2613807ed27a7",
+    "url": "/api/bot/my-presets/6ab3757af363e04583a7f6ab",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2849,7 +2850,7 @@
     "tags": [
      "signals"
     ],
-    "url": "/api/signals/6ab370261bc2613807ed278d",
+    "url": "/api/signals/6ab37554f363e04583a7f691",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2945,7 +2946,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af",
+    "url": "/api/accounts/6ab3755479a0baa68be71054",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2957,7 +2958,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af",
+    "url": "/api/accounts/6ab3755479a0baa68be71054",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2981,7 +2982,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/installations",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/installations",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -2993,7 +2994,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/installations/inst_fb5434677d/revoke",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/installations/inst_815beba5cc/revoke",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3005,7 +3006,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/trust-terminal",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/trust-terminal",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3017,7 +3018,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/rotate-token",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/rotate-token",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3029,7 +3030,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/request-sync",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/request-sync",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3041,7 +3042,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/import-positions",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/import-positions",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3053,7 +3054,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/bridge-token",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/bridge-token",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3065,7 +3066,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/bridge-token/revoke",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/bridge-token/revoke",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3077,7 +3078,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/test-connection",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/test-connection",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3089,7 +3090,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/credentials",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/credentials",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3101,7 +3102,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/credentials/reveal",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/credentials/reveal",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3113,7 +3114,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/unblock",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/unblock",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3125,7 +3126,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/block-status",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/block-status",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3137,7 +3138,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/symbol-suffix",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/symbol-suffix",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3149,7 +3150,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/test-trade",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/test-trade",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3173,7 +3174,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/certify",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/certify",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3317,7 +3318,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/execute/6ab370261bc2613807ed278d",
+    "url": "/api/trades/execute/6ab37554f363e04583a7f691",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3341,7 +3342,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/explain",
+    "url": "/api/trades/6ab37554f363e04583a7f690/explain",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3353,7 +3354,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/dna",
+    "url": "/api/trades/6ab37554f363e04583a7f690/dna",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3365,7 +3366,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/trace",
+    "url": "/api/trades/6ab37554f363e04583a7f690/trace",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3377,7 +3378,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/replay",
+    "url": "/api/trades/6ab37554f363e04583a7f690/replay",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3389,7 +3390,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/timeline",
+    "url": "/api/trades/6ab37554f363e04583a7f690/timeline",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3413,7 +3414,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/audit",
+    "url": "/api/trades/6ab37554f363e04583a7f690/audit",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3425,7 +3426,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/revive",
+    "url": "/api/trades/6ab37554f363e04583a7f690/revive",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3437,7 +3438,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/close",
+    "url": "/api/trades/6ab37554f363e04583a7f690/close",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3557,7 +3558,7 @@
     "tags": [
      "sentiment"
     ],
-    "url": "/api/sentiment/6ab370561bc2613807ed27a8",
+    "url": "/api/sentiment/6ab37585f363e04583a7f6ac",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3581,7 +3582,7 @@
     "tags": [
      "calendar"
     ],
-    "url": "/api/calendar/upcoming/6ab370561bc2613807ed27a9",
+    "url": "/api/calendar/upcoming/6ab37585f363e04583a7f6ad",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3593,7 +3594,7 @@
     "tags": [
      "calendar"
     ],
-    "url": "/api/calendar/freeze/6ab370561bc2613807ed27aa",
+    "url": "/api/calendar/freeze/6ab37585f363e04583a7f6ae",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3737,7 +3738,7 @@
     "tags": [
      "nl-commander"
     ],
-    "url": "/api/nl/triggers/6ab370581bc2613807ed27ab",
+    "url": "/api/nl/triggers/6ab37586f363e04583a7f6af",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3773,7 +3774,7 @@
     "tags": [
      "copilot"
     ],
-    "url": "/api/copilot/sessions/cs_aa72aa8a7d",
+    "url": "/api/copilot/sessions/cs_a81d68c6b2",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3809,7 +3810,7 @@
     "tags": [
      "bugs"
     ],
-    "url": "/api/bugs/6ab370261bc2613807ed2792",
+    "url": "/api/bugs/6ab37554f363e04583a7f696",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3821,7 +3822,7 @@
     "tags": [
      "bugs"
     ],
-    "url": "/api/bugs/6ab370261bc2613807ed2792/status",
+    "url": "/api/bugs/6ab37554f363e04583a7f696/status",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -3893,7 +3894,7 @@
     "tags": [
      "subscription"
     ],
-    "url": "/api/subscription/poll/cs_aa72aa8a7d",
+    "url": "/api/subscription/poll/cs_a81d68c6b2",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4001,7 +4002,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/payout-requests/6ab3705b1bc2613807ed27ac/process",
+    "url": "/api/admin/affiliate/payout-requests/6ab3758af363e04583a7f6b0/process",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4013,7 +4014,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/r/6ab3705c1bc2613807ed27ad",
+    "url": "/api/r/6ab3758af363e04583a7f6b1",
     "status": 307,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -4037,7 +4038,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/applications/6ab3705c1bc2613807ed27ae/approve",
+    "url": "/api/admin/affiliate/applications/6ab3758af363e04583a7f6b2/approve",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4049,7 +4050,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/applications/6ab3705c1bc2613807ed27af/reject",
+    "url": "/api/admin/affiliate/applications/6ab3758bf363e04583a7f6b3/reject",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4073,7 +4074,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/commissions/6ab3705d1bc2613807ed27b0/mark-paid",
+    "url": "/api/admin/affiliate/commissions/6ab3758bf363e04583a7f6b4/mark-paid",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4109,7 +4110,7 @@
     "tags": [
      "support"
     ],
-    "url": "/api/support/tickets/6ab370263602e5367383f5b0",
+    "url": "/api/support/tickets/6ab3755479a0baa68be71055",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4121,7 +4122,7 @@
     "tags": [
      "support"
     ],
-    "url": "/api/support/tickets/6ab370263602e5367383f5b0/reply",
+    "url": "/api/support/tickets/6ab3755479a0baa68be71055/reply",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4133,7 +4134,7 @@
     "tags": [
      "support"
     ],
-    "url": "/api/support/tickets/6ab370263602e5367383f5b0/close",
+    "url": "/api/support/tickets/6ab3755479a0baa68be71055/close",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4157,7 +4158,7 @@
     "tags": [
      "portal"
     ],
-    "url": "/api/legal/6ab3705e1bc2613807ed27b1",
+    "url": "/api/legal/6ab3758cf363e04583a7f6b5",
     "status": 404,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -4265,7 +4266,7 @@
     "tags": [
      "broker-registry"
     ],
-    "url": "/api/admin/brokers/6ab370601bc2613807ed27b2",
+    "url": "/api/admin/brokers/6ab3758ef363e04583a7f6b6",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4277,7 +4278,7 @@
     "tags": [
      "broker-registry"
     ],
-    "url": "/api/admin/brokers/6ab370601bc2613807ed27b3",
+    "url": "/api/admin/brokers/6ab3758ef363e04583a7f6b7",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4349,7 +4350,7 @@
     "tags": [
      "telegram"
     ],
-    "url": "/api/telegram/incoming/6ab370611bc2613807ed27b4",
+    "url": "/api/telegram/incoming/6ab3758ff363e04583a7f6b8",
     "status": 200,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -4769,7 +4770,7 @@
     "tags": [
      "partners"
     ],
-    "url": "/api/partners/brokers/6ab370791bc2613807ed27b5",
+    "url": "/api/partners/brokers/6ab37593f363e04583a7f6b9",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4781,7 +4782,7 @@
     "tags": [
      "partners"
     ],
-    "url": "/api/partners/brokers/6ab370791bc2613807ed27b6/click",
+    "url": "/api/partners/brokers/6ab37593f363e04583a7f6ba/click",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4877,7 +4878,7 @@
     "tags": [
      "safety-blocks"
     ],
-    "url": "/api/safety-blocks/6ab3707b1bc2613807ed27b7",
+    "url": "/api/safety-blocks/6ab37595f363e04583a7f6bb",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4913,7 +4914,7 @@
     "tags": [
      "macro"
     ],
-    "url": "/api/macro/freeze/6ab3707b1bc2613807ed27b8",
+    "url": "/api/macro/freeze/6ab37595f363e04583a7f6bc",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -4949,7 +4950,7 @@
     "tags": [
      "strategies"
     ],
-    "url": "/api/strategies/6ab3707b1bc2613807ed27b9",
+    "url": "/api/strategies/6ab37595f363e04583a7f6bd",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5033,7 +5034,7 @@
     "tags": [
      "public-performance"
     ],
-    "url": "/api/public/performance/6ab3707c1bc2613807ed27ba",
+    "url": "/api/public/performance/6ab37596f363e04583a7f6be",
     "status": 404,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -5057,7 +5058,7 @@
     "tags": [
      "trace"
     ],
-    "url": "/api/trace/6ab3707d1bc2613807ed27bb",
+    "url": "/api/trace/6ab37597f363e04583a7f6bf",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5189,7 +5190,7 @@
     "tags": [
      "research-agent"
     ],
-    "url": "/api/research/proposals/6ab370261bc2613807ed278e/targets",
+    "url": "/api/research/proposals/6ab37554f363e04583a7f692/targets",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5201,7 +5202,7 @@
     "tags": [
      "research-agent"
     ],
-    "url": "/api/research/proposals/6ab370261bc2613807ed278e/accept",
+    "url": "/api/research/proposals/6ab37554f363e04583a7f692/accept",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5213,7 +5214,7 @@
     "tags": [
      "research-agent"
     ],
-    "url": "/api/research/proposals/6ab370261bc2613807ed278e/dismiss",
+    "url": "/api/research/proposals/6ab37554f363e04583a7f692/dismiss",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5249,7 +5250,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5261,7 +5262,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/balance",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/balance",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5273,7 +5274,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/ticker",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/ticker",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5285,7 +5286,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/execute",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/execute",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5297,7 +5298,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/verify",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/verify",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5417,7 +5418,7 @@
     "tags": [
      "shadow"
     ],
-    "url": "/api/shadow/models/6ab370811bc2613807ed27bc/promote",
+    "url": "/api/shadow/models/6ab3759bf363e04583a7f6c0/promote",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5441,7 +5442,7 @@
     "tags": [
      "shadow"
     ],
-    "url": "/api/shadow/models/6ab370811bc2613807ed27bd/canary/rollback",
+    "url": "/api/shadow/models/6ab3759bf363e04583a7f6c1/canary/rollback",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5453,7 +5454,7 @@
     "tags": [
      "shadow"
     ],
-    "url": "/api/shadow/models/6ab370821bc2613807ed27be/retire",
+    "url": "/api/shadow/models/6ab3759bf363e04583a7f6c2/retire",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5765,7 +5766,7 @@
     "tags": [
      "postmortem"
     ],
-    "url": "/api/postmortem/guards/6ab370851bc2613807ed27bf/revert",
+    "url": "/api/postmortem/guards/6ab375bdf363e04583a7f6c3/revert",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5789,7 +5790,7 @@
     "tags": [
      "postmortem"
     ],
-    "url": "/api/postmortem/6ab370261bc2613807ed278c",
+    "url": "/api/postmortem/6ab37554f363e04583a7f690",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5801,7 +5802,7 @@
     "tags": [
      "postmortem"
     ],
-    "url": "/api/postmortem/6ab370261bc2613807ed278c/regenerate",
+    "url": "/api/postmortem/6ab37554f363e04583a7f690/regenerate",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5945,7 +5946,7 @@
     "tags": [
      "optimizer"
     ],
-    "url": "/api/optimizer/report/6ab370261bc2613807ed278f/rec/rec1/apply",
+    "url": "/api/optimizer/report/6ab37554f363e04583a7f693/rec/rec1/apply",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5957,7 +5958,7 @@
     "tags": [
      "optimizer"
     ],
-    "url": "/api/optimizer/report/6ab370261bc2613807ed278f/rec/rec1/dismiss",
+    "url": "/api/optimizer/report/6ab37554f363e04583a7f693/rec/rec1/dismiss",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -5993,7 +5994,7 @@
     "tags": [
      "enterprise-api-keys"
     ],
-    "url": "/api/api-keys/6ab370881bc2613807ed27c0/revoke",
+    "url": "/api/api-keys/6ab375c5f363e04583a7f6c4/revoke",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6065,7 +6066,7 @@
     "tags": [
      "enterprise-public-api"
     ],
-    "url": "/api/v1/connect/accounts/6ab370263602e5367383f5af/status",
+    "url": "/api/v1/connect/accounts/6ab3755479a0baa68be71054/status",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6077,7 +6078,7 @@
     "tags": [
      "enterprise-public-api"
     ],
-    "url": "/api/v1/accounts/6ab370263602e5367383f5af/certificate",
+    "url": "/api/v1/accounts/6ab3755479a0baa68be71054/certificate",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6353,7 +6354,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/agents/6ab3708d1bc2613807ed27c1/release-trust",
+    "url": "/api/ops/agents/6ab375def363e04583a7f6c5/release-trust",
     "status": 403,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -6389,7 +6390,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/signals/6ab370261bc2613807ed278d/replay-validate",
+    "url": "/api/ops/signals/6ab37554f363e04583a7f691/replay-validate",
     "status": 403,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -6401,7 +6402,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/agents/6ab3708e1bc2613807ed27c2/config",
+    "url": "/api/ops/agents/6ab375dff363e04583a7f6c6/config",
     "status": 403,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -6473,7 +6474,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/alerts/6ab3708f1bc2613807ed27c3/ack",
+    "url": "/api/ops/alerts/6ab375e0f363e04583a7f6c7/ack",
     "status": 403,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -6533,7 +6534,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/repair-ledger/6ab370901bc2613807ed27c4",
+    "url": "/api/admin/repair-ledger/6ab375e1f363e04583a7f6c8",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6713,7 +6714,7 @@
     "tags": [
      "validation"
     ],
-    "url": "/api/ops/validation/6ab370931bc2613807ed27c5",
+    "url": "/api/ops/validation/6ab375e3f363e04583a7f6c9",
     "status": 422,
     "public_allowlisted": false,
     "machine_surface": true,
@@ -6857,7 +6858,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6869,7 +6870,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6881,7 +6882,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6893,7 +6894,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6905,7 +6906,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/share",
+    "url": "/api/journal/6ab37554f363e04583a7f690/share",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -6917,7 +6918,7 @@
     "tags": [
      "public-journal"
     ],
-    "url": "/api/public/journal/6ab370961bc2613807ed27c6",
+    "url": "/api/public/journal/6ab375e6f363e04583a7f6ca",
     "status": 404,
     "public_allowlisted": true,
     "machine_surface": false,
@@ -7025,7 +7026,7 @@
     "tags": [
      "governance"
     ],
-    "url": "/api/governance/changes/6ab370971bc2613807ed27c7/approve",
+    "url": "/api/governance/changes/6ab375e7f363e04583a7f6cb/approve",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7037,7 +7038,7 @@
     "tags": [
      "governance"
     ],
-    "url": "/api/governance/changes/6ab370981bc2613807ed27c8/reject",
+    "url": "/api/governance/changes/6ab375e7f363e04583a7f6cc/reject",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7122,7 +7123,7 @@
      "config-versions"
     ],
     "url": "/api/config/rollback",
-    "status": 0,
+    "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
     "verdict": "OK"
@@ -7217,7 +7218,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/providers/6ab370d61bc2613807ed27c9/connect",
+    "url": "/api/infra/providers/6ab375e9f363e04583a7f6cd/connect",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7229,7 +7230,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/providers/6ab370d61bc2613807ed27ca/catalog",
+    "url": "/api/infra/providers/6ab375e9f363e04583a7f6ce/catalog",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7289,7 +7290,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540",
+    "url": "/api/infra/deployments/dep_631cfe6587",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7301,7 +7302,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/bootstrap-token",
+    "url": "/api/infra/deployments/dep_631cfe6587/bootstrap-token",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7313,7 +7314,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/actions",
+    "url": "/api/infra/deployments/dep_631cfe6587/actions",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7361,7 +7362,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370d81bc2613807ed27cb/mtls/revoke",
+    "url": "/api/infra/agents/6ab375ebf363e04583a7f6cf/mtls/revoke",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7493,7 +7494,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/pathb-status",
+    "url": "/api/infra/deployments/dep_631cfe6587/pathb-status",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7517,7 +7518,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/discovery",
+    "url": "/api/infra/deployments/dep_631cfe6587/discovery",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7529,7 +7530,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/discovery/6ab370da1bc2613807ed27cc/decision",
+    "url": "/api/infra/discovery/6ab375edf363e04583a7f6d0/decision",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7541,7 +7542,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370da1bc2613807ed27cd/commands",
+    "url": "/api/infra/agents/6ab375edf363e04583a7f6d1/commands",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7553,7 +7554,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370da1bc2613807ed27ce/rotate-credentials",
+    "url": "/api/infra/agents/6ab375edf363e04583a7f6d2/rotate-credentials",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7565,7 +7566,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/installations/inst_fb5434677d/revoke",
+    "url": "/api/infra/installations/inst_815beba5cc/revoke",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7601,7 +7602,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370db1bc2613807ed27cf/health",
+    "url": "/api/infra/agents/6ab375eef363e04583a7f6d3/health",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7661,7 +7662,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/broker-installers/6ab370db1bc2613807ed27d0/approve",
+    "url": "/api/infra/broker-installers/6ab375eff363e04583a7f6d4/approve",
     "status": 401,
     "public_allowlisted": false,
     "machine_surface": false,
@@ -7711,7 +7712,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7723,7 +7724,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/suspend",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/suspend",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7735,7 +7736,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/unsuspend",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/unsuspend",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7747,7 +7748,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/terminate",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/terminate",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7759,7 +7760,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/restore",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/restore",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7771,7 +7772,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2795/suspend",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f699/suspend",
     "status": 403,
     "unseeded_params": [
      "aff_id"
@@ -7785,7 +7786,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2796/unsuspend",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f69a/unsuspend",
     "status": 403,
     "unseeded_params": [
      "aff_id"
@@ -7799,7 +7800,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2797/terminate",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f69b/terminate",
     "status": 403,
     "unseeded_params": [
      "aff_id"
@@ -7813,7 +7814,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d",
+    "url": "/api/pamm/programs/pgm_586f858922",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7825,7 +7826,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/pause",
+    "url": "/api/pamm/programs/pgm_586f858922/pause",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7837,7 +7838,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/resume",
+    "url": "/api/pamm/programs/pgm_586f858922/resume",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7849,7 +7850,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/emergency-stop",
+    "url": "/api/pamm/programs/pgm_586f858922/emergency-stop",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7861,7 +7862,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/clear-emergency-stop",
+    "url": "/api/pamm/programs/pgm_586f858922/clear-emergency-stop",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7873,7 +7874,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/investors",
+    "url": "/api/pamm/programs/pgm_586f858922/investors",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7885,7 +7886,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/allocations",
+    "url": "/api/pamm/programs/pgm_586f858922/allocations",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7897,7 +7898,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/nav",
+    "url": "/api/pamm/programs/pgm_586f858922/nav",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7909,7 +7910,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/master",
+    "url": "/api/pamm/programs/pgm_586f858922/master",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7921,7 +7922,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/reconcile",
+    "url": "/api/pamm/programs/pgm_586f858922/reconcile",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7933,7 +7934,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/reconciliation",
+    "url": "/api/pamm/programs/pgm_586f858922/reconciliation",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7945,7 +7946,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-limits",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-limits",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7957,7 +7958,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-limits",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-limits",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7969,7 +7970,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-status",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-status",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7981,7 +7982,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/risk-check",
+    "url": "/api/pamm/programs/pgm_586f858922/risk-check",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -7993,7 +7994,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/clear-risk-breach",
+    "url": "/api/pamm/programs/pgm_586f858922/clear-risk-breach",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8005,7 +8006,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/marketplace/pgm_34b654ac8d/join",
+    "url": "/api/pamm/marketplace/pgm_586f858922/join",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8017,7 +8018,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/investor/programs/pgm_34b654ac8d",
+    "url": "/api/pamm/investor/programs/pgm_586f858922",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8029,7 +8030,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/publish",
+    "url": "/api/pamm/programs/pgm_586f858922/publish",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8041,7 +8042,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/join-requests",
+    "url": "/api/pamm/programs/pgm_586f858922/join-requests",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8053,7 +8054,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/join-requests/6ab370351bc2613807ed2799/6ab370351bc2613807ed279a",
+    "url": "/api/pamm/join-requests/6ab37566f363e04583a7f69d/6ab37566f363e04583a7f69e",
     "status": 404,
     "unseeded_params": [
      "request_id",
@@ -8068,7 +8069,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/op-state",
+    "url": "/api/pamm/programs/pgm_586f858922/op-state",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8080,7 +8081,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/trade-verdict",
+    "url": "/api/pamm/programs/pgm_586f858922/trade-verdict",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8092,7 +8093,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/change-requests",
+    "url": "/api/pamm/programs/pgm_586f858922/change-requests",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8104,7 +8105,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/change-requests",
+    "url": "/api/pamm/programs/pgm_586f858922/change-requests",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8116,7 +8117,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/change-requests/6ab370361bc2613807ed279b/6ab370361bc2613807ed279c",
+    "url": "/api/pamm/change-requests/6ab37567f363e04583a7f69f/6ab37567f363e04583a7f6a0",
     "status": 404,
     "unseeded_params": [
      "change_id",
@@ -8131,7 +8132,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/partners/6ab370361bc2613807ed279d/certify",
+    "url": "/api/pamm/partners/6ab37567f363e04583a7f6a1/certify",
     "status": 403,
     "unseeded_params": [
      "partner_id"
@@ -8145,7 +8146,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/position-truth",
+    "url": "/api/pamm/programs/pgm_586f858922/position-truth",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8157,7 +8158,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/position-truth/check",
+    "url": "/api/pamm/programs/pgm_586f858922/position-truth/check",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8169,7 +8170,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/position-truth/acknowledge",
+    "url": "/api/pamm/programs/pgm_586f858922/position-truth/acknowledge",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8181,7 +8182,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/drift-tolerance",
+    "url": "/api/pamm/programs/pgm_586f858922/drift-tolerance",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8193,7 +8194,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8205,7 +8206,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8217,7 +8218,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8229,7 +8230,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/validate",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/validate",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8241,7 +8242,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/activate",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/activate",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8253,7 +8254,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/suspend",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/suspend",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8265,7 +8266,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy/change",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy/change",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8277,7 +8278,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/strategy-ownership",
+    "url": "/api/pamm/programs/pgm_586f858922/strategy-ownership",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8289,7 +8290,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification",
+    "url": "/api/pamm/programs/pgm_586f858922/certification",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8301,7 +8302,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/evidence",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/evidence",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8313,7 +8314,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/start",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/start",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8325,7 +8326,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/checkpoint",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/checkpoint",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8337,7 +8338,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/evaluate",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/evaluate",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8349,7 +8350,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/advance",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/advance",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8361,7 +8362,7 @@
     "tags": [
      "pamm"
     ],
-    "url": "/api/pamm/programs/pgm_34b654ac8d/certification/revoke",
+    "url": "/api/pamm/programs/pgm_586f858922/certification/revoke",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8373,7 +8374,7 @@
     "tags": [
      "execution"
     ],
-    "url": "/api/execution/intents/6ab3703b1bc2613807ed279f",
+    "url": "/api/execution/intents/6ab3756cf363e04583a7f6a3",
     "status": 404,
     "unseeded_params": [
      "intent_id"
@@ -8387,7 +8388,7 @@
     "tags": [
      "attribution"
     ],
-    "url": "/api/attribution/trades/6ab370261bc2613807ed278c",
+    "url": "/api/attribution/trades/6ab37554f363e04583a7f690",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8399,7 +8400,7 @@
     "tags": [
      "brain"
     ],
-    "url": "/api/brain/decisions/6ab3703e1bc2613807ed27a0",
+    "url": "/api/brain/decisions/6ab3756ef363e04583a7f6a4",
     "status": 404,
     "unseeded_params": [
      "decision_id"
@@ -8413,7 +8414,7 @@
     "tags": [
      "brain"
     ],
-    "url": "/api/brain/challenger/6ab3703e1bc2613807ed27a1/qualify",
+    "url": "/api/brain/challenger/6ab3756ff363e04583a7f6a5/qualify",
     "status": 404,
     "unseeded_params": [
      "model_id"
@@ -8427,7 +8428,7 @@
     "tags": [
      "stoic-connect"
     ],
-    "url": "/api/connect/6ab370263602e5367383f5af/status",
+    "url": "/api/connect/6ab3755479a0baa68be71054/status",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8439,7 +8440,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/master",
+    "url": "/api/mockbroker/programs/pgm_586f858922/master",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8451,7 +8452,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/nav",
+    "url": "/api/mockbroker/programs/pgm_586f858922/nav",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8463,7 +8464,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/positions",
+    "url": "/api/mockbroker/programs/pgm_586f858922/positions",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8475,7 +8476,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/positions",
+    "url": "/api/mockbroker/programs/pgm_586f858922/positions",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8487,7 +8488,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/investors",
+    "url": "/api/mockbroker/programs/pgm_586f858922/investors",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8499,7 +8500,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/allocations",
+    "url": "/api/mockbroker/programs/pgm_586f858922/allocations",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8511,7 +8512,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/pause",
+    "url": "/api/mockbroker/programs/pgm_586f858922/pause",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8523,7 +8524,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/resume",
+    "url": "/api/mockbroker/programs/pgm_586f858922/resume",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8535,7 +8536,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/close-all",
+    "url": "/api/mockbroker/programs/pgm_586f858922/close-all",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8547,7 +8548,7 @@
     "tags": [
      "bot"
     ],
-    "url": "/api/bot/my-presets/6ab3704b1bc2613807ed27a7",
+    "url": "/api/bot/my-presets/6ab3757af363e04583a7f6ab",
     "status": 404,
     "unseeded_params": [
      "preset_id"
@@ -8561,7 +8562,7 @@
     "tags": [
      "signals"
     ],
-    "url": "/api/signals/6ab370261bc2613807ed278d",
+    "url": "/api/signals/6ab37554f363e04583a7f691",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8573,7 +8574,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af",
+    "url": "/api/accounts/6ab3755479a0baa68be71054",
     "status": 400,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8585,7 +8586,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af",
+    "url": "/api/accounts/6ab3755479a0baa68be71054",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8597,7 +8598,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/installations",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/installations",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8609,7 +8610,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/installations/inst_fb5434677d/revoke",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/installations/inst_815beba5cc/revoke",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8621,7 +8622,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/trust-terminal",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/trust-terminal",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8633,7 +8634,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/rotate-token",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/rotate-token",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8645,7 +8646,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/request-sync",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/request-sync",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8657,7 +8658,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/import-positions",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/import-positions",
     "status": 422,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8669,7 +8670,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/bridge-token",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/bridge-token",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8681,7 +8682,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/bridge-token/revoke",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/bridge-token/revoke",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8693,7 +8694,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/test-connection",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/test-connection",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8705,7 +8706,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/credentials",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/credentials",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8717,7 +8718,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/credentials/reveal",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/credentials/reveal",
     "status": 422,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8729,7 +8730,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/unblock",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/unblock",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8741,7 +8742,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/block-status",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/block-status",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8753,7 +8754,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/symbol-suffix",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/symbol-suffix",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8765,7 +8766,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/test-trade",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/test-trade",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8777,7 +8778,7 @@
     "tags": [
      "accounts"
     ],
-    "url": "/api/accounts/6ab370263602e5367383f5af/certify",
+    "url": "/api/accounts/6ab3755479a0baa68be71054/certify",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8789,7 +8790,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/execute/6ab370261bc2613807ed278d",
+    "url": "/api/trades/execute/6ab37554f363e04583a7f691",
     "status": 400,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8801,7 +8802,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/explain",
+    "url": "/api/trades/6ab37554f363e04583a7f690/explain",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8813,7 +8814,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/dna",
+    "url": "/api/trades/6ab37554f363e04583a7f690/dna",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8825,7 +8826,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/trace",
+    "url": "/api/trades/6ab37554f363e04583a7f690/trace",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8837,7 +8838,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/replay",
+    "url": "/api/trades/6ab37554f363e04583a7f690/replay",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8849,7 +8850,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/timeline",
+    "url": "/api/trades/6ab37554f363e04583a7f690/timeline",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8861,7 +8862,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/audit",
+    "url": "/api/trades/6ab37554f363e04583a7f690/audit",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8873,7 +8874,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/revive",
+    "url": "/api/trades/6ab37554f363e04583a7f690/revive",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8885,7 +8886,7 @@
     "tags": [
      "trades"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/close",
+    "url": "/api/trades/6ab37554f363e04583a7f690/close",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8897,7 +8898,7 @@
     "tags": [
      "nl-commander"
     ],
-    "url": "/api/nl/triggers/6ab370581bc2613807ed27ab",
+    "url": "/api/nl/triggers/6ab37586f363e04583a7f6af",
     "status": 404,
     "unseeded_params": [
      "trigger_id"
@@ -8911,7 +8912,7 @@
     "tags": [
      "copilot"
     ],
-    "url": "/api/copilot/sessions/cs_aa72aa8a7d",
+    "url": "/api/copilot/sessions/cs_a81d68c6b2",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8923,7 +8924,7 @@
     "tags": [
      "bugs"
     ],
-    "url": "/api/bugs/6ab370261bc2613807ed2792",
+    "url": "/api/bugs/6ab37554f363e04583a7f696",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8935,7 +8936,7 @@
     "tags": [
      "bugs"
     ],
-    "url": "/api/bugs/6ab370261bc2613807ed2792/status",
+    "url": "/api/bugs/6ab37554f363e04583a7f696/status",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8947,7 +8948,7 @@
     "tags": [
      "subscription"
     ],
-    "url": "/api/subscription/poll/cs_aa72aa8a7d",
+    "url": "/api/subscription/poll/cs_a81d68c6b2",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -8959,7 +8960,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/payout-requests/6ab3705b1bc2613807ed27ac/process",
+    "url": "/api/admin/affiliate/payout-requests/6ab3758af363e04583a7f6b0/process",
     "status": 403,
     "unseeded_params": [
      "rid"
@@ -8973,7 +8974,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/applications/6ab3705c1bc2613807ed27ae/approve",
+    "url": "/api/admin/affiliate/applications/6ab3758af363e04583a7f6b2/approve",
     "status": 403,
     "unseeded_params": [
      "app_id"
@@ -8987,7 +8988,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/applications/6ab3705c1bc2613807ed27af/reject",
+    "url": "/api/admin/affiliate/applications/6ab3758bf363e04583a7f6b3/reject",
     "status": 403,
     "unseeded_params": [
      "app_id"
@@ -9001,7 +9002,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/commissions/6ab3705d1bc2613807ed27b0/mark-paid",
+    "url": "/api/admin/affiliate/commissions/6ab3758bf363e04583a7f6b4/mark-paid",
     "status": 403,
     "unseeded_params": [
      "cid"
@@ -9015,7 +9016,7 @@
     "tags": [
      "support"
     ],
-    "url": "/api/support/tickets/6ab370263602e5367383f5b0",
+    "url": "/api/support/tickets/6ab3755479a0baa68be71055",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9027,7 +9028,7 @@
     "tags": [
      "support"
     ],
-    "url": "/api/support/tickets/6ab370263602e5367383f5b0/reply",
+    "url": "/api/support/tickets/6ab3755479a0baa68be71055/reply",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9039,7 +9040,7 @@
     "tags": [
      "support"
     ],
-    "url": "/api/support/tickets/6ab370263602e5367383f5b0/close",
+    "url": "/api/support/tickets/6ab3755479a0baa68be71055/close",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9051,7 +9052,7 @@
     "tags": [
      "broker-registry"
     ],
-    "url": "/api/admin/brokers/6ab370601bc2613807ed27b2",
+    "url": "/api/admin/brokers/6ab3758ef363e04583a7f6b6",
     "status": 403,
     "unseeded_params": [
      "broker_id"
@@ -9065,7 +9066,7 @@
     "tags": [
      "broker-registry"
     ],
-    "url": "/api/admin/brokers/6ab370601bc2613807ed27b3",
+    "url": "/api/admin/brokers/6ab3758ef363e04583a7f6b7",
     "status": 403,
     "unseeded_params": [
      "broker_id"
@@ -9079,7 +9080,7 @@
     "tags": [
      "partners"
     ],
-    "url": "/api/partners/brokers/6ab370791bc2613807ed27b5",
+    "url": "/api/partners/brokers/6ab37593f363e04583a7f6b9",
     "status": 403,
     "unseeded_params": [
      "bid"
@@ -9093,7 +9094,7 @@
     "tags": [
      "partners"
     ],
-    "url": "/api/partners/brokers/6ab370791bc2613807ed27b6/click",
+    "url": "/api/partners/brokers/6ab37593f363e04583a7f6ba/click",
     "status": 404,
     "unseeded_params": [
      "bid"
@@ -9107,7 +9108,7 @@
     "tags": [
      "safety-blocks"
     ],
-    "url": "/api/safety-blocks/6ab3707b1bc2613807ed27b7",
+    "url": "/api/safety-blocks/6ab37595f363e04583a7f6bb",
     "status": 404,
     "unseeded_params": [
      "block_id"
@@ -9121,7 +9122,7 @@
     "tags": [
      "strategies"
     ],
-    "url": "/api/strategies/6ab3707b1bc2613807ed27b9",
+    "url": "/api/strategies/6ab37595f363e04583a7f6bd",
     "status": 404,
     "unseeded_params": [
      "strategy_id"
@@ -9135,7 +9136,7 @@
     "tags": [
      "trace"
     ],
-    "url": "/api/trace/6ab3707d1bc2613807ed27bb",
+    "url": "/api/trace/6ab37597f363e04583a7f6bf",
     "status": 404,
     "unseeded_params": [
      "trace_id"
@@ -9149,7 +9150,7 @@
     "tags": [
      "research-agent"
     ],
-    "url": "/api/research/proposals/6ab370261bc2613807ed278e/targets",
+    "url": "/api/research/proposals/6ab37554f363e04583a7f692/targets",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9161,7 +9162,7 @@
     "tags": [
      "research-agent"
     ],
-    "url": "/api/research/proposals/6ab370261bc2613807ed278e/accept",
+    "url": "/api/research/proposals/6ab37554f363e04583a7f692/accept",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9173,7 +9174,7 @@
     "tags": [
      "research-agent"
     ],
-    "url": "/api/research/proposals/6ab370261bc2613807ed278e/dismiss",
+    "url": "/api/research/proposals/6ab37554f363e04583a7f692/dismiss",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9185,7 +9186,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9197,7 +9198,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/balance",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/balance",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9209,7 +9210,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/ticker",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/ticker",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9221,7 +9222,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/execute",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/execute",
     "status": 422,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9233,7 +9234,7 @@
     "tags": [
      "crypto"
     ],
-    "url": "/api/crypto/accounts/6ab370263602e5367383f5af/verify",
+    "url": "/api/crypto/accounts/6ab3755479a0baa68be71054/verify",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9245,7 +9246,7 @@
     "tags": [
      "shadow"
     ],
-    "url": "/api/shadow/models/6ab370811bc2613807ed27bc/promote",
+    "url": "/api/shadow/models/6ab3759bf363e04583a7f6c0/promote",
     "status": 422,
     "unseeded_params": [
      "model_id"
@@ -9259,7 +9260,7 @@
     "tags": [
      "shadow"
     ],
-    "url": "/api/shadow/models/6ab370811bc2613807ed27bd/canary/rollback",
+    "url": "/api/shadow/models/6ab3759bf363e04583a7f6c1/canary/rollback",
     "status": 404,
     "unseeded_params": [
      "model_id"
@@ -9273,7 +9274,7 @@
     "tags": [
      "shadow"
     ],
-    "url": "/api/shadow/models/6ab370821bc2613807ed27be/retire",
+    "url": "/api/shadow/models/6ab3759bf363e04583a7f6c2/retire",
     "status": 422,
     "unseeded_params": [
      "model_id"
@@ -9287,7 +9288,7 @@
     "tags": [
      "postmortem"
     ],
-    "url": "/api/postmortem/guards/6ab370851bc2613807ed27bf/revert",
+    "url": "/api/postmortem/guards/6ab375bdf363e04583a7f6c3/revert",
     "status": 404,
     "unseeded_params": [
      "guard_id"
@@ -9301,7 +9302,7 @@
     "tags": [
      "postmortem"
     ],
-    "url": "/api/postmortem/6ab370261bc2613807ed278c",
+    "url": "/api/postmortem/6ab37554f363e04583a7f690",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9313,7 +9314,7 @@
     "tags": [
      "postmortem"
     ],
-    "url": "/api/postmortem/6ab370261bc2613807ed278c/regenerate",
+    "url": "/api/postmortem/6ab37554f363e04583a7f690/regenerate",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9325,7 +9326,7 @@
     "tags": [
      "optimizer"
     ],
-    "url": "/api/optimizer/report/6ab370261bc2613807ed278f/rec/rec1/apply",
+    "url": "/api/optimizer/report/6ab37554f363e04583a7f693/rec/rec1/apply",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9337,7 +9338,7 @@
     "tags": [
      "optimizer"
     ],
-    "url": "/api/optimizer/report/6ab370261bc2613807ed278f/rec/rec1/dismiss",
+    "url": "/api/optimizer/report/6ab37554f363e04583a7f693/rec/rec1/dismiss",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9349,7 +9350,7 @@
     "tags": [
      "enterprise-api-keys"
     ],
-    "url": "/api/api-keys/6ab370881bc2613807ed27c0/revoke",
+    "url": "/api/api-keys/6ab375c5f363e04583a7f6c4/revoke",
     "status": 404,
     "unseeded_params": [
      "key_id"
@@ -9363,7 +9364,7 @@
     "tags": [
      "enterprise-public-api"
     ],
-    "url": "/api/v1/connect/accounts/6ab370263602e5367383f5af/status",
+    "url": "/api/v1/connect/accounts/6ab3755479a0baa68be71054/status",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9375,7 +9376,7 @@
     "tags": [
      "enterprise-public-api"
     ],
-    "url": "/api/v1/accounts/6ab370263602e5367383f5af/certificate",
+    "url": "/api/v1/accounts/6ab3755479a0baa68be71054/certificate",
     "status": 401,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9387,7 +9388,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/agents/6ab3708d1bc2613807ed27c1/release-trust",
+    "url": "/api/ops/agents/6ab375def363e04583a7f6c5/release-trust",
     "status": 403,
     "unseeded_params": [
      "agent_id"
@@ -9401,7 +9402,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/signals/6ab370261bc2613807ed278d/replay-validate",
+    "url": "/api/ops/signals/6ab37554f363e04583a7f691/replay-validate",
     "status": 403,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9413,7 +9414,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/agents/6ab3708e1bc2613807ed27c2/config",
+    "url": "/api/ops/agents/6ab375dff363e04583a7f6c6/config",
     "status": 403,
     "unseeded_params": [
      "agent_id"
@@ -9427,7 +9428,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/alerts/6ab3708f1bc2613807ed27c3/ack",
+    "url": "/api/ops/alerts/6ab375e0f363e04583a7f6c7/ack",
     "status": 403,
     "unseeded_params": [
      "alert_id"
@@ -9441,7 +9442,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/repair-ledger/6ab370901bc2613807ed27c4",
+    "url": "/api/admin/repair-ledger/6ab375e1f363e04583a7f6c8",
     "status": 403,
     "unseeded_params": [
      "correlation_id"
@@ -9455,7 +9456,7 @@
     "tags": [
      "validation"
     ],
-    "url": "/api/ops/validation/6ab370931bc2613807ed27c5",
+    "url": "/api/ops/validation/6ab375e3f363e04583a7f6c9",
     "status": 422,
     "unseeded_params": [
      "scenario"
@@ -9469,7 +9470,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9481,7 +9482,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9493,7 +9494,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9505,7 +9506,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/card",
+    "url": "/api/journal/6ab37554f363e04583a7f690/card",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9517,7 +9518,7 @@
     "tags": [
      "journal"
     ],
-    "url": "/api/journal/6ab370261bc2613807ed278c/share",
+    "url": "/api/journal/6ab37554f363e04583a7f690/share",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9529,7 +9530,7 @@
     "tags": [
      "governance"
     ],
-    "url": "/api/governance/changes/6ab370971bc2613807ed27c7/approve",
+    "url": "/api/governance/changes/6ab375e7f363e04583a7f6cb/approve",
     "status": 422,
     "unseeded_params": [
      "change_id"
@@ -9543,7 +9544,7 @@
     "tags": [
      "governance"
     ],
-    "url": "/api/governance/changes/6ab370981bc2613807ed27c8/reject",
+    "url": "/api/governance/changes/6ab375e7f363e04583a7f6cc/reject",
     "status": 404,
     "unseeded_params": [
      "change_id"
@@ -9557,7 +9558,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540",
+    "url": "/api/infra/deployments/dep_631cfe6587",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9569,7 +9570,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/bootstrap-token",
+    "url": "/api/infra/deployments/dep_631cfe6587/bootstrap-token",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9581,7 +9582,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/actions",
+    "url": "/api/infra/deployments/dep_631cfe6587/actions",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9593,7 +9594,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370d81bc2613807ed27cb/mtls/revoke",
+    "url": "/api/infra/agents/6ab375ebf363e04583a7f6cf/mtls/revoke",
     "status": 404,
     "unseeded_params": [
      "agent_id"
@@ -9607,7 +9608,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/pathb-status",
+    "url": "/api/infra/deployments/dep_631cfe6587/pathb-status",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9619,7 +9620,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/deployments/dep_afb8241540/discovery",
+    "url": "/api/infra/deployments/dep_631cfe6587/discovery",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9631,7 +9632,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/discovery/6ab370da1bc2613807ed27cc/decision",
+    "url": "/api/infra/discovery/6ab375edf363e04583a7f6d0/decision",
     "status": 404,
     "unseeded_params": [
      "discovery_id"
@@ -9645,7 +9646,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370da1bc2613807ed27cd/commands",
+    "url": "/api/infra/agents/6ab375edf363e04583a7f6d1/commands",
     "status": 400,
     "unseeded_params": [
      "agent_id"
@@ -9659,7 +9660,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370da1bc2613807ed27ce/rotate-credentials",
+    "url": "/api/infra/agents/6ab375edf363e04583a7f6d2/rotate-credentials",
     "status": 404,
     "unseeded_params": [
      "agent_id"
@@ -9673,7 +9674,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/installations/inst_fb5434677d/revoke",
+    "url": "/api/infra/installations/inst_815beba5cc/revoke",
     "status": 404,
     "unseeded_params": [],
     "verdict": "OK",
@@ -9685,7 +9686,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/agents/6ab370db1bc2613807ed27cf/health",
+    "url": "/api/infra/agents/6ab375eef363e04583a7f6d3/health",
     "status": 404,
     "unseeded_params": [
      "agent_id"
@@ -9699,7 +9700,7 @@
     "tags": [
      "infrastructure"
     ],
-    "url": "/api/infra/broker-installers/6ab370db1bc2613807ed27d0/approve",
+    "url": "/api/infra/broker-installers/6ab375eff363e04583a7f6d4/approve",
     "status": 403,
     "unseeded_params": [
      "installer_id"
@@ -9792,7 +9793,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -9803,7 +9804,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/suspend",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/suspend",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -9814,7 +9815,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/unsuspend",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/unsuspend",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -9825,7 +9826,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/terminate",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/terminate",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -9836,7 +9837,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/users/6ab370243602e5367383f5ab/restore",
+    "url": "/api/admin/users/6ab3755379a0baa68be71050/restore",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -9858,7 +9859,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2795/suspend",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f699/suspend",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -9869,7 +9870,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2796/unsuspend",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f69a/unsuspend",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -9880,7 +9881,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/affiliates/6ab3702b1bc2613807ed2797/terminate",
+    "url": "/api/admin/affiliates/6ab3755af363e04583a7f69b/terminate",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10089,7 +10090,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/master",
+    "url": "/api/mockbroker/programs/pgm_586f858922/master",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10100,7 +10101,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/nav",
+    "url": "/api/mockbroker/programs/pgm_586f858922/nav",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10111,7 +10112,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/positions",
+    "url": "/api/mockbroker/programs/pgm_586f858922/positions",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10122,7 +10123,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/positions",
+    "url": "/api/mockbroker/programs/pgm_586f858922/positions",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10133,7 +10134,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/investors",
+    "url": "/api/mockbroker/programs/pgm_586f858922/investors",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10144,7 +10145,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/allocations",
+    "url": "/api/mockbroker/programs/pgm_586f858922/allocations",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10155,7 +10156,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/pause",
+    "url": "/api/mockbroker/programs/pgm_586f858922/pause",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10166,7 +10167,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/resume",
+    "url": "/api/mockbroker/programs/pgm_586f858922/resume",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10177,7 +10178,7 @@
     "tags": [
      "mockbroker"
     ],
-    "url": "/api/mockbroker/programs/pgm_34b654ac8d/close-all",
+    "url": "/api/mockbroker/programs/pgm_586f858922/close-all",
     "status": 401,
     "verdict": "OK",
     "snippet": ""
@@ -10188,7 +10189,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/trades/6ab370261bc2613807ed278c/timeline",
+    "url": "/api/trades/6ab37554f363e04583a7f690/timeline",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10232,7 +10233,7 @@
     "tags": [
      "bugs"
     ],
-    "url": "/api/bugs/6ab370261bc2613807ed2792",
+    "url": "/api/bugs/6ab37554f363e04583a7f696",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10243,7 +10244,7 @@
     "tags": [
      "bugs"
     ],
-    "url": "/api/bugs/6ab370261bc2613807ed2792/status",
+    "url": "/api/bugs/6ab37554f363e04583a7f696/status",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10265,7 +10266,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/payout-requests/6ab3705b1bc2613807ed27ac/process",
+    "url": "/api/admin/affiliate/payout-requests/6ab3758af363e04583a7f6b0/process",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10287,7 +10288,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/applications/6ab3705c1bc2613807ed27ae/approve",
+    "url": "/api/admin/affiliate/applications/6ab3758af363e04583a7f6b2/approve",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10298,7 +10299,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/applications/6ab3705c1bc2613807ed27af/reject",
+    "url": "/api/admin/affiliate/applications/6ab3758bf363e04583a7f6b3/reject",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10320,7 +10321,7 @@
     "tags": [
      "affiliate"
     ],
-    "url": "/api/admin/affiliate/commissions/6ab3705d1bc2613807ed27b0/mark-paid",
+    "url": "/api/admin/affiliate/commissions/6ab3758bf363e04583a7f6b4/mark-paid",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10375,7 +10376,7 @@
     "tags": [
      "broker-registry"
     ],
-    "url": "/api/admin/brokers/6ab370601bc2613807ed27b2",
+    "url": "/api/admin/brokers/6ab3758ef363e04583a7f6b6",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10386,7 +10387,7 @@
     "tags": [
      "broker-registry"
     ],
-    "url": "/api/admin/brokers/6ab370601bc2613807ed27b3",
+    "url": "/api/admin/brokers/6ab3758ef363e04583a7f6b7",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10397,7 +10398,7 @@
     "tags": [
      "partners"
     ],
-    "url": "/api/partners/brokers/6ab370791bc2613807ed27b5",
+    "url": "/api/partners/brokers/6ab37593f363e04583a7f6b9",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10408,7 +10409,7 @@
     "tags": [
      "partners"
     ],
-    "url": "/api/partners/brokers/6ab370791bc2613807ed27b6/click",
+    "url": "/api/partners/brokers/6ab37593f363e04583a7f6ba/click",
     "status": 404,
     "verdict": "OK",
     "snippet": ""
@@ -10672,7 +10673,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/agents/6ab3708d1bc2613807ed27c1/release-trust",
+    "url": "/api/ops/agents/6ab375def363e04583a7f6c5/release-trust",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10705,7 +10706,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/signals/6ab370261bc2613807ed278d/replay-validate",
+    "url": "/api/ops/signals/6ab37554f363e04583a7f691/replay-validate",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10716,7 +10717,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/agents/6ab3708e1bc2613807ed27c2/config",
+    "url": "/api/ops/agents/6ab375dff363e04583a7f6c6/config",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10760,7 +10761,7 @@
     "tags": [
      "ops"
     ],
-    "url": "/api/ops/alerts/6ab3708f1bc2613807ed27c3/ack",
+    "url": "/api/ops/alerts/6ab375e0f363e04583a7f6c7/ack",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10815,7 +10816,7 @@
     "tags": [
      "admin"
     ],
-    "url": "/api/admin/repair-ledger/6ab370901bc2613807ed27c4",
+    "url": "/api/admin/repair-ledger/6ab375e1f363e04583a7f6c8",
     "status": 403,
     "verdict": "OK",
     "snippet": ""
@@ -10980,7 +10981,7 @@
     "tags": [
      "validation"
     ],
-    "url": "/api/ops/validation/6ab370931bc2613807ed27c5",
+    "url": "/api/ops/validation/6ab375e3f363e04583a7f6c9",
     "status": 422,
     "verdict": "OK",
     "snippet": ""

@@ -213,8 +213,13 @@ async def resolve_change(db, user_id: str, change_id, approve: bool,
     (both with fresh step-up MFA at the route layer). Idempotent — resolved
     changes refuse re-resolution."""
     from bson import ObjectId
+    from bson.errors import InvalidId
+    try:
+        oid = ObjectId(str(change_id))
+    except (InvalidId, TypeError):
+        return {"ok": False, "error": "change not found"}
     doc = await db.governed_changes.find_one(
-        {"_id": ObjectId(str(change_id)), "user_id": user_id})
+        {"_id": oid, "user_id": user_id})
     if not doc:
         return {"ok": False, "error": "change not found"}
     status = doc.get("status")

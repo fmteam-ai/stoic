@@ -86,6 +86,8 @@ async def approve_change(change_id: str, body: ApproveBody, request: Request,
                       {"change_id": change_id, "reason": body.reason,
                        "result": result.get("status") or result.get("error")},
                       request, step_up=True)
+    if result.get("error") == "change not found":
+        raise HTTPException(status_code=404, detail="change not found")
     return result
 
 
