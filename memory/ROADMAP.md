@@ -65,3 +65,9 @@
 - **P2-2** Hermetic <5-min safety suite on public deps (authority, state contract, reconciliation, risk invariants).
 - **P2-3** Exception taxonomy: replace safety-path `pass` with typed outcomes + correlation IDs.
 - **P2-4** Jurisdiction-specific legal review before public launch.
+
+## After audit round 9 (2026-06)
+- P1-07 transport mTLS: needs an ingress/proxy that terminates TLS, verifies client certs against the private CA, strips inbound identity headers and injects verified identity; then make `_mtls_gate` REQUIRE it in production (config + tests exist for the pinned secondary identifier only). Operator/infra work.
+- Frontend corrections still open: typed UI state model (loading/stale/partial/blocked/degraded/unavailable/ready) across every trading-critical number with source/broker timestamps + reconciliation age; route-level error boundaries distinguishing auth/outage/bundle failures; visual-regression + a11y + mobile tests in release evidence; sweep remaining client-side derivations of ready/executing/free/certified → consume /api/authority/decision.
+- Backend corrections still open: singleton background-worker ownership exposure (current lease owner endpoint); AI decision lineage fields (model version, training window, feature schema, owner, approval, expiry, rollback target) + quarantine on drift/missing features; backtest cost model completeness (spread/slippage/commission/swap/latency/rejects/partial fills/survivorship/leakage); explainability tied to actual gates; portfolio-level composition of strategy limits.
+- Staging candidate drills (rollback, broker timeout, late-ACK, stale-position, Turnstile outage, memory pressure) with the signed 6/3/3 pre-promotion bundle.

@@ -1,0 +1,18 @@
+{
+  "summary": "Round 9 live verification: 51/51 backend HTTP checks pass and full frontend UX pass. Turnstile public-state anon returns {state,code,site_key,degraded_login} (no 'enabled' key), state=disabled. Governed break-glass lifecycle (activate -> readiness ok=false -> deactivate -> review empty=400 review_note_required -> review with note -> readiness ok=true) works end-to-end and record left clean. Authority decision/inventory return correct schema, dominance list, new_exposure_allowed consistent (state=CLOSE_ONLY, nea=false). /api/authority root returns embedded decision with matching state and enforced_level==level. Register invariant: two calls with same brand-new email both return 200 with identical exact keys {id,email,name,email_verified,message}, no activation_email_sent/error keys, timing ~equal (0.83s/0.83s). Release readiness contains turnstile_break_glass, turnstile_config, canonical_decision(state), inventory(counts), rc_lock(present true, ok true). Frontend: /login has no turnstile-status element and submit is enabled; /register submit disabled until data-testid=register-terms-checkbox is checked. Post-login dashboard shows data-testid=authority-strip with decision-state='CLOSE ONLY' + decision-code='TERMINAL_STALE'; drilldown-toggle reveals drilldown with authority-blocker-TERMINAL_STALE. Strip state matches GET /api/authority/decision (CLOSE_ONLY).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/tests/round9_live_test.py", "/app/test_reports/round9_live_results.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Non-admin 403 path for /api/authority/inventory/expectation is only reachable by verified users; without seeding a verified regular user, this branch cannot be exercised in preview without a DB write. Consider a preview-only seeded verified non-admin user for QA."
+  ],
+  "updated_files": ["/app/tests/round9_live_test.py"],
+  "success_rate": {"backend": "100% (51/51)", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / TUIofiuh5am4CEvlO1ICLTJAW2Zxc (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Registered qa-r9-<hex>@example.com twice for register invariant + non-admin 403 test; DB row deleted after test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Use /app/tests/round9_live_test.py as regression. CSRF is enforced when cookie-auth is present; call GET /api/auth/csrf after login and forward the csrf_token cookie as x-csrf-token header for any POST/PUT/DELETE. For non-admin 403 tests, either seed a verified user via Mongo or flip email_verified=True after registration.",
+  "rca of the issue": "N/A - all checks pass"
+}
