@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
 import { Mail as EnvelopeSimple, Lock as LockKey, ShieldCheck, MailWarning, RefreshCw } from "lucide-react";
 import { StoicMark } from "@/components/StoicLogo";
-import { TurnstileWidget, useTurnstile, resetTurnstile } from "@/components/TurnstileWidget";
+import { TurnstileWidget, TurnstileStatus, useTurnstile } from "@/components/TurnstileWidget";
 
 export default function Login() {
     const navigate = useNavigate();
@@ -21,7 +21,7 @@ export default function Login() {
     const [unverifiedEmail, setUnverifiedEmail] = useState("");
     const [resendCooldown, setResendCooldown] = useState(0);
     const [loading, setLoading] = useState(false);
-    const turnstile = useTurnstile();
+    const turnstile = useTurnstile("login");
 
     const startOtpCooldown = (secs) => {
         setOtpResendCooldown(secs);
@@ -50,8 +50,7 @@ export default function Login() {
             // this one server-side, so always issue a fresh token before the
             // next submit (wrong password, OTP challenge, 2FA, etc.).
             if (turnstile.enabled) {
-                resetTurnstile();
-                turnstile.setToken("");
+                turnstile.reset();
             }
             if (detail?.code === "turnstile_required") {
                 setError(detail.message || "Please complete the human verification challenge.");
@@ -142,14 +141,14 @@ export default function Login() {
                         <StoicMark size={48} />
                         <div>
                             <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SMART TRADING · STEADY WEALTH</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">RISK-CONTROLLED AUTOMATED TRADING</div>
                         </div>
                     </div>
 
                     <div className="space-y-6 max-w-md">
                         <div className="font-mono text-[11px] text-[#00FF41] tracking-widest">// SYSTEM READY</div>
                         <h1 className="font-display font-bold text-5xl tracking-tighter leading-[1.05]">
-                            Trade gold &amp; crypto<br/>like a <span className="text-[#00FF41]">Stoic</span>.
+                            Automated gold &amp; crypto<br/>trading, <span className="text-[#00FF41]">risk-controlled</span>.
                         </h1>
                         <p className="text-[#A1A1AA] text-sm leading-relaxed max-w-sm">
                             Multi-engine AI consensus. Four risk profiles. Veto-first execution. Built for traders who refuse to panic.
@@ -159,7 +158,7 @@ export default function Login() {
                     <div className="grid grid-cols-3 gap-4 max-w-md">
                         {[
                             { label: "Asset Classes", value: "FX • Crypto • Gold" },
-                            { label: "AI Model", value: "Claude 4.5" },
+                            { label: "AI Engines", value: "Multi-model consensus" },
                             { label: "Risk Tiers", value: "4 Profiles" },
                         ].map(s => (
                             <div key={s.label} className="border border-[#1F1F1F] p-3">
@@ -309,12 +308,13 @@ export default function Login() {
                         )}
 
                         {turnstile.enabled && (
-                            <TurnstileWidget siteKey={turnstile.siteKey} onToken={turnstile.setToken} />
+                            <><TurnstileWidget siteKey={turnstile.siteKey} action="login" onToken={turnstile.setToken} onState={turnstile.onState} resetRef={turnstile.resetRef} /><TurnstileStatus t={turnstile} /></>
                         )}
+                        {!turnstile.enabled && <TurnstileStatus t={turnstile} />}
 
                         <button
                             type="submit"
-                            disabled={loading || (turnstile.enabled && !turnstile.token)}
+                            disabled={loading || !turnstile.canSubmit}
                             data-testid="login-submit-button"
                             className="w-full bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium py-3 text-sm transition-colors duration-150"
                         >

@@ -2564,3 +2564,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 
 ## Iter-234 (2026-06) — synthetic-monitor probe job: checkout git exit 128
 - Cause: workflow-level `permissions: {}` stripped `contents: read`, so actions/checkout could not fetch. Fixed to `permissions: contents: read` (nothing else granted). Secrets flow unchanged.
+
+## Iter-235 (2026-06) — Audit round 8 corrections (docs/RELEASE_ACCEPTANCE_CHECKLIST.md "Round 8")
+- Turnstile FAIL-CLOSED redesign (turnstile_gate.py): states client_token_invalid/provider_unavailable/configuration_invalid; login degraded policy otp_required only; action+hostname binding (TURNSTILE_EXPECTED_HOSTNAMES); FORCE_DISABLE refused in prod; time-limited audited break-glass. Frontend TurnstileWidget/useTurnstile explicit states + canSubmit + TurnstileStatus; pages pass fixed action. Tests: test_iter170_prod_boot (rewritten), test_iter175 updated.
+- Signer: ONE validator release_signing.production_signer_violation (boot/signer/preflight); RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD retired. artifact-digest uses _mtls_gate; "mTLS" relabelled pinned secondary identifier. Sweep: /api/auth sensitive + webauthn credential seeded (0 leaks). Packaging: .gitattributes export-ignore for reports/memory/evidence. Pre-promotion EA gate non-empty+approved. Keep-alive 75 s. Boot fallback distinguishes bundle vs backend. Marquee clones semantic-free / removed under reduced motion. Marketing copy de-risked.
+- OPERATOR (cannot be done from the repo): production Turnstile keys/allowlist + hostname env; RELEASE_SIGNER=external; edge-terminated client TLS; re-tag candidate for build-bound evidence; EA compile; legal review.

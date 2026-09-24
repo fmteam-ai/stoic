@@ -31,6 +31,21 @@ def _private_key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.from_private_bytes(base64.b64decode(b64))
 
 
+def production_signer_violation(env) -> str | None:
+    """The single shared validator (server boot · signing · deploy_preflight):
+    APP_ENV=production requires RELEASE_SIGNER=external. Local keys are
+    forbidden with NO bypass — the retired RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD
+    is itself a misconfiguration signal."""
+    mode = (env.get("RELEASE_SIGNER") or "local").strip().lower()
+    if mode == "external":
+        return None
+    msg = ("APP_ENV=production forbids RELEASE_SIGNER=local — the signing key must not live in the API. "
+           "Configure RELEASE_SIGNER=external with RELEASE_SIGNER_URL/RELEASE_SIGNER_TOKEN (KMS/HSM-backed).")
+    if (env.get("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD") or "").strip().lower() == "true":
+        msg += " RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD is RETIRED and has no effect — remove it."
+    return msg
+
+
 def sign_hex(data: bytes) -> str:
     """Sign `data` and return a hex Ed25519 signature.
 
@@ -45,21 +60,9 @@ def sign_hex(data: bytes) -> str:
         return _external_sign(data)
     from app_env import is_production
     if is_production():
-        # audit v5 P0-7 — local signing in production requires the SAME
-        # explicit acknowledgment as the boot guard (kept consistent so
-        # an acknowledged pilot never hits a post-boot signing failure).
-        ack = os.environ.get("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
-                             "false").strip().lower() == "true"
-        if not ack:
-            raise RuntimeError(
-                "RELEASE_SIGNER=local is forbidden in production — the "
-                "private signing key must NOT live in the API. Configure "
-                "RELEASE_SIGNER=external + RELEASE_SIGNER_URL/RELEASE_"
-                "SIGNER_TOKEN (KMS/HSM proxy), or explicitly acknowledge "
-                "with RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true for a "
-                "supervised pilot.")
-        logger.warning("release signing with LOCAL key in production "
-                       "(explicitly acknowledged) — migrate to KMS/HSM")
+        viol = production_signer_violation(os.environ)
+        if viol:
+            raise RuntimeError(viol)
     return _private_key().sign(data).hex()
 
 

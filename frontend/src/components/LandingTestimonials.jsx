@@ -151,6 +151,19 @@ const Stars = ({ n }) => (
     </div>
 );
 
+// audit round 8 P2-5 — decorative marquee clones carry NO semantic descendants
+// (no figure/blockquote/figcaption/text nodes for AT): purely visual boxes.
+const CloneCard = ({ t }) => (
+    <div className="tst-card" aria-hidden="true" data-marquee-clone="true">
+        <span className="tst-illustrative" aria-hidden="true">Illustrative example</span>
+        <div className="tst-quote" aria-hidden="true">{`\u201C${t.quote}\u201D`}</div>
+        <div className="tst-person" aria-hidden="true">
+            <span className="tst-avatar">{t.name.split(" ").map(w => w[0]).join("").slice(0, 2)}</span>
+            <span><span className="tst-name">{t.name}</span><span className="tst-role">{t.role}</span></span>
+        </div>
+    </div>
+);
+
 const Card = ({ t, idx }) => (
     <figure className="tst-card" data-testid={`testimonial-card-${idx}`}>
         <span className="tst-illustrative">Illustrative example</span>
@@ -170,6 +183,15 @@ export const LandingTestimonials = () => {
     const rowA = TESTIMONIALS.filter((_, i) => i % 2 === 0);
     const rowB = TESTIMONIALS.filter((_, i) => i % 2 === 1);
     const [statsStatus, setStatsStatus] = useState("loading");
+    const [reducedMotion, setReducedMotion] = useState(
+        () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+    useEffect(() => {
+        const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+        if (!mq) return undefined;
+        const on = (e) => setReducedMotion(e.matches);
+        mq.addEventListener?.("change", on);
+        return () => mq.removeEventListener?.("change", on);
+    }, []);
     const statsLine = statsStatus === "live"
         ? "The counts are live platform data with defined, versioned populations (aggregate, refreshed every 15 minutes). Availability is shown only from an independent, reconciled 30-day edge-probe window."
         : "Live statistics unavailable.";
@@ -187,21 +209,15 @@ export const LandingTestimonials = () => {
                 {" "}<span data-testid="testimonials-stats-status">{statsLine}</span>
             </p>
             <TrustBar onStatus={setStatsStatus} />
-            <div className="tst-marquee" data-testid="testimonials-marquee">
+            <div className="tst-marquee" data-testid="testimonials-marquee" data-reduced-motion={reducedMotion ? "true" : "false"}>
                 <div className="tst-track">
-                    {[...rowA, ...rowA].map((t, i) => (
-                        // audit F-19 — animation clones hidden from AT
-                        i < rowA.length
-                            ? <Card key={`a${i}`} t={t} idx={i * 2} />
-                            : <div key={`a${i}`} aria-hidden="true" role="presentation" inert={true} data-marquee-clone="true"><Card t={t} /></div>
-                    ))}
+                    {rowA.map((t, i) => <Card key={`a${i}`} t={t} idx={i * 2} />)}
+                    {/* audit F-19 / round-8 P2-5 — clones are decorative, semantic-free and absent under reduced motion */}
+                    {!reducedMotion && rowA.map((t, i) => <div key={`ac${i}`} aria-hidden="true" inert={true}><CloneCard t={t} /></div>)}
                 </div>
                 <div className="tst-track reverse">
-                    {[...rowB, ...rowB].map((t, i) => (
-                        i < rowB.length
-                            ? <Card key={`b${i}`} t={t} idx={i * 2 + 1} />
-                            : <div key={`b${i}`} aria-hidden="true" role="presentation" inert={true} data-marquee-clone="true"><Card t={t} /></div>
-                    ))}
+                    {rowB.map((t, i) => <Card key={`b${i}`} t={t} idx={i * 2 + 1} />)}
+                    {!reducedMotion && rowB.map((t, i) => <div key={`bc${i}`} aria-hidden="true" inert={true}><CloneCard t={t} /></div>)}
                 </div>
             </div>
             <p className="tst-honesty" data-testid="testimonials-disclaimer">

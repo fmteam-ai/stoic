@@ -7,3 +7,21 @@ test-results/ export-ignore
 playwright-report/ export-ignore
 # Immutable build provenance — git archive substitutes the exact commit SHA
 backend/BUILD_SHA export-subst
+
+# audit round 8 P1-8 — release archives (git archive) carry NO historical test
+# reports, preview state, agent memory or evidence from other builds. Build-bound
+# evidence is generated in CI and attached separately.
+test_reports export-ignore
+test_reports/** export-ignore
+memory export-ignore
+memory/** export-ignore
+release/evidence export-ignore
+release/evidence/** export-ignore
+release/drills export-ignore
+release/drills/** export-ignore
+release/verification export-ignore
+release/verification/** export-ignore
+e2e/playwright-report export-ignore
+e2e/playwright-report/** export-ignore
+e2e/test-results export-ignore
+e2e/test-results/** export-ignore

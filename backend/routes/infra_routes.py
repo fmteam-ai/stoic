@@ -19,7 +19,9 @@ def _aware(dt):
 
 async def _mtls_gate(db, agent_token: str, fingerprint: str) -> dict:
     """iter-172 (#5) — resolve the agent by token, then enforce its enrolled
-    per-installation mTLS client cert. Raises HTTPException(401) directly so
+    per-installation client-cert fingerprint. NOTE (audit round 8 P1-3): until
+    ingress terminates client-certificate TLS and injects a verified identity,
+    this header check is a *pinned secondary identifier*, NOT cryptographic mTLS. Raises HTTPException(401) directly so
     downstream business ValueErrors keep their own status codes."""
     from agent_mtls import enforce_mtls
     from vps_agent import agent_by_token
@@ -795,7 +797,7 @@ async def artifacts_manifest(agent_id: str | None = None):
 
 
 @router.post("/agent/artifact-digest")
-async def report_artifact_digest(payload: dict):
+async def report_artifact_digest(payload: dict, cert_fp: str = _FP_HEADER):
     """iter-125 correction #3 — installers report the SHA-256 digest of the
     artifact they ACTUALLY deployed. The server compares it against the
     CI-published hash so a tampered/locally-recompiled EX5 is detected."""
@@ -805,10 +807,9 @@ async def report_artifact_digest(payload: dict):
     db = get_db()
     reporter = None
     if token:
-        try:
-            agent = await agent_by_token(db, token)
-        except ValueError:
-            raise HTTPException(status_code=401, detail="unknown agent token")
+        # audit round 8 P1-4 — the SAME centralized agent gate as every other
+        # agent_token route (token + enrolled pinned secondary identifier)
+        agent = await _mtls_gate(db, token, cert_fp)
         reporter = {"kind": "agent", "agent_id": str(agent["_id"])}
     elif bridge_token:
         acc = await db.accounts.find_one({"bridge_token": bridge_token})

@@ -91,7 +91,7 @@ integration keys (see `.env.example` for every key):
 | `EMERGENT_LLM_KEY` | works off-platform (billing stays on your Emergent account) — or swap in your own OpenAI/Anthropic keys |
 | `RESEND_*` / `TELEGRAM_*` / `NEWSAPI_KEY` | as currently used |
 | `WEBAUTHN_RP_ID` | `stoicaibot.com` (apex + www share admin passkeys) |
-| `RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD` | `true` until you attach a KMS/external signer |
+| `RELEASE_SIGNER` | `external` + `RELEASE_SIGNER_URL`/`RELEASE_SIGNER_TOKEN` (KMS/HSM proxy). Local signing is **refused** in production — there is no override (the old `RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD` is retired and flagged as a misconfiguration). |
 
 Apply changes: `docker compose up -d` (recreates readers).
 

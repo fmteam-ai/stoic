@@ -117,18 +117,15 @@ def run_preflight() -> dict:
         "secrets_vault refuses to run in production without its own master "
         "key (broker credentials / command keys are encrypted with it)."))
 
-    signer = env.get("RELEASE_SIGNER", "local").strip().lower()
-    allow_local = env.get("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
-                          "").strip().lower() == "true"
-    if signer == "external":
+    # audit round 8 P1-6 — the SAME validator the boot guard and signer use
+    from release_signing import production_signer_violation
+    _viol = production_signer_violation(env)
+    if not _viol:
         s_status, s_cur = "pass", "external"
-    elif allow_local:
-        # v56: the escape hatch was REMOVED — a set override is now a
-        # misconfiguration signal, not a permission
+    elif "RETIRED" in _viol:
         s_status, s_cur = "fail", ("local (RELEASE_SIGNER_ALLOW_LOCAL_IN_"
-                                   "PROD is no longer supported)")
+                                   "PROD is RETIRED — remove it; KMS/HSM required to sign in prod)")
     else:
-        # review P1-9: local signing in production is a FAIL, not a warning
         s_status, s_cur = "fail", "local (KMS/HSM required to sign in prod)"
     checks.append(_check(
         "release_signer", "RELEASE_SIGNER", s_status, s_cur,

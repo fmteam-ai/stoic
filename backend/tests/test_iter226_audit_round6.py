@@ -453,3 +453,39 @@ def test_r7_monitor_and_browser_synthetic_strictness():
     assert _classify("Refused to load the script because it violates the Content Security Policy") == "csp_violation"
     assert _classify("Failed to fetch /api/health") == "failed_request"
     assert os.path.exists(os.path.join(REPO, "scripts", "verify_release.sh"))
+
+
+# ── audit round 8 · agent-token routes all use the centralized gate ──────────
+def test_r8_every_agent_token_route_uses_centralized_gate():
+    """Generated from the source: every handler that reads `agent_token` must
+    call `_mtls_gate` (token + enrolled pinned secondary identifier). A new
+    agent-token route fails here until it does."""
+    import re as _re
+    src = open(os.path.join(ROOT, "routes", "infra_routes.py")).read()
+    handlers = _re.split(r"\n@router\.", src)[1:]
+    # bootstrap exception: enrollment is HOW the second factor gets pinned (token-only by design)
+    BOOTSTRAP = {'post("/agent/cert/enroll")'}
+    offenders = []
+    for h in handlers:
+        reads_token = 'payload.get("agent_token")' in h or "agent_token: str" in h
+        head = h.split("\n", 1)[0]
+        if reads_token and "_mtls_gate(" not in h and head not in BOOTSTRAP:
+            offenders.append(head)
+    assert not offenders, f"agent_token handlers bypassing _mtls_gate: {offenders}"
+    assert 'async def report_artifact_digest(payload: dict, cert_fp: str = _FP_HEADER)' in src
+    # the mechanism is a pinned secondary identifier until ingress-terminated client TLS exists
+    assert "pinned secondary identifier" in src
+
+
+def test_r8_prepromotion_ea_version_gate_rejects_missing_version():
+    src = open(os.path.join(ROOT, "ops", "prepromotion_evidence.py")).read()
+    assert "all(ea_versions)" in src and "approved_ea" in src and 'len(ea_versions) == 1' in src
+
+
+def test_r8_release_archive_excludes_historical_reports():
+    import subprocess as sp
+    out = sp.run(["git", "archive", "--format=tar", "--worktree-attributes", "HEAD"], capture_output=True, cwd=REPO)
+    names = sp.run(["tar", "-t"], input=out.stdout, capture_output=True).stdout.decode().splitlines()
+    leaked = [n for n in names if n.startswith(("test_reports/", "memory/", "release/evidence/", "release/drills/", "e2e/test-results/"))]
+    assert not leaked, leaked[:5]
+    assert any(n.startswith("backend/") for n in names)

@@ -126,7 +126,10 @@ def _extend_uvicorn_keepalive():
     try:
         import gc
         import uvicorn
-        target = int(os.environ.get("UVICORN_KEEPALIVE_SECONDS", "650"))
+        # audit round 8 P2-3: bounded. 75 s exceeds Cloudflare's origin idle
+        # keep-alive (~60 s) without pinning sockets for 10+ minutes; the
+        # value is measured/overridable, never a proof of the 520 root cause.
+        target = min(int(os.environ.get("UVICORN_KEEPALIVE_SECONDS", "75")), 300)
         for obj in gc.get_objects():
             if isinstance(obj, uvicorn.Config) and \
                     obj.timeout_keep_alive < target:
@@ -721,37 +724,13 @@ async def on_startup():
         # review P1-9 — local signing must FAIL at boot in production, not
         # at first runtime signature. Audit anchors / release manifests /
         # public certificates must never hit a post-boot signing failure.
-        if os.environ.get("RELEASE_SIGNER", "local").strip().lower() \
-                == "local":
-            _ack = os.environ.get(
-                "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
-                "false").strip().lower() == "true"
-            if not _ack:
-                raise RuntimeError(
-                    "APP_ENV=production forbids RELEASE_SIGNER=local — the "
-                    "signing key must not live in the API. Set RELEASE_"
-                    "SIGNER=external with RELEASE_SIGNER_URL/RELEASE_SIGNER_"
-                    "TOKEN (KMS/HSM-backed), or explicitly acknowledge the "
-                    "risk with RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true for "
-                    "a supervised pilot.")
-            # audit v5 P0-7 — local signing keys refused unless EXPLICITLY
-            # acknowledged. Acknowledged: boot proceeds with a loud trail.
-            logger.critical(
-                "RELEASE_SIGNER=local in production — explicitly "
-                "acknowledged (RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=true). "
-                "Release manifests are signed by a key resident in the API "
-                "process; migrate to a KMS/HSM-backed external signer "
-                "before scale-up.")
-            try:
-                from alerting import raise_alert
-                await raise_alert(
-                    get_db(), "release_signer_local_in_prod", "warning",
-                    "Production booted with RELEASE_SIGNER=local under "
-                    "explicit acknowledgment — migrate to an external "
-                    "KMS/HSM signer.",
-                    dedup_key="release_signer_local_in_prod")
-            except Exception:  # noqa: BLE001 — alerting must not block boot
-                pass
+        # audit round 8 P1-6 — ONE policy, shared with release_signing +
+        # deploy_preflight: local release signing is NEVER allowed in
+        # production. No acknowledgment / bypass variable exists any more.
+        from release_signing import production_signer_violation
+        _viol = production_signer_violation(os.environ)
+        if _viol:
+            raise RuntimeError(_viol)
         if not os.environ.get("ED25519_SIGNING_KEY_B64"):
             raise RuntimeError(
                 "APP_ENV=production requires ED25519_SIGNING_KEY_B64 for "

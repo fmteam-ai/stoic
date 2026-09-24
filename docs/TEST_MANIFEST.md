@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 571 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3612 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3621 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4273 tests across 432 files.**
+**Total: 4282 tests across 432 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -146,7 +146,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter169_http.py` | http-live | 3 |
 | `backend/tests/test_iter16_profit_pack.py` | http-live | 12 |
 | `backend/tests/test_iter170_agent_token_hashing.py` | http-live | 4 |
-| `backend/tests/test_iter170_prod_boot.py` | http-live | 6 |
+| `backend/tests/test_iter170_prod_boot.py` | http-live | 12 |
 | `backend/tests/test_iter170_review.py` | http-live | 8 |
 | `backend/tests/test_iter171_hardening_batch.py` | http-live | 5 |
 | `backend/tests/test_iter172_kms_mtls.py` | http-live | 11 |
@@ -228,7 +228,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter223_host_migration_full_flow.py` | http-live | 12 |
 | `backend/tests/test_iter224_audit_http.py` | http-live | 7 |
 | `backend/tests/test_iter225_audit_p1p2.py` | http-live | 14 |
-| `backend/tests/test_iter226_audit_round6.py` | http-live | 19 |
+| `backend/tests/test_iter226_audit_round6.py` | http-live | 22 |
 | `backend/tests/test_iter228_route_auth_sweep.py` | http-live | 8 |
 | `backend/tests/test_iter22_live_verification.py` | http-live | 9 |
 | `backend/tests/test_iter22_security_hardening.py` | http-live | 9 |

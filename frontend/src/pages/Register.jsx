@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { formatApiError } from "@/lib/api";
 import { StoicMark } from "@/components/StoicLogo";
 import { MailCheck, RefreshCw, Loader2 } from "lucide-react";
-import { TurnstileWidget, useTurnstile, resetTurnstile } from "@/components/TurnstileWidget";
+import { TurnstileWidget, TurnstileStatus, useTurnstile } from "@/components/TurnstileWidget";
 
 export default function Register() {
     const navigate = useNavigate();
@@ -19,7 +19,7 @@ export default function Register() {
     // Post-registration "check your inbox" state
     const [registered, setRegistered] = useState(null); // { email, activationLinkDevOnly? }
     const [resendCooldown, setResendCooldown] = useState(0);
-    const turnstile = useTurnstile();
+    const turnstile = useTurnstile("register");
     const [resending, setResending] = useState(false);
 
     const handleSubmit = async (e) => {
@@ -39,8 +39,7 @@ export default function Register() {
         } catch (err) {
             // Single-use token was consumed by the failed attempt — reset.
             if (turnstile.enabled) {
-                resetTurnstile();
-                turnstile.setToken("");
+                turnstile.reset();
             }
             setError(formatApiError(err));
         } finally { setLoading(false); }
@@ -79,7 +78,7 @@ export default function Register() {
                         <StoicMark size={40} />
                         <div>
                             <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SMART TRADING · STEADY WEALTH</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">RISK-CONTROLLED AUTOMATED TRADING</div>
                         </div>
                     </div>
 
@@ -144,7 +143,7 @@ export default function Register() {
                     <StoicMark size={40} />
                     <div>
                         <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SMART TRADING · STEADY WEALTH</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">RISK-CONTROLLED AUTOMATED TRADING</div>
                     </div>
                 </div>
 
@@ -210,11 +209,12 @@ export default function Register() {
                     )}
 
                     {turnstile.enabled && (
-                        <TurnstileWidget siteKey={turnstile.siteKey} onToken={turnstile.setToken} />
+                        <><TurnstileWidget siteKey={turnstile.siteKey} action="register" onToken={turnstile.setToken} onState={turnstile.onState} resetRef={turnstile.resetRef} /><TurnstileStatus t={turnstile} /></>
                     )}
+                    {!turnstile.enabled && <TurnstileStatus t={turnstile} />}
 
                     <button
-                        type="submit" disabled={loading || !termsAgreed || (turnstile.enabled && !turnstile.token)} data-testid="register-submit-button"
+                        type="submit" disabled={loading || !termsAgreed || !turnstile.canSubmit} data-testid="register-submit-button"
                         className="w-full bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-40 disabled:cursor-not-allowed text-black font-medium py-3 text-sm transition-colors duration-150"
                     >
                         {loading ? "CREATING..." : "CREATE ACCOUNT →"}

@@ -13,7 +13,7 @@ because the private signing key must never live inside the API process.
 In the production deployment environment variables:
 - **DELETE** `RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD` (whatever its value).
 
-The check becomes *warn* ("local — KMS/HSM required to sign in prod").
+The check stays **fail** until `RELEASE_SIGNER=external` is configured — local signing in production is refused at preflight, at boot and at signing time by one shared validator (`release_signing.production_signer_violation`). There is no supervised-pilot bypass.
 Boot is unaffected.
 
 ## Step 2 — reach PASS with the external signer

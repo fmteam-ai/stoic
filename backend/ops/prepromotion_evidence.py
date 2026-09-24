@@ -101,7 +101,17 @@ async def collect(args) -> dict:
     gates["all_enabled_live"] = all(x["environment"] == "LIVE" for x in en_rows) and bool(en_rows)
     gates["ea_heartbeat_fresh_all_enabled"] = all(x["ea_fresh"] for x in en_rows)
     gates["ea_identity_verified_all_enabled"] = all(x["identity_verified"] for x in en_rows)
-    gates["single_ea_version"] = len({x["ea_version"] for x in en_rows}) <= 1
+    ea_versions = {x["ea_version"] for x in en_rows}
+    approved_ea = (os.environ.get("APPROVED_EA_VERSION") or "").strip() or None
+    # audit round 8 P2-1: exactly ONE non-empty version on every enabled account,
+    # equal to the approved/signed artifact version (LATEST_EA) — None never passes
+    try:
+        from routes.diagnostic_routes import LATEST_EA as _latest
+    except Exception:  # noqa: BLE001
+        _latest = None
+    approved_ea = approved_ea or _latest
+    gates["single_ea_version"] = bool(en_rows) and len(ea_versions) == 1 and all(ea_versions) \
+        and (approved_ea is None or ea_versions == {approved_ea})
     gates["bot_map_one_to_one"] = sorted(str(a["_id"]) for a in enabled) == sorted(b for b in bots if b in {str(a["_id"]) for a in real})
     ctr = await contract(db, args.scope_user)
     worker_view = ctr.get("totals") or {}
@@ -145,7 +155,7 @@ async def collect(args) -> dict:
                                                        "newest_unknown_age_s", "position_mismatches", "authority", "authority_reason", "sla_s", "checked_at")},
             "authority": {"platform": {"level": plat.get("level"), "enforced_level": plat.get("enforced_level"), "reason": plat.get("reason")},
                           "per_account": per_acct},
-            "worker_view": worker_view, "bot_health_cap_inputs": cap_inputs, "performance_gate_reasons": perf_reasons,
+            "worker_view": worker_view, "ea_versions_enabled": sorted(v for v in ea_versions if v), "approved_ea_version": approved_ea, "bot_health_cap_inputs": cap_inputs, "performance_gate_reasons": perf_reasons,
             "gates": gates, "failed_gates": sorted(k for k, v in gates.items() if not v)}
     body["result"] = "PASS" if not body["failed_gates"] else "FAIL"
     return body

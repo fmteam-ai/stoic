@@ -38,23 +38,23 @@ def test_diagnose_interprets_secret_probe(monkeypatch):
     import turnstile_gate as tg
     from database import get_db
 
-    async def _fake_verify(token, remote_ip=None):
-        return {"ok": False, "outage": True,
+    async def _fake_verify(token, remote_ip=None, action=None):
+        return {"ok": False, "outage": False, "state": "configuration_invalid",
                 "error_codes": ["invalid-input-secret"]}
     monkeypatch.setattr(tg, "verify_token", _fake_verify)
     out = _run(tg.diagnose(get_db()))
     assert out["secret_check"] == "INVALID_SECRET"
     assert "hint" in out
 
-    async def _fake_ok(token, remote_ip=None):
-        return {"ok": False, "outage": False,
+    async def _fake_ok(token, remote_ip=None, action=None):
+        return {"ok": False, "outage": False, "state": "client_token_invalid",
                 "error_codes": ["invalid-input-response"]}
     monkeypatch.setattr(tg, "verify_token", _fake_ok)
     out = _run(tg.diagnose(get_db()))
     assert out["secret_check"] == "secret_ok"
 
-    async def _fake_outage(token, remote_ip=None):
-        return {"ok": False, "outage": True, "error_codes": ["network-error"]}
+    async def _fake_outage(token, remote_ip=None, action=None):
+        return {"ok": False, "outage": True, "state": "provider_unavailable", "error_codes": ["network-error"]}
     monkeypatch.setattr(tg, "verify_token", _fake_outage)
     out = _run(tg.diagnose(get_db()))
     assert out["secret_check"] == "cloudflare_unreachable"
@@ -75,8 +75,8 @@ def test_rejection_ring_records_error_codes(monkeypatch):
     import turnstile_gate as tg
     from database import get_db
 
-    async def _fake_reject(token, remote_ip=None):
-        return {"ok": False, "outage": False,
+    async def _fake_reject(token, remote_ip=None, action=None):
+        return {"ok": False, "outage": False, "state": "client_token_invalid",
                 "error_codes": ["timeout-or-duplicate"]}
     monkeypatch.setattr(tg, "verify_token", _fake_reject)
 

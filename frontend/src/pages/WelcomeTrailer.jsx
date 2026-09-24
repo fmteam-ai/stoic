@@ -90,7 +90,7 @@ const SCENES = [
                 to lose stupidly.
             </h1>
         ),
-        sub: "Stop gambling. Start trading like a quant fund. Your edge starts now.",
+        sub: "Rules-based automated trading with fund-grade risk controls. Trading involves substantial risk of loss.",
     },
 ];
 
@@ -274,7 +274,7 @@ export default function WelcomeTrailer() {
                 <div className="scene active" data-testid="scene-cta">
                     <div className="kicker">Your move.</div>
                     <h1 className="headline">
-                        Trade like a <em>quant fund.</em><br/>
+                        Automated trading with <em>fund-grade risk controls.</em><br/>
                         Without becoming one.
                     </h1>
                     <p className="subline">

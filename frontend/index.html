@@ -34,9 +34,16 @@
                     document.body.insertAdjacentHTML("beforeend",
                         '<div id="boot-fallback" data-testid="boot-fallback" style="position:fixed;inset:0;background:#050505;color:#FAFAFA;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:99999;text-align:center;padding:24px">' +
                         '<div style="font-size:15px;letter-spacing:2px">STOIC IS TAKING LONGER THAN USUAL</div>' +
-                        '<div style="font-size:12px;color:#A1A1AA;max-width:440px">The application bundle has not arrived yet — usually a slow network, a cold cache or rate limiting. It will appear automatically as soon as it loads. Your account and funds are unaffected.</div>' +
+                        '<div style="font-size:12px;color:#A1A1AA;max-width:460px">The interface is unavailable: the application bundle has not arrived yet. Trading authority cannot be confirmed here; backend safeguards are designed to fail closed. It will appear automatically as soon as it loads.</div>' +
+                        '<div id="boot-fallback-diag" data-testid="boot-fallback-diag" style="font-size:11px;color:#71717A;max-width:460px">checking backend…</div>' +
                         '<button onclick="location.reload()" style="padding:10px 24px;background:none;border:1px solid #00FF41;color:#00FF41;font-family:monospace;letter-spacing:2px;cursor:pointer">RETRY</button></div>');
                     var poll = setInterval(function () { if (mounted()) { dismiss(); clearInterval(poll); } }, 500);
+                    // distinguish FRONTEND bundle failure from BACKEND outage (audit round 8 P0-2)
+                    var diag = document.getElementById("boot-fallback-diag");
+                    var ref = "ref " + Math.random().toString(16).slice(2, 10);
+                    fetch("/api/health", { cache: "no-store" }).then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+                        .then(function (x) { diag.textContent = "component: frontend bundle · backend " + (x.s === 200 ? "reachable (build " + (x.j.build_sha || "unknown").slice(0, 8) + ")" : "HTTP " + x.s) + " · " + ref + " · support: status page"; })
+                        .catch(function () { diag.textContent = "component: frontend bundle + backend unreachable · " + ref + " · support: status page"; });
                 }, 12000);
             })();
         </script>

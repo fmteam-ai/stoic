@@ -60,7 +60,8 @@ USER_FACING_IN_ADMIN_ROUTER = {"/api/stress-test/run", "/api/stress-test/runs",
 NON_OBJECT_PARAMS = {"symbol", "kind", "code", "key", "name", "decision", "secret", "sha256", "cert_id", "share_id", "scenario", "bid"}
 SENSITIVE_PREFIX = ("/api/admin", "/api/ops", "/api/governance", "/api/execution", "/api/safety-blocks", "/api/infra",
                     "/api/shadow", "/api/brain", "/api/pamm", "/api/postmortem", "/api/api-keys", "/api/strategies",
-                    "/api/nl", "/api/bot", "/api/partners", "/api/trace", "/api/repair-ledger", "/api/affiliate")
+                    "/api/nl", "/api/bot", "/api/partners", "/api/trace", "/api/repair-ledger", "/api/affiliate",
+                    "/api/auth")            # audit round 8 P1-7: authentication-factor objects are sensitive
 # explicit, release-blocking waivers: param → reason (must stay EMPTY for a release)
 SENSITIVE_PARAM_WAIVERS: dict = {}
 
@@ -241,6 +242,9 @@ def _seed_owner_resources(uid, s, admin, run_token, manifest):
     ins("pamm_partners", {"partner_id": None, "name": ns}, "partner_id", "partner_id")
     ins("partner_brokers", {"bid": None, "name": ns}, "bid", "bid")
     ins("broker_registry", {"broker_id": None, "name": ns}, "broker_id", "broker_id")
+    # authentication factors (WebAuthn passkey) — A's credential must be invisible/immutable to B
+    ins("webauthn_credentials", {"credential_id": f"cred_{uuid.uuid4().hex}", "public_key": "pk", "sign_count": 0,
+                                 "label": ns}, "credential_id", "credential_id")
     r = admin.post(f"{API}/pamm/programs", json={"name": f"{ns}-prog", "manager_id": uid}, headers=_csrf(admin), timeout=TIMEOUT)
     ids["program_id"] = (r.json().get("program_id") or r.json().get("id")) if r.status_code == 200 else None
     if ids["program_id"]:
@@ -424,7 +428,8 @@ def test_sweep_covers_every_operation(sweep):
     assert sweep["coverage"]["anonymous"] == sweep["operations_total"]
     assert sweep["coverage"]["idor"] >= 140 and sweep["coverage"]["bfla"] >= 60
     for p in ("account_id", "trade_id", "signal_id", "ticket_id", "deployment_id", "installation_id", "proposal_id", "report_id",
-              "block_id", "change_id", "intent_id", "key_id", "model_id", "agent_id", "alert_id", "strategy_id", "trigger_id"):
+              "block_id", "change_id", "intent_id", "key_id", "model_id", "agent_id", "alert_id", "strategy_id", "trigger_id",
+              "credential_id"):
         assert p in sweep["seeded_params"], p
 
 

@@ -46,7 +46,7 @@ export default function VerifyEmail() {
                     <StoicMark size={40} />
                     <div>
                         <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SMART TRADING · STEADY WEALTH</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">RISK-CONTROLLED AUTOMATED TRADING</div>
                     </div>
                 </div>
 

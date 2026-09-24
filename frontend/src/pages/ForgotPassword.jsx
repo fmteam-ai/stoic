@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { StoicMark } from "@/components/StoicLogo";
 import { Mail as EnvelopeSimple, MailCheck, Loader2, ArrowLeft } from "lucide-react";
-import { TurnstileWidget, useTurnstile, resetTurnstile } from "@/components/TurnstileWidget";
+import { TurnstileWidget, TurnstileStatus, useTurnstile } from "@/components/TurnstileWidget";
 
 export default function ForgotPassword() {
     const [email, setEmail] = useState("");
@@ -11,7 +11,7 @@ export default function ForgotPassword() {
     const [sent, setSent] = useState(false);
     const [error, setError] = useState("");
     const [cooldown, setCooldown] = useState(0);
-    const turnstile = useTurnstile();
+    const turnstile = useTurnstile("password_reset");
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -24,8 +24,7 @@ export default function ForgotPassword() {
             const detail = err?.response?.data?.detail;
             // Single-use token was consumed by the failed attempt — reset.
             if (turnstile.enabled) {
-                resetTurnstile();
-                turnstile.setToken("");
+                turnstile.reset();
             }
             if (detail?.code === "turnstile_required") {
                 setError(detail.message || "Please complete the human verification challenge.");
@@ -56,7 +55,7 @@ export default function ForgotPassword() {
                     <StoicMark size={40} />
                     <div>
                         <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SMART TRADING · STEADY WEALTH</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">RISK-CONTROLLED AUTOMATED TRADING</div>
                     </div>
                 </div>
 
@@ -117,11 +116,12 @@ export default function ForgotPassword() {
                             )}
 
                             {turnstile.enabled && (
-                                <TurnstileWidget siteKey={turnstile.siteKey} onToken={turnstile.setToken} />
+                                <><TurnstileWidget siteKey={turnstile.siteKey} action="password_reset" onToken={turnstile.setToken} onState={turnstile.onState} resetRef={turnstile.resetRef} /><TurnstileStatus t={turnstile} /></>
                             )}
+                            {!turnstile.enabled && <TurnstileStatus t={turnstile} />}
 
                             <button
-                                type="submit" disabled={submitting || !email || (turnstile.enabled && !turnstile.token)}
+                                type="submit" disabled={submitting || !email || !turnstile.canSubmit}
                                 data-testid="forgot-submit-btn"
                                 className="w-full bg-[#FFD700] hover:bg-[#E5C200] disabled:opacity-50 text-black font-medium py-3 text-sm transition-colors flex items-center justify-center gap-2"
                             >
