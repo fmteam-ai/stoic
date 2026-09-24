@@ -292,10 +292,12 @@ class TestReleaseSignerHatchRemoved:
         monkeypatch.setenv("RELEASE_SIGNER", "local")
         monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD",
                            raising=False)
-        with pytest.raises(RuntimeError, match="forbidden in production"):
+        with pytest.raises(RuntimeError, match="forbids RELEASE_SIGNER=local"):
             release_signing.sign_hex(b"x")
+        # round 8/9: the acknowledgment hatch is RETIRED — still refused
         monkeypatch.setenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "true")
-        assert release_signing.sign_hex(b"x")
+        with pytest.raises(RuntimeError, match="RETIRED"):
+            release_signing.sign_hex(b"x")
 
     def test_preflight_flags_override_as_fail(self, monkeypatch):
         from deploy_preflight import run_preflight

@@ -73,15 +73,20 @@ const RECOVERY = {
     "configuration-error": "Human verification could not be configured. Your details are kept — retry in a moment.",
     "script-error": "The verification challenge could not load (blocked script or network). Your details are kept — retry.",
     expired: "The verification expired. Complete the challenge again — your details are kept.",
+    misconfigured: "Human verification is misconfigured on the server. Our operators have been alerted — please try again later.",
+    "provider-degraded": "The verification provider is degraded. Sign-in may ask for an emailed one-time code instead.",
+    "break-glass": "Human verification is temporarily bypassed under an audited incident procedure.",
 };
 
 /**
- * Explicit configuration states — never a silent {enabled:false} on error:
- *   loading · enabled · disabled-by-policy · configuration-error · script-error · expired · ready
- * `canSubmit` is false while the state is unknown or a required challenge is unavailable.
+ * Explicit public states from GET /auth/turnstile-config (round 9 P1-04):
+ *   loading · disabled · ready · misconfigured · provider-degraded · break-glass · configuration-error
+ * plus widget states while ready: enabled · ready · expired · script-error.
+ * `canSubmit` is false while the state is unknown, misconfigured, or a required challenge has no token.
  */
 export const useTurnstile = (action = "login") => {
     const [cfgState, setCfgState] = useState("loading");
+    const [cfg, setCfg] = useState({});
     const [siteKey, setSiteKey] = useState(null);
     const [widgetState, setWidgetState] = useState(null);
     const [token, setToken] = useState("");
@@ -95,37 +100,46 @@ export const useTurnstile = (action = "login") => {
             .then((r) => {
                 if (!alive) return;
                 const d = r.data || {};
-                if (d.enabled && d.site_key) { setSiteKey(d.site_key); setCfgState("enabled"); }
-                else { setSiteKey(null); setCfgState("disabled-by-policy"); }
+                setCfg(d);
+                const s = d.state || "configuration-error";
+                setSiteKey(d.site_key || null);
+                setCfgState(s === "provider_degraded" ? "provider-degraded" : s === "break_glass" ? "break-glass" : s);
             })
             .catch(() => { if (alive) setCfgState("configuration-error"); });
         return () => { alive = false; };
     }, [attempt]);
 
-    const state = cfgState === "enabled" ? (widgetState || "loading") : cfgState;
-    const enabled = cfgState === "enabled";
-    const canSubmit = cfgState === "disabled-by-policy" || (enabled && state === "ready" && !!token);
+    const bypassed = cfgState === "break-glass" && Array.isArray(cfg.scope) && cfg.scope.includes(action);
+    const enabled = !!siteKey && !bypassed && (cfgState === "ready" || cfgState === "provider-degraded" || cfgState === "break-glass");
+    const state = enabled ? (widgetState || "loading") : cfgState;
+    const degradedLoginAllowed = action === "login" && cfg.degraded_login === "otp_required"
+        && (cfgState === "provider-degraded" || state === "script-error" || state === "expired");
+    const canSubmit = cfgState === "disabled" || bypassed || (enabled && state === "ready" && !!token) || degradedLoginAllowed;
     const reset = useCallback(() => { if (resetRef.current) resetRef.current(); else { resetTurnstile(); setToken(""); } }, []);
     const retryConfig = useCallback(() => setAttempt((a) => a + 1), []);
 
-    return { enabled, siteKey, action, token, setToken, state, canSubmit, reset, retryConfig, resetRef,
-             onState: setWidgetState, recoveryMessage: RECOVERY[state] || null };
+    const bannerState = cfgState === "provider-degraded" && enabled ? "provider-degraded" : bypassed ? "break-glass" : null;
+    return { enabled, siteKey, action, token, setToken, state, cfgState, bannerState, canSubmit, reset, retryConfig, resetRef,
+             onState: setWidgetState, recoveryMessage: RECOVERY[bannerState || state] || null };
 };
 
 /** Visible state + recovery. Rendered whether or not the widget itself is mounted. */
 export const TurnstileStatus = ({ t }) => {
-    if (!t || t.state === "ready" || t.state === "disabled-by-policy" || t.state === "enabled") return null;
-    const problem = t.state === "configuration-error" || t.state === "script-error" || t.state === "expired";
+    if (!t) return null;
+    const shown = t.bannerState || t.state;
+    if (shown === "ready" || shown === "disabled" || shown === "enabled") return null;
+    const problem = ["configuration-error", "script-error", "expired", "misconfigured"].includes(shown);
+    const notice = shown === "provider-degraded" || shown === "break-glass";
     return (
-        <div data-testid="turnstile-status" data-state={t.state}
-            className={`text-xs font-mono px-3 py-2 border ${problem ? "border-[#FFB000]/50 text-[#FFB000]" : "border-[#2A2A2A] text-[#A1A1AA]"}`}>
-            {t.state === "loading" && "Preparing human verification…"}
-            {problem && (t.recoveryMessage || "Human verification is unavailable right now.")}
-            {t.state === "configuration-error" && (
+        <div data-testid="turnstile-status" data-state={shown}
+            className={`text-xs font-mono px-3 py-2 border ${problem ? "border-[#FFB000]/50 text-[#FFB000]" : notice ? "border-[#38BDF8]/40 text-[#38BDF8]" : "border-[#2A2A2A] text-[#A1A1AA]"}`}>
+            {shown === "loading" && "Preparing human verification…"}
+            {(problem || notice) && (t.recoveryMessage || "Human verification is unavailable right now.")}
+            {(shown === "configuration-error" || shown === "misconfigured") && (
                 <button type="button" onClick={t.retryConfig} data-testid="turnstile-retry-config"
                     className="ml-2 underline hover:text-white">retry</button>
             )}
-            {(t.state === "script-error" || t.state === "expired") && (
+            {(shown === "script-error" || shown === "expired") && (
                 <button type="button" onClick={t.reset} data-testid="turnstile-retry-widget"
                     className="ml-2 underline hover:text-white">retry challenge</button>
             )}

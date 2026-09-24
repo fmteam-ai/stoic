@@ -51,8 +51,14 @@ class TestTurnstileFailClosed:
             return {"ok": state == "ok", "state": state, "outage": state == "provider_unavailable",
                     "error_codes": [] if state == "ok" else ["x"], "hostname": None, "action": action}
 
+        async def _no_bg(db):
+            return None
+
+        import turnstile_break_glass as tbg
+        monkeypatch.setattr(tbg, "active", _no_bg)
         monkeypatch.setattr(tg, "is_enabled", _enabled)
         monkeypatch.setattr(tg, "verify_token", _verify)
+        monkeypatch.setenv("TURNSTILE_SITE_KEY", "dummy-site")
         try:
             _run(tg.require_turnstile(object(), "tok", "1.2.3.4", action=action))
             return None
@@ -72,8 +78,10 @@ class TestTurnstileFailClosed:
             assert e.status_code == 503 and e.detail["code"] == "turnstile_unavailable", action
 
     def test_login_degraded_policy_routes_to_otp_not_bypass(self, monkeypatch):
+        # require_turnstile (raise-or-pass) treats a degraded decision as DENIAL;
+        # only the typed evaluate() path hands login the otp_required mode (round 9 P1-03).
         e = self._gate(monkeypatch, "provider_unavailable", action="login", policy="otp_required")
-        assert e.status_code == 503 and e.detail["code"] == "turnstile_degraded_otp_required"
+        assert e.status_code == 503 and e.detail["code"] == "turnstile_unavailable"
         # registration never degrades
         e = self._gate(monkeypatch, "provider_unavailable", action="register", policy="otp_required")
         assert e.detail["code"] == "turnstile_unavailable"
@@ -96,17 +104,12 @@ class TestTurnstileFailClosed:
         assert e is not None and e.status_code == 403          # bypass did NOT apply
         assert self._gate(monkeypatch, "client_token_invalid", app_env="preview", force_disable=True) is None
 
-    def test_break_glass_is_time_limited_and_audited(self, monkeypatch):
+    def test_env_break_glass_retired(self):
+        # round 9 P1-05: break-glass is DB-governed (turnstile_break_glass), never an env var.
+        import inspect
         import turnstile_gate as tg
-        from datetime import datetime, timedelta, timezone
-        monkeypatch.setenv("TURNSTILE_BREAK_GLASS_UNTIL", (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
-        monkeypatch.setenv("TURNSTILE_BREAK_GLASS_REASON", "widget allowlist repair INC-42")
-        bg = tg._break_glass()
-        assert bg and "INC-42" in bg["reason"]
-        monkeypatch.setenv("TURNSTILE_BREAK_GLASS_UNTIL", (datetime.now(timezone.utc) + timedelta(hours=9)).isoformat())
-        assert tg._break_glass() is None                        # > 4 h ahead refused
-        monkeypatch.setenv("TURNSTILE_BREAK_GLASS_UNTIL", (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat())
-        assert tg._break_glass() is None                        # expired
+        src = inspect.getsource(tg)
+        assert "TURNSTILE_BREAK_GLASS_UNTIL" not in src and not hasattr(tg, "_break_glass")
 
     def test_diagnose_reports_states(self, monkeypatch):
         monkeypatch.setenv("TURNSTILE_SECRET_KEY", "")
@@ -122,15 +125,18 @@ class TestSignerPolicyIsOneRule:
 
     def test_shared_validator(self):
         from release_signing import production_signer_violation as v
-        assert v({"RELEASE_SIGNER": "external"}) is None
-        assert "forbids RELEASE_SIGNER=local" in v({})
-        assert "RETIRED" in v({"RELEASE_SIGNER": "local", "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": "true"})
+        from test_iter237_signer_round9 import EXTERNAL_OK
+        assert v({"APP_ENV": "production", **EXTERNAL_OK}) is None
+        # round 9 P1-01: mode alone is NOT enough — external needs its full configuration
+        assert v({"APP_ENV": "production", "RELEASE_SIGNER": "external"}) is not None
+        assert "forbids RELEASE_SIGNER=local" in v({"APP_ENV": "production"})
+        assert "RETIRED" in v({"APP_ENV": "production", "RELEASE_SIGNER": "local", "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": "true"})
 
     def test_boot_guard_and_preflight_use_it_and_no_bypass_remains(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         for f in ("server.py", "deploy_preflight.py"):
             src = open(os.path.join(root, f)).read()
-            assert "production_signer_violation" in src, f
+            assert "production_signer_violation" in src or "signer_config_violations" in src, f
         srv = open(os.path.join(root, "server.py")).read()
         assert 'os.environ.get(\n                "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD"' not in srv
         assert "explicitly acknowledge" not in srv
@@ -139,10 +145,14 @@ class TestSignerPolicyIsOneRule:
 
     def test_preflight_fails_local_even_with_retired_flag(self, monkeypatch):
         from deploy_preflight import run_preflight
+        from test_iter237_signer_round9 import EXTERNAL_OK
         for k, v in {"APP_ENV": "production", "RELEASE_SIGNER": "local", "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": "true"}.items():
             monkeypatch.setenv(k, v)
         by = {c["id"]: c for c in run_preflight()["checks"]}
         assert by["release_signer"]["status"] == "fail" and "RETIRED" in by["release_signer"]["current"]
-        monkeypatch.setenv("RELEASE_SIGNER", "external")
+        for k, v in EXTERNAL_OK.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
+        monkeypatch.delenv("ED25519_SIGNING_KEY_B64", raising=False)
         by = {c["id"]: c for c in run_preflight()["checks"]}
         assert by["release_signer"]["status"] == "pass"

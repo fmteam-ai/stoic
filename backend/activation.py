@@ -13,6 +13,7 @@ Flow:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -123,6 +124,43 @@ async def send_existing_account_email(*, recipient: str) -> dict:
         html=f"<pre style='font-family:sans-serif;white-space:pre-wrap'>{text}</pre>",
         text=text,
     )
+
+
+NOTICE_COOLDOWN_SECONDS = 24 * 3600
+
+
+async def queue_existing_account_notice(db, email: str) -> None:
+    """At most ONE notice per normalized email per cooldown; sent in the
+    background so response timing does not depend on delivery."""
+    import asyncio
+    now = datetime.now(timezone.utc)
+    key = hashlib.sha256(email.encode()).hexdigest()
+    res = await db.registration_notices.update_one(
+        {"_id": key, "$or": [{"sent_at": {"$exists": False}},
+                            {"sent_at": {"$lte": (now - timedelta(seconds=NOTICE_COOLDOWN_SECONDS)).isoformat()}}]},
+        {"$set": {"sent_at": now.isoformat()}, "$inc": {"attempts": 1}})
+    if res.matched_count == 0:
+        # either first time (insert) or within cooldown (skip)
+        try:
+            await db.registration_notices.insert_one({"_id": key, "sent_at": now.isoformat(), "attempts": 1})
+        except Exception:  # noqa: BLE001 — exists → within cooldown
+            await db.registration_notices.update_one({"_id": key}, {"$inc": {"suppressed": 1}})
+            return
+    asyncio.get_event_loop().create_task(send_existing_account_email(recipient=email))
+
+
+async def queue_activation_email(*, recipient: str, name: str, token: str) -> str | None:
+    """Background send; returns the dev-only link when email is unconfigured."""
+    import asyncio
+    if not email_is_configured():
+        return (await send_activation_email(recipient=recipient, name=name, token=token)).get("activation_link_dev_only")
+
+    async def _go():
+        res = await send_activation_email(recipient=recipient, name=name, token=token)
+        if not res.get("ok"):
+            logger.warning("activation email not delivered (%s)", res.get("error"))
+    asyncio.get_event_loop().create_task(_go())
+    return None
 
 
 async def send_activation_email(*, recipient: str, name: str, token: str) -> dict:

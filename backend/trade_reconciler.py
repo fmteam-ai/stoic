@@ -18,6 +18,9 @@ caps misfire, manual close buttons get stuck.
 from datetime import datetime, timezone
 from bson import ObjectId
 from database import get_db
+import logging
+
+logger = logging.getLogger("trade_reconciler")
 from ws_manager import manager as ws_manager
 from silent_failures import record_swallow
 
@@ -117,6 +120,17 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
                 "trade_id": str(t["_id"]),
                 **update,
             })
+
+    # round 9 P0-01 — broker reconciliation watermark (feeds the authority
+    # stability window: two fresh reconciliations before READY returns).
+    try:
+        await db.accounts.update_one(
+            {"_id": ObjectId(account_id)},
+            {"$set": {"last_reconciled_at": datetime.now(timezone.utc).isoformat(),
+                      "last_reconciliation_source": source},
+             "$inc": {"reconciliation_seq": 1}})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("reconciliation watermark not stamped for %s: %s", account_id, e)
 
     return {
         "account_id": account_id,

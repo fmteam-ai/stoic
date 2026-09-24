@@ -35,16 +35,40 @@ def test_external_mode_requires_config(monkeypatch):
     monkeypatch.setenv("RELEASE_SIGNER", "external")
     monkeypatch.delenv("RELEASE_SIGNER_URL", raising=False)
     monkeypatch.delenv("RELEASE_SIGNER_TOKEN", raising=False)
+    monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
+    monkeypatch.delenv("ED25519_SIGNING_KEY_B64", raising=False)
     with pytest.raises(RuntimeError, match="RELEASE_SIGNER_URL"):
         release_signing.sign_hex(b"x")
 
 
-def test_external_signer_delegates_and_verifies(monkeypatch):
-    import requests
-    import release_signing
+def _external_env(monkeypatch, release_signing):
+    """Round 9 P1-01: external mode needs the COMPLETE configuration; the pinned
+    public key here is derived from the test-local private key so the fake
+    signer's signatures verify."""
+    import base64
+    from cryptography.hazmat.primitives import serialization
+    pub = release_signing._private_key().public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    priv = os.environ["ED25519_SIGNING_KEY_B64"]
     monkeypatch.setenv("RELEASE_SIGNER", "external")
     monkeypatch.setenv("RELEASE_SIGNER_URL", "https://signer.internal")
+    monkeypatch.setenv("RELEASE_SIGNER_ALLOWED_HOSTS", "signer.internal")
     monkeypatch.setenv("RELEASE_SIGNER_TOKEN", "tok")
+    monkeypatch.setenv("RELEASE_SIGNER_KEY_ID", release_signing.KEY_ID)
+    monkeypatch.setenv("RELEASE_PUBLIC_KEY_B64", base64.b64encode(pub).decode())
+    monkeypatch.setenv("RELEASE_SIGNER_TIMEOUT", "5")
+    monkeypatch.delenv("ED25519_SIGNING_KEY_B64", raising=False)
+    monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
+    return priv
+
+
+def test_external_signer_delegates_and_verifies(monkeypatch):
+    import base64
+    import requests
+    import release_signing
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    priv_b64 = _external_env(monkeypatch, release_signing)
+    signer_key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(priv_b64))
     seen = {}
 
     class _Resp:
@@ -63,7 +87,7 @@ def test_external_signer_delegates_and_verifies(monkeypatch):
         seen["url"] = url
         seen["auth"] = headers["Authorization"]
         data = bytes.fromhex(json["data_hex"])
-        return _Resp(release_signing._private_key().sign(data).hex())
+        return _Resp(signer_key.sign(data).hex())
 
     monkeypatch.setattr(requests, "post", fake_post)
     body = b"iter172-external"
@@ -77,9 +101,7 @@ def test_external_signer_bad_signature_rejected(monkeypatch):
     import pytest
     import requests
     import release_signing
-    monkeypatch.setenv("RELEASE_SIGNER", "external")
-    monkeypatch.setenv("RELEASE_SIGNER_URL", "https://signer.internal")
-    monkeypatch.setenv("RELEASE_SIGNER_TOKEN", "tok")
+    _external_env(monkeypatch, release_signing)
 
     class _Resp:
         def raise_for_status(self):
@@ -100,11 +122,11 @@ def test_local_signing_forbidden_in_production(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("RELEASE_SIGNER", "local")
     monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
-    with pytest.raises(RuntimeError, match="forbidden in production"):
+    with pytest.raises(RuntimeError, match="forbids RELEASE_SIGNER=local"):
         release_signing.sign_hex(b"x")
     # v56: the escape hatch was REMOVED — the override no longer works
     monkeypatch.setenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "true")
-    with pytest.raises(RuntimeError, match="forbidden in production"):
+    with pytest.raises(RuntimeError, match="forbids RELEASE_SIGNER=local"):
         release_signing.sign_hex(b"x")
 
 

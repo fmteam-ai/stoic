@@ -49,3 +49,44 @@ def release_attestation_check(production: bool) -> dict:
         out["note"] = ("attested commit/digest differ from the running process — "
                        "this is not the deployed release truth")
     return out
+
+
+LOCK_PATHS = ("release/rc_lock.json", "../release/rc_lock.json", "/stoic/release/rc_lock.json")
+
+
+def rc_lock_check(production: bool) -> dict:
+    """Round 9 P1-06: the deployed rc_lock must be the CI-authoritative lock for the
+    RUNNING build (commit + backend digest). Developer snapshots never satisfy production."""
+    try:
+        from modules.pamm.strategy_guard import GIT_COMMIT
+    except Exception:  # noqa: BLE001
+        GIT_COMMIT = None
+    running_sha = GIT_COMMIT if GIT_COMMIT and GIT_COMMIT != "unknown" else None
+    running_digest = os.environ.get("STOIC_IMAGE_DIGEST") or None
+    lock = path = None
+    for p in LOCK_PATHS:
+        for base in ("", os.getcwd(), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+            f = os.path.join(base, p) if base else p
+            if os.path.exists(f):
+                path = f
+                try:
+                    lock = json.load(open(f))
+                except Exception:  # noqa: BLE001
+                    lock = None
+                break
+        if path:
+            break
+    out = {"enforced": production, "present": lock is not None, "path": path, "running_build_sha": running_sha}
+    if not lock:
+        out.update(ok=not production, note="no rc_lock.json on this host")
+        return out
+    be = (lock.get("images") or {}).get("backend") or ""
+    out.update(commit=lock.get("git_commit"), authoritative=bool(lock.get("authoritative")),
+               deployment_target=lock.get("deployment_target"),
+               sha_matches_running=bool(running_sha) and lock.get("git_commit") == running_sha,
+               digest_matches_running=bool(running_digest) and running_digest in be)
+    ok = out["authoritative"] and out["sha_matches_running"] and (out["digest_matches_running"] or not production)
+    out["ok"] = ok if production else True
+    if not ok:
+        out["note"] = "rc_lock is not the CI-bound lock for the running build (commit/digest/authoritative mismatch)"
+    return out

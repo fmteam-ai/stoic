@@ -164,6 +164,35 @@ async def admin_set_turnstile(payload: dict, user=Depends(get_current_user)):
             "configured": bool(secret_key() and site_key())}
 
 
+# ─── Admin · Turnstile break-glass (round 9 P1-05) ──────────────────────
+@router.get("/admin/settings/turnstile/break-glass")
+async def admin_break_glass_status(user=Depends(get_current_user)):
+    _admin_only(user)
+    from turnstile_break_glass import status
+    return await status(get_db())
+
+
+@router.post("/admin/settings/turnstile/break-glass")
+async def admin_break_glass_activate(payload: dict, user=Depends(get_current_user)):
+    _admin_only(user)
+    from turnstile_break_glass import activate
+    return await activate(get_db(), payload or {}, user.get("email", ""))
+
+
+@router.post("/admin/settings/turnstile/break-glass/deactivate")
+async def admin_break_glass_deactivate(payload: dict | None = None, user=Depends(get_current_user)):
+    _admin_only(user)
+    from turnstile_break_glass import deactivate
+    return await deactivate(get_db(), user.get("email", ""), str((payload or {}).get("note") or ""))
+
+
+@router.post("/admin/settings/turnstile/break-glass/review")
+async def admin_break_glass_review(payload: dict, user=Depends(get_current_user)):
+    _admin_only(user)
+    from turnstile_break_glass import review
+    return await review(get_db(), user.get("email", ""), str((payload or {}).get("note") or ""))
+
+
 # ─── Admin · Users ───────────────────────────────────────────────────────
 @router.get("/admin/users")
 async def admin_list_users(status: str = "", q: str = "",

@@ -42,7 +42,25 @@ def _hermetic_results(tmp, sha=None, result="PASS", steps=None, signed=True):
     return h
 
 
-def _emit(tmp, junit=JUNIT_OK, pip=PIP_CLEAN, grype=GRYPE_CLEAN, extra=(), hermetic=None):
+def _rc_lock(tmp, sha=None):
+    """CI-bound rc_lock (round 9 P1-06) matching the emitted digests."""
+    d = {"git_commit": sha or SHA, "source_sha": sha or SHA, "authoritative": True,
+         "images": {"backend": "ghcr.io/x/stoic-backend@sha256:" + "1" * 64,
+                    "frontend": "ghcr.io/x/stoic-frontend@sha256:" + "2" * 64},
+         "deployment_target": "production", "signer_key_id": "stoic-release-ed25519-v1",
+         "test_manifest_sha256": "f" * 64}
+    p = tmp / "rc_lock.json"; p.write_text(json.dumps(d))
+    return p
+
+
+def _canary(tmp, result="PASS"):
+    p = tmp / "canary.json"; p.write_text(json.dumps({"result": result, "mode": "external", "key_id": "k"}))
+    return p
+
+
+def _emit(tmp, junit=JUNIT_OK, pip=PIP_CLEAN, grype=GRYPE_CLEAN, extra=(), hermetic=None,
+          rc_lock=None, canary=None):
+    extra = (*extra, "--rc-lock", str(rc_lock or _rc_lock(tmp)), "--signer-canary", str(canary or _canary(tmp)))
     j = tmp / "junit.xml"; j.write_text(junit)
     p = tmp / "pip.json"; p.write_text(json.dumps(pip))
     g = tmp / "grype.json"; g.write_text(json.dumps(grype))
@@ -194,3 +212,17 @@ def test_registry_mode_wiring():
     assert "pull_policy: never" in reg
     rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml")).read()
     assert "--require-images" in rel
+
+
+def test_rc_lock_and_signer_canary_gates(tmp_path):
+    """Round 9: promotion REJECTED unless the rc_lock is bound to this commit +
+    digests and the external signer canary PASSED."""
+    rc, out = _emit(tmp_path)
+    g = json.load(open(out))["gates"]
+    assert rc == 0 and g["rc_lock_bound"] is True and g["signer_canary"] is True
+    rc, out = _emit(tmp_path, rc_lock=_rc_lock(tmp_path, sha="9" * 40))
+    assert rc == 2 and json.load(open(out))["gates"]["rc_lock_bound"] is False
+    rc, out = _emit(tmp_path, canary=_canary(tmp_path, "FAIL"))
+    assert rc == 2 and json.load(open(out))["gates"]["signer_canary"] is False
+    rc, out = _emit(tmp_path, canary=_canary(tmp_path, "SKIPPED"))
+    assert rc == 2

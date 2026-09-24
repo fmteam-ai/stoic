@@ -22,7 +22,7 @@ def _check(cid, label, status, current, required, fix):
             "current": current, "required": required, "fix": fix}
 
 
-def run_preflight() -> dict:
+def run_preflight(check_signer_health: bool = False) -> dict:
     env = os.environ
     checks = []
 
@@ -91,12 +91,6 @@ def run_preflight() -> dict:
         "Set a strong ADMIN_PASSWORD in Secrets — well-known defaults and "
         "passwords under 12 characters refuse boot in production."))
 
-    ed = env.get("ED25519_SIGNING_KEY_B64") or ""
-    checks.append(_check(
-        "ed25519", "ED25519_SIGNING_KEY_B64", "pass" if ed else "fail",
-        "set (" + _mask(ed) + ")" if ed else "(not set)", "set",
-        "Required for release manifest signing — refuses boot when missing."))
-
     # security audit #7 SEC-001 — key separation (mirrors the boot guard)
     jwt = env.get("JWT_SECRET") or ""
     for cid, name in (("order_auth_key", "ORDER_AUTH_SECRET"), ("ledger_anchor_key", "LEDGER_ANCHOR_KEY")):
@@ -117,23 +111,33 @@ def run_preflight() -> dict:
         "secrets_vault refuses to run in production without its own master "
         "key (broker credentials / command keys are encrypted with it)."))
 
-    # audit round 8 P1-6 — the SAME validator the boot guard and signer use
-    from release_signing import production_signer_violation
-    _viol = production_signer_violation(env)
-    if not _viol:
-        s_status, s_cur = "pass", "external"
-    elif "RETIRED" in _viol:
-        s_status, s_cur = "fail", ("local (RELEASE_SIGNER_ALLOW_LOCAL_IN_"
-                                   "PROD is RETIRED — remove it; KMS/HSM required to sign in prod)")
-    else:
-        s_status, s_cur = "fail", "local (KMS/HSM required to sign in prod)"
+    # audit round 9 P1-01 — the SAME complete validator the boot guard and signer use
+    from release_signing import signer_config_violations, signer_health, _mode as _signer_mode
+    _viols = signer_config_violations(env)
+    _mode = _signer_mode(env)
     checks.append(_check(
-        "release_signer", "RELEASE_SIGNER", s_status, s_cur,
-        "external (KMS/HSM) — local signing is never permitted in "
-        "production",
-        "BLOCKS production boot (review P1-9): the API refuses to start "
-        "with RELEASE_SIGNER=local when APP_ENV=production. Configure "
-        "RELEASE_SIGNER=external with RELEASE_SIGNER_URL/TOKEN."))
+        "release_signer", "RELEASE_SIGNER configuration",
+        "pass" if not _viols else "fail",
+        _mode if not _viols else f"{_mode}: " + " | ".join(_viols),
+        "external (KMS/HSM) with https URL in RELEASE_SIGNER_ALLOWED_HOSTS, RELEASE_SIGNER_TOKEN, "
+        "pinned RELEASE_PUBLIC_KEY_B64, RELEASE_SIGNER_KEY_ID, RELEASE_SIGNER_TIMEOUT 1-30 s; "
+        "NO ED25519_SIGNING_KEY_B64 in the API",
+        "BLOCKS production boot: the API refuses to start unless the signer configuration is "
+        "complete and the private key is absent (release_signing.signer_config_violations)."))
+    checks.append(_check(
+        "ed25519", "ED25519_SIGNING_KEY_B64",
+        "pass" if not (env.get("ED25519_SIGNING_KEY_B64") or "").strip() else "fail",
+        "absent" if not (env.get("ED25519_SIGNING_KEY_B64") or "").strip() else "PRESENT",
+        "absent in production (external signer holds the key)",
+        "Remove the private key from the API environment; sign via RELEASE_SIGNER=external."))
+    if check_signer_health and not _viols and _mode == "external":
+        h = signer_health(env)
+        checks.append(_check(
+            "release_signer_health", "External signer identity/health",
+            "pass" if h["ok"] else "fail",
+            "ok" if h["ok"] else h.get("error", "unreachable"),
+            "GET {RELEASE_SIGNER_URL}/health → ok + key_id + public_key_b64 matching the pinned identity",
+            "Signer unreachable or identity mismatch blocks attestations and promotion (read-only service health is unaffected)."))
 
     workers = env.get("BACKGROUND_WORKERS_IN_PROCESS")
     checks.append(_check(

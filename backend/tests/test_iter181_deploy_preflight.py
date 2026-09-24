@@ -25,9 +25,15 @@ GOOD_ENV = {
     "RATE_LIMIT_BYPASS_TOKEN": "",
     "ADMIN_MFA_ENFORCED": "true",
     "ADMIN_PASSWORD": "TestDummy-Pass-2026-NotReal",  # dummy, not a credential
-    "ED25519_SIGNING_KEY_B64": "testkey-testkey-testkey",  # dummy, not a key
+    "ED25519_SIGNING_KEY_B64": None,  # round 9 P1-01: private key must be ABSENT in production
     "KEY_VAULT_MASTER": "vault-master-material",
     "RELEASE_SIGNER": "external",
+    "RELEASE_SIGNER_URL": "https://signer.internal.example",
+    "RELEASE_SIGNER_ALLOWED_HOSTS": "signer.internal.example",
+    "RELEASE_SIGNER_TOKEN": "ref:kms/release-signer",
+    "RELEASE_SIGNER_KEY_ID": "stoic-release-ed25519-v1",
+    "RELEASE_PUBLIC_KEY_B64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",  # 32 zero bytes, dummy
+    "RELEASE_SIGNER_TIMEOUT": "10",
     "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": None,
     "BACKGROUND_WORKERS_IN_PROCESS": "true",
 }
@@ -63,7 +69,7 @@ def test_preflight_flags_each_boot_blocker(monkeypatch):
         "rate_limit_bypass_token": {"RATE_LIMIT_BYPASS_TOKEN": "leaked"},
         "admin_mfa": {"ADMIN_MFA_ENFORCED": "false"},
         "admin_password": {"ADMIN_PASSWORD": "admin" + "123"},   # deliberately split: known-default probe
-        "ed25519": {"ED25519_SIGNING_KEY_B64": None},
+        "ed25519": {"ED25519_SIGNING_KEY_B64": "leaked-private-key"},
         "key_vault": {"KEY_VAULT_MASTER": None},
     }
     for cid, override in cases.items():
@@ -138,7 +144,7 @@ def test_preflight_no_secret_values_leaked(monkeypatch):
     blob = json.dumps(run_preflight())
     assert GOOD_ENV["ADMIN_PASSWORD"] not in blob
     assert GOOD_ENV["KEY_VAULT_MASTER"] not in blob
-    assert GOOD_ENV["ED25519_SIGNING_KEY_B64"] not in blob
+    assert GOOD_ENV["RELEASE_SIGNER_TOKEN"] not in blob
 
 
 def test_preflight_endpoint_admin_only():

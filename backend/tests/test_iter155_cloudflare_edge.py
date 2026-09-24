@@ -60,7 +60,8 @@ def test_turnstile_config_public_and_no_secret_leak():
     r = requests.get(f"{API}/auth/turnstile-config", timeout=TIMEOUT)
     assert r.status_code == 200
     body = r.json()
-    assert set(body.keys()) == {"enabled", "site_key"}
+    assert {"state", "code", "site_key", "degraded_login"} <= set(body.keys())
+    assert body["state"] in ("disabled", "ready", "misconfigured", "provider_degraded", "break_glass")
     secret = os.environ.get("TURNSTILE_SECRET_KEY", "")
     assert secret and secret not in r.text
 
@@ -78,7 +79,7 @@ def test_turnstile_admin_toggle_and_login_gate():
 
         # public config now surfaces the site key
         cfg = requests.get(f"{API}/auth/turnstile-config", timeout=TIMEOUT).json()
-        assert cfg["enabled"] is True
+        assert cfg["state"] == "ready"
         assert cfg["site_key"] == os.environ["TURNSTILE_SITE_KEY"]
 
         # login WITHOUT a token → 403 turnstile_required (fail-closed)

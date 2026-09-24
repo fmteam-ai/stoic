@@ -1,20 +1,27 @@
-"""Cloudflare Turnstile server-side verification gate (iter-155).
+"""Cloudflare Turnstile server-side gate — FAIL-CLOSED. Single source of truth
+for the state machine documented in docs/TURNSTILE.md (audit round 9).
 
-Admin-toggled via db.platform_state {_id:"turnstile"}. When enabled AND
-TURNSTILE_SECRET_KEY is configured, login / register / forgot-password
-require a valid single-use Turnstile token (field: turnstile_token).
+Public state (GET /api/auth/turnstile-config):
+    disabled | ready | misconfigured | provider_degraded | break_glass
+Verify outcome (per request):
+    ok | client_token_invalid | provider_unavailable | configuration_invalid
+Gate decision modes returned to handlers:
+    verified | policy_disabled | force_disabled | break_glass | degraded_otp_required | deny
 
-Policy: fail-CLOSED on missing/invalid/expired/duplicate tokens (user-side
-failures); fail-OPEN with a logged warning ONLY when Cloudflare's siteverify
-infrastructure is unreachable (network error / 5xx) — matches the existing
-Audit round 8 P1-1: FAIL-CLOSED. Provider outage, configuration drift and
-client token faults are DISTINCT states with distinct audit events.
+Rules: a missing/mismatched action or hostname claim is a client-token fault;
+configuration_invalid is always closed; provider_unavailable is closed except
+login with TURNSTILE_LOGIN_DEGRADED_POLICY=otp_required, which hands the login
+handler a typed decision so it can authenticate the password and then demand a
+bound one-time code (degraded_login_otp). There is no fail-open path.
 """
+import hashlib
 import logging
 import os
+import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 
 import httpx
 from fastapi import HTTPException
@@ -23,18 +30,16 @@ logger = logging.getLogger("turnstile")
 
 SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 VERIFY_TIMEOUT_SECONDS = 4.0
+PROVIDER_DEGRADED_WINDOW_SECONDS = 60
+CONSUMED_TOKEN_TTL_SECONDS = 600
+ACTIONS = ("login", "register", "password_reset")
 
-# Cloudflare siteverify error codes caused by the CLIENT's token — always
-# rejected. Anything else (internal-error, network failure, 5xx) is treated
-# as a Cloudflare-side outage → provider_unavailable (fail-closed).
 _CLIENT_FAULT_CODES = {
     "missing-input-response", "invalid-input-response",
     "timeout-or-duplicate", "invalid-widget-id", "bad-request",
 }
-
-# In-memory ring of the most recent rejections for the /ops/turnstile-diag
-# endpoint — lets an admin see the exact Cloudflare error-codes in prod.
 _RECENT_REJECTIONS: deque = deque(maxlen=20)
+_LAST_PROVIDER_FAILURE_MONO: float | None = None
 
 
 def secret_key() -> str:
@@ -43,6 +48,17 @@ def secret_key() -> str:
 
 def site_key() -> str:
     return (os.environ.get("TURNSTILE_SITE_KEY") or "").strip()
+
+
+def is_production() -> bool:
+    return os.environ.get("APP_ENV", "").strip().lower() == "production"
+
+
+def max_token_age_seconds() -> int:
+    try:
+        return max(30, int(os.environ.get("TURNSTILE_MAX_TOKEN_AGE_SECONDS", "300")))
+    except ValueError:
+        return 300
 
 
 async def is_enabled(db) -> bool:
@@ -61,28 +77,88 @@ async def set_enabled(db, enabled: bool, actor_email: str = "") -> None:
 
 
 def _classify(codes: list, http_status: int | None, transport_error: bool) -> str:
-    """Three DISTINCT failure states (audit round 8 P1-1) — never one blob:
-    configuration_invalid · provider_unavailable · client_token_invalid."""
     if transport_error or (http_status is not None and http_status >= 500):
         return "provider_unavailable"
     if any(c in ("missing-input-secret", "invalid-input-secret", "bad-request") for c in codes):
         return "configuration_invalid"
     if any(c in _CLIENT_FAULT_CODES for c in codes):
         return "client_token_invalid"
-    return "provider_unavailable" if not codes else "configuration_invalid"   # unknown codes = config drift
+    return "provider_unavailable" if not codes else "configuration_invalid"
 
 
 def expected_hostnames() -> set:
     return {h.strip().lower() for h in os.environ.get("TURNSTILE_EXPECTED_HOSTNAMES", "").split(",") if h.strip()}
 
 
+def _mark_provider_failure() -> None:
+    global _LAST_PROVIDER_FAILURE_MONO
+    _LAST_PROVIDER_FAILURE_MONO = time.monotonic()
+
+
+def provider_recently_degraded() -> bool:
+    return (_LAST_PROVIDER_FAILURE_MONO is not None
+            and time.monotonic() - _LAST_PROVIDER_FAILURE_MONO < PROVIDER_DEGRADED_WINDOW_SECONDS)
+
+
+def _token_age_seconds(challenge_ts: str | None) -> float | None:
+    if not challenge_ts:
+        return None
+    try:
+        ts = datetime.fromisoformat(challenge_ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc) - ts).total_seconds()
+
+
+def bind_claims(body: dict, action: str | None) -> tuple[bool, list]:
+    """Strict claim binding on a successful siteverify body (round 9 P1-02):
+    expected action ⇒ exact equality (missing claim fails); non-empty hostname
+    allowlist ⇒ non-empty hostname contained in it; freshness ⇒ challenge_ts
+    within TURNSTILE_MAX_TOKEN_AGE_SECONDS."""
+    codes: list = []
+    cf_action = body.get("action") or None
+    hostname = (body.get("hostname") or "").lower() or None
+    if action:
+        if not cf_action:
+            codes.append("action-missing")
+        elif cf_action != action:
+            codes.append("action-mismatch")
+    exp = expected_hostnames()
+    if exp:
+        if not hostname:
+            codes.append("hostname-missing")
+        elif hostname not in exp:
+            codes.append("hostname-mismatch")
+    age = _token_age_seconds(body.get("challenge_ts"))
+    if age is not None and (age > max_token_age_seconds() or age < -60):
+        codes.append("token-stale")
+    return (not codes), codes
+
+
+async def _consume_token_once(db, token: str, action: str | None) -> bool:
+    """Local single-use ledger (defence in depth over Cloudflare's own
+    timeout-or-duplicate) — a token verified for one surface can never be
+    replayed on another. Stores a hash, never the token."""
+    if db is None or not hasattr(db, "turnstile_consumed_tokens"):
+        return True
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    now = datetime.now(timezone.utc)
+    try:
+        await db.turnstile_consumed_tokens.insert_one({
+            "_id": digest, "action": action, "at": now.isoformat(),
+            "expires_at": now + timedelta(seconds=CONSUMED_TOKEN_TTL_SECONDS)})
+        return True
+    except Exception as e:  # noqa: BLE001 — DuplicateKeyError or driver error → replay/deny
+        logger.warning("turnstile token replay refused (%s)", type(e).__name__)
+        return False
+
+
 async def verify_token(token: str, remote_ip: str | None = None, action: str | None = None) -> dict:
-    """Calls Cloudflare siteverify. Returns {ok, state, error_codes, hostname, action}.
-    state ∈ ok | client_token_invalid | provider_unavailable | configuration_invalid.
-    `outage` is kept as an alias of provider_unavailable for older callers."""
-    def _r(ok, state, codes, hostname=None, act=None):
+    """Calls Cloudflare siteverify and applies strict claim binding.
+    Returns {ok, state, error_codes, hostname, action, challenge_ts}."""
+    def _r(ok, state, codes, hostname=None, act=None, ts=None):
         return {"ok": ok, "state": state, "outage": state == "provider_unavailable",
-                "error_codes": codes, "hostname": hostname, "action": act}
+                "error_codes": codes, "hostname": hostname, "action": act, "challenge_ts": ts}
     if not token:
         return _r(False, "client_token_invalid", ["missing-input-response"])
     data = {"secret": secret_key(), "response": token, "idempotency_key": str(uuid.uuid4())}
@@ -92,35 +168,32 @@ async def verify_token(token: str, remote_ip: str | None = None, action: str | N
         async with httpx.AsyncClient(timeout=VERIFY_TIMEOUT_SECONDS) as client:
             resp = await client.post(SITEVERIFY_URL, data=data)
     except httpx.HTTPError as e:
-        logger.warning("turnstile siteverify unreachable: %s", e)
+        logger.warning("turnstile siteverify unreachable: %s", type(e).__name__)
+        _mark_provider_failure()
         return _r(False, "provider_unavailable", ["network-error"])
     if resp.status_code != 200:
-        logger.warning("turnstile siteverify HTTP %s", resp.status_code)
-        return _r(False, _classify([], resp.status_code, False), [f"http-{resp.status_code}"])
+        state = _classify([], resp.status_code, False)
+        if state == "provider_unavailable":
+            _mark_provider_failure()
+        return _r(False, state, [f"http-{resp.status_code}"])
     body = resp.json()
     codes = body.get("error-codes") or []
     hostname = (body.get("hostname") or "").lower() or None
     cf_action = body.get("action") or None
+    ts = body.get("challenge_ts")
     if body.get("success"):
-        # server-side binding of the token to OUR widget/action/hostname
-        if action and cf_action and cf_action != action:
-            return _r(False, "client_token_invalid", ["action-mismatch"], hostname, cf_action)
-        exp = expected_hostnames()
-        if exp and hostname and hostname not in exp:
-            return _r(False, "client_token_invalid", ["hostname-mismatch"], hostname, cf_action)
-        return _r(True, "ok", [], hostname, cf_action)
+        ok, bind_codes = bind_claims(body, action)
+        if not ok:
+            return _r(False, "client_token_invalid", bind_codes, hostname, cf_action, ts)
+        return _r(True, "ok", [], hostname, cf_action, ts)
     state = _classify(codes, None, False)
+    if state == "provider_unavailable":
+        _mark_provider_failure()
     if state == "configuration_invalid":
-        logger.error("turnstile CONFIGURATION invalid (site/secret pair or widget): %s", codes)
-    return _r(False, state, codes, hostname, cf_action)
+        logger.error("turnstile CONFIGURATION invalid: %s", codes)
+    return _r(False, state, codes, hostname, cf_action, ts)
 
 
-# per-action degradation policy when the PROVIDER is unavailable.
-#   closed  → refuse (registration, password reset — always)
-#   login   → env TURNSTILE_LOGIN_DEGRADED_POLICY: closed (default) | otp_required
-#             otp_required lets the login proceed ONLY into the email-OTP step-up path
-#             (login_otp) — never an unconditional bypass. configuration_invalid is
-#             ALWAYS closed: a bad secret is our fault and must page us, not open the door.
 def degraded_policy(action: str) -> str:
     if action != "login":
         return "closed"
@@ -134,82 +207,138 @@ def _audit(event: str, **fields) -> None:
     logger.warning("turnstile %s %s", event, {k: v for k, v in fields.items() if k != "ip"})
 
 
-def _break_glass() -> dict | None:
-    """Time-limited, audited break-glass. TURNSTILE_BREAK_GLASS_UNTIL=<ISO ts>
-    (max 4 h ahead) + TURNSTILE_BREAK_GLASS_REASON. The old unbounded
-    TURNSTILE_FORCE_DISABLE is REFUSED in production."""
-    until = os.environ.get("TURNSTILE_BREAK_GLASS_UNTIL", "").strip()
-    if not until:
-        return None
-    try:
-        exp = datetime.fromisoformat(until.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    now = datetime.now(timezone.utc)
-    if exp <= now or (exp - now).total_seconds() > 4 * 3600:
-        return None
-    return {"until": exp.isoformat(), "reason": os.environ.get("TURNSTILE_BREAK_GLASS_REASON", "") or "unspecified"}
-
-
 def _fail(code: str, message: str, retryable: bool, state: str, status: int = 403) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message, "retryable": retryable, "state": state})
 
 
-async def require_turnstile(db, token: str | None, remote_ip: str | None,
-                            action: str = "login") -> None:
-    """Gate for sensitive auth actions. FAIL-CLOSED (audit round 8 P1-1):
-    provider outage → closed (login may degrade to otp_required by policy);
-    configuration invalid → closed + critical audit; client token invalid →
-    explicit retryable 403. Break-glass is time-limited and audited."""
-    is_prod = os.environ.get("APP_ENV", "").strip().lower() == "production"
+@dataclass
+class GateDecision:
+    allow: bool
+    mode: str                 # verified|policy_disabled|force_disabled|break_glass|degraded_otp_required|deny
+    state: str                # ok|disabled|client_token_invalid|provider_unavailable|configuration_invalid
+    error: HTTPException | None = None
+    error_codes: list = field(default_factory=list)
+    reason: str | None = None
+
+    @property
+    def degraded(self) -> bool:
+        return self.mode == "degraded_otp_required"
+
+
+def configuration_state() -> str:
+    """ready | misconfigured (policy-independent view of the env keys)."""
+    return "ready" if (secret_key() and site_key()) else "misconfigured"
+
+
+async def public_state(db) -> dict:
+    """Explicit public state — never a silent enabled=false on error. No secrets."""
+    from turnstile_break_glass import active as bg_active
+    enabled = await is_enabled(db)
+    if not enabled:
+        return {"state": "disabled", "code": "policy_disabled", "site_key": None,
+                "degraded_login": degraded_policy("login")}
+    bg = await bg_active(db)
+    if bg:
+        return {"state": "break_glass", "code": "break_glass_active",
+                "site_key": site_key() if configuration_state() == "ready" else None,
+                "scope": bg["scope"], "until": bg["until"], "degraded_login": degraded_policy("login")}
+    if configuration_state() == "misconfigured":
+        return {"state": "misconfigured", "code": "keys_incomplete", "site_key": None,
+                "degraded_login": "closed"}
+    if provider_recently_degraded():
+        return {"state": "provider_degraded", "code": "provider_unavailable", "site_key": site_key(),
+                "degraded_login": degraded_policy("login")}
+    return {"state": "ready", "code": "ready", "site_key": site_key(),
+            "degraded_login": degraded_policy("login")}
+
+
+async def evaluate(db, token: str | None, remote_ip: str | None, action: str = "login",
+                   request_id: str | None = None) -> GateDecision:
+    """Typed gate decision (round 9 P1-03). Never raises; callers either
+    `raise decision.error` or branch on `decision.mode`."""
+    if action not in ACTIONS:
+        return GateDecision(False, "deny", "configuration_invalid",
+                            _fail("turnstile_unavailable", "Unknown verification surface.", False, "configuration_invalid", 503))
     if os.environ.get("TURNSTILE_FORCE_DISABLE", "").strip().lower() == "true":
-        if is_prod:
+        if is_production():
             _audit("force_disable_refused", action=action, ip=remote_ip)
         else:
             logger.warning("turnstile FORCE-DISABLED (non-production env, action=%s)", action)
-            return
-    bg = _break_glass()
-    if bg:
-        _audit("break_glass_bypass", action=action, ip=remote_ip, until=bg["until"], reason=bg["reason"])
-        return
-    if not secret_key():
-        if is_prod and await is_enabled(db):
-            _audit("configuration_invalid", action=action, ip=remote_ip, error_codes=["secret-not-configured"])
-            raise _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Please try again shortly.", True, "configuration_invalid", 503)
-        return
+            return GateDecision(True, "force_disabled", "disabled")
     if not await is_enabled(db):
-        return
+        return GateDecision(True, "policy_disabled", "disabled")
+    from turnstile_break_glass import active as bg_active, record_bypass
+    bg = await bg_active(db)
+    if bg and action in bg["scope"]:
+        await record_bypass(db, bg, action=action, remote_ip=remote_ip, request_id=request_id)
+        _audit("break_glass_bypass", action=action, ip=remote_ip, until=bg["until"], incident_id=bg["incident_id"])
+        return GateDecision(True, "break_glass", "disabled", reason=bg["incident_id"])
+    if configuration_state() == "misconfigured":
+        _audit("configuration_invalid", action=action, ip=remote_ip, error_codes=["keys-incomplete"])
+        return GateDecision(False, "deny", "configuration_invalid",
+                            _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Our team has been alerted.", True, "configuration_invalid", 503),
+                            ["keys-incomplete"])
     result = await verify_token((token or "").strip(), remote_ip, action=action)
     if result["ok"]:
-        return
+        if not await _consume_token_once(db, (token or "").strip(), action):
+            _audit("client_token_invalid", action=action, ip=remote_ip, error_codes=["token-replayed"])
+            return GateDecision(False, "deny", "client_token_invalid",
+                                _fail("turnstile_required", "Human verification failed. Please complete the challenge and try again.", True, "client_token_invalid", 403),
+                                ["token-replayed"])
+        return GateDecision(True, "verified", "ok")
     state = result["state"]
     _audit(state, action=action, ip=remote_ip, error_codes=result["error_codes"],
            hostname=result.get("hostname"), cf_action=result.get("action"))
     if state == "provider_unavailable":
-        pol = degraded_policy(action)
-        if pol == "otp_required":
-            raise _fail("turnstile_degraded_otp_required",
-                        "Human verification is unavailable; sign in with the emailed one-time code instead.", True, state, 503)
-        raise _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Please try again in a moment.", True, state, 503)
+        if degraded_policy(action) == "otp_required":
+            return GateDecision(True, "degraded_otp_required", state, None, result["error_codes"], "provider_unavailable")
+        return GateDecision(False, "deny", state,
+                            _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Please try again in a moment.", True, state, 503),
+                            result["error_codes"])
     if state == "configuration_invalid":
-        raise _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Our team has been alerted.", True, state, 503)
-    raise _fail("turnstile_required", "Human verification failed. Please complete the challenge and try again.", True, state, 403)
+        return GateDecision(False, "deny", state,
+                            _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Our team has been alerted.", True, state, 503),
+                            result["error_codes"])
+    return GateDecision(False, "deny", state,
+                        _fail("turnstile_required", "Human verification failed. Please complete the challenge and try again.", True, state, 403),
+                        result["error_codes"])
+
+
+async def require_turnstile(db, token: str | None, remote_ip: str | None,
+                            action: str = "login") -> None:
+    """Raise-or-pass wrapper for surfaces that never degrade (register,
+    password_reset). A degraded decision is a DENIAL here."""
+    d = await evaluate(db, token, remote_ip, action)
+    if d.error is not None:
+        raise d.error
+    if d.degraded:
+        raise _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Please try again in a moment.", True, d.state, 503)
+
+
+def production_config_violation(policy_enabled: bool) -> str | None:
+    """Boot/readiness rule: production + policy enabled ⇒ both keys present."""
+    if is_production() and policy_enabled and configuration_state() == "misconfigured":
+        return ("Turnstile policy is ENABLED but TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY "
+                "are incomplete — refusing to serve an auth control that cannot verify.")
+    return None
 
 
 async def diagnose(db) -> dict:
-    """Admin diagnostics: is the secret key valid, and why were recent
-    tokens rejected? Probes siteverify with a dummy token — Cloudflare
-    answers invalid-input-response when the SECRET is fine, or
-    invalid-input-secret when the secret itself is wrong/mismatched."""
+    from turnstile_break_glass import status as bg_status
     sk = secret_key()
     out = {
         "enabled": await is_enabled(db),
-        "force_disabled": os.environ.get(
-            "TURNSTILE_FORCE_DISABLE", "").strip().lower() == "true",
+        "public_state": await public_state(db),
+        "force_disabled": os.environ.get("TURNSTILE_FORCE_DISABLE", "").strip().lower() == "true",
         "site_key_set": bool(site_key()),
         "site_key_prefix": site_key()[:14] if site_key() else None,
         "secret_key_set": bool(sk),
         "recent_rejections": list(_RECENT_REJECTIONS),
+        "expected_hostnames": sorted(expected_hostnames()),
+        "max_token_age_seconds": max_token_age_seconds(),
+        "login_degraded_policy": degraded_policy("login"),
+        "break_glass": await bg_status(db),
+        "build_sha": os.environ.get("GIT_SHA") or None,
     }
     if not sk:
         out["secret_check"] = "not_configured"
@@ -219,17 +348,11 @@ async def diagnose(db) -> dict:
     out["probe_error_codes"] = codes
     if any(c in ("missing-input-secret", "invalid-input-secret") for c in codes):
         out["secret_check"] = "INVALID_SECRET"
-        out["hint"] = ("TURNSTILE_SECRET_KEY is wrong or belongs to a "
-                       "different widget than TURNSTILE_SITE_KEY. Copy both "
-                       "keys from the SAME widget in the Cloudflare "
-                       "Turnstile dashboard.")
+        out["hint"] = ("TURNSTILE_SECRET_KEY is wrong or belongs to a different widget than "
+                       "TURNSTILE_SITE_KEY. Copy both keys from the SAME widget.")
     elif probe["outage"]:
         out["secret_check"] = "cloudflare_unreachable"
     else:
         out["secret_check"] = "secret_ok"
     out["state"] = probe["state"]
-    out["expected_hostnames"] = sorted(expected_hostnames())
-    out["login_degraded_policy"] = degraded_policy("login")
-    out["break_glass"] = _break_glass()
-    out["build_sha"] = os.environ.get("GIT_SHA") or None
     return out

@@ -74,8 +74,12 @@ already cover login lockout (5 fails/10 min), register (30/h), pw-reset
    `TURNSTILE_SECRET_KEY` (already in backend/.env for this build).
 3. In the app: `/admin/users` → "Cloudflare Turnstile" → ENABLE. Login,
    registration and password-reset now require the challenge; the backend
-   verifies every token server-side (single-use, 300s TTL) and fails closed
-   on invalid tokens, failing open only if Cloudflare itself is down.
+   verifies every token server-side (single-use, action + hostname bound,
+   300s freshness) and is **fail-closed in every state** — a Cloudflare
+   outage blocks the surface (login may fall back to an emailed one-time
+   code only with `TURNSTILE_LOGIN_DEGRADED_POLICY=otp_required`). Also set
+   `TURNSTILE_EXPECTED_HOSTNAMES=stoicaibot.com,www.stoicaibot.com`.
+   Full state machine + break-glass runbook: `docs/TURNSTILE.md`.
 
 ## 6. Zero Trust Access for admin surfaces (free ≤ 50 users)
 Zero Trust dashboard → Access → Applications → Add → Self-hosted:

@@ -539,6 +539,11 @@ class PaperEngine(ExecutionEngine):
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+        # round 9 P0-01 — the canonical decision gates EVERY new-order path.
+        from trading_authority import gate_or_block
+        _deny = await gate_or_block(db, account, "paper_engine")
+        if _deny:
+            return _deny
         # v62.3 — the PAMM Strategy Guard applies to EVERY engine: a paper
         # master account is governed identically to live (no alternate
         # PAMM route escapes the guard).

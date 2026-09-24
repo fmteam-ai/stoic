@@ -34,7 +34,7 @@ export default function Register() {
             setRegistered({
                 email,
                 activationLinkDevOnly: data?.activation_link_dev_only || null,
-                emailDeliveryError: !data?.activation_email_sent ? (data?.activation_email_error || null) : null,
+                emailDeliveryError: null,
             });
         } catch (err) {
             // Single-use token was consumed by the failed attempt — reset.

@@ -201,6 +201,105 @@ async def position_truth_domain(db, account: dict | None = None) -> dict:
     return {"level": "FULL", "reason": "positions reconciled"}
 
 
+# ── round 9 P0-01/P0-02 domains ───────────────────────────────────────────
+async def certification_domain(db, account: dict | None = None) -> dict:
+    if account is None:
+        return {"level": "FULL", "reason": "platform scope"}
+    st = str(account.get("certification_status") or "").upper()
+    if st in ("FAILED", "REVOKED"):
+        return {"level": "LOCKED", "reason": f"account certification {st}"}
+    progs = await _bound_programs(db, account)
+    if progs:
+        revoked = await db.strategy_cert_campaigns.count_documents(
+            {"program_id": {"$in": [p["program_id"] for p in progs]},
+             "certification_status": "REVOKED"})
+        if revoked:
+            return {"level": "CLOSE_ONLY", "reason": f"{revoked} bound strategy certification(s) REVOKED"}
+    return {"level": "FULL", "reason": "certification intact"}
+
+
+async def bot_health_domain(db, account: dict | None = None) -> dict:
+    q: dict = {"trading_blocked": True}
+    if account is not None:
+        if not account.get("trading_blocked"):
+            return {"level": "FULL", "reason": "no breaker halt"}
+        return {"level": "CLOSE_ONLY",
+                "reason": f"Bot Health CRITICAL — broker-reject breaker halted account "
+                          f"({account.get('block_retcode_label') or account.get('block_reason') or 'halt'})"}
+    n = await db.accounts.count_documents({**q, "trading_enabled": True})
+    if n:
+        return {"level": "CLOSE_ONLY", "reason": f"Bot Health CRITICAL — {n} enabled account(s) breaker-halted"}
+    return {"level": "FULL", "reason": "no breaker halts"}
+
+
+async def performance_truth_domain(db, account: dict | None = None) -> dict:
+    """Unreconciled performance (closed trades with estimated/unknown P&L past
+    grace) is not truth — exposure must not grow on unverified numbers."""
+    q: dict = {"status": "closed", "closed_at": {"$lte": _ago(900)},
+               "$or": [{"pnl_estimated": True}, {"pnl_unknown": True}]}
+    if account is not None:
+        if account.get("mode") == "paper":
+            return {"level": "FULL", "reason": "paper account"}
+        q["account_id"] = _acct_id(account)
+    else:
+        return {"level": "FULL", "reason": "account-bound domain — evaluated per account"}
+    n = await db.trades.count_documents(q)
+    if n:
+        return {"level": "CLOSE_ONLY", "reason": f"{n} closed trade(s) with unreconciled P&L (>15m)"}
+    return {"level": "FULL", "reason": "performance reconciled"}
+
+
+STABILITY_RECONCILIATIONS = 2
+
+
+async def recovery_domain(db, account: dict | None = None) -> dict:
+    """After blockers clear, READY returns only after two fresh broker
+    reconciliations AND the stability window (AUTHORITY_STABILITY_WINDOW_SECONDS)."""
+    if account is None or account.get("mode") == "paper" or "_id" not in account:
+        return {"level": "FULL", "reason": "no recovery tracking in this scope"}
+    from canonical_decision import stability_window_seconds
+    doc = await db.authority_stability.find_one({"account_id": _acct_id(account)})
+    if not doc or not doc.get("restricted_at"):
+        return {"level": "FULL", "reason": "no recent restriction"}
+    try:
+        since = (datetime.now(timezone.utc) - datetime.fromisoformat(doc["restricted_at"])).total_seconds()
+    except ValueError:
+        since = 0
+    recon = int(account.get("reconciliation_seq") or 0) - int(doc.get("restricted_seq") or 0)
+    window = stability_window_seconds()
+    if recon >= STABILITY_RECONCILIATIONS and since >= window:
+        await db.authority_stability.delete_one({"account_id": _acct_id(account)})
+        return {"level": "FULL", "reason": "recovered — stability window satisfied"}
+    return {"level": "CLOSE_ONLY",
+            "reason": f"recovering: {recon}/{STABILITY_RECONCILIATIONS} fresh reconciliations, "
+                      f"{int(since)}/{window}s stability window"}
+
+
+async def inventory_domain(db, account: dict | None = None) -> dict:
+    """P0-02 — exact runtime inventory (expected/enabled/bots) must match the
+    approved configuration; unapproved drift blocks new entries platform-wide."""
+    from inventory_projection import projection
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"})
+    if not exp:
+        return {"level": "FULL", "reason": "no inventory expectation declared"}
+    proj = await projection(db, exp.get("scope_user_id"))
+    if proj["blocking"]:
+        return {"level": "CLOSE_ONLY", "reason": "; ".join(proj["violations"][:3])}
+    return {"level": "FULL", "reason": "inventory matches approved configuration"}
+
+
+async def _track_stability(db, account: dict | None, domains: dict) -> None:
+    if account is None or "_id" not in account or account.get("mode") == "paper":
+        return
+    restricted = [k for k, v in domains.items() if k != "recovery"
+                  and level_severity(v["level"]) >= level_severity("CLOSE_ONLY")]
+    if restricted:
+        await db.authority_stability.update_one(
+            {"account_id": _acct_id(account)},
+            {"$set": {"restricted_at": _now(), "restricted_seq": int(account.get("reconciliation_seq") or 0),
+                      "domains": restricted}}, upsert=True)
+
+
 _DOMAINS = {
     "platform": platform_domain,
     "broker": broker_domain,
@@ -210,6 +309,11 @@ _DOMAINS = {
     "position_truth": position_truth_domain,
     "infrastructure": infrastructure_domain,
     "account": account_domain,
+    "certification": certification_domain,
+    "bot_health": bot_health_domain,
+    "performance_truth": performance_truth_domain,
+    "recovery": recovery_domain,
+    "inventory": inventory_domain,
 }
 # Typed registry contract (audit v5 P0-1): every domain is
 # `async def domain(db, account=None) -> dict` and declares its scope.
@@ -219,7 +323,10 @@ DOMAIN_SCOPE = {"platform": "platform_global", "broker": "account_bound",
                 "risk": "account_bound", "pamm": "account_bound",
                 "execution": "account_bound",
                 "position_truth": "account_bound",
-                "infrastructure": "account_bound", "account": "account_bound"}
+                "infrastructure": "account_bound", "account": "account_bound",
+                "certification": "account_bound", "bot_health": "account_bound",
+                "performance_truth": "account_bound", "recovery": "account_bound",
+                "inventory": "platform_global"}
 # domains whose FRESH/FULL state is a precondition for RESIZING (REDUCED)
 HARD_TRUTH_DOMAINS = ("position_truth", "broker", "execution")
 
@@ -257,6 +364,10 @@ async def compute_authority(db, account: dict | None = None) -> dict:
     effective = worst(*(d["level"] for d in domains.values()))
     unavailable = [k for k, v in domains.items()
                    if v.get("reason") == _UNAVAILABLE["reason"]]
+    try:
+        await _track_stability(db, account, domains)
+    except Exception as e:  # noqa: BLE001
+        logger.error("stability tracking failed: %s", e)
     return {"snapshot_id": f"authsnap_{uuid.uuid4().hex[:12]}",
             "level": effective, "enforced_level": effective,
             "restricted": effective != "FULL", "domains": domains,
@@ -277,12 +388,20 @@ async def enforce_new_trade(db, account: dict | None = None) -> dict:
     or worse refuses new exposure; an unavailable domain refuses (never
     infer safety); REDUCED halves volume ONLY while every hard-truth
     domain (position truth / broker / execution) is FULL."""
+    from canonical_decision import from_snapshot
     snap = await compute_authority(db, account)
+    decision = from_snapshot(snap)
     lvl = snap["level"]
     reasons = list(snap["reasons"])
     base = {"level": lvl, "reasons": reasons,
             "snapshot_id": snap["snapshot_id"],
+            "decision_id": decision["decision_id"], "state": decision["state"],
+            "reason_codes": decision["reason_codes"],
             "domains": {k: v["level"] for k, v in snap["domains"].items()}}
+    if not decision["new_exposure_allowed"]:
+        return {"ok": False, **base, "level": worst(lvl, "CLOSE_ONLY"),
+                "reasons": reasons + [b["reason"] for b in decision["blockers"]
+                                      if b["domain"] == "authority"]}
     if level_severity(lvl) >= level_severity("CLOSE_ONLY"):
         return {"ok": False, **base}
     if snap["unavailable_domains"]:
@@ -317,3 +436,19 @@ async def set_platform_level(db, level: str, reason: str,
     logger.warning("PLATFORM TRADING AUTHORITY %s → %s by %s (%s)",
                    prev_level, level, actor, reason)
     return doc
+
+
+async def gate_or_block(db, account: dict | None, path: str) -> dict | None:
+    """Shared new-order gate for engines outside the Execution Authority
+    (paper, crypto): returns a deterministic denial payload or None."""
+    from canonical_decision import denial, from_snapshot
+    try:
+        snap = await compute_authority(db, account)
+    except Exception as e:  # noqa: BLE001 — fail closed
+        return {"blocked": "trading_authority", "path": path, "state": "CLOSE_ONLY",
+                "reason_codes": ["AUTHORITY_EVALUATION_ERROR"], "reasons": [str(e)[:200]]}
+    decision = from_snapshot(snap)
+    if not decision["new_exposure_allowed"]:
+        logger.warning("new order refused on %s path: %s %s", path, decision["state"], decision["reason_codes"])
+        return denial(decision, path)
+    return None

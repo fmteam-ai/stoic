@@ -1,6 +1,18 @@
 {
-  "captured_at": "2026-09-21T14:27:46.232272+00:00",
-  "git_commit": "bbf110bdb52511bcf54903aaa6e0d39cd6e57075",
+  "captured_at": "2026-09-24T14:41:39.873566+00:00",
+  "git_commit": "816c5c254460e288924f77624cd24b605797526c",
+  "source_sha": "816c5c254460e288924f77624cd24b605797526c",
+  "images": {
+    "backend": null,
+    "frontend": null
+  },
+  "deployment_target": null,
+  "authoritative": false,
+  "note": "developer snapshot \u2014 NOT release evidence; release.yml regenerates the lock bound to the tagged commit",
+  "signer_key_id": "stoic-release-ed25519-v1",
+  "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
+  "frontend_asset_digest": null,
+  "test_manifest_sha256": "542cd6f0fb99374813fa6c8617c281305470b717360409bb0367612de38ed944",
   "python": {
     "version": "3.11.16",
     "packages": [
@@ -162,7 +174,7 @@
       "six==1.17.0",
       "sniffio==1.3.1",
       "sortedcontainers==2.4.0",
-      "starlette==1.6.0",
+      "starlette==1.3.1",
       "stripe==14.4.1",
       "sympy==1.14.0",
       "tenacity==9.1.4",
@@ -188,7 +200,7 @@
       "yarl==1.24.2",
       "zipp==4.1.0"
     ],
-    "packages_sha256": "9fef51456e95c477b6eb54e38fe751b011b9324f28dd9344e4cd6f5aa2a271a1",
+    "packages_sha256": "9698bca03a0fe69945b1108136f9e408b9930fa381b3c3bd7d0192d0ac897049",
     "requirements_txt_sha256": "cd3d560339e030f4e49cb742f7e23a3a306b686a3da59579b0afc07c82518da1"
   },
   "node": {

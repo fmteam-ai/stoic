@@ -23,7 +23,7 @@ from totp import (
     consume_recovery_code,
 )
 from activation import (
-    new_activation_token, send_activation_email, send_existing_account_email,
+    new_activation_token, send_activation_email,
     RESEND_COOLDOWN_SECONDS,
 )
 from password_reset import (
@@ -43,11 +43,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/turnstile-config")
 async def turnstile_config():
-    """Public widget config — site key only, never the secret."""
-    from turnstile_gate import is_enabled, site_key, secret_key
-    db = get_db()
-    enabled = bool(await is_enabled(db) and secret_key() and site_key())
-    return {"enabled": enabled, "site_key": site_key() if enabled else None}
+    """Public widget state — explicit disabled|ready|misconfigured|provider_degraded|break_glass; never the secret."""
+    from turnstile_gate import public_state
+    return await public_state(get_db())
 
 
 async def _issue_session_cookies(db, uid: str, email: str, response,
@@ -73,8 +71,34 @@ def _user_to_out(user_doc: dict) -> UserOut:
     )
 
 
+REGISTER_MIN_RESPONSE_MS = 700
+
+
+def _register_public_response(email: str, name: str | None, uid: str,
+                               activation_link_dev_only: str | None = None) -> dict:
+    """Invariant schema for new AND existing addresses (round 9 P2-01): same keys,
+    an opaque id (random for existing addresses), NO delivery internals. The
+    dev-only activation link appears only when Resend is unconfigured."""
+    out = {"id": uid, "email": email, "name": name or email.split("@")[0], "email_verified": False,
+           "message": "Account created. Check your inbox to activate your STOIC membership."}
+    if activation_link_dev_only:
+        out["activation_link_dev_only"] = activation_link_dev_only
+    return out
+
+
+async def _pad_response(started: float) -> None:
+    """Coarse timing envelope: both register branches take ≥ REGISTER_MIN_RESPONSE_MS."""
+    import asyncio
+    import time
+    remaining = REGISTER_MIN_RESPONSE_MS / 1000 - (time.monotonic() - started)
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+
+
 @router.post("/register")
 async def register(payload: RegisterRequest, request: Request, response: Response):
+    import time
+    _started = time.monotonic()
     db = get_db()
     email = payload.email.lower()
     from turnstile_gate import require_turnstile
@@ -97,19 +121,13 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
         )
 
     if await db.users.find_one({"email": email}):
-        # Anti-enumeration: same shape/status as a fresh signup; notify out-of-band.
-        notice = await send_existing_account_email(recipient=email)
-        from bson import ObjectId
-        return {
-            "id": str(ObjectId()),
-            "email": email,
-            "name": payload.name or email.split("@")[0],
-            "email_verified": False,
-            "activation_email_sent": bool(notice.get("ok")),
-            "activation_email_error": notice.get("error"),
-            "activation_link_dev_only": None,
-            "message": "Account created. Check your inbox to activate your STOIC membership.",
-        }
+        # Anti-enumeration (round 9 P2-01): ONE invariant public response, notice
+        # queued out-of-band with a per-email cooldown, delivery never revealed.
+        from activation import queue_existing_account_notice
+        await queue_existing_account_notice(db, email)
+        hash_password(payload.password)          # same CPU profile as a real signup
+        await _pad_response(_started)
+        return _register_public_response(email, payload.name, str(ObjectId()))
 
     # HIBP k-anonymity breached-password screen (fail-open on outage).
     if await is_password_breached(payload.password):
@@ -160,25 +178,15 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
         upsert=True,
     )
 
-    # Fire activation email (async, non-blocking on errors)
-    send_result = await send_activation_email(
-        recipient=email, name=user_doc["name"], token=token,
-    )
+    # Activation email — queued in the background; delivery outcome is logged,
+    # never returned (P2-01). Dev-only link when Resend is unconfigured.
+    from activation import queue_activation_email
+    dev_link = await queue_activation_email(recipient=email, name=user_doc["name"], token=token)
 
     # We deliberately DO NOT set auth cookies — the user must verify their
-    # email before the dashboard becomes accessible. This blocks accidental
-    # auto-login and forces the explicit "click the link" step.
-    return {
-        "id": uid,
-        "email": email,
-        "name": user_doc["name"],
-        "email_verified": False,
-        "activation_email_sent": bool(send_result.get("ok")),
-        "activation_email_error": send_result.get("error"),
-        # In dev (no Resend key), surface the link so the user can finish flow.
-        "activation_link_dev_only": send_result.get("activation_link_dev_only"),
-        "message": "Account created. Check your inbox to activate your STOIC membership.",
-    }
+    # email before the dashboard becomes accessible.
+    await _pad_response(_started)
+    return _register_public_response(email, user_doc["name"], uid, dev_link)
 
 
 @router.post("/login")
@@ -186,8 +194,11 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     db = get_db()
     email = payload.email.lower()
     ip = client_ip(request)
-    from turnstile_gate import require_turnstile
-    await require_turnstile(db, payload.turnstile_token, ip, action="login")
+    from turnstile_gate import evaluate
+    gate = await evaluate(db, payload.turnstile_token, ip, action="login",
+                          request_id=request.headers.get("x-request-id"))
+    if gate.error is not None:
+        raise gate.error
     # Failed-attempt lockout: 5 wrong passwords per ip+email per 10 min.
     # Successful logins never count toward the limit.
     await check_failure_limit(db, "login", f"{ip}:{email}", 5, 600,
@@ -258,9 +269,18 @@ async def login(payload: LoginRequest, request: Request, response: Response):
                 raise HTTPException(status_code=401, detail="Invalid 2FA code")
             await db.users.update_one({"_id": user["_id"]}, {"$set": {"recovery_codes": remaining}})
     else:
-        # Email OTP gate (admin-toggled) — TOTP-enrolled users skip it.
-        from login_otp import otp_gate
-        await otp_gate(db, user, payload.email_otp)
+        if gate.degraded:
+            # Provider outage + otp_required policy: a bound, single-use emailed
+            # code stands in for the challenge (round 9 P1-03). TOTP users
+            # already proved a second factor above.
+            from degraded_login_otp import challenge
+            await challenge(db, user, payload.email_otp, remote_ip=ip,
+                            user_agent=request.headers.get("user-agent", ""),
+                            reason=gate.reason or "provider_unavailable")
+        else:
+            # Email OTP gate (admin-toggled) — TOTP-enrolled users skip it.
+            from login_otp import otp_gate
+            await otp_gate(db, user, payload.email_otp)
 
     uid = str(user["_id"])
     await clear_failures(db, "login", f"{ip}:{email}")

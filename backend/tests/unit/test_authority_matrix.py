@@ -16,7 +16,9 @@ from trading_authority import (HARD_TRUTH_DOMAINS, LEVELS, compute_authority,
                                enforce_new_trade, level_severity)
 
 DOMAINS = ["platform", "broker", "risk", "pamm", "execution",
-           "position_truth", "infrastructure", "account"]
+           "position_truth", "infrastructure", "account",
+           # round 9 P0-01/P0-02 blocker domains
+           "certification", "bot_health", "performance_truth", "recovery", "inventory"]
 
 
 def _run(coro):

@@ -79,7 +79,75 @@ async def authority_ep(user=Depends(get_current_user)):
             f"new trades refused until it can be confirmed [{corr}]")
         return out
     out["authority_state"] = "KNOWN"
+    from canonical_decision import decide_user
+    out["decision"] = await decide_user(db, user["id"])
+    out["level"] = worst_level(out["level"], {"READY": "FULL", "DEGRADED": "REDUCED", "CLOSE_ONLY": "CLOSE_ONLY",
+                                              "BLOCKED": "LOCKED", "EMERGENCY": "EMERGENCY"}[out["decision"]["state"]])
+    out["enforced_level"] = out["level"]
+    out["restricted"] = out["level"] != "FULL"
     return out
+
+
+@router.get("/decision")
+async def decision_ep(user=Depends(get_current_user)):
+    """Round 9 P0-01 — THE canonical decision every surface consumes."""
+    from canonical_decision import decide_user
+    return await decide_user(get_db(), user["id"])
+
+
+@router.get("/decision/{account_id}")
+async def account_decision_ep(account_id: str, user=Depends(get_current_user)):
+    from bson import ObjectId
+    from bson.errors import InvalidId
+    from canonical_decision import decide_account
+    db = get_db()
+    try:
+        q = {"_id": ObjectId(account_id)}
+    except InvalidId:
+        raise HTTPException(status_code=404, detail="account not found")
+    if user.get("role") != "admin":
+        q["user_id"] = user["id"]
+    acc = await db.accounts.find_one(q)
+    if not acc:
+        raise HTTPException(status_code=404, detail="account not found")
+    return await decide_account(db, acc)
+
+
+@router.get("/inventory")
+async def inventory_ep(user=Depends(get_current_user)):
+    """Round 9 P0-02 — canonical inventory projection (admin: platform scope; user: own accounts)."""
+    from inventory_projection import projection
+    db = get_db()
+    if user.get("role") == "admin":
+        exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+        return await projection(db, exp.get("scope_user_id"))
+    return await projection(db, user["id"])
+
+
+@router.post("/inventory/expectation")
+async def inventory_expectation_ep(payload: dict, request: Request, user=Depends(get_current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    from inventory_projection import set_expectation
+    for k in ("accounts", "enabled", "bots"):
+        if not isinstance(payload.get(k), int):
+            raise HTTPException(status_code=400, detail=f"{k} (int) required")
+    from step_up import audit_event
+    await audit_event(db := get_db(), user["id"], "inventory_expectation_set", payload, request)
+    return await set_expectation(db, payload, user.get("email", ""))
+
+
+@router.post("/inventory/approve")
+async def inventory_approve_ep(payload: dict, request: Request, user=Depends(get_current_user)):
+    """Approve the CURRENT inventory as the configured state (step-up MFA)."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    db = get_db()
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "authority_relax")
+    from inventory_projection import approve_current
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+    return await approve_current(db, user.get("email", ""), str(payload.get("note") or ""), exp.get("scope_user_id"))
 
 
 @router.post("/platform")

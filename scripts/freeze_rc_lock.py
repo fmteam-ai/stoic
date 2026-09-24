@@ -63,12 +63,49 @@ def _playwright_version():
     return _run(["npx", "--no-install", "playwright", "--version"])
 
 
-def build_lock(prev=None):
+def _tree_sha256(path):
+    """Deterministic digest over a directory (relative path + content, sorted)."""
+    if not os.path.isdir(path):
+        return None
+    h = hashlib.sha256()
+    for root, _, names in sorted(os.walk(path)):
+        for n in sorted(names):
+            if "__pycache__" in root or n.endswith((".pyc", ".pyo")):
+                continue
+            full = os.path.join(root, n)
+            h.update(os.path.relpath(full, path).encode() + b"\0" + bytes.fromhex(_sha256(full)))
+    return h.hexdigest()
+
+
+def build_lock(prev=None, *, commit=None, backend_digest=None, frontend_digest=None,
+               target=None):
+    """Bind the lock to the immutable release commit (round 9 P1-06): source SHA,
+    image digests, dependency locks, migrations, frontend asset digest, test
+    manifest, signer key id and deployment target — generated ONLY in CI from
+    the release commit (`--commit`), never from a developer checkout."""
     prev = prev or {}
     freeze = _pip_freeze()
+    sys.path.insert(0, os.path.join(ROOT, "backend"))
+    try:
+        from release_signing import key_id as _kid
+        signer_key_id = _kid(os.environ)
+    except Exception:
+        signer_key_id = None
+    dist = next((d for d in (os.path.join(ROOT, "frontend", "dist"), os.path.join(ROOT, "frontend", "build"))
+                 if os.path.isdir(d)), None)
     return {
         "captured_at": datetime.now(timezone.utc).isoformat(),
-        "git_commit": _run(["git", "-C", ROOT, "rev-parse", "HEAD"]),
+        "git_commit": commit or _run(["git", "-C", ROOT, "rev-parse", "HEAD"]),
+        "source_sha": commit or _run(["git", "-C", ROOT, "rev-parse", "HEAD"]),
+        "images": {"backend": backend_digest, "frontend": frontend_digest},
+        "deployment_target": target,
+        "authoritative": bool(commit and target),
+        "note": ("CI-generated from the immutable release commit" if commit and target else
+                 "developer snapshot — NOT release evidence; release.yml regenerates the lock bound to the tagged commit"),
+        "signer_key_id": signer_key_id,
+        "migrations_sha256": _tree_sha256(os.path.join(ROOT, "backend", "migrations")),
+        "frontend_asset_digest": _tree_sha256(dist) if dist else None,
+        "test_manifest_sha256": _sha256(os.path.join(ROOT, "docs", "TEST_MANIFEST.md")),
         "python": {
             "version": ".".join(map(str, sys.version_info[:3])),
             "packages": freeze,
@@ -124,30 +161,39 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
                     help="verify current env matches the lock; exit 1 on drift")
+    ap.add_argument("--commit", help="immutable release commit SHA (CI only)")
+    ap.add_argument("--backend-digest")
+    ap.add_argument("--frontend-digest")
+    ap.add_argument("--target", help="deployment target, e.g. production")
+    ap.add_argument("--out", help="write the lock somewhere other than release/rc_lock.json")
     args = ap.parse_args()
+    dest = args.out or DEST
 
     prev = None
-    if os.path.exists(DEST):
-        prev = json.load(open(DEST))
+    if os.path.exists(dest):
+        prev = json.load(open(dest))
 
     if args.check:
         if not prev:
-            print(f"FAIL: no lock at {DEST} — run scripts/freeze_rc_lock.py")
+            print(f"FAIL: no lock at {dest} — run scripts/freeze_rc_lock.py")
             return 1
-        diffs = _drift(prev, build_lock(prev))
+        diffs = _drift(prev, build_lock(prev, commit=args.commit))
+        if args.commit and prev.get("git_commit") != args.commit:
+            diffs.append(f"git_commit: locked={prev.get('git_commit')!r} release={args.commit!r}")
         if diffs:
             print("FAIL: environment drifted from RC lock:")
             for d in diffs:
                 print(f"  · {d}")
             return 1
-        print("OK: environment matches release/rc_lock.json")
+        print(f"OK: environment matches {dest}")
         return 0
 
-    os.makedirs(os.path.dirname(DEST), exist_ok=True)
-    lock = build_lock(prev)
-    with open(DEST, "w") as f:
+    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+    lock = build_lock(prev, commit=args.commit, backend_digest=args.backend_digest,
+                      frontend_digest=args.frontend_digest, target=args.target)
+    with open(dest, "w") as f:
         json.dump(lock, f, indent=2)
-    print(f"wrote {DEST}")
+    print(f"wrote {dest}")
     print(f"  python {lock['python']['version']} · "
           f"{len(lock['python']['packages'])} packages · "
           f"node {lock['node']['version']} · "

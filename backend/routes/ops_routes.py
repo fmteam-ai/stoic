@@ -238,8 +238,9 @@ async def release_readiness(request: Request):
     # audit P1-5 — runtime release truth: the signed CI attestation that
     # deploy/lib.sh verified for THIS checkout (release/attestation.current.json)
     # is exposed here and compared with the running build SHA / image digest.
-    from release_truth import release_attestation_check
+    from release_truth import release_attestation_check, rc_lock_check
     checks["release_attestation"] = release_attestation_check(is_production())
+    checks["rc_lock"] = rc_lock_check(is_production())
     # P2-1 — repair-ledger anchor: latest signed anchor must still be reachable (no tail deletion)
     try:
         from health_repairs import verify_anchor
@@ -252,6 +253,30 @@ async def release_readiness(request: Request):
         checks["execution_truth"] = await execution_truth_check(db)
     except Exception as e:  # noqa: BLE001
         checks["execution_truth"] = {"ok": False, "detail": f"execution truth unavailable: {e}"}
+    # round-9 P0-01/P0-02 — the canonical decision + inventory projection gate promotion
+    try:
+        from canonical_decision import decide_platform
+        from inventory_projection import projection as inv_projection
+        dec = await decide_platform(db)
+        checks["canonical_decision"] = {"ok": dec["new_exposure_allowed"] if is_production() else True,
+                                        "state": dec["state"], "reason_codes": dec["reason_codes"],
+                                        "decision_id": dec["decision_id"], "enforced": is_production()}
+        exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+        inv = await inv_projection(db, exp.get("scope_user_id"))
+        checks["inventory"] = {"ok": not inv["blocking"], "counts": inv["counts"], "violations": inv["violations"],
+                               "inventory_hash": inv["inventory_hash"], "approved_hash": inv["approved_hash"]}
+    except Exception as e:  # noqa: BLE001
+        checks["canonical_decision"] = {"ok": False, "detail": f"decision unavailable: {e}"}
+    # round-9 P1-04/P1-05 — Turnstile: no break-glass active/unreviewed; policy-enabled ⇒ keys complete
+    try:
+        from turnstile_break_glass import readiness_check as bg_readiness
+        from turnstile_gate import is_enabled as ts_enabled, configuration_state
+        checks["turnstile_break_glass"] = await bg_readiness(db)
+        ts_on = await ts_enabled(db)
+        checks["turnstile_config"] = {"ok": (not ts_on) or configuration_state() == "ready",
+                                      "policy_enabled": ts_on, "state": configuration_state()}
+    except Exception as e:  # noqa: BLE001
+        checks["turnstile_break_glass"] = {"ok": False, "detail": f"turnstile state unavailable: {e}"}
     # AT-15 rollback drill hook — can ONLY force a failure (fail-closed), never a pass.
     if os.environ.get("STOIC_DRILL_FORCE_READINESS_FAIL") == "1":
         checks["drill_forced_failure"] = {"ok": False,
@@ -602,13 +627,15 @@ async def runtime_stats(request: Request):
 
 
 @router.get("/ops/deploy-preflight")
-async def deploy_preflight(request: Request):
-    """iter-181 — production guardrail preflight (deploys never bounce)."""
+async def deploy_preflight(request: Request, signer_health: bool = False):
+    """iter-181 — production guardrail preflight (deploys never bounce).
+    ?signer_health=true adds the non-signing external-signer identity check (round 9 P1-01)."""
     allowed, _actor = await _ops_actor(request)
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     from deploy_preflight import run_preflight
-    return run_preflight()
+    import asyncio
+    return await asyncio.to_thread(run_preflight, bool(signer_health))
 
 
 @router.get("/ops/agent-certs")

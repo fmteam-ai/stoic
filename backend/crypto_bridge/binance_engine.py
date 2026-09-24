@@ -61,6 +61,11 @@ class BinanceCCXTEngine(ExecutionEngine):
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+        # round 9 P0-01 — canonical trading decision: crypto is not a bypass.
+        from trading_authority import gate_or_block
+        _deny = await gate_or_block(db, account, "binance_engine")
+        if _deny:
+            return _deny
 
         # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — same authority
         # boundary as the MT5 engine; crypto is not a bypass.

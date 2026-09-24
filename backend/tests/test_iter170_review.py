@@ -64,7 +64,7 @@ class TestTurnstileDiag:
         r = requests.get(f"{BASE_URL}/api/auth/turnstile-config", timeout=10)
         assert r.status_code == 200
         # UI only shows widget when enabled
-        assert r.json().get("enabled") is False
+        assert r.json().get("state") == "disabled"
 
 
 class TestCORS:

@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 571 |
+| unit | pure logic, no external I/O | every CI job | 572 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3621 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3666 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4282 tests across 432 files.**
+**Total: 4328 tests across 435 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -232,6 +232,9 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter228_route_auth_sweep.py` | http-live | 8 |
 | `backend/tests/test_iter22_live_verification.py` | http-live | 9 |
 | `backend/tests/test_iter22_security_hardening.py` | http-live | 9 |
+| `backend/tests/test_iter236_turnstile_round9.py` | http-live | 18 |
+| `backend/tests/test_iter237_signer_round9.py` | http-live | 13 |
+| `backend/tests/test_iter238_authority_round9.py` | http-live | 14 |
 | `backend/tests/test_iter23_reconciler.py` | http-live | 9 |
 | `backend/tests/test_iter24_objectid_hardening.py` | http-live | 10 |
 | `backend/tests/test_iter24_per_account_bot_cfg.py` | http-live | 9 |
@@ -443,7 +446,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
 | `backend/tests/unit/test_host_migrator.py` | unit | 17 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
-| `backend/tests/unit/test_release_attestation.py` | unit | 13 |
+| `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |

@@ -98,6 +98,41 @@ def _hermetic(path, sha) -> dict:
     return out
 
 
+def _rc_lock(path, sha, be, fe) -> dict:
+    """Round 9 P1-06: the lock must be generated from THIS release commit and bound
+    to the published image digests; any mismatch rejects promotion."""
+    out = {"ran": False, "path": path, "commit_matches": False, "images_match": False, "bound": False}
+    if not path or not os.path.exists(path):
+        return out
+    try:
+        lock = json.load(open(path))
+    except Exception:  # noqa: BLE001
+        return out
+    imgs = lock.get("images") or {}
+    out.update(ran=True, commit=lock.get("git_commit"), captured_at=lock.get("captured_at"),
+               deployment_target=lock.get("deployment_target"), signer_key_id=lock.get("signer_key_id"),
+               test_manifest_sha256=lock.get("test_manifest_sha256"),
+               commit_matches=bool(sha) and lock.get("git_commit") == sha and lock.get("source_sha") == sha,
+               images_match=(not be or imgs.get("backend") == be) and (not fe or imgs.get("frontend") == fe)
+                            and bool(imgs.get("backend")) and bool(imgs.get("frontend")))
+    out["bound"] = bool(out["commit_matches"] and out["images_match"] and lock.get("signer_key_id")
+                        and lock.get("deployment_target") and lock.get("test_manifest_sha256"))
+    return out
+
+
+def _signer_canary(path) -> dict:
+    out = {"ran": False, "path": path, "result": None}
+    if not path or not os.path.exists(path):
+        return out
+    try:
+        rec = json.load(open(path))
+    except Exception:  # noqa: BLE001
+        return out
+    out.update(ran=True, result=rec.get("result"), mode=rec.get("mode"), key_id=rec.get("key_id"),
+               error=rec.get("error"))
+    return out
+
+
 def cmd_emit(a) -> int:
     manifest = json.load(open(a.manifest)) if a.manifest and os.path.exists(a.manifest) else {}
     att = {
@@ -115,8 +150,12 @@ def cmd_emit(a) -> int:
             "clean_install_readiness": bool(a.install_ready),
             "ea_compile": bool(a.ea_compiled),
             "hermetic_verification": None,     # filled below
+            "rc_lock_bound": None,
+            "signer_canary": None,
         },
         "hermetic_verification": _hermetic(a.hermetic_verification, a.sha),
+        "rc_lock": _rc_lock(a.rc_lock, a.sha, a.backend_digest, a.frontend_digest),
+        "signer_canary": _signer_canary(a.signer_canary),
         "artifacts": {"release_manifest_sha256": _sha256(a.manifest)
                       if a.manifest and os.path.exists(a.manifest) else None,
                       "ea_version": manifest.get("ea_version")},
@@ -142,6 +181,8 @@ def cmd_emit(a) -> int:
     hv = att["hermetic_verification"]
     att["gates"]["hermetic_verification"] = bool(hv["ran"] and hv["result"] == "PASS" and hv["signed"]
                                                  and hv["build_matches"] and not hv["failed_steps"])
+    att["gates"]["rc_lock_bound"] = bool(att["rc_lock"]["bound"])
+    att["gates"]["signer_canary"] = att["signer_canary"]["result"] == "PASS"
     att["promotion_decision"] = ("APPROVED" if all(att["gates"].values())
                                  else "REJECTED")
     json.dump(att, open(a.out, "w"), indent=2, sort_keys=True)
@@ -199,6 +240,9 @@ def cmd_verify(a) -> int:
         problems.append(f"commit {att.get('commit')} != deployed {a.sha}")
     if a.tag and att.get("tag") != a.tag:
         problems.append(f"tag {att.get('tag')} != {a.tag}")
+    rc = att.get("rc_lock") or {}
+    if a.sha and rc.get("commit") != a.sha:
+        problems.append(f"rc_lock commit {rc.get('commit')} != deployed {a.sha}")
     t = att.get("tests") or {}
     if t.get("failures", 1) or t.get("errors", 1):
         problems.append(f"tests failed={t.get('failures')} errors={t.get('errors')}")
@@ -275,6 +319,8 @@ def main() -> int:
     e.add_argument("--ea-compiled", action="store_true")
     e.add_argument("--command", action="append")
     e.add_argument("--hermetic-verification", help="signed results JSON from scripts/verify_release.sh")
+    e.add_argument("--rc-lock", help="release/rc_lock.json generated in CI from the release commit")
+    e.add_argument("--signer-canary", help="evidence JSON from scripts/signer_canary.py")
     e.add_argument("--min-tests", type=int, default=MIN_TESTS_DEFAULT)
     e.add_argument("--out", default="release-attestation.json")
     f = sub.add_parser("fetch")

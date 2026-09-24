@@ -62,25 +62,25 @@ export default function Login() {
                 setError("");
                 return;
             }
-            // Email OTP challenge issued (or still pending)
-            if (detail?.code === "email_otp_sent") {
+            // Email OTP challenge issued (or still pending) — normal or Turnstile-degraded path
+            if (detail?.code === "email_otp_sent" || detail?.code === "turnstile_degraded_otp_sent") {
                 setNeedsEmailOtp(true);
                 setOtpMessage(detail.message || "Enter the 6-digit code we emailed you.");
                 setError("");
                 if (detail.resend_in) startOtpCooldown(detail.resend_in);
                 return;
             }
-            if (detail?.code === "invalid_email_otp") {
+            if (detail?.code === "invalid_email_otp" || detail?.code === "turnstile_degraded_otp_invalid") {
                 setError(`${detail.message}${detail.attempts_left ? ` (${detail.attempts_left} attempts left)` : ""}`);
                 return;
             }
-            if (detail?.code === "email_otp_expired") {
+            if (detail?.code === "email_otp_expired" || detail?.code === "turnstile_degraded_otp_expired") {
                 setEmailOtp("");
                 setError(detail.message || "Code expired. Request a new one.");
                 setOtpResendCooldown(0);
                 return;
             }
-            if (detail?.code === "email_otp_send_failed") {
+            if (detail?.code === "email_otp_send_failed" || detail?.code === "turnstile_unavailable") {
                 setError(detail.message);
                 return;
             }
@@ -119,10 +119,11 @@ export default function Login() {
         if (otpResendCooldown > 0) return;
         setError("");
         try {
-            await login(email, password, undefined, undefined);
+            await login(email, password, undefined, undefined, turnstile.enabled ? turnstile.token : undefined);
         } catch (err) {
             const detail = err?.response?.data?.detail;
-            if (detail?.code === "email_otp_sent") {
+            if (turnstile.enabled) turnstile.reset();
+            if (detail?.code === "email_otp_sent" || detail?.code === "turnstile_degraded_otp_sent") {
                 setOtpMessage("A new code is on its way. Check your inbox.");
                 if (detail.resend_in) startOtpCooldown(detail.resend_in);
             } else {

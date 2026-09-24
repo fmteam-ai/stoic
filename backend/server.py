@@ -727,14 +727,13 @@ async def on_startup():
         # audit round 8 P1-6 — ONE policy, shared with release_signing +
         # deploy_preflight: local release signing is NEVER allowed in
         # production. No acknowledgment / bypass variable exists any more.
-        from release_signing import production_signer_violation
-        _viol = production_signer_violation(os.environ)
-        if _viol:
-            raise RuntimeError(_viol)
-        if not os.environ.get("ED25519_SIGNING_KEY_B64"):
-            raise RuntimeError(
-                "APP_ENV=production requires ED25519_SIGNING_KEY_B64 for "
-                "release manifest signing.")
+        # audit round 9 P1-01 — ONE complete signer-configuration validator
+        # shared with release_signing + deploy_preflight: production requires a
+        # fully configured external signer and FORBIDS the private key here.
+        from release_signing import signer_config_violations
+        _viols = signer_config_violations(os.environ)
+        if _viols:
+            raise RuntimeError("release signer configuration invalid: " + " | ".join(_viols))
         # security audit #7 SEC-001 — key separation: no signer may share
         # the auth secret in production (one leak must never span auth +
         # order authorization + ledger/attestation trust domains).
@@ -755,6 +754,12 @@ async def on_startup():
         from modules.pamm.models import ensure_pamm_setup
         await ensure_pamm_setup(get_db())
         await seed_admin()
+        # round-9 P1-04 — production must not serve an auth control it cannot verify.
+        from turnstile_gate import is_enabled as _ts_enabled, production_config_violation
+        _ts_violation = production_config_violation(await _ts_enabled(get_db()))
+        if _ts_violation:
+            raise RuntimeError(_ts_violation)
+        await get_db().turnstile_consumed_tokens.create_index("expires_at", expireAfterSeconds=0)
         # Safety review — DEFAULT_MODE is observe; grandfather migration
         # stamps pre-existing configs explicitly (idempotent, audited).
         from operational_modes import (migrate_default_modes,
