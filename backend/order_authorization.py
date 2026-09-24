@@ -18,10 +18,9 @@ DEFAULT_TTL_SEC = 120
 
 
 def _secret() -> bytes:
-    s = os.environ.get("ORDER_AUTH_SECRET") or os.environ.get("JWT_SECRET")
+    s = os.environ.get("ORDER_AUTH_SECRET")
     if not s:
-        raise RuntimeError(
-            "ORDER_AUTH_SECRET or JWT_SECRET must be set to authorize orders")
+        raise RuntimeError("ORDER_AUTH_SECRET must be set to authorize orders")
     return s.encode()
 
 

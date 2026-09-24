@@ -23,7 +23,7 @@ from totp import (
     consume_recovery_code,
 )
 from activation import (
-    new_activation_token, send_activation_email,
+    new_activation_token, send_activation_email, send_existing_account_email,
     RESEND_COOLDOWN_SECONDS,
 )
 from password_reset import (
@@ -97,7 +97,19 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
         )
 
     if await db.users.find_one({"email": email}):
-        raise HTTPException(status_code=400, detail="Email already registered")
+        # Anti-enumeration: same shape/status as a fresh signup; notify out-of-band.
+        notice = await send_existing_account_email(recipient=email)
+        from bson import ObjectId
+        return {
+            "id": str(ObjectId()),
+            "email": email,
+            "name": payload.name or email.split("@")[0],
+            "email_verified": False,
+            "activation_email_sent": bool(notice.get("ok")),
+            "activation_email_error": notice.get("error"),
+            "activation_link_dev_only": None,
+            "message": "Account created. Check your inbox to activate your STOIC membership.",
+        }
 
     # HIBP k-anonymity breached-password screen (fail-open on outage).
     if await is_password_breached(payload.password):

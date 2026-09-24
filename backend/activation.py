@@ -103,6 +103,28 @@ def _email_text(*, link: str) -> str:
     )
 
 
+async def send_existing_account_email(*, recipient: str) -> dict:
+    """Out-of-band notice when someone registers with an already-used email."""
+    if not email_is_configured():
+        logger.warning("RESEND_API_KEY not configured — existing-account notice for %s skipped", recipient)
+        return {"ok": False, "error": "email_not_configured"}
+    login_url = f"{_frontend_base()}/login"
+    text = (
+        "Someone tried to create a STOIC account with this email address, "
+        "but an account already exists.\n\n"
+        f"If that was you, sign in here: {login_url}\n"
+        "If you forgot your password, use the reset link on the sign-in page.\n\n"
+        "If this wasn't you, no action is needed — nothing has changed.\n\n"
+        "— STOIC · Disciplined AI Trading"
+    )
+    return await send_email(
+        recipient=recipient,
+        subject="You already have a STOIC account",
+        html=f"<pre style='font-family:sans-serif;white-space:pre-wrap'>{text}</pre>",
+        text=text,
+    )
+
+
 async def send_activation_email(*, recipient: str, name: str, token: str) -> dict:
     """Fire the activation email. Returns the Resend send result."""
     link = _activation_link(token)
