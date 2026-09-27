@@ -185,7 +185,8 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
         if acc.get("broker") or issuer else None
     if prof:
         known |= {str(prof.get("name") or "").lower(), *[str(x).lower() for x in (prof.get("server_names") or [])]}
-    if not known or not any(issuer == k or issuer in k or k in issuer for k in known):
+    _norm = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())  # noqa: E731
+    if not known or _norm(issuer) not in {_norm(k) for k in known}:
         raise HTTPException(status_code=400, detail={
             "code": "statement_rejected", "problems": ["issuer is not the account's registered broker"]})
     # continuous period coverage against the latest accepted statement
@@ -238,15 +239,31 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
         raise HTTPException(status_code=409, detail={
             "code": "statement_overwrite_refused",
             "message": "A different statement with this id is already on the ledger — ledger rows are append-only."})
-    last = await db.reconciliation_ledger.find_one({"ledger_root": {"$exists": True}}, sort=[("ledger_seq", -1)])
-    row["ledger_seq"] = int((last or {}).get("ledger_seq") or 0) + 1
-    row["ledger_root"] = hashlib.sha256(f"{(last or {}).get('ledger_root') or ''}|{row['statement_sha256']}|{row['status']}".encode()).hexdigest()
+    # SEC-001 (r14 audit) — PER-USER hash chain with a unique (user_id, ledger_seq)
+    # index: two concurrent imports cannot fork the chain (the loser retries
+    # on DuplicateKeyError) and no tenant learns another tenant's sequence.
+    await db.reconciliation_ledger.create_index([("user_id", 1), ("ledger_seq", 1)], unique=True,
+                                                partialFilterExpression={"ledger_seq": {"$exists": True}})
     key = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
-    row["ledger_root_sig"] = hmac.new(key, row["ledger_root"].encode(), hashlib.sha256).hexdigest() if key else None
-    try:
-        await db.reconciliation_ledger.insert_one(row)
-    except DuplicateKeyError:
-        return await db.reconciliation_ledger.find_one({"_id": row["_id"]})
+    for _attempt in range(8):
+        last = await db.reconciliation_ledger.find_one({"user_id": user_id, "ledger_root": {"$exists": True}},
+                                                       sort=[("ledger_seq", -1)])
+        row["ledger_seq"] = int((last or {}).get("ledger_seq") or 0) + 1
+        row["ledger_root"] = hashlib.sha256(
+            f"{(last or {}).get('ledger_root') or ''}|{row['statement_sha256']}|{row['status']}".encode()).hexdigest()
+        # SEC-004 — domain-separated HMAC (never the raw root, never shared with /api/status)
+        row["ledger_root_sig"] = (hmac.new(key, f"stoic-statement-ledger-v1|{user_id}|{row['ledger_seq']}|{row['ledger_root']}".encode(),
+                                           hashlib.sha256).hexdigest() if key else None)
+        try:
+            await db.reconciliation_ledger.insert_one(row)
+            return row
+        except DuplicateKeyError as e:
+            existing = await db.reconciliation_ledger.find_one({"_id": row["_id"]})
+            if existing:
+                return existing  # same statement raced with itself → idempotent
+            if _attempt == 7:
+                raise HTTPException(status_code=503, detail={"code": "ledger_busy",
+                                                             "message": "Ledger sequence contention — retry."}) from e
     return row
 
 

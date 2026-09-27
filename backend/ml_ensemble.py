@@ -351,7 +351,6 @@ async def approve_candidate(db, user_id: str, approver_email: str, note: str = "
     # audit r14 P1-06 — ONE atomic conditional reservation per (candidate digest,
     # principal): concurrent same-principal approvals collapse to a single record.
     from pymongo.errors import DuplicateKeyError
-    await db.model_approval_principals.create_index([("digest", 1), ("principal_id", 1)], unique=True)
     try:
         await db.model_approval_principals.insert_one({"digest": cand["digest"], "principal_id": str(actor_id),
                                                        "user_id": user_id, "at": datetime.now(timezone.utc).isoformat()})
@@ -382,7 +381,6 @@ async def flush_promotion_outbox(db, user_id: str | None = None) -> int:
         # audit r14 P1-06 — atomic claim of the outbox record: concurrent flushers
         # cannot both append the chained event (unique promotion_id reservation).
         from pymongo.errors import DuplicateKeyError
-        await db.promotion_publications.create_index("promotion_id", unique=True)
         try:
             await db.promotion_publications.insert_one({"promotion_id": ob["promotion_id"], "user_id": d["user_id"],
                                                         "claimed_at": datetime.now(timezone.utc).isoformat()})

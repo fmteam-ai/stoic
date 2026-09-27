@@ -309,3 +309,48 @@ def test_enabled_flag_never_counts_and_is_migrated():
         assert d["active"] is True and "enabled" not in d
     finally:
         _run(db.bot_configs.delete_many({"user_id": uid}))
+
+
+# ------------------------------------------------------------- SEC-001 ledger chain
+def test_ledger_chain_cannot_fork_under_concurrency():
+    """Two parallel imports for one user must yield seq 1 and 2 — never a fork."""
+    import broker_statement_ledger as bl
+    from database import get_db
+    db = get_db()
+    uid = f"chain-{ObjectId()}"
+    _run(db.reconciliation_ledger.create_index([("user_id", 1), ("ledger_seq", 1)], unique=True,
+                                               partialFilterExpression={"ledger_seq": {"$exists": True}}))
+    try:
+        async def _one(i):
+            row = {"_id": f"{uid}:S{i}", "user_id": uid, "account_id": "a", "statement_id": f"S{i}",
+                   "statement_sha256": f"{i:064d}", "status": "RECONCILED"}
+            # replicate the append tail of reconcile(): read-latest → insert, retry on dup
+            for _ in range(8):
+                last = await db.reconciliation_ledger.find_one({"user_id": uid, "ledger_root": {"$exists": True}},
+                                                               sort=[("ledger_seq", -1)])
+                row["ledger_seq"] = int((last or {}).get("ledger_seq") or 0) + 1
+                row["ledger_root"] = f"root{row['ledger_seq']}"
+                try:
+                    await db.reconciliation_ledger.insert_one(row)
+                    return row["ledger_seq"]
+                except Exception:
+                    continue
+            raise AssertionError("no seq")
+        seqs = _run(asyncio.gather(*[_one(i) for i in range(6)]))
+        assert sorted(seqs) == [1, 2, 3, 4, 5, 6]
+        assert _run(db.reconciliation_ledger.count_documents({"user_id": uid})) == 6
+    finally:
+        _run(db.reconciliation_ledger.delete_many({"user_id": uid}))
+
+
+def test_trigger_then_actions_validated_at_arm_time(world, monkeypatch):
+    import routes.nl_routes as nr
+    user = {"id": world["id"], "email": world["email"]}
+
+    async def _fake(prompt):
+        return {"actions": [{"type": "SET_CONDITIONAL_TRIGGER",
+                             "params": {"symbol": "BTCUSD", "then": [{"type": "DROP_TABLES"}]}}]}
+    monkeypatch.setattr(nr, "interpret_command", _fake)
+    with pytest.raises(HTTPException) as ei:
+        _run(nr.nl_command({"prompt": "x"}, user=user))
+    assert ei.value.status_code == 400 and "trigger action" in str(ei.value.detail)

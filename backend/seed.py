@@ -287,6 +287,10 @@ async def ensure_indexes():
         logging.getLogger("seed").warning("bot_configs validator not applied: %s", e)
     # audit r14 P0 — exactly-once execution ledgers
     await db.trigger_fire_events.create_index("event_id", unique=True)
+    await db.model_approval_principals.create_index([("digest", 1), ("principal_id", 1)], unique=True)
+    await db.promotion_publications.create_index("promotion_id", unique=True)
+    await db.reconciliation_ledger.create_index([("user_id", 1), ("ledger_seq", 1)], unique=True,
+                                                partialFilterExpression={"ledger_seq": {"$exists": True}})
     await db.nl_proposals.create_index([("user_id", 1), ("status", 1)])
     # Round 8 item 1 / Round 10 item 5 — scalp reconciliation / ownership
     # integrity constraints. These unique indexes ARE the distributed-safety

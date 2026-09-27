@@ -170,7 +170,7 @@ async def _compute_status(now: float):
     import hashlib as _hl
     import hmac as _hm
     _k = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
-    _msg = f"{aggregate['input_version']}|{aggregate['accounts_enabled']}|{aggregate['accounts_ready']}|{readiness['state']}".encode()
+    _msg = f"stoic-public-readiness-v1|{aggregate['input_version']}|{aggregate['accounts_enabled']}|{aggregate['accounts_ready']}|{readiness['state']}".encode()
     aggregate["sig"] = _hm.new(_k, _msg, _hl.sha256).hexdigest() if _k else None
     trading_ready = readiness["state"] == "READY" and connectivity == "active" and aggregate["all_ready"]
     trading = {"connectivity": connectivity, "fresh_terminals": fresh, "enabled_accounts_present": enabled > 0,

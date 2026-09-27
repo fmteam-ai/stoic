@@ -311,6 +311,14 @@ async def nl_command(payload: dict, user=Depends(get_current_user)):
         if str(a.get("type") or "").upper() not in KNOWN_NL_ACTIONS:
             raise HTTPException(status_code=400,
                                 detail=f"unknown action type {a.get('type')}")
+        # a trigger's deferred `then` list is validated at ARM time too
+        if str(a.get("type") or "").upper() == "SET_CONDITIONAL_TRIGGER":
+            for t in ((a.get("params") or {}).get("then") or []):
+                if str(t.get("type") or "").upper() not in KNOWN_NL_ACTIONS - {"SET_CONDITIONAL_TRIGGER"}:
+                    raise HTTPException(status_code=400,
+                                        detail=f"unknown trigger action type {t.get('type')}")
+    if len(actions) > 8:
+        raise HTTPException(status_code=400, detail="too many actions in one command (max 8)")
 
     # AI → deterministic PREVIEW → operator approval for EVERY command.
     # Nothing touches bots or capital until /command/confirm carries the

@@ -167,10 +167,11 @@ async def test_email(request: Request, user=Depends(get_current_user)):
             "code": "email_not_configured",
             "message": "Email delivery is not configured on this server."})
     sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    from html import escape as _esc
     res = await email_sender.send_email(
         user["email"],
         "[TEST] STOIC · Test alert — no action required",
-        _test_email_html(user.get("name") or "trader", sent_at),
+        _test_email_html(_esc(str(user.get("name") or "trader"))[:80], sent_at),
         text=f"STOIC test alert sent {sent_at} UTC. Email alerts reach this inbox.")
     if not res.get("ok"):
         await _stamp_test(db, user["id"], "email", False, "email_send_failed")
