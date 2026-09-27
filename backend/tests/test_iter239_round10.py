@@ -250,3 +250,27 @@ class TestContainerAndCopy:
         from modules.pamm.strategy_guard import GIT_COMMIT
         head = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
         assert GIT_COMMIT == head
+
+
+class TestProdShorthandAgreement:
+    """Audit round 11 SEC-001 — every round-9/10 guardrail must treat APP_ENV=prod as production."""
+
+    def test_inventory_turnstile_signer_agree_on_prod(self, monkeypatch):
+        import inventory_projection as ip
+        import turnstile_gate as tg
+        import release_signing as rs
+        from trading_authority import inventory_domain
+        db = _db()
+        saved = _run(db.platform_state.find_one({"_id": "inventory_expectation"}))
+        _run(db.platform_state.delete_one({"_id": "inventory_expectation"}))
+        try:
+            for val in ("prod", "production", "PROD"):
+                monkeypatch.setenv("APP_ENV", val)
+                assert ip.production_mode() and tg.is_production() and rs._is_prod({"APP_ENV": val}), val
+                assert _run(inventory_domain(db, None))["level"] == "CLOSE_ONLY", val
+                assert _run(ip.projection(db, "no-such-user"))["blocking"] is True, val
+            monkeypatch.setenv("APP_ENV", "preview")
+            assert not ip.production_mode() and not tg.is_production()
+        finally:
+            if saved:
+                _run(db.platform_state.replace_one({"_id": "inventory_expectation"}, saved, upsert=True))

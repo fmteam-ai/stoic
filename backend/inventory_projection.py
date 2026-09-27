@@ -15,8 +15,8 @@ LIVE_ENVS = {"live", "real"}
 
 
 def production_mode() -> bool:
-    import os
-    return os.environ.get("APP_ENV", "").strip().lower() == "production"
+    from app_env import is_production      # SEC-001: one definition of "production" ("production" | "prod")
+    return is_production()
 
 
 def _now() -> str:

@@ -32,7 +32,7 @@ def _mode(env) -> str:
 
 
 def _is_prod(env) -> bool:
-    return (env.get("APP_ENV") or "").strip().lower() == "production"
+    return (env.get("APP_ENV") or "").strip().lower() in ("production", "prod")   # mirrors app_env._PROD_VALUES
 
 
 def _b64_key_ok(b64: str, length: int = 32) -> bool:

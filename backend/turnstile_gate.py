@@ -52,7 +52,8 @@ def site_key() -> str:
 
 
 def is_production() -> bool:
-    return os.environ.get("APP_ENV", "").strip().lower() == "production"
+    from app_env import is_production as _shared
+    return _shared()
 
 
 def max_token_age_seconds() -> int:
