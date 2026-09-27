@@ -1,0 +1,24 @@
+{
+  "summary": "Round 10 live verification (backend + frontend). 22/22 live HTTP checks pass and full frontend UX pass. Verified: (1) rotated admin creds authenticate; old password → 401. (2) /api/health build_sha equals git HEAD after backend restart (previous stale value 238d996 was pre-auto-commit; supervisor restart brought it to ecebb10 matching `git rev-parse HEAD`). (3) /api/status anon returns overall+components+deployment{region,app_env=preview}. (4) /api/state/readiness returns level+decision_id(shape dec_<hex>)+dominant_code+new_exposure_allowed+reasons; its level (BLOCKED) is at-least-as-severe as /api/authority/decision state (CLOSE_ONLY). (5) /api/authority/decision blockers list non-increasing in dominance (CLOSE_ONLY×3 then DEGRADED×2), dominant_code == blockers[0].code (POSITION_TRUTH_STALE), risk_reducing_allowed == true. (6) Break-glass two-admin flow: WITHOUT X-Step-Up-Bypass → 403 (mfa_enrollment_required); WITH header → 200 {pending:true, request:{...}}; GET shows active:false + pending_request set; approve as SAME admin WITH header → 403 code=approver_mismatch (still inactive); cleaned pending via Mongo, GET shows pending_request:null. (7) Inventory expectation propose/approve: WITHOUT step-up → 403; WITH step-up + {accounts:6,enabled:3,bots:3} → 200 with proposed_by=admin@trading.bot; approve as same admin → 403 code=second_admin_required; cleaned pending via Mongo. (8) /api/ops/release-readiness includes canonical_decision, inventory, turnstile_break_glass, turnstile_config, rc_lock (plus more). (9) Frontend /login shows data-testid=login-system-state='// SYSTEM OPERATIONAL' (dynamic, not static SYSTEM READY). (10) After admin login, dashboard renders data-testid=authority-strip containing data-testid=authority-decision-state='CLOSE ONLY'; no 'EU SERVERS' text found in status-bar or anywhere on the page.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/health", "issue": "GIT_COMMIT is cached at import time from .git/HEAD fallback (BUILD_SHA file has un-substituted $Format:%H$ placeholder in preview). If new commits land after backend start, /api/health returns stale SHA until supervisor restart. Preview-only nuisance; production images inject backend/BUILD_SHA at build time."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/tmp/round10_live_test.py", "/tmp/round10_results.json"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "canonical_decision.decide_user + decide_platform mint a fresh decision_id (uuid4) on every call, so /api/state/readiness and /api/authority/decision emit different decision_id values for the same logical state within the same second. Spec only requires shape (dec_xxxx) so this passes, but consider caching the decision (or deriving id from a stable hash of state+timestamp bucket) so auditors can correlate a single decision across endpoints.",
+    "Break-glass endpoint returns 403 with detail.code='mfa_enrollment_required' when the step-up bypass header is absent — that message is misleading in preview where MFA is intentionally disabled and the real gate is the missing X-Step-Up-Bypass header. Consider returning code='step_up_required' when only the header is missing so ops don't chase a false MFA lead."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (22/22)", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot / <read from /app/memory/test_credentials.md at runtime — NOT embedded>",
+  "seed_data_creation": "Created & DELETED (via Mongo) platform_state _id='turnstile_break_glass_pending' and _id='inventory_expectation_pending'. No residual test data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Live test script is at /tmp/round10_live_test.py (kept OUT of /app per audit round 10 P0-02 — never commit credential-loading scripts under /app even when reading creds from files). Reads rotated password from /app/memory/test_credentials.md and STEP_UP_BYPASS_TOKEN from /app/backend/.env; connects to Mongo via MONGO_URL/DB_NAME. Backend may need `sudo supervisorctl restart backend` if git HEAD changed since last start to re-align /api/health build_sha. Two-admin approve endpoints require the SAME session's admin to attempt approval to observe approver_mismatch / second_admin_required codes.",
+  "rca of the issue": "N/A — no bugs to root-cause; the initial health-build-sha mismatch was a stale-process artifact resolved by supervisor restart, and the readiness/decision id mismatch was a misread of the spec (shape check only, not equality)."
+}
