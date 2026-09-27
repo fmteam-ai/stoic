@@ -67,6 +67,7 @@ from routes.telegram_routes import router as telegram_router
 from routes.posture_routes import router as posture_router
 from routes.rl_routes import router as rl_router
 from routes.ml_routes import router as ml_router
+from routes.ledger_routes import router as ledger_router
 from routes.architecture_routes import router as architecture_router
 from routes.analytics_routes import router as analytics_router
 from routes.entitlement_routes import router as entitlement_router
@@ -462,6 +463,7 @@ api_router.include_router(telegram_router)
 api_router.include_router(posture_router)
 api_router.include_router(rl_router)
 api_router.include_router(ml_router)
+api_router.include_router(ledger_router)
 api_router.include_router(architecture_router)
 api_router.include_router(analytics_router)
 api_router.include_router(entitlement_router)

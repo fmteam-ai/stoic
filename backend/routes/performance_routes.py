@@ -200,6 +200,12 @@ async def _attestation_gate(db, user_id: str) -> list:
                 reasons.append("BROKER_DATA_STALE")
         except Exception:  # noqa: BLE001 — unparseable = not fresh
             reasons.append("BROKER_DATA_AGE_UNKNOWN")
+    # round 13 P2-05 — the books must equal the SIGNED broker statement to the cent
+    try:
+        from broker_statement_ledger import ledger_gate
+        reasons += await ledger_gate(db, user_id)
+    except Exception:  # noqa: BLE001 — fail closed
+        reasons.append("STATEMENT_LEDGER_UNAVAILABLE")
     return sorted(set(reasons))
 
 

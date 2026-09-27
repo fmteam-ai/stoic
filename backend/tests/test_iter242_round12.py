@@ -568,3 +568,66 @@ class TestRound13:
         assert "model_manifest verify --build" in rel
         src = open(os.path.join(_BACKEND_DIR, "ml_ensemble.py")).read()
         assert "os.replace(cand_file" not in src and "promotion_outbox" in src and "model_store.fetch" in src
+
+
+class TestBrokerStatementLedger:
+    def _statement(self, acc_id, **over):
+        from broker_statement_ledger import STATEMENT_SCHEMA
+        now = datetime.now(timezone.utc)
+        st = {"schema": STATEMENT_SCHEMA, "statement_id": "ST-" + uuid.uuid4().hex[:8], "account_id": acc_id,
+              "broker_login": "1001", "currency": "USD",
+              "period_from": (now - timedelta(days=30)).isoformat(), "period_to": (now - timedelta(days=1)).isoformat(),
+              "issuer": "Broker Ltd", "issued_at": now.isoformat(),
+              "opening_balance": 10000.00, "trading_pnl": 18.02, "commission": -0.70, "swap": 0.25,
+              "deposits": 500.00, "withdrawals": 100.00, "corrections": 0.00, "fx_conversion": 0.00,
+              "closing_balance": 10417.57, "unrealized_pnl": -12.34, "closing_equity": 10405.23}
+        st.update(over)
+        return st
+
+    def test_signed_statement_reconciles_to_the_cent_and_gates_attestation(self):
+        import broker_statement_ledger as bl
+        from release_signing import sign_hex
+        from bson import ObjectId
+        db = _db()
+        uid = "r13-led-" + uuid.uuid4().hex[:6]
+        acc = ObjectId()
+        _run(db.accounts.insert_one({"_id": acc, "user_id": uid, "label": "live-1", "mode": "live", "trading_enabled": True,
+                                     "broker_environment": "LIVE", "account_type": "real", "server": "Broker-Live", "verified_identity": True}))
+        when = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        _run(db.broker_deals.insert_many([
+            {"user_id": uid, "account_id": str(acc), "deal_id": "1", "profit": "18.02", "commission": "-0.70", "swap": "0.25",
+             "deal_entry": "out", "occurred_at": when, "financial_reconciliation_status": "complete"}]))
+        _run(db.account_cashflows.insert_many([{"user_id": uid, "account_id": str(acc), "kind": "deposits", "amount": 500, "at": when},
+                                               {"user_id": uid, "account_id": str(acc), "kind": "withdrawals", "amount": 100, "at": when}]))
+        try:
+            st = self._statement(str(acc))
+            sig = sign_hex(bl.statement_body(st))
+            assert bl.statement_problems(st, sig) == []
+            assert bl.statement_problems({**st, "closing_balance": 10417.58}, sig)          # one cent off → does not balance / bad sig
+            assert "signature" in " ".join(bl.statement_problems(st, "00" * 64))
+            assert _run(bl.ledger_gate(db, uid)) == ["STATEMENT_LEDGER_MISSING"]
+            row = _run(bl.reconcile(db, uid, st, sig, "ops@x"))
+            assert row["status"] == "RECONCILED" and row["discrepancies"] == [] and row["return_formula_version"] == bl.RETURN_FORMULA_VERSION
+            assert row["return_pct"] == round((10405.23 - 10000 - 400) / (10000 + 200) * 100, 4)
+            assert _run(bl.ledger_gate(db, uid)) == []
+            # a one-cent platform/statement difference is a DISCREPANCY that withholds attestation
+            st2 = self._statement(str(acc), swap=0.26, closing_balance=10417.58, closing_equity=10405.24)
+            row2 = _run(bl.reconcile(db, uid, st2, sign_hex(bl.statement_body(st2)), "ops@x"))
+            assert row2["status"] == "DISCREPANCY" and row2["discrepancies"][0]["field"] == "swap" and row2["discrepancies"][0]["delta"] == 0.01
+            assert "STATEMENT_DISCREPANCY" in _run(bl.ledger_gate(db, uid))
+            # unreconciled deal → UNRECONCILED_DEALS; stale period → STATEMENT_PERIOD_STALE
+            _run(db.broker_deals.update_one({"user_id": uid, "deal_id": "1"}, {"$set": {"financial_reconciliation_status": "pending"}}))
+            st3 = self._statement(str(acc))
+            assert _run(bl.reconcile(db, uid, st3, sign_hex(bl.statement_body(st3)), "ops@x"))["status"] == "UNRECONCILED_DEALS"
+            old = datetime.now(timezone.utc) - timedelta(days=90)
+            st4 = self._statement(str(acc), period_from=(old - timedelta(days=30)).isoformat(), period_to=old.isoformat(),
+                                  trading_pnl=0.0, commission=0.0, swap=0.0, deposits=0.0, withdrawals=0.0,
+                                  closing_balance=10000.0, unrealized_pnl=0.0, closing_equity=10000.0)
+            _run(db.reconciliation_ledger.delete_many({"user_id": uid}))
+            _run(bl.reconcile(db, uid, st4, sign_hex(bl.statement_body(st4)), "ops@x"))
+            assert "STATEMENT_PERIOD_STALE" in _run(bl.ledger_gate(db, uid))
+            src = open(os.path.join(_BACKEND_DIR, "routes", "performance_routes.py")).read()
+            assert "ledger_gate" in src and "STATEMENT_LEDGER_UNAVAILABLE" in src
+        finally:
+            for c in ("accounts", "broker_deals", "account_cashflows", "reconciliation_ledger"):
+                _run(db[c].delete_many({"user_id": uid}))

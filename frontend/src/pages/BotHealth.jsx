@@ -20,6 +20,7 @@ import { AlertsCard } from "../components/AlertsCard";
 import { ValidationCard } from "../components/ValidationCard";
 import { StageCard } from "../components/StageCard";
 import { LearningPipelineCard } from "../components/LearningPipelineCard";
+import { ModelApprovalPanel } from "../components/ModelApprovalPanel";
 import { LearningSpeedsCard } from "../components/LearningSpeedsCard";
 
 const SEV_STYLE = {
@@ -634,6 +635,7 @@ export default function BotHealth() {
                 <StageCard />
                 <ValidationCard />
                 <LearningPipelineCard />
+                <ModelApprovalPanel />
                 <LearningSpeedsCard />
 
                 <AutoHealPanel data={data.autoHeal} onChange={load} />
