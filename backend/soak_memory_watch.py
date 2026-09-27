@@ -69,9 +69,9 @@ def instance_coverage(samples: list, expected_services: set | None = None) -> di
 
 
 def memory_trend(samples: list, started_at=None) -> dict:
-    """Pure. `samples` = [{at, rss_mb, service?, host?, pid?}] oldest→newest.
-    Multi-instance samples are folded per day by MAX (the leaking replica
-    dominates) while per-instance coverage is reported alongside."""
+    """Pure. `samples` = [{at, rss_mb, service?, host?, pid?, build?}] oldest→newest.
+    Per-instance daily medians are folded per day by MAX (the leaking replica
+    dominates); per-instance slopes, restarts and coverage are reported alongside."""
     pts = [(_to_dt(s.get("at")), float(s["rss_mb"])) for s in samples
            if s.get("rss_mb") is not None and _to_dt(s.get("at")) is not None]
     cov = instance_coverage(samples)
@@ -79,11 +79,35 @@ def memory_trend(samples: list, started_at=None) -> dict:
         return {"verdict": "INSUFFICIENT", "samples": len(pts), "coverage": cov,
                 "detail": f"{len(pts)}/{MIN_SAMPLES} memory samples — keep the soak running"}
     t0 = _to_dt(started_at) or pts[0][0]
+    # per-instance daily medians first, then the FLEET day value is the MAX across
+    # instances (the leaking replica dominates — a median would hide it)
+    per_inst: dict = {}
+    for smp in samples:
+        at = _to_dt(smp.get("at"))
+        if smp.get("rss_mb") is None or at is None:
+            continue
+        day = int((at - t0).total_seconds() // 86400) + 1
+        per_inst.setdefault(_instance(smp), {}).setdefault(day, []).append(float(smp["rss_mb"]))
     by_day: dict = {}
-    for at, mb in pts:
-        by_day.setdefault(int((at - t0).total_seconds() // 86400) + 1, []).append(mb)
-    daily = [{"day": d, "median_mb": round(_median(v), 1), "max_mb": round(max(v), 1),
-              "samples": len(v)} for d, v in sorted(by_day.items())]
+    for inst, days in per_inst.items():
+        for d, v in days.items():
+            by_day.setdefault(d, []).append(_median(v))
+    daily = [{"day": d, "median_mb": round(max(v), 1), "fleet_max_mb": round(max(v), 1),
+              "fleet_min_mb": round(min(v), 1), "instances": len(v)} for d, v in sorted(by_day.items())]
+    instance_trends = {}
+    for inst, days in per_inst.items():
+        pts_i = sorted((d, _median(v)) for d, v in days.items())
+        instance_trends[inst] = {"days": len(pts_i), "first_mb": round(pts_i[0][1], 1), "last_mb": round(pts_i[-1][1], 1),
+                                 "slope_mb_per_day": round(_slope(pts_i), 2)}
+    # restarts / build changes: distinct pids or builds per service@host
+    by_proc: dict = {}
+    for smp in samples:
+        k = f"{smp.get('service') or 'api'}@{smp.get('host') or '?'}"
+        by_proc.setdefault(k, {"pids": set(), "builds": set()})
+        by_proc[k]["pids"].add(smp.get("pid"))
+        by_proc[k]["builds"].add(smp.get("build"))
+    restarts = {k: {"restarts": max(0, len(v["pids"]) - 1), "builds": sorted(str(b) for b in v["builds"] if b)}
+                for k, v in by_proc.items()}
     baseline = daily[0]["median_mb"]
     latest = daily[-1]["median_mb"]
     growth_pct = round((latest - baseline) / baseline * 100, 1) if baseline else 0.0
@@ -110,7 +134,8 @@ def memory_trend(samples: list, started_at=None) -> dict:
             "peak_mb": round(max(p[1] for p in pts), 1),
             "growth_pct": growth_pct, "slope_mb_per_day": slope,
             "consecutive_climbs": climbs, "daily": daily, "detail": detail,
-            "scope": scope, "coverage": cov,
+            "scope": scope, "coverage": cov, "instances": instance_trends, "restarts": restarts,
+            "fleet_rule": "per-instance daily median → fleet daily MAX",
             "thresholds": {"watch_growth_pct": WATCH_GROWTH_PCT,
                            "alert_growth_pct": ALERT_GROWTH_PCT,
                            "watch_slope_mb_day": WATCH_SLOPE_MB_DAY,
@@ -123,7 +148,8 @@ async def campaign_trend(db, campaign: dict | None = None, days: int = 45) -> di
     started = (campaign or {}).get("started_at")
     since = _to_dt(started) or (datetime.now(timezone.utc) - timedelta(days=days))
     samples = await db.ops_soak_samples.find(
-        {"at": {"$gte": since}}, {"at": 1, "rss_mb": 1}).sort("at", 1).to_list(20000)
+        {"at": {"$gte": since}}, {"at": 1, "rss_mb": 1, "service": 1, "host": 1, "pid": 1, "build": 1}
+    ).sort("at", 1).to_list(20000)
     out = memory_trend(samples, started)
     out["campaign_id"] = (campaign or {}).get("campaign_id")
     return out

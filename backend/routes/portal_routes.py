@@ -148,33 +148,46 @@ async def _compute_status(now: float):
         readiness = {"state": "UNKNOWN", "new_exposure_allowed": False, "dominant_code": "UNAVAILABLE", "decision_id": None}
     if connectivity != "active" and readiness["state"] == "READY":
         readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False, "dominant_code": "TERMINAL_STALE"}
-    # audit r14 P1-02 — "trading ready" is ACCOUNT-scoped: every intended
-    # enabled account must be READY under the same canonical decision version
-    # (execution UNKNOWN, stale position truth, restrictions, reconciliation
-    # lag all surface per account). Counts only — never identifiers.
-    aggregate = {"accounts_enabled": 0, "accounts_ready": 0, "all_ready": False, "input_version": None}
+    # audit r15 P1-02 — the public portal reports PLATFORM AVAILABILITY only.
+    # A "trading ready" claim is made solely from the signed, approved EXACT
+    # inventory (6/3/3: declared expectation, approved hash, zero violations
+    # or orphans) with every intended enabled account READY under ONE canonical
+    # input version. No raw operational counts are exposed.
+    aggregate = {"attested": False, "basis": "platform_availability_only", "input_version": None,
+                 "inventory_hash": None, "as_of": None}
     try:
         from canonical_decision import authority_version, decide_account
-        aggregate["input_version"] = await authority_version(db)
-        async for acc in db.accounts.find({"trading_enabled": True, "status": {"$ne": "deleted"}}):
-            aggregate["accounts_enabled"] += 1
-            if (await decide_account(db, acc)).get("state") == "READY":
-                aggregate["accounts_ready"] += 1
-        aggregate["all_ready"] = (aggregate["accounts_enabled"] > 0
-                                  and aggregate["accounts_ready"] == aggregate["accounts_enabled"])
-    except Exception:  # noqa: BLE001 — fail closed: no aggregate ⇒ not ready
-        aggregate["all_ready"] = False
-    if readiness["state"] == "READY" and not aggregate["all_ready"]:
+        from inventory_projection import projection
+        v_before = await authority_version(db)
+        proj = await projection(db)
+        exp_declared = all(proj["counts"].get(k) is not None
+                           for k in ("expected_accounts", "expected_enabled", "expected_bots"))
+        exact = (exp_declared and not proj["violations"] and not proj["structural_defects"]
+                 and proj["approved_hash"] is not None and proj["approved_hash"] == proj["inventory_hash"])
+        all_ready = False
+        if exact:
+            enabled_ids = [r["account_id"] for r in proj["accounts"] if r.get("enabled")]
+            states = []
+            for aid in enabled_ids:
+                acc = await db.accounts.find_one({"_id": ObjectId(aid)})
+                states.append((await decide_account(db, acc)).get("state") if acc else "MISSING")
+            all_ready = bool(states) and all(st == "READY" for st in states)
+        v_after = await authority_version(db)
+        aggregate.update(attested=bool(exact and all_ready and v_before == v_after),
+                         basis="signed_exact_inventory" if exact else "platform_availability_only",
+                         input_version=v_after if v_before == v_after else None,
+                         inventory_hash=(proj["approved_hash"] or "")[:12] or None, as_of=proj["as_of"])
+    except Exception:  # noqa: BLE001 — fail closed: no attestation
+        aggregate["attested"] = False
+    if readiness["state"] == "READY" and not aggregate["attested"]:
         readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False,
-                     "dominant_code": "ACCOUNT_NOT_READY" if aggregate["accounts_enabled"] else "NO_ENABLED_ACCOUNTS"}
-    import hashlib as _hl
-    import hmac as _hm
-    _k = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
-    _msg = f"stoic-public-readiness-v1|{aggregate['input_version']}|{aggregate['accounts_enabled']}|{aggregate['accounts_ready']}|{readiness['state']}".encode()
-    aggregate["sig"] = _hm.new(_k, _msg, _hl.sha256).hexdigest() if _k else None
-    trading_ready = readiness["state"] == "READY" and connectivity == "active" and aggregate["all_ready"]
-    trading = {"connectivity": connectivity, "fresh_terminals": fresh, "enabled_accounts_present": enabled > 0,
-               "readiness": readiness, "aggregate": aggregate,
+                     "dominant_code": "INVENTORY_NOT_ATTESTED"}
+    trading_ready = readiness["state"] == "READY" and connectivity == "active" and aggregate["attested"]
+    # public payload: NO raw operational counts (r15 P1-02)
+    trading = {"connectivity": connectivity,
+               "readiness": {**{k: readiness.get(k) for k in ("state", "dominant_code", "decision_id")},
+                             "new_exposure_allowed": bool(readiness.get("new_exposure_allowed")) and trading_ready},
+               "attestation": aggregate,
                "label": ("Trading ready" if trading_ready
                          else f"Trading {readiness['state'].lower().replace('_', '-')} · connectivity {connectivity.replace('_', ' ')}")}
     headline = (("Platform controls available" if overall == "operational" else f"Platform {overall.replace('_', ' ')}")

@@ -221,6 +221,8 @@ async def _attach_attestation(db, user_id: str, payload: dict) -> dict:
                     "LIVE-classified accounts only, fresh broker deals and "
                     "a dataset free of synthetic/test accounts."}
     else:
+        from broker_statement_ledger import ledger_snapshot
+        payload["verified_ledger"] = await ledger_snapshot(db, user_id)   # r15 P1-03 — bound into the claim
         payload["attestation"] = perf_attestation(payload)
         payload["attestation_blocked"] = None
     return payload

@@ -143,6 +143,8 @@ async def _attestation_gate_scenario():
         out = await _attach_attestation(db, "clean_user", {"overall": {}})
         assert out["attestation"] is None
         assert "STATEMENT_LEDGER_MISSING" in out["attestation_blocked"]["reasons"]
+        # r15 P1-03 — the publication gate RE-VERIFIES: a bare RECONCILED row
+        # without verifiable signature/identity is still withheld
         await db.reconciliation_ledger.insert_one(
             {"_id": f"{clean_acc}:ST-1", "user_id": "clean_user", "account_id": str(clean_acc),
              "statement_id": "ST-1", "status": "RECONCILED",
@@ -150,8 +152,37 @@ async def _attestation_gate_scenario():
              "period_to": (now - timedelta(days=1)).isoformat(),
              "statement_sha256": "0" * 64})
         out = await _attach_attestation(db, "clean_user", {"overall": {}})
-        assert out["attestation_blocked"] is None
+        assert out["attestation"] is None
+        assert {"STATEMENT_IDENTITY_CHANGED", "STATEMENT_UNVERIFIABLE"} <= set(out["attestation_blocked"]["reasons"])
+        # a genuinely signed, identity-bound statement (via reconcile) passes
+        import broker_statement_ledger as bl
+        import base64 as _b64
+        from cryptography.hazmat.primitives import serialization as _ser
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        k = Ed25519PrivateKey.generate()
+        pub = _b64.b64encode(k.public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)).decode()
+        import os as _os
+        _os.environ["STATEMENT_ATTESTATION_PUBLIC_KEY_B64"] = pub
+        _os.environ.pop("STATEMENT_ATTESTATION_KEYS_JSON", None)
+        await db.reconciliation_ledger.delete_many({"user_id": "clean_user"})
+        await db.accounts.update_one({"_id": clean_acc}, {"$set": {
+            "broker": "ICMarkets", "verified_identity": {"broker_server": "ICMarkets-Live01", "account_number": "77001"},
+            "broker_environment": "LIVE", "base_currency": "USD"}})
+        await db.broker_deals.update_many({"user_id": "clean_user"}, {"$set": {
+            "account_id": str(clean_acc), "profit": 0, "commission": 0, "swap": 0,
+            "financial_reconciliation_status": "complete"}})
+        st = {"schema": bl.STATEMENT_SCHEMA, "statement_id": "ST-2", "account_id": str(clean_acc), "broker_login": "77001", "currency": "USD",
+              "period_from": (now - timedelta(days=31)).isoformat(), "period_to": (now - timedelta(days=1)).isoformat(),
+              "issuer": "ICMarkets", "issued_at": now.isoformat(), "opening_balance": 1000, "closing_balance": 1000,
+              "closing_equity": 1000, "trading_pnl": 0, "commission": 0, "swap": 0, "deposits": 0, "withdrawals": 0,
+              "corrections": 0, "fx_conversion": 0}
+        st = {**{k2: 0 for k2 in bl.MONEY_FIELDS}, **st}
+        sig = k.sign(bl.statement_body(st)).hex()
+        await bl.reconcile(db, "clean_user", st, sig, "ops@x")
+        out = await _attach_attestation(db, "clean_user", {"overall": {}})
+        assert out["attestation_blocked"] is None, out["attestation_blocked"]
         assert out["attestation"] is not None
+        assert out["verified_ledger"]["chain_ok"] and out["verified_ledger"]["ledger_rows"] == 1
 
         # synthetic/test account data → PROHIBITED
         await db.accounts.insert_one(

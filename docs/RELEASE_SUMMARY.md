@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `5814099f4477d3eee0acdc8b41362167bdaeadf2`
-- rc_lock: `5814099f4477d3eee0acdc8b41362167bdaeadf2` authoritative=False
+- Source commit: `f8966543d3d453019a7002730dd1566703553219`
+- rc_lock: `f8966543d3d453019a7002730dd1566703553219` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `22a68cbd9a3d601ebbfb69755d20cae31cf2a2a939b977cb5ac1c7030afdd762`
+- Test manifest sha256: `0826f55ff627c437d3b58f61cfa92a32d8580ebdfda12b93bd2caaa37acf2d31`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4392 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4405 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -25,5 +25,12 @@
 - input version exposed in readiness, Bot Health, Safety Blocks and denial receipts (partially exposed today). — owner: engineering
 - P2-04-r14 [P2] Preview/prod parity: production-built staging bundle with content hashes + non-production banner, Turnstile enabled on a stable staging hostname, /api/version equals the promoted build
 - full Turnstile matrix (valid-once, replay, wrong action/hostname, skew, outage fallback, script failure) run there. — owner: engineering
+- P1-05-r15 [P1] Authoritative release artifact: tagged workflow with the external signer on one staged tree → model manifest verifies against the pinned trusted key, strict RC lock, authoritative image digests, signed provenance
+- deployed build endpoint verified against that evidence. Cannot be produced from the preview. — owner: release-engineering
+- P1-06-r15 [P1] Publication order: images pushed to GHCR under a tag before signer canary / final scans / attestation. Required: build+scan by digest in quarantine, attest, canary, THEN publish the deployable tag once
+- admission requires signed provenance. — owner: release-engineering
+- P1-07-r15 [P1] Live 6/3/3, broker truth and zero-UNKNOWN closure are unproven on production: authority stays BLOCKED/CLOSE_ONLY and performance publication withheld until a signed pre-promotion + production-reconciliation evidence bundle from the exact deployed digest passes the final gate. — owner: operations
+- P2-05-r15 [P2] Preview/prod parity: content-hashed production build on stable staging with non-secret build identity
+- Turnstile valid-once/replay/wrong-binding/malformed/skew/outage/script-failure/recovery matrix executed there. — owner: engineering
 
-_generated 2026-09-27T19:39:33.528190+00:00 — regenerate on every release commit_
+_generated 2026-09-27T20:18:39.586114+00:00 — regenerate on every release commit_

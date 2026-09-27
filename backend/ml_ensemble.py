@@ -13,7 +13,7 @@ Transformer gets a fixed modest weight. Final p_win = Σ wᵢpᵢ / Σ wᵢ."""
 import hashlib
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pip_utils import price_to_pips
 from rl_policy import _session_of, _regime_of
@@ -348,23 +348,43 @@ async def approve_candidate(db, user_id: str, approver_email: str, note: str = "
     if await model_store.fetch(db, cand["digest"], MODEL_DIR) is None:
         raise HTTPException(status_code=409, detail={"code": "candidate_bytes_changed",
                                                      "message": "candidate digest not present/verifiable in the shared artifact store"})
-    # audit r14 P1-06 — ONE atomic conditional reservation per (candidate digest,
-    # principal): concurrent same-principal approvals collapse to a single record.
+    # audit r14 P1-06 / r15 P1-04 — ONE tenant-scoped reservation per (user, digest,
+    # principal) as a durable state machine: `pending` until the chained audit
+    # event AND the candidate update both succeed (→ `committed`); a failure in
+    # between deletes the reservation so the principal can retry; a stale
+    # `pending` left by a crash is reclaimable once its lease expires.
+    from pymongo import ReturnDocument
     from pymongo.errors import DuplicateKeyError
-    try:
-        await db.model_approval_principals.insert_one({"digest": cand["digest"], "principal_id": str(actor_id),
-                                                       "user_id": user_id, "at": datetime.now(timezone.utc).isoformat()})
-    except DuplicateKeyError:
-        raise HTTPException(status_code=409, detail={"code": "repeated_approver"})
     if any(str(a.get("principal_id")) == str(actor_id) for a in cand.get("approvals") or []):
         raise HTTPException(status_code=409, detail={"code": "repeated_approver"})
-    ev = await append_chained(db, {"actor_email": approver_email.lower(), "action": APPROVAL_ACTION,
-                                   "target_kind": "model_candidate", "target_id": user_id, "reason": (note or "")[:500],
-                                   "at": datetime.now(timezone.utc).isoformat(),
-                                   "meta": {"digest": cand["digest"], "user_id": user_id, "actor_id": str(actor_id)}})
-    rec = {"email": approver_email.lower(), "audit_event_id": ev["entry_hash"], "principal_id": str(actor_id), "at": ev["at"]}
-    await db.ml_ensembles.update_one({"user_id": user_id, "candidate.digest": cand["digest"]},
-                                     {"$push": {"candidate.approvals": rec}})
+    now = datetime.now(timezone.utc)
+    res_key = {"user_id": user_id, "digest": cand["digest"], "principal_id": str(actor_id)}
+    try:
+        await db.model_approval_principals.insert_one({**res_key, "status": "pending", "at": now.isoformat(),
+                                                       "lease_until": (now + timedelta(seconds=60)).isoformat()})
+    except DuplicateKeyError:
+        stale = await db.model_approval_principals.find_one_and_update(
+            {**res_key, "status": "pending", "lease_until": {"$lt": now.isoformat()}},
+            {"$set": {"lease_until": (now + timedelta(seconds=60)).isoformat(), "reclaimed_at": now.isoformat()}},
+            return_document=ReturnDocument.AFTER)
+        if stale is None:
+            raise HTTPException(status_code=409, detail={"code": "repeated_approver"})
+    try:
+        ev = await append_chained(db, {"actor_email": approver_email.lower(), "action": APPROVAL_ACTION,
+                                       "target_kind": "model_candidate", "target_id": user_id, "reason": (note or "")[:500],
+                                       "at": now.isoformat(),
+                                       "meta": {"digest": cand["digest"], "user_id": user_id, "actor_id": str(actor_id)}})
+        rec = {"email": approver_email.lower(), "audit_event_id": ev["entry_hash"], "principal_id": str(actor_id), "at": ev["at"]}
+        upd = await db.ml_ensembles.update_one(
+            {"user_id": user_id, "candidate.digest": cand["digest"], "candidate.approvals.principal_id": {"$ne": str(actor_id)}},
+            {"$push": {"candidate.approvals": rec}})
+        if upd.matched_count == 0:
+            raise RuntimeError("candidate changed or already approved by this principal")
+    except Exception:
+        await db.model_approval_principals.delete_one({**res_key, "status": "pending"})
+        raise
+    await db.model_approval_principals.update_one({**res_key, "status": "pending"},
+                                                  {"$set": {"status": "committed", "audit_event_id": rec["audit_event_id"]}})
     allrecs = (cand.get("approvals") or []) + [rec]
     return {"approval": rec, "approvals": allrecs,
             "sign_hint": f"python -m model_manifest sign --promote {user_id} " + " ".join(
@@ -378,21 +398,35 @@ async def flush_promotion_outbox(db, user_id: str | None = None) -> int:
     n = 0
     async for d in db.ml_ensembles.find(q):
         ob = d["promotion_outbox"]
-        # audit r14 P1-06 — atomic claim of the outbox record: concurrent flushers
-        # cannot both append the chained event (unique promotion_id reservation).
+        # audit r14 P1-06 / r15 P1-04 — publication is a leased state machine:
+        # claimed → published. Only a `published` record may clear the outbox;
+        # a crashed claimer's `claimed` record is reclaimed after its lease.
+        from pymongo import ReturnDocument
         from pymongo.errors import DuplicateKeyError
+        now = datetime.now(timezone.utc)
+        lease = (now + timedelta(seconds=60)).isoformat()
         try:
             await db.promotion_publications.insert_one({"promotion_id": ob["promotion_id"], "user_id": d["user_id"],
-                                                        "claimed_at": datetime.now(timezone.utc).isoformat()})
+                                                        "status": "claimed", "claimed_at": now.isoformat(), "lease_until": lease})
         except DuplicateKeyError:
-            await db.ml_ensembles.update_one({"user_id": d["user_id"], "promotion_outbox.promotion_id": ob["promotion_id"]},
-                                             {"$set": {"promotion_outbox": None}})
-            continue
+            pub = await db.promotion_publications.find_one({"promotion_id": ob["promotion_id"]})
+            if pub and pub.get("status") == "published":
+                await db.ml_ensembles.update_one({"user_id": d["user_id"], "promotion_outbox.promotion_id": ob["promotion_id"]},
+                                                 {"$set": {"promotion_outbox": None}})
+                continue
+            got = await db.promotion_publications.find_one_and_update(
+                {"promotion_id": ob["promotion_id"], "status": "claimed", "lease_until": {"$lt": now.isoformat()}},
+                {"$set": {"lease_until": lease, "reclaimed_at": now.isoformat()}}, return_document=ReturnDocument.AFTER)
+            if got is None:
+                continue  # another live claimer owns it
         if not await db.admin_audit_log.find_one({"action": "model_promoted", "meta.promotion_id": ob["promotion_id"]}):
             await append_chained(db, {"actor_email": ob["actor"], "action": "model_promoted", "target_kind": "model",
                                       "target_id": d["user_id"], "reason": "two-admin signed manifest promotion",
                                       "at": ob["at"], "meta": {k: ob[k] for k in ("digest", "manifest_sha256", "approvals",
                                                                                    "code_commit", "promotion_id")}})
+        # the chained event now EXISTS → mark published, then clear the outbox
+        await db.promotion_publications.update_one({"promotion_id": ob["promotion_id"]},
+                                                   {"$set": {"status": "published", "published_at": datetime.now(timezone.utc).isoformat()}})
         await db.ml_ensembles.update_one({"user_id": d["user_id"], "promotion_outbox.promotion_id": ob["promotion_id"]},
                                          {"$set": {"promotion_outbox": None}})
         n += 1

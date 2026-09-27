@@ -92,9 +92,9 @@ def statement_problems(st: dict, signature_hex: str) -> list:
             problems.append(f"{k} must be a string")
     # SEC-001 (round 13 audit) — statement authenticity must come from an INDEPENDENT broker /
     # statement-attestation key; never the platform release key. Absent key ⇒ fail closed.
-    pinned = (os.environ.get("STATEMENT_ATTESTATION_PUBLIC_KEY_B64") or "").strip()
+    pinned = attestation_key_for_issuer(st.get("issuer"))
     if not pinned:
-        problems.append("STATEMENT_ATTESTATION_PUBLIC_KEY_B64 not configured — statements cannot be authenticated")
+        problems.append("statement-attestation key not configured for this issuer — statements cannot be authenticated")
         return problems
     try:
         from release_signing import public_key_b64, verify_hex
@@ -111,6 +111,29 @@ def statement_problems(st: dict, signature_hex: str) -> list:
     return problems
 
 
+def _norm_issuer(x) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(x or "").lower())
+
+
+def attestation_key_for_issuer(issuer) -> str:
+    """Per-broker statement key registry (r15 P1-03): STATEMENT_ATTESTATION_KEYS_JSON
+    = {"<issuer>": "<ed25519 pub b64>", ...}. When the registry is configured
+    an unknown issuer has NO key (fail closed); otherwise the single pinned
+    STATEMENT_ATTESTATION_PUBLIC_KEY_B64 applies to every issuer."""
+    raw = (os.environ.get("STATEMENT_ATTESTATION_KEYS_JSON") or "").strip()
+    if raw:
+        try:
+            reg = {_norm_issuer(k): str(v).strip() for k, v in json.loads(raw).items()}
+        except (ValueError, AttributeError):
+            return ""
+        return reg.get(_norm_issuer(issuer), "")
+    return (os.environ.get("STATEMENT_ATTESTATION_PUBLIC_KEY_B64") or "").strip()
+
+
+def key_id(pub_b64: str) -> str:
+    return hashlib.sha256((pub_b64 or "").encode()).hexdigest()[:16]
+
+
 def _ts(v):
     try:
         if isinstance(v, (int, float)) or (isinstance(v, str) and v.isdigit()):
@@ -121,18 +144,26 @@ def _ts(v):
         return None
 
 
-async def platform_totals(db, user_id: str, account_id: str, period_from: str, period_to: str) -> dict:
+async def platform_totals(db, user_id: str, account_id: str, period_from: str, period_to: str,
+                          currency: str | None = None) -> dict:
     """Recompute the platform's books for the period from broker deals + recorded cash flows."""
     pf, pt = datetime.fromisoformat(period_from), datetime.fromisoformat(period_to)
-    tot = {"trading_pnl": 0.0, "commission": 0.0, "swap": 0.0, "deals": 0, "unreconciled_deals": 0, "unknown_deals": 0}
+    tot = {"trading_pnl": 0.0, "commission": 0.0, "swap": 0.0, "deals": 0, "unreconciled_deals": 0,
+           "unknown_deals": 0, "foreign_currency_rows": 0}
+    cur = str(currency or "").upper()
     async for d in db.broker_deals.find({"user_id": user_id, "account_id": account_id},
                                         {"deal_time": 1, "occurred_at": 1, "profit": 1, "commission": 1, "swap": 1,
-                                         "deal_entry": 1, "financial_reconciliation_status": 1}):
+                                         "deal_entry": 1, "financial_reconciliation_status": 1, "currency": 1,
+                                         "profit_currency": 1}):
         when = _ts(d.get("deal_time")) or _ts(d.get("occurred_at"))
         if when is None:
             tot["unknown_deals"] += 1
             continue
         if not (pf <= when < pt):
+            continue
+        dcur = str(d.get("profit_currency") or d.get("currency") or cur).upper()
+        if cur and dcur != cur:
+            tot["foreign_currency_rows"] += 1   # r15 P1-03 — never sum across currencies
             continue
         tot["deals"] += 1
         tot["trading_pnl"] += float(d.get("profit") or 0)
@@ -144,10 +175,14 @@ async def platform_totals(db, user_id: str, account_id: str, period_from: str, p
     async for f in db.account_cashflows.find({"user_id": user_id, "account_id": account_id}):
         when = _ts(f.get("at"))
         if when and pf <= when < pt and f.get("kind") in flows:
+            if cur and str(f.get("currency") or cur).upper() != cur:
+                tot["foreign_currency_rows"] += 1
+                continue
             flows[f["kind"]] += float(f.get("amount") or 0)
     return {**{k: cents(v) for k, v in tot.items() if k in ("trading_pnl", "commission", "swap")},
             **{k: cents(v) for k, v in flows.items()},
-            "deals": tot["deals"], "unreconciled_deals": tot["unreconciled_deals"], "unknown_deals": tot["unknown_deals"]}
+            "deals": tot["deals"], "unreconciled_deals": tot["unreconciled_deals"], "unknown_deals": tot["unknown_deals"],
+            "foreign_currency_rows": tot["foreign_currency_rows"]}
 
 
 def cash_flow_adjusted_return(st: dict) -> float | None:
@@ -207,7 +242,13 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
             problem = None
         if problem:
             raise HTTPException(status_code=400, detail={"code": "statement_rejected", "problems": [problem]})
-    totals = await platform_totals(db, user_id, statement["account_id"], statement["period_from"], statement["period_to"])
+    # r15 P1-03 — currency binding: statement currency must be the account's base currency
+    acc_cur = str(acc.get("base_currency") or acc.get("currency") or "").upper()
+    if acc_cur and str(statement["currency"]).upper() != acc_cur:
+        raise HTTPException(status_code=400, detail={
+            "code": "statement_rejected", "problems": [f"statement currency {statement['currency']} != account base currency {acc_cur}"]})
+    totals = await platform_totals(db, user_id, statement["account_id"], statement["period_from"], statement["period_to"],
+                                   currency=statement["currency"])
     discrepancies = []
     for k in ("trading_pnl", "commission", "swap", "deposits", "withdrawals", "corrections", "fx_conversion"):
         s, p = cents(statement[k]), totals[k]
@@ -218,6 +259,8 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
         status = "DISCREPANCY"
     if totals["unreconciled_deals"] or totals["unknown_deals"]:
         status = "UNRECONCILED_DEALS"
+    if totals.get("foreign_currency_rows"):
+        status = "MIXED_CURRENCY"
     if env != "LIVE":
         status = f"NON_LIVE_ENVIRONMENT:{env}"
     if totals["deals"] == 0 and cents(statement["trading_pnl"]) != 0:
@@ -229,7 +272,10 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
            "platform": totals, "discrepancies": discrepancies,
            "return_pct": cash_flow_adjusted_return(statement), "return_formula_version": RETURN_FORMULA_VERSION,
            "statement_sha256": hashlib.sha256(statement_body(statement)).hexdigest(), "signature_hex": signature_hex,
-           "issuer": statement["issuer"], "recorded_by": actor_email, "recorded_at": datetime.now(timezone.utc).isoformat()}
+           "issuer": statement["issuer"], "recorded_by": actor_email, "recorded_at": datetime.now(timezone.utc).isoformat(),
+           # r15 P1-03 — verbatim statement + key id so publication can RE-VERIFY
+           "statement_raw": dict(statement), "key_id": key_id(attestation_key_for_issuer(statement["issuer"])),
+           "broker_login": str(statement["broker_login"])}
     # audit r14 P1-03 — APPEND-ONLY: an existing (account, statement_id) row is
     # immutable. Same bytes → idempotent; different bytes → refused.
     existing = await db.reconciliation_ledger.find_one({"_id": row["_id"]})
@@ -260,7 +306,11 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
         except DuplicateKeyError as e:
             existing = await db.reconciliation_ledger.find_one({"_id": row["_id"]})
             if existing:
-                return existing  # same statement raced with itself → idempotent
+                if existing.get("statement_sha256") == row["statement_sha256"]:
+                    return existing  # same statement raced with itself → idempotent
+                raise HTTPException(status_code=409, detail={
+                    "code": "statement_overwrite_refused",
+                    "message": "A different statement with this id won the race — ledger rows are append-only."}) from e
             if _attempt == 7:
                 raise HTTPException(status_code=503, detail={"code": "ledger_busy",
                                                              "message": "Ledger sequence contention — retry."}) from e
@@ -283,23 +333,87 @@ def _oid(v):
         return v
 
 
+def _root_sig(user_id: str, seq: int, root: str) -> str | None:
+    key = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
+    return hmac.new(key, f"stoic-statement-ledger-v1|{user_id}|{seq}|{root}".encode(), hashlib.sha256).hexdigest() if key else None
+
+
+async def verify_chain(db, user_id: str) -> dict:
+    """Recompute the per-user hash chain + anchor HMACs (r15 P1-03)."""
+    rows = await db.reconciliation_ledger.find({"user_id": user_id, "ledger_seq": {"$exists": True}}).sort("ledger_seq", 1).to_list(5000)
+    prev_root, problems = "", []
+    for i, r in enumerate(rows, start=1):
+        if int(r.get("ledger_seq") or -1) != i:
+            problems.append(f"sequence break at {i}")
+            break
+        want = hashlib.sha256(f"{prev_root}|{r.get('statement_sha256')}|{r.get('status')}".encode()).hexdigest()
+        if r.get("ledger_root") != want:
+            problems.append(f"root mismatch at seq {i}")
+            break
+        sig = _root_sig(user_id, i, want)
+        if sig and r.get("ledger_root_sig") != sig:
+            problems.append(f"anchor signature mismatch at seq {i}")
+            break
+        prev_root = want
+    return {"rows": len(rows), "root": prev_root or None, "problems": problems}
+
+
 async def ledger_gate(db, user_id: str) -> list:
-    """Attestation-gate reasons: every enabled account needs a current RECONCILED period."""
+    """Publication-time revalidation (r15 P1-03): every enabled account needs a
+    current RECONCILED statement whose signature STILL verifies against the
+    issuer's registered key, whose broker login/currency STILL match the account,
+    with continuous period coverage over the publication window, on an intact
+    per-user hash chain. Any failure withholds the claim."""
+    from identity_model import authoritative_account_number
     reasons = []
     now = datetime.now(timezone.utc)
-    async for a in db.accounts.find({"user_id": user_id, "trading_enabled": True, "status": {"$ne": "deleted"}}, {"_id": 1}):
-        row = await db.reconciliation_ledger.find_one({"user_id": user_id, "account_id": str(a["_id"])}, sort=[("period_to", -1)])
-        if not row:
+    chain = await verify_chain(db, user_id)
+    if chain["problems"]:
+        reasons.append("LEDGER_CHAIN_BROKEN")
+    async for a in db.accounts.find({"user_id": user_id, "trading_enabled": True, "status": {"$ne": "deleted"}}):
+        rows = await db.reconciliation_ledger.find({"user_id": user_id, "account_id": str(a["_id"])}).sort("period_from", 1).to_list(1000)
+        if not rows:
             reasons.append("STATEMENT_LEDGER_MISSING")
             continue
-        if row["status"] != "RECONCILED":
-            reasons.append(f"STATEMENT_{row['status'].split(':')[0]}")
+        latest = max(rows, key=lambda r: r.get("period_to") or "")
+        if latest["status"] != "RECONCILED":
+            reasons.append(f"STATEMENT_{latest['status'].split(':')[0]}")
         try:
-            if (now - datetime.fromisoformat(row["period_to"])).days > STATEMENT_MAX_AGE_DAYS:
+            if (now - datetime.fromisoformat(latest["period_to"])).days > STATEMENT_MAX_AGE_DAYS:
                 reasons.append("STATEMENT_PERIOD_STALE")
         except (ValueError, TypeError):
             reasons.append("STATEMENT_PERIOD_STALE")
+        # identity / currency against the account as it is NOW
+        login_now = str(authoritative_account_number(a) or "").strip()
+        if not login_now or str(latest.get("broker_login") or (latest.get("statement_raw") or {}).get("broker_login") or "") != login_now:
+            reasons.append("STATEMENT_IDENTITY_CHANGED")
+        acc_cur = str(a.get("base_currency") or a.get("currency") or "").upper()
+        if acc_cur and str(latest.get("currency") or "").upper() != acc_cur:
+            reasons.append("STATEMENT_CURRENCY_MISMATCH")
+        # signatures re-verified against the CURRENT issuer key mapping
+        window_start = now - timedelta(days=STATEMENT_MAX_AGE_DAYS)
+        in_window = [r for r in rows if _ts(r.get("period_to")) and _ts(r.get("period_to")) >= window_start]
+        for r in in_window:
+            raw = r.get("statement_raw")
+            if not raw or statement_problems(raw, r.get("signature_hex")):
+                reasons.append("STATEMENT_SIGNATURE_INVALID" if raw else "STATEMENT_UNVERIFIABLE")
+                break
+            if r.get("key_id") and r["key_id"] != key_id(attestation_key_for_issuer(raw.get("issuer"))):
+                reasons.append("STATEMENT_KEY_ROTATED")
+                break
+        # continuous coverage across the window
+        for prev, cur in zip(in_window, in_window[1:]):
+            gap_h = (_ts(cur.get("period_from")) - _ts(prev.get("period_to"))).total_seconds() / 3600
+            if abs(gap_h) > PERIOD_JOIN_TOLERANCE_H:
+                reasons.append("STATEMENT_COVERAGE_GAP")
+                break
     return sorted(set(reasons))
+
+
+async def ledger_snapshot(db, user_id: str) -> dict:
+    """Immutable verified-ledger root for embedding in a public attestation."""
+    chain = await verify_chain(db, user_id)
+    return {"ledger_rows": chain["rows"], "ledger_root": chain["root"], "chain_ok": not chain["problems"]}
 
 
 async def ledger_rows(db, user_id: str, account_id: str | None = None) -> list:

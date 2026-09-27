@@ -258,6 +258,11 @@ async def nl_command_confirm(payload: dict, user=Depends(get_current_user)):
     from canonical_decision import decide_user
     authority = await decide_user(db, user["id"], fresh=True)
     res = await nx.run_claimed(db, "nl_proposals", claimed, user["id"], actions, authority=authority)
+    if res["status"] == "lease_lost":
+        raise HTTPException(status_code=409, detail={
+            "code": "execution_in_progress",
+            "message": "This execution was taken over by a recovery worker — check the proposal receipts.",
+            "execution_id": res["execution_id"]})
     await ws_manager.broadcast(user["id"], "nl_command_executed", {
         "summary": claimed.get("summary"), "receipts": res["receipts"], "prompt": claimed.get("prompt"),
     })
@@ -307,18 +312,14 @@ async def nl_command(payload: dict, user=Depends(get_current_user)):
     actions = parsed.get("actions") or []
     if not actions:
         raise HTTPException(status_code=400, detail="No actions produced from prompt")
-    for a in actions:
-        if str(a.get("type") or "").upper() not in KNOWN_NL_ACTIONS:
-            raise HTTPException(status_code=400,
-                                detail=f"unknown action type {a.get('type')}")
-        # a trigger's deferred `then` list is validated at ARM time too
-        if str(a.get("type") or "").upper() == "SET_CONDITIONAL_TRIGGER":
-            for t in ((a.get("params") or {}).get("then") or []):
-                if str(t.get("type") or "").upper() not in KNOWN_NL_ACTIONS - {"SET_CONDITIONAL_TRIGGER"}:
-                    raise HTTPException(status_code=400,
-                                        detail=f"unknown trigger action type {t.get('type')}")
-    if len(actions) > 8:
-        raise HTTPException(status_code=400, detail="too many actions in one command (max 8)")
+    # audit r15 P1-01 — strict typed schemas: bounded finite thresholds,
+    # enumerated conditions/targets/risk levels, ≤8 actions, ≤3 nested, no
+    # recursive triggers. Rejected BEFORE anything is previewed or stored.
+    from nl_actions import validate_actions
+    try:
+        actions = validate_actions(actions)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"code": "invalid_action", "message": str(e)})
 
     # AI → deterministic PREVIEW → operator approval for EVERY command.
     # Nothing touches bots or capital until /command/confirm carries the
@@ -366,9 +367,10 @@ async def delete_trigger(trigger_id: str, user=Depends(get_current_user)):
 
 
 # ------------------- Action Executors --------------------------------------
-async def execute_one(user_id: str, act: dict) -> dict:
+async def execute_one(user_id: str, act: dict, idem_key: str | None = None) -> dict:
     """Run ONE action and return its result. Raises on failure so the
-    exactly-once executor (nl_execution) records a failed receipt."""
+    exactly-once executor (nl_execution) records a failed receipt. `idem_key`
+    is propagated to the ultimate side effect (trigger insert, trade/bot writes)."""
     a_type = (act.get("type") or "").upper()
     target = act.get("target") or "all"
     params = act.get("params") or {}
@@ -387,8 +389,8 @@ async def execute_one(user_id: str, act: dict) -> dict:
         return await _disable_all_bots_and_close_trades(
             {"user_id": user_id}, broadcast_user_id=user_id)
     if a_type == "SET_CONDITIONAL_TRIGGER":
-        return await _save_trigger(user_id, params)
-    return {"skipped": True, "reason": f"unknown action {a_type}"}
+        return await _save_trigger(user_id, params, idem_key=idem_key)
+    raise ValueError(f"unknown action {a_type}")
 
 
 async def _execute_actions(user_id: str, actions: list) -> list:
@@ -432,22 +434,47 @@ async def _enable_bots(user_id, target):
 
 
 async def _move_stops_breakeven(user_id, target):
+    """Monotonic risk reduction ONLY (audit r15 P1-01): a BUY stop may only
+    move UP to entry, a SELL stop only DOWN to entry; a stop already at or
+    better than entry is left alone, and a stop is never placed on the wrong
+    side of the current market."""
     db = get_db()
     q = {"user_id": user_id, "status": "open"}
     if target and target not in ("all", ""):
         q["symbol"] = target.upper()
-    cursor = db.trades.find(q)
-    trades = await cursor.to_list(length=500)
-    updated = 0
+    trades = await db.trades.find(q).to_list(length=500)
+    updated, skipped = 0, []
     for t in trades:
-        new_sl = t["entry_price"]
-        await db.trades.update_one(
-            {"_id": t["_id"]},
-            {"$set": {"stop_loss": new_sl, "sl_adjustment": "nl_breakeven",
-                      "sl_updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
-        updated += 1
-    return {"trades_updated": updated, "new_stop": "entry_price"}
+        decision = breakeven_decision(t)
+        if decision["move"]:
+            res = await db.trades.update_one(
+                {"_id": t["_id"], "status": "open", "stop_loss": t.get("stop_loss")},
+                {"$set": {"stop_loss": decision["new_stop"], "sl_adjustment": "nl_breakeven",
+                          "sl_updated_at": datetime.now(timezone.utc).isoformat()}})
+            updated += res.modified_count
+        else:
+            skipped.append({"trade_id": str(t["_id"]), "reason": decision["reason"]})
+    return {"trades_updated": updated, "skipped": skipped, "new_stop": "entry_price"}
+
+
+def breakeven_decision(t: dict) -> dict:
+    """Pure: decide whether moving this trade's stop to entry REDUCES risk."""
+    side = str(t.get("action") or t.get("side") or "").upper()
+    entry = t.get("entry_price")
+    sl = t.get("stop_loss")
+    px = t.get("current_price") or t.get("price")
+    if entry is None or side not in ("BUY", "SELL"):
+        return {"move": False, "reason": "unknown side/entry"}
+    entry = float(entry)
+    if sl is not None:
+        sl = float(sl)
+        if (side == "BUY" and sl >= entry) or (side == "SELL" and sl <= entry):
+            return {"move": False, "reason": "stop already at or better than entry"}
+    if px is not None:
+        px = float(px)
+        if (side == "BUY" and px <= entry) or (side == "SELL" and px >= entry):
+            return {"move": False, "reason": "entry is on the wrong side of the market — stop would trigger/reject"}
+    return {"move": True, "new_stop": entry}
 
 
 async def _close_all_trades(user_id, target):
@@ -470,7 +497,7 @@ async def _set_risk_level(user_id, risk_level):
     needed, the AI orchestrator can call `_apply_to_target` directly.
     """
     if risk_level not in ("low", "medium", "high", "extreme"):
-        return {"error": f"invalid risk_level {risk_level}"}
+        raise ValueError(f"invalid risk_level {risk_level}")
     db = get_db()
     from research_agent.proposal_targeting import (
         resolve_target_configs, apply_to_bot_configs,
@@ -493,10 +520,17 @@ async def _set_risk_level(user_id, risk_level):
             "target_mode": resolved_mode}
 
 
-async def _save_trigger(user_id, params):
+async def _save_trigger(user_id, params, idem_key: str | None = None):
     db = get_db()
+    if idem_key:
+        existing = await db.conditional_triggers.find_one({"idem_key": idem_key, "user_id": user_id})
+        if existing:
+            return {"trigger_id": str(existing["_id"]), "symbol": existing["symbol"],
+                    "condition": existing["condition"], "threshold_pct": existing["threshold_pct"],
+                    "deduped": True}
     doc = {
         "user_id": user_id,
+        "idem_key": idem_key,
         "symbol": (params.get("symbol") or "BTCUSD").upper(),
         "condition": params.get("condition", "drop"),
         "threshold_pct": float(params.get("threshold_pct", 3.0)),

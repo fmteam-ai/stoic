@@ -210,7 +210,8 @@ export default function Notifications() {
                 </div>
 
                 {/* Channel check */}
-                <AlertTestPanel cfg={cfg} userEmail={user?.email} onResult={onTestResult} />
+                <AlertTestPanel cfg={cfg} userEmail={user?.email} onResult={onTestResult}
+                    onVerified={() => setCfg(c => ({ ...c, telegram_verified: true }))} />
 
                 {/* Alert types */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A]">

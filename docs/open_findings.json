@@ -64,5 +64,29 @@
     "severity": "P2",
     "title": "Preview/prod parity: production-built staging bundle with content hashes + non-production banner, Turnstile enabled on a stable staging hostname, /api/version equals the promoted build; full Turnstile matrix (valid-once, replay, wrong action/hostname, skew, outage fallback, script failure) run there.",
     "owner": "engineering"
+  },
+  {
+    "id": "P1-05-r15",
+    "severity": "P1",
+    "title": "Authoritative release artifact: tagged workflow with the external signer on one staged tree \u2192 model manifest verifies against the pinned trusted key, strict RC lock, authoritative image digests, signed provenance; deployed build endpoint verified against that evidence. Cannot be produced from the preview.",
+    "owner": "release-engineering"
+  },
+  {
+    "id": "P1-06-r15",
+    "severity": "P1",
+    "title": "Publication order: images pushed to GHCR under a tag before signer canary / final scans / attestation. Required: build+scan by digest in quarantine, attest, canary, THEN publish the deployable tag once; admission requires signed provenance.",
+    "owner": "release-engineering"
+  },
+  {
+    "id": "P1-07-r15",
+    "severity": "P1",
+    "title": "Live 6/3/3, broker truth and zero-UNKNOWN closure are unproven on production: authority stays BLOCKED/CLOSE_ONLY and performance publication withheld until a signed pre-promotion + production-reconciliation evidence bundle from the exact deployed digest passes the final gate.",
+    "owner": "operations"
+  },
+  {
+    "id": "P2-05-r15",
+    "severity": "P2",
+    "title": "Preview/prod parity: content-hashed production build on stable staging with non-secret build identity; Turnstile valid-once/replay/wrong-binding/malformed/skew/outage/script-failure/recovery matrix executed there.",
+    "owner": "engineering"
   }
 ]

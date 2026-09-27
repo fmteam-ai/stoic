@@ -526,7 +526,7 @@ class TestInventoryTwoAdmin:
 class TestRound13:
     def test_public_status_separates_infrastructure_from_trading(self):
         src = open(os.path.join(_BACKEND_DIR, "routes", "portal_routes.py")).read()
-        assert '"trading": trading' in src and '"connectivity": connectivity' in src and 'account' not in src.split('trading = {')[1].split('}')[0].lower().replace("enabled_accounts_present", "")
+        assert '"trading": trading' in src and '"connectivity": connectivity' in src and 'account' not in src.split('trading = {')[1].split('}')[0].lower().replace("enabled_accounts_present", "").replace("attestation", "")
         assert 'readiness["state"] == "READY" and connectivity == "active"' in src      # "Trading ready" only when canonical READY + fresh terminals
         login = open(os.path.join(ROOT, "frontend", "src", "pages", "Login.jsx")).read()
         assert "SYSTEM OPERATIONAL" not in login and "headline" in login

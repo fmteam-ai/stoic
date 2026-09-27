@@ -44,6 +44,8 @@ async def fire_claimed(db, t: dict) -> dict:
     authority = await decide_user(db, t["user_id"], fresh=True)
     res = await nx.run_claimed(db, "conditional_triggers", t, t["user_id"],
                                t.get("then") or [], authority=authority)
+    if res["status"] == "lease_lost":
+        return res
     await db.trigger_fire_events.update_one(
         {"event_id": ex["id"]},
         {"$set": {"status": res["status"], "receipts": res["receipts"],

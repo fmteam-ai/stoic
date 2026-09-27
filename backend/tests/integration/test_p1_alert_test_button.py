@@ -34,10 +34,13 @@ def user(request):
     from bson import ObjectId
     uid = str(ObjectId())
     u = {"id": uid, "email": f"alert-{uid}@test.local", "name": "Alert Tester", "role": "user"}
+    from bson import ObjectId as _O
+    _run(get_db().users.insert_one({"_id": _O(uid), "email": u["email"], "role": "user", "email_verified": True}))
 
     def _cleanup():
         db = get_db()
         _run(db.notifications.delete_many({"user_id": uid}))
+        _run(db.users.delete_one({"_id": _O(uid)}))
         _run(db.notification_test_audit.delete_many({"actor_email": u["email"]}))
         _run(db.rate_limits.delete_many({"_id": {"$regex": f"^alert_test_.*:{uid}:"}}))
     request.addfinalizer(_cleanup)
@@ -119,13 +122,51 @@ def test_email_test_rate_limited(monkeypatch, user):
     assert ei.value.status_code == 429
 
 
-def test_telegram_test_unconfigured_stamps_failure(user):
+def test_telegram_test_requires_verified_chat_then_unconfigured(user):
     from routes import notification_routes as nr
+    # r15 P2-02 — an unverified chat is refused BEFORE any provider call
     with pytest.raises(HTTPException) as ei:
         _run(nr.test_telegram(_Req(), user=user))
-    assert ei.value.status_code == 400
+    assert ei.value.status_code == 403 and ei.value.detail["code"] == "destination_unverified"
+    _run(_db().notifications.update_one({"user_id": user["id"]}, {"$set": {"telegram_verified": True}}, upsert=True))
+    with pytest.raises(HTTPException) as ei2:
+        _run(nr.test_telegram(_Req(), user=user))
+    assert ei2.value.status_code == 400
     cfg = _run(nr.get_telegram(user=user))
     assert cfg["last_test"]["telegram"]["error"] == "telegram_not_configured"
+
+
+def test_email_test_refuses_legacy_unverified_state(monkeypatch, user):
+    from routes import notification_routes as nr
+    import email_sender
+    monkeypatch.setattr(email_sender, "is_configured", lambda: True)
+    _run(_db().users.update_one({"email": user["email"]}, {"$unset": {"email_verified": ""}}))
+    with pytest.raises(HTTPException) as ei:
+        _run(nr.test_email(_Req(), user=user))
+    assert ei.value.status_code == 403 and ei.value.detail["code"] == "destination_unverified"
+
+
+def test_telegram_verify_handshake(monkeypatch, user):
+    from routes import notification_routes as nr
+    sent = {}
+
+    async def _fake_send(db, uid, text):
+        sent["text"] = text
+        return True, "42", None
+    monkeypatch.setattr(nr, "_telegram_send", _fake_send)
+    _run(_db().notifications.update_one({"user_id": user["id"]}, {"$set": {"telegram_bot_token": "x", "telegram_chat_id": "1"}}, upsert=True))
+    r = _run(nr.telegram_verify_start(_Req(), user=user))
+    assert r["sent"] is True and r["provider_receipt"] == "42"
+    import re as _re
+    code = _re.search(r"\*(\d{6})\*", sent["text"]).group(1)
+    with pytest.raises(HTTPException) as ei:
+        _run(nr.telegram_verify_confirm({"code": "000000" if code != "000000" else "111111"}, _Req(), user=user))
+    assert ei.value.detail["code"] == "wrong_code"
+    assert _run(nr.telegram_verify_confirm({"code": code}, _Req(), user=user))["telegram_verified"] is True
+    assert _run(nr.get_telegram(user=user))["telegram_verified"] is True
+    # rebinding the chat resets verification
+    _run(nr.update_telegram(nr.TelegramConfigIn(telegram_chat_id="2"), user=user))
+    assert _run(nr.get_telegram(user=user))["telegram_verified"] is False
 
 
 def test_mask_email():

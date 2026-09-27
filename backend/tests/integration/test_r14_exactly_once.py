@@ -58,7 +58,7 @@ def test_fifty_concurrent_confirms_execute_once(world, monkeypatch):
     user = {"id": uid, "email": world["email"]}
     calls = []
 
-    async def _exec(u, act):
+    async def _exec(u, act, **kw):
         calls.append(act["type"])
         await asyncio.sleep(0.01)
         return {"ok": True}
@@ -102,7 +102,7 @@ def test_crash_recovery_never_replays_completed_action(world, monkeypatch):
     class Boom(Exception):
         pass
 
-    async def _exec(u, act):
+    async def _exec(u, act, **kw):
         calls.append(act["type"])
         return {"ok": True}
     monkeypatch.setattr(nr, "execute_one", _exec)
@@ -110,22 +110,17 @@ def test_crash_recovery_never_replays_completed_action(world, monkeypatch):
                {"type": "MOVE_STOPS_BREAKEVEN", "target": "all"}]
     doc = _proposal(db, uid, actions)
     claimed = _run(nx.claim(db, "nl_proposals", {"_id": ObjectId(doc["id"])}, from_status="pending"))
-    # hard crash AFTER action 1 ran but BEFORE its post-receipt is written:
-    # _now() is called once for the started-receipt and once for the final
-    # receipt of every action → the 4th call is exactly that moment.
-    real_now = nx._now
-    n = {"c": 0}
+    # hard crash AFTER action 1 ran but BEFORE its post-receipt is written
+    real_write = nx._write_receipt
 
-    def _crashing_now():
-        n["c"] += 1
-        if n["c"] >= 4:
+    async def _crashing_write(db_, coll, doc_, key, rec):
+        if rec.get("index") == 1 and rec.get("state") == "done":
             raise Boom()
-        return real_now()
-    n["c"] = 0
-    monkeypatch.setattr(nx, "_now", _crashing_now)
+        return await real_write(db_, coll, doc_, key, rec)
+    monkeypatch.setattr(nx, "_write_receipt", _crashing_write)
     with pytest.raises(Boom):
         _run(nx.run_claimed(db, "nl_proposals", claimed, uid, actions, authority=READY))
-    monkeypatch.setattr(nx, "_now", real_now)
+    monkeypatch.setattr(nx, "_write_receipt", real_write)
     real_update = db.nl_proposals.update_one
     assert calls == ["CLOSE_ALL_TRADES", "DISABLE_BOTS"]
 
@@ -157,7 +152,7 @@ def test_partial_failure_is_visible_and_authority_suppresses_risk_increase(world
     db, uid = world["db"], world["id"]
     user = {"id": uid, "email": world["email"]}
 
-    async def _exec(u, act):
+    async def _exec(u, act, **kw):
         if act["type"] == "MOVE_STOPS_BREAKEVEN":
             raise RuntimeError("broker down")
         return {"ok": True}
@@ -213,7 +208,7 @@ def test_two_sweepers_one_claim_and_authority_suppression(world, monkeypatch):
     db, uid = world["db"], world["id"]
     calls = []
 
-    async def _exec(u, act):
+    async def _exec(u, act, **kw):
         calls.append(act["type"])
         return {"ok": True}
 
@@ -255,7 +250,7 @@ def test_trigger_lease_recovery_no_duplicate(world, monkeypatch):
     db, uid = world["db"], world["id"]
     calls = []
 
-    async def _exec(u, act):
+    async def _exec(u, act, **kw):
         calls.append(act["type"])
         return {"ok": True}
 
@@ -349,8 +344,9 @@ def test_trigger_then_actions_validated_at_arm_time(world, monkeypatch):
 
     async def _fake(prompt):
         return {"actions": [{"type": "SET_CONDITIONAL_TRIGGER",
-                             "params": {"symbol": "BTCUSD", "then": [{"type": "DROP_TABLES"}]}}]}
+                             "params": {"symbol": "BTCUSD", "threshold_pct": 3, "then": [{"type": "DROP_TABLES"}]}}]}
     monkeypatch.setattr(nr, "interpret_command", _fake)
     with pytest.raises(HTTPException) as ei:
         _run(nr.nl_command({"prompt": "x"}, user=user))
-    assert ei.value.status_code == 400 and "trigger action" in str(ei.value.detail)
+    assert ei.value.status_code == 400 and ei.value.detail["code"] == "invalid_action"
+    assert "then" in ei.value.detail["message"]

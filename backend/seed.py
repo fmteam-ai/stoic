@@ -287,7 +287,12 @@ async def ensure_indexes():
         logging.getLogger("seed").warning("bot_configs validator not applied: %s", e)
     # audit r14 P0 — exactly-once execution ledgers
     await db.trigger_fire_events.create_index("event_id", unique=True)
-    await db.model_approval_principals.create_index([("digest", 1), ("principal_id", 1)], unique=True)
+    await db.conditional_triggers.create_index("idem_key", unique=True, sparse=True)
+    try:
+        await db.model_approval_principals.drop_index("digest_1_principal_id_1")
+    except Exception:  # noqa: BLE001 — index may not exist
+        pass
+    await db.model_approval_principals.create_index([("user_id", 1), ("digest", 1), ("principal_id", 1)], unique=True)
     await db.promotion_publications.create_index("promotion_id", unique=True)
     await db.reconciliation_ledger.create_index([("user_id", 1), ("ledger_seq", 1)], unique=True,
                                                 partialFilterExpression={"ledger_seq": {"$exists": True}})
