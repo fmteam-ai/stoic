@@ -1,13 +1,15 @@
 # Fixing the RELEASE_SIGNER preflight failure
 
 ## What the failure means
-Your production env still has **`RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD`** set.
+Your production env still has **`RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD`** set, or
+`RELEASE_SIGNER=local` / `ED25519_SIGNING_KEY_B64` is present.
 That override was **removed in v56** — a set value is now treated as a
 misconfiguration and turns the preflight check from *warn* into **fail**.
 
-It does NOT block boot. But any signing operation in production (audit
-anchors, release manifests) errors until an external signer is configured,
-because the private signing key must never live inside the API process.
+Since audit round 9 (P1-01) this **BLOCKS BOOT**: with `APP_ENV=production`
+the API refuses to start (`release_signing.signer_config_violations`) until
+an external signer is fully configured and the private key is absent from the
+API environment — a failed deploy health check is the visible symptom.
 
 ## Step 1 — clear the fail immediately
 In the production deployment environment variables:
