@@ -214,7 +214,7 @@ def test_r6_reconcile_scoped_signed_and_excludes_synthetic(sdb, uid):
                              "broker_server": "Broker-Live", "bridge_token": f"{uid}_bt2"})
     sdb.accounts.insert_one({"user_id": uid, "label": "chaos_acct_9", "status": "connected", "trading_enabled": True,
                              "mode": "live", "last_heartbeat": _iso(now), "bridge_token": f"{uid}_bt3"})       # synthetic → excluded, never counted
-    sdb.bot_configs.insert_one({"user_id": uid, "account_id": str(real), "enabled": True, "active": True, "strategy": "s"})
+    sdb.bot_configs.insert_one({"user_id": uid, "account_id": str(real), "active": True, "strategy": "s"})
     env = {"APP_ENV": "production", "GIT_SHA": "deadbeef", "LEDGER_ANCHOR_KEY": "r6-dedicated-key"}
     r = _reconcile(["--expect", "2/1/1", "--scope-user", uid, "--expect-ids", str(real)], env)
     rep = json.loads(r.stdout)

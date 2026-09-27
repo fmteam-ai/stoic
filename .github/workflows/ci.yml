@@ -108,6 +108,16 @@ jobs:
         run: |
           cd backend
           python -m pytest tests/integration -m integration -q
+      - name: Critical controls lane (audit r14 P1-05) — REQUIRED; zero
+          collection / unexpected skips refused
+        run: |
+          cd backend
+          N=$(python -m pytest tests/integration -m critical_controls --collect-only -q 2>/dev/null | grep -c '::')
+          echo "critical_controls collected=$N"
+          test "$N" -ge 20 || { echo "critical_controls lane collected $N tests (<20) — lane broken"; exit 1; }
+          python -m pytest tests/integration -m critical_controls -q -rs --junitxml=/tmp/junit-critical.xml \
+            | tee /tmp/critical.log
+          ! grep -E '^SKIPPED' /tmp/critical.log || { echo "unexpected skips in critical_controls"; exit 1; }
 
   clean-deploy-cert:
     # iter-213 P1 — clean-machine deployment certification: from a FRESH
@@ -424,7 +434,7 @@ jobs:
 
   container-build:
     runs-on: ubuntu-latest
-    needs: [backend-unit, frontend-build]
+    needs: [backend-unit, backend-integration, frontend-build]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Build backend image

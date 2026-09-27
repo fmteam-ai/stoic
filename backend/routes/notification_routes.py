@@ -1,6 +1,7 @@
 """Notifications routes — per-user Telegram alert settings."""
 from datetime import datetime, timezone
 from typing import Optional, Dict
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 import httpx
@@ -53,14 +54,39 @@ def _mask_email(addr: str) -> str:
     return f"{local[:2]}***@{domain}"
 
 
-async def _stamp_test(db, user_id: str, channel: str, ok: bool, error: str | None = None):
+async def _stamp_test(db, user_id: str, channel: str, ok: bool, error: str | None = None,
+                      receipt: str | None = None):
     await db.notifications.update_one(
         {"user_id": user_id},
         {"$set": {"user_id": user_id,
                   f"last_test.{channel}": {
-                      "ok": ok, "error": error,
+                      "ok": ok, "error": error, "provider_receipt": receipt,
                       "at": datetime.now(timezone.utc).isoformat()}}},
         upsert=True)
+
+
+async def _test_safeguards(db, user: dict, request: Request, channel: str) -> None:
+    """Audit r14 P2-05 — delivery tests are user-scoped, step-up gated for
+    MFA-enrolled users, need a verified destination, and are audit-chained."""
+    full = await db.users.find_one({"_id": ObjectId(user["id"])},
+                                   {"two_factor_enabled": 1, "email_verified": 1})
+    if channel == "email" and (full or {}).get("email_verified") is False:
+        raise HTTPException(status_code=403, detail={
+            "code": "destination_unverified",
+            "message": "Verify your email address before sending a test alert to it."})
+    if (full or {}).get("two_factor_enabled"):
+        from step_up import require_step_up
+        await require_step_up(db, user, request, "alert_test")
+
+
+async def _audit_test(db, user: dict, channel: str, ok: bool, receipt: str | None, error: str | None):
+    from audit_chain import append_chained
+    await append_chained(db, {
+        "actor_email": user.get("email"), "action": "alert_test_sent",
+        "target_kind": "notification_channel", "target_id": channel,
+        "meta": {"ok": ok, "provider_receipt": receipt, "error": error, "template": "TEST"},
+        "at": datetime.now(timezone.utc).isoformat(),
+    }, collection="notification_test_audit")
 
 
 def _test_email_html(name: str, sent_at: str) -> str:
@@ -134,6 +160,7 @@ async def test_email(request: Request, user=Depends(get_current_user)):
     await rate_limit(db, "alert_test_email", user["id"], TEST_ALERT_MAX,
                      TEST_ALERT_WINDOW_SEC, request=request,
                      message="Too many test emails — try again in a few minutes.")
+    await _test_safeguards(db, user, request, "email")
     if not email_sender.is_configured():
         await _stamp_test(db, user["id"], "email", False, "email_not_configured")
         raise HTTPException(status_code=503, detail={
@@ -142,19 +169,21 @@ async def test_email(request: Request, user=Depends(get_current_user)):
     sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     res = await email_sender.send_email(
         user["email"],
-        "STOIC · Test alert",
+        "[TEST] STOIC · Test alert — no action required",
         _test_email_html(user.get("name") or "trader", sent_at),
         text=f"STOIC test alert sent {sent_at} UTC. Email alerts reach this inbox.")
     if not res.get("ok"):
         await _stamp_test(db, user["id"], "email", False, "send_failed")
+        await _audit_test(db, user, "email", False, None, str(res.get("error") or "")[:120])
         # 503 (not 502): Cloudflare replaces origin 502s with its own HTML page.
         raise HTTPException(status_code=503, detail={
             "code": "email_send_failed",
             "message": "The email provider rejected the message.",
             "reason": str(res.get("error") or "")[:240]})
-    await _stamp_test(db, user["id"], "email", True)
+    await _stamp_test(db, user["id"], "email", True, receipt=res.get("id"))
+    await _audit_test(db, user, "email", True, res.get("id"), None)
     return {"ok": True, "channel": "email", "delivered_to": _mask_email(user["email"]),
-            "message": "Test email sent"}
+            "provider_receipt": res.get("id"), "message": "Test email sent"}
 
 
 @router.post("/telegram/test")
@@ -165,6 +194,7 @@ async def test_telegram(request: Request, user=Depends(get_current_user)):
     await rate_limit(db, "alert_test_telegram", user["id"], TEST_ALERT_MAX,
                      TEST_ALERT_WINDOW_SEC, request=request,
                      message="Too many test messages — try again in a few minutes.")
+    await _test_safeguards(db, user, request, "telegram")
     doc = await db.notifications.find_one({"user_id": user["id"]})
     if not doc or not doc.get("telegram_bot_token") or not doc.get("telegram_chat_id"):
         await _stamp_test(db, user["id"], "telegram", False, "telegram_not_configured")
@@ -175,7 +205,7 @@ async def test_telegram(request: Request, user=Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Could not decrypt bot token")
 
     text = (
-        "✅ *STOIC AI Trader · Test Alert*\n\n"
+        "🧪 *\\[TEST\\] STOIC AI Trader · Test Alert*\n\n"
         "Your Telegram alerts are working\\.\n"
         "You will now receive push notifications for trades, "
         "break\\-even shifts, partial closes, and circuit breakers\\.\n\n"
@@ -202,6 +232,13 @@ async def test_telegram(request: Request, user=Depends(get_current_user)):
         except Exception:
             pass
         await _stamp_test(db, user["id"], "telegram", False, "telegram_rejected")
+        await _audit_test(db, user, "telegram", False, None, detail[:120])
         raise HTTPException(status_code=400, detail=detail)
-    await _stamp_test(db, user["id"], "telegram", True)
-    return {"ok": True, "channel": "telegram", "message": "Test message sent successfully"}
+    try:
+        msg_id = str(((r.json() or {}).get("result") or {}).get("message_id") or "")
+    except Exception:
+        msg_id = None
+    await _stamp_test(db, user["id"], "telegram", True, receipt=msg_id)
+    await _audit_test(db, user, "telegram", True, msg_id, None)
+    return {"ok": True, "channel": "telegram", "provider_receipt": msg_id,
+            "message": "Test message sent successfully"}

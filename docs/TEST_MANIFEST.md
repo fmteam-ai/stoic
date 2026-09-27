@@ -7,11 +7,11 @@ fails when this file drifts from the tree.
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 572 |
-| integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3721 |
+| integration | real MongoDB service container | CI `backend-integration` | 102 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3705 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4383 tests across 440 files.**
+**Total: 4390 tests across 441 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -381,9 +381,6 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter_optimizer_http.py` | http-live | 11 |
 | `backend/tests/test_iter_trade_stats_perf.py` | http-live | 6 |
 | `backend/tests/test_max_concurrent_race.py` | http-live | 3 |
-| `backend/tests/test_p1_alert_test_button.py` | http-live | 6 |
-| `backend/tests/test_p1_risk_commander_confirm.py` | http-live | 5 |
-| `backend/tests/test_p1_soak_memory_watch.py` | http-live | 5 |
 | `backend/tests/test_regime_dispatch.py` | http-live | 9 |
 | `backend/tests/test_safety_guardian.py` | http-live | 11 |
 | `backend/tests/test_sec001_brain_bola.py` | http-live | 7 |
@@ -416,6 +413,10 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_iter172_blocked_reason.py` | integration | 3 |
 | `backend/tests/integration/test_iter173_heartbeat_watch.py` | integration | 1 |
 | `backend/tests/integration/test_iter174_scalp_session.py` | integration | 1 |
+| `backend/tests/integration/test_p1_alert_test_button.py` | integration | 6 |
+| `backend/tests/integration/test_p1_risk_commander_confirm.py` | integration | 5 |
+| `backend/tests/integration/test_p1_soak_memory_watch.py` | integration | 5 |
+| `backend/tests/integration/test_r14_exactly_once.py` | integration | 7 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |

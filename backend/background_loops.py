@@ -11,6 +11,7 @@ run externally, so API restarts/deploys never interrupt trading loops.
 import asyncio
 import logging
 import os
+import socket
 from datetime import datetime, timezone, timedelta
 
 from database import get_db
@@ -554,8 +555,14 @@ async def _soak_sampler_loop():
                     hb = hb.replace(tzinfo=timezone.utc)
                 if hb:
                     hb_ages.append((now - hb).total_seconds())
+            from modules.pamm.strategy_guard import GIT_COMMIT as _build
             await db.ops_soak_samples.insert_one({
                 "at": now, "rss_mb": _rss_mb(),
+                # audit r14 P2-01 — every sample names its process so replicas
+                # never mix and a missing series is detectable.
+                "service": os.environ.get("STOIC_SERVICE_NAME") or "api",
+                "host": socket.gethostname(), "pid": os.getpid(),
+                "build": (_build or "unknown")[:12],
                 "workers_alive": alive, "workers_total": total,
                 "hb_age_min_s": round(min(hb_ages)) if hb_ages else None,
                 "hb_age_max_s": round(max(hb_ages)) if hb_ages else None})

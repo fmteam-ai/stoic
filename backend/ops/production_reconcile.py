@@ -91,7 +91,7 @@ async def main() -> int:
     excluded = [{"id": str(x["_id"]), "label": x.get("label"), "reason": "synthetic_or_test_account"}
                 for x in raw if is_synthetic_account(x)]
     accs = [x for x in raw if not is_synthetic_account(x)]
-    bots = {b["account_id"]: b for b in await db.bot_configs.find({"enabled": True}, {"account_id": 1, "strategy": 1}).to_list(length=1000)}
+    bots = {b["account_id"]: b for b in await db.bot_configs.find({"active": True}, {"account_id": 1, "strategy": 1}).to_list(length=1000)}
     rows, enabled, bot_ids, fresh = [], set(), set(), set()
     for acc in accs:
         aid = str(acc["_id"])

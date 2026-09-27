@@ -148,12 +148,37 @@ async def _compute_status(now: float):
         readiness = {"state": "UNKNOWN", "new_exposure_allowed": False, "dominant_code": "UNAVAILABLE", "decision_id": None}
     if connectivity != "active" and readiness["state"] == "READY":
         readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False, "dominant_code": "TERMINAL_STALE"}
+    # audit r14 P1-02 — "trading ready" is ACCOUNT-scoped: every intended
+    # enabled account must be READY under the same canonical decision version
+    # (execution UNKNOWN, stale position truth, restrictions, reconciliation
+    # lag all surface per account). Counts only — never identifiers.
+    aggregate = {"accounts_enabled": 0, "accounts_ready": 0, "all_ready": False, "input_version": None}
+    try:
+        from canonical_decision import authority_version, decide_account
+        aggregate["input_version"] = await authority_version(db)
+        async for acc in db.accounts.find({"trading_enabled": True, "status": {"$ne": "deleted"}}):
+            aggregate["accounts_enabled"] += 1
+            if (await decide_account(db, acc)).get("state") == "READY":
+                aggregate["accounts_ready"] += 1
+        aggregate["all_ready"] = (aggregate["accounts_enabled"] > 0
+                                  and aggregate["accounts_ready"] == aggregate["accounts_enabled"])
+    except Exception:  # noqa: BLE001 — fail closed: no aggregate ⇒ not ready
+        aggregate["all_ready"] = False
+    if readiness["state"] == "READY" and not aggregate["all_ready"]:
+        readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False,
+                     "dominant_code": "ACCOUNT_NOT_READY" if aggregate["accounts_enabled"] else "NO_ENABLED_ACCOUNTS"}
+    import hashlib as _hl
+    import hmac as _hm
+    _k = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
+    _msg = f"{aggregate['input_version']}|{aggregate['accounts_enabled']}|{aggregate['accounts_ready']}|{readiness['state']}".encode()
+    aggregate["sig"] = _hm.new(_k, _msg, _hl.sha256).hexdigest() if _k else None
+    trading_ready = readiness["state"] == "READY" and connectivity == "active" and aggregate["all_ready"]
     trading = {"connectivity": connectivity, "fresh_terminals": fresh, "enabled_accounts_present": enabled > 0,
-               "readiness": readiness,
-               "label": ("Trading ready" if readiness["state"] == "READY" and connectivity == "active"
+               "readiness": readiness, "aggregate": aggregate,
+               "label": ("Trading ready" if trading_ready
                          else f"Trading {readiness['state'].lower().replace('_', '-')} · connectivity {connectivity.replace('_', ' ')}")}
-    headline = (("Platform available" if overall == "operational" else f"Platform {overall.replace('_', ' ')}")
-                + (" · trading ready" if trading["label"] == "Trading ready" else f" · {trading['label'].lower()}"))
+    headline = (("Platform controls available" if overall == "operational" else f"Platform {overall.replace('_', ' ')}")
+                + (" · trading ready" if trading_ready else f" · {trading['label'].lower()}"))
     data = {"overall": overall, "components": components, "trading": trading, "headline": headline,
             # round 10 P2-01 — deployment metadata, never hard-coded copy
             "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,

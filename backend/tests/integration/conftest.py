@@ -42,3 +42,16 @@ def _restore_db_name():
         database._client = None
     except Exception:  # noqa: BLE001
         pass
+
+
+
+def run_async(coro):
+    """Delegate to the suite-wide shared loop owned by tests/conftest.py so
+    motor singletons stay bound to ONE loop across unit/integration suites."""
+    import sys
+    for m in list(sys.modules.values()):
+        f = getattr(m, "__file__", "") or ""
+        if f.endswith(os.path.join("tests", "conftest.py")) and hasattr(m, "run_async"):
+            return m.run_async(coro)
+    import asyncio
+    return asyncio.get_event_loop().run_until_complete(coro)

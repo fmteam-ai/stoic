@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `2e31ea4119c83a68440f479aaaa8583345950d81`
-- rc_lock: `bb720f7be3a87b3c86fa4185688040a8ce2a0373` authoritative=False
+- Source commit: `5253b94979a461d750ede93653e05cacec02eb23`
+- rc_lock: `5253b94979a461d750ede93653e05cacec02eb23` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `0046d08787fa49fef3ddcf753080e54267bc4c7cee45d29c7b7b0802600213ac`
+- Test manifest sha256: `80e108f79ff4352e11e5e1be30b7e1ccaf956e4461bd0561f2fee12efb381dd0`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4383 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4390 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -16,5 +16,14 @@
 - AI-GOV [P2] Model lineage on every AI decision, shadow-only promotion, drift quarantine, broker-realistic backtest costs — owner: engineering
 - PERF-ATT [P2] Per-account reconciliation ledger whose signed period totals equal broker statements to the cent (commission, swap, deposits/withdrawals, corrections, FX, unrealized) with a versioned cash-flow-adjusted return formula
 - any discrepancy withholds attestation — owner: engineering
+- P1-04-r14 [P1] Release package not release-ready: one staged tree for one peeled commit, model manifest signed by the trusted external key, test manifest/RC lock/release summary regenerated from that tree, images built from it, evidence extracted+compared, final image digests in an external signed provenance statement. Cannot be produced from the preview (needs the tagged release workflow + external signer). — owner: release-engineering
+- P1-07-r14 [P1] Publication order: build+scan by digest first, keep images quarantined/private, run signer canary and all final gates, THEN attach the release tag/alias
+- consumers deploy only from signed provenance, never a mutable tag. Workflow reordering pending in release.yml. — owner: release-engineering
+- P2-02-r14 [P2] Charts: per-series metadata (provider/source, as-of, timezone, freshness, gaps, fallback/cache) and timestamp-based calendar windows
+- indicative market history visually distinct from reconciled broker performance. — owner: engineering
+- P2-03-r14 [P2] Canonical decision fingerprint must cover every mutable authority input (global trading-block, alert/PAMM state) or derive one decision hash from a complete canonical snapshot
+- input version exposed in readiness, Bot Health, Safety Blocks and denial receipts (partially exposed today). — owner: engineering
+- P2-04-r14 [P2] Preview/prod parity: production-built staging bundle with content hashes + non-production banner, Turnstile enabled on a stable staging hostname, /api/version equals the promoted build
+- full Turnstile matrix (valid-once, replay, wrong action/hostname, skew, outage fallback, script failure) run there. — owner: engineering
 
-_generated 2026-09-27T18:48:16.525739+00:00 — regenerate on every release commit_
+_generated 2026-09-27T19:10:48.516721+00:00 — regenerate on every release commit_

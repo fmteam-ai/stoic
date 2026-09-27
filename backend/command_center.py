@@ -38,7 +38,7 @@ async def _soak_section(db) -> dict:
     from soak_memory_watch import campaign_trend
     mem = await campaign_trend(db, out.get("campaign"))
     memory = {k: mem.get(k) for k in ("verdict", "latest_mb", "baseline_mb",
-                                      "growth_pct", "slope_mb_per_day", "detail")}
+                                      "growth_pct", "slope_mb_per_day", "detail", "scope")}
     if verdict == "FAIL":
         color, detail = "RED", "soak campaign FAILED"
     elif verdict == "PASS":

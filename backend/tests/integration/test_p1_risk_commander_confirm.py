@@ -5,6 +5,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+pytestmark = [pytest.mark.integration, pytest.mark.critical_controls]
 from bson import ObjectId
 from fastapi import HTTPException
 
@@ -26,7 +28,7 @@ def world(request):
     db = get_db()
     uid = str(ObjectId())
     acct = ObjectId()
-    _run(db.accounts.insert_one({"_id": acct, "user_id": uid, "display_name": "RC Acct"}))
+    _run(db.accounts.insert_one({"_id": acct, "user_id": uid, "display_name": "RC Acct", "bridge_token": f"rc-{acct}"}))
     _run(db.bot_configs.insert_many([
         {"user_id": uid, "account_id": str(acct), "risk_level": "high", "active": True, "active_preset": "scalper"},
         {"user_id": uid, "account_id": None, "risk_level": "low", "active": True, "active_preset": "balanced"},

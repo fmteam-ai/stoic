@@ -33,7 +33,9 @@ async def put(db, data: bytes, digest: str, user_id: str, provenance: dict) -> s
         await bucket.upload_from_stream(digest, data, metadata={"digest": digest, "user_id": user_id})
         await db.fs_model_artifacts_index.update_one({"_id": digest}, {"$setOnInsert": {"user_id": user_id,
                                                                                          "bytes": len(data)}}, upsert=True)
-    await db.model_artifact_meta.update_one({"_id": digest}, {"$set": {"user_id": user_id, "provenance": provenance}},
+    # audit r14 P1-06 — provenance is IMMUTABLE: first writer wins, later
+    # uploads of the same digest never rewrite it.
+    await db.model_artifact_meta.update_one({"_id": digest}, {"$setOnInsert": {"user_id": user_id, "provenance": provenance}},
                                             upsert=True)
     return digest
 

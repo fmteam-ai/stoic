@@ -77,7 +77,7 @@ async def main() -> int:
     await db.accounts.insert_many(rows)
     bot_ids = []
     for r in rows[:3]:
-        res = await db.bot_configs.insert_one({"user_id": uid, "account_id": str(r["_id"]), "enabled": True,
+        res = await db.bot_configs.insert_one({"user_id": uid, "account_id": str(r["_id"]), "active": True,
                                                "strategy": "drill", "risk_pct": 0.1, "created_at": now})
         bot_ids.append(res.inserted_id)
     try:

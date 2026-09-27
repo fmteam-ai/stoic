@@ -47,15 +47,22 @@ export default function RiskCommander() {
         setErr("");
         try {
             const { data } = await api.post("/nl/command/confirm", { proposal_id: proposalId });
-            setHistory(h => h.map(m => m.id === msgId ? { ...m, resolved: "approved" } : m)
+            const resolved = data.status === "executed" ? "approved" : data.status;
+            setHistory(h => h.map(m => m.id === msgId ? { ...m, resolved } : m)
                 .concat([newMsg({ role: "ai", content: data.summary, receipts: data.receipts })]));
-            toast.success("Proposal approved", { description: data.summary });
+            (data.status === "executed" ? toast.success : toast.warning)(
+                data.status === "executed" ? "Proposal executed" : `Proposal ${data.status.replace("_", " ")}`,
+                { description: data.summary });
             await loadTriggers();
         } catch (e) {
             const d = e?.response?.data?.detail;
             if (d?.code === "preview_stale" && d.preview) {
                 setHistory(h => h.map(m => m.id === msgId ? { ...m, preview: d.preview, stale: true } : m));
                 toast.warning("Portfolio changed — preview refreshed, review and confirm again");
+                return;
+            }
+            if (d?.code === "execution_in_progress") {
+                toast.info("Already executing — another confirmation claimed this proposal");
                 return;
             }
             if (d?.code === "proposal_expired") {
@@ -322,7 +329,10 @@ export default function RiskCommander() {
                                             )}
                                             {m.resolved && (
                                                 <div className={`font-mono text-[10px] tracking-widest ${m.resolved === "approved" ? "text-[#00FF41]" : "text-[#FF3B30]"}`} data-testid={`proposal-resolved-${i}`}>
-                                                    {m.resolved === "approved" ? "CONFIRMED — EXECUTED" : m.resolved === "expired" ? "EXPIRED — SEND THE COMMAND AGAIN" : "REJECTED"}
+                                                    {m.resolved === "approved" ? "CONFIRMED — EXECUTED"
+                                                        : m.resolved === "partially_executed" ? "PARTIALLY EXECUTED — CHECK RECEIPTS"
+                                                            : m.resolved === "failed" ? "FAILED — NO ACTION COMPLETED"
+                                                                : m.resolved === "expired" ? "EXPIRED — SEND THE COMMAND AGAIN" : "REJECTED"}
                                                 </div>
                                             )}
                                         </div>
@@ -331,10 +341,10 @@ export default function RiskCommander() {
                                         <div className="mt-2 space-y-1" data-testid={`receipts-${i}`}>
                                             {m.receipts.map((r, j) => (
                                                 <div key={`${m.id}-r${j}`} className="font-mono text-[10px] text-[#A1A1AA] flex items-center gap-2">
-                                                    <CheckCircle2 className="w-3 h-3 text-[#00FF41]" />
-                                                    <span className="text-[#00FF41]">{r.type}</span>
+                                                    <CheckCircle2 className={`w-3 h-3 ${!r.state || r.state === "done" ? "text-[#00FF41]" : r.state === "suppressed" ? "text-[#FFB000]" : "text-[#FF3B30]"}`} />
+                                                    <span className={!r.state || r.state === "done" ? "text-[#00FF41]" : r.state === "suppressed" ? "text-[#FFB000]" : "text-[#FF3B30]"}>{r.type}{r.state && r.state !== "done" ? ` · ${r.state.toUpperCase()}` : ""}</span>
                                                     <span className="text-[#52525B]">·</span>
-                                                    <span className="text-[#A1A1AA] truncate">{JSON.stringify(r.result || r.error)}</span>
+                                                    <span className="text-[#A1A1AA] truncate" data-testid={`receipt-state-${r.index ?? j}`}>{JSON.stringify(r.result || r.error || r.reason)}</span>
                                                 </div>
                                             ))}
                                         </div>

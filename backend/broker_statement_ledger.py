@@ -10,15 +10,22 @@ stale period, unknown account/environment or unreconciled deal sets the ledger
 status to something other than RECONCILED — and the attestation gate withholds.
 """
 import hashlib
+import hmac
+import re
+
+from pymongo.errors import DuplicateKeyError
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 STATEMENT_SCHEMA = "stoic.broker-statement/v1"
 RETURN_FORMULA_VERSION = "simple-dietz-v1"          # (E1 - E0 - F) / (E0 + 0.5·F), F = net external cash flow
 MONEY_FIELDS = ("opening_balance", "closing_balance", "closing_equity", "unrealized_pnl", "trading_pnl",
                 "commission", "swap", "deposits", "withdrawals", "corrections", "fx_conversion")
 STATEMENT_MAX_AGE_DAYS = int(os.environ.get("STATEMENT_MAX_AGE_DAYS") or 35)
+STATEMENT_MIN_PERIOD_DAYS = int(os.environ.get("STATEMENT_MIN_PERIOD_DAYS") or 7)
+STATEMENT_MAX_PERIOD_DAYS = int(os.environ.get("STATEMENT_MAX_PERIOD_DAYS") or 35)
+PERIOD_JOIN_TOLERANCE_H = 24
 TOLERANCE = 0.005                                    # to the cent
 
 
@@ -39,15 +46,31 @@ def statement_problems(st: dict, signature_hex: str) -> list:
     problems = []
     if st.get("schema") != STATEMENT_SCHEMA:
         problems.append(f"schema must be {STATEMENT_SCHEMA}")
-    for k in ("statement_id", "account_id", "currency", "period_from", "period_to", "issuer", "issued_at"):
+    for k in ("statement_id", "account_id", "broker_login", "currency", "period_from", "period_to", "issuer", "issued_at"):
         if not str(st.get(k) or "").strip():
             problems.append(f"{k} required")
     try:
         pf, pt = datetime.fromisoformat(str(st["period_from"])), datetime.fromisoformat(str(st["period_to"]))
         if pf.tzinfo is None or pt.tzinfo is None or pt <= pf:
             problems.append("period_from/period_to must be aware and ordered")
+        else:
+            days = (pt - pf).total_seconds() / 86400
+            if days < STATEMENT_MIN_PERIOD_DAYS:
+                problems.append(f"statement period shorter than {STATEMENT_MIN_PERIOD_DAYS} days")
+            if days > STATEMENT_MAX_PERIOD_DAYS:
+                problems.append(f"statement period longer than {STATEMENT_MAX_PERIOD_DAYS} days")
+            ia = datetime.fromisoformat(str(st["issued_at"]))
+            now = datetime.now(timezone.utc)
+            if ia.tzinfo is None:
+                problems.append("issued_at must be timezone-aware")
+            elif ia > now + timedelta(minutes=5):
+                problems.append("issued_at is in the future")
+            elif ia < pt:
+                problems.append("issued_at precedes period_to")
+            elif (now - ia).days > STATEMENT_MAX_AGE_DAYS:
+                problems.append(f"issued_at older than {STATEMENT_MAX_AGE_DAYS} days")
     except (KeyError, ValueError, TypeError):
-        problems.append("period_from/period_to invalid")
+        problems.append("period_from/period_to/issued_at invalid")
     for k in MONEY_FIELDS:
         if k not in st:
             problems.append(f"{k} required")
@@ -146,6 +169,43 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
     if not acc:
         raise HTTPException(status_code=404, detail={"code": "unknown_account"})
     env = _environment(acc)
+    # audit r14 P1-03 — identity binding: the signed broker_login must be the
+    # account's VERIFIED broker identity and the issuer must be the account's
+    # registered broker (or one of its registry server names).
+    from identity_model import authoritative_account_number
+    verified_login = str(authoritative_account_number(acc) or "").strip()
+    if not verified_login or str(statement["broker_login"]).strip() != verified_login:
+        raise HTTPException(status_code=400, detail={
+            "code": "statement_rejected", "problems": ["broker_login does not match the account's verified broker identity"]})
+    issuer = str(statement["issuer"]).strip().lower()
+    known = {str(acc.get("broker") or "").lower(), str(acc.get("broker_server") or "").lower(),
+             str(((acc.get("verified_identity") or {}).get("broker_server")) or "").lower()} - {""}
+    prof = await db.broker_profiles.find_one({"$or": [{"name": {"$regex": f"^{re.escape(acc.get('broker') or '')}$", "$options": "i"}},
+                                                      {"server_names": {"$elemMatch": {"$regex": f"^{re.escape(issuer)}$", "$options": "i"}}}]}) \
+        if acc.get("broker") or issuer else None
+    if prof:
+        known |= {str(prof.get("name") or "").lower(), *[str(x).lower() for x in (prof.get("server_names") or [])]}
+    if not known or not any(issuer == k or issuer in k or k in issuer for k in known):
+        raise HTTPException(status_code=400, detail={
+            "code": "statement_rejected", "problems": ["issuer is not the account's registered broker"]})
+    # continuous period coverage against the latest accepted statement
+    prev = await db.reconciliation_ledger.find_one(
+        {"user_id": user_id, "account_id": statement["account_id"], "statement_id": {"$ne": statement["statement_id"]}},
+        sort=[("period_to", -1)])
+    if prev:
+        pf_new, pt_new = datetime.fromisoformat(statement["period_from"]), datetime.fromisoformat(statement["period_to"])
+        pf_prev, pt_prev = datetime.fromisoformat(prev["period_from"]), datetime.fromisoformat(prev["period_to"])
+        gap_h = (pf_new - pt_prev).total_seconds() / 3600
+        if gap_h > PERIOD_JOIN_TOLERANCE_H:
+            problem = f"coverage gap of {gap_h:.0f}h after the previous statement"
+        elif pt_new <= pf_prev + timedelta(hours=PERIOD_JOIN_TOLERANCE_H):
+            problem = "coverage gap: statement ends before the accepted coverage begins (out of sequence)"
+        elif gap_h < -PERIOD_JOIN_TOLERANCE_H:
+            problem = f"period overlaps the previous statement by {-gap_h:.0f}h"
+        else:
+            problem = None
+        if problem:
+            raise HTTPException(status_code=400, detail={"code": "statement_rejected", "problems": [problem]})
     totals = await platform_totals(db, user_id, statement["account_id"], statement["period_from"], statement["period_to"])
     discrepancies = []
     for k in ("trading_pnl", "commission", "swap", "deposits", "withdrawals", "corrections", "fx_conversion"):
@@ -169,7 +229,24 @@ async def reconcile(db, user_id: str, statement: dict, signature_hex: str, actor
            "return_pct": cash_flow_adjusted_return(statement), "return_formula_version": RETURN_FORMULA_VERSION,
            "statement_sha256": hashlib.sha256(statement_body(statement)).hexdigest(), "signature_hex": signature_hex,
            "issuer": statement["issuer"], "recorded_by": actor_email, "recorded_at": datetime.now(timezone.utc).isoformat()}
-    await db.reconciliation_ledger.replace_one({"_id": row["_id"]}, row, upsert=True)
+    # audit r14 P1-03 — APPEND-ONLY: an existing (account, statement_id) row is
+    # immutable. Same bytes → idempotent; different bytes → refused.
+    existing = await db.reconciliation_ledger.find_one({"_id": row["_id"]})
+    if existing:
+        if existing.get("statement_sha256") == row["statement_sha256"]:
+            return existing
+        raise HTTPException(status_code=409, detail={
+            "code": "statement_overwrite_refused",
+            "message": "A different statement with this id is already on the ledger — ledger rows are append-only."})
+    last = await db.reconciliation_ledger.find_one({"ledger_root": {"$exists": True}}, sort=[("ledger_seq", -1)])
+    row["ledger_seq"] = int((last or {}).get("ledger_seq") or 0) + 1
+    row["ledger_root"] = hashlib.sha256(f"{(last or {}).get('ledger_root') or ''}|{row['statement_sha256']}|{row['status']}".encode()).hexdigest()
+    key = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
+    row["ledger_root_sig"] = hmac.new(key, row["ledger_root"].encode(), hashlib.sha256).hexdigest() if key else None
+    try:
+        await db.reconciliation_ledger.insert_one(row)
+    except DuplicateKeyError:
+        return await db.reconciliation_ledger.find_one({"_id": row["_id"]})
     return row
 
 

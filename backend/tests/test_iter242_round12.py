@@ -602,7 +602,8 @@ class TestBrokerStatementLedger:
         uid = "r13-led-" + uuid.uuid4().hex[:6]
         acc = ObjectId()
         _run(db.accounts.insert_one({"_id": acc, "user_id": uid, "label": "live-1", "mode": "live", "trading_enabled": True,
-                                     "broker_environment": "LIVE", "account_type": "real", "server": "Broker-Live", "verified_identity": True}))
+                                     "broker_environment": "LIVE", "account_type": "real", "server": "Broker-Live", "broker": "Broker Ltd",
+                                     "verified_identity": {"account_number": "1001", "broker_server": "Broker-Live"}}))
         when = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         _run(db.broker_deals.insert_many([
             {"user_id": uid, "account_id": str(acc), "deal_id": "1", "profit": "18.02", "commission": "-0.70", "swap": "0.25",
@@ -632,12 +633,39 @@ class TestBrokerStatementLedger:
             assert row["return_pct"] == round((10405.23 - 10000 - 400) / (10000 + 200) * 100, 4)
             assert _run(bl.ledger_gate(db, uid)) == []
             # a one-cent platform/statement difference is a DISCREPANCY that withholds attestation
+            # r14 P1-03 — identity / coverage / append-only guarantees
+            now = datetime.now(timezone.utc)
+            assert "broker_login required" in bl.statement_problems({**st, "broker_login": ""}, sig)
+            assert any("shorter" in p for p in bl.statement_problems({**st, "period_from": (now - timedelta(days=2)).isoformat()}, sig))
+            assert any("future" in p for p in bl.statement_problems({**st, "issued_at": (now + timedelta(days=1)).isoformat()}, sig))
+            for bad, needle in (({"broker_login": "9999"}, "verified broker identity"), ({"issuer": "Unknown Corp"}, "registered broker")):
+                stx = self._statement(str(acc), statement_id="STX", **bad)
+                with pytest.raises(Exception) as ei:
+                    _run(bl.reconcile(db, uid, stx, sign_hex(bl.statement_body(stx)), "ops@x"))
+                assert needle in str(ei.value.detail)
+            # overwrite of the same statement_id with different bytes is refused; same bytes idempotent
+            assert _run(bl.reconcile(db, uid, st, sig, "ops@x"))["ledger_seq"] == row["ledger_seq"]
+            st_mod = self._statement(str(acc), statement_id=st["statement_id"], swap=0.26, closing_balance=10417.58, closing_equity=10405.24)
+            with pytest.raises(Exception) as ei:
+                _run(bl.reconcile(db, uid, st_mod, sign_hex(bl.statement_body(st_mod)), "ops@x"))
+            assert ei.value.status_code == 409
+            # overlap and gap against the accepted period are refused
+            for pf, pt, needle in ((now - timedelta(days=20), now - timedelta(days=1), "overlaps"),
+                                   (now - timedelta(days=60), now - timedelta(days=40), "gap")):
+                stg = self._statement(str(acc), statement_id="STG", period_from=pf.isoformat(), period_to=pt.isoformat(),
+                                      issued_at=now.isoformat())
+                with pytest.raises(Exception) as ei:
+                    _run(bl.reconcile(db, uid, stg, sign_hex(bl.statement_body(stg)), "ops@x"))
+                assert needle in str(ei.value.detail), (needle, ei.value.detail)
+            assert row["ledger_root"] and row["ledger_root_sig"]
+            _run(db.reconciliation_ledger.delete_many({"user_id": uid}))
             st2 = self._statement(str(acc), swap=0.26, closing_balance=10417.58, closing_equity=10405.24)
             row2 = _run(bl.reconcile(db, uid, st2, sign_hex(bl.statement_body(st2)), "ops@x"))
             assert row2["status"] == "DISCREPANCY" and row2["discrepancies"][0]["field"] == "swap" and row2["discrepancies"][0]["delta"] == 0.01
             assert "STATEMENT_DISCREPANCY" in _run(bl.ledger_gate(db, uid))
             # unreconciled deal → UNRECONCILED_DEALS; stale period → STATEMENT_PERIOD_STALE
             _run(db.broker_deals.update_one({"user_id": uid, "deal_id": "1"}, {"$set": {"financial_reconciliation_status": "pending"}}))
+            _run(db.reconciliation_ledger.delete_many({"user_id": uid}))
             st3 = self._statement(str(acc))
             assert _run(bl.reconcile(db, uid, st3, sign_hex(bl.statement_body(st3)), "ops@x"))["status"] == "UNRECONCILED_DEALS"
             old = datetime.now(timezone.utc) - timedelta(days=90)

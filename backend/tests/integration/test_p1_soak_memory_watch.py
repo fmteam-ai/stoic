@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+pytestmark = [pytest.mark.integration, pytest.mark.critical_controls]
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
@@ -98,9 +100,9 @@ def test_sweep_raises_deduped_alert(request):
 
 
 def test_soak_report_exposes_watch_block():
-    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                             "routes", "ops_routes.py")).read()
     assert '"watch": memory_trend(samples)' in src
-    cp = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    cp = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                            "soak_campaign.py")).read()
     assert 'memory["verdict"] != "ALERT"' in cp

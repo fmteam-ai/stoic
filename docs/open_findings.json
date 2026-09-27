@@ -34,5 +34,35 @@
     "severity": "P2",
     "title": "Per-account reconciliation ledger whose signed period totals equal broker statements to the cent (commission, swap, deposits/withdrawals, corrections, FX, unrealized) with a versioned cash-flow-adjusted return formula; any discrepancy withholds attestation",
     "owner": "engineering"
+  },
+  {
+    "id": "P1-04-r14",
+    "severity": "P1",
+    "title": "Release package not release-ready: one staged tree for one peeled commit, model manifest signed by the trusted external key, test manifest/RC lock/release summary regenerated from that tree, images built from it, evidence extracted+compared, final image digests in an external signed provenance statement. Cannot be produced from the preview (needs the tagged release workflow + external signer).",
+    "owner": "release-engineering"
+  },
+  {
+    "id": "P1-07-r14",
+    "severity": "P1",
+    "title": "Publication order: build+scan by digest first, keep images quarantined/private, run signer canary and all final gates, THEN attach the release tag/alias; consumers deploy only from signed provenance, never a mutable tag. Workflow reordering pending in release.yml.",
+    "owner": "release-engineering"
+  },
+  {
+    "id": "P2-02-r14",
+    "severity": "P2",
+    "title": "Charts: per-series metadata (provider/source, as-of, timezone, freshness, gaps, fallback/cache) and timestamp-based calendar windows; indicative market history visually distinct from reconciled broker performance.",
+    "owner": "engineering"
+  },
+  {
+    "id": "P2-03-r14",
+    "severity": "P2",
+    "title": "Canonical decision fingerprint must cover every mutable authority input (global trading-block, alert/PAMM state) or derive one decision hash from a complete canonical snapshot; input version exposed in readiness, Bot Health, Safety Blocks and denial receipts (partially exposed today).",
+    "owner": "engineering"
+  },
+  {
+    "id": "P2-04-r14",
+    "severity": "P2",
+    "title": "Preview/prod parity: production-built staging bundle with content hashes + non-production banner, Turnstile enabled on a stable staging hostname, /api/version equals the promoted build; full Turnstile matrix (valid-once, replay, wrong action/hostname, skew, outage fallback, script failure) run there.",
+    "owner": "engineering"
   }
 ]

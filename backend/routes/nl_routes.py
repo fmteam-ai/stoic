@@ -190,47 +190,83 @@ KNOWN_NL_ACTIONS = {"DISABLE_BOTS", "ENABLE_BOTS", "MOVE_STOPS_BREAKEVEN",
 
 @router.post("/command/confirm")
 async def nl_command_confirm(payload: dict, user=Depends(get_current_user)):
-    """Execute a stored proposal ONLY after the operator approved the exact
-    preview they were shown. Re-computes the preview: any drift (a trade
-    closed, a bot toggled) → 409 preview_stale with the fresh preview."""
+    """Execute a stored proposal EXACTLY ONCE after the operator approved the
+    exact preview they were shown (audit r14 P0-01): atomic pending→executing
+    claim, per-action idempotency keys + durable receipts, revalidation inside
+    the claimed boundary, final status executed|partially_executed|failed,
+    lease-expiry recovery that never replays a completed action."""
     from nl_preview import build_preview, is_expired
+    import nl_execution as nx
     pid = payload.get("proposal_id")
     if not pid:
         raise HTTPException(status_code=400, detail={
             "code": "proposal_id_required",
             "message": "Commands execute only from a previewed proposal."})
     db = get_db()
-    doc = await db.nl_proposals.find_one(
-        {"_id": parse_object_id(pid, "Proposal"), "user_id": user["id"]})
+    oid = parse_object_id(pid, "Proposal")
+    doc = await db.nl_proposals.find_one({"_id": oid, "user_id": user["id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Proposal not found")
-    if doc.get("status") != "pending":
+    claimed = None
+    if doc.get("status") == "executing":
+        claimed = await nx.reclaim_expired(db, "nl_proposals", doc)
+        if claimed is None:
+            raise HTTPException(status_code=409, detail={
+                "code": "execution_in_progress",
+                "message": "This proposal is already being executed.",
+                "execution_id": (doc.get("execution") or {}).get("id")})
+    elif doc.get("status") != "pending":
         raise HTTPException(status_code=409, detail={
             "code": "proposal_not_pending",
-            "message": f"Proposal already {doc.get('status')}."})
-    if is_expired(doc):
-        await db.nl_proposals.update_one({"_id": doc["_id"]}, {"$set": {"status": "expired"}})
-        raise HTTPException(status_code=409, detail={
-            "code": "proposal_expired",
-            "message": "Preview expired — send the command again to get a fresh preview."})
-    actions = doc["actions"]
-    fresh = await build_preview(db, user["id"], actions)
-    if fresh["fingerprint"] != doc["preview"]["fingerprint"]:
-        await db.nl_proposals.update_one(
-            {"_id": doc["_id"]}, {"$set": {"preview": fresh}})
-        raise HTTPException(status_code=409, detail={
-            "code": "preview_stale",
-            "message": "Portfolio changed since the preview — review the updated preview and confirm again.",
-            "preview": fresh, "proposal_id": pid})
-    receipts = await _execute_actions(user["id"], actions)
-    await db.nl_proposals.update_one({"_id": doc["_id"]}, {"$set": {
-        "status": "executed", "receipts": receipts,
-        "executed_at": datetime.now(timezone.utc).isoformat()}})
+            "message": f"Proposal already {doc.get('status')}.",
+            "receipts": doc.get("receipts")})
+    else:
+        if is_expired(doc):
+            await db.nl_proposals.update_one({"_id": oid, "status": "pending"},
+                                             {"$set": {"status": "expired"}})
+            raise HTTPException(status_code=409, detail={
+                "code": "proposal_expired",
+                "message": "Preview expired — send the command again to get a fresh preview."})
+        claimed = await nx.claim(db, "nl_proposals", {"_id": oid, "user_id": user["id"]},
+                                 from_status="pending")
+        if claimed is None:
+            raise HTTPException(status_code=409, detail={
+                "code": "execution_in_progress",
+                "message": "Another confirmation already claimed this proposal."})
+    actions = claimed["actions"]
+    # Revalidation INSIDE the claimed boundary (first attempt only — a
+    # recovered execution must not be blocked by state its own actions changed).
+    if int(claimed["execution"].get("attempt") or 1) == 1:
+        problems = []
+        if claimed.get("user_id") != user["id"]:
+            problems.append("owner_mismatch")
+        if is_expired(claimed):
+            problems.append("proposal_expired")
+        fresh = await build_preview(db, user["id"], actions)
+        if fresh["fingerprint"] != claimed["preview"]["fingerprint"]:
+            problems.append("preview_stale")
+        if problems:
+            await db.nl_proposals.update_one(
+                {"_id": oid, "execution.id": claimed["execution"]["id"]},
+                {"$set": {"status": "pending", "preview": fresh}, "$unset": {"execution": ""}})
+            code = problems[0]
+            raise HTTPException(status_code=409, detail={
+                "code": code, "proposal_id": pid,
+                "message": ("Portfolio changed since the preview — review the updated preview and confirm again."
+                            if code == "preview_stale" else code),
+                "preview": fresh})
+    from canonical_decision import decide_user
+    authority = await decide_user(db, user["id"], fresh=True)
+    res = await nx.run_claimed(db, "nl_proposals", claimed, user["id"], actions, authority=authority)
     await ws_manager.broadcast(user["id"], "nl_command_executed", {
-        "summary": doc.get("summary"), "receipts": receipts, "prompt": doc.get("prompt"),
+        "summary": claimed.get("summary"), "receipts": res["receipts"], "prompt": claimed.get("prompt"),
     })
-    return {"summary": f"Approved — executed {len(receipts)} action(s).",
-            "receipts": receipts, "actions": actions, "confirmed": True,
+    n_done = sum(1 for r in res["receipts"] if r.get("state") == "done")
+    return {"summary": f"{res['status'].replace('_', ' ').upper()} — {n_done}/{len(actions)} action(s) done.",
+            "status": res["status"], "receipts": res["receipts"], "actions": actions,
+            "confirmed": res["status"] == "executed", "execution_id": res["execution_id"],
+            "authority": {"state": authority.get("state"), "decision_id": authority.get("decision_id"),
+                          "input_hash": authority.get("input_hash")},
             "proposal_id": pid}
 
 
@@ -322,33 +358,41 @@ async def delete_trigger(trigger_id: str, user=Depends(get_current_user)):
 
 
 # ------------------- Action Executors --------------------------------------
+async def execute_one(user_id: str, act: dict) -> dict:
+    """Run ONE action and return its result. Raises on failure so the
+    exactly-once executor (nl_execution) records a failed receipt."""
+    a_type = (act.get("type") or "").upper()
+    target = act.get("target") or "all"
+    params = act.get("params") or {}
+    if a_type == "DISABLE_BOTS":
+        return await _disable_bots(user_id, target)
+    if a_type == "ENABLE_BOTS":
+        return await _enable_bots(user_id, target)
+    if a_type == "MOVE_STOPS_BREAKEVEN":
+        return await _move_stops_breakeven(user_id, target)
+    if a_type == "CLOSE_ALL_TRADES":
+        return await _close_all_trades(user_id, target)
+    if a_type == "SET_RISK_LEVEL":
+        return await _set_risk_level(user_id, params.get("risk_level", "low"))
+    if a_type == "PANIC_LOCK":
+        from routes.panic_routes import _disable_all_bots_and_close_trades
+        return await _disable_all_bots_and_close_trades(
+            {"user_id": user_id}, broadcast_user_id=user_id)
+    if a_type == "SET_CONDITIONAL_TRIGGER":
+        return await _save_trigger(user_id, params)
+    return {"skipped": True, "reason": f"unknown action {a_type}"}
+
+
 async def _execute_actions(user_id: str, actions: list) -> list:
+    """Legacy non-idempotent loop — kept ONLY for unit tests; every production
+    path goes through nl_execution.run_claimed."""
     receipts = []
     for act in actions:
         a_type = (act.get("type") or "").upper()
         target = act.get("target") or "all"
-        params = act.get("params") or {}
         try:
-            if a_type == "DISABLE_BOTS":
-                r = await _disable_bots(user_id, target)
-            elif a_type == "ENABLE_BOTS":
-                r = await _enable_bots(user_id, target)
-            elif a_type == "MOVE_STOPS_BREAKEVEN":
-                r = await _move_stops_breakeven(user_id, target)
-            elif a_type == "CLOSE_ALL_TRADES":
-                r = await _close_all_trades(user_id, target)
-            elif a_type == "SET_RISK_LEVEL":
-                r = await _set_risk_level(user_id, params.get("risk_level", "low"))
-            elif a_type == "PANIC_LOCK":
-                from routes.panic_routes import _disable_all_bots_and_close_trades
-                r = await _disable_all_bots_and_close_trades(
-                    {"user_id": user_id}, broadcast_user_id=user_id
-                )
-            elif a_type == "SET_CONDITIONAL_TRIGGER":
-                r = await _save_trigger(user_id, params)
-            else:
-                r = {"skipped": True, "reason": f"unknown action {a_type}"}
-            receipts.append({"type": a_type, "target": target, "result": r})
+            receipts.append({"type": a_type, "target": target,
+                             "result": await execute_one(user_id, act)})
         except Exception as e:
             logger.warning("nl action %s failed: %s", a_type, e)
             receipts.append({"type": a_type, "target": target,
@@ -450,6 +494,7 @@ async def _save_trigger(user_id, params):
         "threshold_pct": float(params.get("threshold_pct", 3.0)),
         "then": params.get("then", []),
         "active": True,
+        "status": "active",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "baseline_price": None,  # filled on first sweep
     }

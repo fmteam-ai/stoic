@@ -273,6 +273,21 @@ async def ensure_indexes():
         [("user_id", 1), ("account_id", 1)], unique=True
     )
     await db.conditional_triggers.create_index([("user_id", 1), ("active", 1)])
+    # audit r14 P1-01 — `active` is the ONLY bot enablement field; a legacy
+    # `enabled` flag is migrated once and the schema validator refuses it.
+    await db.bot_configs.update_many(
+        {"enabled": {"$exists": True}, "active": {"$exists": False}},
+        [{"$set": {"active": {"$eq": ["$enabled", True]}}}])
+    await db.bot_configs.update_many({"enabled": {"$exists": True}}, {"$unset": {"enabled": ""}})
+    try:
+        await db.command("collMod", "bot_configs", validator={
+            "$jsonSchema": {"bsonType": "object", "not": {"required": ["enabled"]}}},
+            validationLevel="moderate", validationAction="error")
+    except Exception as e:  # noqa: BLE001 — validator is defence-in-depth
+        logging.getLogger("seed").warning("bot_configs validator not applied: %s", e)
+    # audit r14 P0 — exactly-once execution ledgers
+    await db.trigger_fire_events.create_index("event_id", unique=True)
+    await db.nl_proposals.create_index([("user_id", 1), ("status", 1)])
     # Round 8 item 1 / Round 10 item 5 — scalp reconciliation / ownership
     # integrity constraints. These unique indexes ARE the distributed-safety
     # guarantees (single lease owner, exactly-once deal application, one

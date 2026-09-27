@@ -89,7 +89,7 @@ async def collect(args) -> dict:
     synthetic = [{"id_hash": _h(a["_id"]), "label": a.get("label")} for a in accs if is_synthetic_account(a)]
     real = [a for a in accs if not is_synthetic_account(a)]
     enabled = [a for a in real if a.get("trading_enabled") is True]
-    bots = {b["account_id"] for b in await db.bot_configs.find({"enabled": True, "user_id": args.scope_user}, {"account_id": 1}).to_list(length=100)}
+    bots = {b["account_id"] for b in await db.bot_configs.find({"active": True, "user_id": args.scope_user}, {"account_id": 1}).to_list(length=100)}
     acct_rows = []
     for a in real:
         age = _age(a.get("last_heartbeat"), now)

@@ -42,6 +42,7 @@ step shell_syntax bash -c 'for f in deploy/*.sh scripts/*.sh deploy/drills/*.sh;
 # backend tests (CI-equivalent jobs, DB-free unit + Mongo integration)
 step backend_unit bash -c 'cd backend && env -u MONGO_URL python -m pytest tests/unit -q -p no:cacheprovider'
 step backend_integration bash -c 'cd backend && python -m pytest tests/integration -m integration -q -p no:cacheprovider'
+step critical_controls bash -c 'cd backend && python -m pytest tests/integration -m critical_controls -q -p no:cacheprovider'
 # frontend lint + build
 step frontend_lint bash -c 'cd frontend && npx eslint src >/dev/null'
 step frontend_build bash -c 'cd frontend && CI=true yarn --silent build >/dev/null'

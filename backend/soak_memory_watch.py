@@ -5,6 +5,7 @@ folds it into daily checkpoints and raises an ops alert when memory keeps
 climbing between checkpoints — a slow leak must be visible on day 3, not on
 day 14 when the pod is OOM-killed.
 """
+import os
 from datetime import datetime, timedelta, timezone
 
 WATCH_GROWTH_PCT = 10.0      # vs. baseline (first day median)
@@ -45,12 +46,37 @@ def _slope(points: list) -> float:
     return sum((p[0] - mx) * (p[1] - my) for p in points) / den
 
 
+def _instance(s: dict) -> str:
+    return f"{s.get('service') or 'api'}@{s.get('host') or '?'}:{s.get('pid') or '?'}"
+
+
+def instance_coverage(samples: list, expected_services: set | None = None) -> dict:
+    """Per-instance series + which expected services have NO samples (r14 P2-01)."""
+    seen: dict = {}
+    for s in samples:
+        if s.get("rss_mb") is None:
+            continue
+        seen.setdefault(_instance(s), {"service": s.get("service") or "api", "samples": 0,
+                                       "last_mb": None, "build": s.get("build")})
+        seen[_instance(s)]["samples"] += 1
+        seen[_instance(s)]["last_mb"] = float(s["rss_mb"])
+    expected = expected_services or set(
+        x.strip() for x in (os.environ.get("SOAK_EXPECTED_SERVICES") or "api").split(",") if x.strip())
+    present = {v["service"] for v in seen.values()}
+    return {"instances": seen, "expected_services": sorted(expected),
+            "missing_services": sorted(expected - present),
+            "workers_covered": not (expected - present) and len(expected) > 1}
+
+
 def memory_trend(samples: list, started_at=None) -> dict:
-    """Pure. `samples` = [{at, rss_mb}] oldest→newest."""
+    """Pure. `samples` = [{at, rss_mb, service?, host?, pid?}] oldest→newest.
+    Multi-instance samples are folded per day by MAX (the leaking replica
+    dominates) while per-instance coverage is reported alongside."""
     pts = [(_to_dt(s.get("at")), float(s["rss_mb"])) for s in samples
            if s.get("rss_mb") is not None and _to_dt(s.get("at")) is not None]
+    cov = instance_coverage(samples)
     if len(pts) < MIN_SAMPLES:
-        return {"verdict": "INSUFFICIENT", "samples": len(pts),
+        return {"verdict": "INSUFFICIENT", "samples": len(pts), "coverage": cov,
                 "detail": f"{len(pts)}/{MIN_SAMPLES} memory samples — keep the soak running"}
     t0 = _to_dt(started_at) or pts[0][0]
     by_day: dict = {}
@@ -66,20 +92,25 @@ def memory_trend(samples: list, started_at=None) -> dict:
     for prev, cur in zip(daily, daily[1:]):
         step = (cur["median_mb"] - prev["median_mb"]) / prev["median_mb"] * 100 if prev["median_mb"] else 0
         climbs = climbs + 1 if step > CLIMB_STEP_PCT else 0
-    if (growth_pct >= ALERT_GROWTH_PCT or slope >= ALERT_SLOPE_MB_DAY
+    if cov["missing_services"]:
+        verdict = "ALERT"
+    elif (growth_pct >= ALERT_GROWTH_PCT or slope >= ALERT_SLOPE_MB_DAY
             or climbs >= ALERT_CONSECUTIVE_CLIMBS):
         verdict = "ALERT"
     elif growth_pct >= WATCH_GROWTH_PCT or slope >= WATCH_SLOPE_MB_DAY or climbs >= 2:
         verdict = "WATCH"
     else:
         verdict = "OK"
-    detail = (f"RSS {latest:.0f} MB · {growth_pct:+.1f}% vs day-1 baseline {baseline:.0f} MB · "
-              f"{slope:+.1f} MB/day · {climbs} consecutive climbing day(s)")
+    scope = "fleet RSS" if cov["workers_covered"] else "API process RSS"
+    detail = (f"{scope} {latest:.0f} MB · {growth_pct:+.1f}% vs day-1 baseline {baseline:.0f} MB · "
+              f"{slope:+.1f} MB/day · {climbs} consecutive climbing day(s)"
+              + (f" · MISSING telemetry: {', '.join(cov['missing_services'])}" if cov["missing_services"] else ""))
     return {"verdict": verdict, "samples": len(pts), "baseline_mb": baseline,
             "latest_mb": latest, "current_mb": round(pts[-1][1], 1),
             "peak_mb": round(max(p[1] for p in pts), 1),
             "growth_pct": growth_pct, "slope_mb_per_day": slope,
             "consecutive_climbs": climbs, "daily": daily, "detail": detail,
+            "scope": scope, "coverage": cov,
             "thresholds": {"watch_growth_pct": WATCH_GROWTH_PCT,
                            "alert_growth_pct": ALERT_GROWTH_PCT,
                            "watch_slope_mb_day": WATCH_SLOPE_MB_DAY,

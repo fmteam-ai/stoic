@@ -348,6 +348,15 @@ async def approve_candidate(db, user_id: str, approver_email: str, note: str = "
     if await model_store.fetch(db, cand["digest"], MODEL_DIR) is None:
         raise HTTPException(status_code=409, detail={"code": "candidate_bytes_changed",
                                                      "message": "candidate digest not present/verifiable in the shared artifact store"})
+    # audit r14 P1-06 — ONE atomic conditional reservation per (candidate digest,
+    # principal): concurrent same-principal approvals collapse to a single record.
+    from pymongo.errors import DuplicateKeyError
+    await db.model_approval_principals.create_index([("digest", 1), ("principal_id", 1)], unique=True)
+    try:
+        await db.model_approval_principals.insert_one({"digest": cand["digest"], "principal_id": str(actor_id),
+                                                       "user_id": user_id, "at": datetime.now(timezone.utc).isoformat()})
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail={"code": "repeated_approver"})
     if any(str(a.get("principal_id")) == str(actor_id) for a in cand.get("approvals") or []):
         raise HTTPException(status_code=409, detail={"code": "repeated_approver"})
     ev = await append_chained(db, {"actor_email": approver_email.lower(), "action": APPROVAL_ACTION,
@@ -370,6 +379,17 @@ async def flush_promotion_outbox(db, user_id: str | None = None) -> int:
     n = 0
     async for d in db.ml_ensembles.find(q):
         ob = d["promotion_outbox"]
+        # audit r14 P1-06 — atomic claim of the outbox record: concurrent flushers
+        # cannot both append the chained event (unique promotion_id reservation).
+        from pymongo.errors import DuplicateKeyError
+        await db.promotion_publications.create_index("promotion_id", unique=True)
+        try:
+            await db.promotion_publications.insert_one({"promotion_id": ob["promotion_id"], "user_id": d["user_id"],
+                                                        "claimed_at": datetime.now(timezone.utc).isoformat()})
+        except DuplicateKeyError:
+            await db.ml_ensembles.update_one({"user_id": d["user_id"], "promotion_outbox.promotion_id": ob["promotion_id"]},
+                                             {"$set": {"promotion_outbox": None}})
+            continue
         if not await db.admin_audit_log.find_one({"action": "model_promoted", "meta.promotion_id": ob["promotion_id"]}):
             await append_chained(db, {"actor_email": ob["actor"], "action": "model_promoted", "target_kind": "model",
                                       "target_id": d["user_id"], "reason": "two-admin signed manifest promotion",

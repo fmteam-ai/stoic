@@ -207,7 +207,7 @@ export default function CommandCenter() {
                         <Metric label="Incidents" value={s.soak?.incidents} testid="cc-soak-incidents" />
                         <div className="flex items-center justify-between py-0.5 text-xs" data-testid="cc-soak-memory"
                              title={s.soak?.memory?.detail || "Worker RSS sampled every 10 min across the soak"}>
-                            <span className="text-[#52525B]">Worker memory</span>
+                            <span className="text-[#52525B]">{s.soak?.memory?.scope === "fleet RSS" ? "Fleet memory" : "API process RSS"}</span>
                             <span className={`font-mono font-bold ${
                                 s.soak?.memory?.verdict === "ALERT" ? "text-[#FF3B30]"
                                     : s.soak?.memory?.verdict === "WATCH" ? "text-[#FFD700]"

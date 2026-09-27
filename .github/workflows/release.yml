@@ -104,6 +104,11 @@ jobs:
             tests/test_iter150_netting_hedging.py::TestEaSourceScenarios \
             -q --junitxml=/tmp/junit-unit.xml
           python -m pytest tests/integration -m integration -q --junitxml=/tmp/junit-integration.xml
+          # audit r14 P1-05 — safety-critical controls are a REQUIRED release gate
+          N=$(python -m pytest tests/integration -m critical_controls --collect-only -q 2>/dev/null | grep -c '::')
+          test "$N" -ge 20 || { echo "critical_controls collected $N (<20)"; exit 1; }
+          python -m pytest tests/integration -m critical_controls -q -rs --junitxml=/tmp/junit-critical.xml | tee /tmp/critical.log
+          ! grep -E '^SKIPPED' /tmp/critical.log || { echo "unexpected skips in critical_controls"; exit 1; }
       - name: Upload test evidence (consumed by the signed release attestation)
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
@@ -111,6 +116,7 @@ jobs:
           path: |
             /tmp/junit-unit.xml
             /tmp/junit-integration.xml
+            /tmp/junit-critical.xml
 
   hermetic-verify:
     # Audit round 7 P2 — ONE reproducible command (scripts/verify_release.sh) run
@@ -589,7 +595,7 @@ jobs:
           python3 scripts/release_attestation.py emit \
             --sha "${COMMIT_SHA}" --tag "${{ github.ref_name }}" \
             --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" \
-            --junit evidence/junit-unit.xml --junit evidence/junit-integration.xml \
+            --junit evidence/junit-unit.xml --junit evidence/junit-integration.xml --junit evidence/junit-critical.xml \
             --pip-audit evidence/pip-audit.json --grype evidence/grype-backend.json \
             --manifest release-manifest.json --install-ready --ea-compiled \
             --hermetic-verification evidence/hermetic/hermetic-verification.json \
