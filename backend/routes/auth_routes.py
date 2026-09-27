@@ -66,7 +66,7 @@ def _user_to_out(user_doc: dict) -> UserOut:
         role=user_doc.get("role", "user"),
         created_at=user_doc.get("created_at") if isinstance(user_doc.get("created_at"), datetime) else None,
         two_factor_enabled=bool(user_doc.get("two_factor_enabled", False)),
-        email_verified=bool(user_doc.get("email_verified", True)),
+        email_verified=user_doc.get("email_verified") is True,
         must_change_password=bool(user_doc.get("must_change_password", False)),
     )
 

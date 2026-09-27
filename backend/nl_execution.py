@@ -49,8 +49,8 @@ def is_risk_increasing(act: dict) -> bool:
         return True
     if a_type == "SET_RISK_LEVEL":
         return str((act.get("params") or {}).get("risk_level") or "low").lower() != "low"
-    if a_type == "SET_CONDITIONAL_TRIGGER":
-        return any(is_risk_increasing(t) for t in ((act.get("params") or {}).get("then") or []))
+    # arming a trigger touches nothing; its `then` actions are re-checked against
+    # authority AT FIRE TIME (trigger_sweeper.fire_claimed)
     return False
 
 

@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 191 — audit round 15 P0/P1/P2 verified live against preview. Backend regression: 39 critical_controls + 118 integration + 15 iter242_round12 + 8 iter151_ops_observability + 12 r15_fenced_execution all pass. Live P0-01 fenced exactly-once confirmed (1 winner, 19 losers with 409 execution_in_progress|proposal_not_pending, receipts carry fence==1 and 32-hex keys). P1-02 /api/status shape matches spec exactly (attestation replaces aggregate; no fresh_terminals/enabled_accounts_present/accounts_*/sig). P2-02 destination verification working. Frontend Risk Commander confirm-execute flow works via proposal-approve-{index} → proposal-resolved-{index} 'CONFIRMED — EXECUTED' + receipt-state-{n}. Notifications alert-test panel shows telegram-verify-block + start button + disabled send-telegram. Command Center admin page shows cc-soak-memory 'API process RSS · MEASURING'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "P0-02 conditional trigger", "issue": "When trigger's inner then-action is risk-increasing under authority CLOSE_ONLY, the receipt is 'suppressed' AND no trigger record is armed. Round-15 spec explicitly allows either receipt state (done|suppressed), but requires GET /api/nl/triggers to list the trigger with status='active'. Live behavior: triggers list is empty after suppressed receipt. Either the spec is stale or the trigger should persist even when its then-action is refused by authority."},
+      {"endpoint": "POST /api/notifications/email/test", "issue": "Admin user record has no email_verified field in DB (find_one returns only role='admin'); /api/auth/me exposes email_verified=true. Because _test_safeguards inspects users.email_verified directly, it returns 403 destination_unverified while /me claims verified — inconsistent surface. Not exploitable (defaults to closed), but the two data sources should agree."},
+      {"endpoint": "GET /api/ops/soak?days=14 → memory.watch.coverage.instances", "issue": "All 285 samples in ops_soak_samples lack service/host/pid — newest sample is 2026-09-24 (3 days stale). coverage.instances key is 'api@?:?' rather than 'api@<host>:<pid>'. The sampler either stopped writing after 09-24 or the new host/pid fields aren't being emitted. Same finding as iter190 note but samples still not appearing."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/tmp/iter191_live.py",
+    "/tmp/iter191_results.json",
+    "/app/backend/tests/integration/test_r15_fenced_execution.py",
+    "/app/backend/tests/integration (39 critical_controls)"
+  ],
+  "action_items": [
+    "P0-02 spec vs behavior: decide whether SET_CONDITIONAL_TRIGGER should always create the armed trigger (regardless of authority suppressing its then-actions at fire time) or whether the trigger record should be omitted when the then-action is risk-increasing under CLOSE_ONLY. Round-15 review sentence explicitly requires status='active' in GET /api/nl/triggers, so this is the P0-02 gap.",
+    "Align users.email_verified vs /api/auth/me — either backfill admin.email_verified=true and normalize the field, or make _test_safeguards use the same source as /me.",
+    "Investigate why ops_soak_samples stopped at 2026-09-24 and why new samples still don't carry service/host/pid (the sampler-adds-fields change appears not to be running in preview)."
+  ],
+  "critical_code_review_comments": [
+    "nl_execution: fenced exactly-once verified live — 20 concurrent confirms produced exactly 1 winner with status='executed' and 19 losers with mix of {execution_in_progress, proposal_not_pending}. Winner receipts carry fence==1 and 32-hex keys as required.",
+    "portal_routes /api/status: trading has exactly {connectivity, readiness, attestation, label}. readiness has exactly {state, dominant_code, decision_id, new_exposure_allowed}. attestation has exactly {attested, basis, input_version, inventory_hash, as_of}. No fresh_terminals / enabled_accounts_present / accounts_* / sig fields anywhere in payload. Headline 'Platform controls available · trading degraded · connectivity idle'. attestation.attested=false → label='Trading degraded · connectivity idle' ≠ 'Trading ready' and readiness.new_exposure_allowed=false — all as spec.",
+    "notification_routes _test_safeguards: destination_unverified correctly gates telegram (chat unverified) and email (email_verified missing) at 403 before step-up. verify/start returns 200 with provider_receipt+expires_in_sec=600; verify/confirm {code:'000000'} returns 400 wrong_code — good.",
+    "nl_actions.validate_actions: 12/12 unit tests in test_r15_fenced_execution.py pass covering threshold 0/-3/inf/nan/99, condition 'crash', nested >3, recursive trigger, risk 'yolo', >8 actions — all rejected as expected.",
+    "Frontend AlertTestPanel: renders telegram-verify-block + telegram-verify-start when telegram_verified is falsy; alert-test-send-telegram is disabled — correct.",
+    "Frontend RiskCommander: submits via risk-commander-send, shows proposal-{idx} card with proposal-approve-{idx} button, on approve renders proposal-resolved-{idx} with 'CONFIRMED — EXECUTED' and receipt-state-{n} rows — correct end-to-end.",
+    "Non-issue: Claude occasionally emits SET_RISK_LEVEL without the params.risk_level field (~50% of attempts on 'switch my risk level to X'); backend correctly rejects with 400 invalid_action (schema validation). This is model flakiness, not a backend bug. Better UX would be a stable canned system prompt or retry with an explicit key repair — noting only, not blocking."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% regression / ~90% live (3 minor spec-vs-behavior gaps)", "frontend": "100%"},
+  "test_credentials": "TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD read from /app/backend/.env; RATE_LIMIT_BYPASS_TOKEN and STEP_UP_BYPASS_TOKEN present.",
+  "seed_data_creation": "Set admin bot_configs.risk_level low↔medium multiple times during exactly-once + UI test. FINAL STATE restored to risk_level='medium', active=true on both admin bots (6a4d1b55…d38e, 6a9074992…f4c0). Created 0 triggers (all NL-created trigger proposals were authority-suppressed and left no record). No trade rows inserted.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend HTTP behavior for NL confirm on risk-INCREASING actions (medium after low, ENABLE_BOTS, SET_CONDITIONAL_TRIGGER whose then is risk-increasing) is uniformly authority-CLOSE_ONLY suppressed with confirm.status='failed' and each receipt state='suppressed'. To restore risk_level=medium at end-of-run you MUST use direct Mongo (bot_configs.update_many). For P0-02 trigger checks, the current preview will not create an active trigger via NL for 'if bitcoin drops X% enable all my bots' because the then-action is risk-increasing under authority CLOSE_ONLY. Consider using a risk-reducing then-action (e.g., 'disable all my bots' or 'reduce risk_pct') if you need to verify the trigger persists live. Claude-produced SET_RISK_LEVEL sometimes omits params.risk_level → retry the prompt; backend returns 400 invalid_action as designed.",
+  "rca of the issue": "P0-02: nl_execution.execute_one suppresses risk-increasing actions under authority CLOSE_ONLY BEFORE the trigger record is persisted. If the round-15 spec truly requires the trigger record to be created regardless of the then-action's suppression, the SET_CONDITIONAL_TRIGGER handler must persist the trigger row FIRST (marking it status='active') and let the authority gate only affect fire-time execution. Current code: receipt state='suppressed' + reason='authority CLOSE_ONLY — risk-increasing action refused' + no trigger row inserted → GET /api/nl/triggers empty."
+}

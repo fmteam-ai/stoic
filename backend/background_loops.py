@@ -519,9 +519,13 @@ async def _soak_sampler_loop():
     sampled every SOAK_SAMPLE_INTERVAL_SEC into ops_soak_samples (30d TTL)."""
     INTERVAL = int(os.environ.get("SOAK_SAMPLE_INTERVAL_SEC", "600"))
     indexed = False
+    first = True
     while True:
         try:
-            await asyncio.sleep(INTERVAL)
+            # r15 P2-01 — sample at start-up too, so every (re)started process
+            # announces its identity/build instead of staying invisible for INTERVAL
+            await asyncio.sleep(5 if first else INTERVAL)
+            first = False
             db = get_db()
             if not indexed:
                 await db.ops_soak_samples.create_index(
