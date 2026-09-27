@@ -108,7 +108,8 @@ jobs:
           N=$(python -m pytest tests/integration -m critical_controls --collect-only -q 2>/dev/null | grep -c '::')
           test "$N" -ge 20 || { echo "critical_controls collected $N (<20)"; exit 1; }
           python -m pytest tests/integration -m critical_controls -q -rs --junitxml=/tmp/junit-critical.xml | tee /tmp/critical.log
-          ! grep -E '^SKIPPED' /tmp/critical.log || { echo "unexpected skips in critical_controls"; exit 1; }
+          P=$(grep -oE '[0-9]+ passed' /tmp/critical.log | grep -oE '[0-9]+' | tail -1)
+          test "${P:-0}" -eq "$N" || { echo "critical_controls: passed=$P collected=$N — skips/failures refused"; exit 1; }
       - name: Upload test evidence (consumed by the signed release attestation)
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:

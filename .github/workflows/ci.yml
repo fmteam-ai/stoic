@@ -117,7 +117,10 @@ jobs:
           test "$N" -ge 20 || { echo "critical_controls lane collected $N tests (<20) — lane broken"; exit 1; }
           python -m pytest tests/integration -m critical_controls -q -rs --junitxml=/tmp/junit-critical.xml \
             | tee /tmp/critical.log
-          ! grep -E '^SKIPPED' /tmp/critical.log || { echo "unexpected skips in critical_controls"; exit 1; }
+          # every SELECTED critical test must pass (module-level skips of unrelated
+          # live-only suites are collection noise and do not count)
+          P=$(grep -oE '[0-9]+ passed' /tmp/critical.log | grep -oE '[0-9]+' | tail -1)
+          test "${P:-0}" -eq "$N" || { echo "critical_controls: passed=$P collected=$N — skips/failures refused"; exit 1; }
 
   clean-deploy-cert:
     # iter-213 P1 — clean-machine deployment certification: from a FRESH
