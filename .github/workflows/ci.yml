@@ -443,7 +443,15 @@ jobs:
           image: stoic-frontend:${{ github.sha }}
           format: spdx-json
           output-file: sbom-frontend.spdx.json
+      # Grype scans: the action reports "grype had a non-zero exit status"
+      # for any exit code other than 2 (severity gate) — in practice a
+      # transient vulnerability-DB download failure on the runner. Each scan
+      # therefore gets ONE automatic retry and the DB is restored from the
+      # Actions cache. A genuine finding (exit 2) prints "Failed minimum
+      # severity level" and still fails both attempts.
       - name: Image vulnerability scan — backend (BLOCKING on fixable criticals)
+        id: scan_backend
+        continue-on-error: true
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
         with:
           image: stoic-backend:${{ github.sha }}
@@ -453,13 +461,35 @@ jobs:
           # no released patch cannot be actioned and would leave the gate
           # permanently red.
           only-fixed: true
+          cache-db: true
+      - name: Image vulnerability scan — backend (retry)
+        if: steps.scan_backend.outcome == 'failure'
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
+        with:
+          image: stoic-backend:${{ github.sha }}
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          cache-db: true
       - name: Image vulnerability scan — frontend (BLOCKING on fixable criticals)
+        id: scan_frontend
+        continue-on-error: true
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
         with:
           image: stoic-frontend:${{ github.sha }}
           fail-build: true
           severity-cutoff: critical
           only-fixed: true
+          cache-db: true
+      - name: Image vulnerability scan — frontend (retry)
+        if: steps.scan_frontend.outcome == 'failure'
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
+        with:
+          image: stoic-frontend:${{ github.sha }}
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          cache-db: true
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: sbom
