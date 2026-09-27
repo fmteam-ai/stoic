@@ -173,7 +173,7 @@ async def test_email(request: Request, user=Depends(get_current_user)):
         _test_email_html(user.get("name") or "trader", sent_at),
         text=f"STOIC test alert sent {sent_at} UTC. Email alerts reach this inbox.")
     if not res.get("ok"):
-        await _stamp_test(db, user["id"], "email", False, "send_failed")
+        await _stamp_test(db, user["id"], "email", False, "email_send_failed")
         await _audit_test(db, user, "email", False, None, str(res.get("error") or "")[:120])
         # 503 (not 502): Cloudflare replaces origin 502s with its own HTML page.
         raise HTTPException(status_code=503, detail={

@@ -100,7 +100,7 @@ def test_email_test_provider_failure_is_502(monkeypatch, user):
     assert "domain" in ei.value.detail["reason"]
     cfg = _run(nr.get_telegram(user=user))
     assert cfg["last_test"]["email"]["ok"] is False
-    assert cfg["last_test"]["email"]["error"] == "send_failed"
+    assert cfg["last_test"]["email"]["error"] == "email_send_failed"
 
 
 def test_email_test_rate_limited(monkeypatch, user):

@@ -1,0 +1,95 @@
+{
+  "summary": "Iteration 190 — security audit round 14 P0/P1/P2 verified end-to-end against preview backend + live UI. All 46 regression tests pass (23 critical_controls + 15 iter242_round12 + 8 iter151_ops_observability). All required live checks pass. Frontend Risk Commander, Command Center soak card, and Notifications alert-test panel all render with expected testids and content.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/notifications/telegram → last_test.email.error", "issue": "Stored as 'send_failed' but public API detail.code is 'email_send_failed' — FE displays 'SEND_FAILED' while spec text says 'EMAIL_SEND_FAILED'. Not a functional bug (client-visible label mismatch)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/notifications alert-test", "issues": ["alert-test-last-email shows 'LAST TEST FAILED · SEND_FAILED · <time>' — spec expected the token 'EMAIL_SEND_FAILED'. Minor copy discrepancy driven by stored last_test.error='send_failed' rather than 'email_send_failed'."]}
+    ]
+  },
+  "test_report_links": [
+    "/tmp/iter190_live.py",
+    "/app/test_reports/pytest/iter190_regression.xml",
+    "/app/backend/tests/integration (23 critical_controls)",
+    "/app/backend/tests/test_iter242_round12.py",
+    "/app/backend/tests/test_iter151_ops_observability.py"
+  ],
+  "action_items": [
+    "(Optional) Normalize last_test.email.error to 'email_send_failed' so the Notifications UI reads 'LAST TEST FAILED · EMAIL_SEND_FAILED' as specified. Currently rendered as 'SEND_FAILED'."
+  ],
+  "critical_code_review_comments": [
+    "nl_execution.claim/finalize_status enforces exactly-once semantics correctly: under 20 concurrent confirms exactly 1 winner (200 status=executed with idempotency 32-hex keys) + 19 losers (409 execution_in_progress or proposal_not_pending). Replay after completion returns 409 proposal_not_pending with detail.receipts included — good.",
+    "Authority CLOSE_ONLY suppression is applied inside execute_one for BOTH SET_RISK_LEVEL (up) and ENABLE_BOTS with receipt.state='suppressed' + reason mentions 'authority CLOSE_ONLY' and includes decision_id — good. bot_configs.active unchanged (still 2 active). Note: revert of risk low→medium via NL is also suppressed (risk-increasing) so the restore path uses Mongo direct.",
+    "P0-02 conditional trigger create-via-confirm and DELETE /api/nl/triggers/{id} work; status='active' active=true after creation, 200 on delete. Trigger sweeper claim path covered by tests/integration/test_r14_exactly_once.py.",
+    "P1-02 public /api/status: headline starts with 'Platform controls available'; trading.aggregate has all required keys (accounts_enabled, accounts_ready, all_ready, input_version, sig) with 64-hex sig; label ≠ 'Trading ready' while all_ready=false; no account IDs/emails in payload — good.",
+    "P2-05 email test in preview returns 503 email_send_failed as expected (Resend sandbox); last_test.email now has provider_receipt=null key + at ISO. Admin two_factor_enabled=false so step-up MFA branch not exercised on this admin; STEP_UP_BYPASS_TOKEN sent regardless as safety. Telegram test returns 200 channel=telegram provider_receipt='3877' — response body did NOT expose the actual message text so the [TEST] prefix cannot be asserted via response; the message field of the response is a generic 'Test message sent successfully' (verify via unit test or provider_receipt content).",
+    "P2-01 /api/ops/soak?days=14 memory.watch.coverage {instances, expected_services, missing_services, workers_covered} + scope='API process RSS' present. /api/command-center/status sections.soak.memory.scope is null because verdict=INSUFFICIENT (0/6 memory samples immediately after deploy; sampler runs every 600s and sleeps FIRST). Old ops_soak_samples (2026-09-24) have no service/host/pid — the new fields land only on fresh samples. Not a bug per review note."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD read from /app/backend/.env (per /app/memory/test_credentials.md). RATE_LIMIT_BYPASS_TOKEN and STEP_UP_BYPASS_TOKEN present and honored by preview.",
+  "seed_data_creation": "Toggled admin bot_configs.risk_level low↔medium during exactly-once + suppression tests. RESTORED to risk_level='medium', active=True on both admin bots (6a4d1b55…d38e, 6a9074992…f4c0) at end. Created one trigger via NL and DELETEd it. No trade rows inserted. Two harmless expired proposals may exist (TTL 300s).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression command in review request has a subtle pytest quirk: `pytest tests/integration -m critical_controls tests/test_iter242_round12.py tests/test_iter151_ops_observability.py -q` filters -m critical_controls across ALL provided paths and returns 23 passed, 102 deselected — that's expected. To count the round12/observability tests you must run them separately (they contribute 15 and 8, total 23; spec said '+4' but observability file actually has 8 tests, all pass). Admin has two_factor_enabled=false, so step-up MFA branch of alert-test was not exercised live — cover with unit tests. Telegram/test response body doesn't return the sent message text; [TEST] prefix must be asserted via unit test on the compose function.",
+  "detailed_results": {
+    "regression": {
+      "critical_controls": "23/23 passed (0.94s)",
+      "iter242_round12": "15/15 passed",
+      "iter151_ops_observability": "8/8 passed (spec said 4 — file actually has 8)",
+      "collect_only_critical_controls": "23 tests collected (>= 20 required)"
+    },
+    "P0_01_exactly_once": {
+      "risk_low.status": 200,
+      "confirm.20_thread": "1 x 200 status=executed confirmed=true / 19 x 409 (mix of execution_in_progress + proposal_not_pending)",
+      "winner.receipts[0]": "{key:32-hex, index:0, type:SET_RISK_LEVEL, target:all, state:done, result:{risk_level:low, modified:2, target_mode:all}, at:ISO}",
+      "winner.authority": "{state:CLOSE_ONLY, decision_id:dec_..., input_hash:hex16}",
+      "replay": "409 detail.code=proposal_not_pending with detail.receipts present",
+      "risk_level_change": "bot_configs.risk_level low (modified=2); restored to medium via Mongo (NL medium is suppressed by authority)."
+    },
+    "P0_01_authority_suppression": {
+      "authority.state": "CLOSE_ONLY", "authority.new_exposure_allowed": false,
+      "confirm.status": 200, "confirm.status_field": "failed",
+      "receipt": "{type:ENABLE_BOTS, state:suppressed, reason:'authority CLOSE_ONLY — risk-increasing action refused', decision_id:dec_...}",
+      "bot_configs.active": "unchanged (still 2 active)"
+    },
+    "P0_02_trigger": {
+      "create.status": 200, "confirm.status": 200, "confirm.status_field": "executed",
+      "GET_triggers": "1 trigger with status=active active=true",
+      "DELETE": 200
+    },
+    "P1_02_public_status": {
+      "headline": "Platform controls available · trading degraded · connectivity idle",
+      "aggregate": "{accounts_enabled:2, accounts_ready:1, all_ready:false, input_version:59, sig:'97c48817...041b5' (64-hex)}",
+      "trading.label": "Trading degraded · connectivity idle (≠ 'Trading ready')",
+      "no_identifiers_in_payload": true
+    },
+    "P2_05_alerts": {
+      "admin.two_factor_enabled": false,
+      "email_test.status": 503,
+      "email_test.detail.code": "email_send_failed",
+      "last_test.email": "{ok:false, error:send_failed, provider_receipt:null, at:ISO}",
+      "telegram_test.status": 200,
+      "telegram_test.body": "{ok:true, channel:telegram, provider_receipt:'3877', message:'Test message sent successfully'}",
+      "note": "[TEST] prefix cannot be verified via response body (endpoint only echoes 'Test message sent successfully'); recommend unit test on notification_test_audit chain."
+    },
+    "P2_01_memory": {
+      "ops_soak.memory.watch.scope": "API process RSS",
+      "ops_soak.memory.watch.coverage_keys": ["instances","expected_services","missing_services","workers_covered"],
+      "command_center.soak.memory.verdict": "INSUFFICIENT (0/6 samples — sampler runs every 600s and sleeps first; scope null until samples exist)"
+    },
+    "frontend": {
+      "risk_commander.low": "CONFIRMED — EXECUTED (proposal-resolved-1); receipt-state-0 shows result JSON",
+      "risk_commander.enable_all": "FAILED — NO ACTION COMPLETED (proposal-resolved-4); receipt row shows 'ENABLE_BOTS · SUPPRESSED · authority CLOSE_ONLY — risk-increasing action refused'",
+      "command_center.cc-soak-memory": "API process RSS · MEASURING",
+      "notifications.alert-test-panel": "renders",
+      "notifications.alert-test-last-email": "LAST TEST FAILED · SEND_FAILED · 9/27/26, 7:15 PM (minor: spec expected EMAIL_SEND_FAILED)"
+    }
+  }
+}
