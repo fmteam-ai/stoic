@@ -2649,3 +2649,6 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## Iter-247 (2026-06) — Security audit round 13 follow-up (read-only audit → CONDITIONAL PASS)
 - SEC-001 (P2/MEDIUM) fixed: `broker_statement_ledger.statement_problems` now REQUIRES `STATEMENT_ATTESTATION_PUBLIC_KEY_B64` (absent ⇒ fail closed), refuses a key equal to the platform release key, and never falls back to `release_signing.public_key_b64()`. Hardening: `account_id/statement_id/currency/issuer` must be plain strings (no operator-shaped ids). Preview `.env` carries a distinct dev statement key; `.env.example` documents the variable. Test updated (independent broker key; absent/release-key/operator-id cases refused).
 - Verified sound by the audit: manifest-gated joblib.load, two-principal exact-tuple approvals, inventory two-admin + nonce, break-glass 409/503, CSRF + step-up, release pipeline staging, frontend escaping. Deferred (P3): coarser `/api/status` fleet counts.
+
+## Iter-248 (2026-06) — Security audit re-run: PASS (no P0/P1/P2)
+- SEC-001 verified resolved by the auditor. P3 fixed: `statement_problems` now reports `<field> required` for missing money fields instead of a KeyError 500 (test added). Deferred P3s: coarser `/api/status` fleet counts; consider grype `--fail-on high`; CORS wildcard only on the non-credentialed branch (by design).

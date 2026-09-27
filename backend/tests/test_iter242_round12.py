@@ -621,6 +621,8 @@ class TestBrokerStatementLedger:
             monkeypatch.setenv("STATEMENT_ATTESTATION_PUBLIC_KEY_B64", broker_pub)
             assert "signature" in " ".join(bl.statement_problems(st, release_sign(bl.statement_body(st))))
             assert bl.statement_problems({**st, "account_id": {"$ne": ""}}, sig)                  # operator-shaped id refused
+            missing = {k: v for k, v in st.items() if k != "opening_balance"}
+            assert any("opening_balance required" in p for p in bl.statement_problems(missing, sig))   # no KeyError/500
             assert bl.statement_problems(st, sig) == []
             assert bl.statement_problems({**st, "closing_balance": 10417.58}, sig)          # one cent off → does not balance / bad sig
             assert "signature" in " ".join(bl.statement_problems(st, "00" * 64))

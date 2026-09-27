@@ -49,6 +49,9 @@ def statement_problems(st: dict, signature_hex: str) -> list:
     except (KeyError, ValueError, TypeError):
         problems.append("period_from/period_to invalid")
     for k in MONEY_FIELDS:
+        if k not in st:
+            problems.append(f"{k} required")
+            continue
         try:
             float(st.get(k) or 0)
         except (TypeError, ValueError):
