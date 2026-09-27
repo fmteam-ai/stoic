@@ -2895,6 +2895,8 @@ class ScalpRunner:
             "clock_drift_ms": self.state.clock_drift_ms,
             "clock_drift_residual_ms": round(
                 kill.clock_drift_residual_ms(self.state.clock_drift_ms)),
+            "clock_drift_samples": len(getattr(self.state, "_offsets", ()) or ()),
+            "clock_drift_limit_ms": kill.MAX_CLOCK_DRIFT_MS,
             "features": ({k: round(v, 3) for k, v in feats.items()
                           if not k.startswith("_")} if feats else None),
             "risk": {

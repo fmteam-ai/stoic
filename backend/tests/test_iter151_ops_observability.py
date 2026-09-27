@@ -64,15 +64,17 @@ def test_execution_health_sre_sections():
     assert isinstance(j["infra"]["heartbeats"], list)
 
 
-# ------------------- Risk Commander: AI → proposal → operator approval
-def test_nl_confirm_rejects_unknown_actions():
+# ------------------- Risk Commander: AI → preview → operator approval
+def test_nl_confirm_rejects_raw_actions():
+    """Client-supplied action lists are refused — only stored proposals run."""
     s = _login()
     r = s.post(f"{BASE}/api/nl/command/confirm",
                json={"actions": [{"type": "DELETE_EVERYTHING"}]}, timeout=15)
     assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "proposal_id_required"
 
 
-def test_nl_confirm_requires_actions():
+def test_nl_confirm_requires_proposal_id():
     s = _login()
     r = s.post(f"{BASE}/api/nl/command/confirm", json={}, timeout=15)
     assert r.status_code == 400
@@ -82,11 +84,9 @@ def test_sensitive_gate_in_source():
     src = open(_os.path.join(_BACKEND_DIR, "routes", "nl_routes.py")).read()
     assert 'SENSITIVE_NL_ACTIONS = {"SET_RISK_LEVEL", "ENABLE_BOTS", "CLOSE_ALL_TRADES"}' in src
     assert '"requires_confirmation": True' in src
-    # the gate must sit BEFORE execution in nl_command
-    cmd = src[src.index("async def nl_command("):src.index("async def nl_command_confirm(")] \
-        if src.index("async def nl_command(") < src.index("async def nl_command_confirm(") \
-        else src[src.index("async def nl_command("):]
-    assert cmd.index("requires_confirmation") < cmd.index("_execute_actions")
+    # nl_command must NEVER execute — every command is previewed first
+    cmd = src[src.index("async def nl_command("):]
+    assert "_execute_actions" not in cmd.split("@router.get", 1)[0]
     # raw interpret exception no longer leaks
     assert 'detail=f"AI interpret failed: {e}"' not in src
 

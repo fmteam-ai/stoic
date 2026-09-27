@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import api, { formatApiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { AlertTestPanel } from "@/components/AlertTestPanel";
 import {
     Bell, Send, Save as FloppyDisk, CheckCircle2, ExternalLink, KeyRound,
     AlertTriangle, MessageSquare, Webhook, Power,
@@ -22,6 +24,7 @@ const EVENT_LABELS = {
 };
 
 export default function Notifications() {
+    const { user } = useAuth();
     const [cfg, setCfg] = useState(null);
     const [token, setToken] = useState("");
     const [chatId, setChatId] = useState("");
@@ -68,9 +71,13 @@ export default function Notifications() {
         try {
             await api.post("/notifications/telegram/test");
             toast.success("Test message sent — check your Telegram", { duration: 5000 });
+            onTestResult("telegram", { ok: true, at: new Date().toISOString() });
         } catch (e) { setErr(formatApiError(e)); }
         finally { setTesting(false); }
     };
+
+    const onTestResult = (channel, result) =>
+        setCfg(c => ({ ...c, last_test: { ...(c?.last_test || {}), [channel]: result } }));
 
     const toggleAlert = (key) => {
         // Match the display logic — undefined ≡ ON, so flipping undefined → OFF.
@@ -202,10 +209,13 @@ export default function Notifications() {
                     </div>
                 </div>
 
+                {/* Channel check */}
+                <AlertTestPanel cfg={cfg} userEmail={user?.email} onResult={onTestResult} />
+
                 {/* Alert types */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A]">
                     <div className="px-5 py-3 border-b border-[#1F1F1F]">
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SECTION 03</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SECTION 04</div>
                         <div className="font-display font-bold text-lg tracking-tight">Which Events Trigger Alerts</div>
                     </div>
                     <div className="p-5 space-y-2">
@@ -238,7 +248,7 @@ export default function Notifications() {
                     <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center gap-2">
                         <Webhook className="w-4 h-4 text-[#FFD700]" />
                         <div className="flex-1">
-                            <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">SECTION 04 · 2-WAY CONTROL</div>
+                            <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">SECTION 05 · 2-WAY CONTROL</div>
                             <div className="font-display font-bold text-lg tracking-tight">Control the bot from Telegram</div>
                         </div>
                         <div className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border ${

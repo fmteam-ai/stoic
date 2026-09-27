@@ -405,6 +405,7 @@ async def soak_report(request: Request, days: int = 14):
         {"financial_reconciliation_status": {"$nin": [None, "ok",
                                                       "reconciled"]}})
     from silent_failures import swallow_counters
+    from soak_memory_watch import memory_trend
     chaos = await db.chaos_drills.find_one({}, sort=[("at", -1)]) or {}
     return {"days": days, "samples": len(samples),
             "memory": {"first_mb": rss[0] if rss else None,
@@ -412,7 +413,8 @@ async def soak_report(request: Request, days: int = 14):
                        "max_mb": max(rss) if rss else None,
                        "growth_pct": (round((rss[-1] - rss[0]) / rss[0]
                                             * 100, 1)
-                                      if len(rss) > 1 and rss[0] else None)},
+                                      if len(rss) > 1 and rss[0] else None),
+                       "watch": memory_trend(samples)},
             "worker_restart_events": restarts,
             "missed_heartbeat_samples": missed_hb,
             "reconciliation_backlog": recon_backlog,

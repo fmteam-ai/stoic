@@ -1661,6 +1661,15 @@ class TestNLCommander:
             "prompt": "if Bitcoin drops 4% disable my high-risk bots"
         }, timeout=120)
         assert r.status_code == 200, r.text
+        body = r.json()
+        # Every command is previewed first — the trigger is armed only on confirm.
+        assert body.get("requires_confirmation") is True, body
+        assert body.get("proposal_id"), body
+        assert body["preview"]["actions"][0]["type"] == "SET_CONDITIONAL_TRIGGER"
+        rc = admin_session.post(f"{API}/nl/command/confirm",
+                                json={"proposal_id": body["proposal_id"]}, timeout=30)
+        assert rc.status_code == 200, rc.text
+        assert rc.json().get("confirmed") is True
         # List triggers
         r2 = admin_session.get(f"{API}/nl/triggers", timeout=10)
         assert r2.status_code == 200

@@ -6,6 +6,7 @@ import { RiskBudgetCard } from "@/components/RiskBudgetCard";
 import { StrategyPortfolioCard } from "@/components/StrategyPortfolioCard";
 import { RegimeCard } from "@/components/RegimeCard";
 import { GovernanceCard } from "@/components/GovernanceCard";
+import { ProposalPreview } from "@/components/ProposalPreview";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
 import {
@@ -42,18 +43,30 @@ export default function RiskCommander() {
     const [err, setErr] = useState("");
     const [history, setHistory] = useState([]); // {id, role:user|ai, content, receipts?}
 
-    const approveProposal = async (msgId, actions) => {
+    const approveProposal = async (msgId, proposalId) => {
+        setErr("");
         try {
-            const { data } = await api.post("/nl/command/confirm", { actions });
+            const { data } = await api.post("/nl/command/confirm", { proposal_id: proposalId });
             setHistory(h => h.map(m => m.id === msgId ? { ...m, resolved: "approved" } : m)
                 .concat([newMsg({ role: "ai", content: data.summary, receipts: data.receipts })]));
             toast.success("Proposal approved", { description: data.summary });
+            await loadTriggers();
         } catch (e) {
+            const d = e?.response?.data?.detail;
+            if (d?.code === "preview_stale" && d.preview) {
+                setHistory(h => h.map(m => m.id === msgId ? { ...m, preview: d.preview, stale: true } : m));
+                toast.warning("Portfolio changed — preview refreshed, review and confirm again");
+                return;
+            }
+            if (d?.code === "proposal_expired") {
+                setHistory(h => h.map(m => m.id === msgId ? { ...m, resolved: "expired" } : m));
+            }
             setErr(formatApiError(e));
         }
     };
-    const rejectProposal = (msgId) => {
+    const rejectProposal = async (msgId, proposalId) => {
         setHistory(h => h.map(m => m.id === msgId ? { ...m, resolved: "rejected" } : m));
+        try { await api.post(`/nl/command/${proposalId}/reject`); } catch (e) { console.warn("[risk-commander] reject failed", e?.message); }
     };
 
     // Monotonic counter for chat-row keys. Avoids index-as-key (stale after edits/deletes).
@@ -106,6 +119,9 @@ export default function RiskCommander() {
                         content: data.summary,
                         pendingActions: data.pending_actions,
                         sensitiveTypes: data.sensitive_types,
+                        proposalId: data.proposal_id,
+                        preview: data.preview,
+                        expiresAt: Date.now() + (data.expires_in_sec || 300) * 1000,
                     })]);
                 } else {
                     setHistory(h => [...h, newMsg({
@@ -285,30 +301,28 @@ export default function RiskCommander() {
                                     {m.pendingActions?.length > 0 && (
                                         <div className="mt-2 border border-[#FFB000]/40 bg-[#FFB000]/5 p-2 space-y-2" data-testid={`proposal-${i}`}>
                                             <div className="font-mono text-[10px] tracking-widest text-[#FFB000]">
-                                                PROPOSAL · {m.sensitiveTypes?.join(" · ")} — needs your approval
+                                                PREVIEW · {(m.sensitiveTypes?.length ? m.sensitiveTypes : m.pendingActions.map(a => a.type)).join(" · ")} — nothing runs until you confirm
+                                                {m.stale && <span className="text-[#FF3B30]"> · REFRESHED AFTER PORTFOLIO CHANGE</span>}
                                             </div>
-                                            {m.pendingActions.map((a, j) => (
-                                                <div key={j} className="font-mono text-[10px] text-[#A1A1AA]">
-                                                    {a.type}{a.params ? ` · ${JSON.stringify(a.params)}` : ""}
-                                                </div>
-                                            ))}
+                                            <ProposalPreview preview={m.preview} msgIndex={i} />
                                             {!m.resolved && (
-                                                <div className="flex gap-2">
+                                                <div className="flex gap-2 items-center">
                                                     <button data-testid={`proposal-approve-${i}`}
-                                                        onClick={() => approveProposal(m.id, m.pendingActions)}
+                                                        onClick={() => approveProposal(m.id, m.proposalId)}
                                                         className="font-mono text-[10px] tracking-widest px-3 py-1 border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10">
-                                                        APPROVE &amp; EXECUTE
+                                                        CONFIRM &amp; EXECUTE
                                                     </button>
                                                     <button data-testid={`proposal-reject-${i}`}
-                                                        onClick={() => rejectProposal(m.id)}
+                                                        onClick={() => rejectProposal(m.id, m.proposalId)}
                                                         className="font-mono text-[10px] tracking-widest px-3 py-1 border border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10">
                                                         REJECT
                                                     </button>
+                                                    <span className="font-mono text-[10px] text-[#52525B] flex items-center gap-1"><Clock className="w-3 h-3" /> valid 5 min</span>
                                                 </div>
                                             )}
                                             {m.resolved && (
-                                                <div className={`font-mono text-[10px] tracking-widest ${m.resolved === "approved" ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
-                                                    {m.resolved === "approved" ? "APPROVED — EXECUTED" : "REJECTED"}
+                                                <div className={`font-mono text-[10px] tracking-widest ${m.resolved === "approved" ? "text-[#00FF41]" : "text-[#FF3B30]"}`} data-testid={`proposal-resolved-${i}`}>
+                                                    {m.resolved === "approved" ? "CONFIRMED — EXECUTED" : m.resolved === "expired" ? "EXPIRED — SEND THE COMMAND AGAIN" : "REJECTED"}
                                                 </div>
                                             )}
                                         </div>

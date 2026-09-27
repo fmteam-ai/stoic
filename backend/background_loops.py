@@ -561,6 +561,11 @@ async def _soak_sampler_loop():
                 "hb_age_max_s": round(max(hb_ages)) if hb_ages else None})
             record_progress("_soak_sampler_loop", processed=1,
                             started_at=None, interval_sec=INTERVAL)
+            try:
+                from soak_memory_watch import sweep as memory_sweep
+                await memory_sweep(db)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("soak memory watch error: %s", e)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001

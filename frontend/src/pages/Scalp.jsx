@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { ScalpExecutions } from "@/components/ScalpExecutions";
 import { ScalpReview } from "@/components/ScalpReview";
+import { DriftGauge } from "@/components/DriftGauge";
 import { RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -329,12 +330,15 @@ export default function Scalp() {
                                 <X size={12} /> REMOVE
                             </button>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs text-[#A1A1AA]">
+                        <div className="grid grid-cols-2 md:grid-cols-7 gap-2 text-xs text-[#A1A1AA]">
                             <div>Ticks <span className="text-[#E4E4E7] font-mono">{r.counters?.ticks}</span></div>
                             <div>Candidates <span className="text-[#E4E4E7] font-mono">{r.counters?.candidates}</span></div>
                             <div>Shadow <span className="text-[#E4E4E7] font-mono">{r.counters?.shadow_trades}</span></div>
                             <div>Live <span className="text-[#E4E4E7] font-mono">{r.counters?.live_trades}</span></div>
                             <div>Spread <span className="text-[#E4E4E7] font-mono">{fmt(r.spread_pips, 2)}p</span></div>
+                            <DriftGauge residualMs={r.clock_drift_residual_ms} offsetMs={r.clock_drift_ms}
+                                        samples={r.clock_drift_samples} limitMs={r.clock_drift_limit_ms}
+                                        testid={`scalp-runner-drift-${r.symbol}`} />
                             {(() => {
                                 const qa = quoteAge(r.quote_age_ms);
                                 return (

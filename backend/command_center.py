@@ -35,16 +35,23 @@ async def _soak_section(db) -> dict:
     reds = ev.get("red_checkpoint_days") or []
     majors = int(ev.get("major_incidents") or 0)
     campaign_status = (out.get("campaign") or {}).get("status")
+    from soak_memory_watch import campaign_trend
+    mem = await campaign_trend(db, out.get("campaign"))
+    memory = {k: mem.get(k) for k in ("verdict", "latest_mb", "baseline_mb",
+                                      "growth_pct", "slope_mb_per_day", "detail")}
     if verdict == "FAIL":
         color, detail = "RED", "soak campaign FAILED"
     elif verdict == "PASS":
         color, detail = "GREEN", "soak campaign PASSED"
-    elif drift or reds or majors:
+    elif memory["verdict"] == "ALERT":
+        color, detail = "RED", f"worker memory climbing — {memory['detail']}"
+    elif drift or reds or majors or memory["verdict"] == "WATCH":
         color = "YELLOW"
         detail = "; ".join(filter(None, [
             f"version drift: {', '.join(drift)}" if drift else "",
             f"red checkpoint days: {reds}" if reds else "",
-            f"{majors} major incident(s)" if majors else ""]))
+            f"{majors} major incident(s)" if majors else "",
+            f"memory watch: {memory['detail']}" if memory["verdict"] == "WATCH" else ""]))
     elif (campaign_status == "RUNNING"
           and cd.get("today_checkpoint_done") is False
           and (cd.get("hours_into_day") or 0) >= 12):
@@ -61,6 +68,7 @@ async def _soak_section(db) -> dict:
             "days_remaining": cd.get("days_remaining"),
             "ends_at": cd.get("ends_at"),
             "today_checkpoint_done": cd.get("today_checkpoint_done"),
+            "memory": memory,
             "detail": detail}
 
 

@@ -134,8 +134,8 @@ export function formatApiError(err) {
         // Actionable lists (activation problems, certification blockers)
         // must be surfaced, not dropped — prod bug: "Live activation
         // blocked — fix these first:" rendered with an empty list.
-        const items = ["problems", "blockers", "reasons"]
-            .flatMap(k => (Array.isArray(detail[k]) ? detail[k] : []))
+        const items = ["problems", "blockers", "reasons", "reason"]
+            .flatMap(k => (Array.isArray(detail[k]) ? detail[k] : (typeof detail[k] === "string" && detail[k] ? [detail[k]] : [])))
             .map(x => (typeof x === "string" ? x
                 : (x?.message || x?.msg || x?.detail || JSON.stringify(x))))
             .filter(Boolean);

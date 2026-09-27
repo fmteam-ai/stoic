@@ -190,18 +190,61 @@ KNOWN_NL_ACTIONS = {"DISABLE_BOTS", "ENABLE_BOTS", "MOVE_STOPS_BREAKEVEN",
 
 @router.post("/command/confirm")
 async def nl_command_confirm(payload: dict, user=Depends(get_current_user)):
-    """Iter-151 · execute a previously proposed action set after the
-    operator explicitly approved it in the Risk Commander UI."""
-    actions = payload.get("actions") or []
-    if not actions:
-        raise HTTPException(status_code=400, detail="actions required")
-    for a in actions:
-        if str(a.get("type") or "").upper() not in KNOWN_NL_ACTIONS:
-            raise HTTPException(status_code=400,
-                                detail=f"unknown action type {a.get('type')}")
+    """Execute a stored proposal ONLY after the operator approved the exact
+    preview they were shown. Re-computes the preview: any drift (a trade
+    closed, a bot toggled) → 409 preview_stale with the fresh preview."""
+    from nl_preview import build_preview, is_expired
+    pid = payload.get("proposal_id")
+    if not pid:
+        raise HTTPException(status_code=400, detail={
+            "code": "proposal_id_required",
+            "message": "Commands execute only from a previewed proposal."})
+    db = get_db()
+    doc = await db.nl_proposals.find_one(
+        {"_id": parse_object_id(pid, "Proposal"), "user_id": user["id"]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    if doc.get("status") != "pending":
+        raise HTTPException(status_code=409, detail={
+            "code": "proposal_not_pending",
+            "message": f"Proposal already {doc.get('status')}."})
+    if is_expired(doc):
+        await db.nl_proposals.update_one({"_id": doc["_id"]}, {"$set": {"status": "expired"}})
+        raise HTTPException(status_code=409, detail={
+            "code": "proposal_expired",
+            "message": "Preview expired — send the command again to get a fresh preview."})
+    actions = doc["actions"]
+    fresh = await build_preview(db, user["id"], actions)
+    if fresh["fingerprint"] != doc["preview"]["fingerprint"]:
+        await db.nl_proposals.update_one(
+            {"_id": doc["_id"]}, {"$set": {"preview": fresh}})
+        raise HTTPException(status_code=409, detail={
+            "code": "preview_stale",
+            "message": "Portfolio changed since the preview — review the updated preview and confirm again.",
+            "preview": fresh, "proposal_id": pid})
     receipts = await _execute_actions(user["id"], actions)
+    await db.nl_proposals.update_one({"_id": doc["_id"]}, {"$set": {
+        "status": "executed", "receipts": receipts,
+        "executed_at": datetime.now(timezone.utc).isoformat()}})
+    await ws_manager.broadcast(user["id"], "nl_command_executed", {
+        "summary": doc.get("summary"), "receipts": receipts, "prompt": doc.get("prompt"),
+    })
     return {"summary": f"Approved — executed {len(receipts)} action(s).",
-            "receipts": receipts, "actions": actions, "confirmed": True}
+            "receipts": receipts, "actions": actions, "confirmed": True,
+            "proposal_id": pid}
+
+
+@router.post("/command/{proposal_id}/reject")
+async def nl_command_reject(proposal_id: str, user=Depends(get_current_user)):
+    db = get_db()
+    res = await db.nl_proposals.update_one(
+        {"_id": parse_object_id(proposal_id, "Proposal"), "user_id": user["id"],
+         "status": "pending"},
+        {"$set": {"status": "rejected",
+                  "rejected_at": datetime.now(timezone.utc).isoformat()}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Pending proposal not found")
+    return {"ok": True, "proposal_id": proposal_id, "status": "rejected"}
 
 
 @router.post("/command")
@@ -228,27 +271,30 @@ async def nl_command(payload: dict, user=Depends(get_current_user)):
     actions = parsed.get("actions") or []
     if not actions:
         raise HTTPException(status_code=400, detail="No actions produced from prompt")
+    for a in actions:
+        if str(a.get("type") or "").upper() not in KNOWN_NL_ACTIONS:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown action type {a.get('type')}")
 
-    # iter-151 — AI → PROPOSAL → operator approval for live-sensitive
-    # actions (risk raises, re-enabling bots, mass closes). Safety-reducing
-    # actions (disable, panic, breakeven) still execute immediately.
+    # AI → deterministic PREVIEW → operator approval for EVERY command.
+    # Nothing touches bots or capital until /command/confirm carries the
+    # proposal_id and the preview still matches the live portfolio.
+    from nl_preview import PROPOSAL_TTL_SEC, build_preview, store_proposal
+    db = get_db()
+    preview = await build_preview(db, user["id"], actions)
+    doc = await store_proposal(db, user["id"], prompt, actions, preview)
     sensitive = [a for a in actions
                  if str(a.get("type") or "").upper() in SENSITIVE_NL_ACTIONS]
-    if sensitive and not payload.get("confirm"):
-        return {"requires_confirmation": True,
-                "summary": ("These action(s) change live trading behaviour "
-                            "and need your explicit approval."),
-                "pending_actions": actions,
-                "sensitive_types": sorted({str(a.get("type")).upper()
-                                           for a in sensitive}),
-                "prompt": prompt}
-
-    receipts = await _execute_actions(user["id"], actions)
-    summary = parsed.get("summary") or "Commands executed."
-    await ws_manager.broadcast(user["id"], "nl_command_executed", {
-        "summary": summary, "receipts": receipts, "prompt": prompt,
-    })
-    return {"summary": summary, "receipts": receipts, "actions": actions, "prompt": prompt}
+    summary = parsed.get("summary") or "Proposed actions."
+    await db.nl_proposals.update_one({"_id": doc["_id"]}, {"$set": {"summary": summary}})
+    return {"requires_confirmation": True,
+            "proposal_id": doc["id"],
+            "summary": summary,
+            "pending_actions": actions,
+            "preview": preview,
+            "sensitive_types": sorted({str(a.get("type")).upper() for a in sensitive}),
+            "expires_in_sec": PROPOSAL_TTL_SEC,
+            "prompt": prompt}
 
 
 @router.get("/triggers")

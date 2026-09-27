@@ -390,13 +390,19 @@ async def record_checkpoint(db, recorded_by: str = "manual") -> dict:
         {"campaign_id": campaign["campaign_id"], "severity": "critical"})
     drift = version_drift(campaign.get("frozen_versions"),
                           material_versions())
+    from soak_memory_watch import campaign_trend
+    mem = await campaign_trend(db, campaign)
+    memory = {k: mem.get(k) for k in ("verdict", "baseline_mb", "latest_mb", "peak_mb",
+                                      "growth_pct", "slope_mb_per_day",
+                                      "consecutive_climbs", "samples", "detail")}
     green = (incidents == 0
              and not global_health["critical_failing"]
              and account_connected
              and invariants["unknown_rate_ok"]
              and invariants["duplicates_ok"]
              and invariants["reconciliation_ok"]
-             and not drift)
+             and not drift
+             and memory["verdict"] != "ALERT")
     cp = {"campaign_id": campaign["campaign_id"], "day": day, "at": _now(),
           "scope": {"account_id": acc_id} if acc_id else {"account_id": None,
                                                           "note": "no "
@@ -407,6 +413,7 @@ async def record_checkpoint(db, recorded_by: str = "manual") -> dict:
           "invariants": invariants,
           "global_health": global_health,
           "version_drift": drift,
+          "memory": memory,
           "recorded_by": recorded_by,
           "green": green}
     await db.soak_checkpoints.update_one(

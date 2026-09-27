@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 572 |
 | integration | real MongoDB service container | CI `backend-integration` | 79 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3705 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3721 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4367 tests across 437 files.**
+**Total: 4383 tests across 440 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -381,6 +381,9 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter_optimizer_http.py` | http-live | 11 |
 | `backend/tests/test_iter_trade_stats_perf.py` | http-live | 6 |
 | `backend/tests/test_max_concurrent_race.py` | http-live | 3 |
+| `backend/tests/test_p1_alert_test_button.py` | http-live | 6 |
+| `backend/tests/test_p1_risk_commander_confirm.py` | http-live | 5 |
+| `backend/tests/test_p1_soak_memory_watch.py` | http-live | 5 |
 | `backend/tests/test_regime_dispatch.py` | http-live | 9 |
 | `backend/tests/test_safety_guardian.py` | http-live | 11 |
 | `backend/tests/test_sec001_brain_bola.py` | http-live | 7 |

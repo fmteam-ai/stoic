@@ -205,6 +205,18 @@ export default function CommandCenter() {
                         <Metric label="Checkpoint coverage" testid="cc-soak-coverage"
                             value={s.soak?.coverage != null ? `${Math.round(s.soak.coverage * 100)}%` : "—"} />
                         <Metric label="Incidents" value={s.soak?.incidents} testid="cc-soak-incidents" />
+                        <div className="flex items-center justify-between py-0.5 text-xs" data-testid="cc-soak-memory"
+                             title={s.soak?.memory?.detail || "Worker RSS sampled every 10 min across the soak"}>
+                            <span className="text-[#52525B]">Worker memory</span>
+                            <span className={`font-mono font-bold ${
+                                s.soak?.memory?.verdict === "ALERT" ? "text-[#FF3B30]"
+                                    : s.soak?.memory?.verdict === "WATCH" ? "text-[#FFD700]"
+                                        : s.soak?.memory?.verdict === "OK" ? "text-[#00FF41]" : "text-[#A1A1AA]"}`}>
+                                {s.soak?.memory?.latest_mb != null
+                                    ? `${Math.round(s.soak.memory.latest_mb)} MB · ${s.soak.memory.growth_pct >= 0 ? "+" : ""}${s.soak.memory.growth_pct}% · ${s.soak.memory.verdict}`
+                                    : (s.soak?.memory?.verdict === "INSUFFICIENT" ? "MEASURING" : "—")}
+                            </span>
+                        </div>
                         {s.soak?.day != null && (
                             <div className="mt-2 h-1.5 bg-[#1F1F1F]" data-testid="cc-soak-progress">
                                 <div className={`h-full ${tone(s.soak.status).dot}`}
