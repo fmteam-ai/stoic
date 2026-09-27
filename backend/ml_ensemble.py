@@ -258,7 +258,7 @@ def public_state(doc: dict) -> dict:
 
 
 async def get_meta(db, user_id: str) -> dict:
-    doc = await db.ml_ensembles.find_one({"user_id": user_id})
+    doc = await db.ml_ensembles.find_one({"user_id": user_id}, {"_id": 0})
     if doc:
         try:
             age = (datetime.now(timezone.utc)
@@ -271,7 +271,7 @@ async def get_meta(db, user_id: str) -> dict:
         # never auto-retrain in-request on a memory-constrained pod
         return doc or {"status": "disabled_low_memory"}
     await train_ensemble(db, user_id)
-    return await db.ml_ensembles.find_one({"user_id": user_id}) or {}
+    return await db.ml_ensembles.find_one({"user_id": user_id}, {"_id": 0}) or {}
 
 
 async def approval_events(db, approvals: list) -> set:
