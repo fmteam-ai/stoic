@@ -128,8 +128,9 @@ async def _attestation_gate_scenario():
         # clean user: ONE enabled LIVE account, verified identity, FRESH
         # heartbeat agreeing with the local projection, fresh broker deal,
         # reconciled (empty) P&L, nothing synthetic → signed
+        clean_acc = ObjectId()
         await db.accounts.insert_one(
-            {"_id": ObjectId(), "user_id": "clean_user", "label": "Real IC",
+            {"_id": clean_acc, "user_id": "clean_user", "label": "Real IC",
              "mode": "live", "trading_enabled": True,
              "broker_server": "ICMarkets-Live01", "open_positions": 0,
              "last_heartbeat": (now - timedelta(seconds=5)).isoformat(),
@@ -137,6 +138,17 @@ async def _attestation_gate_scenario():
         await db.broker_deals.insert_one(
             {"user_id": "clean_user", "deal_id": 1, "account_id": "x",
              "deal_time": int((now - timedelta(minutes=5)).timestamp())})
+        # round 13 P1 — no signed, RECONCILED broker statement on the ledger
+        # → attestation withheld even for an otherwise clean account
+        out = await _attach_attestation(db, "clean_user", {"overall": {}})
+        assert out["attestation"] is None
+        assert "STATEMENT_LEDGER_MISSING" in out["attestation_blocked"]["reasons"]
+        await db.reconciliation_ledger.insert_one(
+            {"_id": f"{clean_acc}:ST-1", "user_id": "clean_user", "account_id": str(clean_acc),
+             "statement_id": "ST-1", "status": "RECONCILED",
+             "period_from": (now - timedelta(days=31)).isoformat(),
+             "period_to": (now - timedelta(days=1)).isoformat(),
+             "statement_sha256": "0" * 64})
         out = await _attach_attestation(db, "clean_user", {"overall": {}})
         assert out["attestation_blocked"] is None
         assert out["attestation"] is not None

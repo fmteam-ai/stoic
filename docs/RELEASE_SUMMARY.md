@@ -1,7 +1,7 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `90721fcb22aa111b377ac917d10a9a483acd708e`
-- rc_lock: `90721fcb22aa111b377ac917d10a9a483acd708e` authoritative=False
+- Source commit: `5814099f4477d3eee0acdc8b41362167bdaeadf2`
+- rc_lock: `5814099f4477d3eee0acdc8b41362167bdaeadf2` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
 - Test manifest sha256: `22a68cbd9a3d601ebbfb69755d20cae31cf2a2a939b977cb5ac1c7030afdd762`
 - Uvicorn keepalive (container): 75s (application cap 300s)
@@ -26,4 +26,4 @@
 - P2-04-r14 [P2] Preview/prod parity: production-built staging bundle with content hashes + non-production banner, Turnstile enabled on a stable staging hostname, /api/version equals the promoted build
 - full Turnstile matrix (valid-once, replay, wrong action/hostname, skew, outage fallback, script failure) run there. — owner: engineering
 
-_generated 2026-09-27T19:31:24.410534+00:00 — regenerate on every release commit_
+_generated 2026-09-27T19:39:33.528190+00:00 — regenerate on every release commit_
