@@ -113,9 +113,10 @@ async def get_architecture(user=Depends(get_current_user)):
                         bool(bayes_doc.get("cells") or bayes_doc.get("states")),
                         "Beta-Binomial P(success) + EV with credible intervals")]),
         stage("ensemble", "Ensemble",
-              ml_doc.get("status") == "trained",
+              (ml_doc.get("production") or {}).get("status") == "active",
               (f"GBM+XGBoost+LightGBM+CatBoost skill-weighted (AUC) + live "
-               f"agents → P(win) · trained on {ml_doc.get('n_trades', 0)} trades"
+               f"agents → P(win) · production trained on {(ml_doc.get('production') or {}).get('n_trades', 0)} trades"
+               + (" · candidate awaiting approval" if (ml_doc.get("candidate") or {}).get("status") == "awaiting_approval" else "")
                + (f" · retrained {online.get('retrain_count', 0)}× online"
                   if online else ""))),
         stage("regime", "Regime Detection Model", bool(sig.get("regime")),

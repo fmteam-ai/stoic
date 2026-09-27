@@ -44,9 +44,9 @@ def test_train_ensemble_skips_when_disabled(monkeypatch):
     uid = f"iter173ml-{os.urandom(4).hex()}"
     try:
         meta = _run(m.train_ensemble(db, uid))
-        assert meta["status"] == "disabled_low_memory"
+        assert meta["last_training_status"] == "disabled_low_memory" and meta["production"] is None
         doc = _run(db.ml_ensembles.find_one({"user_id": uid}))
-        assert doc["status"] == "disabled_low_memory"
+        assert doc["status"] == "disabled_low_memory" and doc["last_training_status"] == "disabled_low_memory"
     finally:
         _run(db.ml_ensembles.delete_many({"user_id": uid}))
 

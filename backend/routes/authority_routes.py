@@ -154,7 +154,8 @@ async def inventory_expectation_approve_ep(request: Request, user=Depends(get_cu
 
 @router.post("/inventory/approve")
 async def inventory_approve_ep(payload: dict, request: Request, user=Depends(get_current_user)):
-    """Approve the CURRENT inventory as the configured state (step-up MFA)."""
+    """PROPOSE the CURRENT inventory hash as the configured state (step-up MFA).
+    Round 12 P2-05: a DIFFERENT step-up admin must confirm (/inventory/approve/confirm)."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     db = get_db()
@@ -163,6 +164,18 @@ async def inventory_approve_ep(payload: dict, request: Request, user=Depends(get
     from inventory_projection import approve_current
     exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
     return await approve_current(db, user.get("email", ""), str(payload.get("note") or ""), exp.get("scope_user_id"))
+
+
+@router.post("/inventory/approve/confirm")
+async def inventory_approve_confirm_ep(request: Request, user=Depends(get_current_user)):
+    """Second-admin confirmation of the pending inventory-hash proposal (hash + ids recomputed before commit)."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    db = get_db()
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "authority_relax")
+    from inventory_projection import confirm_current
+    return await confirm_current(db, user.get("email", ""))
 
 
 @router.post("/platform")

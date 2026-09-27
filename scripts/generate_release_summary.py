@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Generate docs/RELEASE_SUMMARY.md from CURRENT evidence (audit round 11 P2-04).
+"""Generate docs/RELEASE_SUMMARY.md from CURRENT evidence (audit rounds 11 P2-04 · 12 P2-01).
 
-Handoff/release claims must never be hand-written: build SHA, keepalive,
-test count, open findings and the readiness verdict are read from the
-repository and configuration. `--check` fails when the committed summary is
-stale (used as a verify_release.sh step).
+Handoff/release claims must never be hand-written: source identity, RC-lock
+identity + authoritative flag + digests, keepalive, test count, open findings
+and the readiness verdict are read from the repository/archive. `--check`
+compares EVERY field (only the generated timestamp is normalized) and fails
+with the exact field names that disagree.
+
+Source identity comes from backend/BUILD_SHA (release archive / image) and
+falls back to `git rev-parse HEAD` only in a developer checkout. In a
+developer checkout with a NON-authoritative lock the committed summary can
+never carry its own commit (self-reference), so `source_commit` is reported
+but not failed there; everything else is strict everywhere.
 """
 import argparse
 import json
@@ -17,10 +24,25 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "RELEASE_SUMMARY.md")
 OPEN_FINDINGS = os.path.join(ROOT, "docs", "open_findings.json")
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _sha():
-    return subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+    """BUILD_SHA (archive/image) → STOIC_BUILD_SHA → git HEAD (dev checkout) → 'unknown'."""
+    try:
+        v = open(os.path.join(ROOT, "backend", "BUILD_SHA")).read().strip().lower()
+        if _SHA_RE.match(v):
+            return v
+    except OSError:
+        pass
+    v = (os.environ.get("STOIC_BUILD_SHA") or "").strip().lower()
+    if _SHA_RE.match(v):
+        return v
+    try:
+        return subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True,
+                                       stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
 
 
 def _keepalive():
@@ -42,42 +64,100 @@ def _lock():
     return json.load(open(p)) if os.path.exists(p) else {}
 
 
-def render() -> str:
-    sha, ka, tests, lock, findings = _sha(), _keepalive(), _tests(), _lock(), _open_findings()
+def fields() -> dict:
+    lock, findings = _lock(), _open_findings()
     verdict = "NOT RELEASABLE" if (not lock.get("authoritative") or any(f["severity"] in ("P0", "P1") for f in findings)) else "RELEASE CANDIDATE"
+    return {
+        "source_commit": _sha(),
+        "lock_commit": str(lock.get("git_commit")),
+        "lock_authoritative": str(lock.get("authoritative")),
+        "model_manifest_sha256": str(lock.get("model_manifest_sha256")),
+        "test_manifest_sha256": str(lock.get("test_manifest_sha256")),
+        "keepalive_seconds": str(_keepalive()),
+        "test_count": str(_tests()),
+        "verdict": verdict,
+        "open_findings": "; ".join(f"{f['id']} [{f['severity']}] {f['title']} — owner: {f.get('owner', 'engineering')}"
+                                   for f in findings) or "none",
+    }
+
+
+def render(f: dict) -> str:
     lines = [
         "# Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)",
         "",
-        f"- Source commit: `{sha}`",
-        f"- rc_lock: `{lock.get('git_commit')}` authoritative={lock.get('authoritative')} model_manifest={str(lock.get('model_manifest_sha256'))[:12]}…",
-        f"- Uvicorn keepalive (container): {ka}s (application cap 300s)",
-        f"- Test manifest: {tests} tests (docs/TEST_MANIFEST.md)",
-        f"- Readiness verdict: **{verdict}**",
+        f"- Source commit: `{f['source_commit']}`",
+        f"- rc_lock: `{f['lock_commit']}` authoritative={f['lock_authoritative']}",
+        f"- Model manifest sha256: `{f['model_manifest_sha256']}`",
+        f"- Test manifest sha256: `{f['test_manifest_sha256']}`",
+        f"- Uvicorn keepalive (container): {f['keepalive_seconds']}s (application cap 300s)",
+        f"- Test manifest: {f['test_count']} tests (docs/TEST_MANIFEST.md)",
+        f"- Readiness verdict: **{f['verdict']}**",
         "",
         "## Open findings (docs/open_findings.json)",
     ]
-    lines += [f"- {f['id']} [{f['severity']}] {f['title']} — owner: {f.get('owner', 'engineering')}" for f in findings] or ["- none"]
+    lines += [f"- {x.strip()}" for x in f["open_findings"].split(";")] if f["open_findings"] != "none" else ["- none"]
     lines += ["", f"_generated {datetime.now(timezone.utc).isoformat()} — regenerate on every release commit_", ""]
     return "\n".join(lines)
+
+
+_PATTERNS = {
+    "source_commit": r"- Source commit: `([^`]*)`",
+    "lock_commit": r"- rc_lock: `([^`]*)` authoritative=",
+    "lock_authoritative": r"authoritative=(\S+)",
+    "model_manifest_sha256": r"- Model manifest sha256: `([^`]*)`",
+    "test_manifest_sha256": r"- Test manifest sha256: `([^`]*)`",
+    "keepalive_seconds": r"- Uvicorn keepalive \(container\): (\S+?)s ",
+    "test_count": r"- Test manifest: (\S+) tests",
+    "verdict": r"- Readiness verdict: \*\*([^*]+)\*\*",
+}
+
+
+def parse(text: str) -> dict:
+    out = {k: (m.group(1) if (m := re.search(p, text)) else None) for k, p in _PATTERNS.items()}
+    sect = text.split("## Open findings (docs/open_findings.json)", 1)
+    body = sect[1] if len(sect) == 2 else ""
+    items = [ln[2:].strip() for ln in body.splitlines() if ln.startswith("- ")]
+    out["open_findings"] = "none" if items == ["none"] else "; ".join(items)
+    return out
+
+
+def check(current_text: str, f: dict, *, strict_source: bool) -> list:
+    cur = parse(current_text)
+    diffs = []
+    for k, want in f.items():
+        got = cur.get(k)
+        if k == "open_findings":
+            same = [x.strip() for x in str(got).split(";")] == [x.strip() for x in want.split(";")]
+        else:
+            same = got == want
+        if not same:
+            if k == "source_commit" and not strict_source:
+                print(f"note  source_commit: summary {str(got)[:12]} vs checkout {str(want)[:12]} (developer snapshot — bound at release)")
+                continue
+            diffs.append(f"{k}: summary={str(got)[:40]!r} current={str(want)[:40]!r}")
+    return diffs
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--strict", action="store_true", help="also fail on source_commit drift (release job / archive)")
+    ap.add_argument("--out", default=OUT)
     a = ap.parse_args()
-    text = render()
-    # commit/lock lines are re-derived in CI on the release commit; claims (keepalive,
-    # tests, verdict, findings) must match exactly.
-    strip = lambda t: re.sub(r"(_generated .*_|- Source commit: .*|- rc_lock: .*)", "", t)
+    f = fields()
     if a.check:
         cur = open(OUT).read() if os.path.exists(OUT) else ""
-        if strip(cur) != strip(text):
-            print("STALE: docs/RELEASE_SUMMARY.md does not match current evidence — regenerate")
+        strict_source = a.strict or f["lock_authoritative"] == "True"
+        diffs = check(cur, f, strict_source=strict_source)
+        if diffs:
+            print("STALE: docs/RELEASE_SUMMARY.md disagrees with current evidence on:")
+            for d in diffs:
+                print(f"  {d}")
             return 1
         print("OK: release summary matches current evidence")
         return 0
-    open(OUT, "w").write(text)
-    print(f"wrote {OUT}")
+    open(a.out, "w").write(render(f))
+    print(f"wrote {a.out}")
     return 0
 
 

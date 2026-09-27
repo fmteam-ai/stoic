@@ -207,23 +207,31 @@ class TestMLEnsemble:
         r = session.get(f"{BASE_URL}/api/ml/ensemble", timeout=30)
         assert r.status_code == 200, r.text[:300]
         j = r.json()
-        # admin has 400+ trades — should be trained
-        assert j.get("status") == "trained", f"expected trained, got {j.get('status')}"
-        aucs = j.get("aucs") or {}
-        weights = j.get("weights") or {}
-        for m in ("gradient_boosting", "xgboost", "lightgbm", "catboost"):
-            assert m in aucs, f"aucs missing {m}"
-            assert m in weights, f"weights missing {m}"
+        # round 12 P1-01 — candidate and production are separate records; the admin has a promoted production model
+        assert j.get("status") in ("production_active", "no_production_model"), j.get("status")
+        assert "production" in j and "candidate" in j and "manifest" in j
+        prod = j.get("production") or {}
+        if j["status"] == "production_active":
+            for m in ("gradient_boosting", "xgboost", "lightgbm", "catboost"):
+                assert m in (prod.get("aucs") or {}), f"aucs missing {m}"
+                assert m in (prod.get("weights") or {}), f"weights missing {m}"
+            assert len(prod.get("digest") or "") == 64
 
     def test_train_endpoint_returns_same_shape(self, session):
         r = session.post(f"{BASE_URL}/api/ml/train", timeout=120)
         assert r.status_code == 200, r.text[:300]
         j = r.json()
-        assert j.get("status") == "trained"
-        assert set(j.get("aucs", {}).keys()) >= {
+        # training yields a CANDIDATE awaiting approval — never "trained"/"promoted"
+        assert j.get("last_training_status") == "candidate_ready_for_review", j
+        assert j.get("promotion") == "candidate_ready_for_review"
+        cand = j.get("candidate") or {}
+        assert cand.get("status") == "awaiting_approval" and len(cand.get("digest") or "") == 64
+        assert set(cand.get("aucs", {}).keys()) >= {
             "gradient_boosting", "xgboost", "lightgbm", "catboost"}
-        assert set(j.get("weights", {}).keys()) >= {
+        assert set(cand.get("weights", {}).keys()) >= {
             "gradient_boosting", "xgboost", "lightgbm", "catboost"}
+        # production untouched by training: same shape as GET, no "trained"/"promoted" wording
+        assert set(j) >= {"status", "production", "candidate", "promotion", "manifest"}
 
 
 # ── Bridge DOM ──

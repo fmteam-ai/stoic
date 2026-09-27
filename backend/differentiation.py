@@ -157,11 +157,11 @@ async def feature_evidence(db, user_id: str, days: int = 30) -> dict:
     frozen = sum(1 for r in runs if r.get("frozen"))
     ml = [((r.get("stages") or {}).get("ml_ensemble") or {}).get("status")
           for r in runs]
-    rej, prom = ml.count("rejected"), ml.count("promoted")
+    rej, prom = ml.count("rejected"), ml.count("candidate_ready_for_review")
     rows.append({"feature": "learning_pipeline",
                  "question": "Does it reduce operational risk?",
                  "n": len(runs),
-                 "metric": f"{prom} promoted · {rej} rejected · {frozen} frozen runs",
+                 "metric": f"{prom} candidate(s) staged for two-admin review · {rej} rejected · {frozen} frozen runs",
                  "verdict": "proven" if (rej or frozen or prom) else "experimental"})
 
     proven = sum(1 for r in rows if r["verdict"] == "proven")

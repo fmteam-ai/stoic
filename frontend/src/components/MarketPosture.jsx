@@ -215,10 +215,12 @@ export default function MarketPosture() {
                                     {(s.ml_ensemble.BUY?.members || s.ml_ensemble.SELL?.members || []).map(m =>
                                         `${m.name.replace(/_/g, " ")} ${Math.round(m.p * 100)}% (w${m.w})`).join(" · ")}
                                 </span>
-                                <span className="block text-[10px] text-[#A1A1AA]">
-                                    {s.ml_ensemble.BUY?.gbm_status === "trained"
-                                        ? `GBMs trained on ${s.ml_ensemble.BUY.trained_n} real trades · walk-forward AUC: ${Object.entries(s.ml_ensemble.BUY.gbm_auc || {}).map(([k, v]) => `${k.split("_")[0]} ${v}`).join(" / ")}`
-                                        : `GBMs waiting for data (${s.ml_ensemble.BUY?.trained_n ?? 0}/40 trades) — averaging live agents meanwhile`}
+                                <span className="block text-[10px] text-[#A1A1AA]" data-testid={`posture-ml-gbm-status-${sym}`}>
+                                    {s.ml_ensemble.BUY?.gbm_status === "production_active"
+                                        ? `GBMs · PRODUCTION ${String(s.ml_ensemble.BUY.production_digest || "").slice(0, 12)}… trained on ${s.ml_ensemble.BUY.trained_n} real trades · walk-forward AUC: ${Object.entries(s.ml_ensemble.BUY.gbm_auc || {}).map(([k, v]) => `${k.split("_")[0]} ${v}`).join(" / ")}`
+                                        : s.ml_ensemble.BUY?.gbm_status === "no_production_model"
+                                            ? `GBMs · no promoted production model${s.ml_ensemble.BUY?.candidate_status === "awaiting_approval" ? " (candidate awaiting two-admin approval)" : ""} — averaging live agents meanwhile`
+                                            : `GBMs waiting for data (${s.ml_ensemble.BUY?.trained_n ?? 0}/40 trades) — averaging live agents meanwhile`}
                                 </span></>
                             : <span className="text-[#52525B]">ensemble warming up</span>}
                     </AgentRow>

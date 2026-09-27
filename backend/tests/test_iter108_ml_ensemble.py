@@ -72,7 +72,14 @@ def test_train_sync_learns_and_weights_normalize():
     assert sum(1 for a in res["aucs"].values() if a > 0.55) >= 2
     total = sum(res["weights"].values())
     assert abs(total - 1.0) < 0.02 or total == 0.0
-    models = _load_models(TEST_UID)
+    # round 12 P1-01 — training yields a CANDIDATE with provenance; production stays untouched
+    assert res["status"] == "candidate_ready_for_review" and len(res["candidate_digest"]) == 64
+    assert _load_models(TEST_UID) == {}                       # no production binary → nothing loadable
+    import joblib
+    from model_manifest import CANDIDATE_NAME, read_sidecar
+    prov = read_sidecar(TEST_UID, "candidate")
+    assert prov["sha256"] == res["candidate_digest"] and prov["metrics"]["aucs"] and prov["dataset_sha256"]
+    models = joblib.load(MODEL_DIR / TEST_UID / CANDIDATE_NAME)   # test-only direct read of the candidate
     assert len(models) == 4
     for mdl in models.values():
         p = float(mdl.predict_proba([featurize("BUY", "XAUUSD", _sig())])[0][1])

@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException
+from pymongo.errors import DuplicateKeyError
 
 DOC_ID = "turnstile_break_glass"
 MAX_TTL_MINUTES = 60
@@ -18,6 +19,30 @@ DEFAULT_TTL_MINUTES = 30
 MIN_REASON_CHARS = 20
 DEFAULT_SCOPE = ["login"]
 ALLOWED_SCOPE = {"login", "register", "password_reset"}
+
+
+async def _alert(db, kind: str, message: str) -> None:
+    try:
+        from alerting import raise_alert
+        await raise_alert(db, kind, "critical", message, dedup_key=f"{kind}:{message[:40]}")
+    except Exception:  # noqa: BLE001 — alerting must never mask the primary failure
+        pass
+
+
+async def _store_failure(db, op: str, exc: Exception) -> None:
+    """Round 12 P2-04: infrastructure errors take the sanitized 503 path + alert."""
+    await _alert(db, "break_glass_store", f"break-glass {op} store failure: {type(exc).__name__}")
+    raise HTTPException(status_code=503, detail={"code": "break_glass_store_unavailable",
+                                                 "message": "break-glass state store unavailable — operations alerted"})
+
+
+def _parse_expiry(raw) -> datetime | None:
+    """Aware datetime or None (malformed / naive values are NOT trusted)."""
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo is not None else None
 
 
 def _now() -> datetime:
@@ -83,9 +108,11 @@ async def request_activation(db, payload: dict, actor_email: str) -> dict:
     await db.platform_state.delete_one({"_id": PENDING_ID, "expires_at": {"$lte": _iso(now)}})
     try:
         await db.platform_state.insert_one(doc)
-    except Exception:  # noqa: BLE001 — DuplicateKeyError
+    except DuplicateKeyError:
         raise HTTPException(status_code=409, detail={"code": "break_glass_request_pending",
                                                      "message": "an unexpired request exists — cancel it first"})
+    except Exception as e:  # noqa: BLE001 — round 12 P2-04: infrastructure failure is NOT a duplicate
+        await _store_failure(db, "request_activation", e)
     await append_chained(db, {"actor_email": actor_email, "action": "turnstile_break_glass_requested",
                               "target_kind": "platform", "target_id": DOC_ID, "reason": req["reason"], "at": _iso(now),
                               "meta": {k: req[k] for k in ("incident_id", "approver", "scope", "ttl_minutes")}})
@@ -109,7 +136,11 @@ async def approve_activation(db, approver_email: str) -> dict:
     pending = await db.platform_state.find_one({"_id": PENDING_ID})
     if not pending:
         raise HTTPException(status_code=404, detail={"code": "no_pending_break_glass"})
-    if datetime.fromisoformat(pending["expires_at"]) <= _now():
+    exp = _parse_expiry(pending.get("expires_at"))
+    if exp is None:
+        raise HTTPException(status_code=409, detail={"code": "break_glass_request_malformed",
+                                                     "message": "pending request has a malformed expiry — cancel and re-request"})
+    if exp <= _now():
         await db.platform_state.delete_one({"_id": PENDING_ID})
         raise HTTPException(status_code=410, detail={"code": "break_glass_request_expired"})
     if pending["approver"] != approver_email.lower():
@@ -151,6 +182,8 @@ async def activate(db, payload: dict, actor_email: str, *, approved_by: str | No
                       f"Turnstile break-glass ACTIVE ({req['incident_id']}) scope={','.join(req['scope'])} until {_iso(until)}",
                       dedup_key=f"turnstile_break_glass:{req['incident_id']}",
                       meta={"incident_id": req["incident_id"], "actor": actor_email, "approver": req["approver"]})
+    from canonical_decision import bump_authority_version
+    await bump_authority_version(db, "break_glass_activated")
     return await status(db)
 
 
@@ -195,6 +228,8 @@ async def deactivate(db, actor_email: str, note: str = "") -> dict:
     await append_chained(db, {"actor_email": actor_email, "action": "turnstile_break_glass_deactivated",
                               "target_kind": "platform", "target_id": DOC_ID, "reason": note[:500], "at": now,
                               "meta": {"incident_id": doc["incident_id"]}})
+    from canonical_decision import bump_authority_version
+    await bump_authority_version(db, "break_glass_deactivated")
     return await status(db)
 
 
@@ -221,7 +256,14 @@ async def review(db, actor_email: str, note: str) -> dict:
 
 async def _pending(db) -> dict | None:
     p = await db.platform_state.find_one({"_id": PENDING_ID})
-    if p and datetime.fromisoformat(p["expires_at"]) <= _now():
+    if not p:
+        return None
+    exp = _parse_expiry(p.get("expires_at"))
+    if exp is None:                       # round 12 P2-04: malformed expiry FAILS CLOSED (blocks promotion)
+        p["malformed"] = True
+        await _alert(db, "break_glass_integrity", "pending break-glass request has a malformed expiry")
+        return p
+    if exp <= _now():
         await db.platform_state.delete_one({"_id": PENDING_ID})
         return None
     return p
@@ -230,7 +272,8 @@ async def _pending(db) -> dict | None:
 async def status(db) -> dict:
     doc = await _load(db)
     pending_req = await _pending(db)          # round 11 P2-01 — loaded BEFORE any early return
-    pending_view = ({k: pending_req[k] for k in ("incident_id", "actor", "approver", "scope", "expires_at")}
+    pending_view = ({**{k: pending_req.get(k) for k in ("incident_id", "actor", "approver", "scope", "expires_at")},
+                     **({"malformed": True} if pending_req.get("malformed") else {})}
                     if pending_req else None)
     if not doc:
         return {"active": False, "promotion_blocked": pending_req is not None, "pending_review": False,

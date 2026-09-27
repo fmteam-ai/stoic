@@ -9,7 +9,10 @@ configuration event (db.inventory_config_events) or promotion/new entries block.
 """
 import hashlib
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
+
+from pymongo.errors import DuplicateKeyError
 
 LIVE_ENVS = {"live", "real"}
 
@@ -133,28 +136,161 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
             "note": "Canonical inventory projection — counts are never collapsed."}
 
 
+HASH_PENDING_ID = "inventory_hash_pending"
+HASH_PROPOSAL_TTL_MIN = 30
+
+
 async def approve_current(db, actor_email: str, note: str, scope_user_id: str | None = None) -> dict:
-    """Record an approved configuration event for the CURRENT inventory."""
-    from audit_chain import append_chained
+    """Step 1 of the two-admin inventory-hash approval (round 12 P2-05): the
+    proposing admin binds the CURRENT hash + exact enabled account ids + expiry.
+    Nothing is approved until a DIFFERENT step-up admin confirms (confirm_current)."""
     from fastapi import HTTPException
     proj = await projection(db, scope_user_id)
     real = [v for v in proj["violations"] if "approved configuration event" not in v]
     if real:
         raise HTTPException(status_code=409, detail={"code": "inventory_not_approvable", "violations": real})
-    ev = {"inventory_hash": proj["inventory_hash"], "approved": True, "actor": actor_email,
-          "note": (note or "")[:500], "at": _now(), "counts": proj["counts"],
-          "account_ids": [r["account_id"] for r in proj["accounts"] if r["enabled"]]}
+    now = datetime.now(timezone.utc)
+    pending = {"_id": HASH_PENDING_ID, "inventory_hash": proj["inventory_hash"],
+               "account_ids": sorted(r["account_id"] for r in proj["accounts"] if r["enabled"]),
+               "counts": proj["counts"], "scope_user_id": scope_user_id, "proposed_by": actor_email.lower(),
+               "note": (note or "")[:500], "proposed_at": _now(),
+               "expires_at": (now + timedelta(minutes=HASH_PROPOSAL_TTL_MIN)).isoformat()}
+    await db.platform_state.replace_one({"_id": HASH_PENDING_ID}, pending, upsert=True)
+    return {**proj, "pending_approval": {k: pending[k] for k in ("inventory_hash", "account_ids", "proposed_by",
+                                                                   "proposed_at", "expires_at")}}
+
+
+async def pending_hash_approval(db) -> dict | None:
+    p = await db.platform_state.find_one({"_id": HASH_PENDING_ID})
+    if not p:
+        return None
+    try:
+        if datetime.fromisoformat(p["expires_at"]) <= datetime.now(timezone.utc):
+            await db.platform_state.delete_one({"_id": HASH_PENDING_ID})
+            return None
+    except (KeyError, ValueError, TypeError):
+        await db.platform_state.delete_one({"_id": HASH_PENDING_ID})
+        return None
+    return p
+
+
+async def confirm_current(db, approver_email: str) -> dict:
+    """Step 2: a different admin confirms; the hash and enabled ids are RECOMPUTED
+    immediately before commit and must equal the proposal exactly."""
+    from fastapi import HTTPException
+    from audit_chain import append_chained
+    pending = await pending_hash_approval(db)
+    if not pending:
+        raise HTTPException(status_code=404, detail={"code": "no_pending_inventory_approval"})
+    if pending["proposed_by"] == approver_email.lower():
+        raise HTTPException(status_code=403, detail={"code": "second_admin_required",
+                                                     "message": "the proposing admin cannot confirm their own proposal"})
+    proj = await projection(db, pending.get("scope_user_id"))
+    ids = sorted(r["account_id"] for r in proj["accounts"] if r["enabled"])
+    real = [v for v in proj["violations"] if "approved configuration event" not in v]
+    if real or proj["inventory_hash"] != pending["inventory_hash"] or ids != pending["account_ids"]:
+        await db.platform_state.delete_one({"_id": HASH_PENDING_ID})
+        raise HTTPException(status_code=409, detail={"code": "inventory_changed_since_proposal",
+                                                     "violations": real, "proposal_invalidated": True})
+    ev = {"inventory_hash": proj["inventory_hash"], "approved": True, "actor": pending["proposed_by"],
+          "approved_by": approver_email.lower(), "note": pending["note"], "at": _now(), "counts": proj["counts"],
+          "account_ids": ids}
     await db.inventory_config_events.insert_one(dict(ev))
-    await append_chained(db, {"actor_email": actor_email, "action": "inventory_config_approved",
+    await db.platform_state.delete_one({"_id": HASH_PENDING_ID})
+    await append_chained(db, {"actor_email": approver_email, "action": "inventory_config_approved",
                               "target_kind": "platform", "target_id": "inventory", "reason": ev["note"],
-                              "at": ev["at"], "meta": {"inventory_hash": ev["inventory_hash"], "counts": ev["counts"]}})
-    return await projection(db, scope_user_id)
+                              "at": ev["at"], "meta": {"inventory_hash": ev["inventory_hash"], "counts": ev["counts"],
+                                                       "proposed_by": pending["proposed_by"], "account_ids": ids}})
+    from canonical_decision import bump_authority_version
+    await bump_authority_version(db, "inventory_approved")
+    return await projection(db, pending.get("scope_user_id"))
 
 
 DEPLOYMENT_POLICY = {"accounts": 6, "enabled": 3, "bots": 3}       # signed installation policy (round 11 P1-02)
+DEPLOYMENT_POLICY_VERSION = "6/3/3-v1"
+MIGRATION_SCHEMA = "stoic.policy-migration/v2"
 
 
-def validate_expectation(payload: dict, *, require_policy: bool) -> dict:
+def installation_id() -> str | None:
+    """Installation identity a signed migration must name (production: mandatory)."""
+    v = (os.environ.get("STOIC_INSTALLATION_ID") or "").strip()
+    if v:
+        return v
+    return None if production_mode() else "dev-local"
+
+
+def environment_label() -> str:
+    return "production" if production_mode() else "preview"
+
+
+def migration_body(mig: dict) -> bytes:
+    """Canonical signed statement of the COMPLETE policy transition (round 12 P2-06)."""
+    fields = ("schema", "installation_id", "environment", "previous_policy_version", "policy_version",
+              "accounts", "enabled", "bots", "account_ids", "reason", "issuer", "issued_at", "expires_at", "nonce")
+    body = {k: mig.get(k) for k in fields}
+    body["account_ids"] = sorted(body.get("account_ids") or [])
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+
+
+def migration_problems(payload: dict, *, current_policy_version: str, now: datetime | None = None) -> list:
+    """Every reason a supplied policy migration is NOT acceptable (empty ⇒ valid)."""
+    mig = payload.get("policy_migration") or {}
+    if not mig.get("signature_hex"):
+        return ["policy_migration.signature_hex missing"]
+    now = now or datetime.now(timezone.utc)
+    problems = []
+    try:
+        from release_signing import verify_hex
+        if not verify_hex(migration_body(mig), str(mig["signature_hex"])):
+            problems.append("migration signature invalid")
+    except Exception:  # noqa: BLE001
+        problems.append("migration signature invalid")
+    if mig.get("schema") != MIGRATION_SCHEMA:
+        problems.append(f"migration schema must be {MIGRATION_SCHEMA}")
+    inst = installation_id()
+    if not inst or mig.get("installation_id") != inst:
+        problems.append("migration installation_id does not match this installation")
+    if mig.get("environment") != environment_label():
+        problems.append(f"migration environment must be {environment_label()}")
+    if mig.get("previous_policy_version") != current_policy_version:
+        problems.append(f"migration previous_policy_version must be {current_policy_version}")
+    if not mig.get("policy_version") or mig.get("policy_version") == current_policy_version:
+        problems.append("migration policy_version must be a new version")
+    try:
+        if (int(mig.get("accounts")), int(mig.get("enabled")), int(mig.get("bots"))) != \
+                (int(payload["accounts"]), int(payload["enabled"]), int(payload["bots"])):
+            problems.append("migration counts differ from the proposed expectation")
+    except (TypeError, ValueError, KeyError):
+        problems.append("migration counts invalid")
+    if sorted(mig.get("account_ids") or []) != sorted(payload.get("account_ids") or []):
+        problems.append("migration account_ids differ from the proposed expectation")
+    try:
+        issued, expires = datetime.fromisoformat(str(mig.get("issued_at"))), datetime.fromisoformat(str(mig.get("expires_at")))
+        if issued.tzinfo is None or expires.tzinfo is None:
+            raise ValueError("naive")
+        if not (issued <= now < expires):
+            problems.append("migration expired or not yet valid")
+    except (TypeError, ValueError):
+        problems.append("migration issued_at/expires_at invalid")
+    if len(str(mig.get("nonce") or "")) < 16:
+        problems.append("migration nonce missing")
+    if not str(mig.get("issuer") or "").strip() or len(str(mig.get("reason") or "").strip()) < 10:
+        problems.append("migration issuer/reason required")
+    return problems
+
+
+async def consume_migration_nonce(db, mig: dict) -> None:
+    """Atomic single use — a replayed migration is refused even with a valid signature."""
+    from fastapi import HTTPException
+    try:
+        await db.policy_migration_nonces.insert_one({"_id": str(mig.get("nonce")), "at": _now(),
+                                                     "policy_version": mig.get("policy_version")})
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail={"code": "policy_migration_replayed"})
+
+
+def validate_expectation(payload: dict, *, require_policy: bool,
+                         current_policy_version: str = DEPLOYMENT_POLICY_VERSION) -> dict:
     """Set-relationship validation shared by proposal AND approval (no TOCTOU drift)."""
     from fastapi import HTTPException
     errors = []
@@ -173,37 +309,30 @@ def validate_expectation(payload: dict, *, require_policy: bool) -> dict:
         errors.append("account_ids must be unique")
     if ids and len(ids) != en:
         errors.append("len(account_ids) must equal enabled")
-    if require_policy and (acc, en, bots) != (DEPLOYMENT_POLICY["accounts"], DEPLOYMENT_POLICY["enabled"], DEPLOYMENT_POLICY["bots"]) \
-            and not _policy_migration_signed(payload):
-        errors.append("production target must be 6/3/3 unless a signed policy migration is supplied")
+    policy_version = current_policy_version
+    if require_policy and (acc, en, bots) != (DEPLOYMENT_POLICY["accounts"], DEPLOYMENT_POLICY["enabled"], DEPLOYMENT_POLICY["bots"]):
+        probs = migration_problems(payload, current_policy_version=current_policy_version)
+        if probs:
+            errors.append("production target must be 6/3/3 unless a valid signed policy migration is supplied: " + "; ".join(probs))
+        else:
+            policy_version = payload["policy_migration"]["policy_version"]
     if require_policy and not ids:
         errors.append("production expectation must name the approved account ids")
     if errors:
         raise HTTPException(status_code=400, detail={"code": "expectation_invalid", "errors": errors})
-    return {"accounts": acc, "enabled": en, "bots": bots, "account_ids": ids}
+    return {"accounts": acc, "enabled": en, "bots": bots, "account_ids": ids, "policy_version": policy_version}
 
 
-def _policy_migration_signed(payload: dict) -> bool:
-    """A policy migration is an Ed25519-signed statement over the new target by the release key."""
-    import json as _json
-    mig = payload.get("policy_migration") or {}
-    sig = mig.get("signature_hex")
-    if not sig:
-        return False
-    try:
-        from release_signing import verify_hex
-        body = _json.dumps({"accounts": int(payload["accounts"]), "enabled": int(payload["enabled"]),
-                            "bots": int(payload["bots"]), "migration_id": mig.get("migration_id")},
-                           sort_keys=True, separators=(",", ":")).encode()
-        return verify_hex(body, sig)
-    except Exception:  # noqa: BLE001
-        return False
+async def current_policy_version(db) -> str:
+    cur = await db.platform_state.find_one({"_id": "inventory_expectation"}, {"policy_version": 1}) or {}
+    return str(cur.get("policy_version") or DEPLOYMENT_POLICY_VERSION)
 
 
 async def propose_expectation(db, payload: dict, actor_email: str) -> dict:
     """Two-admin control (round 10 P1-01): one admin PROPOSES the desired state,
     a DIFFERENT admin (step-up verified) must approve before it takes effect."""
-    v = validate_expectation(payload, require_policy=production_mode())
+    v = validate_expectation(payload, require_policy=production_mode(),
+                             current_policy_version=await current_policy_version(db))
     doc = {"_id": "inventory_expectation_pending", **v, "scope_user_id": payload.get("scope_user_id"),
            "policy_migration": payload.get("policy_migration"),
            "proposed_by": actor_email, "proposed_at": _now()}
@@ -220,15 +349,20 @@ async def approve_expectation(db, approver_email: str) -> dict:
     if pending.get("proposed_by", "").lower() == approver_email.lower():
         raise HTTPException(status_code=403, detail={"code": "second_admin_required",
                                                      "message": "the proposing admin cannot approve their own expectation"})
-    validate_expectation(pending, require_policy=production_mode())            # re-validated at approval
+    v = validate_expectation(pending, require_policy=production_mode(),
+                             current_policy_version=await current_policy_version(db))   # re-validated at approval
+    if pending.get("policy_migration") and v["policy_version"] != await current_policy_version(db):
+        await consume_migration_nonce(db, pending["policy_migration"])                  # single use, atomic
     doc = {k: pending.get(k) for k in ("accounts", "enabled", "bots", "account_ids", "scope_user_id", "proposed_by", "proposed_at")}
-    doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now())
+    doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now(), policy_version=v["policy_version"])
     await db.platform_state.replace_one({"_id": "inventory_expectation"}, doc, upsert=True)
     await db.platform_state.delete_one({"_id": "inventory_expectation_pending"})
     await append_chained(db, {"actor_email": approver_email, "action": "inventory_expectation_approved",
                               "target_kind": "platform", "target_id": "inventory_expectation",
                               "reason": f"proposed by {pending['proposed_by']}", "at": doc["set_at"],
-                              "meta": {k: doc[k] for k in ("accounts", "enabled", "bots", "account_ids")}})
+                              "meta": {k: doc[k] for k in ("accounts", "enabled", "bots", "account_ids", "policy_version")}})
+    from canonical_decision import bump_authority_version
+    await bump_authority_version(db, "inventory_expectation")
     return doc
 
 

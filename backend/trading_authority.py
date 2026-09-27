@@ -437,6 +437,8 @@ async def set_platform_level(db, level: str, reason: str,
          "reason": doc["reason"]})
     logger.warning("PLATFORM TRADING AUTHORITY %s → %s by %s (%s)",
                    prev_level, level, actor, reason)
+    from canonical_decision import bump_authority_version
+    await bump_authority_version(db, f"platform_authority:{level}")
     return doc
 
 

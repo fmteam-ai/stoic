@@ -302,4 +302,6 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
         summary["label"] = acc.get("label")
         summaries.append(summary)
     total_closed = sum(s.get("closed_count", 0) for s in summaries)
+    from canonical_decision import bump_authority_version
+    await bump_authority_version(db, "reconciliation", user_id=user_id)
     return {"accounts": summaries, "total_closed": total_closed}

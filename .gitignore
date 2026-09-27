@@ -171,3 +171,8 @@ frontend/node_modules/.cache/default-development/5.pack
 frontend/node_modules/.cache/default-development/11.pack
 test_reports/*.log
 frontend/node_modules/.cache/default-development/19.pack
+
+# round 12 P1-01 — candidates are transient governance state; quarantine is local evidence
+backend/models_store/**/gbm_ensemble.candidate.*
+backend/models_store/**/gbm_ensemble.previous.joblib
+backend/models_store/_quarantine/

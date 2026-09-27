@@ -100,21 +100,48 @@ async def decide_platform(db) -> dict:
 
 
 _SNAPSHOT_TTL_S = 5.0
-_snapshots: dict = {}
+VERSION_ID = "authority_version"
+
+
+async def authority_version(db) -> int:
+    doc = await db.platform_state.find_one({"_id": VERSION_ID}, {"version": 1})
+    return int((doc or {}).get("version") or 0)
+
+
+async def bump_authority_version(db, reason: str, *, user_id: str | None = None) -> int:
+    """Round 12 P2-02: invalidate EVERY cached canonical view (all workers/pods)
+    the moment an input changes — PANIC, reconciliation, execution truth,
+    inventory, identity, Bot Health, break-glass or a platform blocker."""
+    doc = await db.platform_state.find_one_and_update(
+        {"_id": VERSION_ID}, {"$inc": {"version": 1},
+                              "$set": {"reason": reason[:120], "at": datetime.now(timezone.utc).isoformat(),
+                                       "user_id": user_id}},
+        upsert=True, return_document=True)
+    await db.canonical_decisions.delete_many({} if user_id is None else {"_id": user_id})
+    return int(doc["version"])
 
 
 async def decide_user(db, user_id: str, *, fresh: bool = False) -> dict:
     """User-facing canonical decision (dominant across platform + accounts).
-    Round 11 P2-05: a 5 s per-user snapshot so every panel rendered together
-    references ONE decision_id; pass fresh=True to force recomputation."""
-    import time
-    hit = _snapshots.get(user_id)
-    if hit and not fresh and time.monotonic() - hit[0] < _SNAPSHOT_TTL_S:
-        return hit[1]
+    The snapshot is PERSISTED (db.canonical_decisions) with the input version
+    it was computed from, so every worker/pod serves the same decision_id and
+    any version bump invalidates it before the next response; fresh=True
+    forces recomputation."""
+    ver = await authority_version(db)
+    if not fresh:
+        hit = await db.canonical_decisions.find_one({"_id": user_id})
+        if hit and hit.get("input_version") == ver:
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(hit["cached_at"])).total_seconds()
+            except (KeyError, ValueError, TypeError):
+                age = _SNAPSHOT_TTL_S
+            if 0 <= age < _SNAPSHOT_TTL_S:
+                return hit["decision"]
     out = await _decide_user_uncached(db, user_id)
-    _snapshots[user_id] = (time.monotonic(), out)
-    if len(_snapshots) > 5000:
-        _snapshots.clear()
+    out["input_version"] = ver
+    await db.canonical_decisions.replace_one(
+        {"_id": user_id}, {"_id": user_id, "input_version": ver, "decision": out,
+                           "cached_at": datetime.now(timezone.utc).isoformat()}, upsert=True)
     return out
 
 
@@ -155,6 +182,7 @@ def stability_window_seconds() -> int:
 def denial(decision: dict, path: str) -> dict:
     """Deterministic denial payload for every new-order path."""
     return {"blocked": "trading_authority", "path": path, "decision_id": decision["decision_id"],
+            "input_version": decision.get("input_version"),
             "state": decision["state"], "authority_level": decision.get("level"),
             "reason_codes": decision["reason_codes"],
             "reasons": [b["reason"] for b in decision["blockers"]]}

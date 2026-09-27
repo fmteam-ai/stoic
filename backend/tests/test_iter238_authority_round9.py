@@ -269,6 +269,9 @@ class TestInventoryProjection:
         assert c["connected"] == 6 and c["fresh"] == 6 and c["tradable"] == 3
         assert p["violations"] == [] and p["blocking"] is False
         p = _run(approve_current(db, "iter238@stoic.test", "initial 6/3/3 approval for drill", uid))
+        assert p["pending_approval"]["inventory_hash"] == p["inventory_hash"] and p["approved_hash"] is None
+        from inventory_projection import confirm_current
+        p = _run(confirm_current(db, "iter238-second@stoic.test"))          # round 12 P2-05: second admin
         assert p["approved_hash"] == p["inventory_hash"] and not p["unapproved_change"]
 
     def test_fourth_enabled_or_lost_account_blocks_new_entries(self, fleet):
@@ -279,6 +282,8 @@ class TestInventoryProjection:
         _run(set_expectation(db, {"accounts": 6, "enabled": 3, "bots": 3, "scope_user_id": uid,
                                   "account_ids": [str(r["_id"]) for r in rows[:3]]}, "iter238@stoic.test"))
         _run(approve_current(db, "iter238@stoic.test", "initial 6/3/3 approval for drill", uid))
+        from inventory_projection import confirm_current
+        _run(confirm_current(db, "iter238-second@stoic.test"))
         assert _run(inventory_domain(db, None))["level"] == "FULL"
         # enable a fourth (account only → also breaks 1:1)
         _run(db.accounts.update_one({"_id": rows[3]["_id"]}, {"$set": {"trading_enabled": True}}))

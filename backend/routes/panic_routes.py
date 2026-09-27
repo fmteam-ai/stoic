@@ -49,6 +49,8 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
     }
     if broadcast_user_id:
         await ws_manager.broadcast(broadcast_user_id, "panic_lock", payload)
+    from canonical_decision import bump_authority_version
+    await bump_authority_version(db, "panic", user_id=broadcast_user_id)
     return payload
 
 

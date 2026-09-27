@@ -149,7 +149,7 @@ class TestCanonicalDecisionRound10:
                     "account_id": "acc1", "new_exposure_allowed": False}
         monkeypatch.setattr(cd, "decide_platform", _platform)
         monkeypatch.setattr(cd, "decide_account", _account)
-        d = _run(cd.decide_user(_DB(), "u1"))
+        d = _run(cd._decide_user_uncached(_DB(), "u1"))        # pure projection (persistence covered in round 12 tests)
         assert d["state"] == "BLOCKED" and d["dominant_code"] == "IDENTITY_MISMATCH" and d["dominant_account_id"] == "acc1"
         assert [b["state"] for b in d["blockers"]] == ["BLOCKED", "CLOSE_ONLY", "DEGRADED"]
         assert d["reason_codes"][0] == "IDENTITY_MISMATCH" and d["blockers"][0]["account_label"] == "L1"
@@ -332,16 +332,30 @@ class TestRound11Corrections:
         with pytest.raises(HTTPException) as e:
             validate_expectation({"accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd")}, require_policy=True)
         assert any("6/3/3" in x for x in e.value.detail["errors"])
-        # a migration signed by the release key is the only way to change the target
-        import json as _json
+        # a migration signed by the release key over the COMPLETE transition is the only way to change the target
+        from datetime import datetime, timedelta, timezone
         from release_signing import sign_hex
-        body = _json.dumps({"accounts": 4, "enabled": 4, "bots": 4, "migration_id": "MIG-1"}, sort_keys=True, separators=(",", ":")).encode()
-        mig = {"accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd"),
-               "policy_migration": {"migration_id": "MIG-1", "signature_hex": sign_hex(body)}}
-        assert validate_expectation(mig, require_policy=True)["accounts"] == 4
-        mig["policy_migration"]["signature_hex"] = "00" * 64
-        with pytest.raises(HTTPException):
-            validate_expectation(mig, require_policy=True)
+        from inventory_projection import migration_body, MIGRATION_SCHEMA, DEPLOYMENT_POLICY_VERSION, installation_id
+        now = datetime.now(timezone.utc)
+        mig_doc = {"schema": MIGRATION_SCHEMA, "installation_id": installation_id(), "environment": "preview",
+                   "previous_policy_version": DEPLOYMENT_POLICY_VERSION, "policy_version": "4/4/4-v2",
+                   "accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd"), "reason": "drill: four live desks",
+                   "issuer": "release-ops", "issued_at": now.isoformat(), "expires_at": (now + timedelta(hours=1)).isoformat(),
+                   "nonce": "n0nce-" + "a" * 20}
+        mig_doc["signature_hex"] = sign_hex(migration_body(mig_doc))
+        mig = {"accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd"), "policy_migration": dict(mig_doc)}
+        assert validate_expectation(mig, require_policy=True)["policy_version"] == "4/4/4-v2"
+        for k, v in (("signature_hex", "00" * 64), ("account_ids", list("abce")), ("environment", "production"),
+                     ("installation_id", "other-install"), ("previous_policy_version", "0/0/0-v0"),
+                     ("expires_at", (now - timedelta(minutes=1)).isoformat())):
+            bad = {**mig, "policy_migration": {**mig_doc, k: v}}
+            if k != "signature_hex":
+                bad["policy_migration"]["signature_hex"] = sign_hex(migration_body(bad["policy_migration"]))
+            if k == "account_ids":
+                bad["account_ids"] = list("abcd")          # payload ids differ from the signed set
+            with pytest.raises(HTTPException) as e2:
+                validate_expectation(bad, require_policy=True)
+            assert any("migration" in x for x in e2.value.detail["errors"]), k
 
     def test_model_manifest_gates_joblib_load(self, tmp_path, monkeypatch):
         import model_manifest as mm
@@ -351,9 +365,16 @@ class TestRound11Corrections:
         (tmp_path / "u1").mkdir()
         f = tmp_path / "u1" / "gbm_ensemble.joblib"
         f.write_bytes(b"\x80\x04model-bytes")
+        prov = {"feature_schema": mm.FEATURE_SCHEMA_VERSION, "feature_code_digest": mm.feature_code_digest(),
+                "training_window": {"from": "2026-01-01T00:00:00+00:00", "until": "2026-02-01T00:00:00+00:00"},
+                "dataset_sha256": "d" * 64, "n_samples": 100, "trained_at": "2026-02-01T00:00:00+00:00",
+                "metrics": {"aucs": {"xgboost": 0.6}, "weights": {"xgboost": 1.0}, "holdout_auc": 0.6},
+                "code_commit": mm.running_build_sha()}
+        mm.sidecar_path("u1", "production").write_text(json.dumps(prov))
         with pytest.raises(mm.ModelRefused, match="no signed"):
             mm.verify_model(f)
-        mm.sign(["a@x", "b@y"])
+        approvals = [{"email": "a@x", "audit_event_id": "e" * 64}, {"email": "b@y", "audit_event_id": "f" * 64}]
+        mm.sign(approvals)
         assert mm.verify_model(f) == mm.sha256_file(f)
         f.write_bytes(b"\x80\x04model-bytez")                       # one-byte mutation
         with pytest.raises(mm.ModelRefused, match="digest mismatch"):
@@ -363,13 +384,13 @@ class TestRound11Corrections:
         with pytest.raises(mm.ModelRefused, match="feature schema"):
             mm.verify_model(f, expected_schema="ens-features-v9")
         doc = json.loads((tmp_path / "MODEL_MANIFEST.json").read_text())
-        doc["body"]["approvers"] = ["evil@x"]
+        doc["body"]["approvals"] = [{"email": "evil@x", "audit_event_id": "0" * 64}]
         (tmp_path / "MODEL_MANIFEST.json").write_text(json.dumps(doc))
         with pytest.raises(mm.ModelRefused, match="signature"):
             mm.verify_model(f)
         src = open(os.path.join(_BACKEND_DIR, "ml_ensemble.py")).read()
-        assert "verify_model(f)" in src and src.index("verify_model(f)") < src.index("models = joblib.load(f)")
-        assert "gbm_ensemble.candidate.joblib" in src
+        assert "verify_model(f" in src and src.index("verify_model(f") < src.index("models = joblib.load(f)")
+        assert "CANDIDATE_NAME" in src
         assert json.load(open(os.path.join(ROOT, "release", "rc_lock.json")))["model_manifest_sha256"]
 
     def test_turnstile_malformed_provider_bodies_fail_closed(self, monkeypatch):

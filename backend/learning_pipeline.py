@@ -204,13 +204,18 @@ async def staged_ml_retrain(db, user_id: str) -> dict:
                 "holdout_n": ev["holdout_n"], "compare_mode": compare_mode,
                 "detail": f"candidate AUC {cand:.3f} < required {floor:.3f} "
                           f"({basis}) — production model untouched"}
-    result = await train_ensemble(db, user_id)  # full-data refit + persist
-    return {"stage": "production", "status": "promoted",
+    result = await train_ensemble(db, user_id)  # full-data refit → CANDIDATE only
+    # round 12 P1-01 — the pipeline never reports "promoted": activation is a
+    # separate two-admin, signed-manifest, atomic step (ml_ensemble.promote_candidate).
+    return {"stage": "approval", "status": "candidate_ready_for_review",
             "candidate_auc": round(cand, 3),
             "production_auc": round(prod, 3) if prod else None,
             "holdout_n": ev["holdout_n"], "compare_mode": compare_mode,
-            "approved_by": "auto (non-inferior on unseen holdout)",
-            "train_status": result.get("status")}
+            "approved_by": None,
+            "promotion": "awaiting_two_admin_signed_manifest",
+            "candidate_digest": (result.get("candidate") or {}).get("digest"),
+            "production_digest": (result.get("production") or {}).get("digest"),
+            "train_status": result.get("last_training_status")}
 
 
 # ------------------------------------------------- versioned advisory nets
@@ -273,7 +278,11 @@ async def pipeline_status(db, user_id: str) -> dict:
         s = m.get("status") or "unknown"
         shadow_counts[s] = shadow_counts.get(s, 0) + 1
     versions = await db.model_versions.count_documents({"user_id": user_id})
+    from ml_ensemble import public_state
+    ml_state = public_state(await db.ml_ensembles.find_one({"user_id": user_id}) or {})
     return {"freeze": frz, "recent_runs": last,
             "shadow_lab": shadow_counts, "rollback_versions": versions,
+            "ml_state": {"production": ml_state["production"], "candidate": ml_state["candidate"],
+                         "promotion": ml_state["promotion"], "status": ml_state["status"]},
             "workflow": ["live_trades", "replay", "shadow", "validation",
                          "approval", "production"]}

@@ -16,7 +16,9 @@ STEP_UP_HEADER = "X-Step-Up-Token"
 STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_create",
                    # iter-163/165/166/171 — ops release/fleet controls (audit hardening)
                    "release_promote", "release_rollback", "agent_config_push",
-                   "canary_set", "release_trust", "audit_anchor"}
+                   "canary_set", "release_trust", "audit_anchor",
+                   # round 10–12 — two-admin governance + model promotion
+                   "authority_relax", "model_promotion"}
 
 
 def _hash_token(token: str) -> str:

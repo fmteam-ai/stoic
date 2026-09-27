@@ -114,14 +114,43 @@ def _token_age_seconds(challenge_ts: str | None) -> float | None:
     return (datetime.now(timezone.utc) - ts).total_seconds()
 
 
+def typed_claims(body: dict) -> tuple[dict, list]:
+    """Round 12 P2-03: schema-validate every siteverify claim BEFORE use. A claim
+    of the wrong type is a controlled client-token fault (never a 500, never a
+    provider outage that could unlock degraded login)."""
+    codes: list = []
+    out = {"success": False, "hostname": None, "action": None, "challenge_ts": None, "error_codes": []}
+    succ = body.get("success")
+    if isinstance(succ, bool):
+        out["success"] = succ
+    else:
+        codes.append("malformed-claim-success")          # absent/non-bool success is a shape fault, never an outage
+    for k in ("hostname", "action", "challenge_ts"):
+        v = body.get(k)
+        if v is None or v == "":
+            continue
+        if isinstance(v, str):
+            out[k] = v.lower() if k == "hostname" else v
+        else:
+            codes.append(f"malformed-claim-{k.replace('_', '-')}")
+    ec = body.get("error-codes")
+    if ec is None:
+        pass
+    elif isinstance(ec, list) and all(isinstance(c, str) for c in ec):
+        out["error_codes"] = ec
+    else:
+        codes.append("malformed-error-codes")
+    return out, codes
+
+
 def bind_claims(body: dict, action: str | None) -> tuple[bool, list]:
     """Strict claim binding on a successful siteverify body (round 9 P1-02):
     expected action ⇒ exact equality (missing claim fails); non-empty hostname
     allowlist ⇒ non-empty hostname contained in it; freshness ⇒ challenge_ts
     within TURNSTILE_MAX_TOKEN_AGE_SECONDS."""
-    codes: list = []
-    cf_action = body.get("action") or None
-    hostname = (body.get("hostname") or "").lower() or None
+    claims, codes = typed_claims(body)
+    cf_action = claims["action"]
+    hostname = claims["hostname"]
     if action:
         if not cf_action:
             codes.append("action-missing")
@@ -133,7 +162,7 @@ def bind_claims(body: dict, action: str | None) -> tuple[bool, list]:
             codes.append("hostname-missing")
         elif hostname not in exp:
             codes.append("hostname-mismatch")
-    age = _token_age_seconds(body.get("challenge_ts"))
+    age = _token_age_seconds(claims["challenge_ts"])
     if age is None:
         codes.append("challenge-ts-missing")             # round 10 P1-04: freshness is mandatory
     elif age > max_token_age_seconds():
@@ -192,13 +221,13 @@ async def verify_token(token: str, remote_ip: str | None = None, action: str | N
     if not isinstance(body, dict):
         _mark_provider_failure()
         return _r(False, "provider_unavailable", ["malformed-body"])
-    codes = body.get("error-codes") or []
-    if not isinstance(codes, list):
-        codes = ["malformed-error-codes"]
-    hostname = (body.get("hostname") or "").lower() or None
-    cf_action = body.get("action") or None
-    ts = body.get("challenge_ts")
-    if body.get("success"):
+    claims, type_codes = typed_claims(body)
+    codes = claims["error_codes"] or type_codes
+    hostname, cf_action, ts = claims["hostname"], claims["action"], claims["challenge_ts"]
+    if type_codes:
+        # wrong-typed claims never unlock degraded login and never mark the provider degraded
+        return _r(False, "client_token_invalid", type_codes, hostname, cf_action, ts)
+    if claims["success"]:
         ok, bind_codes = bind_claims(body, action)
         if not ok:
             return _r(False, "client_token_invalid", bind_codes, hostname, cf_action, ts)
