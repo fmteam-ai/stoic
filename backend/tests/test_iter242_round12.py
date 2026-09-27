@@ -9,6 +9,7 @@ inventory-hash approval · P2-06 complete, replay-proof policy migration ·
 P2-07 handoff pointer.
 """
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -63,7 +64,8 @@ class TestModelGovernance:
         (model_dir / "u1").mkdir()
         f = model_dir / "u1" / mm.PRODUCTION_NAME
         f.write_bytes(b"\x80\x04model")
-        ok = [{"email": "a@x", "audit_event_id": "e" * 64}, {"email": "b@y", "audit_event_id": "f" * 64}]
+        ok = [{"email": "a@x", "audit_event_id": "e" * 64, "principal_id": "p" * 24},
+              {"email": "b@y", "audit_event_id": "f" * 64, "principal_id": "q" * 24}]
         # empty metrics / incomplete window / missing dataset hash → refused
         mm.sidecar_path("u1", "production").write_text(json.dumps(_prov(mm, {"metrics": {}})))
         mm.sign(ok)
@@ -75,7 +77,8 @@ class TestModelGovernance:
             mm.verify_model(f)
         mm.sidecar_path("u1", "production").write_text(json.dumps(_prov(mm)))
         # one approver / repeated approver / missing event id → never signable, never loadable
-        for bad in ([ok[0]], [ok[0], {**ok[0]}], [ok[0], {"email": "b@y", "audit_event_id": ""}]):
+        for bad in ([ok[0]], [ok[0], {**ok[0]}], [ok[0], {"email": "b@y", "audit_event_id": "", "principal_id": "q" * 24}],
+                    [ok[0], {**ok[1], "principal_id": ok[0]["principal_id"]}]):        # two emails, ONE principal
             with pytest.raises(mm.ModelRefused):
                 mm.sign(bad)
         mm.sign(ok)
@@ -105,77 +108,123 @@ class TestModelGovernance:
         with pytest.raises(mm.ModelRefused):
             mm.load_manifest()
 
-    def test_training_never_touches_production_and_promotion_is_atomic(self, model_dir):
+    def test_training_never_touches_production_and_promotion_is_atomic(self, model_dir, monkeypatch):
+        """Round 12 P1-01 + round 13 P1-01/P1-03/P2-02: shared content-addressed store, DB pointer
+        activation, exact-tuple two-principal approvals, outbox audit, previous production preserved."""
         import model_manifest as mm
         import ml_ensemble as me
+        import model_store as ms
+        from bson import ObjectId
         db = _db()
         uid = "r12-" + uuid.uuid4().hex[:8]
+        p1, p2 = ObjectId(), ObjectId()
+        _run(db.users.insert_many([{"_id": p1, "email": f"a-{uid}@x", "role": "admin"}, {"_id": p2, "email": f"b-{uid}@x", "role": "admin"}]))
         try:
-            # a signed production model already active
-            (model_dir / uid).mkdir()
-            prod = model_dir / uid / mm.PRODUCTION_NAME
-            prod.write_bytes(b"\x80\x04prod-v1")
-            prod_digest = mm.sha256_file(prod)
-            mm.sidecar_path(uid, "production").write_text(json.dumps(_prov(mm)))
-            _run(db.ml_ensembles.insert_one({"user_id": uid, "production": {"status": "active", "digest": prod_digest,
-                                                                             "weights": {"xgboost": 1.0}, "aucs": {"xgboost": 0.6},
-                                                                             "n_trades": 100}}))
-            # "training" produced a candidate + sidecar (train_sync contract) — production untouched
-            cand = model_dir / uid / mm.CANDIDATE_NAME
-            cand.write_bytes(b"\x80\x04cand-v2")
-            cd = mm.sha256_file(cand)
-            mm.sidecar_path(uid, "candidate").write_text(json.dumps(_prov(mm, {"sha256": cd})))
-            _run(db.ml_ensembles.update_one({"user_id": uid}, {"$set": {"candidate": {
-                "status": "awaiting_approval", "digest": cd, "weights": {"xgboost": 1.0}, "aucs": {"xgboost": 0.7},
-                "n_trades": 140, "approvals": []}}}))
-            st = me.public_state(_run(db.ml_ensembles.find_one({"user_id": uid})))
-            assert st["production"]["digest"] == prod_digest and st["candidate"]["status"] == "awaiting_approval"
-            assert st["promotion"] == "candidate_ready_for_review" and mm.sha256_file(prod) == prod_digest
-            # promotion without a manifest naming the candidate → refused, production unchanged
+            import io
+            import joblib
+
+            def _blob(tag):
+                buf = io.BytesIO()
+                joblib.dump({"tag": tag, "uid": uid}, buf)
+                return buf.getvalue()
+            prod_bytes, cand_bytes = _blob("prod-v1"), _blob("cand-v2")
+            pd, cd = hashlib.sha256(prod_bytes).hexdigest(), hashlib.sha256(cand_bytes).hexdigest()
+            _run(ms.put(db, prod_bytes, pd, uid, _prov(mm, {"sha256": pd, "bytes": len(prod_bytes)})))
+            _run(ms.put(db, cand_bytes, cd, uid, _prov(mm, {"sha256": cd, "bytes": len(cand_bytes)})))
+            _run(db.ml_ensembles.insert_one({"user_id": uid,
+                                             "production": {"status": "active", "digest": pd, "weights": {"xgboost": 1.0},
+                                                            "aucs": {"xgboost": 0.6}, "n_trades": 100},
+                                             "candidate": {"status": "awaiting_approval", "digest": cd, "weights": {"xgboost": 1.0},
+                                                           "aucs": {"xgboost": 0.7}, "n_trades": 140, "approvals": []}}))
+
+            def prod_digest():
+                return _run(db.ml_ensembles.find_one({"user_id": uid}))["production"]["digest"]
+
+            def refused(approvals=None, **kw):
+                if approvals is not None:
+                    mm.sign(approvals, promote=[uid], **kw)
+                with pytest.raises(HTTPException) as e:
+                    _run(me.promote_candidate(db, uid, "ops@x"))
+                assert e.value.status_code in (404, 409) and prod_digest() == pd
+                return e.value.detail
+            refused()                                                       # no manifest naming the candidate
+            # approvals: distinct PRINCIPALS, exact digest, bytes present in the store
+            a1 = _run(me.approve_candidate(db, uid, f"a-{uid}@x", "reviewed", actor_id=str(p1)))["approval"]
             with pytest.raises(HTTPException) as e:
-                _run(me.promote_candidate(db, uid, "ops@x"))
-            assert e.value.status_code == 409 and mm.sha256_file(prod) == prod_digest
-            # one approver → cannot sign; repeated approver → 409
-            a1 = _run(me.approve_candidate(db, uid, "ops-a@x", "reviewed on holdout"))
-            with pytest.raises(HTTPException) as e:
-                _run(me.approve_candidate(db, uid, "ops-a@x", "again"))
+                _run(me.approve_candidate(db, uid, f"a-again-{uid}@x", "same principal, other email", actor_id=str(p1)))
             assert e.value.detail["code"] == "repeated_approver"
-            a2 = _run(me.approve_candidate(db, uid, "ops-b@x", "second review"))
-            approvals = [a1["approval"], a2["approval"]]
-            # approvals must reference REAL audit-chain events
-            forged = [a1["approval"], {"email": "ops-b@x", "audit_event_id": "0" * 64}]
-            mm.sign(forged, promote=[uid])
+            a2 = _run(me.approve_candidate(db, uid, f"b-{uid}@x", "second", actor_id=str(p2)))["approval"]
+            good = [a1, a2]
+            # (1) two emails pointing at events from ONE principal
+            with pytest.raises(mm.ModelRefused):
+                mm.sign([a1, {**a2, "principal_id": a1["principal_id"]}], promote=[uid])
+            # (2) forged event id / (3) event of another target with same digest / (4) approval absent from candidate
+            refused([a1, {**a2, "audit_event_id": "0" * 64}])
+            other = _run(db.admin_audit_log.find_one({"entry_hash": a2["audit_event_id"]}))
+            other = {**other, "_id": ObjectId(), "target_id": uid + "-other"}
+            _run(db.admin_audit_log.insert_one(other))                      # cloned event, wrong target (chain now also tampered)
+            d = refused([a1, {**a2, "audit_event_id": other["entry_hash"]}])
+            assert any("does not match" in p or "chain" in p or "differ" in p for p in d["problems"])
+            _run(db.admin_audit_log.delete_one({"_id": other["_id"]}))
+            d = refused([a1, {**a2, "email": f"other-{uid}@x"}])           # manifest identity != authenticated actor
+            assert any("does not match" in p for p in d["problems"])
+            refused(good, commit="1" * 40)                                  # stale build
+            # bytes absent from the shared store → refused, previous production stays active
+            _run(db.fs_model_artifacts_index.delete_one({"_id": cd}))
+            for f in _run(db["model_artifacts.files"].find({"filename": cd}).to_list(10)):
+                _run(db["model_artifacts.chunks"].delete_many({"files_id": f["_id"]}))
+            _run(db["model_artifacts.files"].delete_many({"filename": cd}))
+            (model_dir / "_cache" / "sha256" / f"{cd}.joblib").unlink(missing_ok=True)
+            d = refused(good)
+            assert any("shared artifact store" in p for p in d["problems"])
+            _run(ms.put(db, cand_bytes, cd, uid, _prov(mm, {"sha256": cd})))
+            # DB failure at the pointer flip → nothing activated, candidate retriable
+            mm.sign(good, promote=[uid])
+
+            class _Col:
+                def __init__(self, real):
+                    self.real = real
+
+                def __getattr__(self, k):
+                    return getattr(self.real, k)
+
+                async def update_one(self, *a, **k):
+                    raise TimeoutError("mongo down")
+
+            class _DB:
+                def __init__(self):
+                    self.ml_ensembles = _Col(db.ml_ensembles)
+
+                def __getattr__(self, k):
+                    return getattr(db, k)
+
+                def __getitem__(self, k):
+                    return db[k]
+            real_fetch = ms.fetch
+            monkeypatch.setattr(ms, "fetch", lambda _db, digest, mdir: real_fetch(db, digest, mdir))
             with pytest.raises(HTTPException) as e:
-                _run(me.promote_candidate(db, uid, "ops@x"))
-            assert any("audit event unknown" in p for p in e.value.detail["problems"]) and mm.sha256_file(prod) == prod_digest
-            # stale build → refused
-            mm.sign(approvals, promote=[uid], commit="1" * 40)
-            with pytest.raises(HTTPException):
-                _run(me.promote_candidate(db, uid, "ops@x"))
-            mm.sign(approvals, promote=[uid])
-            # changed bytes → refused
-            cand.write_bytes(b"\x80\x04cand-v2-tampered")
-            with pytest.raises(HTTPException) as e:
-                _run(me.promote_candidate(db, uid, "ops@x"))
-            assert any("bytes changed" in p or "digest mismatch" in p for p in e.value.detail["problems"])
-            cand.write_bytes(b"\x80\x04cand-v2")
-            # database failure → rolled back, production unchanged
-            _run(db.ml_ensembles.update_one({"user_id": uid}, {"$set": {"candidate.digest": "9" * 64}}))
-            with pytest.raises(HTTPException) as e:
-                _run(me.promote_candidate(db, uid, "ops@x"))
-            assert e.value.status_code == 409 and mm.sha256_file(prod) == prod_digest and cand.exists()
-            _run(db.ml_ensembles.update_one({"user_id": uid}, {"$set": {"candidate.digest": cd}}))
-            # success: binary + matching metadata switch together, one audit event
-            before = _run(db.admin_audit_log.count_documents({"action": "model_promoted", "target_id": uid}))
-            st = _run(me.promote_candidate(db, uid, "ops-b@x"))
-            assert st["production"]["digest"] == cd == mm.sha256_file(prod) and st["candidate"] is None
-            assert st["production"]["aucs"] == {"xgboost": 0.7} and st["production"]["n_trades"] == 140
-            assert not cand.exists() and mm.read_sidecar(uid, "production")["sha256"] == cd
-            assert _run(db.admin_audit_log.count_documents({"action": "model_promoted", "target_id": uid})) == before + 1
-            assert mm.verify_model(prod, known_events=_run(me.approval_events(db, approvals))) == cd
+                _run(me.promote_candidate(_DB(), uid, "ops@x"))
+            monkeypatch.setattr(ms, "fetch", real_fetch)
+            assert e.value.status_code == 503 and prod_digest() == pd
+            assert _run(db.ml_ensembles.find_one({"user_id": uid}))["candidate"]["status"] == "awaiting_approval"
+            assert _run(ms.exists(db, cd))
+            # success: ONE atomic pointer flip + exactly one promotion audit event; candidate bytes preserved
+            st = _run(me.promote_candidate(db, uid, f"b-{uid}@x"))
+            assert st["production"]["digest"] == cd and st["candidate"] is None and st["production"]["aucs"] == {"xgboost": 0.7}
+            doc = _run(db.ml_ensembles.find_one({"user_id": uid}))
+            assert doc["promotion_outbox"] is None and doc["previous_production"]["digest"] == pd
+            assert _run(db.admin_audit_log.count_documents({"action": "model_promoted", "target_id": uid})) == 1
+            assert _run(me.flush_promotion_outbox(db, uid)) == 0             # idempotent
+            assert _run(ms.exists(db, cd)) and _run(ms.exists(db, pd))
+            # a second "instance" (empty cache, different MODEL_DIR) resolves the identical digest from the store
+            me._models_cache.clear()
+            known = _run(me.approval_events(db, good))
+            models, digest = _run(me._load_production(db, uid, doc["production"], known))
+            assert digest == cd and (model_dir / "_cache" / "sha256" / f"{cd}.joblib").exists()
         finally:
             _run(db.ml_ensembles.delete_many({"user_id": uid}))
             _run(db.admin_audit_log.delete_many({"target_id": uid}))
+            _run(db.users.delete_many({"_id": {"$in": [p1, p2]}}))
 
     def test_pipeline_and_api_share_one_state_shape(self):
         src = open(os.path.join(_BACKEND_DIR, "learning_pipeline.py")).read()
@@ -472,3 +521,50 @@ class TestInventoryTwoAdmin:
             _run(ip.consume_migration_nonce(db, mig))                                       # replay
         assert e.value.detail["code"] == "policy_migration_replayed"
         _run(db.policy_migration_nonces.delete_one({"_id": mig["nonce"]}))
+
+
+class TestRound13:
+    def test_public_status_separates_infrastructure_from_trading(self):
+        src = open(os.path.join(_BACKEND_DIR, "routes", "portal_routes.py")).read()
+        assert '"trading": trading' in src and '"connectivity": connectivity' in src and 'account' not in src.split('trading = {')[1].split('}')[0].lower().replace("enabled_accounts_present", "")
+        assert 'readiness["state"] == "READY" and connectivity == "active"' in src      # "Trading ready" only when canonical READY + fresh terminals
+        login = open(os.path.join(ROOT, "frontend", "src", "pages", "Login.jsx")).read()
+        assert "SYSTEM OPERATIONAL" not in login and "headline" in login
+        assert os.path.exists(os.path.join(ROOT, "docs", "TURNSTILE_PREVIEW.md"))
+
+    def test_canonical_snapshot_single_flight_and_input_hash(self, monkeypatch):
+        import canonical_decision as cd
+        db = _db()
+        uid = "r13-cd-" + uuid.uuid4().hex[:6]
+        calls = {"n": 0}
+
+        async def _platform(_db):
+            calls["n"] += 1
+            return cd.from_snapshot({"level": "FULL", "domains": {}, "snapshot_id": "s"})
+        monkeypatch.setattr(cd, "decide_platform", _platform)
+        try:
+            # concurrent cold-cache requests → ONE persisted decision for the version
+            results = _run(asyncio.gather(*(cd.decide_user(db, uid, fresh=(i == 0)) for i in range(5))))
+            ids = {r["decision_id"] for r in results}
+            persisted = _run(db.canonical_decisions.find_one({"_id": uid}))["decision"]["decision_id"]
+            assert persisted in ids and _run(cd.decide_user(db, uid))["decision_id"] == persisted
+            d = _run(cd.decide_user(db, uid))
+            assert len(d["input_hash"]) == 16 and cd.denial(d, "/x")["input_hash"] == d["input_hash"]
+            # platform authority change is part of the fingerprint → immediate invalidation
+            _run(db.platform_state.update_one({"_id": "trading_authority"}, {"$set": {"set_at": "r13-" + uuid.uuid4().hex}}, upsert=True))
+            assert _run(cd.decide_user(db, uid))["input_hash"] != d["input_hash"]
+        finally:
+            _run(db.canonical_decisions.delete_one({"_id": uid}))
+
+    def test_release_pipeline_stages_one_tree_before_build(self):
+        rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml")).read()
+        i_stage = rel.index("re-sign model manifest IN the staged tree")
+        i_build = rel.index("docker build -f /tmp/pkg/Dockerfile.backend")
+        i_extract = rel.index("Extract provenance from the candidate image BEFORE push")
+        i_push = rel.index("Publish images to GHCR")
+        assert i_stage < i_build < i_extract < i_push
+        assert "archive manifest != published image manifest" in rel
+        assert rel.count("model_manifest resign --commit") >= 2          # hermetic job stages the same way
+        assert "model_manifest verify --build" in rel
+        src = open(os.path.join(_BACKEND_DIR, "ml_ensemble.py")).read()
+        assert "os.replace(cand_file" not in src and "promotion_outbox" in src and "model_store.fetch" in src

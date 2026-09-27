@@ -147,9 +147,21 @@ jobs:
           VERIFY_RESULTS_PATH: /tmp/hermetic-verification.json
           # round 12 P1-03 — the model-manifest gate verifies against the CI-pinned release public key
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
           # bind the results to the release commit (archive tree has no .git)
           COMMIT_SHA=$(git rev-parse --verify --quiet "${GITHUB_SHA}^{commit}" || git rev-parse HEAD^{commit})
+          # round 13 P1-02 — the SAME sanctioned staging step as the release job: re-sign the model
+          # manifest for this commit in the exported tree, then verify it strictly against the build
+          printf '%s\n' "${COMMIT_SHA}" > /tmp/verify/backend/BUILD_SHA
+          if [ -f /tmp/verify/backend/models_store/MODEL_MANIFEST.json ]; then
+            pip install -q cryptography requests pymongo >/dev/null 2>&1 || true
+            (cd /tmp/verify/backend && APP_ENV=production RELEASE_SIGNER=external STOIC_BUILD_SHA="${COMMIT_SHA}" python -m model_manifest resign --commit "${COMMIT_SHA}")
+            (cd /tmp/verify/backend && python -m model_manifest verify --build "${COMMIT_SHA}")
+          fi
           cd /tmp/verify
           git init -q . && git add -A >/dev/null 2>&1 && git -c user.email=ci@stoic -c user.name=ci commit -qm "archive" >/dev/null 2>&1 || true
           # verify_release.sh reads GIT_SHA from `git rev-parse HEAD`; override with the real release commit
@@ -306,12 +318,59 @@ jobs:
           # the archive is packed AFTER the release evidence is bound to this commit (round 12 P1-02)
           echo "archive provenance verified == ${COMMIT_SHA}"
 
+      - name: Stage release evidence — re-sign model manifest IN the staged tree, verify against the release commit (round 13 P1-02)
+        env:
+          APP_ENV: production
+          RELEASE_SIGNER: external
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+          STOIC_BUILD_SHA: ${{ env.COMMIT_SHA }}
+        run: |
+          pip install -q -r backend/requirements.txt >/dev/null 2>&1 || pip install -q cryptography requests pymongo
+          if [ -f /tmp/pkg/backend/models_store/MODEL_MANIFEST.json ]; then
+            # approvals + model digests carried over UNCHANGED (verified first); only code_commit is bound.
+            # Everything downstream (hermetic tests, images, archive, lock) consumes THIS staged tree.
+            (cd /tmp/pkg/backend && python -m model_manifest resign --commit "${COMMIT_SHA}")
+            (cd /tmp/pkg/backend && python -m model_manifest verify --build "${COMMIT_SHA}")
+            cp /tmp/pkg/backend/models_store/MODEL_MANIFEST.json backend/models_store/MODEL_MANIFEST.json
+          else
+            echo "no model manifest in this release"
+          fi
+          echo "STAGED_TREE=/tmp/pkg" >> "$GITHUB_ENV"
+
       - name: Build images
         env:
           REF: ${{ github.ref_name }}
         run: |
-          docker build -f Dockerfile.backend --build-arg GIT_SHA="${COMMIT_SHA}" -t "stoic-backend:${REF}" .
-          docker build -f Dockerfile.frontend -t "stoic-frontend:${REF}" .
+          # images are built from the STAGED tree (commit-bound BUILD_SHA + re-signed manifest), never the raw checkout
+          docker build -f /tmp/pkg/Dockerfile.backend --build-arg GIT_SHA="${COMMIT_SHA}" -t "stoic-backend:${REF}" /tmp/pkg
+          docker build -f /tmp/pkg/Dockerfile.frontend -t "stoic-frontend:${REF}" /tmp/pkg
+
+      - name: Extract provenance from the candidate image BEFORE push (round 13 P1-02)
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          set -e
+          CID=$(docker create "stoic-backend:${REF}")
+          mkdir -p /tmp/img
+          docker cp "${CID}:/app/backend/BUILD_SHA" /tmp/img/BUILD_SHA
+          docker cp "${CID}:/app/backend/models_store" /tmp/img/models_store || mkdir -p /tmp/img/models_store
+          docker rm "${CID}" >/dev/null
+          IMG_SHA=$(tr -d '[:space:]' < /tmp/img/BUILD_SHA)
+          [ "${IMG_SHA}" = "${COMMIT_SHA}" ] || { echo "RELEASE BLOCKED: image BUILD_SHA ${IMG_SHA} != ${COMMIT_SHA}"; exit 1; }
+          if [ -f /tmp/pkg/backend/models_store/MODEL_MANIFEST.json ]; then
+            A=$(sha256sum /tmp/pkg/backend/models_store/MODEL_MANIFEST.json | cut -d' ' -f1)
+            B=$(sha256sum /tmp/img/models_store/MODEL_MANIFEST.json | cut -d' ' -f1)
+            [ "$A" = "$B" ] || { echo "RELEASE BLOCKED: image MODEL_MANIFEST.json ($B) != staged tree ($A)"; exit 1; }
+            for f in $(cd /tmp/pkg/backend/models_store && find . -name 'gbm_ensemble.joblib'); do
+              X=$(sha256sum "/tmp/pkg/backend/models_store/$f" | cut -d' ' -f1); Y=$(sha256sum "/tmp/img/models_store/$f" | cut -d' ' -f1)
+              [ "$X" = "$Y" ] || { echo "RELEASE BLOCKED: image model $f ($Y) != staged tree ($X)"; exit 1; }
+            done
+            echo "image manifest sha256 ${B} == staged tree; model binaries identical"
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
@@ -368,26 +427,6 @@ jobs:
           format: spdx-json
           output-file: sbom-frontend.spdx.json
 
-      - name: Re-sign model manifest bound to the release commit (round 12 P1-02/P1-04)
-        env:
-          APP_ENV: production
-          RELEASE_SIGNER: external
-          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
-          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
-          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
-          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
-          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
-          STOIC_BUILD_SHA: ${{ env.COMMIT_SHA }}
-        run: |
-          pip install -q -r backend/requirements.txt >/dev/null 2>&1 || pip install -q cryptography requests
-          if [ -f backend/models_store/MODEL_MANIFEST.json ]; then
-            # approvals + model digests are carried over UNCHANGED (verified first); only code_commit is bound here
-            (cd backend && python -m model_manifest resign --commit "${COMMIT_SHA}")
-            (cd backend && python -m model_manifest verify --build "${COMMIT_SHA}")
-          else
-            echo "no model manifest in this release"
-          fi
-
       - name: Bind RC lock to the release commit + image digests (round 9 P1-06)
         env:
           BACKEND_DIGEST: ${{ steps.push.outputs.backend_digest }}
@@ -409,8 +448,11 @@ jobs:
         run: |
           cp rc_lock.json /tmp/pkg/release/rc_lock.json
           cp rc_lock.json release/rc_lock.json
-          if [ -f backend/models_store/MODEL_MANIFEST.json ]; then
-            cp backend/models_store/MODEL_MANIFEST.json /tmp/pkg/backend/models_store/MODEL_MANIFEST.json
+          # the model manifest was re-signed IN the staged tree before the image build — no source evidence
+          # is mutated after an image using it exists (round 13 P1-02)
+          if [ -f /tmp/pkg/backend/models_store/MODEL_MANIFEST.json ]; then
+            cmp -s /tmp/pkg/backend/models_store/MODEL_MANIFEST.json /tmp/img/models_store/MODEL_MANIFEST.json \
+              || { echo "RELEASE BLOCKED: archive manifest != published image manifest"; exit 1; }
           fi
           # summary generated from the FROZEN evidence (BUILD_SHA, authoritative lock, digests)
           python3 scripts/generate_release_summary.py --out docs/RELEASE_SUMMARY.md

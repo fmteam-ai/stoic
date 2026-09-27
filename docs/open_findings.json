@@ -1,8 +1,38 @@
 [
-  {"id": "P1-07-r9", "severity": "P1", "title": "Transport mTLS at a client-cert-verifying ingress for agent endpoints (pinned secondary identifier only today)", "owner": "infrastructure"},
-  {"id": "P1-09-r10", "severity": "P1", "title": "Authoritative CI-signed rc_lock for the promoted commit (developer snapshot only until a tagged release run)", "owner": "release-ci"},
-  {"id": "P0-03-r10", "severity": "P1", "title": "Broker-side reconciliation of the six live account IDs + two-admin 6/3/3 inventory approval", "owner": "operations"},
-  {"id": "P1-05-r12", "severity": "P1", "title": "Authoritative release + operational acceptance evidence (6/3/3 inventory, broker truth, zero UNKNOWN executions, EA consistency, Bot Health, performance reconciliation) on ONE signed artifact before any live-capital promotion", "owner": "operations"},
-  {"id": "AI-GOV", "severity": "P2", "title": "Model lineage on every AI decision, shadow-only promotion, drift quarantine, broker-realistic backtest costs", "owner": "engineering"},
-  {"id": "PERF-ATT", "severity": "P2", "title": "Performance reconciliation to broker statements (fees/financing/deposits) before any public attestation", "owner": "engineering"}
+  {
+    "id": "P1-07-r9",
+    "severity": "P1",
+    "title": "Transport mTLS at a client-cert-verifying ingress for agent endpoints (pinned secondary identifier only today)",
+    "owner": "infrastructure"
+  },
+  {
+    "id": "P1-09-r10",
+    "severity": "P1",
+    "title": "Authoritative CI-signed rc_lock for the promoted commit (developer snapshot only until a tagged release run)",
+    "owner": "release-ci"
+  },
+  {
+    "id": "P0-03-r10",
+    "severity": "P1",
+    "title": "Broker-side reconciliation of the six live account IDs + two-admin 6/3/3 inventory approval",
+    "owner": "operations"
+  },
+  {
+    "id": "P1-04-r13",
+    "severity": "P1",
+    "title": "Signed operational acceptance run on the exact promoted image (6/3/3 inventory, broker truth within SLA, zero UNKNOWN executions, EA-count agreement, Safety Blocks dominance, Bot Health caps, performance reconciliation) \u2014 authority stays BLOCKED/CLOSE_ONLY and ML advisory-only until it passes",
+    "owner": "operations"
+  },
+  {
+    "id": "AI-GOV",
+    "severity": "P2",
+    "title": "Model lineage on every AI decision, shadow-only promotion, drift quarantine, broker-realistic backtest costs",
+    "owner": "engineering"
+  },
+  {
+    "id": "PERF-ATT",
+    "severity": "P2",
+    "title": "Per-account reconciliation ledger whose signed period totals equal broker statements to the cent (commission, swap, deposits/withdrawals, corrections, FX, unrealized) with a versioned cash-flow-adjusted return formula; any discrepancy withholds attestation",
+    "owner": "engineering"
+  }
 ]

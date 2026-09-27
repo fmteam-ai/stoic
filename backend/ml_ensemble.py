@@ -13,8 +13,6 @@ Transformer gets a fixed modest weight. Final p_win = Σ wᵢpᵢ / Σ wᵢ."""
 import hashlib
 import logging
 import math
-import os
-import shutil
 from datetime import datetime, timezone
 
 from pip_utils import price_to_pips
@@ -230,6 +228,11 @@ async def train_ensemble(db, user_id: str) -> dict:
         y.append(1 if t["pnl"] > 0 else 0)
     window = {"from": str(trades[0].get("closed_at")), "until": str(trades[-1].get("closed_at"))}
     result = await asyncio.to_thread(train_sync, X, y, user_id, window=window)
+    import model_store
+    from model_manifest import read_sidecar
+    from pathlib import Path as _P
+    await model_store.put(db, _P(result["candidate_path"]).read_bytes(), result["candidate_digest"], user_id,
+                          read_sidecar(user_id, "candidate") or {})
     candidate = {"status": "awaiting_approval", "digest": result["candidate_digest"],
                  "aucs": result["aucs"], "weights": result["weights"], "n_trades": len(trades),
                  "trained_at": meta["last_training_at"], "training_window": window,
@@ -275,158 +278,218 @@ async def get_meta(db, user_id: str) -> dict:
 
 
 async def approval_events(db, approvals: list) -> set:
-    """Resolve approval audit-event ids against the hash-chained admin audit log."""
+    """Approval audit-event ids that exist in the hash-chained admin audit log."""
     ids = [str(a.get("audit_event_id") or "") for a in (approvals or [])]
     if not ids:
         return set()
     from model_manifest import APPROVAL_ACTION
-    found = set()
-    async for e in db.admin_audit_log.find({"entry_hash": {"$in": ids}, "action": APPROVAL_ACTION}, {"entry_hash": 1}):
-        found.add(e["entry_hash"])
-    return found
+    return {e["entry_hash"] async for e in db.admin_audit_log.find(
+        {"entry_hash": {"$in": ids}, "action": APPROVAL_ACTION}, {"entry_hash": 1})}
 
 
-async def approve_candidate(db, user_id: str, approver_email: str, note: str = "") -> dict:
-    """Two-person approval, step 1..n: an admin records an authenticated approval of
-    the EXACT candidate digest. Returns the audit-event id used in the signed manifest."""
+async def approval_problems(db, approvals: list, *, user_id: str, digest: str, candidate_approvals: list) -> list:
+    """Round 13 P1-03 — every manifest approval must resolve to a COMPLETE audit event
+    with exact tuple equality (entry_hash, actor_email, action, target_kind, target_id,
+    meta.digest, meta.actor_id), the set must equal the candidate's stored approvals,
+    principals must be two distinct immutable admin ids, and the chain must verify."""
+    from model_manifest import APPROVAL_ACTION
+    from audit_chain import verify_chain
+    problems = []
+    ids = [a["audit_event_id"] for a in approvals]
+    events = {e["entry_hash"]: e async for e in db.admin_audit_log.find({"entry_hash": {"$in": ids}})}
+    for a in approvals:
+        e = events.get(a["audit_event_id"])
+        if not e:
+            problems.append(f"approval audit event unknown for {a['email']}")
+            continue
+        meta = e.get("meta") or {}
+        expect = (a["audit_event_id"], a["email"], APPROVAL_ACTION, "model_candidate", user_id, digest, a["principal_id"])
+        got = (e.get("entry_hash"), str(e.get("actor_email") or "").lower(), e.get("action"), e.get("target_kind"),
+               e.get("target_id"), meta.get("digest"), str(meta.get("actor_id") or ""))
+        if expect != got:
+            problems.append(f"approval event for {a['email']} does not match (actor/target/digest/principal)")
+    manifest_set = {(a["email"], a["audit_event_id"], a["principal_id"]) for a in approvals}
+    cand_set = {(c.get("email"), c.get("audit_event_id"), str(c.get("principal_id") or "")) for c in (candidate_approvals or [])}
+    if manifest_set != cand_set:
+        problems.append("manifest approvals differ from the candidate's recorded approvals")
+    if len({a["principal_id"] for a in approvals}) < 2:
+        problems.append("approvals must come from two distinct admin principals")
+    admins = {str(u["_id"]) async for u in db.users.find({"_id": {"$in": [_oid(a["principal_id"]) for a in approvals if _oid(a["principal_id"])]},
+                                                          "role": "admin"}, {"_id": 1})}
+    if any(a["principal_id"] not in admins for a in approvals):
+        problems.append("approval principal is not a current admin")
+    chain = await verify_chain(db)
+    if chain.get("anomalies"):
+        problems.append(f"admin audit chain has {len(chain['anomalies'])} anomaly(ies)")
+    return problems
+
+
+def _oid(v):
+    from bson import ObjectId
+    try:
+        return ObjectId(str(v))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def approve_candidate(db, user_id: str, approver_email: str, note: str = "", *, actor_id: str = "") -> dict:
+    """Two-person approval, step 1..n: an admin PRINCIPAL records an authenticated,
+    audit-chained approval of the EXACT candidate digest (bytes verified in the shared store)."""
     from fastapi import HTTPException
     from audit_chain import append_chained
+    import model_store
     doc = await db.ml_ensembles.find_one({"user_id": user_id}) or {}
     cand = doc.get("candidate")
     if not cand or cand.get("status") != "awaiting_approval":
         raise HTTPException(status_code=404, detail={"code": "no_candidate_awaiting_approval"})
-    cand_file = MODEL_DIR / user_id / CANDIDATE_NAME
-    from model_manifest import sha256_file, APPROVAL_ACTION
-    if not cand_file.exists() or sha256_file(cand_file) != cand["digest"]:
-        raise HTTPException(status_code=409, detail={"code": "candidate_bytes_changed"})
-    if any(a.get("email") == approver_email.lower() for a in cand.get("approvals") or []):
+    if not actor_id:
+        raise HTTPException(status_code=403, detail={"code": "principal_required"})
+    from model_manifest import APPROVAL_ACTION
+    if await model_store.fetch(db, cand["digest"], MODEL_DIR) is None:
+        raise HTTPException(status_code=409, detail={"code": "candidate_bytes_changed",
+                                                     "message": "candidate digest not present/verifiable in the shared artifact store"})
+    if any(str(a.get("principal_id")) == str(actor_id) for a in cand.get("approvals") or []):
         raise HTTPException(status_code=409, detail={"code": "repeated_approver"})
     ev = await append_chained(db, {"actor_email": approver_email.lower(), "action": APPROVAL_ACTION,
                                    "target_kind": "model_candidate", "target_id": user_id, "reason": (note or "")[:500],
                                    "at": datetime.now(timezone.utc).isoformat(),
-                                   "meta": {"digest": cand["digest"], "user_id": user_id}})
-    rec = {"email": approver_email.lower(), "audit_event_id": ev["entry_hash"], "at": ev["at"]}
+                                   "meta": {"digest": cand["digest"], "user_id": user_id, "actor_id": str(actor_id)}})
+    rec = {"email": approver_email.lower(), "audit_event_id": ev["entry_hash"], "principal_id": str(actor_id), "at": ev["at"]}
     await db.ml_ensembles.update_one({"user_id": user_id, "candidate.digest": cand["digest"]},
                                      {"$push": {"candidate.approvals": rec}})
-    return {"approval": rec, "approvals": (cand.get("approvals") or []) + [rec],
+    allrecs = (cand.get("approvals") or []) + [rec]
+    return {"approval": rec, "approvals": allrecs,
             "sign_hint": f"python -m model_manifest sign --promote {user_id} " + " ".join(
-                f"--approval {a['email']}:{a['audit_event_id']}" for a in (cand.get("approvals") or []) + [rec])}
+                f"--approval {a['email']}:{a['audit_event_id']}:{a['principal_id']}" for a in allrecs)}
+
+
+async def flush_promotion_outbox(db, user_id: str | None = None) -> int:
+    """Publish pending chained promotion audits idempotently (round 13 P2-02)."""
+    from audit_chain import append_chained
+    q = {"promotion_outbox": {"$ne": None}, **({"user_id": user_id} if user_id else {})}
+    n = 0
+    async for d in db.ml_ensembles.find(q):
+        ob = d["promotion_outbox"]
+        if not await db.admin_audit_log.find_one({"action": "model_promoted", "meta.promotion_id": ob["promotion_id"]}):
+            await append_chained(db, {"actor_email": ob["actor"], "action": "model_promoted", "target_kind": "model",
+                                      "target_id": d["user_id"], "reason": "two-admin signed manifest promotion",
+                                      "at": ob["at"], "meta": {k: ob[k] for k in ("digest", "manifest_sha256", "approvals",
+                                                                                   "code_commit", "promotion_id")}})
+        await db.ml_ensembles.update_one({"user_id": d["user_id"], "promotion_outbox.promotion_id": ob["promotion_id"]},
+                                         {"$set": {"promotion_outbox": None}})
+        n += 1
+    return n
 
 
 async def promote_candidate(db, user_id: str, actor_email: str) -> dict:
-    """ATOMIC activation (round 12 P1-01): verify signed manifest → two distinct
-    authenticated approvals → build binding → exact candidate bytes; then swap the
-    binary and its matching metadata together, rolling back on any failure."""
+    """Governed activation (round 13 P1-01/P2-02): verify signed manifest → exact-tuple
+    two-principal approvals + valid chain → build binding → candidate bytes present in the
+    shared store; then ONE atomic document update flips the production pointer, clears the
+    candidate and records the audit outbox. Candidate bytes are never moved or deleted."""
     from fastapi import HTTPException
-    from audit_chain import append_chained
-    from model_manifest import (load_manifest, ModelRefused, sha256_file, manifest_digest,
-                                check_build_binding, sidecar_path, _check_entry, feature_code_digest)
+    from model_manifest import (load_manifest, ModelRefused, manifest_digest, check_build_binding,
+                                _check_entry, feature_code_digest, running_build_sha)
+    import model_store
+    import uuid
+    await flush_promotion_outbox(db, user_id)
     doc = await db.ml_ensembles.find_one({"user_id": user_id}) or {}
     cand = doc.get("candidate")
     if not cand or cand.get("status") != "awaiting_approval":
         raise HTTPException(status_code=404, detail={"code": "no_candidate_awaiting_approval"})
-    udir = MODEL_DIR / user_id
-    cand_file, prod_file, prev_file = udir / CANDIDATE_NAME, udir / PRODUCTION_NAME, udir / "gbm_ensemble.previous.joblib"
-    problems = []
     try:
         body = load_manifest()
     except ModelRefused as e:
         raise HTTPException(status_code=409, detail={"code": "manifest_refused", "problems": [str(e)]})
+    problems = []
     entry = next((m for m in body["models"] if m["path"] == f"{user_id}/{PRODUCTION_NAME}"), None)
     if entry is None or entry["sha256"] != cand["digest"]:
         problems.append("signed manifest does not name the candidate digest for the production path")
-    if not cand_file.exists() or sha256_file(cand_file) != cand["digest"]:
-        problems.append("candidate bytes changed since training")
-    if entry is not None:
-        problems += [p for p in _check_entry(entry, cand_file, FEATURE_SCHEMA_VERSION, build=None,
-                                             runtime_feature_digest=feature_code_digest())
-                     if "never loadable" not in p]
-    # promotion is a deliberate act on THIS code: bind to the running build (git HEAD in a bare checkout)
-    from model_manifest import running_build_sha
+    else:
+        problems += _check_entry(entry, None, FEATURE_SCHEMA_VERSION, build=None,
+                                 runtime_feature_digest=feature_code_digest(), actual=cand["digest"])
+    if await model_store.fetch(db, cand["digest"], MODEL_DIR) is None:
+        problems.append("candidate bytes changed / absent in the shared artifact store")
     bb = check_build_binding(body, running_build_sha())
     if bb:
         problems.append(bb)
-    known = await approval_events(db, body["approvals"])
-    unknown = [a["email"] for a in body["approvals"] if a["audit_event_id"] not in known]
-    if unknown:
-        problems.append(f"approval audit event unknown for {', '.join(unknown)}")
-    approved_digests = set()
-    async for e in db.admin_audit_log.find({"entry_hash": {"$in": list(known)}}, {"meta": 1}):
-        approved_digests.add((e.get("meta") or {}).get("digest"))
-    if known and approved_digests != {cand["digest"]}:
-        problems.append("approval events do not all approve this exact candidate digest")
+    problems += await approval_problems(db, body["approvals"], user_id=user_id, digest=cand["digest"],
+                                        candidate_approvals=cand.get("approvals") or [])
     if problems:
         raise HTTPException(status_code=409, detail={"code": "promotion_refused", "problems": problems})
-
-    had_prev = prod_file.exists()
-    prev_sidecar = sidecar_path(user_id, "production")
-    prev_sidecar_text = prev_sidecar.read_text() if prev_sidecar.exists() else None
-    if had_prev:
-        shutil.copy2(prod_file, prev_file)
-    os.replace(cand_file, prod_file)
-    cs = sidecar_path(user_id, "candidate")
-    if cs.exists():
-        os.replace(cs, prev_sidecar)
     now = datetime.now(timezone.utc).isoformat()
     production = {**{k: cand.get(k) for k in ("digest", "aucs", "weights", "n_trades", "trained_at", "training_window",
                                              "dataset_sha256", "feature_schema", "models_saved")},
                   "status": "active", "activated_at": now, "activated_by": actor_email,
-                  "approvals": body["approvals"], "manifest_sha256": manifest_digest(),
-                  "code_commit": body["code_commit"]}
+                  "approvals": body["approvals"], "manifest_sha256": manifest_digest(), "code_commit": body["code_commit"]}
+    outbox = {"promotion_id": uuid.uuid4().hex, "actor": actor_email, "at": now, "digest": cand["digest"],
+              "manifest_sha256": production["manifest_sha256"], "approvals": [a["email"] for a in body["approvals"]],
+              "code_commit": body["code_commit"]}
     try:
         res = await db.ml_ensembles.update_one(
             {"user_id": user_id, "candidate.digest": cand["digest"]},
-            {"$set": {"production": production, "candidate": None, "last_promotion_at": now}})
-        if res.matched_count != 1:
-            raise RuntimeError("candidate record changed during promotion")
-    except Exception as e:  # noqa: BLE001 — roll the filesystem back, production unchanged
-        if had_prev:
-            os.replace(prev_file, prod_file)
-        else:
-            prod_file.unlink(missing_ok=True)
-        if prev_sidecar_text is not None:
-            prev_sidecar.write_text(prev_sidecar_text)
-        _models_cache.pop(user_id, None)
-        logger.error("model promotion rolled back for %s: %s", user_id, e)
+            {"$set": {"production": production, "candidate": None, "previous_production": doc.get("production"),
+                      "last_promotion_at": now, "promotion_outbox": outbox}})
+    except Exception as e:  # noqa: BLE001 — nothing moved; previous production pointer untouched
+        logger.error("model promotion store failure for %s: %s", user_id, e)
         raise HTTPException(status_code=503, detail={"code": "promotion_store_unavailable"})
-    prev_file.unlink(missing_ok=True)
+    if res.matched_count != 1:
+        raise HTTPException(status_code=409, detail={"code": "promotion_refused",
+                                                     "problems": ["candidate record changed during promotion"]})
     _models_cache.pop(user_id, None)
-    await append_chained(db, {"actor_email": actor_email, "action": "model_promoted", "target_kind": "model",
-                              "target_id": user_id, "reason": "two-admin signed manifest promotion", "at": now,
-                              "meta": {"digest": cand["digest"], "manifest_sha256": production["manifest_sha256"],
-                                       "approvals": [a["email"] for a in body["approvals"]],
-                                       "code_commit": body["code_commit"]}})
+    # materialize the ACTIVE bytes as the shippable release copy (archive/image verification);
+    # activation itself is the DB pointer above — this copy is never the source of truth
+    try:
+        import shutil as _sh
+        import json as _json
+        from model_manifest import sidecar_path
+        src = await model_store.fetch(db, cand["digest"], MODEL_DIR)
+        (MODEL_DIR / user_id).mkdir(parents=True, exist_ok=True)
+        _sh.copyfile(src, MODEL_DIR / user_id / PRODUCTION_NAME)
+        prov = await model_store.provenance(db, cand["digest"])
+        if prov:
+            sidecar_path(user_id, "production").write_text(_json.dumps(prov, indent=2, sort_keys=True))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("release copy of promoted model not materialized here: %s", e)
+    try:
+        await flush_promotion_outbox(db, user_id)
+    except Exception as e:  # noqa: BLE001 — outbox stays pending; republished on the next promotion/status call
+        logger.error("promotion audit deferred for %s: %s", user_id, e)
     return public_state(await db.ml_ensembles.find_one({"user_id": user_id}) or {})
 
 
 def _load_models(uid: str, known_events: set | None = None) -> dict:
-    return _load_production(uid, known_events)[0]
-
-
-def _load_production(uid: str, known_events: set | None = None) -> tuple:
-    """(models, verified_digest) for the PRODUCTION binary only."""
-    import joblib
-    f = MODEL_DIR / uid / PRODUCTION_NAME
-    if not f.exists():
-        return {}, None
-    mtime = f.stat().st_mtime
+    """Sync accessor for already-fetched production bytes (learning pipeline thread)."""
     hit = _models_cache.get(uid)
-    if hit and hit[0] == mtime:
-        return hit[1], hit[2]
-    # round 11 P1-03 — joblib.load is code execution: only a binary named by the
-    # SIGNED model manifest (exact digest + schema + approved) may be deserialized.
-    from model_manifest import verify_model, ModelRefused
-    try:
-        digest = verify_model(f, known_events=known_events)
-    except ModelRefused as e:
-        logger.error("ensemble model REFUSED (quarantined, not loaded): %s", e)
+    return hit[1] if hit else {}
+
+
+async def _load_production(db, uid: str, prod: dict, known_events: set | None = None) -> tuple:
+    """(models, verified_digest) for the ACTIVE production digest from the shared store."""
+    import joblib
+    import model_store
+    from model_manifest import verify_digest, ModelRefused
+    digest = prod.get("digest")
+    if not digest:
+        return {}, None
+    hit = _models_cache.get(uid)
+    if hit and hit[2] == digest:
+        return hit[1], digest
+    path = await model_store.fetch(db, digest, MODEL_DIR)
+    if path is None:
+        logger.error("production model %s… not retrievable from the shared artifact store (instance %s)",
+                     digest[:12], model_store.instance_id())
         return {}, None
     try:
-        models = joblib.load(f)
+        verify_digest(uid, digest, known_events=known_events)
+    except ModelRefused as e:
+        logger.error("ensemble model REFUSED (not loaded): %s", e)
+        return {}, None
+    try:
+        models = joblib.load(path)
     except Exception as e:
         logger.warning("ensemble model load failed: %s", e)
         return {}, None
-    _models_cache[uid] = (mtime, models, digest)
+    _models_cache[uid] = (path.stat().st_mtime, models, digest)
     return models, digest
 
 
@@ -464,7 +527,7 @@ async def ml_predict(db, user_id: str, signal: dict, symbol: str) -> dict:
     # only; the loaded digest must equal the production record's digest.
     if gbm_enabled and prod.get("status") == "active":
         known = await approval_events(db, prod.get("approvals") or [])
-        models, digest = _load_production(user_id, known)
+        models, digest = await _load_production(db, user_id, prod, known)
         if models and digest != prod.get("digest"):
             logger.error("production model digest %s != record %s — GBM vote withheld",
                          str(digest)[:12], str(prod.get("digest"))[:12])
@@ -502,6 +565,9 @@ async def ml_predict(db, user_id: str, signal: dict, symbol: str) -> dict:
                            ("disabled_low_memory" if not gbm_enabled else
                             "no_production_model" if prod.get("status") != "active" else "production_refused")),
             "production_digest": used_digest,
+            "expected_production_digest": prod.get("digest"),
+            "instance_id": __import__("model_store").instance_id(),
+            "manifest_sha256": prod.get("manifest_sha256"),
             "candidate_status": cand.get("status"),
             "trained_n": prod.get("n_trades"),
             "gbm_auc": prod.get("aucs")}

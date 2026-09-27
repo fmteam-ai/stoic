@@ -1,6 +1,6 @@
 {
   "bytes": 291569,
-  "code_commit": "596522caf61c4923679ea6bc7e06efd8cbfc3376",
+  "code_commit": "58f376511118528ae7eba0221047cb94b253320a",
   "dataset_sha256": "a2de377d0f3d846fe6bbf5c1e1794a43cf0c187670c69d9b6a788674043b806c",
   "feature_code_digest": "4686f3684827d1ee0b199dbd4c50b22708331f9295b34db13bea1966153c78cf",
   "feature_schema": "ens-features-v1",
@@ -20,8 +20,8 @@
     }
   },
   "n_samples": 476,
-  "sha256": "2c439406daf88fb272fd12dfd1406d5128b69f5ebd3a6b3f5ca79f765af12da8",
-  "trained_at": "2026-09-27T15:14:38.204013+00:00",
+  "sha256": "5e31fb0d929f1e63219e1777f142be6ea708392434385e83121c0e42a86565c2",
+  "trained_at": "2026-09-27T16:07:00.553656+00:00",
   "training_window": {
     "from": "2026-06-26T17:32:25.763076+00:00",
     "until": "2026-07-24T02:47:58+00:00"

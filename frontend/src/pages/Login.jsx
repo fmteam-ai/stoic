@@ -19,9 +19,10 @@ export default function Login() {
     const [otpResendCooldown, setOtpResendCooldown] = useState(0);
     const [error, setError] = useState("");
     const [sysState, setSysState] = useState("checking");
+    const [headline, setHeadline] = useState(null);
     useEffect(() => {
         let alive = true;
-        api.get("/status").then(r => { if (alive) setSysState(r.data?.overall || "unknown"); })
+        api.get("/status").then(r => { if (alive) { setSysState(r.data?.overall || "unknown"); setHeadline(r.data?.headline || null); } })
             .catch(() => { if (alive) setSysState("unreachable"); });
         return () => { alive = false; };
     }, []);
@@ -155,7 +156,7 @@ export default function Login() {
 
                     <div className="space-y-6 max-w-md">
                         <div className={`font-mono text-[11px] tracking-widest ${sysState === "operational" ? "text-[#00FF41]" : sysState === "checking" ? "text-[#52525B]" : "text-[#FFB000]"}`} data-testid="login-system-state">
-                            {sysState === "operational" ? "// SYSTEM OPERATIONAL" : sysState === "checking" ? "// CHECKING SYSTEM STATE…" : sysState === "unreachable" ? "// BACKEND UNREACHABLE" : `// SYSTEM ${sysState.toUpperCase().replaceAll("_", " ")}`}
+                            {sysState === "checking" ? "// CHECKING SYSTEM STATE…" : sysState === "unreachable" ? "// BACKEND UNREACHABLE" : headline ? `// ${headline.toUpperCase()}` : `// PLATFORM ${sysState.toUpperCase().replaceAll("_", " ")}`}
                         </div>
                         <h1 className="font-display font-bold text-5xl tracking-tighter leading-[1.05]">
                             Automated gold &amp; crypto<br/>trading, <span className="text-[#00FF41]">risk-controlled</span>.

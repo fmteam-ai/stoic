@@ -51,7 +51,8 @@ async def approve_candidate_ep(payload: dict, request: Request, user=Depends(get
     from ml_ensemble import approve_candidate
     db = get_db()
     target = await _admin_step_up(db, user, request, str(payload.get("user_id") or ""))
-    return await approve_candidate(db, target, user.get("email", ""), str(payload.get("note") or ""))
+    return await approve_candidate(db, target, user.get("email", ""), str(payload.get("note") or ""),
+                                   actor_id=str(user.get("id") or user.get("_id") or ""))
 
 
 @router.post("/candidate/promote")

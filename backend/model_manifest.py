@@ -121,29 +121,47 @@ def read_sidecar(uid: str, kind: str) -> dict | None:
         return None
 
 
+def read_provenance(uid: str, kind: str) -> dict | None:
+    """Sidecar (same container) → shared store (Mongo, any container): the record's
+    digest for `kind` (candidate|production) resolves its immutable provenance."""
+    prov = read_sidecar(uid, kind)
+    if prov:
+        return prov
+    try:
+        from pymongo import MongoClient
+        db = MongoClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=3000)[os.environ["DB_NAME"]]
+        rec = (db.ml_ensembles.find_one({"user_id": uid}, {kind: 1}) or {}).get(kind) or {}
+        meta = db.model_artifact_meta.find_one({"_id": rec.get("digest")}) if rec.get("digest") else None
+        return (meta or {}).get("provenance")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def parse_approval(raw: str) -> dict:
-    """CLI form email:audit_event_id."""
-    email, _, event = raw.partition(":")
-    if "@" not in email or len(event) < 16:
-        raise ValueError(f"approval must be email:audit_event_id — got {raw!r}")
-    return {"email": email.strip().lower(), "audit_event_id": event.strip()}
+    """CLI form email:audit_event_id:principal_id (principal = immutable admin user id)."""
+    parts = raw.split(":")
+    if len(parts) != 3 or "@" not in parts[0] or len(parts[1]) < 16 or len(parts[2]) < 8:
+        raise ValueError(f"approval must be email:audit_event_id:principal_id — got {raw!r}")
+    return {"email": parts[0].strip().lower(), "audit_event_id": parts[1].strip(), "principal_id": parts[2].strip()}
 
 
 def validate_approvals(approvals) -> list:
-    """>= 2 DISTINCT identities, each with an audit-event id (round 12 P1-04)."""
+    """>= 2 DISTINCT immutable principals, each with an audit-event id (round 12 P1-04 · round 13 P1-03)."""
     problems = []
     if not isinstance(approvals, list) or len(approvals) < 2:
         problems.append("at least two approval records required")
         return problems
-    emails = []
+    emails, principals = [], []
     for a in approvals:
-        if not isinstance(a, dict) or "@" not in str(a.get("email") or "") or not str(a.get("audit_event_id") or "").strip():
-            problems.append("approval record must carry email + audit_event_id")
+        if not isinstance(a, dict) or "@" not in str(a.get("email") or "") or not str(a.get("audit_event_id") or "").strip() \
+                or not str(a.get("principal_id") or "").strip():
+            problems.append("approval record must carry email + audit_event_id + principal_id")
             continue
         emails.append(str(a["email"]).lower())
-    if len(set(emails)) < 2:
-        problems.append("approvals must come from two distinct identities")
-    if len(emails) != len(set(emails)):
+        principals.append(str(a["principal_id"]))
+    if len(set(principals)) < 2:
+        problems.append("approvals must come from two distinct admin principals")
+    if len(emails) != len(set(emails)) or len(principals) != len(set(principals)):
         problems.append("repeated approver")
     return problems
 
@@ -168,18 +186,21 @@ def build_body(approvals: list, *, promote: list | None = None, commit: str | No
     candidate provenance (the atomic promote step moves the bytes)."""
     promote = set(promote or [])
     models = []
-    for d in sorted(p for p in MODEL_DIR.iterdir() if p.is_dir() and not p.name.startswith("_")):
-        uid, rel = d.name, f"{d.name}/{PRODUCTION_NAME}"
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    uids = sorted({p.name for p in MODEL_DIR.iterdir() if p.is_dir() and not p.name.startswith("_")} | promote)
+    for uid in uids:
+        rel = f"{uid}/{PRODUCTION_NAME}"
         if uid in promote:
-            cand = d / CANDIDATE_NAME
-            prov = read_sidecar(uid, "candidate")
-            if not cand.exists() or not prov:
-                raise ModelRefused(f"{uid}: no candidate binary + provenance to promote")
-            models.append(_entry_from_provenance(uid, rel, prov, sha256_file(cand), cand.stat().st_size))
-        elif (d / PRODUCTION_NAME).exists():
-            prov = read_sidecar(uid, "production") or {}
-            models.append(_entry_from_provenance(uid, rel, prov, sha256_file(d / PRODUCTION_NAME),
-                                                 (d / PRODUCTION_NAME).stat().st_size))
+            prov = read_provenance(uid, "candidate")
+            if not prov or not prov.get("sha256"):
+                raise ModelRefused(f"{uid}: no candidate provenance to promote (train first)")
+            models.append(_entry_from_provenance(uid, rel, prov, prov["sha256"], int(prov.get("bytes") or 0)))
+        else:
+            prov = read_provenance(uid, "production") or {}
+            f = MODEL_DIR / uid / PRODUCTION_NAME
+            sha = prov.get("sha256") or (sha256_file(f) if f.exists() else None)
+            if sha:
+                models.append(_entry_from_provenance(uid, rel, prov, sha, int(prov.get("bytes") or (f.stat().st_size if f.exists() else 0))))
     return {"record": "stoic.model-manifest", "version": MANIFEST_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "code_commit": commit or running_build_sha(), "policy_version": POLICY_VERSION,
@@ -210,7 +231,11 @@ def resign(commit: str) -> dict:
         raise ModelRefused("resign requires a 40-hex release commit")
     body = load_manifest()
     for m in body["models"]:
-        _check_entry(m, MODEL_DIR / m["path"], FEATURE_SCHEMA_VERSION, build=None)
+        p = MODEL_DIR / m["path"]
+        probs = _check_entry(m, p if p.exists() else None, FEATURE_SCHEMA_VERSION, build=None,
+                             actual=None if p.exists() else m["sha256"])
+        if probs:
+            raise ModelRefused("; ".join(probs))
     body = {**body, "code_commit": commit, "generated_at": datetime.now(timezone.utc).isoformat(),
             "resigned_from_commit": body["code_commit"]}
     return _write_signed(body)
@@ -253,12 +278,14 @@ def check_build_binding(body: dict, build: str | None) -> str | None:
     return None
 
 
-def _check_entry(entry: dict, path: Path, expected_schema: str, *, build: str | None,
-                 runtime_feature_digest: str | None = None) -> list:
+def _check_entry(entry: dict, path, expected_schema: str, *, build: str | None,
+                 runtime_feature_digest: str | None = None, actual: str | None = None) -> list:
+    """`path` may be a Path (hashed here) or None when `actual` (a digest) is supplied."""
     problems = []
-    if path.name == CANDIDATE_NAME:
+    if isinstance(path, Path) and path.name == CANDIDATE_NAME:
         problems.append("candidate binaries are never loadable — promote first")
-    actual = sha256_file(path) if path.exists() else None
+    if actual is None:
+        actual = sha256_file(path) if (isinstance(path, Path) and path.exists()) else None
     if entry["sha256"] != actual:
         problems.append(f"digest mismatch (manifest {entry['sha256'][:12]}…, file {str(actual)[:12]}…)")
     if entry.get("feature_schema") != expected_schema:
@@ -307,6 +334,30 @@ def verify_model(path: Path, expected_schema: str = FEATURE_SCHEMA_VERSION, *,
     return entry["sha256"]
 
 
+def verify_digest(uid: str, digest: str, *, known_events: set | None = None, build: str | None = None) -> str:
+    """Content-addressed variant (round 13 P1-01): the ACTIVE digest must be the one
+    the signed manifest names for this user's production path."""
+    body = load_manifest()
+    entry = next((m for m in body["models"] if m["path"] == f"{uid}/{PRODUCTION_NAME}"), None)
+    problems = []
+    if entry is None:
+        problems.append("model not listed in the signed manifest")
+    else:
+        problems += _check_entry(entry, None, FEATURE_SCHEMA_VERSION, build=build,
+                                 runtime_feature_digest=feature_code_digest(), actual=digest)
+    bb = check_build_binding(body, build)
+    if bb:
+        problems.append(bb)
+    if known_events is not None:
+        missing = [a["email"] for a in body["approvals"] if a["audit_event_id"] not in known_events]
+        if missing:
+            problems.append(f"approval audit event unknown for {', '.join(missing)}")
+    if problems:
+        _quarantine(MODEL_DIR / uid / f"sha256-{digest[:12]}", problems)
+        raise ModelRefused("; ".join(problems))
+    return digest
+
+
 def _quarantine(path: Path, problems: list) -> None:
     try:
         QUARANTINE.mkdir(parents=True, exist_ok=True)
@@ -353,7 +404,8 @@ if __name__ == "__main__":
             probs = []
             for m in body["models"]:
                 p = MODEL_DIR / m["path"]
-                probs += _check_entry(m, p, FEATURE_SCHEMA_VERSION, build=None)
+                probs += _check_entry(m, p if p.exists() else None, FEATURE_SCHEMA_VERSION, build=None,
+                                      actual=None if p.exists() else m["sha256"])
             if a.build:
                 bb = check_build_binding(body, a.build)
                 if bb:

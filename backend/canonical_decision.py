@@ -7,9 +7,12 @@ States, dominance order:  EMERGENCY > BLOCKED > CLOSE_ONLY > DEGRADED > READY
 Level mapping:  FULL→READY · REDUCED→DEGRADED · CLOSE_ONLY→CLOSE_ONLY ·
                 PAUSED/LOCKED→BLOCKED · EMERGENCY→EMERGENCY
 """
+import hashlib
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from pymongo.errors import DuplicateKeyError
 
 STATES = ["READY", "DEGRADED", "CLOSE_ONLY", "BLOCKED", "EMERGENCY"]
 LEVEL_TO_STATE = {"FULL": "READY", "REDUCED": "DEGRADED", "CLOSE_ONLY": "CLOSE_ONLY",
@@ -128,10 +131,17 @@ async def inventory_fingerprint(db, user_id: str) -> str:
     import hashlib
     import json
     rows = []
-    async for a in db.accounts.find({"user_id": user_id}, {"_id": 1, "trading_enabled": 1, "mode": 1, "verified_identity": 1}):
-        rows.append(["a", str(a["_id"]), a.get("trading_enabled") is True, str(a.get("mode") or ""), bool(a.get("verified_identity"))])
+    async for a in db.accounts.find({"user_id": user_id}, {"_id": 1, "trading_enabled": 1, "mode": 1, "verified_identity": 1,
+                                                          "status": 1, "reconciliation_seq": 1, "last_reconciled_at": 1,
+                                                          "position_truth": 1, "execution_authority": 1}):
+        rows.append(["a", str(a["_id"]), a.get("trading_enabled") is True, str(a.get("mode") or ""), bool(a.get("verified_identity")),
+                     str(a.get("status") or ""), int(a.get("reconciliation_seq") or 0), str(a.get("last_reconciled_at") or ""),
+                     str(a.get("position_truth") or ""), str(a.get("execution_authority") or "")])
     async for b in db.bot_configs.find({"user_id": user_id}, {"account_id": 1, "active": 1}):
         rows.append(["b", str(b.get("account_id")), bool(b.get("active"))])
+    async for p in db.platform_state.find({"_id": {"$in": ["trading_authority", "turnstile_break_glass", "inventory_expectation",
+                                                            "inventory_hash_pending"]}}):
+        rows.append(["p", str(p["_id"]), str(p.get("level") or ""), bool(p.get("active")), str(p.get("set_at") or p.get("until") or "")])
     rows.sort()
     return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
 
@@ -155,9 +165,23 @@ async def decide_user(db, user_id: str, *, fresh: bool = False) -> dict:
                 return hit["decision"]
     out = await _decide_user_uncached(db, user_id)
     out["input_version"] = ver
-    await db.canonical_decisions.replace_one(
-        {"_id": user_id}, {"_id": user_id, "input_version": ver, "inventory_fingerprint": fp, "decision": out,
-                           "cached_at": datetime.now(timezone.utc).isoformat()}, upsert=True)
+    out["input_hash"] = hashlib.sha256(f"{ver}:{fp}".encode()).hexdigest()[:16]
+    now = datetime.now(timezone.utc)
+    stale_cutoff = (now - timedelta(seconds=_SNAPSHOT_TTL_S)).isoformat()
+    snap = {"input_version": ver, "inventory_fingerprint": fp, "decision": out, "cached_at": now.isoformat()}
+    # single-flight (round 13 P2-01): concurrent cold-cache computations race, but only
+    # ONE decision is persisted per (version, fingerprint) window — losers return the winner.
+    try:
+        res = await db.canonical_decisions.update_one(
+            {"_id": user_id, "$or": [{"input_version": {"$ne": ver}}, {"inventory_fingerprint": {"$ne": fp}},
+                                     {"cached_at": {"$lt": stale_cutoff}}]},
+            {"$set": snap}, upsert=True)
+        if res.matched_count == 0 and res.upserted_id is None:
+            raise DuplicateKeyError("snapshot exists")
+    except DuplicateKeyError:
+        hit = await db.canonical_decisions.find_one({"_id": user_id})
+        if hit and hit.get("input_version") == ver and hit.get("inventory_fingerprint") == fp:
+            return hit["decision"]
     return out
 
 
@@ -198,7 +222,7 @@ def stability_window_seconds() -> int:
 def denial(decision: dict, path: str) -> dict:
     """Deterministic denial payload for every new-order path."""
     return {"blocked": "trading_authority", "path": path, "decision_id": decision["decision_id"],
-            "input_version": decision.get("input_version"),
+            "input_version": decision.get("input_version"), "input_hash": decision.get("input_hash"),
             "state": decision["state"], "authority_level": decision.get("level"),
             "reason_codes": decision["reason_codes"],
             "reasons": [b["reason"] for b in decision["blockers"]]}

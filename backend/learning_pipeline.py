@@ -167,7 +167,7 @@ async def staged_ml_retrain(db, user_id: str) -> dict:
     # an absolute skill floor instead (production's score on data it has
     # already seen would be an unfairly leaked benchmark).
     meta = await db.ml_ensembles.find_one({"user_id": user_id}) or {}
-    prod_trained_at = str(meta.get("trained_at") or "")
+    prod_trained_at = str((meta.get("production") or {}).get("trained_at") or "")
     post_prod = [t for t in trades
                  if str(t.get("closed_at") or "") > prod_trained_at] \
         if prod_trained_at else []
@@ -184,6 +184,11 @@ async def staged_ml_retrain(db, user_id: str) -> dict:
                 "n_trades": len(trades)}
     X_train, y_train = await _build_xy(db, user_id, train_trades)
     X_hold, y_hold = await _build_xy(db, user_id, hold_trades)
+    # warm the production model from the shared artifact store so the thread can score it
+    prod_rec = (meta.get("production") or {})
+    if prod_rec.get("status") == "active":
+        from ml_ensemble import _load_production, approval_events
+        await _load_production(db, user_id, prod_rec, await approval_events(db, prod_rec.get("approvals") or []))
     ev = await asyncio.to_thread(_holdout_auc_sync, X_train, y_train,
                                  X_hold, y_hold, user_id)
     if ev.get("status") != "ok" or ev.get("candidate_auc") is None:

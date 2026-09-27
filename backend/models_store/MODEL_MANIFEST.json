@@ -2,16 +2,18 @@
   "body": {
     "approvals": [
       {
-        "audit_event_id": "85a73c4b7aee733920c9e17d6753d553341e80a383c07f5b85d3f53e873b330f",
-        "email": "ops-a@stoicaibot.com"
+        "audit_event_id": "051076547dfa95ef6d4af93d71c0a1b004b44867a004a1fea975677d4127996f",
+        "email": "admin@stoicaibot.com",
+        "principal_id": "6a37783f9360a2589770da4e"
       },
       {
-        "audit_event_id": "2a6df27a4cd77c7bb0526f8f5a6294cf052849cf30466ac3b584ed963e003adc",
-        "email": "ops-b@stoicaibot.com"
+        "audit_event_id": "3121792e0e5c96969a4b5c7171d54d9847e1c0f4896e00aa3e387f3804d7c0cb",
+        "email": "admin@trading.bot",
+        "principal_id": "6a65a1a89d126b87feed2591"
       }
     ],
-    "code_commit": "596522caf61c4923679ea6bc7e06efd8cbfc3376",
-    "generated_at": "2026-09-27T15:14:38.449170+00:00",
+    "code_commit": "58f376511118528ae7eba0221047cb94b253320a",
+    "generated_at": "2026-09-27T16:07:00.828742+00:00",
     "models": [
       {
         "bytes": 291569,
@@ -37,9 +39,9 @@
         "n_samples": 476,
         "path": "6a37783f9360a2589770da4e/gbm_ensemble.joblib",
         "promotion_status": "approved",
-        "sha256": "2c439406daf88fb272fd12dfd1406d5128b69f5ebd3a6b3f5ca79f765af12da8",
-        "trained_at": "2026-09-27T15:14:38.204013+00:00",
-        "trained_on_commit": "596522caf61c4923679ea6bc7e06efd8cbfc3376",
+        "sha256": "5e31fb0d929f1e63219e1777f142be6ea708392434385e83121c0e42a86565c2",
+        "trained_at": "2026-09-27T16:07:00.553656+00:00",
+        "trained_on_commit": "58f376511118528ae7eba0221047cb94b253320a",
         "training_window": {
           "from": "2026-06-26T17:32:25.763076+00:00",
           "until": "2026-07-24T02:47:58+00:00"
@@ -50,8 +52,8 @@
     "record": "stoic.model-manifest",
     "version": 2
   },
-  "body_sha256": "0a7d40ff06c72f3a4082902e3ba4e95054f2fdea15aa4a434c85350ca50e160f",
+  "body_sha256": "695ca5ab071f7267f696cd453d9e5e2952182571f6746b5c776825a1003e1e13",
   "key_id": "stoic-release-ed25519-v1",
   "public_key_b64": "shsQu1qBIZRAX1sUkxn4v7sU9IbRFLLSA88T9+5Q7TY=",
-  "signature_hex": "364075b81d90f71601404158fe2e6c594eec0b67db95222d121206d2b408e83f1f7ac7e46902be168fd74a13977bf9c490e76381e1e413cad05a5d5e46305a04"
+  "signature_hex": "46dcb75f18139f07b844adfa6da5636a0f73c4efb68cb57c19108e3cb677d5d40bf359bb43aa13f4fe1c1d7439b75deb3a0077277b01f46fc1a76147fd692d0c"
 }

@@ -373,7 +373,7 @@ class TestRound11Corrections:
         mm.sidecar_path("u1", "production").write_text(json.dumps(prov))
         with pytest.raises(mm.ModelRefused, match="no signed"):
             mm.verify_model(f)
-        approvals = [{"email": "a@x", "audit_event_id": "e" * 64}, {"email": "b@y", "audit_event_id": "f" * 64}]
+        approvals = [{"email": "a@x", "audit_event_id": "e" * 64, "principal_id": "p" * 24}, {"email": "b@y", "audit_event_id": "f" * 64, "principal_id": "q" * 24}]
         mm.sign(approvals)
         assert mm.verify_model(f) == mm.sha256_file(f)
         f.write_bytes(b"\x80\x04model-bytez")                       # one-byte mutation
@@ -384,12 +384,13 @@ class TestRound11Corrections:
         with pytest.raises(mm.ModelRefused, match="feature schema"):
             mm.verify_model(f, expected_schema="ens-features-v9")
         doc = json.loads((tmp_path / "MODEL_MANIFEST.json").read_text())
-        doc["body"]["approvals"] = [{"email": "evil@x", "audit_event_id": "0" * 64}]
+        doc["body"]["approvals"] = [{"email": "evil@x", "audit_event_id": "0" * 64, "principal_id": "z" * 24}]
         (tmp_path / "MODEL_MANIFEST.json").write_text(json.dumps(doc))
         with pytest.raises(mm.ModelRefused, match="signature"):
             mm.verify_model(f)
         src = open(os.path.join(_BACKEND_DIR, "ml_ensemble.py")).read()
-        assert "verify_model(f" in src and src.index("verify_model(f") < src.index("models = joblib.load(f)")
+        # round 13: content-addressed load — the active digest is manifest-verified BEFORE joblib.load
+        assert "verify_digest(uid, digest" in src and src.index("verify_digest(uid, digest") < src.index("models = joblib.load(path)")
         assert "CANDIDATE_NAME" in src
         assert json.load(open(os.path.join(ROOT, "release", "rc_lock.json")))["model_manifest_sha256"]
 

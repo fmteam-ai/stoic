@@ -131,7 +131,30 @@ async def _compute_status(now: float):
     soft = [c for c in components.values() if c["status"] == "degraded"]
     overall = ("major_outage" if hard
                else "degraded" if soft else "operational")
-    data = {"overall": overall, "components": components,
+    # round 13 P2-03 — infrastructure availability and TRADING readiness are separate,
+    # explicitly labelled objects; account identifiers are never exposed here.
+    try:
+        fresh = await db.accounts.count_documents({"last_heartbeat": {"$gte": (utc_now - timedelta(minutes=2)).isoformat()}})
+        enabled = await db.accounts.count_documents({"trading_enabled": True})
+    except Exception:  # noqa: BLE001
+        fresh, enabled = 0, 0
+    connectivity = ("active" if fresh > 0 else "idle" if components["ea_bridge"]["status"] == "idle" else "not_verified")
+    try:
+        from canonical_decision import decide_platform
+        dec = await decide_platform(db)
+        readiness = {"state": dec["state"], "new_exposure_allowed": dec["new_exposure_allowed"],
+                     "dominant_code": dec["dominant_code"], "decision_id": dec["decision_id"]}
+    except Exception:  # noqa: BLE001
+        readiness = {"state": "UNKNOWN", "new_exposure_allowed": False, "dominant_code": "UNAVAILABLE", "decision_id": None}
+    if connectivity != "active" and readiness["state"] == "READY":
+        readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False, "dominant_code": "TERMINAL_STALE"}
+    trading = {"connectivity": connectivity, "fresh_terminals": fresh, "enabled_accounts_present": enabled > 0,
+               "readiness": readiness,
+               "label": ("Trading ready" if readiness["state"] == "READY" and connectivity == "active"
+                         else f"Trading {readiness['state'].lower().replace('_', '-')} · connectivity {connectivity.replace('_', ' ')}")}
+    headline = (("Platform available" if overall == "operational" else f"Platform {overall.replace('_', ' ')}")
+                + (" · trading ready" if trading["label"] == "Trading ready" else f" · {trading['label'].lower()}"))
+    data = {"overall": overall, "components": components, "trading": trading, "headline": headline,
             # round 10 P2-01 — deployment metadata, never hard-coded copy
             "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,
                            "app_env": os.environ.get("APP_ENV") or "development"},
