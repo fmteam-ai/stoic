@@ -1,7 +1,7 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `596522caf61c4923679ea6bc7e06efd8cbfc3376`
-- rc_lock: `596522caf61c4923679ea6bc7e06efd8cbfc3376` authoritative=False
+- Source commit: `fff3ff3aee5bef2c1e2eec131478d801d18b6661`
+- rc_lock: `fff3ff3aee5bef2c1e2eec131478d801d18b6661` authoritative=False
 - Model manifest sha256: `25511e82d03a8a6a3dc1cadd4aa9f1d02be79f8710b4ae663f1135a2262364b2`
 - Test manifest sha256: `85c71d3cdd3fc8e08b7a6e518f63ceb6022e2f5623618f07f7543e374f41bdcd`
 - Uvicorn keepalive (container): 75s (application cap 300s)
@@ -16,4 +16,4 @@
 - AI-GOV [P2] Model lineage on every AI decision, shadow-only promotion, drift quarantine, broker-realistic backtest costs — owner: engineering
 - PERF-ATT [P2] Performance reconciliation to broker statements (fees/financing/deposits) before any public attestation — owner: engineering
 
-_generated 2026-09-27T15:32:21.785727+00:00 — regenerate on every release commit_
+_generated 2026-09-27T15:58:33.098341+00:00 — regenerate on every release commit_

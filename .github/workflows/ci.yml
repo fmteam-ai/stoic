@@ -443,53 +443,44 @@ jobs:
           image: stoic-frontend:${{ github.sha }}
           format: spdx-json
           output-file: sbom-frontend.spdx.json
-      # Grype scans: the action reports "grype had a non-zero exit status"
-      # for any exit code other than 2 (severity gate) — in practice a
-      # transient vulnerability-DB download failure on the runner. Each scan
-      # therefore gets ONE automatic retry and the DB is restored from the
-      # Actions cache. A genuine finding (exit 2) prints "Failed minimum
-      # severity level" and still fails both attempts.
-      - name: Image vulnerability scan — backend (BLOCKING on fixable criticals)
-        id: scan_backend
-        continue-on-error: true
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
+      # Image vulnerability gate — grype runs DIRECTLY (pinned binary from the
+      # scan-action installer, DB restored from the Actions cache) against the
+      # syft SBOMs produced above, so the gate never depends on docker-daemon
+      # image access and every grype error line is visible in the job log.
+      # Exit 2 = fixable critical found (BLOCKING); any other non-zero exit is
+      # a scanner fault and is retried once before failing.
+      - name: Install grype (pinned, DB cached)
+        id: grype
+        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
         with:
-          image: stoic-backend:${{ github.sha }}
-          fail-build: true
-          severity-cutoff: critical
-          # Block only on criticals with an available fix — distro CVEs with
-          # no released patch cannot be actioned and would leave the gate
-          # permanently red.
-          only-fixed: true
           cache-db: true
-      - name: Image vulnerability scan — backend (retry)
-        if: steps.scan_backend.outcome == 'failure'
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
+      - name: Image vulnerability scan (BLOCKING on fixable criticals)
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+        run: |
+          set -o pipefail
+          scan() {  # $1 = sbom file, $2 = label
+            for attempt in 1 2; do
+              rc=0
+              "$GRYPE" "sbom:$1" --fail-on critical --only-fixed -o table --file "grype-$2.txt" \
+                && "$GRYPE" "sbom:$1" -o sarif --file "grype-$2.sarif" >/dev/null || rc=$?
+              cat "grype-$2.txt" 2>/dev/null || true
+              if [ "$rc" = 0 ]; then echo "== $2: no fixable critical vulnerabilities"; return 0; fi
+              if [ "$rc" = 2 ]; then echo "::error::$2 image has FIXABLE CRITICAL vulnerabilities (see table above)"; return 2; fi
+              echo "::warning::grype scanner fault on $2 (exit $rc) — attempt $attempt"
+              sleep 10
+            done
+            echo "::error::grype could not scan $2 after 2 attempts (exit $rc)"; return "$rc"
+          }
+          scan sbom-backend.spdx.json backend
+          scan sbom-frontend.spdx.json frontend
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        if: always()
         with:
-          image: stoic-backend:${{ github.sha }}
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-          cache-db: true
-      - name: Image vulnerability scan — frontend (BLOCKING on fixable criticals)
-        id: scan_frontend
-        continue-on-error: true
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
-        with:
-          image: stoic-frontend:${{ github.sha }}
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-          cache-db: true
-      - name: Image vulnerability scan — frontend (retry)
-        if: steps.scan_frontend.outcome == 'failure'
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7
-        with:
-          image: stoic-frontend:${{ github.sha }}
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-          cache-db: true
+          name: grype-scan-results
+          path: |
+            grype-*.txt
+            grype-*.sarif
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: sbom

@@ -121,16 +121,32 @@ async def bump_authority_version(db, reason: str, *, user_id: str | None = None)
     return int(doc["version"])
 
 
+async def inventory_fingerprint(db, user_id: str) -> str:
+    """Cheap digest of the user's account/bot inventory inputs (ids, enabled,
+    mode, bot active) — any add/remove/toggle invalidates the snapshot even when
+    the writer did not call bump_authority_version()."""
+    import hashlib
+    import json
+    rows = []
+    async for a in db.accounts.find({"user_id": user_id}, {"_id": 1, "trading_enabled": 1, "mode": 1, "verified_identity": 1}):
+        rows.append(["a", str(a["_id"]), a.get("trading_enabled") is True, str(a.get("mode") or ""), bool(a.get("verified_identity"))])
+    async for b in db.bot_configs.find({"user_id": user_id}, {"account_id": 1, "active": 1}):
+        rows.append(["b", str(b.get("account_id")), bool(b.get("active"))])
+    rows.sort()
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
+
+
 async def decide_user(db, user_id: str, *, fresh: bool = False) -> dict:
     """User-facing canonical decision (dominant across platform + accounts).
     The snapshot is PERSISTED (db.canonical_decisions) with the input version
-    it was computed from, so every worker/pod serves the same decision_id and
-    any version bump invalidates it before the next response; fresh=True
-    forces recomputation."""
+    and inventory fingerprint it was computed from, so every worker/pod serves
+    the same decision_id and any version bump or inventory change invalidates
+    it before the next response; fresh=True forces recomputation."""
     ver = await authority_version(db)
+    fp = await inventory_fingerprint(db, user_id)
     if not fresh:
         hit = await db.canonical_decisions.find_one({"_id": user_id})
-        if hit and hit.get("input_version") == ver:
+        if hit and hit.get("input_version") == ver and hit.get("inventory_fingerprint") == fp:
             try:
                 age = (datetime.now(timezone.utc) - datetime.fromisoformat(hit["cached_at"])).total_seconds()
             except (KeyError, ValueError, TypeError):
@@ -140,7 +156,7 @@ async def decide_user(db, user_id: str, *, fresh: bool = False) -> dict:
     out = await _decide_user_uncached(db, user_id)
     out["input_version"] = ver
     await db.canonical_decisions.replace_one(
-        {"_id": user_id}, {"_id": user_id, "input_version": ver, "decision": out,
+        {"_id": user_id}, {"_id": user_id, "input_version": ver, "inventory_fingerprint": fp, "decision": out,
                            "cached_at": datetime.now(timezone.utc).isoformat()}, upsert=True)
     return out
 

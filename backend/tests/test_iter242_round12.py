@@ -300,6 +300,14 @@ class TestCanonicalSnapshot:
             d3 = _run(cd.decide_user(db, uid))
             assert d3["decision_id"] != d1["decision_id"] and d3["input_version"] == v and calls["n"] == 2
             assert cd.denial(d3, "/x")["input_version"] == v
+            # an inventory change (new account/bot) invalidates without an explicit bump
+            acc = _run(db.accounts.insert_one({"user_id": uid, "mode": "demo", "trading_enabled": False, "label": "r12cd"}))
+            try:
+                d4 = _run(cd.decide_user(db, uid))
+                assert d4["decision_id"] != d3["decision_id"] and calls["n"] == 3
+                assert _run(cd.decide_user(db, uid))["decision_id"] == d4["decision_id"]
+            finally:
+                _run(db.accounts.delete_one({"_id": acc.inserted_id}))
         finally:
             _run(db.canonical_decisions.delete_one({"_id": uid}))
         for f, hook in (("routes/panic_routes.py", "bump_authority_version"), ("trading_authority.py", "bump_authority_version"),
