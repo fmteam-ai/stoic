@@ -278,10 +278,12 @@ async def recovery_domain(db, account: dict | None = None) -> dict:
 async def inventory_domain(db, account: dict | None = None) -> dict:
     """P0-02 — exact runtime inventory (expected/enabled/bots) must match the
     approved configuration; unapproved drift blocks new entries platform-wide."""
-    from inventory_projection import projection
+    from inventory_projection import projection, production_mode
     exp = await db.platform_state.find_one({"_id": "inventory_expectation"})
     if not exp:
-        return {"level": "FULL", "reason": "no inventory expectation declared"}
+        if production_mode():
+            return {"level": "CLOSE_ONLY", "reason": "no inventory expectation declared — production fails closed"}
+        return {"level": "FULL", "reason": "no inventory expectation declared (non-production)"}
     proj = await projection(db, exp.get("scope_user_id"))
     if proj["blocking"]:
         return {"level": "CLOSE_ONLY", "reason": "; ".join(proj["violations"][:3])}

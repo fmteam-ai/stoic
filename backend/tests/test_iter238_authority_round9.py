@@ -314,7 +314,8 @@ class TestInventoryProjection:
         _run(db.accounts.update_one({"_id": rows[0]["_id"]}, {"$set": {"label": "RENAMED-ALIAS"}}))
         after = _run(projection(db, uid))
         assert after["inventory_hash"] == before["inventory_hash"] == inventory_hash(after["accounts"])
-        assert {r["immutable_id"] for r in after["accounts"]} == {r["immutable_id"] for r in before["accounts"]}
+        assert {r["account_id"] for r in after["accounts"]} == {r["account_id"] for r in before["accounts"]}
+        assert all(r["broker_identity"]["verified"] for r in after["accounts"])
 
 
 class TestExecutionTruthAndReplay:

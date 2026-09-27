@@ -33,6 +33,7 @@ VERIFY_TIMEOUT_SECONDS = 4.0
 PROVIDER_DEGRADED_WINDOW_SECONDS = 60
 CONSUMED_TOKEN_TTL_SECONDS = 600
 ACTIONS = ("login", "register", "password_reset")
+MAX_FUTURE_SKEW_SECONDS = 30
 
 _CLIENT_FAULT_CODES = {
     "missing-input-response", "invalid-input-response",
@@ -130,8 +131,12 @@ def bind_claims(body: dict, action: str | None) -> tuple[bool, list]:
         elif hostname not in exp:
             codes.append("hostname-mismatch")
     age = _token_age_seconds(body.get("challenge_ts"))
-    if age is not None and (age > max_token_age_seconds() or age < -60):
+    if age is None:
+        codes.append("challenge-ts-missing")             # round 10 P1-04: freshness is mandatory
+    elif age > max_token_age_seconds():
         codes.append("token-stale")
+    elif age < -MAX_FUTURE_SKEW_SECONDS:
+        codes.append("token-from-future")
     return (not codes), codes
 
 
@@ -278,6 +283,13 @@ async def evaluate(db, token: str | None, remote_ip: str | None, action: str = "
         return GateDecision(False, "deny", "configuration_invalid",
                             _fail("turnstile_unavailable", "Human verification is temporarily unavailable. Our team has been alerted.", True, "configuration_invalid", 503),
                             ["keys-incomplete"])
+    if not (token or "").strip() and action == "login" and provider_recently_degraded() \
+            and degraded_policy("login") == "otp_required":
+        # round 10 P1-05: the SERVER's own recent provider failure (not a client
+        # claim) routes a tokenless login into the bound OTP path.
+        _audit("provider_unavailable", action=action, ip=remote_ip, error_codes=["tokenless-during-server-degraded"])
+        return GateDecision(True, "degraded_otp_required", "provider_unavailable", None,
+                            ["tokenless-during-server-degraded"], "provider_unavailable")
     result = await verify_token((token or "").strip(), remote_ip, action=action)
     if result["ok"]:
         if not await _consume_token_once(db, (token or "").strip(), action):
@@ -316,10 +328,15 @@ async def require_turnstile(db, token: str | None, remote_ip: str | None,
 
 
 def production_config_violation(policy_enabled: bool) -> str | None:
-    """Boot/readiness rule: production + policy enabled ⇒ both keys present."""
-    if is_production() and policy_enabled and configuration_state() == "misconfigured":
-        return ("Turnstile policy is ENABLED but TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY "
-                "are incomplete — refusing to serve an auth control that cannot verify.")
+    """Boot/readiness rule: production + policy enabled ⇒ both keys present AND a
+    non-empty hostname allowlist (round 10 P1-04)."""
+    if is_production() and policy_enabled:
+        if configuration_state() == "misconfigured":
+            return ("Turnstile policy is ENABLED but TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY "
+                    "are incomplete — refusing to serve an auth control that cannot verify.")
+        if not expected_hostnames():
+            return ("Turnstile policy is ENABLED but TURNSTILE_EXPECTED_HOSTNAMES is empty — "
+                    "production requires exact hostname binding.")
     return None
 
 

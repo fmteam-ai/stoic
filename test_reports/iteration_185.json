@@ -9,7 +9,7 @@
   ],
   "updated_files": ["/app/tests/round9_live_test.py"],
   "success_rate": {"backend": "100% (51/51)", "frontend": "100%"},
-  "test_credentials": "admin@trading.bot / TUIofiuh5am4CEvlO1ICLTJAW2Zxc (from /app/memory/test_credentials.md)",
+  "test_credentials": "admin@trading.bot / <REDACTED-ROTATED> (from /app/memory/test_credentials.md)",
   "seed_data_creation": "Registered qa-r9-<hex>@example.com twice for register invariant + non-admin 403 test; DB row deleted after test.",
   "retest_needed": false,
   "main_agent_can_self_test": true,

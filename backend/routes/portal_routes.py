@@ -132,6 +132,9 @@ async def _compute_status(now: float):
     overall = ("major_outage" if hard
                else "degraded" if soft else "operational")
     data = {"overall": overall, "components": components,
+            # round 10 P2-01 — deployment metadata, never hard-coded copy
+            "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,
+                           "app_env": os.environ.get("APP_ENV") or "development"},
             "checked_at": utc_now.isoformat()}
     _STATUS_CACHE.update(at=now, data=data)
     return data

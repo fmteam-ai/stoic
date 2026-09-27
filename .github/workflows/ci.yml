@@ -43,6 +43,8 @@ jobs:
           echo "${EI_SHA256}  /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl" | sha256sum -c -
           pip install --no-deps /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl
           pip show -q emergentintegrations
+      - name: Credential scan — whole repository incl. top-level tests + recent history (round 10 P0-02)
+        run: python3 scripts/secret_scan.py --history
       - name: Collection gate — zero collection failures in the exact
           pinned dependency environment
         run: |

@@ -48,7 +48,12 @@ step frontend_build bash -c 'cd frontend && CI=true yarn --silent build >/dev/nu
 # test manifest must match the tree
 step test_manifest_current bash -c 'cp docs/TEST_MANIFEST.md /tmp/manifest.before && python scripts/generate_test_manifest.py >/dev/null && cmp -s /tmp/manifest.before docs/TEST_MANIFEST.md; rc=$?; cp /tmp/manifest.before docs/TEST_MANIFEST.md; exit $rc'
 # no credential literals anywhere in source (audit round 7 P1)
-step no_default_credentials bash -c "! grep -rn --include='*.py' --include='*.js' --include='*.jsx' --include='*.sh' --include='*.yml' --include='*.ps1' --include='*.ts' -E \"['\\\"]admin123['\\\"]\" backend frontend/src deploy scripts ops .github | grep -v __pycache__"
+step credential_scan python3 scripts/secret_scan.py
+# round 10 P1-10 — round-9/10 control tests are RELEASE GATES (Mongo-backed, no live server)
+step round9_10_controls bash -c 'cd backend && env -u REACT_APP_BACKEND_URL -u LIVE_TEST_BASE_URL python -m pytest tests/unit/test_authority_matrix.py tests/unit/test_release_attestation.py tests/test_iter237_signer_round9.py::TestSignerConfigValidator tests/test_iter237_signer_round9.py::TestExternalSignerFailClosed -q -p no:cacheprovider'
+step round10_hermetic_controls bash -c 'cd backend && LIVE_TEST_BASE_URL=http://hermetic.invalid TEST_ADMIN_EMAIL=hermetic@invalid TEST_ADMIN_PASSWORD=hermetic-not-a-credential-000 python -m pytest tests/test_iter239_round10.py -k "Scanner or Container or Turnstile or CanonicalDecision or FailsClosed" -q -p no:cacheprovider'
+step keepalive_bounded bash -c 'grep -Eq "\"--timeout-keep-alive\", \"(([1-9][0-9]?)|([12][0-9][0-9])|300)\"" Dockerfile.backend'
+
 if [ "$WITH_SWEEP" = 1 ]; then
   step route_auth_sweep bash -c 'cd backend && python -m pytest tests/test_iter228_route_auth_sweep.py -q -p no:cacheprovider'
 fi

@@ -65,16 +65,63 @@ def validate_request(payload: dict, actor_email: str) -> dict:
             "scope": sorted(set(scope)), "ttl_minutes": ttl}
 
 
-async def activate(db, payload: dict, actor_email: str) -> dict:
+PENDING_ID = "turnstile_break_glass_pending"
+
+
+async def request_activation(db, payload: dict, actor_email: str) -> dict:
+    """Step 1 (round 10 P1-06): the requesting admin records the request; nothing
+    is bypassed until the named approver confirms from their OWN authenticated,
+    step-up-verified session (`approve`)."""
+    from audit_chain import append_chained
+    req = validate_request(payload, actor_email)
+    if await active(db):
+        raise HTTPException(status_code=409, detail={"code": "break_glass_already_active"})
+    now = _now()
+    doc = {"_id": PENDING_ID, **req, "actor": actor_email, "requested_at": _iso(now),
+           "expires_at": _iso(now + timedelta(minutes=15))}
+    await db.platform_state.replace_one({"_id": PENDING_ID}, doc, upsert=True)
+    await append_chained(db, {"actor_email": actor_email, "action": "turnstile_break_glass_requested",
+                              "target_kind": "platform", "target_id": DOC_ID, "reason": req["reason"], "at": _iso(now),
+                              "meta": {k: req[k] for k in ("incident_id", "approver", "scope", "ttl_minutes")}})
+    return {"pending": True, "request": {k: doc[k] for k in ("incident_id", "actor", "approver", "scope",
+                                                             "ttl_minutes", "requested_at", "expires_at")}}
+
+
+async def approve_activation(db, approver_email: str) -> dict:
+    """Step 2: the approver named in the request — and nobody else — activates it."""
+    pending = await db.platform_state.find_one({"_id": PENDING_ID})
+    if not pending:
+        raise HTTPException(status_code=404, detail={"code": "no_pending_break_glass"})
+    if datetime.fromisoformat(pending["expires_at"]) <= _now():
+        await db.platform_state.delete_one({"_id": PENDING_ID})
+        raise HTTPException(status_code=410, detail={"code": "break_glass_request_expired"})
+    if pending["approver"] != approver_email.lower():
+        raise HTTPException(status_code=403, detail={"code": "approver_mismatch",
+                                                     "message": "only the named approver may activate this request"})
+    if pending["actor"].lower() == approver_email.lower():
+        raise HTTPException(status_code=403, detail={"code": "second_admin_required"})
+    payload = {k: pending[k] for k in ("incident_id", "approver", "reason", "scope", "ttl_minutes")}
+    payload["allow_registration_reset"] = bool(set(pending["scope"]) - {"login"})
+    out = await activate(db, payload, pending["actor"], approved_by=approver_email)
+    await db.platform_state.delete_one({"_id": PENDING_ID})
+    return out
+
+
+async def activate(db, payload: dict, actor_email: str, *, approved_by: str | None = None) -> dict:
+    """Direct activation is only reachable through approve_activation (signed
+    approver session) — `approved_by` is mandatory."""
     from audit_chain import append_chained
     from alerting import raise_alert
+    if not approved_by:
+        raise HTTPException(status_code=403, detail={"code": "approval_required",
+                                                     "message": "break-glass requires a second admin's approval"})
     req = validate_request(payload, actor_email)
     if await active(db):
         raise HTTPException(status_code=409, detail={"code": "break_glass_already_active"})
     now = _now()
     until = now + timedelta(minutes=req["ttl_minutes"])
     doc = {"_id": DOC_ID, "active": True, "incident_id": req["incident_id"], "actor": actor_email,
-           "approver": req["approver"], "reason": req["reason"], "scope": req["scope"],
+           "approver": req["approver"], "approved_by": approved_by, "reason": req["reason"], "scope": req["scope"],
            "activated_at": _iso(now), "until": _iso(until), "deactivated_at": None,
            "deactivated_by": None, "reviewed_at": None, "reviewed_by": None, "review_note": None,
            "bypass_count": 0}
@@ -82,7 +129,7 @@ async def activate(db, payload: dict, actor_email: str) -> dict:
     await append_chained(db, {"actor_email": actor_email, "action": "turnstile_break_glass_activated",
                               "target_kind": "platform", "target_id": DOC_ID,
                               "reason": req["reason"], "at": _iso(now),
-                              "meta": {k: doc[k] for k in ("incident_id", "approver", "scope", "until")}})
+                              "meta": {k: doc[k] for k in ("incident_id", "approver", "approved_by", "scope", "until")}})
     await raise_alert(db, "turnstile_break_glass", "critical",
                       f"Turnstile break-glass ACTIVE ({req['incident_id']}) scope={','.join(req['scope'])} until {_iso(until)}",
                       dedup_key=f"turnstile_break_glass:{req['incident_id']}",
@@ -161,11 +208,14 @@ async def status(db) -> dict:
         return {"active": False, "promotion_blocked": False, "pending_review": False, "record": None}
     is_active = await active(db) is not None
     pending_review = (not is_active) and not doc.get("reviewed_at")
-    rec = {k: doc.get(k) for k in ("incident_id", "actor", "approver", "reason", "scope", "activated_at",
+    rec = {k: doc.get(k) for k in ("incident_id", "actor", "approver", "approved_by", "reason", "scope", "activated_at",
                                    "until", "deactivated_at", "deactivated_by", "expired_at", "reviewed_at",
                                    "reviewed_by", "review_note", "bypass_count")}
+    pending_req = await db.platform_state.find_one({"_id": PENDING_ID})
     return {"active": is_active, "promotion_blocked": is_active or pending_review,
-            "pending_review": pending_review, "record": rec}
+            "pending_review": pending_review, "record": rec,
+            "pending_request": ({k: pending_req[k] for k in ("incident_id", "actor", "approver", "scope", "expires_at")}
+                                if pending_req else None)}
 
 
 async def readiness_check(db) -> dict:

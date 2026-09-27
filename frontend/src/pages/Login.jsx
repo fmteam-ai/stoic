@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { formatApiError } from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { Mail as EnvelopeSimple, Lock as LockKey, ShieldCheck, MailWarning, RefreshCw } from "lucide-react";
 import { StoicMark } from "@/components/StoicLogo";
 import { TurnstileWidget, TurnstileStatus, useTurnstile } from "@/components/TurnstileWidget";
@@ -18,6 +18,13 @@ export default function Login() {
     const [otpMessage, setOtpMessage] = useState("");
     const [otpResendCooldown, setOtpResendCooldown] = useState(0);
     const [error, setError] = useState("");
+    const [sysState, setSysState] = useState("checking");
+    useEffect(() => {
+        let alive = true;
+        api.get("/status").then(r => { if (alive) setSysState(r.data?.overall || "unknown"); })
+            .catch(() => { if (alive) setSysState("unreachable"); });
+        return () => { alive = false; };
+    }, []);
     const [unverifiedEmail, setUnverifiedEmail] = useState("");
     const [resendCooldown, setResendCooldown] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -147,7 +154,9 @@ export default function Login() {
                     </div>
 
                     <div className="space-y-6 max-w-md">
-                        <div className="font-mono text-[11px] text-[#00FF41] tracking-widest">// SYSTEM READY</div>
+                        <div className={`font-mono text-[11px] tracking-widest ${sysState === "operational" ? "text-[#00FF41]" : sysState === "checking" ? "text-[#52525B]" : "text-[#FFB000]"}`} data-testid="login-system-state">
+                            {sysState === "operational" ? "// SYSTEM OPERATIONAL" : sysState === "checking" ? "// CHECKING SYSTEM STATE…" : sysState === "unreachable" ? "// BACKEND UNREACHABLE" : `// SYSTEM ${sysState.toUpperCase().replaceAll("_", " ")}`}
+                        </div>
                         <h1 className="font-display font-bold text-5xl tracking-tighter leading-[1.05]">
                             Automated gold &amp; crypto<br/>trading, <span className="text-[#00FF41]">risk-controlled</span>.
                         </h1>

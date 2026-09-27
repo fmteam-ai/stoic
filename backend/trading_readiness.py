@@ -162,11 +162,26 @@ async def readiness(db, user_id: str) -> dict:
         upsert=True)
 
     reasons.sort(key=lambda r: LEVELS.index(r["level"]), reverse=True)
+    # round 10 P1-02 — the canonical decision is THE authority; this model may
+    # only ENRICH (recovery guidance), never relax. Its level is dominated by,
+    # and its reasons merged with, /authority/decision.
+    from canonical_decision import decide_user, dominant
+    dec = await decide_user(db, user_id)
+    for b in dec["blockers"]:
+        if not any(r["code"] == b["code"] for r in reasons):
+            reasons.append({"code": b["code"], "level": b["state"], "message": b["reason"],
+                            "accounts": [b["account_label"]] if b.get("account_label") else [],
+                            "source": "canonical_decision"})
+    level = dominant(level, dec["state"]) if level in ("READY", "DEGRADED", "CLOSE_ONLY", "BLOCKED", "EMERGENCY") else dec["state"]
     return {"level": level,
+            "decision_id": dec["decision_id"],
+            "dominant_code": dec["dominant_code"],
+            "new_exposure_allowed": level in ("READY", "DEGRADED"),
             "reasons": reasons,
             "accounts_enabled": len(rows),
             "accounts_total": len(sc["accounts"]),
             "checked_at": now,
+            "source": "canonical_decision + readiness enrichment",
             "note": "Trading readiness is independent of infrastructure "
                     "uptime — services can be operational while trading "
                     "is not safe."}

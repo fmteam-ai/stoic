@@ -14,6 +14,11 @@ from datetime import datetime, timezone
 LIVE_ENVS = {"live", "real"}
 
 
+def production_mode() -> bool:
+    import os
+    return os.environ.get("APP_ENV", "").strip().lower() == "production"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -44,7 +49,11 @@ async def projection(db, scope_user_id: str | None = None) -> dict:
         truth = account_truth(acc, open_local)
         fresh = truth["position_truth"] == "FRESH"
         tradable = enabled and bot_on and conn["connected"] and fresh and truth["execution_authority"] == "FULL"
-        rows.append({"account_id": aid, "immutable_id": acc.get("account_login") or aid,
+        vid = acc.get("verified_identity") or {}
+        rows.append({"account_id": aid,                                   # platform-owned immutable UUID
+                     "broker_identity": {"login": acc.get("account_login") or acc.get("account_number"),
+                                         "server": vid.get("broker_server") or acc.get("server"),
+                                         "verified": bool(vid.get("account_number"))},
                      "label": acc.get("label"), "environment": env, "enabled": enabled, "bot_enabled": bot_on,
                      "connection_state": conn["state"], "position_truth": truth["position_truth"],
                      "tradable": tradable, "reconciliation_seq": int(acc.get("reconciliation_seq") or 0),
@@ -78,10 +87,15 @@ async def projection(db, scope_user_id: str | None = None) -> dict:
     unapproved_change = bool(approved) and approved.get("inventory_hash") != h
     if unapproved_change:
         violations.append("inventory changed without an approved configuration event")
+    prod = production_mode()
+    if prod and not exp:
+        violations.append("no inventory expectation declared — production fails closed")
+    if prod and not approved:
+        violations.append("no approved inventory configuration event — production fails closed")
     return {"as_of": _now(), "scope_user_id": scope_user_id, "counts": counts, "accounts": rows,
             "inventory_hash": h, "approved_hash": (approved or {}).get("inventory_hash"),
             "approved_at": (approved or {}).get("at"), "unapproved_change": unapproved_change,
-            "violations": violations, "blocking": bool(violations) and bool(exp or approved),
+            "violations": violations, "blocking": bool(violations) and (prod or bool(exp or approved)),
             "note": "Canonical inventory projection — counts are never collapsed."}
 
 
@@ -99,7 +113,42 @@ async def approve_current(db, actor_email: str, note: str, scope_user_id: str | 
     return await projection(db, scope_user_id)
 
 
+async def propose_expectation(db, payload: dict, actor_email: str) -> dict:
+    """Two-admin control (round 10 P1-01): one admin PROPOSES the desired state,
+    a DIFFERENT admin (step-up verified) must approve before it takes effect."""
+    doc = {"_id": "inventory_expectation_pending", "accounts": int(payload["accounts"]),
+           "enabled": int(payload["enabled"]), "bots": int(payload["bots"]),
+           "account_ids": list(payload.get("account_ids") or []), "scope_user_id": payload.get("scope_user_id"),
+           "proposed_by": actor_email, "proposed_at": _now()}
+    await db.platform_state.replace_one({"_id": "inventory_expectation_pending"}, doc, upsert=True)
+    return doc
+
+
+async def approve_expectation(db, approver_email: str) -> dict:
+    from fastapi import HTTPException
+    from audit_chain import append_chained
+    pending = await db.platform_state.find_one({"_id": "inventory_expectation_pending"})
+    if not pending:
+        raise HTTPException(status_code=404, detail={"code": "no_pending_expectation"})
+    if pending.get("proposed_by", "").lower() == approver_email.lower():
+        raise HTTPException(status_code=403, detail={"code": "second_admin_required",
+                                                     "message": "the proposing admin cannot approve their own expectation"})
+    doc = {k: pending[k] for k in ("accounts", "enabled", "bots", "account_ids", "scope_user_id", "proposed_by", "proposed_at")}
+    doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now())
+    await db.platform_state.replace_one({"_id": "inventory_expectation"}, doc, upsert=True)
+    await db.platform_state.delete_one({"_id": "inventory_expectation_pending"})
+    await append_chained(db, {"actor_email": approver_email, "action": "inventory_expectation_approved",
+                              "target_kind": "platform", "target_id": "inventory_expectation",
+                              "reason": f"proposed by {pending['proposed_by']}", "at": doc["set_at"],
+                              "meta": {k: doc[k] for k in ("accounts", "enabled", "bots", "account_ids")}})
+    return doc
+
+
 async def set_expectation(db, payload: dict, actor_email: str) -> dict:
+    """Direct set — tests/seed only (non-production). Production goes through propose→approve."""
+    if production_mode():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail={"code": "two_admin_required"})
     doc = {"_id": "inventory_expectation", "accounts": int(payload["accounts"]), "enabled": int(payload["enabled"]),
            "bots": int(payload["bots"]), "account_ids": list(payload.get("account_ids") or []),
            "scope_user_id": payload.get("scope_user_id"), "set_by": actor_email, "set_at": _now()}

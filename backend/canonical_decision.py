@@ -72,7 +72,11 @@ def from_snapshot(snap: dict) -> dict:
         "state": state,
         "level": snap.get("level"),
         "new_exposure_allowed": state in NEW_EXPOSURE_ALLOWED,
-        "risk_reducing_allowed": state != "EMERGENCY" or True,
+        # Policy: risk-REDUCING actions (close / cancel / hedge-off) stay allowed in every
+        # state including EMERGENCY so operators can always shrink exposure.
+        "risk_reducing_allowed": True,
+        "close_allowed": True,
+        "cancel_pending_allowed": True,
         "dominant_code": blockers[0]["code"] if blockers else "READY",
         "reason_codes": [b["code"] for b in blockers],
         "blockers": blockers,
@@ -105,11 +109,20 @@ async def decide_user(db, user_id: str) -> dict:
         d["label"] = acc.get("label") or acc.get("account_login")
         d["environment"] = acc.get("mode") or "demo"
         per_account.append(d)
+    # ONE flattened blocker list, sorted by severity (round 10 P1-03): state,
+    # dominant_code, reason_codes and top-level blockers all derive from it.
+    flat = [{**b, "account_id": None, "scope": "platform"} for b in platform["blockers"]]
+    for d in per_account:
+        flat += [{**b, "account_id": d["account_id"], "account_label": d.get("label"), "scope": "account"}
+                 for b in d["blockers"]]
+    flat.sort(key=lambda b: -severity(b["state"]))
     state = dominant(platform["state"], *(d["state"] for d in per_account))
-    codes = list(dict.fromkeys(platform["reason_codes"] + [c for d in per_account for c in d["reason_codes"]]))
+    codes = list(dict.fromkeys(b["code"] for b in flat))
     return {**platform, "decision_id": f"dec_{uuid.uuid4().hex[:12]}", "scope": "user",
             "state": state, "new_exposure_allowed": state in NEW_EXPOSURE_ALLOWED,
-            "reason_codes": codes, "dominant_code": codes[0] if codes else "READY",
+            "blockers": flat, "reason_codes": codes,
+            "dominant_code": flat[0]["code"] if flat else "READY",
+            "dominant_account_id": flat[0]["account_id"] if flat else None,
             "accounts": per_account,
             "stability_window_seconds": stability_window_seconds()}
 

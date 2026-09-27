@@ -128,13 +128,28 @@ async def inventory_ep(user=Depends(get_current_user)):
 async def inventory_expectation_ep(payload: dict, request: Request, user=Depends(get_current_user)):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    from inventory_projection import set_expectation
+    """Round 10 P1-01: PROPOSE the desired 6/3/3 state (step-up). A second admin approves."""
+    from inventory_projection import propose_expectation
     for k in ("accounts", "enabled", "bots"):
         if not isinstance(payload.get(k), int):
             raise HTTPException(status_code=400, detail=f"{k} (int) required")
-    from step_up import audit_event
-    await audit_event(db := get_db(), user["id"], "inventory_expectation_set", payload, request)
-    return await set_expectation(db, payload, user.get("email", ""))
+    db = get_db()
+    from step_up import require_step_up, audit_event
+    await require_step_up(db, user, request, "authority_relax")
+    await audit_event(db, user["id"], "inventory_expectation_proposed", payload, request)
+    return await propose_expectation(db, payload, user.get("email", ""))
+
+
+@router.post("/inventory/expectation/approve")
+async def inventory_expectation_approve_ep(request: Request, user=Depends(get_current_user)):
+    """Second-admin approval of the pending expectation (step-up, proposer ≠ approver)."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    db = get_db()
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "authority_relax")
+    from inventory_projection import approve_expectation
+    return await approve_expectation(db, user.get("email", ""))
 
 
 @router.post("/inventory/approve")

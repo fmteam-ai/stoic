@@ -374,6 +374,22 @@ def _build_sha(path: Path = BUILD_SHA_FILE, env: dict | None = None) -> str:
         c = (c or "").strip().lower()
         if re.fullmatch(_SHA_RE, c):
             return c
+    # preview/dev checkout (BUILD_SHA is the un-substituted `$Format:%H$`): read
+    # HEAD from .git so /api/health still reports the exact build under test.
+    try:
+        git_dir = path.parent.parent / ".git"
+        head = (git_dir / "HEAD").read_text().strip()
+        if head.startswith("ref: "):
+            ref = git_dir / head[5:]
+            head = ref.read_text().strip() if ref.exists() else ""
+            if not head:
+                for line in (git_dir / "packed-refs").read_text().splitlines():
+                    if line.endswith(" " + ref.relative_to(git_dir).as_posix()):
+                        head = line.split()[0]
+        if re.fullmatch(_SHA_RE, head.lower()):
+            return head.lower()
+    except OSError:
+        pass
     return "unknown"
 
 

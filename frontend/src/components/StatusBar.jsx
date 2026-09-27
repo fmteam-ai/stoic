@@ -108,10 +108,12 @@ export function StatusBar() {
                     <Lock className="w-2.5 h-2.5" />
                     ENCRYPTED LOGIN
                 </span>
-                <span className="hidden xl:flex items-center gap-1.5">
-                    <Server className="w-2.5 h-2.5" />
-                    EU SERVERS
-                </span>
+                {status?.deployment?.region && (
+                    <span className="hidden xl:flex items-center gap-1.5" data-testid="statusbar-region">
+                        <Server className="w-2.5 h-2.5" />
+                        {status.deployment.region.toUpperCase()} SERVERS
+                    </span>
+                )}
             </div>
             <div className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-[#A1A1AA]">
                 <ShieldCheck className="w-3 h-3 text-[#00FF41]" />

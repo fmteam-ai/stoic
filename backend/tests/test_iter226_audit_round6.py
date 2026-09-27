@@ -368,12 +368,12 @@ def test_r7_backlog_counts_exact_and_truncation_flagged(sdb, uid):
 
 # ── audit round 7 · credentials, environment marker, evidence bundle, monitor ─
 def test_r7_no_default_credential_literals_in_source():
-    import subprocess as sp
-    r = sp.run(["grep", "-rn", "--include=*.py", "--include=*.js", "--include=*.jsx", "--include=*.sh", "--include=*.yml",
-                "--include=*.ps1", "--include=*.ts", "-E", "['\"]admin123['\"]", "backend", "frontend/src", "deploy", "scripts", "ops", ".github", "e2e/tests"],
-               capture_output=True, text=True, cwd=REPO)
-    hits = [l for l in r.stdout.splitlines() if "__pycache__" not in l]
-    assert not hits, "default credential literals in source:\n" + "\n".join(hits)
+    # round 10 P2-04: the one-literal grep is replaced by the repo-wide pattern scanner
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(REPO, "scripts"))
+    import secret_scan
+    hits = secret_scan.scan_tree(REPO)
+    assert not hits, "credential literals in source:\n" + "\n".join(f"{h['path']}:{h['line']} {h['kind']}" for h in hits)
     from live_target import is_known_default_password, admin_credentials
     assert is_known_default_password("admin" + "123") and not is_known_default_password("T" + "x" * 30)
     saved = {k: os.environ.pop(k) for k in ("TEST_ADMIN_EMAIL", "TEST_ADMIN_PASSWORD", "ADMIN_EMAIL", "ADMIN_PASSWORD") if k in os.environ}

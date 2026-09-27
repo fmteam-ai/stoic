@@ -19,6 +19,22 @@ KNOWN_DEFAULT_PASSWORD_HASHES = {
     "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",   # 123456
     "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",   # password
 }
+# round 10 P0-02: credentials exposed in a committed artifact are rotated AND refused forever
+_RETIRED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                             "scripts", "retired_credentials.sha256")
+if os.path.exists(_RETIRED_FILE):
+    with open(_RETIRED_FILE) as _f:
+        KNOWN_DEFAULT_PASSWORD_HASHES |= {l.split()[0] for l in _f if l.strip() and not l.startswith("#")}
+
+PRODUCTION_HOST_MARKERS = ("stoicaibot.com", "api.stoicaibot", "app.stoicaibot")
+
+
+def refuse_production_target(url: str) -> None:
+    """Live suites mutate state (users, break-glass, readiness) — they must never
+    point at production. Allowed only with an explicit signed marker."""
+    host = (url or "").split("//", 1)[-1].split("/", 1)[0].lower()
+    if any(m in host for m in PRODUCTION_HOST_MARKERS) and os.environ.get("LIVE_TEST_TARGET_ACK") != "non-production-drill":
+        raise RuntimeError(f"live tests refuse production target {host!r}")
 
 
 def _sha(v: str) -> str:
@@ -75,6 +91,7 @@ def require_live_base_url() -> str:
     if not url:
         pytest.skip("no live test target — set REACT_APP_BACKEND_URL or "
                     "LIVE_TEST_BASE_URL", allow_module_level=True)
+    refuse_production_target(url)
     return url
 
 

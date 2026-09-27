@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
 from database import get_db
@@ -173,24 +173,44 @@ async def admin_break_glass_status(user=Depends(get_current_user)):
 
 
 @router.post("/admin/settings/turnstile/break-glass")
-async def admin_break_glass_activate(payload: dict, user=Depends(get_current_user)):
+async def admin_break_glass_request(payload: dict, request: Request, user=Depends(get_current_user)):
+    """Round 10 P1-06: step-up MFA + records a REQUEST; a second admin must approve."""
     _admin_only(user)
-    from turnstile_break_glass import activate
-    return await activate(get_db(), payload or {}, user.get("email", ""))
+    from step_up import require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    from turnstile_break_glass import request_activation
+    return await request_activation(db, payload or {}, user.get("email", ""))
+
+
+@router.post("/admin/settings/turnstile/break-glass/approve")
+async def admin_break_glass_approve(request: Request, user=Depends(get_current_user)):
+    _admin_only(user)
+    from step_up import require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    from turnstile_break_glass import approve_activation
+    return await approve_activation(db, user.get("email", ""))
 
 
 @router.post("/admin/settings/turnstile/break-glass/deactivate")
-async def admin_break_glass_deactivate(payload: dict | None = None, user=Depends(get_current_user)):
+async def admin_break_glass_deactivate(request: Request, payload: dict | None = None, user=Depends(get_current_user)):
     _admin_only(user)
+    from step_up import require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
     from turnstile_break_glass import deactivate
-    return await deactivate(get_db(), user.get("email", ""), str((payload or {}).get("note") or ""))
+    return await deactivate(db, user.get("email", ""), str((payload or {}).get("note") or ""))
 
 
 @router.post("/admin/settings/turnstile/break-glass/review")
-async def admin_break_glass_review(payload: dict, user=Depends(get_current_user)):
+async def admin_break_glass_review(payload: dict, request: Request, user=Depends(get_current_user)):
     _admin_only(user)
+    from step_up import require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
     from turnstile_break_glass import review
-    return await review(get_db(), user.get("email", ""), str((payload or {}).get("note") or ""))
+    return await review(db, user.get("email", ""), str((payload or {}).get("note") or ""))
 
 
 # ─── Admin · Users ───────────────────────────────────────────────────────

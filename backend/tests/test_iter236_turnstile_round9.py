@@ -63,7 +63,8 @@ class TestClaimBinding:
     def test_no_allowlist_means_hostname_not_required(self, monkeypatch):
         import turnstile_gate as tg
         monkeypatch.delenv("TURNSTILE_EXPECTED_HOSTNAMES", raising=False)
-        ok, _ = tg.bind_claims({"success": True, "action": "login"}, "login")
+        ok, _ = tg.bind_claims({"success": True, "action": "login",
+                                "challenge_ts": datetime.now(timezone.utc).isoformat()}, "login")
         assert ok
 
     def test_token_cannot_be_replayed_across_surfaces(self, monkeypatch):
@@ -244,6 +245,7 @@ class TestPublicState:
     def test_production_refuses_enabled_without_keys(self, monkeypatch):
         import turnstile_gate as tg
         monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("TURNSTILE_EXPECTED_HOSTNAMES", "app.example.com")
         monkeypatch.setenv("TURNSTILE_SITE_KEY", "")
         monkeypatch.setenv("TURNSTILE_SECRET_KEY", "x")
         assert tg.production_config_violation(True)
@@ -309,8 +311,21 @@ class TestBreakGlassGovernance:
         monkeypatch.setattr(tg, "is_enabled", _enabled)
         assert _run(tbg.readiness_check(db))["ok"] is True
 
-        st = _run(tbg.activate(db, GOOD, "actor@stoic.test"))
-        assert st["active"] and st["promotion_blocked"]
+        # round 10 P1-06: direct activation without a signed approver is refused;
+        # request → approve by the NAMED approver (≠ actor) is the only path
+        with pytest.raises(HTTPException) as e0:
+            _run(tbg.activate(db, GOOD, "actor@stoic.test"))
+        assert e0.value.detail["code"] == "approval_required"
+        req = _run(tbg.request_activation(db, GOOD, "actor@stoic.test"))
+        assert req["pending"] and _run(tbg.active(db)) is None
+        with pytest.raises(HTTPException) as e1:
+            _run(tbg.approve_activation(db, "someone-else@stoic.test"))
+        assert e1.value.detail["code"] == "approver_mismatch"
+        with pytest.raises(HTTPException) as e2:
+            _run(tbg.approve_activation(db, "actor@stoic.test"))
+        assert e2.value.status_code == 403
+        st = _run(tbg.approve_activation(db, "approver@stoic.test"))
+        assert st["active"] and st["promotion_blocked"] and st["record"]["approved_by"] == "approver@stoic.test"
         chain = _run(db.admin_audit_log.find_one({"action": "turnstile_break_glass_activated",
                                                  "meta.incident_id": "INC-236-1"}))
         assert chain and chain.get("entry_hash")
@@ -347,7 +362,8 @@ class TestBreakGlassGovernance:
     def test_expiry_is_automatic(self, bg_clean):
         import turnstile_break_glass as tbg
         db = bg_clean
-        _run(tbg.activate(db, {**GOOD, "incident_id": "INC-236-2", "ttl_minutes": 1}, "actor@stoic.test"))
+        _run(tbg.activate(db, {**GOOD, "incident_id": "INC-236-2", "ttl_minutes": 1}, "actor@stoic.test",
+                          approved_by="approver@stoic.test"))
         _run(db.platform_state.update_one({"_id": "turnstile_break_glass"},
                                           {"$set": {"until": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}))
         assert _run(tbg.active(db)) is None
