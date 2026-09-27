@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 189 — P1 features (a) Alert Test Button, (c) Risk Commander preview+confirm, (b) Scalp drift gauge, (d) Soak Memory Watch verified end-to-end against preview backend + live UI. All 24 regression tests pass, all live backend endpoints behave per spec, and every new frontend testid renders correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_p1_alert_test_button.py",
+    "/app/backend/tests/test_p1_risk_commander_confirm.py",
+    "/app/backend/tests/test_p1_soak_memory_watch.py",
+    "/app/backend/tests/test_iter151_ops_observability.py",
+    "/tmp/live_p1_test.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "None — code paths reviewed align with the spec; proposal store uses Mongo TTL 300s, fingerprint sha256 hex, and confirm path enforces proposal_id_required / preview_stale / proposal_not_pending correctly."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD read from /app/backend/.env (per /app/memory/test_credentials.md).",
+  "seed_data_creation": "None. Rejected all NL proposals used for testing; no capital-touching action was confirmed. No trades inserted/deleted in this run (preview-stale flow was covered by pytest tests/test_p1_risk_commander_confirm.py which passed).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All P1 backlog items (a,b,c,d) shipped and verified. Live email test is expected 503 email_send_failed (Resend sandbox) — that IS the pass condition. Command Center route is /admin/command-center (admin-only). Risk Commander proposal testids are proposal-<messageIndex> where messageIndex is chat message ordinal (typically 1 after user prompt, not 0). Live test script preserved at /tmp/live_p1_test.py.",
+  "detailed_results": {
+    "pytest_regression": "24 passed in 3.17s (test_p1_alert_test_button.py, test_p1_risk_commander_confirm.py, test_p1_soak_memory_watch.py, test_iter151_ops_observability.py)",
+    "a_backend": {
+      "GET /api/notifications/telegram": "200, email_configured=true, last_test present",
+      "POST /api/notifications/email/test": "503 detail.code=email_send_failed with reason mentioning verifying a domain (Resend sandbox — expected)",
+      "last_test.email after call": "{ok:false, error:send_failed, at:ISO}",
+      "POST /api/notifications/telegram/test": "200 {ok:true, channel:telegram}",
+      "last_test.telegram after call": "{ok:true, at:ISO}",
+      "Anonymous email/test": "401"
+    },
+    "a_frontend": "alert-test-panel + rows telegram/email + send buttons + alert-test-last-email='LAST TEST FAILED · EMAIL_SEND_FAILED · <time>' all render. SECTION 03/04/05 renumbered correctly. Email row hint shows admin@trading.bot.",
+    "c_backend": {
+      "nl_command 'switch risk to low'": "200 requires_confirmation=true, proposal_id 24-hex, fingerprint 64-hex, expires_in_sec=300, capital_touching=true",
+      "nl_command 'disable all my bots'": "200 requires_confirmation=true (previously auto-exec, now gated — verified)",
+      "confirm rejected proposal": "409 detail.code=proposal_not_pending",
+      "confirm legacy {actions:[...]}": "400 detail.code=proposal_id_required",
+      "confirm unknown proposal_id": "404",
+      "reject on pending": "200 status=rejected",
+      "drift refusal": "covered by pytest test_p1_risk_commander_confirm.py (passed)"
+    },
+    "c_frontend": "Proposal card renders with 'PREVIEW · SET_RISK_LEVEL — nothing runs until you confirm', TOUCHES CAPITAL flag, per-action bot rows, CONFIRM & EXECUTE + REJECT buttons (testids proposal-<i>, proposal-preview-<i>, preview-action-<i>-<j>, preview-capital-flag-<i>, proposal-approve-<i>, proposal-reject-<i>).",
+    "b_backend": "runners[] include clock_drift_ms, clock_drift_residual_ms, clock_drift_samples(int), clock_drift_limit_ms=15000",
+    "b_frontend": "scalp-runner-drift-EURUSD renders with -value='measuring' (samples<10). Horizontal overflow: 0 px at both 1920x900 and 390x844.",
+    "d_backend": {
+      "/api/ops/soak?days=14 memory.watch": "verdict=ALERT, samples=67, baseline=516.1MB, latest=954.5MB, growth=+84.9%, slope=20.67 MB/day, daily[], thresholds — all keys present",
+      "/api/command-center/status sections.soak.memory": "verdict=WATCH, latest_mb=954.5, baseline_mb=856.3, growth_pct=11.5, slope_mb_per_day=-6.17, detail present"
+    },
+    "d_frontend": "cc-soak-memory row renders 'Worker memory  955 MB · +11.5% · WATCH' on /admin/command-center."
+  },
+  "note_on_soak_status_endpoint": "GET /api/soak/status returned 404 in this preview — review request only said 'unaffected'. If it was intended to exist, main agent may want to confirm; not counted as a regression."
+}
