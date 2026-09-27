@@ -584,10 +584,20 @@ class TestBrokerStatementLedger:
         st.update(over)
         return st
 
-    def test_signed_statement_reconciles_to_the_cent_and_gates_attestation(self):
+    def test_signed_statement_reconciles_to_the_cent_and_gates_attestation(self, monkeypatch):
+        import base64
         import broker_statement_ledger as bl
-        from release_signing import sign_hex
         from bson import ObjectId
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+        from release_signing import sign_hex as release_sign
+        # SEC-001: statements are authenticated by an INDEPENDENT broker/statement key — never the release key
+        broker_key = Ed25519PrivateKey.generate()
+        broker_pub = base64.b64encode(broker_key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+
+        def sign_hex(body: bytes) -> str:
+            return broker_key.sign(body).hex()
         db = _db()
         uid = "r13-led-" + uuid.uuid4().hex[:6]
         acc = ObjectId()
@@ -602,6 +612,15 @@ class TestBrokerStatementLedger:
         try:
             st = self._statement(str(acc))
             sig = sign_hex(bl.statement_body(st))
+            monkeypatch.delenv("STATEMENT_ATTESTATION_PUBLIC_KEY_B64", raising=False)
+            assert any("not configured" in p for p in bl.statement_problems(st, sig))            # absent key → fail closed
+            from release_signing import public_key_b64
+            monkeypatch.setenv("STATEMENT_ATTESTATION_PUBLIC_KEY_B64", public_key_b64())
+            assert any("differ from the platform release key" in p
+                       for p in bl.statement_problems(st, release_sign(bl.statement_body(st))))   # release key refused
+            monkeypatch.setenv("STATEMENT_ATTESTATION_PUBLIC_KEY_B64", broker_pub)
+            assert "signature" in " ".join(bl.statement_problems(st, release_sign(bl.statement_body(st))))
+            assert bl.statement_problems({**st, "account_id": {"$ne": ""}}, sig)                  # operator-shaped id refused
             assert bl.statement_problems(st, sig) == []
             assert bl.statement_problems({**st, "closing_balance": 10417.58}, sig)          # one cent off → does not balance / bad sig
             assert "signature" in " ".join(bl.statement_problems(st, "00" * 64))

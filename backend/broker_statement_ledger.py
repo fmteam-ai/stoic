@@ -61,9 +61,23 @@ def statement_problems(st: dict, signature_hex: str) -> list:
             problems.append(f"statement does not balance: computed closing {lhs:.2f} != {cents(st['closing_balance']):.2f}")
         if abs(cents(st["closing_balance"]) + cents(st["unrealized_pnl"]) - cents(st["closing_equity"])) > TOLERANCE:
             problems.append("closing_equity != closing_balance + unrealized_pnl")
+    for k in ("account_id", "statement_id", "currency", "issuer"):
+        if k in st and not isinstance(st.get(k), str):
+            problems.append(f"{k} must be a string")
+    # SEC-001 (round 13 audit) — statement authenticity must come from an INDEPENDENT broker /
+    # statement-attestation key; never the platform release key. Absent key ⇒ fail closed.
+    pinned = (os.environ.get("STATEMENT_ATTESTATION_PUBLIC_KEY_B64") or "").strip()
+    if not pinned:
+        problems.append("STATEMENT_ATTESTATION_PUBLIC_KEY_B64 not configured — statements cannot be authenticated")
+        return problems
     try:
-        from release_signing import verify_hex
-        pinned = os.environ.get("STATEMENT_ATTESTATION_PUBLIC_KEY_B64") or None
+        from release_signing import public_key_b64, verify_hex
+        try:
+            if pinned == public_key_b64():
+                problems.append("statement-attestation key must differ from the platform release key")
+                return problems
+        except Exception:  # noqa: BLE001 — no release key configured here; independence holds trivially
+            pass
         if not signature_hex or not verify_hex(statement_body(st), str(signature_hex), pinned):
             problems.append("statement signature does not verify against the statement-attestation key")
     except Exception:  # noqa: BLE001
