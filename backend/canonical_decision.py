@@ -99,9 +99,26 @@ async def decide_platform(db) -> dict:
     return from_snapshot(await compute_authority(db, None))
 
 
-async def decide_user(db, user_id: str) -> dict:
-    """User-facing canonical decision: dominant across the platform view and
-    every account of the user; per-account decisions attached."""
+_SNAPSHOT_TTL_S = 5.0
+_snapshots: dict = {}
+
+
+async def decide_user(db, user_id: str, *, fresh: bool = False) -> dict:
+    """User-facing canonical decision (dominant across platform + accounts).
+    Round 11 P2-05: a 5 s per-user snapshot so every panel rendered together
+    references ONE decision_id; pass fresh=True to force recomputation."""
+    import time
+    hit = _snapshots.get(user_id)
+    if hit and not fresh and time.monotonic() - hit[0] < _SNAPSHOT_TTL_S:
+        return hit[1]
+    out = await _decide_user_uncached(db, user_id)
+    _snapshots[user_id] = (time.monotonic(), out)
+    if len(_snapshots) > 5000:
+        _snapshots.clear()
+    return out
+
+
+async def _decide_user_uncached(db, user_id: str) -> dict:
     platform = await decide_platform(db)
     per_account = []
     async for acc in db.accounts.find({"user_id": user_id}):
@@ -124,6 +141,7 @@ async def decide_user(db, user_id: str) -> dict:
             "dominant_code": flat[0]["code"] if flat else "READY",
             "dominant_account_id": flat[0]["account_id"] if flat else None,
             "accounts": per_account,
+            "snapshot_ttl_seconds": _SNAPSHOT_TTL_S,
             "stability_window_seconds": stability_window_seconds()}
 
 

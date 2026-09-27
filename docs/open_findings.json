@@ -1,0 +1,7 @@
+[
+  {"id": "P1-07-r9", "severity": "P1", "title": "Transport mTLS at a client-cert-verifying ingress for agent endpoints (pinned secondary identifier only today)", "owner": "infrastructure"},
+  {"id": "P1-09-r10", "severity": "P1", "title": "Authoritative CI-signed rc_lock for the promoted commit (developer snapshot only until a tagged release run)", "owner": "release-ci"},
+  {"id": "P0-03-r10", "severity": "P1", "title": "Broker-side reconciliation of the six live account IDs + two-admin 6/3/3 inventory approval", "owner": "operations"},
+  {"id": "AI-GOV", "severity": "P2", "title": "Model lineage on every AI decision, shadow-only promotion, drift quarantine, broker-realistic backtest costs", "owner": "engineering"},
+  {"id": "PERF-ATT", "severity": "P2", "title": "Performance reconciliation to broker statements (fees/financing/deposits) before any public attestation", "owner": "engineering"}
+]

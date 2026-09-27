@@ -115,8 +115,10 @@ def _rc_lock(path, sha, be, fe) -> dict:
                commit_matches=bool(sha) and lock.get("git_commit") == sha and lock.get("source_sha") == sha,
                images_match=(not be or imgs.get("backend") == be) and (not fe or imgs.get("frontend") == fe)
                             and bool(imgs.get("backend")) and bool(imgs.get("frontend")))
+    out["model_manifest_sha256"] = lock.get("model_manifest_sha256")
     out["bound"] = bool(out["commit_matches"] and out["images_match"] and lock.get("signer_key_id")
-                        and lock.get("deployment_target") and lock.get("test_manifest_sha256"))
+                        and lock.get("deployment_target") and lock.get("test_manifest_sha256")
+                        and lock.get("model_manifest_sha256"))
     return out
 
 

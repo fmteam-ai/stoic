@@ -48,7 +48,7 @@ def _rc_lock(tmp, sha=None):
          "images": {"backend": "ghcr.io/x/stoic-backend@sha256:" + "1" * 64,
                     "frontend": "ghcr.io/x/stoic-frontend@sha256:" + "2" * 64},
          "deployment_target": "production", "signer_key_id": "stoic-release-ed25519-v1",
-         "test_manifest_sha256": "f" * 64}
+         "test_manifest_sha256": "f" * 64, "model_manifest_sha256": "e" * 64}
     p = tmp / "rc_lock.json"; p.write_text(json.dumps(d))
     return p
 

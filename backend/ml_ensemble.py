@@ -138,9 +138,13 @@ def train_sync(X: list, y: list, uid: str) -> dict:
             logger.debug("ensemble final fit %s failed: %s", name, e)
     path = MODEL_DIR / uid
     path.mkdir(parents=True, exist_ok=True)
-    joblib.dump(final, path / "gbm_ensemble.joblib")
+    # round 11 P1-03 — online training NEVER self-promotes: the new binary is a
+    # CANDIDATE until a two-approver signed manifest names it (model_manifest sign).
+    cand = path / "gbm_ensemble.candidate.joblib"
+    joblib.dump(final, cand)
     _models_cache.pop(uid, None)
-    return {"aucs": aucs, "weights": weights, "models_saved": len(final)}
+    return {"aucs": aucs, "weights": weights, "models_saved": len(final),
+            "candidate_path": str(cand), "promotion": "pending_signed_manifest"}
 
 
 async def train_ensemble(db, user_id: str) -> dict:
@@ -231,6 +235,14 @@ def _load_models(uid: str) -> dict:
     hit = _models_cache.get(uid)
     if hit and hit[0] == mtime:
         return hit[1]
+    # round 11 P1-03 — joblib.load is code execution: only a binary named by the
+    # SIGNED model manifest (exact digest + schema + approved) may be deserialized.
+    from model_manifest import verify_model, ModelRefused
+    try:
+        verify_model(f)
+    except ModelRefused as e:
+        logger.error("ensemble model REFUSED (quarantined, not loaded): %s", e)
+        return {}
     try:
         models = joblib.load(f)
     except Exception as e:

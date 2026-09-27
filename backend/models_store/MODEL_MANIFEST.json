@@ -1,0 +1,30 @@
+{
+  "body": {
+    "approvers": [
+      "ops-a@stoicaibot.com",
+      "ops-b@stoicaibot.com"
+    ],
+    "code_commit": "23b9b00776a8ce22c42e7019820176c9a7339d16",
+    "generated_at": "2026-09-27T14:20:28.534759+00:00",
+    "models": [
+      {
+        "bytes": 291569,
+        "feature_schema": "ens-features-v1",
+        "format": "joblib-pickle (executable \u2014 verified before load)",
+        "metrics": {},
+        "path": "6a37783f9360a2589770da4e/gbm_ensemble.joblib",
+        "promotion_status": "approved",
+        "sha256": "ced698870448ce37ef8844c0474a721ae4809f18aa752b723f8bb81aecfe2c86",
+        "training_window": {
+          "until": "2026-09-27T13:55:16.530732+00:00"
+        }
+      }
+    ],
+    "record": "stoic.model-manifest",
+    "version": 1
+  },
+  "body_sha256": "8ecb10b0d8118472ad8dab63c63e1d8c0bba6a66587360d15f293f95228ec486",
+  "key_id": "stoic-release-ed25519-v1",
+  "public_key_b64": "shsQu1qBIZRAX1sUkxn4v7sU9IbRFLLSA88T9+5Q7TY=",
+  "signature_hex": "f978b067eec2cb4d21b6a793c4ba2f4d0562facef04644ab49cbb19100e56850a73bb129edf2b58bd3694b650d88120fc9cc74c5880899b63afd5947f8cb0409"
+}

@@ -79,12 +79,29 @@ async def request_activation(db, payload: dict, actor_email: str) -> dict:
     now = _now()
     doc = {"_id": PENDING_ID, **req, "actor": actor_email, "requested_at": _iso(now),
            "expires_at": _iso(now + timedelta(minutes=15))}
-    await db.platform_state.replace_one({"_id": PENDING_ID}, doc, upsert=True)
+    # round 11 P2-02 — atomic create: an unexpired pending request is never overwritten
+    await db.platform_state.delete_one({"_id": PENDING_ID, "expires_at": {"$lte": _iso(now)}})
+    try:
+        await db.platform_state.insert_one(doc)
+    except Exception:  # noqa: BLE001 — DuplicateKeyError
+        raise HTTPException(status_code=409, detail={"code": "break_glass_request_pending",
+                                                     "message": "an unexpired request exists — cancel it first"})
     await append_chained(db, {"actor_email": actor_email, "action": "turnstile_break_glass_requested",
                               "target_kind": "platform", "target_id": DOC_ID, "reason": req["reason"], "at": _iso(now),
                               "meta": {k: req[k] for k in ("incident_id", "approver", "scope", "ttl_minutes")}})
     return {"pending": True, "request": {k: doc[k] for k in ("incident_id", "actor", "approver", "scope",
                                                              "ttl_minutes", "requested_at", "expires_at")}}
+
+
+async def cancel_request(db, actor_email: str, note: str = "") -> dict:
+    from audit_chain import append_chained
+    pending = await db.platform_state.find_one_and_delete({"_id": PENDING_ID})
+    if not pending:
+        raise HTTPException(status_code=404, detail={"code": "no_pending_break_glass"})
+    await append_chained(db, {"actor_email": actor_email, "action": "turnstile_break_glass_request_cancelled",
+                              "target_kind": "platform", "target_id": DOC_ID, "reason": (note or "")[:500],
+                              "at": _iso(_now()), "meta": {"incident_id": pending["incident_id"], "requested_by": pending["actor"]}})
+    return await status(db)
 
 
 async def approve_activation(db, approver_email: str) -> dict:
@@ -202,25 +219,36 @@ async def review(db, actor_email: str, note: str) -> dict:
     return await status(db)
 
 
+async def _pending(db) -> dict | None:
+    p = await db.platform_state.find_one({"_id": PENDING_ID})
+    if p and datetime.fromisoformat(p["expires_at"]) <= _now():
+        await db.platform_state.delete_one({"_id": PENDING_ID})
+        return None
+    return p
+
+
 async def status(db) -> dict:
     doc = await _load(db)
+    pending_req = await _pending(db)          # round 11 P2-01 — loaded BEFORE any early return
+    pending_view = ({k: pending_req[k] for k in ("incident_id", "actor", "approver", "scope", "expires_at")}
+                    if pending_req else None)
     if not doc:
-        return {"active": False, "promotion_blocked": False, "pending_review": False, "record": None}
+        return {"active": False, "promotion_blocked": pending_req is not None, "pending_review": False,
+                "record": None, "pending_request": pending_view}
     is_active = await active(db) is not None
     pending_review = (not is_active) and not doc.get("reviewed_at")
     rec = {k: doc.get(k) for k in ("incident_id", "actor", "approver", "approved_by", "reason", "scope", "activated_at",
                                    "until", "deactivated_at", "deactivated_by", "expired_at", "reviewed_at",
                                    "reviewed_by", "review_note", "bypass_count")}
-    pending_req = await db.platform_state.find_one({"_id": PENDING_ID})
-    return {"active": is_active, "promotion_blocked": is_active or pending_review,
-            "pending_review": pending_review, "record": rec,
-            "pending_request": ({k: pending_req[k] for k in ("incident_id", "actor", "approver", "scope", "expires_at")}
-                                if pending_req else None)}
+    return {"active": is_active, "promotion_blocked": is_active or pending_review or pending_req is not None,
+            "pending_review": pending_review, "record": rec, "pending_request": pending_view}
 
 
 async def readiness_check(db) -> dict:
     s = await status(db)
     detail = ("break-glass ACTIVE" if s["active"] else
-              "break-glass used and awaiting post-incident review" if s["pending_review"] else "clear")
+              "break-glass used and awaiting post-incident review" if s["pending_review"] else
+              "break-glass request pending approval" if s["pending_request"] else "clear")
     return {"ok": not s["promotion_blocked"], "detail": detail,
-            "incident_id": (s["record"] or {}).get("incident_id")}
+            "incident_id": ((s["pending_request"] or {}).get("incident_id") if s["pending_request"] and not s["active"]
+                            else (s["record"] or {}).get("incident_id"))}

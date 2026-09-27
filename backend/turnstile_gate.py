@@ -106,9 +106,11 @@ def _token_age_seconds(challenge_ts: str | None) -> float | None:
     if not challenge_ts:
         return None
     try:
-        ts = datetime.fromisoformat(challenge_ts.replace("Z", "+00:00"))
-    except ValueError:
+        ts = datetime.fromisoformat(str(challenge_ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
         return None
+    if ts.tzinfo is None:                      # naive timestamp → treat as UTC, never TypeError
+        ts = ts.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - ts).total_seconds()
 
 
@@ -182,8 +184,17 @@ async def verify_token(token: str, remote_ip: str | None = None, action: str | N
         if state == "provider_unavailable":
             _mark_provider_failure()
         return _r(False, state, [f"http-{resp.status_code}"])
-    body = resp.json()
+    try:
+        body = resp.json()
+    except ValueError:
+        _mark_provider_failure()
+        return _r(False, "provider_unavailable", ["malformed-json"])
+    if not isinstance(body, dict):
+        _mark_provider_failure()
+        return _r(False, "provider_unavailable", ["malformed-body"])
     codes = body.get("error-codes") or []
+    if not isinstance(codes, list):
+        codes = ["malformed-error-codes"]
     hostname = (body.get("hostname") or "").lower() or None
     cf_action = body.get("action") or None
     ts = body.get("challenge_ts")

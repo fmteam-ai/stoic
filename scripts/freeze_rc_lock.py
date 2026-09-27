@@ -106,6 +106,8 @@ def build_lock(prev=None, *, commit=None, backend_digest=None, frontend_digest=N
         "migrations_sha256": _tree_sha256(os.path.join(ROOT, "backend", "migrations")),
         "frontend_asset_digest": _tree_sha256(dist) if dist else None,
         "test_manifest_sha256": _sha256(os.path.join(ROOT, "docs", "TEST_MANIFEST.md")),
+        "model_manifest_sha256": (_sha256(os.path.join(ROOT, "backend", "models_store", "MODEL_MANIFEST.json"))
+                                  if os.path.exists(os.path.join(ROOT, "backend", "models_store", "MODEL_MANIFEST.json")) else None),
         "python": {
             "version": ".".join(map(str, sys.version_info[:3])),
             "packages": freeze,

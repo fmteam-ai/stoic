@@ -147,7 +147,19 @@ async def readiness(db, user_id: str) -> dict:
             "Accounts are enabled but no bot is ON", [],
             "Turn a bot ON from Bot Config once you are ready")
 
-    # first-seen persistence per user+code (cleared on recovery)
+    # round 11 P1-04 — merge the canonical decision FIRST, de-duplicate and
+    # severity-sort ONCE, then persist and return the SAME snapshot.
+    from canonical_decision import decide_user, dominant, STATES
+    dec = await decide_user(db, user_id)
+    for b in dec["blockers"]:
+        if not any(r["code"] == b["code"] for r in reasons):
+            reasons.append({"code": b["code"], "level": b["state"], "message": b["reason"],
+                            "accounts": [b["account_label"]] if b.get("account_label") else [],
+                            "source": "canonical_decision"})
+    level = dominant(level, dec["state"]) if level in STATES else dec["state"]
+    reasons.sort(key=lambda r: STATES.index(r["level"]) if r["level"] in STATES else 0, reverse=True)
+
+    # first-seen persistence per user+code (cleared on recovery) — stored AFTER merge
     doc = await db.trading_readiness.find_one({"_id": user_id}) or {}
     seen = doc.get("first_seen") or {}
     now = _now()
@@ -157,22 +169,10 @@ async def readiness(db, user_id: str) -> dict:
         new_seen[r["code"]] = r["first_seen"]
     await db.trading_readiness.update_one(
         {"_id": user_id},
-        {"$set": {"first_seen": new_seen, "level": level,
+        {"$set": {"first_seen": new_seen, "level": level, "decision_id": dec["decision_id"],
+                  "dominant_code": dec["dominant_code"], "reason_codes": [r["code"] for r in reasons],
                   "last_checked": now}},
         upsert=True)
-
-    reasons.sort(key=lambda r: LEVELS.index(r["level"]), reverse=True)
-    # round 10 P1-02 — the canonical decision is THE authority; this model may
-    # only ENRICH (recovery guidance), never relax. Its level is dominated by,
-    # and its reasons merged with, /authority/decision.
-    from canonical_decision import decide_user, dominant
-    dec = await decide_user(db, user_id)
-    for b in dec["blockers"]:
-        if not any(r["code"] == b["code"] for r in reasons):
-            reasons.append({"code": b["code"], "level": b["state"], "message": b["reason"],
-                            "accounts": [b["account_label"]] if b.get("account_label") else [],
-                            "source": "canonical_decision"})
-    level = dominant(level, dec["state"]) if level in ("READY", "DEGRADED", "CLOSE_ONLY", "BLOCKED", "EMERGENCY") else dec["state"]
     return {"level": level,
             "decision_id": dec["decision_id"],
             "dominant_code": dec["dominant_code"],

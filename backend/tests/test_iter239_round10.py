@@ -8,6 +8,7 @@ allowlist · P1-05 server-side degraded routing for tokenless login · P1-06
 break-glass step-up + second-admin approval · P1-08 container keepalive ·
 P2-02 risk-reducing policy · P2-03 immutable id.
 """
+import json
 import os
 import subprocess
 import sys
@@ -274,3 +275,186 @@ class TestProdShorthandAgreement:
         finally:
             if saved:
                 _run(db.platform_state.replace_one({"_id": "inventory_expectation"}, saved, upsert=True))
+
+
+class TestRound11Corrections:
+    """Audit round 11 — P1-01/02/03/04/05, P2-01/02/03."""
+
+    @pytest.fixture
+    def fleet(self):
+        import uuid
+        from bson import ObjectId
+        db = _db()
+        uid = f"iter241_{uuid.uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc).isoformat()
+        rows = []
+        for i, (mode, en) in enumerate([("live", True), ("live", True), ("live", True), ("live", False), ("demo", False), ("demo", False)]):
+            n = str(820000 + i)
+            rows.append({"_id": ObjectId(), "user_id": uid, "label": f"R11-{i}", "mode": mode, "trading_enabled": en,
+                         "status": "connected", "last_heartbeat": now, "open_positions": 0, "account_number": n,
+                         "account_login": n, "bridge_token": f"r11_{uuid.uuid4().hex}",
+                         "verified_identity": {"account_number": n, "broker_server": "X"}, "created_at": now})
+        _run(db.accounts.insert_many(rows))
+        for r in rows:
+            _run(db.bot_configs.insert_one({"user_id": uid, "account_id": str(r["_id"]), "active": r["trading_enabled"], "created_at": now}))
+        yield uid, rows
+        _run(db.accounts.delete_many({"user_id": uid}))
+        _run(db.bot_configs.delete_many({"user_id": {"$in": [uid, uid + "_x"]}}))
+        _run(db.inventory_config_events.delete_many({"actor": "iter241@stoic.test"}))
+
+    def test_duplicate_and_orphan_bots_block_and_are_reported(self, fleet):
+        from inventory_projection import projection, approve_current
+        uid, rows = fleet
+        db = _db()
+        clean = _run(projection(db, uid))
+        assert clean["violations"] == [] and clean["counts"]["bots_active_raw"] == 3
+        # (user_id, account_id) is unique-indexed, so a duplicate can only arrive from another tenant row
+        _run(db.bot_configs.insert_one({"user_id": uid + "_x", "account_id": str(rows[0]["_id"]), "active": True}))
+        _run(db.bot_configs.insert_one({"user_id": uid, "account_id": "000000000000000000000000", "active": True}))
+        p = _run(projection(db, None if False else uid, include_foreign_bots=True))
+        assert p["blocking"] and p["counts"]["bots_duplicate"] == 1 and p["counts"]["bots_orphan"] == 1
+        assert p["counts"]["bots_active_raw"] == 5 and p["counts"]["bots_enabled"] == 3
+        assert any("2 bot configurations" in v for v in p["violations"]) and any("unknown accounts" in v for v in p["violations"])
+        with pytest.raises(HTTPException) as e:                 # P2-03: invalid inventory is never "approved"
+            _run(approve_current(db, "iter241@stoic.test", "should be refused", uid))
+        assert e.value.status_code == 409
+
+    def test_expectation_policy_validation(self, monkeypatch):
+        from inventory_projection import validate_expectation
+        bad = [{"accounts": -1, "enabled": 0, "bots": 0}, {"accounts": 2, "enabled": 3, "bots": 3},
+               {"accounts": 6, "enabled": 3, "bots": 2}, {"accounts": 6, "enabled": 3, "bots": 3, "account_ids": ["a", "a", "b"]},
+               {"accounts": 6, "enabled": 3, "bots": 3, "account_ids": ["a", "b"]}]
+        for b in bad:
+            with pytest.raises(HTTPException):
+                validate_expectation(b, require_policy=False)
+        ok = {"accounts": 6, "enabled": 3, "bots": 3, "account_ids": ["a", "b", "c"]}
+        assert validate_expectation(ok, require_policy=True)["enabled"] == 3
+        with pytest.raises(HTTPException) as e:
+            validate_expectation({"accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd")}, require_policy=True)
+        assert any("6/3/3" in x for x in e.value.detail["errors"])
+        # a migration signed by the release key is the only way to change the target
+        import json as _json
+        from release_signing import sign_hex
+        body = _json.dumps({"accounts": 4, "enabled": 4, "bots": 4, "migration_id": "MIG-1"}, sort_keys=True, separators=(",", ":")).encode()
+        mig = {"accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd"),
+               "policy_migration": {"migration_id": "MIG-1", "signature_hex": sign_hex(body)}}
+        assert validate_expectation(mig, require_policy=True)["accounts"] == 4
+        mig["policy_migration"]["signature_hex"] = "00" * 64
+        with pytest.raises(HTTPException):
+            validate_expectation(mig, require_policy=True)
+
+    def test_model_manifest_gates_joblib_load(self, tmp_path, monkeypatch):
+        import model_manifest as mm
+        monkeypatch.setattr(mm, "MODEL_DIR", tmp_path)
+        monkeypatch.setattr(mm, "MANIFEST", tmp_path / "MODEL_MANIFEST.json")
+        monkeypatch.setattr(mm, "QUARANTINE", tmp_path / "_quarantine")
+        (tmp_path / "u1").mkdir()
+        f = tmp_path / "u1" / "gbm_ensemble.joblib"
+        f.write_bytes(b"\x80\x04model-bytes")
+        with pytest.raises(mm.ModelRefused, match="no signed"):
+            mm.verify_model(f)
+        mm.sign(["a@x", "b@y"])
+        assert mm.verify_model(f) == mm.sha256_file(f)
+        f.write_bytes(b"\x80\x04model-bytez")                       # one-byte mutation
+        with pytest.raises(mm.ModelRefused, match="digest mismatch"):
+            mm.verify_model(f)
+        assert list((tmp_path / "_quarantine").glob("*.refused.json"))
+        f.write_bytes(b"\x80\x04model-bytes")
+        with pytest.raises(mm.ModelRefused, match="feature schema"):
+            mm.verify_model(f, expected_schema="ens-features-v9")
+        doc = json.loads((tmp_path / "MODEL_MANIFEST.json").read_text())
+        doc["body"]["approvers"] = ["evil@x"]
+        (tmp_path / "MODEL_MANIFEST.json").write_text(json.dumps(doc))
+        with pytest.raises(mm.ModelRefused, match="signature"):
+            mm.verify_model(f)
+        src = open(os.path.join(_BACKEND_DIR, "ml_ensemble.py")).read()
+        assert "verify_model(f)" in src and src.index("verify_model(f)") < src.index("models = joblib.load(f)")
+        assert "gbm_ensemble.candidate.joblib" in src
+        assert json.load(open(os.path.join(ROOT, "release", "rc_lock.json")))["model_manifest_sha256"]
+
+    def test_turnstile_malformed_provider_bodies_fail_closed(self, monkeypatch):
+        import turnstile_gate as tg
+        import httpx
+
+        class _Resp:
+            status_code = 200
+
+            def __init__(self, payload, raw=False):
+                self.p, self.raw = payload, raw
+
+            def json(self):
+                if self.raw:
+                    raise ValueError("bad json")
+                return self.p
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, data=None):
+                return _Client.resp
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        monkeypatch.setenv("TURNSTILE_SECRET_KEY", "k")
+        for payload, raw in ((None, True), ([1, 2], False), (None, False), ({"success": True, "error-codes": "x"}, False)):
+            _Client.resp = _Resp(payload, raw)
+            r = _run(tg.verify_token("tok", "1.1.1.1", action="login"))
+            assert r["ok"] is False and r["state"] in ("provider_unavailable", "client_token_invalid"), (payload, r)
+        assert tg._token_age_seconds("2026-01-01T00:00:00") is not None        # naive → UTC, no TypeError
+        assert tg._token_age_seconds(12345) is None and tg._token_age_seconds(None) is None
+
+    def test_frontend_never_unlocks_on_client_script_failure(self):
+        src = open(os.path.join(ROOT, "frontend", "src", "components", "TurnstileWidget.jsx")).read()
+        assert 'cfgState === "provider-degraded";' in src and 'state === "script-error" ||' not in src
+
+    def test_break_glass_pending_visible_blocking_and_not_overwritable(self):
+        import turnstile_break_glass as tbg
+        db = _db()
+        saved = _run(db.platform_state.find_one({"_id": "turnstile_break_glass"}))
+        _run(db.platform_state.delete_one({"_id": "turnstile_break_glass"}))
+        _run(db.platform_state.delete_one({"_id": tbg.PENDING_ID}))
+        good = {"incident_id": "INC-241", "approver": "approver@stoic.test",
+                "reason": "round 11 pending-request visibility and overwrite refusal drill", "scope": ["login"], "ttl_minutes": 5}
+        try:
+            _run(tbg.request_activation(db, good, "actor@stoic.test"))
+            st = _run(tbg.status(db))
+            assert st["record"] is None and st["pending_request"]["incident_id"] == "INC-241"
+            assert st["promotion_blocked"] and not st["active"]
+            assert _run(tbg.readiness_check(db))["ok"] is False
+            with pytest.raises(HTTPException) as e:
+                _run(tbg.request_activation(db, {**good, "incident_id": "INC-242"}, "other@stoic.test"))
+            assert e.value.status_code == 409
+            assert _run(db.platform_state.find_one({"_id": tbg.PENDING_ID}))["incident_id"] == "INC-241"
+            _run(tbg.cancel_request(db, "actor@stoic.test", "drill over"))
+            assert _run(tbg.status(db))["pending_request"] is None and _run(tbg.readiness_check(db))["ok"]
+        finally:
+            _run(db.platform_state.delete_one({"_id": tbg.PENDING_ID}))
+            if saved:
+                _run(db.platform_state.replace_one({"_id": "turnstile_break_glass"}, saved, upsert=True))
+
+    def test_readiness_persists_the_same_snapshot_it_returns(self, monkeypatch):
+        import trading_readiness as tr
+        import canonical_decision as cd
+        import uuid
+        uid = f"iter241r_{uuid.uuid4().hex[:6]}"
+        db = _db()
+
+        async def _dec(db_, user_id, fresh=False):
+            return {"decision_id": "dec_test", "state": "BLOCKED", "dominant_code": "IDENTITY_MISMATCH",
+                    "blockers": [{"code": "IDENTITY_MISMATCH", "state": "BLOCKED", "reason": "m", "account_label": "A"}]}
+        monkeypatch.setattr(cd, "decide_user", _dec)
+        try:
+            out = _run(tr.readiness(db, uid))
+            stored = _run(db.trading_readiness.find_one({"_id": uid}))
+            assert out["level"] == "BLOCKED" == stored["level"] and stored["decision_id"] == out["decision_id"] == "dec_test"
+            assert out["reasons"][0]["code"] == "IDENTITY_MISMATCH" and stored["reason_codes"][0] == "IDENTITY_MISMATCH"
+            fs = out["reasons"][0]["first_seen"]
+            out2 = _run(tr.readiness(db, uid))
+            assert out2["reasons"][0]["first_seen"] == fs
+        finally:
+            _run(db.trading_readiness.delete_one({"_id": uid}))

@@ -193,6 +193,16 @@ async def admin_break_glass_approve(request: Request, user=Depends(get_current_u
     return await approve_activation(db, user.get("email", ""))
 
 
+@router.post("/admin/settings/turnstile/break-glass/cancel")
+async def admin_break_glass_cancel(request: Request, payload: dict | None = None, user=Depends(get_current_user)):
+    _admin_only(user)
+    from step_up import require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    from turnstile_break_glass import cancel_request
+    return await cancel_request(db, user.get("email", ""), str((payload or {}).get("note") or ""))
+
+
 @router.post("/admin/settings/turnstile/break-glass/deactivate")
 async def admin_break_glass_deactivate(request: Request, payload: dict | None = None, user=Depends(get_current_user)):
     _admin_only(user)

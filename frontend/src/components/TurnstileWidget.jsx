@@ -71,7 +71,7 @@ export const resetTurnstile = () => {
 
 const RECOVERY = {
     "configuration-error": "Human verification could not be configured. Your details are kept — retry in a moment.",
-    "script-error": "The verification challenge could not load (blocked script or network). Your details are kept — retry.",
+    "script-error": "The verification challenge could not load (blocked script, ad-blocker or network). Sign-in stays locked until it loads — allow challenges.cloudflare.com and retry, or contact support.",
     expired: "The verification expired. Complete the challenge again — your details are kept.",
     misconfigured: "Human verification is misconfigured on the server. Our operators have been alerted — please try again later.",
     "provider-degraded": "The verification provider is degraded. Sign-in may ask for an emailed one-time code instead.",
@@ -112,8 +112,10 @@ export const useTurnstile = (action = "login") => {
     const bypassed = cfgState === "break-glass" && Array.isArray(cfg.scope) && cfg.scope.includes(action);
     const enabled = !!siteKey && !bypassed && (cfgState === "ready" || cfgState === "provider-degraded" || cfgState === "break-glass");
     const state = enabled ? (widgetState || "loading") : cfgState;
-    const degradedLoginAllowed = action === "login" && cfg.degraded_login === "otp_required"
-        && (cfgState === "provider-degraded" || state === "script-error" || state === "expired");
+    // round 11 P1-06: tokenless login is offered ONLY when the SERVER reports provider
+    // degradation (its own siteverify failures). A client-side script/CDN failure never
+    // unlocks submit — it fails closed with a precise retry message.
+    const degradedLoginAllowed = action === "login" && cfg.degraded_login === "otp_required" && cfgState === "provider-degraded";
     const canSubmit = cfgState === "disabled" || bypassed || (enabled && state === "ready" && !!token) || degradedLoginAllowed;
     const reset = useCallback(() => { if (resetRef.current) resetRef.current(); else { resetTurnstile(); setToken(""); } }, []);
     const retryConfig = useCallback(() => setAttempt((a) => a + 1), []);

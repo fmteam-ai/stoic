@@ -272,6 +272,7 @@ def bg_clean():
     yield db
     _run(db.platform_state.delete_one({"_id": "turnstile_break_glass"}))
     _run(db.turnstile_bypass_events.delete_many({"incident_id": {"$regex": "^INC-236-"}}))
+    _run(db.ops_alerts.delete_many({"dedup_key": {"$regex": "^turnstile_break_glass:INC-236-"}}))
     if saved:
         _run(db.platform_state.replace_one({"_id": "turnstile_break_glass"}, saved, upsert=True))
 
