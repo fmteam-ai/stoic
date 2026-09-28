@@ -816,6 +816,8 @@ async def on_startup():
         asyncio.create_task(_mode_guardian_loop())
         asyncio.create_task(_pamm_sweep_loop())
         asyncio.create_task(_heartbeat_watch_loop())
+        from deploy_watch import loop as _deploy_watch_loop
+        asyncio.create_task(_deploy_watch_loop())
         # Phase F — separated services (in-process mode runs them all)
         global _protection_task, _analytics_task, _model_maint_task
         _protection_task = asyncio.create_task(_protection_guard_loop())

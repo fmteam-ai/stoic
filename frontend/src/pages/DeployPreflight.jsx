@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { DeployWatchCard } from "@/components/DeployWatchCard";
+import { SignerHealthRow } from "@/components/SignerHealthRow";
 import api, { formatApiError } from "@/lib/api";
 import { CheckCircle2, Loader2, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 
@@ -26,20 +28,24 @@ const VERDICT = {
 
 export default function DeployPreflight() {
     const [data, setData] = useState(null);
+    const [health, setHealth] = useState(null);
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
 
     const load = useCallback(async () => {
         setBusy(true);
         setErr("");
-        try { setData((await api.get("/ops/deploy-preflight")).data); }
+        try { setData((await api.get("/ops/deploy-preflight", { params: { signer_health: true } })).data); }
         catch (e) { setErr(formatApiError(e)); }
         finally { setBusy(false); }
+        try { setHealth((await api.get("/health")).data); } catch { /* provenance optional */ }
     }, []);
     useEffect(() => { load(); }, [load]);
 
     const v = VERDICT[data?.verdict] || VERDICT.will_crash;
     const VIcon = v.icon;
+    const signerCheck = data?.checks?.find((c) => c.id === "release_signer_health");
+    const rows = (data?.checks || []).filter((c) => c.id !== "release_signer_health");
 
     return (
         <AppLayout>
@@ -72,8 +78,10 @@ export default function DeployPreflight() {
                         <p className="text-xs text-[#71717A] leading-relaxed border border-[#1F1F1F] bg-[#0A0A0A] p-3 font-mono">
                             {data.note}
                         </p>
+                        <SignerHealthRow check={signerCheck} />
+                        <DeployWatchCard localSha={health?.build_sha || ""} />
                         <div className="border border-[#1F1F1F] bg-[#0A0A0A] divide-y divide-[#1F1F1F]" data-testid="preflight-checks">
-                            {data.checks.map((c) => {
+                            {rows.map((c) => {
                                 const [label, cls] = PILL[c.status] || PILL.warn;
                                 return (
                                     <div key={c.id} className="p-4 flex flex-wrap gap-3 items-start" data-testid={`preflight-check-${c.id}`}>

@@ -131,13 +131,32 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "absent in production (external signer holds the key)",
         "Remove the private key from the API environment; sign via RELEASE_SIGNER=external."))
     if check_signer_health and not _viols and _mode == "external":
+        import time as _t
+        _t0 = _t.monotonic()
         h = signer_health(env)
-        checks.append(_check(
+        _p = __import__("urllib.parse").parse.urlparse(env.get("RELEASE_SIGNER_URL", ""))
+        c = _check(
             "release_signer_health", "External signer identity/health",
             "pass" if h["ok"] else "fail",
             "ok" if h["ok"] else h.get("error", "unreachable"),
             "GET {RELEASE_SIGNER_URL}/health → ok + key_id + public_key_b64 matching the pinned identity",
-            "Signer unreachable or identity mismatch blocks attestations and promotion (read-only service health is unaffected)."))
+            "Signer unreachable or identity mismatch blocks attestations and promotion (read-only service health is unaffected).")
+        c["signer"] = {"mode": "external", "host": _p.hostname, "remote_key_id": h.get("remote_key_id"),
+                       "pinned_key_id": h.get("key_id"), "identity_matches": h.get("identity_matches"),
+                       "pinned_public_key_prefix": (env.get("RELEASE_PUBLIC_KEY_B64") or "").strip()[:12],
+                       "latency_ms": round((_t.monotonic() - _t0) * 1000), "error": h.get("error")}
+        checks.append(c)
+    elif check_signer_health:
+        c = _check(
+            "release_signer_health", "External signer identity/health",
+            "warn" if not _viols else "fail",
+            f"{_mode} — no remote signer to probe" if not _viols else "not probed (configuration invalid)",
+            "RELEASE_SIGNER=external reachable with matching key_id + pinned public key",
+            "Configure the external signer (docs/PRODUCTION_DEPLOY_CHECKLIST.md Step 1) — the probe runs once RELEASE_SIGNER=external is valid.")
+        c["signer"] = {"mode": _mode, "host": None, "remote_key_id": None, "pinned_key_id": None,
+                       "identity_matches": None, "pinned_public_key_prefix": None, "latency_ms": None,
+                       "error": _viols[0] if _viols else None}
+        checks.append(c)
 
     workers = env.get("BACKGROUND_WORKERS_IN_PROCESS")
     checks.append(_check(

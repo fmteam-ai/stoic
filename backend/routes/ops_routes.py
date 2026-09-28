@@ -640,6 +640,67 @@ async def deploy_preflight(request: Request, signer_health: bool = False):
     return await asyncio.to_thread(run_preflight, bool(signer_health))
 
 
+@router.get("/ops/deploy-watch")
+async def deploy_watch_status(request: Request):
+    """Deploy Watchdog — latest watch (watching|live|stalled|cancelled)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from deploy_watch import allowed_hosts, latest
+    return {"watch": await latest(get_db()),
+            "allowed_hosts": sorted(allowed_hosts()),
+            "interval_sec": int(os.environ.get("DEPLOY_WATCH_INTERVAL_SEC", "30")),
+            "workers_in_process": (os.environ.get("BACKGROUND_WORKERS_IN_PROCESS") or "").lower() == "true"}
+
+
+@router.post("/ops/deploy-watch/arm")
+async def deploy_watch_arm(request: Request):
+    """Arm a watch: admin session (email verified) → polls target/api/health
+    until expected_sha is live, e-mails the arming admin."""
+    from auth import get_current_user, require_admin
+    try:
+        user = await get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"detail": "authentication required"})
+    require_admin(user)
+    db = get_db()
+    from bson import ObjectId
+    full = await db.users.find_one({"_id": ObjectId(user["id"])}, {"email": 1, "email_verified": 1})
+    if (full or {}).get("email_verified") is not True:
+        return JSONResponse(status_code=403, content={"detail": {
+            "code": "email_not_verified",
+            "message": "Verify your e-mail before arming the deploy watchdog."}})
+    from email_sender import is_configured
+    if not is_configured():
+        return JSONResponse(status_code=503, content={"detail": {
+            "code": "email_not_configured", "message": "RESEND_API_KEY is not configured."}})
+    body = await request.json()
+    from deploy_watch import arm
+    try:
+        doc = await arm(db, target_url=body.get("target_url"),
+                        expected_sha=body.get("expected_sha"),
+                        notify_email=full["email"], armed_by=full["email"],
+                        timeout_h=int(body.get("timeout_h") or 24))
+    except (ValueError, TypeError) as e:
+        return JSONResponse(status_code=400, content={"detail": str(e)})
+    return {"watch": doc}
+
+
+@router.post("/ops/deploy-watch/cancel")
+async def deploy_watch_cancel(request: Request):
+    from auth import get_current_user, require_admin
+    try:
+        user = await get_current_user(request)
+    except Exception:
+        return JSONResponse(status_code=401, content={"detail": "authentication required"})
+    require_admin(user)
+    from deploy_watch import cancel
+    doc = await cancel(get_db(), user.get("email") or "admin")
+    if not doc:
+        return JSONResponse(status_code=404, content={"detail": "no active watch"})
+    return {"watch": doc}
+
+
 @router.get("/ops/agent-certs")
 async def agent_cert_posture(request: Request):
     """iter-176 — mTLS cert-expiry posture (rotation policy visibility)."""
