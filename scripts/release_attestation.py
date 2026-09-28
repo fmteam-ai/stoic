@@ -160,6 +160,8 @@ def cmd_emit(a) -> int:
         "signer_canary": _signer_canary(a.signer_canary),
         "artifacts": {"release_manifest_sha256": _sha256(a.manifest)
                       if a.manifest and os.path.exists(a.manifest) else None,
+                      "release_admission_sha256": _sha256(a.admission)
+                      if getattr(a, "admission", None) and os.path.exists(a.admission) else None,
                       "ea_version": manifest.get("ea_version")},
         "provenance": {
             "builder": "github-actions",
@@ -318,6 +320,7 @@ def main() -> int:
     e.add_argument("--pip-audit")
     e.add_argument("--grype")
     e.add_argument("--manifest")
+    e.add_argument("--admission", help="release-admission.json (paired digests) — hash bound into the attestation")
     e.add_argument("--install-ready", action="store_true")
     e.add_argument("--ea-compiled", action="store_true")
     e.add_argument("--command", action="append")

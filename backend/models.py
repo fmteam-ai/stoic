@@ -459,6 +459,7 @@ class BridgeHeartbeat(BaseModel):
     # badge on the Dashboard so the user can tell at a glance which terminals
     # are running stale builds (e.g. missing the autonomous deal-history sweep).
     client_version: Optional[str] = None
+    ea_binary_sha256: Optional[str] = None   # r20 P1-01: terminal-reported EX5 hash (binary proof)
     # EA v1.34+: MarketWatch symbol inventory (filtered to instruments we
     # care about — XAU/BTC/forex majors). Drives the iter-76 broker
     # symbol-suffix auto-detector so the bot routes orders with the

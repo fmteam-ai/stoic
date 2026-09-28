@@ -614,7 +614,7 @@ jobs:
           BACKEND_DIGEST: ${{ steps.push.outputs.backend_digest }}
           FRONTEND_DIGEST: ${{ steps.push.outputs.frontend_digest }}
         run: |
-          python3 scripts/release_attestation.py emit \
+          python3 scripts/release_attestation.py emit --admission release-admission.json \
             --sha "${COMMIT_SHA}" --tag "${{ github.ref_name }}" \
             --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" \
             --junit evidence/junit-unit.xml --junit evidence/junit-integration.xml --junit evidence/junit-critical.xml \

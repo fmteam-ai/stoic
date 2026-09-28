@@ -7,7 +7,7 @@ Two surfaces:
                                    calling user. Any authenticated user can use it.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
@@ -41,19 +41,24 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
                   "close_reason": "panic",
                   "closed_at": now_iso, **stamp}}, session=session,
     )
-    # Request close on all open trades — EA will close on next poll
-    open_close = await db.trades.update_many(
-        {**query, "status": "open"},
-        nx.close_command_update("panic", {"idempotency_key": (stamp.get("nl_effect") or {}).get("key"),
-                                          "fence": (stamp.get("nl_effect") or {}).get("fence")}, **stamp),
-        session=session,
-    )
+    # Request close on all open trades through the unified close protocol (r20 P2-01)
+    from close_commands import request_close
+    nl = stamp.get("nl_effect") or {}
+    closed = await request_close(db, query, reason="panic", actor=f"panic:{broadcast_user_id or 'admin'}",
+                                 ctx={"idempotency_key": nl.get("key"), "fence": nl.get("fence"),
+                                      "execution_id": nl.get("execution_id"), "decision_id": nl.get("decision_id"),
+                                      "authority_version": nl.get("authority_version")},
+                                 session=session, stamp=stamp)
     payload = {
         "bots_disabled": bot_result.modified_count,
         "trades_cancelled": trade_cancel.modified_count,
-        "open_trades_marked_for_close": open_close.modified_count,
+        "open_trades_marked_for_close": closed["trades_marked_for_close"],
+        "close_command_id": closed["command_id"],
         "at": now_iso,
     }
+    # r20 P2-03: the authority-version event is part of the SAME transaction
+    from canonical_decision import bump_authority_version
+    payload["authority_version"] = await bump_authority_version(db, "panic", user_id=broadcast_user_id, session=session)
     # r18 P1-02: the transaction stays DATABASE-ONLY. The websocket broadcast and the
     # authority-version bump are written to an outbox row in the same session and
     # published only after commit (publish_panic_outbox).
@@ -67,20 +72,33 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
 
 
 async def publish_panic_outbox(db, outbox_id: str | None) -> bool:
-    """Post-commit side effects, exactly once per outbox row (claimed via CAS)."""
+    """Post-commit websocket notification, exactly once per outbox row: leased
+    claim (pending → publishing with lease_until + attempts) so a crash after the
+    claim is RECOVERED by sweep_ops_outbox(); outcome delivered/failed/unknown
+    is recorded (r20 P2-03). The authority bump already committed in the txn."""
     if not outbox_id:
         return False
+    now = datetime.now(timezone.utc)
     row = await db.ops_outbox.find_one_and_update(
-        {"_id": outbox_id, "state": "pending"},
-        {"$set": {"state": "publishing", "publishing_at": datetime.now(timezone.utc).isoformat()}})
+        {"_id": outbox_id, "$or": [{"state": "pending"},
+                                   {"state": "publishing", "lease_until": {"$lt": now.isoformat()}}]},
+        {"$set": {"state": "publishing", "publishing_at": now.isoformat(),
+                  "lease_until": (now + timedelta(seconds=OUTBOX_LEASE_S)).isoformat()},
+         "$inc": {"attempts": 1}})
     if not row:
         return False
-    if row.get("user_id"):
-        await ws_manager.broadcast(row["user_id"], "panic_lock", row["payload"])
-    from canonical_decision import bump_authority_version
-    ver = await bump_authority_version(db, "panic", user_id=row.get("user_id"))
-    await db.ops_outbox.update_one({"_id": outbox_id}, {"$set": {
-        "state": "published", "authority_version": ver, "published_at": datetime.now(timezone.utc).isoformat()}})
+    if (row.get("attempts") or 0) + 1 > OUTBOX_MAX_ATTEMPTS:
+        await db.ops_outbox.update_one({"_id": outbox_id}, {"$set": {
+            "state": "unknown", "outcome": "delivery unknown after max attempts", "ended_at": now.isoformat()}})
+        return False
+    try:
+        if row.get("user_id"):
+            await ws_manager.broadcast(row["user_id"], "panic_lock", row["payload"])
+        outcome = "delivered"
+    except Exception as e:  # noqa: BLE001
+        outcome = f"failed: {type(e).__name__}"
+    await db.ops_outbox.update_one({"_id": outbox_id, "state": "publishing"}, {"$set": {
+        "state": "published", "outcome": outcome, "published_at": datetime.now(timezone.utc).isoformat()}})
     return True
 
 
@@ -102,3 +120,32 @@ async def panic_global(user=Depends(get_current_user)):
     require_admin(user)
     reset_rate_limiter()  # clear all rate-limit buckets
     return await _disable_all_bots_and_close_trades({})
+
+
+OUTBOX_LEASE_S = 30
+OUTBOX_MAX_ATTEMPTS = 5
+
+
+async def sweep_ops_outbox(db) -> int:
+    """Reclaim pending rows and publishing rows whose lease expired (crash recovery)."""
+    now = datetime.now(timezone.utc).isoformat()
+    n = 0
+    async for row in db.ops_outbox.find({"kind": "panic_lock", "$or": [
+            {"state": "pending"}, {"state": "publishing", "lease_until": {"$lt": now}}]}, {"_id": 1}):
+        if await publish_panic_outbox(db, row["_id"]):
+            n += 1
+    return n
+
+
+async def ops_outbox_loop():
+    """Background sweeper (in-process workers): recovers stuck/expired outbox rows."""
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(20)
+            await sweep_ops_outbox(get_db())
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger("ops_outbox").warning("sweep error: %s", e)

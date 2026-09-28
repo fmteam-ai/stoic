@@ -221,6 +221,12 @@ async def heartbeat(payload: BridgeHeartbeat):
     if payload.client_version:
         set_doc["ea_version"] = str(payload.client_version)
         set_doc["ea_version_updated_at"] = now_iso
+    # r20 P1-01: binary proof handshake — the terminal reports its EX5 hash; the
+    # server never trusts account metadata for the expected value (release record).
+    reported_hash = str(getattr(payload, "ea_binary_sha256", "") or "").strip().lower()
+    if reported_hash and len(reported_hash) == 64:
+        set_doc["ea_binary_sha256"] = reported_hash
+        set_doc["ea_binary_sha256_at"] = now_iso
 
     # iter-76 · EA v1.34+: auto-detect the broker's symbol-suffix convention
     # from the MarketWatch inventory. Stored on the account so `execution.py`
@@ -2083,11 +2089,9 @@ async def external_deal(payload: BridgeExternalDeal):
     }
     close_ack = None
     if existing and (existing.get("close_command") or {}).get("state") == "requested":
-        # r18 P0-01: broker-confirmed acknowledgement of the outstanding close command
-        # (command key + close_seq + broker deal + time) — persisted, never inferred.
-        close_ack = {**existing["close_command"], "state": "broker_confirmed",
-                     "close_seq": existing.get("close_seq"), "broker_deal_id": payload.deal_id,
-                     "confirmed_at": deal_iso}
+        # r18/r20: broker-confirmed acknowledgement on the trade pointer AND the immutable command row
+        from close_commands import acknowledge_close
+        close_ack = await acknowledge_close(db, existing, broker_deal_id=payload.deal_id, occurred_at=deal_iso)
     if existing:
         real_exit_known = (existing.get("exit_price") is not None
                            and not existing.get("pnl_estimated"))

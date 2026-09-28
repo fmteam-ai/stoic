@@ -505,12 +505,14 @@ async def _close_all_trades(user_id, target, ctx=None):
          "status": {"$in": ["open", "pending"]}}
 
     async def work(session):
-        # r18 P0-01: close_seq is a DURABLE per-trade sequence incremented atomically
-        # with the command (across proposals, PANIC and recovery) — the EA orders by
-        # it and dedupes close_idem_key; the proposal-local fence stays backend-only.
-        res = await db.trades.update_many(q, nx.close_command_update(
-            "nl_command", ctx, **nx.effect_stamp(ctx)), session=session)
-        return {"trades_marked_for_close": res.modified_count}
+        # r18/r20: unified close protocol — durable close_seq + immutable command row
+        from close_commands import request_close, cancel_pending
+        out = await request_close(db, {k: v for k, v in q.items() if k != "status"}, reason="nl_command",
+                                  actor=f"risk_commander:{user_id}", ctx=ctx, session=session, stamp=nx.effect_stamp(ctx))
+        cancelled = await cancel_pending(db, {k: v for k, v in q.items() if k != "status"}, reason="nl_command",
+                                         actor=f"risk_commander:{user_id}", session=session, stamp=nx.effect_stamp(ctx))
+        return {"trades_marked_for_close": out["trades_marked_for_close"], "pending_cancelled": cancelled,
+                "close_command_id": out["command_id"]}
     return await nx.fenced(db, ctx, work)
 
 

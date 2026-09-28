@@ -93,40 +93,54 @@ def test_panic_increments_the_same_close_seq(world, monkeypatch):
     out = _run(_disable_all_bots_and_close_trades({"user_id": uid}, broadcast_user_id=uid))
     t = _run(db.trades.find_one({"_id": tid}))
     assert t["close_seq"] == 5 and t["close_reason"] == "panic" and t["close_command"]["reason"] == "panic"
+    ledger = _run(db.close_commands.find_one({"command_id": out["close_command_id"], "trade_id": str(tid)}))
+    assert ledger["close_seq"] == 5 and ledger["state"] == "requested" and ledger["actor"].startswith("panic:")
+    _run(db.close_commands.delete_many({"trade_id": str(tid)}))
     row = _run(db.ops_outbox.find_one({"_id": out["outbox_id"]}))
     assert row["state"] == "published" and sent == ["panic_lock"]          # no session → published immediately
 
 
 # ---------------------------------------------------------------- P0-02
-def test_ea_capability_gate_numeric_versions_and_hash():
+def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     from ea_capabilities import live_gate, version_tuple, capabilities_for
+    monkeypatch.setenv("EA_RELEASE_SHA256", "c" * 64)                 # pinned from the release record
     assert version_tuple("1.57") == (1, 57) and version_tuple("v1.60") == (1, 60) and version_tuple("1.57.1") == (1, 57, 1)
     assert version_tuple("1.9") < version_tuple("1.10")               # never string compare
     assert version_tuple("") is None and version_tuple("beta") is None
-    blocked = {v: live_gate({"ea_version": v}) for v in (None, "unknown", "1.50", "1.56", "1.57", "1.57.1", "1.60")}
+    blocked = {v: live_gate({"ea_version": v, "ea_binary_sha256": "c" * 64})
+               for v in (None, "unknown", "1.50", "1.56", "1.57", "1.57.1", "1.60")}
     assert blocked[None]["code"] == "EA_VERSION_UNKNOWN" and blocked["unknown"]["code"] == "EA_VERSION_UNKNOWN"
     assert blocked["1.50"]["code"] == "EA_CAPABILITY_BELOW_MIN" and "nl_close_fence_v1" in blocked["1.50"]["reason"]
     assert blocked["1.56"]["code"] == "EA_CAPABILITY_BELOW_MIN"
     assert blocked["1.57"] is None and blocked["1.57.1"] is None and blocked["1.60"] is None
     assert "nl_close_fence_v1" in capabilities_for("1.57") and "nl_close_fence_v1" not in capabilities_for("1.56")
-    forged = live_gate({"ea_version": "1.57", "ea_binary_sha256_expected": "a" * 64, "ea_binary_sha256": "b" * 64})
+    forged = live_gate({"ea_version": "1.57", "ea_binary_sha256": "b" * 64})
     assert forged["code"] == "EA_BINARY_HASH_MISMATCH"
+    # r20 P1-01: proof is REQUIRED for live — missing report or unpinned release both block
+    assert live_gate({"ea_version": "1.57"})["code"] == "EA_BINARY_PROOF_MISSING"
+    assert live_gate({"ea_version": "1.57", "mode": "paper"}) is None            # paper: no terminal dependency
+    monkeypatch.delenv("EA_RELEASE_SHA256")
+    monkeypatch.setattr("ea_capabilities._EA_RELEASE_FILES", ())
+    assert live_gate({"ea_version": "1.57", "ea_binary_sha256": "c" * 64})["code"] == "EA_RELEASE_HASH_UNPINNED"
 
 
-def test_incompatible_ea_blocks_activation_and_canonical_authority(world):
+def test_incompatible_ea_blocks_activation_and_canonical_authority(world, monkeypatch):
     from routes.bot_routes import _activation_readiness, FENCING_MIN_EA
+    monkeypatch.setenv("EA_RELEASE_SHA256", "c" * 64)
     from trading_authority import infrastructure_domain
     from canonical_decision import reason_code
     assert FENCING_MIN_EA == "1.57"
     hb = datetime.now(timezone.utc).isoformat()
     acc = {"user_id": world["id"], "mode": "live", "trading_enabled": True, "ea_version": "1.56",
-           "last_heartbeat": hb, "equity": 1000, "status": "active"}
+           "ea_binary_sha256": "c" * 64, "last_heartbeat": hb, "equity": 1000, "status": "active"}
     problems = _run(_activation_readiness(world["db"], acc))
     assert any("nl_close_fence_v1" in p for p in problems)
     dom = _run(infrastructure_domain(world["db"], acc))
     assert dom["level"] == "CLOSE_ONLY" and reason_code("infrastructure", dom) == "EA_CAPABILITY_BELOW_MIN"
     ok = _run(infrastructure_domain(world["db"], {**acc, "ea_version": "1.57"}))
     assert ok["level"] == "FULL"
+    unproved = _run(infrastructure_domain(world["db"], {**acc, "ea_version": "1.57", "ea_binary_sha256": None}))
+    assert unproved["level"] == "CLOSE_ONLY" and unproved["code"] == "EA_BINARY_PROOF_MISSING"
     paper = _run(infrastructure_domain(world["db"], {**acc, "mode": "paper", "ea_version": "1.20"}))
     assert paper["level"] == "FULL"                                      # paper: no terminal dependency
 
@@ -168,8 +182,8 @@ def test_panic_inside_session_defers_broadcast_and_authority_bump(world, monkeyp
     async def _bc(u, ev, payload):
         sent.append(ev)
 
-    async def _bump(db_, reason, user_id=None):
-        bumps.append(reason)
+    async def _bump(db_, reason, user_id=None, session=None):
+        bumps.append((reason, session is not None))
         return 99
     monkeypatch.setattr(pr.ws_manager, "broadcast", _bc)
     monkeypatch.setattr(cd, "bump_authority_version", _bump)
@@ -178,7 +192,8 @@ def test_panic_inside_session_defers_broadcast_and_authority_bump(world, monkeyp
         pass
     out = _run(pr._disable_all_bots_and_close_trades({"user_id": uid}, broadcast_user_id=uid, session=None,
                                                      stamp={}))  # baseline path publishes immediately
-    assert sent == ["panic_lock"] and bumps == ["panic"]
+    assert sent == ["panic_lock"] and bumps == [("panic", False)]      # bump is part of the (no-)txn write path
+    assert out["authority_version"] == 99
     sent.clear(); bumps.clear()
     # simulate the transactional path: outbox row pending, nothing published yet
     oid = "outbox-test-" + uid
@@ -187,13 +202,19 @@ def test_panic_inside_session_defers_broadcast_and_authority_bump(world, monkeyp
     assert sent == [] and bumps == []
     assert _run(pr.publish_panic_outbox(db, oid)) is True
     assert _run(pr.publish_panic_outbox(db, oid)) is False                 # exactly once
-    assert sent == ["panic_lock"] and bumps == ["panic"]
-    assert _run(db.ops_outbox.find_one({"_id": oid}))["state"] == "published"
+    assert sent == ["panic_lock"] and bumps == []                          # publisher never bumps: it committed in the txn
+    row = _run(db.ops_outbox.find_one({"_id": oid}))
+    assert row["state"] == "published" and row["outcome"] == "delivered" and row["attempts"] == 1
+    # r20 P2-03 crash recovery: a row stuck in `publishing` with an expired lease is reclaimed by the sweeper
+    _run(db.ops_outbox.update_one({"_id": oid}, {"$set": {"state": "publishing", "lease_until": "2000-01-01T00:00:00+00:00"}}))
+    assert _run(pr.sweep_ops_outbox(db)) >= 1
+    row = _run(db.ops_outbox.find_one({"_id": oid}))
+    assert row["state"] == "published" and row["attempts"] == 2 and sent == ["panic_lock", "panic_lock"]
     _run(db.ops_outbox.delete_many({"_id": oid}))
     src = open(pr.__file__).read()
     body = src[src.index("async def _disable_all_bots_and_close_trades"):src.index("async def publish_panic_outbox")]
     assert "ws_manager.broadcast" not in body.replace("publish_panic_outbox", "")
-    assert "bump_authority_version" not in body
+    assert "session=session)" in body[body.index("bump_authority_version("):]
 
 
 # ---------------------------------------------------------------- P2-01 / P2-02

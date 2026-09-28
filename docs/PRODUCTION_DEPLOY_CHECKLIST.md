@@ -140,8 +140,13 @@ refuses a duplicate key or a lower per-trade `close_seq` BEFORE `OrderSend`
 (`close_seq` is a backend-owned sequence monotonic across proposals, PANIC and
 recovery — audit r18 P0-01). Live activation and canonical authority refuse
 terminals below v1.57 or with an unverified/mismatched EX5 hash (r18 P0-02). Compile v1.57 in
-MetaEditor, record the EX5 hash with `scripts/verify_ea_release.py`, and roll
-the terminals — the server reports `LATEST_EA = 1.57`.
+MetaEditor, record the EX5 hash with `scripts/verify_ea_release.py --record`
+(→ `release/ea_release.json`, or pin `EA_RELEASE_SHA256=<64 hex>` in the API
+Secrets), and roll the terminals — the server reports `LATEST_EA = 1.57`.
+**Binary proof is mandatory for live accounts (audit r20 P1-01):** canonical
+authority is CLOSE_ONLY with `EA_RELEASE_HASH_UNPINNED` until the hash is
+pinned, `EA_BINARY_PROOF_MISSING` until the terminal reports `ea_binary_sha256`
+on its heartbeat, and `EA_BINARY_HASH_MISMATCH` when they differ.
 
 ## Not boot-blocking, but needed for the operational tooling
 `STOIC_INSTALLATION_ID`, `RECONCILE_EXPECT=6/3/3`, `RECONCILE_APPROVED_POLICY`,

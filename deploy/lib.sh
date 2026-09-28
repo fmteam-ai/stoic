@@ -206,7 +206,7 @@ pull_attested_images() {
       --certificate-github-workflow-repository "${repo}" \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     || { echo "!! admission manifest SIGNATURE invalid"; return 1; }
-  python3 scripts/verify_admission.py "${adm}" --backend-digest "${be}" --frontend-digest "${fe}" --tag "${tag}" \
+  python3 scripts/verify_admission.py "${adm}" --backend-digest "${be}" --frontend-digest "${fe}" --tag "${tag}" --commit "${GIT_SHA}" \
     || { echo "!! admission manifest does not match the attested digest pair"; return 1; }
   echo "   admission gate: PASSED — deploying the signed digest PAIR"
   registry_login

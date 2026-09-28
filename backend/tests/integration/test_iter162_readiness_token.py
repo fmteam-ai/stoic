@@ -47,7 +47,8 @@ async def _readiness_scenario():
         await db.accounts.insert_one(
             {"_id": acc, "user_id": uid, "label": "main",
              "trading_enabled": True, "open_positions": 0,
-             "verified_identity": True, "ea_version": "1.57",   # r18 P0-02: live gate needs a capable EA
+             "verified_identity": True, "ea_version": "1.57",   # r18/r20: capable EA + binary proof
+             "ea_binary_sha256": "c" * 64,
              "last_heartbeat": (now - timedelta(seconds=5)).isoformat()})
         await db.bot_configs.insert_one(
             {"user_id": uid, "account_id": str(acc), "active": True})
@@ -82,9 +83,14 @@ async def _readiness_scenario():
             {"_id": acc},
             {"$set": {"last_heartbeat": _now_dt().isoformat()}})
         out3 = await readiness(db, uid)
-        assert out3["level"] == "READY"
+        # r20 P2-04: the canonical fingerprint now sees the heartbeat recovery
+        # immediately, so the stability window (RECOVERY_WINDOW, CLOSE_ONLY) applies
+        # instead of a stale READY snapshot; POSITION_TRUTH_STALE itself is cleared.
+        codes3 = [r["code"] for r in out3["reasons"]]
+        assert "POSITION_TRUTH_STALE" not in codes3
+        assert out3["level"] == "READY" or codes3 == ["RECOVERY_WINDOW"], out3["reasons"]
         doc = await db.trading_readiness.find_one({"_id": uid})
-        assert doc["first_seen"] == {}
+        assert "POSITION_TRUTH_STALE" not in (doc.get("first_seen") or {})
 
         # unknown execution on the user's account → BLOCKED
         await db.execution_intents.insert_one(
@@ -97,7 +103,8 @@ async def _readiness_scenario():
         await db.client.drop_database(DB_NAME)
 
 
-def test_trading_readiness_levels():
+def test_trading_readiness_levels(monkeypatch):
+    monkeypatch.setenv("EA_RELEASE_SHA256", "c" * 64)   # r20 P1-01: pinned release hash for the live gate
     asyncio.run(_readiness_scenario())
 
 

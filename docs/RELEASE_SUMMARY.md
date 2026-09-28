@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `d649ebd792a7d3f1f7c1fdef4f8aeed50906d788`
-- rc_lock: `a793ae921b8c7fc9b4b9bab384d35e5a7f21871d` authoritative=False
+- Source commit: `c0114900b9892a728cfc86116920c1e8cc4064f4`
+- rc_lock: `c0114900b9892a728cfc86116920c1e8cc4064f4` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `dbac3de95c0e1732ad1ff69189600cc5094d7e2cb7ff3d1f23dc9389bb693df3`
+- Test manifest sha256: `6f0e77b339b24c654e6efd1c72b071589c910d6c92a613b6c6b74dd6bf1ce5af`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4460 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4464 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -53,5 +53,9 @@
 - server pins ea_binary_sha256_expected from the verified release) — live_gate() already refuses a mismatch
 - the EA-side reporting and server pinning must be wired and rolled out. — owner: engineering
 - SEC-002-r19 [P3] Cloudflare edge duplicates security headers on /api/* (two HSTS max-ages, doubled Referrer-Policy / X-Content-Type-Options). Scope the Transform Rule to non-/api paths or use Set-static (overwrite) and align the dashboard HSTS toggle to 12 months — docs/CLOUDFLARE_EDGE.md §8. — owner: operations
+- P1-01-r20-ea-proof [P1] Terminal-side binary proof: the EA must report its EX5 hash (and capability bitmap / build commit) on the heartbeat handshake, nonce-bound. MQL5 sandboxing prevents an EA from hashing its own EX5, so the proof must come from a signed installer/agent step or an operator-attested install record bound to the terminal identity
+- until then live authority stays CLOSE_ONLY (EA_BINARY_PROOF_MISSING). — owner: engineering
+- P2-01-r20-close-writers [P2] Migrate the remaining close writers (protection_guard, position_protector, eod_flatten, friday_flat, portfolio/risk_manager, trade_manager, trade_reconciler, integrity, telegram/trade/diagnostic routes) to close_commands.request_close() / cancel_pending() so every broker close has one sequence namespace and ledger row. — owner: engineering
+- P1-02-r20-capability-record [P2] Replace the NL_EFFECTS_SYNTHETIC_ONLY environment flag with a signed/immutable deployment capability record and refuse capital-capable startup when the transaction probe fails. — owner: engineering
 
-_generated 2026-09-28T12:08:27.569061+00:00 — regenerate on every release commit_
+_generated 2026-09-28T12:40:48.920691+00:00 — regenerate on every release commit_

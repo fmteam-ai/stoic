@@ -113,7 +113,7 @@ async def authority_version(db) -> int:
     return int((doc or {}).get("version") or 0)
 
 
-async def bump_authority_version(db, reason: str, *, user_id: str | None = None) -> int:
+async def bump_authority_version(db, reason: str, *, user_id: str | None = None, session=None) -> int:
     """Round 12 P2-02: invalidate EVERY cached canonical view (all workers/pods)
     the moment an input changes — PANIC, reconciliation, execution truth,
     inventory, identity, Bot Health, break-glass or a platform blocker."""
@@ -121,8 +121,8 @@ async def bump_authority_version(db, reason: str, *, user_id: str | None = None)
         {"_id": VERSION_ID}, {"$inc": {"version": 1},
                               "$set": {"reason": reason[:120], "at": datetime.now(timezone.utc).isoformat(),
                                        "user_id": user_id}},
-        upsert=True, return_document=True)
-    await db.canonical_decisions.delete_many({} if user_id is None else {"_id": user_id})
+        upsert=True, return_document=True, session=session)
+    await db.canonical_decisions.delete_many({} if user_id is None else {"_id": user_id}, session=session)
     return int(doc["version"])
 
 
@@ -135,10 +135,15 @@ async def inventory_fingerprint(db, user_id: str) -> str:
     rows = []
     async for a in db.accounts.find({"user_id": user_id}, {"_id": 1, "trading_enabled": 1, "mode": 1, "verified_identity": 1,
                                                           "status": 1, "reconciliation_seq": 1, "last_reconciled_at": 1,
-                                                          "position_truth": 1, "execution_authority": 1}):
+                                                          "position_truth": 1, "execution_authority": 1,
+                                                          "ea_version": 1, "ea_binary_sha256": 1, "last_heartbeat": 1}):
+        hb = str(a.get("last_heartbeat") or "")
         rows.append(["a", str(a["_id"]), a.get("trading_enabled") is True, str(a.get("mode") or ""), bool(a.get("verified_identity")),
                      str(a.get("status") or ""), int(a.get("reconciliation_seq") or 0), str(a.get("last_reconciled_at") or ""),
-                     str(a.get("position_truth") or ""), str(a.get("execution_authority") or "")])
+                     str(a.get("position_truth") or ""), str(a.get("execution_authority") or ""),
+                     # r20 P2-04: EA capability inputs + heartbeat freshness bucket (fresh ≤180 s / stale)
+                     str(a.get("ea_version") or ""), str(a.get("ea_binary_sha256") or ""),
+                     "fresh" if hb and hb >= (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat() else "stale"])
     async for b in db.bot_configs.find({"user_id": user_id}, {"account_id": 1, "active": 1}):
         rows.append(["b", str(b.get("account_id")), bool(b.get("active"))])
     async for p in db.platform_state.find({"_id": {"$in": ["trading_authority", "turnstile_break_glass", "inventory_expectation",

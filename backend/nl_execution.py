@@ -269,10 +269,26 @@ async def transactions_required(db) -> bool:
     from app_env import is_production
     if is_production():
         return True
-    live = await db.accounts.count_documents({"trading_enabled": True, "mode": "live", "status": {"$ne": "deleted"}})
-    if live:
+    if await capital_capable(db):
         return True
     return (os.environ.get("NL_EFFECTS_SYNTHETIC_ONLY") or "").lower() != "true"
+
+
+async def capital_capable(db) -> bool:
+    """r20 P1-02: ANY representation of live capital counts — a trading-enabled
+    account whose mode is missing/empty/any non-paper value (missing defaults to
+    live elsewhere), or any account with a terminal binding (bridge token /
+    heartbeat) or broker credentials."""
+    live_like = {"trading_enabled": True, "status": {"$ne": "deleted"},
+                 "$nor": [{"mode": {"$regex": "^paper$", "$options": "i"}}]}
+    if await db.accounts.count_documents(live_like):
+        return True
+    bound = {"status": {"$ne": "deleted"}, "$or": [
+        {"bridge_token": {"$exists": True, "$nin": [None, ""]}},
+        {"last_heartbeat": {"$exists": True, "$nin": [None, ""]}},
+        {"broker_password_enc": {"$exists": True, "$nin": [None, ""]}},
+        {"mt5_password_enc": {"$exists": True, "$nin": [None, ""]}}]}
+    return bool(await db.accounts.count_documents(bound))
 
 
 def target_filter(user_id: str, ctx: dict | None, fallback: dict) -> dict:

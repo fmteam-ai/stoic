@@ -178,5 +178,23 @@
     "severity": "P3",
     "title": "Cloudflare edge duplicates security headers on /api/* (two HSTS max-ages, doubled Referrer-Policy / X-Content-Type-Options). Scope the Transform Rule to non-/api paths or use Set-static (overwrite) and align the dashboard HSTS toggle to 12 months \u2014 docs/CLOUDFLARE_EDGE.md \u00a78.",
     "owner": "operations"
+  },
+  {
+    "id": "P1-01-r20-ea-proof",
+    "severity": "P1",
+    "title": "Terminal-side binary proof: the EA must report its EX5 hash (and capability bitmap / build commit) on the heartbeat handshake, nonce-bound. MQL5 sandboxing prevents an EA from hashing its own EX5, so the proof must come from a signed installer/agent step or an operator-attested install record bound to the terminal identity; until then live authority stays CLOSE_ONLY (EA_BINARY_PROOF_MISSING).",
+    "owner": "engineering"
+  },
+  {
+    "id": "P2-01-r20-close-writers",
+    "severity": "P2",
+    "title": "Migrate the remaining close writers (protection_guard, position_protector, eod_flatten, friday_flat, portfolio/risk_manager, trade_manager, trade_reconciler, integrity, telegram/trade/diagnostic routes) to close_commands.request_close() / cancel_pending() so every broker close has one sequence namespace and ledger row.",
+    "owner": "engineering"
+  },
+  {
+    "id": "P1-02-r20-capability-record",
+    "severity": "P2",
+    "title": "Replace the NL_EFFECTS_SYNTHETIC_ONLY environment flag with a signed/immutable deployment capability record and refuse capital-capable startup when the transaction probe fails.",
+    "owner": "engineering"
   }
 ]
