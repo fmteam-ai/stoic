@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `3c0f6efb5110dc54acb51819f9aadbd518660000`
-- rc_lock: `3c0f6efb5110dc54acb51819f9aadbd518660000` authoritative=False
+- Source commit: `a793ae921b8c7fc9b4b9bab384d35e5a7f21871d`
+- rc_lock: `a793ae921b8c7fc9b4b9bab384d35e5a7f21871d` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `be3773b6ecd51802fd71dd279d9e47d88b296267850390050c0f7e7f8d2d164d`
+- Test manifest sha256: `dbac3de95c0e1732ad1ff69189600cc5094d7e2cb7ff3d1f23dc9389bb693df3`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4454 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4460 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -53,4 +53,4 @@
 - server pins ea_binary_sha256_expected from the verified release) — live_gate() already refuses a mismatch
 - the EA-side reporting and server pinning must be wired and rolled out. — owner: engineering
 
-_generated 2026-09-28T09:48:26.178913+00:00 — regenerate on every release commit_
+_generated 2026-09-28T09:58:48.506284+00:00 — regenerate on every release commit_
