@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `4e61401c0365caf4fec9b17846137b63a51425b5`
-- rc_lock: `4e61401c0365caf4fec9b17846137b63a51425b5` authoritative=False
+- Source commit: `7433df4340e8fd50d9177b1227e51592d908751a`
+- rc_lock: `7433df4340e8fd50d9177b1227e51592d908751a` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `31dfab5114185812b401b2827e660dcf9d23618a621109b8d99a7702ae2907d2`
+- Test manifest sha256: `f2b58138035cdd6050397e14fd44cf2c30abaaf3ceeca91cddb5d99f13c2ef6d`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4478 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4482 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -63,5 +63,6 @@
 - resolved only by the pending redeploy (hosted signer + replica-set Mongo). — owner: operator
 - P3-r22-pairing-rate-limit-review [P3] Tune BRIDGE_IP_LIMIT_PER_MIN (default 1200) per VPS fleet size once live heartbeat volume per address is measured
 - claim-pairing is 20/10 min per IP. — owner: operator
+- P3-r23-pamm-amount-check [P3] PAMM add_investor: add an explicit server-side positive/precision amount check ahead of the broker adapter (adapter currently the only guard). — owner: engineering
 
-_generated 2026-09-28T13:37:43.637700+00:00 — regenerate on every release commit_
+_generated 2026-09-28T13:59:16.115625+00:00 — regenerate on every release commit_

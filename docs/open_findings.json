@@ -214,5 +214,11 @@
     "severity": "P3",
     "title": "Tune BRIDGE_IP_LIMIT_PER_MIN (default 1200) per VPS fleet size once live heartbeat volume per address is measured; claim-pairing is 20/10 min per IP.",
     "owner": "operator"
+  },
+  {
+    "id": "P3-r23-pamm-amount-check",
+    "severity": "P3",
+    "title": "PAMM add_investor: add an explicit server-side positive/precision amount check ahead of the broker adapter (adapter currently the only guard).",
+    "owner": "engineering"
   }
 ]

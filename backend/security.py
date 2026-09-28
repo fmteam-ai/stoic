@@ -112,9 +112,7 @@ def client_ip(request: Request) -> str:
     fwd = request.headers.get("x-forwarded-for", "")
     if fwd:
         return fwd.split(",")[-1].strip()
-    real = request.headers.get("x-real-ip", "")
-    if real:
-        return real.strip()
+    # r23: no X-Real-IP fallback — only the ingress-appended hop or the socket peer.
     return request.client.host if request.client else "unknown"
 
 
@@ -326,3 +324,55 @@ def token_digest(token: str) -> str:
     """r22: one-time e-mail tokens (activation / password reset) are stored as
     SHA-256 digests so a database read cannot redeem an outstanding link."""
     return hashlib.sha256((token or "").strip().encode()).hexdigest()
+
+
+MAX_REQUEST_BODY_BYTES = int(os.environ.get("MAX_REQUEST_BODY_BYTES") or 4 * 1024 * 1024)
+
+
+class RequestBodyLimit:
+    """r23: application-level request body cap (413) — defence in depth behind the edge."""
+
+    def __init__(self, app, max_bytes: int | None = None):
+        self.app = app
+        self.max_bytes = max_bytes or MAX_REQUEST_BODY_BYTES
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        declared = next((v for k, v in scope.get("headers") or [] if k.lower() == b"content-length"), None)
+        try:
+            too_big = declared is not None and int(declared) > self.max_bytes
+        except ValueError:
+            too_big = True
+        if too_big:
+            return await self._reject(send)
+        state = {"seen": 0, "responded": False}
+
+        async def _send(message):
+            if not state["responded"]:
+                await send(message)
+
+        async def _receive():
+            message = await receive()
+            if message["type"] == "http.request":
+                state["seen"] += len(message.get("body") or b"")
+                if state["seen"] > self.max_bytes and not state["responded"]:
+                    await self._reject(send)
+                    state["responded"] = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        try:
+            await self.app(scope, _receive, _send)
+        except Exception:
+            if not state["responded"]:
+                raise
+
+    @staticmethod
+    async def _reject(send):
+        body = b'{"detail":"Request body too large"}'
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+

@@ -671,8 +671,10 @@ else:
     )
 
 
+from security import RequestBodyLimit as _RequestBodyLimit  # noqa: E402
 from security import StripStrayCorsCredentials as _StripStrayCorsCredentials  # noqa: E402
 app.add_middleware(_StripStrayCorsCredentials)
+app.add_middleware(_RequestBodyLimit)
 
 
 _bot_runner_task = None

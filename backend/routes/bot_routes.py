@@ -657,8 +657,26 @@ async def get_risk_gauge(user=Depends(get_current_user)):
     return {"items": out}
 
 
-RISK_LEVEL_RANK = {"low": 0, "middle": 1, "high": 2, "extreme": 3}
-RISK_RAISE_FIELDS = ("adaptive_risk_cap_pct", "crypto_risk_pct_per_trade")
+RISK_LEVEL_RANK = {"low": 0, "medium": 1, "high": 2, "extreme": 3}
+# r23 SEC-001 — every field whose change can ENLARGE live exposure or WEAKEN a
+# protection is step-up gated (fresh TOTP), not just a handful of risk knobs.
+RISK_RAISE_FIELDS = ("adaptive_risk_cap_pct", "crypto_risk_pct_per_trade", "adaptive_risk_floor_pct",
+                     "daily_drawdown_pct", "weekly_drawdown_pct", "monthly_drawdown_pct",
+                     "max_concurrent_trades", "max_leverage", "cvar_budget_pct",
+                     "event_exposure_cap_pct", "anti_tilt_consecutive_losses")
+# lowering these makes the bot LESS strict
+RISK_LOWER_IS_RAISE_FIELDS = ("min_calibrated_confidence", "consensus_threshold", "min_final_rr",
+                              "sl_cooldown_minutes", "loss_cooldown_minutes", "anti_tilt_freeze_hours",
+                              "pre_news_protect_minutes")
+# 0 = unlimited: removing or widening an existing cap is a raise
+RISK_CAP_ZERO_UNLIMITED_FIELDS = ("max_lot_size", "trade_of_day_cap")
+GUARD_FLAG_FIELDS = ("daily_drawdown_enabled", "weekly_drawdown_enabled", "monthly_drawdown_enabled",
+                     "risk_engine_enabled", "spread_filter_enabled", "friday_flat_enabled",
+                     "slippage_veto_enabled", "anti_tilt_enabled", "sl_cooldown_enabled",
+                     "loss_cooldown_enabled", "payoff_guard_enabled", "pre_news_protect_enabled",
+                     "adaptive_sizing_enabled", "breakeven_enabled", "trailing_enabled",
+                     "regime_gating_enabled", "asia_session_skip_xau")
+GUARD_MODE_FIELDS = ("uncertainty_gate_mode", "calendar_intel_mode")   # enforce → anything else
 
 
 async def _live_context(db, user_id: str, account_id: Optional[str],
@@ -675,6 +693,14 @@ async def _live_context(db, user_id: str, account_id: Optional[str],
          "mode": {"$nin": ["paper"]}}) > 0
 
 
+def _cfg_value(cur: dict, field: str):
+    """Stored value, else the model default (a missing field never reads as 0)."""
+    if cur.get(field) is not None:
+        return cur[field]
+    from models import BotConfigUpdate
+    return BotConfigUpdate.model_fields[field].default
+
+
 def _is_risk_raise(update: dict, current: dict) -> bool:
     cur = current or {}
     if "risk_level" in update:
@@ -684,18 +710,31 @@ def _is_risk_raise(update: dict, current: dict) -> bool:
     for f in RISK_RAISE_FIELDS:
         if update.get(f) is not None:
             try:
-                if float(update[f]) > float(cur.get(f) or 0):
+                if float(update[f]) > float(_cfg_value(cur, f) or 0):
                     return True
             except (TypeError, ValueError):
                 continue
-    if update.get("max_lot_size") is not None:
-        try:
-            new_v, cur_v = float(update["max_lot_size"]), float(cur.get("max_lot_size") or 0)
-            # 0 = uncapped → removing an existing cap or raising it is a raise.
-            if cur_v > 0 and (new_v == 0 or new_v > cur_v):
-                return True
-        except (TypeError, ValueError):
-            pass
+    for f in RISK_LOWER_IS_RAISE_FIELDS:
+        if update.get(f) is not None:
+            try:
+                if float(update[f]) < float(_cfg_value(cur, f) or 0):
+                    return True
+            except (TypeError, ValueError):
+                continue
+    for f in RISK_CAP_ZERO_UNLIMITED_FIELDS:
+        if update.get(f) is not None:
+            try:
+                new_v, cur_v = float(update[f]), float(_cfg_value(cur, f) or 0)
+                if cur_v > 0 and (new_v == 0 or new_v > cur_v):
+                    return True
+            except (TypeError, ValueError):
+                pass
+    for f in GUARD_FLAG_FIELDS:
+        if update.get(f) is False and bool(_cfg_value(cur, f)):
+            return True
+    for f in GUARD_MODE_FIELDS:
+        if f in update and str(update[f]).lower() != "enforce" and str(_cfg_value(cur, f)).lower() == "enforce":
+            return True
     return False
 
 

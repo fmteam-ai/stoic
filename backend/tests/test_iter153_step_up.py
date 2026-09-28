@@ -75,11 +75,30 @@ def _login():
     return s
 
 
+_USED_CODES: set = set()
+
+
+def _fresh_code(secret):
+    """r22 replay cache refuses a re-used code — take the next unused step
+    inside the server's ±1 window instead of sleeping."""
+    import time
+    totp = pyotp.TOTP(secret)
+    for offset in (0, 30):
+        code = totp.at(int(time.time()) + offset)
+        if code not in _USED_CODES:
+            _USED_CODES.add(code)
+            return code
+    time.sleep(31)
+    code = totp.now()
+    _USED_CODES.add(code)
+    return code
+
+
 def _enroll_2fa(s):
     r = s.post(f"{BASE}/api/auth/2fa/enroll", json={}, timeout=15)
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]
-    code = pyotp.TOTP(secret).now()
+    code = _fresh_code(secret)
     r = s.post(f"{BASE}/api/auth/2fa/verify-enroll", json={"code": code},
                timeout=15)
     assert r.status_code == 200, r.text
@@ -88,7 +107,7 @@ def _enroll_2fa(s):
 
 def _step_up(s, secret, action):
     r = s.post(f"{BASE}/api/auth/step-up",
-               json={"code": pyotp.TOTP(secret).now(), "action": action},
+               json={"code": _fresh_code(secret), "action": action},
                timeout=15)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -128,7 +147,7 @@ def test_step_up_full_flow():
 
     # 3. unknown action rejected
     r = s.post(f"{BASE}/api/auth/step-up",
-               json={"code": pyotp.TOTP(secret).now(), "action": "nope"},
+               json={"code": _fresh_code(secret), "action": "nope"},
                timeout=15)
     assert r.status_code == 400
 
