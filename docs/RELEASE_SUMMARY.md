@@ -1,7 +1,7 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `bd64d7c6dccaaf6b3773133ac9fde06f3bba2826`
-- rc_lock: `bd64d7c6dccaaf6b3773133ac9fde06f3bba2826` authoritative=False
+- Source commit: `233fcc29199ff3867a336cda6a0d2e38697979e4`
+- rc_lock: `233fcc29199ff3867a336cda6a0d2e38697979e4` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
 - Test manifest sha256: `e65ff56165c8ca03002a2154a19a5e5a50b9466b2c1305d666c014a152d48372`
 - Uvicorn keepalive (container): 75s (application cap 300s)
@@ -33,4 +33,4 @@
 - P2-05-r15 [P2] Preview/prod parity: content-hashed production build on stable staging with non-secret build identity
 - Turnstile valid-once/replay/wrong-binding/malformed/skew/outage/script-failure/recovery matrix executed there. — owner: engineering
 
-_generated 2026-09-28T05:01:48.909887+00:00 — regenerate on every release commit_
+_generated 2026-09-28T05:13:05.852109+00:00 — regenerate on every release commit_

@@ -11,10 +11,11 @@ import os
 from app_env import is_production
 
 
-def _mask(v: str, keep: int = 4) -> str:
+def _mask(v: str, keep: int = 0) -> str:
+    """Length-only mask — never echoes secret characters (audit P3)."""
     if not v:
         return ""
-    return v[:keep] + "•" * min(len(v) - keep, 12) if len(v) > keep else "•" * len(v)
+    return "•" * min(len(v), 12) + f" ({len(v)} chars)"
 
 
 def _check(cid, label, status, current, required, fix):

@@ -65,7 +65,7 @@ def _sha_matches(observed: str, expected: str | None) -> bool:
 def fetch_health(target: str, timeout: float = 10.0) -> dict:
     import requests
     try:
-        r = requests.get(f"{target}/api/health", timeout=timeout,
+        r = requests.get(f"{target}/api/health", timeout=timeout, allow_redirects=False,
                          headers={"User-Agent": "stoic-deploy-watch/1"})
         try:
             body = r.json() if r.content else {}
