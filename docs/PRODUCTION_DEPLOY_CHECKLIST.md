@@ -100,11 +100,16 @@ domain, `TURNSTILE_*` if the Turnstile policy is enabled, `BACKGROUND_WORKERS_IN
 
 ## Step 3 — verify after the deploy
 
+One command (PASS only on the audited production build; old build ⇒ "still serves the OLD build"):
+```bash
+python scripts/live_probe.py --expect-sha <deployed commit>
+```
+Equivalent manual curls:
 ```bash
 curl -s https://www.stoicaibot.com/api/health           # build_sha == deployed commit, app_env=production, env_sig present
-curl -s https://www.stoicaibot.com/api/status | jq .trading.readiness   # canonical readiness block (R13 schema)
-curl -s -o /dev/null -w '%{http_code}\n' https://www.stoicaibot.com/api/authority/decision   # 200
-curl -s -o /dev/null -w '%{http_code}\n' https://www.stoicaibot.com/api/ledger/statements    # 401 (route exists)
+curl -s https://www.stoicaibot.com/api/status | jq .trading.attestation   # R15 availability-only attestation block
+curl -s -o /dev/null -w '%{http_code}\n' https://www.stoicaibot.com/api/authority/decision   # 401 (route exists; auth required — old build: 404)
+curl -s -o /dev/null -w '%{http_code}\n' https://www.stoicaibot.com/api/ledger/statements    # 401 (route exists — old build: 404)
 ```
 Then log in as admin (TOTP required) and open **/admin/runbooks → Deploy
 preflight** (`GET /api/ops/deploy-preflight`) — every row must be `pass`.
