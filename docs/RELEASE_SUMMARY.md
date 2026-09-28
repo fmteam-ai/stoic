@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `c0114900b9892a728cfc86116920c1e8cc4064f4`
-- rc_lock: `c0114900b9892a728cfc86116920c1e8cc4064f4` authoritative=False
+- Source commit: `fb2353944700bd2f626499b5bc5a685e39f1bccc`
+- rc_lock: `fb2353944700bd2f626499b5bc5a685e39f1bccc` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `6f0e77b339b24c654e6efd1c72b071589c910d6c92a613b6c6b74dd6bf1ce5af`
+- Test manifest sha256: `baa34f123590789de3732485394fe9e8e5e12a7674f8116a776b79321a994d06`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4464 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4470 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -58,4 +58,4 @@
 - P2-01-r20-close-writers [P2] Migrate the remaining close writers (protection_guard, position_protector, eod_flatten, friday_flat, portfolio/risk_manager, trade_manager, trade_reconciler, integrity, telegram/trade/diagnostic routes) to close_commands.request_close() / cancel_pending() so every broker close has one sequence namespace and ledger row. — owner: engineering
 - P1-02-r20-capability-record [P2] Replace the NL_EFFECTS_SYNTHETIC_ONLY environment flag with a signed/immutable deployment capability record and refuse capital-capable startup when the transaction probe fails. — owner: engineering
 
-_generated 2026-09-28T12:40:48.920691+00:00 — regenerate on every release commit_
+_generated 2026-09-28T12:44:29.891513+00:00 — regenerate on every release commit_
