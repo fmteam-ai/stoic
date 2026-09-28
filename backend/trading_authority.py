@@ -75,6 +75,11 @@ async def infrastructure_domain(db, account: dict | None = None) -> dict:
         if account.get("mode") == "paper":
             return {"level": "FULL", "reason": "paper account — no "
                                                 "terminal dependency"}
+        if account.get("trading_enabled"):
+            from ea_capabilities import live_gate
+            gate = live_gate(account)   # r18 P0-02: incompatible EA ⇒ no new exposure, everywhere
+            if gate:
+                return {"level": "CLOSE_ONLY", "reason": gate["reason"], "code": gate["code"]}
         hb = str(account.get("last_heartbeat") or "")
         if hb and hb >= _ago(180):
             return {"level": "FULL", "reason": "terminal heartbeat fresh"}

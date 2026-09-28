@@ -47,7 +47,7 @@ async def _readiness_scenario():
         await db.accounts.insert_one(
             {"_id": acc, "user_id": uid, "label": "main",
              "trading_enabled": True, "open_positions": 0,
-             "verified_identity": True,
+             "verified_identity": True, "ea_version": "1.57",   # r18 P0-02: live gate needs a capable EA
              "last_heartbeat": (now - timedelta(seconds=5)).isoformat()})
         await db.bot_configs.insert_one(
             {"user_id": uid, "account_id": str(acc), "active": True})

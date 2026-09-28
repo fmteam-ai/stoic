@@ -120,6 +120,10 @@ def test_production_fails_closed_without_transactions(world, monkeypatch):
     ctx = {"idempotency_key": key, "execution_id": "ex", "owner": "w1", "fence": 1, "target_ids": None}
     assert _run(nx.reserve_effect(db, key, {"user_id": uid}, ctx=ctx)) == "reserved" and _run(nx.dispatch_effect(db, ctx))
     monkeypatch.setattr(app_env, "is_production", lambda: True)
+
+    async def _real(db_):
+        return True
+    monkeypatch.setattr(nx, "transactions_required", _real)
     with pytest.raises(RuntimeError):
         _run(execute_one(uid, {"type": "CLOSE_ALL_TRADES", "target": "all"}, idem_key=key, ctx=ctx))
     assert _run(db.trades.count_documents({"user_id": uid, "close_requested": True})) == 0
@@ -161,11 +165,11 @@ def test_live_suite_is_read_only_by_default():
 def test_ea_parses_nl_fence_and_release_admission_pair():
     ea = open(os.path.join(ROOT, "backend", "static", "EmergentTradingBridge.mq5"), encoding="utf-8", errors="ignore").read()
     assert '#property version   "1.57"' in ea and '#define EA_CLIENT_VERSION "1.57"' in ea
-    assert '"\\"close_idem_key\\":\\"' in ea and '"\\"close_fence\\":"' in ea
-    assert "bool NlCloseAdmitted(" in ea and ea.index("NlCloseAdmitted(trade_id, nl_key, nl_fence)") < ea.index("ClosePosition(trade_id, ticket);")
-    assert 'IntentDone("nlkey-" + nl_key)' in ea and "STALE NL fence rejected" in ea
+    assert '"\\"close_idem_key\\":\\"' in ea and '"\\"close_seq\\":"' in ea
+    assert "bool NlCloseAdmitted(" in ea and ea.index("NlCloseAdmitted(trade_id, nl_key, nl_seq)") < ea.index("ClosePosition(trade_id, ticket);")
+    assert 'IntentDone("nlkey-" + nl_key)' in ea and "STALE NL close_seq rejected" in ea
     rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml")).read()
-    assert "release-admission.json" in rel and rel.index('"record": "release-admission"') < rel.index("docker buildx imagetools create --tag")
+    assert "release-admission.json" in rel and rel.index("verify_admission.py --emit") < rel.index("docker buildx imagetools create --tag")
     assert "ALIAS PAIR INCOMPLETE" in rel
 
 

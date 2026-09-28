@@ -197,6 +197,18 @@ pull_attested_images() {
   local tag; tag=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("tag",""))' "${att}")
   [ -n "${tag}" ] || { echo "!! attestation carries no release tag"; return 1; }
   ensure_cosign || { echo "!! cosign unavailable — cannot verify image signatures"; return 1; }
+  # r18 P2-01 — the signed PAIR admission manifest is mandatory: both digests must
+  # match the attestation; a single tag/alias is never a deployable unit.
+  local adm=release/attestation/release-admission.json
+  [ -f "${adm}" ] || { echo "!! release-admission.json missing — refusing to deploy from tags/aliases"; return 1; }
+  cosign verify-blob "${adm}" --signature "${adm}.sig" --certificate "${adm}.pem" \
+      --certificate-identity "https://github.com/${repo}/.github/workflows/release.yml@refs/tags/${tag}" \
+      --certificate-github-workflow-repository "${repo}" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    || { echo "!! admission manifest SIGNATURE invalid"; return 1; }
+  python3 scripts/verify_admission.py "${adm}" --backend-digest "${be}" --frontend-digest "${fe}" --tag "${tag}" \
+    || { echo "!! admission manifest does not match the attested digest pair"; return 1; }
+  echo "   admission gate: PASSED — deploying the signed digest PAIR"
   registry_login
   for d in "${be}" "${fe}"; do
     echo "${d}" | grep -qE '^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$' \

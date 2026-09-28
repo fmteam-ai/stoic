@@ -17,6 +17,7 @@ logger = logging.getLogger("deploy_watch")
 
 DEFAULT_ALLOWED_HOSTS = "www.stoicaibot.com,stoicaibot.com"
 MAX_TIMEOUT_H = 72
+PROVIDER_IDEMPOTENCY_RETENTION = timedelta(hours=23)   # Resend keeps Idempotency-Key for 24 h
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -170,17 +171,28 @@ async def _notify(db, doc: dict, kind: str, obs: dict) -> dict:
     now = _now()
     try:
         await db.deploy_watch_outbox.insert_one({"_id": outbox_id, "watch_id": doc["_id"], "kind": kind,
-                                                 "state": "claimed", "claimed_at": now, "to": doc["notify_email"]})
+                                                 "state": "claimed", "claimed_at": now, "first_claimed_at": now,
+                                                 "to": doc["notify_email"]})
     except DuplicateKeyError:
         row = await db.deploy_watch_outbox.find_one({"_id": outbox_id}) or {}
         if row.get("state") == "sent" or (row.get("state") == "claimed"
                                           and _aware(row.get("claimed_at") or now) > now - timedelta(minutes=5)):
             return {"kind": kind, "ok": row.get("state") == "sent", "deduped": True,
                     "provider_id": row.get("provider_id"), "at": row.get("sent_at") or row.get("claimed_at")}
-        # a claim older than 5 min never reached `sent`/`failed` → retry once under a fresh claim
+        # r18 P2-02: automatic retries only INSIDE the provider's idempotency
+        # retention window (Resend: 24 h). Older ambiguous rows become an INCIDENT
+        # for manual resolution — never a blind re-send.
+        first = _aware(row.get("first_claimed_at") or row.get("claimed_at") or now)
+        if first < now - PROVIDER_IDEMPOTENCY_RETENTION:
+            await db.deploy_watch_outbox.update_one(
+                {"_id": outbox_id, "state": "claimed"},
+                {"$set": {"state": "incident", "incident_at": now,
+                          "incident_reason": "unacknowledged send older than provider idempotency retention"}})
+            return {"kind": kind, "ok": False, "incident": True, "deduped": True}
         res = await db.deploy_watch_outbox.find_one_and_update(
             {"_id": outbox_id, "state": "claimed", "claimed_at": row.get("claimed_at")},
-            {"$set": {"state": "claimed", "claimed_at": now, "retry": True}})
+            {"$set": {"state": "claimed", "claimed_at": now, "retry": True,
+                      "first_claimed_at": first}})
         if not res:
             return {"kind": kind, "ok": False, "deduped": True}
     subject, html_doc, text = _email_html(kind, doc, obs)

@@ -55,3 +55,19 @@ def run_async(coro):
             return m.run_async(coro)
     import asyncio
     return asyncio.get_event_loop().run_until_complete(coro)
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_nl_effect_posture(monkeypatch):
+    """r18 P1-01: fenced NL effects refuse the non-atomic standalone fallback whenever
+    capital can be touched. The integration suite shares the preview database (which
+    may hold a live-enabled account) and CI runs on a replica set, so the suite
+    declares the SYNTHETIC posture explicitly; the real predicate is covered by
+    test_r18_audit.py::test_transactions_required_by_capability."""
+    import nl_execution as nx
+    if not hasattr(nx, "_transactions_required_real"):
+        nx._transactions_required_real = nx.transactions_required
+
+    async def _synthetic(db):
+        return False
+    monkeypatch.setattr(nx, "transactions_required", _synthetic)

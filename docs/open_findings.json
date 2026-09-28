@@ -154,5 +154,23 @@
     "severity": "P2",
     "title": "Ingress mTLS for agent transport: client-certificate verification, certificate\u2192agent binding, expiry/rotation monitoring, revocation, fail closed when identity cannot be established.",
     "owner": "infrastructure"
+  },
+  {
+    "id": "P1-03-r18",
+    "severity": "P1",
+    "title": "Live capital-safety acceptance pack (AT-P1-03..06) on the promoted digest in one canonical input version \u2014 6/3/3 identity-bound inventory, EA counts agree everywhere, reconciliation in SLA, position truth FRESH+matching, zero UNKNOWN executions, blocker dominance across Start Trader/Safety Blocks/Bot Health/readiness/authority, performance reconciled to signed statements. Authority stays BLOCKED/CLOSE_ONLY until proved.",
+    "owner": "operations"
+  },
+  {
+    "id": "P1-04-r18",
+    "severity": "P1",
+    "title": "Authoritative release (AT-P1-07): one peeled tagged commit binds BUILD_SHA, manifests, strict RC lock, SBOMs, both digests, EA MQ5 + compiled EX5 hash/signature (v1.57 \u2014 currently unrecorded/unsigned, verify_ea_release fails closed), signer identity, admission pair and deployed /api/health.",
+    "owner": "release-engineering"
+  },
+  {
+    "id": "P0-02-r18-handshake",
+    "severity": "P1",
+    "title": "Terminal handshake must PROVE the deployed EX5 hash + capability set (EA reports ea_binary_sha256; server pins ea_binary_sha256_expected from the verified release) \u2014 live_gate() already refuses a mismatch; the EA-side reporting and server pinning must be wired and rolled out.",
+    "owner": "engineering"
   }
 ]

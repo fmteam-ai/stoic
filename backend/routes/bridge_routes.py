@@ -919,7 +919,7 @@ async def poll_trades(payload: PollRequest):
             "take_profit": t["take_profit"],
             "close_requested": t.get("close_requested", False),
             "close_idem_key": t.get("close_idem_key"),
-            "close_fence": t.get("close_fence"),
+            "close_seq": t.get("close_seq", 0),
             "mt5_ticket": t.get("mt5_ticket"),
         })
 
@@ -2081,6 +2081,13 @@ async def external_deal(payload: BridgeExternalDeal):
         "broker_deal_id": payload.deal_id,
         "pending_modification": None,  # closed — any queued mod is moot
     }
+    close_ack = None
+    if existing and (existing.get("close_command") or {}).get("state") == "requested":
+        # r18 P0-01: broker-confirmed acknowledgement of the outstanding close command
+        # (command key + close_seq + broker deal + time) — persisted, never inferred.
+        close_ack = {**existing["close_command"], "state": "broker_confirmed",
+                     "close_seq": existing.get("close_seq"), "broker_deal_id": payload.deal_id,
+                     "confirmed_at": deal_iso}
     if existing:
         real_exit_known = (existing.get("exit_price") is not None
                            and not existing.get("pnl_estimated"))
@@ -2106,6 +2113,8 @@ async def external_deal(payload: BridgeExternalDeal):
             if existing.get("status") == "closed":
                 update["auto_repaired_from_ghost"] = True
                 update["auto_repaired_at"] = datetime.now(timezone.utc).isoformat()
+        if close_ack:
+            update["close_command"] = close_ack
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
         tid = str(existing["_id"])
         # Scalp fast-path AUTHORITATIVE financial reconciliation (round 5

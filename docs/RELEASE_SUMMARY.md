@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `856d7e85910ad35823af5aa28cf127246e2092b0`
-- rc_lock: `856d7e85910ad35823af5aa28cf127246e2092b0` authoritative=False
+- Source commit: `3c0f6efb5110dc54acb51819f9aadbd518660000`
+- rc_lock: `3c0f6efb5110dc54acb51819f9aadbd518660000` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `d4196d4b492be69118881e17995a079ebb9123e633b56be529923c77afa7b82a`
+- Test manifest sha256: `be3773b6ecd51802fd71dd279d9e47d88b296267850390050c0f7e7f8d2d164d`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4445 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4454 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -47,5 +47,10 @@
 - EA v1.57 must be compiled, hash-recorded and rolled to every terminal so close_idem_key/close_fence are enforced at the destination. — owner: operations
 - P2-06-r17 [P2] Turnstile/Cloudflare matrix on a production-built staging bundle at a stable challenge-enabled hostname with the exact build identity recorded. — owner: engineering
 - P2-07-r17 [P2] Ingress mTLS for agent transport: client-certificate verification, certificate→agent binding, expiry/rotation monitoring, revocation, fail closed when identity cannot be established. — owner: infrastructure
+- P1-03-r18 [P1] Live capital-safety acceptance pack (AT-P1-03..06) on the promoted digest in one canonical input version — 6/3/3 identity-bound inventory, EA counts agree everywhere, reconciliation in SLA, position truth FRESH+matching, zero UNKNOWN executions, blocker dominance across Start Trader/Safety Blocks/Bot Health/readiness/authority, performance reconciled to signed statements. Authority stays BLOCKED/CLOSE_ONLY until proved. — owner: operations
+- P1-04-r18 [P1] Authoritative release (AT-P1-07): one peeled tagged commit binds BUILD_SHA, manifests, strict RC lock, SBOMs, both digests, EA MQ5 + compiled EX5 hash/signature (v1.57 — currently unrecorded/unsigned, verify_ea_release fails closed), signer identity, admission pair and deployed /api/health. — owner: release-engineering
+- P0-02-r18-handshake [P1] Terminal handshake must PROVE the deployed EX5 hash + capability set (EA reports ea_binary_sha256
+- server pins ea_binary_sha256_expected from the verified release) — live_gate() already refuses a mismatch
+- the EA-side reporting and server pinning must be wired and rolled out. — owner: engineering
 
-_generated 2026-09-28T07:14:43.935799+00:00 — regenerate on every release commit_
+_generated 2026-09-28T09:48:26.178913+00:00 — regenerate on every release commit_

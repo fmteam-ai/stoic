@@ -206,7 +206,6 @@ async def fenced(db, ctx: dict | None, work):
     if not ctx:
         return await work(None)
     from pymongo.errors import OperationFailure
-    from app_env import is_production
     owned = {"_id": ctx["idempotency_key"], "owner": ctx["owner"], "fence": ctx["fence"]}
     dispatching = {**owned, "state": "dispatching"}
     applying = {**owned, "state": "applying"}
@@ -233,10 +232,47 @@ async def fenced(db, ctx: dict | None, work):
     except OperationFailure as e:
         if "Transaction numbers" not in str(e) and getattr(e, "code", None) not in (20, 263):
             raise
-        if is_production():
-            raise RuntimeError("NL effects require a replica-set MongoDB (transactions) in production")
-    # standalone fallback (preview/CI): the same CAS sequence without atomic commit
+        if await transactions_required(db):
+            raise RuntimeError("NL effects require a replica-set MongoDB (transactions) whenever capital "
+                               "can be touched — standalone fallback only under NL_EFFECTS_SYNTHETIC_ONLY=true "
+                               "with zero live-enabled accounts")
+    # synthetic-only standalone fallback (CI): the same CAS sequence without atomic commit
     return await _run(None)
+
+
+def close_command_update(reason: str, ctx: dict | None, **stamp) -> dict:
+    """Mongo update that writes the current close command AND atomically
+    increments the trade's DURABLE close_seq (r18 P0-01). The terminal orders
+    commands by close_seq across proposals/PANIC/recovery and dedupes
+    close_idem_key; the proposal-local fence is recorded for backend audit only.
+    The previous unresolved command is kept as a supersession record."""
+    ctx = ctx or {}
+    now = _now().isoformat()
+    return {
+        "$inc": {"close_seq": 1},
+        "$set": {"close_requested": True, "close_reason": reason,
+                 "close_idem_key": ctx.get("idempotency_key"), "close_fence": ctx.get("fence"),
+                 "close_command": {"key": ctx.get("idempotency_key"), "fence": ctx.get("fence"),
+                                   "execution_id": ctx.get("execution_id"), "reason": reason,
+                                   "state": "requested", "requested_at": now}, **stamp},
+        "$push": {"close_command_history": {"$each": [{"key": ctx.get("idempotency_key"), "reason": reason,
+                                                       "requested_at": now}], "$slice": -20}},
+    }
+
+
+async def transactions_required(db) -> bool:
+    """r18 P1-01: atomic commit is required whenever capital can be touched —
+    production, OR any live-mode account with trading enabled, OR broker execution
+    enabled — regardless of APP_ENV. Standalone fallback is permitted only under an
+    explicit, verified synthetic-only posture (NL_EFFECTS_SYNTHETIC_ONLY=true AND
+    zero live-enabled accounts)."""
+    from app_env import is_production
+    if is_production():
+        return True
+    live = await db.accounts.count_documents({"trading_enabled": True, "mode": "live", "status": {"$ne": "deleted"}})
+    if live:
+        return True
+    return (os.environ.get("NL_EFFECTS_SYNTHETIC_ONLY") or "").lower() != "true"
 
 
 def target_filter(user_id: str, ctx: dict | None, fallback: dict) -> dict:

@@ -16,7 +16,8 @@ from strategy_presets import list_presets, get_preset
 
 # audit r4 P0 · minimum EA version with command fencing + intent journaling —
 # live activation is blocked below this (paper accounts unaffected).
-FENCING_MIN_EA = "1.50"
+from ea_capabilities import LIVE_MIN_VERSION, live_gate, version_str
+FENCING_MIN_EA = version_str(LIVE_MIN_VERSION)   # r18 P0-02: capability-derived, compared numerically
 from user_presets import (
     list_user_presets, create_user_preset, delete_user_preset, get_user_preset,
 )
@@ -883,15 +884,9 @@ async def _activation_readiness(db, account) -> list:
                                 f"AutoTrading enabled")
         except (TypeError, ValueError):
             pass
-    if not account.get("ea_version"):
-        problems.append("EA version unknown — update to the latest STOIC EA")
-    elif str(account.get("ea_version")) < FENCING_MIN_EA:
-        # audit r4 P0 · live capital requires the fencing-capable EA:
-        # command intent/seq dedupe + durable new-order intent journal.
-        problems.append(
-            f"EA v{account.get('ea_version')} lacks command fencing and "
-            f"intent journaling — update to v{FENCING_MIN_EA}+ before "
-            f"live activation")
+    ea_block = live_gate(account)   # r18 P0-02: numeric version + capability + EX5 hash
+    if ea_block:
+        problems.append(ea_block["reason"])
     if not (account.get("equity") or account.get("balance")):
         problems.append("Account equity is unknown — cannot size trades safely")
     return problems

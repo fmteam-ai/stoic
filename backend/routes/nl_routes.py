@@ -391,10 +391,14 @@ async def execute_one(user_id: str, act: dict, idem_key: str | None = None, ctx:
         import nl_execution as nx
         from routes.panic_routes import _disable_all_bots_and_close_trades
 
+        from routes.panic_routes import publish_panic_outbox
+
         async def work(session):
             return await _disable_all_bots_and_close_trades(
                 {"user_id": user_id}, broadcast_user_id=user_id, stamp=nx.effect_stamp(ctx), session=session)
-        return await nx.fenced(get_db(), ctx, work)
+        result = await nx.fenced(get_db(), ctx, work)
+        await publish_panic_outbox(get_db(), result.get("outbox_id"))   # after commit (r18 P1-02)
+        return result
     if a_type == "SET_CONDITIONAL_TRIGGER":
         return await _save_trigger(user_id, params, idem_key=idem_key, ctx=ctx)
     raise ValueError(f"unknown action {a_type}")
@@ -501,12 +505,11 @@ async def _close_all_trades(user_id, target, ctx=None):
          "status": {"$in": ["open", "pending"]}}
 
     async def work(session):
-        # EA >= 1.57 parses close_idem_key/close_fence from the bridge poll and
-        # durably dedupes the key / rejects a lower fence before OrderSend (r17 P0-01)
-        res = await db.trades.update_many(q, {"$set": {
-            "close_requested": True, "close_reason": "nl_command",
-            "close_idem_key": (ctx or {}).get("idempotency_key"),
-            "close_fence": (ctx or {}).get("fence"), **nx.effect_stamp(ctx)}}, session=session)
+        # r18 P0-01: close_seq is a DURABLE per-trade sequence incremented atomically
+        # with the command (across proposals, PANIC and recovery) — the EA orders by
+        # it and dedupes close_idem_key; the proposal-local fence stays backend-only.
+        res = await db.trades.update_many(q, nx.close_command_update(
+            "nl_command", ctx, **nx.effect_stamp(ctx)), session=session)
         return {"trades_marked_for_close": res.modified_count}
     return await nx.fenced(db, ctx, work)
 

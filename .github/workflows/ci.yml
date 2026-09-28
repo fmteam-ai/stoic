@@ -68,15 +68,23 @@ jobs:
     # DB-layer integration tests (order-state machine, risk reservations,
     # trace persistence) against a real MongoDB service container.
     runs-on: ubuntu-latest
-    services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
     env:
-      MONGO_URL: mongodb://localhost:27017
+      # r18 P2-03 — integration runs on a REAL single-node replica set so the
+      # transactional fenced-effect path (nl_execution.fenced) is exercised, not the CAS fallback
+      MONGO_URL: mongodb://localhost:27017/?replicaSet=rs0&directConnection=true
       DB_NAME: stoic_ci
     steps:
+      - name: Start MongoDB replica set (rs0)
+        run: |
+          docker run -d --name mongo-rs -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            docker exec mongo-rs mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break; sleep 1
+          done
+          docker exec mongo-rs mongosh --quiet --eval 'rs.initiate({_id:"rs0", members:[{_id:0, host:"localhost:27017"}]})'
+          for i in $(seq 1 30); do
+            [ "$(docker exec mongo-rs mongosh --quiet --eval 'rs.isMaster().ismaster')" = "true" ] && break; sleep 1
+          done
+          docker exec mongo-rs mongosh --quiet --eval 'rs.isMaster().setName'
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:

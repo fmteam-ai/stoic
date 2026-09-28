@@ -1453,12 +1453,15 @@ void ParseTradesBlock(string resp) {
       string nl_key   = ExtractString(section, "\"close_idem_key\":\"", t_end);
       int    key_pos  = StringFind(section, "\"close_idem_key\":\"", t_end);
       if (key_pos < 0 || key_pos > brace_pos) nl_key = "";
-      long   nl_fence = (long)ExtractDouble(section, "\"close_fence\":", t_end);
-      int    fence_pos = StringFind(section, "\"close_fence\":", t_end);
-      if (fence_pos < 0 || fence_pos > brace_pos) nl_fence = 0;
+      // r18 P0-01: close_seq is the backend's DURABLE per-trade command sequence
+      // (monotonic across proposals, PANIC and recovery). The proposal-local
+      // fence is NOT used for ordering here — a newer proposal always wins.
+      long   nl_seq  = (long)ExtractDouble(section, "\"close_seq\":", t_end);
+      int    seq_pos = StringFind(section, "\"close_seq\":", t_end);
+      if (seq_pos < 0 || seq_pos > brace_pos) nl_seq = 0;
 
       if (close_req && ticket > 0) {
-         if (!NlCloseAdmitted(trade_id, nl_key, nl_fence)) {
+         if (!NlCloseAdmitted(trade_id, nl_key, nl_seq)) {
             idx = brace_pos + 1;
             if (idx <= 0) break;
             continue;
@@ -1475,23 +1478,26 @@ void ParseTradesBlock(string resp) {
    }
 }
 
-// v1.57 — destination-side NL fence (audit r17 P0-01). Persisted in the
-// terminal's Global Variables (survive restarts): the highest fence seen per
-// trade and every idempotency key already executed.
-bool NlCloseAdmitted(string trade_id, string nl_key, long nl_fence) {
+// v1.57/r18 — destination-side NL close admission (audit r17 P0-01, r18 P0-01).
+// Persisted in the terminal's Global Variables (survive restarts): the highest
+// close_seq seen per trade and every idempotency key already executed.
+// close_seq is a durable cross-proposal sequence owned by the backend, so a
+// genuinely newer command can never be rejected because an OLDER proposal had
+// more worker recovery attempts.
+bool NlCloseAdmitted(string trade_id, string nl_key, long nl_seq) {
    if (StringLen(nl_key) > 0 && IntentDone("nlkey-" + nl_key)) {
       Print("STOIC v1.57: duplicate NL close key ignored trade=", trade_id);
       return false;
    }
-   if (nl_fence > 0) {
-      string fk = JKey("F", trade_id);
-      long seen = GlobalVariableCheck(fk) ? (long)GlobalVariableGet(fk) : 0;
-      if (nl_fence < seen) {
-         Print("STOIC v1.57: STALE NL fence rejected trade=", trade_id,
-               " fence=", nl_fence, " seen=", seen);
+   if (nl_seq > 0) {
+      string sk = JKey("S", trade_id);
+      long seen = GlobalVariableCheck(sk) ? (long)GlobalVariableGet(sk) : 0;
+      if (nl_seq < seen) {
+         Print("STOIC v1.57: STALE NL close_seq rejected trade=", trade_id,
+               " seq=", nl_seq, " seen=", seen);
          return false;
       }
-      if (nl_fence > seen) GlobalVariableSet(fk, (double)nl_fence);
+      if (nl_seq > seen) GlobalVariableSet(sk, (double)nl_seq);
    }
    return true;
 }

@@ -119,7 +119,10 @@ Fenced Risk Commander / trigger effects commit the effect-row assertion, the
 domain mutation and the `completed` transition in ONE transaction. On a
 standalone `mongod` the API **fails closed** (the action is recorded `failed`,
 nothing is written) and the preflight row `mongo_transactions` is FAIL.
-Run MongoDB as a single-node replica set:
+Transactions are required whenever capital can be touched — production, ANY
+live-mode account with trading enabled, regardless of APP_ENV (r18 P1-01). The
+non-atomic standalone fallback exists only for `NL_EFFECTS_SYNTHETIC_ONLY=true`
+with zero live-enabled accounts (CI). Run MongoDB as a single-node replica set:
 
 ```bash
 openssl rand -base64 756 > secrets/mongo_keyfile && chmod 400 secrets/mongo_keyfile   # owned by the mongod uid (999)
@@ -132,8 +135,11 @@ docker compose exec mongo mongosh -u "$MONGO_ROOT_USER" -p "$(cat secrets/mongo_
 
 ## EA v1.57 (audit r17 P0-01) — rebuild required
 `backend/static/EmergentTradingBridge.mq5` now parses `close_idem_key` /
-`close_fence` from the bridge poll and durably (terminal Global Variables)
-refuses a duplicate key or a lower fence BEFORE `OrderSend`. Compile v1.57 in
+`close_seq` from the bridge poll and durably (terminal Global Variables)
+refuses a duplicate key or a lower per-trade `close_seq` BEFORE `OrderSend`
+(`close_seq` is a backend-owned sequence monotonic across proposals, PANIC and
+recovery — audit r18 P0-01). Live activation and canonical authority refuse
+terminals below v1.57 or with an unverified/mismatched EX5 hash (r18 P0-02). Compile v1.57 in
 MetaEditor, record the EX5 hash with `scripts/verify_ea_release.py`, and roll
 the terminals — the server reports `LATEST_EA = 1.57`.
 

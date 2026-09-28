@@ -434,6 +434,21 @@ jobs:
       - name: Install cosign (image signing)
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
 
+      - name: Create + sign + verify the paired ADMISSION manifest (both digests; covered by SHA256SUMS + attestation; r18 P2-01)
+        env:
+          REF: ${{ github.ref_name }}
+          BACKEND_DIGEST: ${{ steps.push.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.push.outputs.frontend_digest }}
+        run: |
+          python3 scripts/verify_admission.py --emit release-admission.json \
+            --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" --tag "${REF}" --commit "${COMMIT_SHA}"
+          cosign sign-blob --yes release-admission.json \
+            --output-signature release-admission.json.sig --output-certificate release-admission.json.pem
+          cosign verify-blob release-admission.json --signature release-admission.json.sig \
+            --certificate release-admission.json.pem \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
       - name: Sign container images by immutable digest (cosign keyless)
         run: |
           cosign sign --yes "${{ steps.push.outputs.backend_digest }}"
@@ -570,7 +585,7 @@ jobs:
       - name: Checksums
         env:
           REF: ${{ github.ref_name }}
-        run: sha256sum "stoic-${REF}.tar.gz" backend/static/EmergentTradingBridge.ex5 release-manifest.json sbom-backend.spdx.json sbom-frontend.spdx.json rc_lock.json > SHA256SUMS
+        run: sha256sum "stoic-${REF}.tar.gz" backend/static/EmergentTradingBridge.ex5 release-manifest.json release-admission.json sbom-backend.spdx.json sbom-frontend.spdx.json rc_lock.json > SHA256SUMS
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
@@ -704,15 +719,13 @@ jobs:
               echo "RELEASE BLOCKED: ${IMG}:${REF} already exists"; exit 1
             fi
           done
-          python3 - << 'EOF'
-          import json, os
-          json.dump({"record": "release-admission", "tag": os.environ["REF"], "commit": os.environ["COMMIT_SHA"],
-                     "images": {"backend": os.environ["BACKEND_DIGEST"], "frontend": os.environ["FRONTEND_DIGEST"]},
-                     "rule": "deploy BOTH digests from this manifest or neither — never from a single tag"},
-                    open("release-admission.json", "w"), indent=2)
-          EOF
-          cosign sign-blob --yes release-admission.json \
-            --output-signature release-admission.json.sig --output-certificate release-admission.json.pem
+          # admission manifest was created, signed and VERIFIED before SHA256SUMS/attestation
+          python3 scripts/verify_admission.py release-admission.json \
+            --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" --tag "${REF}" --commit "${COMMIT_SHA}"
+          cosign verify-blob release-admission.json --signature release-admission.json.sig \
+            --certificate release-admission.json.pem \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
           FAILED=""
           for c in backend frontend; do
             IMG="ghcr.io/${OWNER}/stoic-${c}"

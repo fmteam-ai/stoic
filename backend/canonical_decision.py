@@ -43,6 +43,8 @@ def state_for_level(level: str) -> str:
 
 
 def reason_code(domain: str, domain_state: dict) -> str:
+    if domain_state.get("code"):
+        return str(domain_state["code"])
     base = _CODES.get(domain, domain.upper())
     if domain == "account" and "identity mismatch" in (domain_state.get("reason") or ""):
         return "IDENTITY_MISMATCH"

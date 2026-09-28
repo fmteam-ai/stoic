@@ -6,10 +6,12 @@ Two surfaces:
   - POST /api/panic              : per-user. Same blast radius scoped to the
                                    calling user. Any authenticated user can use it.
 """
+import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
+import nl_execution as nx
 from database import get_db
 from step_up import audit_event
 from ws_manager import manager as ws_manager
@@ -42,9 +44,9 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
     # Request close on all open trades — EA will close on next poll
     open_close = await db.trades.update_many(
         {**query, "status": "open"},
-        {"$set": {"close_requested": True, "close_reason": "panic",
-                  "close_idem_key": (stamp.get("nl_effect") or {}).get("key"),
-                  "close_fence": (stamp.get("nl_effect") or {}).get("fence"), **stamp}}, session=session,
+        nx.close_command_update("panic", {"idempotency_key": (stamp.get("nl_effect") or {}).get("key"),
+                                          "fence": (stamp.get("nl_effect") or {}).get("fence")}, **stamp),
+        session=session,
     )
     payload = {
         "bots_disabled": bot_result.modified_count,
@@ -52,11 +54,34 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
         "open_trades_marked_for_close": open_close.modified_count,
         "at": now_iso,
     }
-    if broadcast_user_id:
-        await ws_manager.broadcast(broadcast_user_id, "panic_lock", payload)
-    from canonical_decision import bump_authority_version
-    await bump_authority_version(db, "panic", user_id=broadcast_user_id)
+    # r18 P1-02: the transaction stays DATABASE-ONLY. The websocket broadcast and the
+    # authority-version bump are written to an outbox row in the same session and
+    # published only after commit (publish_panic_outbox).
+    outbox = {"_id": uuid.uuid4().hex, "kind": "panic_lock", "user_id": broadcast_user_id,
+              "payload": payload, "state": "pending", "created_at": now_iso}
+    await db.ops_outbox.insert_one(outbox, session=session)
+    payload["outbox_id"] = outbox["_id"]
+    if session is None:
+        await publish_panic_outbox(db, outbox["_id"])
     return payload
+
+
+async def publish_panic_outbox(db, outbox_id: str | None) -> bool:
+    """Post-commit side effects, exactly once per outbox row (claimed via CAS)."""
+    if not outbox_id:
+        return False
+    row = await db.ops_outbox.find_one_and_update(
+        {"_id": outbox_id, "state": "pending"},
+        {"$set": {"state": "publishing", "publishing_at": datetime.now(timezone.utc).isoformat()}})
+    if not row:
+        return False
+    if row.get("user_id"):
+        await ws_manager.broadcast(row["user_id"], "panic_lock", row["payload"])
+    from canonical_decision import bump_authority_version
+    ver = await bump_authority_version(db, "panic", user_id=row.get("user_id"))
+    await db.ops_outbox.update_one({"_id": outbox_id}, {"$set": {
+        "state": "published", "authority_version": ver, "published_at": datetime.now(timezone.utc).isoformat()}})
+    return True
 
 
 @router.post("/panic")
