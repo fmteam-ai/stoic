@@ -195,6 +195,62 @@ async def apply_effect(db, ctx: dict | None) -> None:
         raise LeaseLost("effect fenced out before the side effect")
 
 
+async def fenced(db, ctx: dict | None, work):
+    """THE side-effect boundary (audit r17 P0-01). Runs `work(session)` so that
+    the effect-row assertion (`applying` under THIS owner+fence), the domain
+    mutation and the transition to `completed` commit in ONE MongoDB
+    transaction — a stale worker that resumes after a takeover aborts without
+    writing anything. Without a replica set (preview/CI) the fallback is the
+    CAS assertion immediately before the writes; production REQUIRES
+    transactions (fail closed, nothing is written)."""
+    if not ctx:
+        return await work(None)
+    from pymongo.errors import OperationFailure
+    from app_env import is_production
+    owned = {"_id": ctx["idempotency_key"], "owner": ctx["owner"], "fence": ctx["fence"]}
+    dispatching = {**owned, "state": "dispatching"}
+    applying = {**owned, "state": "applying"}
+    now = _now().isoformat()
+
+    async def _run(session):
+        res = await db.nl_effects.update_one(dispatching, {"$set": {"state": "applying", "applying_at": now}},
+                                             session=session)
+        if res.matched_count == 0:
+            raise LeaseLost("effect fenced out before the side effect")
+        result = await work(session)
+        res = await db.nl_effects.update_one(
+            applying, {"$set": {"state": "completed", "result": result, "completed_at": _now().isoformat(),
+                                "committed": "transaction" if session is not None else "cas"}}, session=session)
+        if res.matched_count == 0:
+            raise LeaseLost("effect fenced out at commit")
+        return result
+
+    client = db.client
+    try:
+        async with await client.start_session() as s:
+            async with s.start_transaction():
+                return await _run(s)
+    except OperationFailure as e:
+        if "Transaction numbers" not in str(e) and getattr(e, "code", None) not in (20, 263):
+            raise
+        if is_production():
+            raise RuntimeError("NL effects require a replica-set MongoDB (transactions) in production")
+    # standalone fallback (preview/CI): the same CAS sequence without atomic commit
+    return await _run(None)
+
+
+def target_filter(user_id: str, ctx: dict | None, fallback: dict) -> dict:
+    """Immutable approved targets (r17 P1-01): mutate ONLY the ids bound to the
+    effect at confirmation; the caller's token-derived query is used only
+    when no target list was bound (never for a recovered execution)."""
+    ids = (ctx or {}).get("target_ids")
+    if ids is None:
+        return fallback
+    from bson import ObjectId
+    oids = [ObjectId(i) for i in ids if ObjectId.is_valid(i)]
+    return {"user_id": user_id, "_id": {"$in": oids}}
+
+
 def effect_stamp(ctx: dict | None) -> dict:
     """Fields stamped on every mutated domain row / outbox event so downstream
     consumers (EA bridge, reconciler) can dedupe by key and reject stale fences."""
@@ -229,6 +285,31 @@ async def recheck_authority(db, user_id: str, act: dict, authority: dict | None)
     return fresh, None
 
 
+NO_TARGET_BINDING = {"PANIC_LOCK", "SET_CONDITIONAL_TRIGGER"}   # account-wide / creates a row
+
+
+def base_action(doc: dict, index: int) -> dict:
+    acts = doc.get("actions") or doc.get("then") or []
+    return acts[index] if index < len(acts) else {}
+
+
+async def bound_targets(db, doc: dict, index: int, user_id: str, act: dict):
+    """Immutable target ids for action `index` (r17 P1-01): the APPROVED preview's
+    resolved_ids when the document carries a preview (proposals); otherwise
+    (triggers fire without an operator preview) resolved ONCE now and persisted
+    on the effect row so recovery never re-resolves a broad token."""
+    a_type = str(act.get("type") or "").upper()
+    if a_type in NO_TARGET_BINDING:
+        return None
+    items = ((doc.get("preview") or {}).get("actions") or [])
+    if index < len(items) and items[index].get("resolved_ids") is not None:
+        ids = items[index]["resolved_ids"]
+    else:
+        from nl_preview import preview_action
+        ids = (await preview_action(db, user_id, act)).get("resolved_ids") or []
+    return [str(i).split(":", 1)[0] for i in ids]
+
+
 async def _write_receipt(db, coll: str, doc: dict, key: str, rec: dict) -> bool:
     res = await db[coll].update_one(_guard(doc), {"$set": {f"action_receipts.{key}": rec}})
     return res.matched_count > 0
@@ -239,7 +320,12 @@ async def _recover_started(db, coll: str, doc: dict, key: str, base: dict, user_
     Nothing reached the write → we may run it under our fence; finished →
     copy the outcome; mid-write → uncertain, never replayed."""
     ctx = effect_context(doc, key, authority)
-    state = await reserve_effect(db, key, {"user_id": user_id, "type": base["type"]}, ctx=ctx)
+    prior = await db.nl_effects.find_one({"_id": key}, {"target_ids": 1})
+    ctx["target_ids"] = (prior or {}).get("target_ids")
+    if ctx["target_ids"] is None:
+        ctx["target_ids"] = await bound_targets(db, doc, base["index"], user_id, base_action(doc, base["index"]))
+    state = await reserve_effect(db, key, {"user_id": user_id, "type": base["type"],
+                                           "target_ids": ctx["target_ids"]}, ctx=ctx)
     now = _now().isoformat()
     if state == "reserved":
         return None, ctx
@@ -301,7 +387,9 @@ async def run_claimed(db, coll: str, doc: dict, user_id: str, actions: list,
         try:
             if ctx is None:
                 ctx = effect_context(doc, key, authority)
-                state = await reserve_effect(db, key, {"user_id": user_id, "type": a_type}, ctx=ctx)
+                ctx["target_ids"] = await bound_targets(db, doc, i, user_id, act)
+                state = await reserve_effect(db, key, {"user_id": user_id, "type": a_type,
+                                                       "target_ids": ctx["target_ids"]}, ctx=ctx)
                 if state != "reserved":
                     rec = {**base, "state": "uncertain", "error": f"effect_key_already_{state} — not replayed",
                            "at": _now().isoformat()}
@@ -322,16 +410,21 @@ async def run_claimed(db, coll: str, doc: dict, user_id: str, actions: list,
                         ctx = {**ctx, "decision_id": fresh.get("decision_id"),
                                "authority_version": fresh.get("input_version")}
                     try:
+                        # the handler commits its writes + `completed` atomically via fenced()
                         result = await execute_one(user_id, act, idem_key=key, ctx=ctx)
                     except LeaseLost:
                         raise
                     except Exception as e:  # noqa: BLE001
                         await complete_effect(db, ctx, "failed", error=f"action_failed: {type(e).__name__}")
                         raise
-                    if not await complete_effect(db, ctx, "completed", result=result):
+                    row = await db.nl_effects.find_one({"_id": key}, {"state": 1, "owner": 1, "fence": 1})
+                    if not row or row.get("owner") != ctx["owner"] or row.get("fence") != ctx["fence"]:
+                        raise LeaseLost("effect fenced out at completion")
+                    if row.get("state") != "completed" and not await complete_effect(db, ctx, "completed", result=result):
                         raise LeaseLost("effect fenced out at completion")
                     rec = {**base, "state": "done", "result": result, "decision_id": ctx.get("decision_id"),
-                           "authority_version": ctx.get("authority_version"), "at": _now().isoformat()}
+                           "authority_version": ctx.get("authority_version"),
+                           "target_ids": ctx.get("target_ids"), "at": _now().isoformat()}
         except LeaseLost:
             lost = True
             break

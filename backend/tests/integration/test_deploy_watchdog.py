@@ -23,7 +23,7 @@ def _run(coro):
 def mail(monkeypatch):
     sent = []
 
-    async def fake_send(recipient, subject, html, text=None, sender=None):
+    async def fake_send(recipient, subject, html, text=None, sender=None, idempotency_key=None):
         sent.append({"to": recipient, "subject": subject, "html": html, "text": text})
         return {"ok": True, "id": f"msg-{len(sent)}"}
 

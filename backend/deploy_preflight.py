@@ -18,6 +18,16 @@ def _mask(v: str, keep: int = 0) -> str:
     return "•" * min(len(v), 12) + f" ({len(v)} chars)"
 
 
+def _mongo_transactions_supported(env):
+    try:
+        from pymongo import MongoClient
+        c = MongoClient(env["MONGO_URL"], serverSelectionTimeoutMS=2000)
+        hello = c.admin.command("hello")
+        return bool(hello.get("setName")) or hello.get("msg") == "isdbgrid"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _check(cid, label, status, current, required, fix):
     return {"id": cid, "label": label, "status": status,
             "current": current, "required": required, "fix": fix}
@@ -158,6 +168,17 @@ def run_preflight(check_signer_health: bool = False) -> dict:
                        "identity_matches": None, "pinned_public_key_prefix": None, "latency_ms": None,
                        "error": _viols[0] if _viols else None}
         checks.append(c)
+
+    # r17 P0-01 — fenced NL effects commit in ONE MongoDB transaction in production
+    txn = _mongo_transactions_supported(env)
+    checks.append(_check(
+        "mongo_transactions", "MongoDB transactions (replica set)",
+        "pass" if txn is True else ("fail" if is_production() else "warn"),
+        {True: "replica set — transactions available", False: "standalone — NO transactions",
+         None: "unknown (MongoDB unreachable)"}[txn],
+        "replica set (single-node rs0 is fine) so fenced NL effects commit atomically",
+        "Production NL effects FAIL CLOSED without transactions: run MongoDB with --replSet rs0 "
+        "(+ keyFile with auth) and rs.initiate() — docs/PRODUCTION_DEPLOY_CHECKLIST.md."))
 
     workers = env.get("BACKGROUND_WORKERS_IN_PROCESS")
     checks.append(_check(

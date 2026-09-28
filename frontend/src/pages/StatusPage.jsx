@@ -66,9 +66,25 @@ export default function StatusPage() {
                 ) : (
                     <>
                         {overall && (
-                            <div className={`border px-5 py-4 mb-8 font-display text-lg ${overall.cls}`}
+                            <div className={`border px-5 py-4 mb-3 font-display text-lg ${overall.cls}`}
                                 data-testid="status-overall">
-                                {overall.text}
+                                {data?.headline || overall.text}
+                            </div>
+                        )}
+                        {data?.trading && (
+                            <div className="border border-[#1F1F1F] bg-[#0A0A0A] px-5 py-3 mb-8 font-mono text-[11px] text-[#A1A1AA] grid sm:grid-cols-2 gap-x-6 gap-y-1"
+                                data-testid="status-trading-provenance">
+                                <div>readiness: <span className="text-white" data-testid="status-readiness-state">{data.trading.readiness?.state || "UNKNOWN"}</span>
+                                    {data.trading.readiness?.dominant_code && <span className="text-[#FFB000]"> · {data.trading.readiness.dominant_code}</span>}</div>
+                                <div>connectivity: <span className="text-white">{data.trading.connectivity || "—"}</span></div>
+                                <div>decision: <span className="text-white">{data.trading.readiness?.decision_id || "—"}</span>
+                                    {data.trading.attestation?.input_version != null && <span> · input v{data.trading.attestation.input_version}</span>}</div>
+                                <div>attestation: <span className={data.trading.attestation?.attested ? "text-[#00FF41]" : "text-[#FFB000]"}>
+                                    {data.trading.attestation?.attested ? "attested" : "not attested"}</span>
+                                    {data.trading.attestation?.basis && <span> · {data.trading.attestation.basis}</span>}
+                                    {data.trading.attestation?.inventory_hash && <span> · inv {data.trading.attestation.inventory_hash}</span>}</div>
+                                <div>new exposure: <span className="text-white">{data.trading.readiness?.new_exposure_allowed ? "allowed" : "refused"}</span></div>
+                                <div>as of: <span className="text-white">{data.trading.attestation?.as_of || data.checked_at || "—"}</span></div>
                             </div>
                         )}
                         <div className="space-y-2" data-testid="status-components">

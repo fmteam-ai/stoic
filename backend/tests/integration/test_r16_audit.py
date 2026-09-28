@@ -100,7 +100,7 @@ def test_deploy_watch_terminal_notification_is_sent_once(monkeypatch):
     db = get_db()
     sent = []
 
-    async def fake_send(recipient, subject, html, text=None, sender=None):
+    async def fake_send(recipient, subject, html, text=None, sender=None, idempotency_key=None):
         sent.append(subject)
         return {"ok": True, "id": f"msg-{len(sent)}"}
     monkeypatch.setattr(email_sender, "send_email", fake_send)

@@ -266,14 +266,14 @@
 //|         EURUSD from a GOLD/other-symbol chart).                   |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.56"
+#property version   "1.57"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.56"
+#define EA_CLIENT_VERSION "1.57"
 
 input string ServerUrl              = "https://stoic-trading-bot.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -1447,9 +1447,25 @@ void ParseTradesBlock(string resp) {
       int brace_pos = StringFind(section, "}", t_end);
       bool   close_req = (close_pos > 0 && close_pos < brace_pos);
       long ticket   = (long)ExtractDouble(section, "\"mt5_ticket\":", t_end);
+      // v1.57 (audit r17 P0-01) — NL close commands carry a fenced idempotency
+      // key: the terminal DURABLY dedupes the exact key and rejects a lower fence
+      // for the same trade BEFORE OrderSend.
+      string nl_key   = ExtractString(section, "\"close_idem_key\":\"", t_end);
+      int    key_pos  = StringFind(section, "\"close_idem_key\":\"", t_end);
+      if (key_pos < 0 || key_pos > brace_pos) nl_key = "";
+      long   nl_fence = (long)ExtractDouble(section, "\"close_fence\":", t_end);
+      int    fence_pos = StringFind(section, "\"close_fence\":", t_end);
+      if (fence_pos < 0 || fence_pos > brace_pos) nl_fence = 0;
 
       if (close_req && ticket > 0) {
+         if (!NlCloseAdmitted(trade_id, nl_key, nl_fence)) {
+            idx = brace_pos + 1;
+            if (idx <= 0) break;
+            continue;
+         }
          ClosePosition(trade_id, ticket);
+         if (StringLen(nl_key) > 0 && IntentDone("close-" + trade_id))
+            GlobalVariableSet(JKey("I", "nlkey-" + nl_key), 1);
       } else if (ticket == 0) {
          ExecuteTrade(trade_id, symbol, action, lot, sl, tp);
       }
@@ -1457,6 +1473,27 @@ void ParseTradesBlock(string resp) {
       idx = brace_pos + 1;
       if (idx <= 0) break;
    }
+}
+
+// v1.57 — destination-side NL fence (audit r17 P0-01). Persisted in the
+// terminal's Global Variables (survive restarts): the highest fence seen per
+// trade and every idempotency key already executed.
+bool NlCloseAdmitted(string trade_id, string nl_key, long nl_fence) {
+   if (StringLen(nl_key) > 0 && IntentDone("nlkey-" + nl_key)) {
+      Print("STOIC v1.57: duplicate NL close key ignored trade=", trade_id);
+      return false;
+   }
+   if (nl_fence > 0) {
+      string fk = JKey("F", trade_id);
+      long seen = GlobalVariableCheck(fk) ? (long)GlobalVariableGet(fk) : 0;
+      if (nl_fence < seen) {
+         Print("STOIC v1.57: STALE NL fence rejected trade=", trade_id,
+               " fence=", nl_fence, " seen=", seen);
+         return false;
+      }
+      if (nl_fence > seen) GlobalVariableSet(fk, (double)nl_fence);
+   }
+   return true;
 }
 
 // ----- MODIFICATIONS BLOCK -----

@@ -155,6 +155,10 @@ def _email_html(kind: str, doc: dict, obs: dict) -> tuple[str, str, str]:
     return subject, html_doc, text
 
 
+async def _outbox_ack(db, outbox_id: str, fields: dict) -> None:
+    await db.deploy_watch_outbox.update_one({"_id": outbox_id}, {"$set": fields})
+
+
 async def _notify(db, doc: dict, kind: str, obs: dict) -> dict:
     """Exactly-once terminal notification (r16 P2-05): a unique outbox row keyed
     (watch_id, terminal_status) is claimed BEFORE the send; a send that succeeded
@@ -180,13 +184,11 @@ async def _notify(db, doc: dict, kind: str, obs: dict) -> dict:
         if not res:
             return {"kind": kind, "ok": False, "deduped": True}
     subject, html_doc, text = _email_html(kind, doc, obs)
-    res = await send_email(doc["notify_email"], subject, html_doc, text)
+    res = await send_email(doc["notify_email"], subject, html_doc, text, idempotency_key=outbox_id)
     rec = {"kind": kind, "ok": bool(res.get("ok")), "error": res.get("error"),
            "provider_id": res.get("id"), "at": _now()}
-    await db.deploy_watch_outbox.update_one(
-        {"_id": outbox_id},
-        {"$set": {"state": "sent" if rec["ok"] else "failed", "provider_id": res.get("id"),
-                  "error": res.get("error"), "sent_at": rec["at"]}})
+    await _outbox_ack(db, outbox_id, {"state": "sent" if rec["ok"] else "failed", "provider_id": res.get("id"),
+                                      "error": res.get("error"), "sent_at": rec["at"]})
     await db.deploy_watch.update_one({"_id": doc["_id"]}, {"$set": {"notified": rec}})
     return rec
 

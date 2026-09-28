@@ -19,7 +19,7 @@ router = APIRouter(tags=["panic"])
 
 
 async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str = None,
-                                             stamp: dict | None = None) -> dict:
+                                             stamp: dict | None = None, session=None) -> dict:
     """`stamp` = nl_execution.effect_stamp(ctx) when invoked from the fenced NL executor."""
     db = get_db()
     stamp = stamp or {}
@@ -30,21 +30,21 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
             "active": False,
             "tripped_at": now_iso,
             "tripped_reason": "PANIC LOCK — all trading halted by user/admin", **stamp,
-        }},
+        }}, session=session,
     )
     # Mark all pending trades cancelled
     trade_cancel = await db.trades.update_many(
         {**query, "status": "pending"},
         {"$set": {"status": "cancelled", "error": "panic_lock",
                   "close_reason": "panic",
-                  "closed_at": now_iso, **stamp}},
+                  "closed_at": now_iso, **stamp}}, session=session,
     )
     # Request close on all open trades — EA will close on next poll
     open_close = await db.trades.update_many(
         {**query, "status": "open"},
         {"$set": {"close_requested": True, "close_reason": "panic",
                   "close_idem_key": (stamp.get("nl_effect") or {}).get("key"),
-                  "close_fence": (stamp.get("nl_effect") or {}).get("fence"), **stamp}},
+                  "close_fence": (stamp.get("nl_effect") or {}).get("fence"), **stamp}}, session=session,
     )
     payload = {
         "bots_disabled": bot_result.modified_count,

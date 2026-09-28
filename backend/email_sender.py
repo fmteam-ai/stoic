@@ -33,6 +33,7 @@ async def send_email(
     html: str,
     text: Optional[str] = None,
     sender: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> dict:
     """Send a transactional email via Resend.
 
@@ -53,7 +54,13 @@ async def send_email(
         params["text"] = text
 
     try:
-        email = await asyncio.to_thread(resend.Emails.send, params)
+        # r17 P2-02 — provider-bound idempotency: Resend dedupes the exact key
+        # (sent as the Idempotency-Key header), so a crash after acceptance but
+        # before our outbox acknowledgement cannot produce a second delivery.
+        if idempotency_key:
+            email = await asyncio.to_thread(resend.Emails.send, params, {"idempotency_key": idempotency_key})
+        else:
+            email = await asyncio.to_thread(resend.Emails.send, params)
         return {"ok": True, "id": (email or {}).get("id")}
     except Exception as e:
         logger.error("resend send failed: %s", e)

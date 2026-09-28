@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `30856cbc25d83dac5d472ab609fb8bdc7b8cfdda`
-- rc_lock: `30856cbc25d83dac5d472ab609fb8bdc7b8cfdda` authoritative=False
+- Source commit: `5380c2cbb720a95f4850fe789524f90972ac71c2`
+- rc_lock: `5380c2cbb720a95f4850fe789524f90972ac71c2` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `db84b7b1a636a16bdfcaf4ad868c4693b4fbfeb784826b92b9ed898944f04e85`
+- Test manifest sha256: `c41578336deba170b1ad69f8775b7b5588c0c94ca52b1467a4b2d9a472feda61`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4432 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4439 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -40,5 +40,12 @@
 - P2-02-r16 [P2] Canonical decision fingerprint completeness: every mutable authority input (global blocks, active alerts, PAMM uncertainty, inventory, identity, executions, reconciliation, Bot Health caps, Safety Blocks) in one snapshot hash/version exposed uniformly in readiness, denials, Bot Health, Safety Blocks, receipts and performance gating. — owner: engineering
 - P2-03-r16 [P2] Turnstile/Cloudflare matrix demonstrated on production-like staging with the production-built frontend and a stable hostname (valid-once, replay, wrong action/hostname, malformed, skew, outage, script failure, OTP fallback, recovery, rate limits). — owner: engineering
 - P2-04-r16 [P2] Agent transport identity: ingress mTLS with client-certificate verification, rotation/expiry monitoring, revocation and certificate→immutable agent record mapping. — owner: infrastructure
+- P1-02-r17 [P1] Authoritative single-commit release: BUILD_SHA, RC lock, model manifest, test manifest, SBOMs, both image digests, EA source + compiled EX5 (hash recorded, signed), signer identity, attestation and deployed /api/health all bound to one peeled tagged commit
+- verify offline, deploy by digest pair from release-admission.json. — owner: release-engineering
+- P1-03-r17 [P1] Live capital-safety acceptance on the promoted digest in one canonical input version (6 identity-bound accounts, exactly 3 LIVE enabled + their 3 bots, no orphan/null-account bots, EA counts agree everywhere, reconciliation age in SLA, position truth FRESH + matching, zero UNKNOWN/aged executions, Safety Blocks / Bot Health caps / Start Trader / readiness / authority agree, every performance period reconciles to signed statements with full coverage). — owner: operations
+- P0-01-r17-infra [P0] Production MongoDB must run as a replica set (transactions) — fenced NL effects fail closed without it
+- EA v1.57 must be compiled, hash-recorded and rolled to every terminal so close_idem_key/close_fence are enforced at the destination. — owner: operations
+- P2-06-r17 [P2] Turnstile/Cloudflare matrix on a production-built staging bundle at a stable challenge-enabled hostname with the exact build identity recorded. — owner: engineering
+- P2-07-r17 [P2] Ingress mTLS for agent transport: client-certificate verification, certificate→agent binding, expiry/rotation monitoring, revocation, fail closed when identity cannot be established. — owner: infrastructure
 
-_generated 2026-09-28T06:48:03.211387+00:00 — regenerate on every release commit_
+_generated 2026-09-28T07:10:13.515515+00:00 — regenerate on every release commit_

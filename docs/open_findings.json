@@ -124,5 +124,35 @@
     "severity": "P2",
     "title": "Agent transport identity: ingress mTLS with client-certificate verification, rotation/expiry monitoring, revocation and certificate\u2192immutable agent record mapping.",
     "owner": "infrastructure"
+  },
+  {
+    "id": "P1-02-r17",
+    "severity": "P1",
+    "title": "Authoritative single-commit release: BUILD_SHA, RC lock, model manifest, test manifest, SBOMs, both image digests, EA source + compiled EX5 (hash recorded, signed), signer identity, attestation and deployed /api/health all bound to one peeled tagged commit; verify offline, deploy by digest pair from release-admission.json.",
+    "owner": "release-engineering"
+  },
+  {
+    "id": "P1-03-r17",
+    "severity": "P1",
+    "title": "Live capital-safety acceptance on the promoted digest in one canonical input version (6 identity-bound accounts, exactly 3 LIVE enabled + their 3 bots, no orphan/null-account bots, EA counts agree everywhere, reconciliation age in SLA, position truth FRESH + matching, zero UNKNOWN/aged executions, Safety Blocks / Bot Health caps / Start Trader / readiness / authority agree, every performance period reconciles to signed statements with full coverage).",
+    "owner": "operations"
+  },
+  {
+    "id": "P0-01-r17-infra",
+    "severity": "P0",
+    "title": "Production MongoDB must run as a replica set (transactions) \u2014 fenced NL effects fail closed without it; EA v1.57 must be compiled, hash-recorded and rolled to every terminal so close_idem_key/close_fence are enforced at the destination.",
+    "owner": "operations"
+  },
+  {
+    "id": "P2-06-r17",
+    "severity": "P2",
+    "title": "Turnstile/Cloudflare matrix on a production-built staging bundle at a stable challenge-enabled hostname with the exact build identity recorded.",
+    "owner": "engineering"
+  },
+  {
+    "id": "P2-07-r17",
+    "severity": "P2",
+    "title": "Ingress mTLS for agent transport: client-certificate verification, certificate\u2192agent binding, expiry/rotation monitoring, revocation, fail closed when identity cannot be established.",
+    "owner": "infrastructure"
   }
 ]

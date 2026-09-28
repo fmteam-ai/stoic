@@ -8,7 +8,7 @@ test-integration:     ## integration lane (needs MongoDB via backend/.env)
 	cd backend && python -m pytest tests/integration -q
 
 test-full:            ## full classified suite against a running stack
-	STOIC_ALLOW_MUTATING_TESTS=YES ./scripts/run_full_suite.sh
+	./scripts/run_full_suite.sh   # read-only; export STOIC_ALLOW_MUTATING_TESTS=YES to opt in to mutating live tests
 
 lock:                 ## freeze the RC dependency lock (release/rc_lock.json)
 	python scripts/freeze_rc_lock.py

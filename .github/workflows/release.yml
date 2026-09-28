@@ -695,15 +695,34 @@ jobs:
           python3 scripts/release_attestation.py verify --file release-attestation.json \
             --sha "${COMMIT_SHA}" --tag "${REF}" \
             --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" --require-images
+          # r17 P2-01 — the deployable unit is the PAIR. Preflight both aliases absent,
+          # publish ONE signed admission manifest naming both digests (consumers admit
+          # from it; aliases are convenience pointers), then attach the aliases.
           for c in backend frontend; do
             IMG="ghcr.io/${OWNER}/stoic-${c}"
             if docker manifest inspect "${IMG}:${REF}" >/dev/null 2>&1; then
               echo "RELEASE BLOCKED: ${IMG}:${REF} already exists"; exit 1
             fi
+          done
+          python3 - << 'EOF'
+          import json, os
+          json.dump({"record": "release-admission", "tag": os.environ["REF"], "commit": os.environ["COMMIT_SHA"],
+                     "images": {"backend": os.environ["BACKEND_DIGEST"], "frontend": os.environ["FRONTEND_DIGEST"]},
+                     "rule": "deploy BOTH digests from this manifest or neither — never from a single tag"},
+                    open("release-admission.json", "w"), indent=2)
+          EOF
+          cosign sign-blob --yes release-admission.json \
+            --output-signature release-admission.json.sig --output-certificate release-admission.json.pem
+          FAILED=""
+          for c in backend frontend; do
+            IMG="ghcr.io/${OWNER}/stoic-${c}"
             [ "$c" = backend ] && D="${BACKEND_DIGEST}" || D="${FRONTEND_DIGEST}"
-            docker buildx imagetools create --tag "${IMG}:${REF}" "${D}"
+            docker buildx imagetools create --tag "${IMG}:${REF}" "${D}" || FAILED="${FAILED} ${c}"
             echo "attached ${IMG}:${REF} -> ${D}"
           done
+          if [ -n "${FAILED}" ]; then
+            echo "ALIAS PAIR INCOMPLETE (${FAILED}) — admission manifest is authoritative; do NOT deploy from tags. Re-run this step to complete the pair."; exit 1
+          fi
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
@@ -724,6 +743,9 @@ jobs:
             release-attestation.json.sig
             release-attestation.json.pem
             release-attestation.json.bundle
+            release-admission.json
+            release-admission.json.sig
+            release-admission.json.pem
             evidence/pip-audit.json
             evidence/grype-backend.json
             evidence/junit-unit.xml

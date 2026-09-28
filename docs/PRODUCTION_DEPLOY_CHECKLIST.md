@@ -114,6 +114,29 @@ curl -s -o /dev/null -w '%{http_code}\n' https://www.stoicaibot.com/api/ledger/s
 Then log in as admin (TOTP required) and open **/admin/runbooks → Deploy
 preflight** (`GET /api/ops/deploy-preflight`) — every row must be `pass`.
 
+## MongoDB transactions are REQUIRED in production (audit r17 P0-01)
+Fenced Risk Commander / trigger effects commit the effect-row assertion, the
+domain mutation and the `completed` transition in ONE transaction. On a
+standalone `mongod` the API **fails closed** (the action is recorded `failed`,
+nothing is written) and the preflight row `mongo_transactions` is FAIL.
+Run MongoDB as a single-node replica set:
+
+```bash
+openssl rand -base64 756 > secrets/mongo_keyfile && chmod 400 secrets/mongo_keyfile   # owned by the mongod uid (999)
+# docker-compose.yml → mongo.command:
+#   ["mongod","--bind_ip_all","--replSet","rs0","--keyFile","/run/secrets/mongo_keyfile"]
+docker compose exec mongo mongosh -u "$MONGO_ROOT_USER" -p "$(cat secrets/mongo_root_password)" \
+  --eval 'try { rs.status() } catch (e) { rs.initiate({_id:"rs0", members:[{_id:0, host:"mongo:27017"}]}) }'
+```
+`MONGO_URL` gains `&replicaSet=rs0`. Managed MongoDB (Atlas etc.) already qualifies.
+
+## EA v1.57 (audit r17 P0-01) — rebuild required
+`backend/static/EmergentTradingBridge.mq5` now parses `close_idem_key` /
+`close_fence` from the bridge poll and durably (terminal Global Variables)
+refuses a duplicate key or a lower fence BEFORE `OrderSend`. Compile v1.57 in
+MetaEditor, record the EX5 hash with `scripts/verify_ea_release.py`, and roll
+the terminals — the server reports `LATEST_EA = 1.57`.
+
 ## Not boot-blocking, but needed for the operational tooling
 `STOIC_INSTALLATION_ID`, `RECONCILE_EXPECT=6/3/3`, `RECONCILE_APPROVED_POLICY`,
 `RECONCILE_SCOPE_USER_ID` are read by `ops/production_reconcile.py` and the

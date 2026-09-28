@@ -16,6 +16,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 import release_signing as rs  # noqa: E402
 
+pytestmark = pytest.mark.unit
+
 TOKEN = "test-signer-bearer-" + "x" * 16
 
 
