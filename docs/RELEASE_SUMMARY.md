@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `233fcc29199ff3867a336cda6a0d2e38697979e4`
-- rc_lock: `233fcc29199ff3867a336cda6a0d2e38697979e4` authoritative=False
+- Source commit: `3f31d46db726ef4dd8f49acf8936ded1ad43b9e7`
+- rc_lock: `3f31d46db726ef4dd8f49acf8936ded1ad43b9e7` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `e65ff56165c8ca03002a2154a19a5e5a50b9466b2c1305d666c014a152d48372`
+- Test manifest sha256: `40f12bb5cd9bebe2419c10b61604f4372a5a04caf19f721ff8d338b9a65990ce`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4415 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4426 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -32,5 +32,13 @@
 - P1-07-r15 [P1] Live 6/3/3, broker truth and zero-UNKNOWN closure are unproven on production: authority stays BLOCKED/CLOSE_ONLY and performance publication withheld until a signed pre-promotion + production-reconciliation evidence bundle from the exact deployed digest passes the final gate. — owner: operations
 - P2-05-r15 [P2] Preview/prod parity: content-hashed production build on stable staging with non-secret build identity
 - Turnstile valid-once/replay/wrong-binding/malformed/skew/outage/script-failure/recovery matrix executed there. — owner: engineering
+- P1-03-r16 [P1] Authoritative release identities: BUILD_SHA, RC-lock commit, model-manifest code_commit, image digests, attestation and EA EX5 hash must all bind to ONE peeled tagged commit produced by the tagged workflow (developer-snapshot evidence is not authoritative). — owner: release-engineering
+- P1-05-r16 [P1] Live capital-safety acceptance on the exact promoted digest: 6 identity-bound accounts, exactly 3 LIVE enabled + their 3 bots, no orphan/duplicate bots, EA fresh counts agree across inventory/readiness/status/accounts/broker sessions, reconciliation age in SLA, position truth FRESH and matching, zero UNKNOWN/aged executions, Safety Blocks/Bot Health/Start Trader/readiness/authority agree, all performance periods reconcile to signed statements with full coverage. — owner: operations
+- P2-01-r16 [P2] Chart provenance: shared SeriesProvenance component + API schema on every chart (source/provider, as-of, timezone, freshness, missing intervals, cache/fallback state, ledger/attestation id)
+- timestamp-based ranges
+- visual separation of indicative vs simulated vs reconciled broker series. — owner: engineering
+- P2-02-r16 [P2] Canonical decision fingerprint completeness: every mutable authority input (global blocks, active alerts, PAMM uncertainty, inventory, identity, executions, reconciliation, Bot Health caps, Safety Blocks) in one snapshot hash/version exposed uniformly in readiness, denials, Bot Health, Safety Blocks, receipts and performance gating. — owner: engineering
+- P2-03-r16 [P2] Turnstile/Cloudflare matrix demonstrated on production-like staging with the production-built frontend and a stable hostname (valid-once, replay, wrong action/hostname, malformed, skew, outage, script failure, OTP fallback, recovery, rate limits). — owner: engineering
+- P2-04-r16 [P2] Agent transport identity: ingress mTLS with client-certificate verification, rotation/expiry monitoring, revocation and certificate→immutable agent record mapping. — owner: infrastructure
 
-_generated 2026-09-28T05:13:05.852109+00:00 — regenerate on every release commit_
+_generated 2026-09-28T05:54:33.792957+00:00 — regenerate on every release commit_

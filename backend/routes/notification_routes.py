@@ -13,6 +13,17 @@ from auth import get_current_user
 from database import get_db
 from secrets_vault import encrypt as vault_encrypt, decrypt as vault_decrypt
 
+# Telegram MarkdownV2 bodies — raw strings so "\." is a literal escape (audit r16 P2-06)
+TELEGRAM_VERIFY_TEXT = ("🔐 STOIC chat verification code: *{code}*\n\n"
+                        r"Enter it on the Notifications page\. Expires in 10 minutes\.")
+TELEGRAM_TEST_TEXT = (
+    r"🧪 *\[TEST\] STOIC AI Trader · Test Alert*" "\n\n"
+    r"Your Telegram alerts are working\." "\n"
+    "You will now receive push notifications for trades, "
+    r"break\-even shifts, partial closes, and circuit breakers\." "\n\n"
+    "— STOIC AI"
+)
+
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
@@ -204,8 +215,7 @@ async def telegram_verify_start(request: Request, user=Depends(get_current_user)
     await rate_limit(db, "tg_verify_start", user["id"], 3, 900, request=request,
                      message="Too many verification codes — try again later.")
     code = f"{secrets.randbelow(1000000):06d}"
-    ok, msg_id, err = await _telegram_send(
-        db, user["id"], f"🔐 STOIC chat verification code: *{code}*\n\nEnter it on the Notifications page\. Expires in 10 minutes\.")
+    ok, msg_id, err = await _telegram_send(db, user["id"], TELEGRAM_VERIFY_TEXT.format(code=code))
     if not ok:
         raise HTTPException(status_code=400 if err == "telegram_not_configured" else 503,
                             detail={"code": err or "telegram_failed", "message": "Could not deliver the verification code."})
@@ -294,13 +304,7 @@ async def test_telegram(request: Request, user=Depends(get_current_user)):
     except Exception:
         raise HTTPException(status_code=500, detail="Could not decrypt bot token")
 
-    text = (
-        "🧪 *\\[TEST\\] STOIC AI Trader · Test Alert*\n\n"
-        "Your Telegram alerts are working\\.\n"
-        "You will now receive push notifications for trades, "
-        "break\\-even shifts, partial closes, and circuit breakers\\.\n\n"
-        "— STOIC AI"
-    )
+    text = TELEGRAM_TEST_TEXT
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:

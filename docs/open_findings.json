@@ -88,5 +88,41 @@
     "severity": "P2",
     "title": "Preview/prod parity: content-hashed production build on stable staging with non-secret build identity; Turnstile valid-once/replay/wrong-binding/malformed/skew/outage/script-failure/recovery matrix executed there.",
     "owner": "engineering"
+  },
+  {
+    "id": "P1-03-r16",
+    "severity": "P1",
+    "title": "Authoritative release identities: BUILD_SHA, RC-lock commit, model-manifest code_commit, image digests, attestation and EA EX5 hash must all bind to ONE peeled tagged commit produced by the tagged workflow (developer-snapshot evidence is not authoritative).",
+    "owner": "release-engineering"
+  },
+  {
+    "id": "P1-05-r16",
+    "severity": "P1",
+    "title": "Live capital-safety acceptance on the exact promoted digest: 6 identity-bound accounts, exactly 3 LIVE enabled + their 3 bots, no orphan/duplicate bots, EA fresh counts agree across inventory/readiness/status/accounts/broker sessions, reconciliation age in SLA, position truth FRESH and matching, zero UNKNOWN/aged executions, Safety Blocks/Bot Health/Start Trader/readiness/authority agree, all performance periods reconcile to signed statements with full coverage.",
+    "owner": "operations"
+  },
+  {
+    "id": "P2-01-r16",
+    "severity": "P2",
+    "title": "Chart provenance: shared SeriesProvenance component + API schema on every chart (source/provider, as-of, timezone, freshness, missing intervals, cache/fallback state, ledger/attestation id); timestamp-based ranges; visual separation of indicative vs simulated vs reconciled broker series.",
+    "owner": "engineering"
+  },
+  {
+    "id": "P2-02-r16",
+    "severity": "P2",
+    "title": "Canonical decision fingerprint completeness: every mutable authority input (global blocks, active alerts, PAMM uncertainty, inventory, identity, executions, reconciliation, Bot Health caps, Safety Blocks) in one snapshot hash/version exposed uniformly in readiness, denials, Bot Health, Safety Blocks, receipts and performance gating.",
+    "owner": "engineering"
+  },
+  {
+    "id": "P2-03-r16",
+    "severity": "P2",
+    "title": "Turnstile/Cloudflare matrix demonstrated on production-like staging with the production-built frontend and a stable hostname (valid-once, replay, wrong action/hostname, malformed, skew, outage, script failure, OTP fallback, recovery, rate limits).",
+    "owner": "engineering"
+  },
+  {
+    "id": "P2-04-r16",
+    "severity": "P2",
+    "title": "Agent transport identity: ingress mTLS with client-certificate verification, rotation/expiry monitoring, revocation and certificate\u2192immutable agent record mapping.",
+    "owner": "infrastructure"
   }
 ]

@@ -367,29 +367,34 @@ async def delete_trigger(trigger_id: str, user=Depends(get_current_user)):
 
 
 # ------------------- Action Executors --------------------------------------
-async def execute_one(user_id: str, act: dict, idem_key: str | None = None) -> dict:
+async def execute_one(user_id: str, act: dict, idem_key: str | None = None, ctx: dict | None = None) -> dict:
     """Run ONE action and return its result. Raises on failure so the
-    exactly-once executor (nl_execution) records a failed receipt. `idem_key`
-    is propagated to the ultimate side effect (trigger insert, trade/bot writes)."""
+    exactly-once executor (nl_execution) records a failed receipt. `ctx`
+    (idempotency_key, fence, execution_id, decision_id, authority_version) is
+    propagated to the ULTIMATE side effect: every handler calls
+    nl_execution.apply_effect(ctx) right before its domain write and stamps the
+    mutated rows / outbox events (audit r16 P0-01)."""
     a_type = (act.get("type") or "").upper()
     target = act.get("target") or "all"
     params = act.get("params") or {}
     if a_type == "DISABLE_BOTS":
-        return await _disable_bots(user_id, target)
+        return await _disable_bots(user_id, target, ctx)
     if a_type == "ENABLE_BOTS":
-        return await _enable_bots(user_id, target)
+        return await _enable_bots(user_id, target, ctx)
     if a_type == "MOVE_STOPS_BREAKEVEN":
-        return await _move_stops_breakeven(user_id, target)
+        return await _move_stops_breakeven(user_id, target, ctx)
     if a_type == "CLOSE_ALL_TRADES":
-        return await _close_all_trades(user_id, target)
+        return await _close_all_trades(user_id, target, ctx)
     if a_type == "SET_RISK_LEVEL":
-        return await _set_risk_level(user_id, params.get("risk_level", "low"))
+        return await _set_risk_level(user_id, params.get("risk_level", "low"), target, ctx)
     if a_type == "PANIC_LOCK":
+        import nl_execution as nx
         from routes.panic_routes import _disable_all_bots_and_close_trades
+        await nx.apply_effect(get_db(), ctx)
         return await _disable_all_bots_and_close_trades(
-            {"user_id": user_id}, broadcast_user_id=user_id)
+            {"user_id": user_id}, broadcast_user_id=user_id, stamp=nx.effect_stamp(ctx))
     if a_type == "SET_CONDITIONAL_TRIGGER":
-        return await _save_trigger(user_id, params, idem_key=idem_key)
+        return await _save_trigger(user_id, params, idem_key=idem_key, ctx=ctx)
     raise ValueError(f"unknown action {a_type}")
 
 
@@ -410,47 +415,49 @@ async def _execute_actions(user_id: str, actions: list) -> list:
     return receipts
 
 
-async def _disable_bots(user_id, target):
+async def _disable_bots(user_id, target, ctx=None):
+    import nl_execution as nx
+    from nl_preview import bot_query
     db = get_db()
-    q = {"user_id": user_id}
-    if target == "high_risk":
-        q["risk_level"] = {"$in": ["high", "extreme"]}
+    q = bot_query(user_id, target)          # r16 P1-01: all | high_risk | bot:<id> — never "everything" by accident
     update = {"active": False, "tripped_at": datetime.now(timezone.utc).isoformat(),
-              "tripped_reason": f"NL command: disable {target}"}
+              "tripped_reason": f"NL command: disable {target}", **nx.effect_stamp(ctx)}
+    await nx.apply_effect(db, ctx)
     res = await db.bot_configs.update_many(q, {"$set": update})
     return {"bots_disabled": res.modified_count}
 
 
-async def _enable_bots(user_id, target):
+async def _enable_bots(user_id, target, ctx=None):
+    import nl_execution as nx
+    from nl_preview import bot_query
     db = get_db()
-    q = {"user_id": user_id}
-    if target == "high_risk":
-        q["risk_level"] = {"$in": ["high", "extreme"]}
+    q = bot_query(user_id, target)
+    await nx.apply_effect(db, ctx)
     res = await db.bot_configs.update_many(q, {"$set": {
         "active": True,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(), **nx.effect_stamp(ctx),
     }})
     return {"bots_enabled": res.modified_count}
 
 
-async def _move_stops_breakeven(user_id, target):
+async def _move_stops_breakeven(user_id, target, ctx=None):
     """Monotonic risk reduction ONLY (audit r15 P1-01): a BUY stop may only
     move UP to entry, a SELL stop only DOWN to entry; a stop already at or
     better than entry is left alone, and a stop is never placed on the wrong
     side of the current market."""
+    import nl_execution as nx
+    from nl_preview import trade_query
     db = get_db()
-    q = {"user_id": user_id, "status": "open"}
-    if target and target not in ("all", ""):
-        q["symbol"] = target.upper()
-    trades = await db.trades.find(q).to_list(length=500)
+    trades = await db.trades.find(trade_query(user_id, target, ["open"])).to_list(length=500)
     updated, skipped = 0, []
+    await nx.apply_effect(db, ctx)
     for t in trades:
         decision = breakeven_decision(t)
         if decision["move"]:
             res = await db.trades.update_one(
                 {"_id": t["_id"], "status": "open", "stop_loss": t.get("stop_loss")},
                 {"$set": {"stop_loss": decision["new_stop"], "sl_adjustment": "nl_breakeven",
-                          "sl_updated_at": datetime.now(timezone.utc).isoformat()}})
+                          "sl_updated_at": datetime.now(timezone.utc).isoformat(), **nx.effect_stamp(ctx)}})
             updated += res.modified_count
         else:
             skipped.append({"trade_id": str(t["_id"]), "reason": decision["reason"]})
@@ -477,50 +484,51 @@ def breakeven_decision(t: dict) -> dict:
     return {"move": True, "new_stop": entry}
 
 
-async def _close_all_trades(user_id, target):
+async def _close_all_trades(user_id, target, ctx=None):
+    import nl_execution as nx
+    from nl_preview import trade_query
     db = get_db()
-    q = {"user_id": user_id, "status": {"$in": ["open", "pending"]}}
-    if target and target not in ("all", ""):
-        q["symbol"] = target.upper()
+    q = trade_query(user_id, target, ["open", "pending"])
+    await nx.apply_effect(db, ctx)
+    # the EA bridge forwards close_idem_key with the close command so the
+    # terminal dedupes by key and refuses a lower fence (r16 P0-01)
     res = await db.trades.update_many(q, {"$set": {
         "close_requested": True,
         "close_reason": "nl_command",
+        "close_idem_key": (ctx or {}).get("idempotency_key"),
+        "close_fence": (ctx or {}).get("fence"), **nx.effect_stamp(ctx),
     }})
     return {"trades_marked_for_close": res.modified_count}
 
 
-async def _set_risk_level(user_id, risk_level):
-    """Risk Commander: set risk level on ALL bots the user owns.
-
-    Default behaviour is broadcast (matches the NL intent "set risk to low"
-    — the user means it for all their bots). If a per-bot target is ever
-    needed, the AI orchestrator can call `_apply_to_target` directly.
-    """
+async def _set_risk_level(user_id, risk_level, target="all", ctx=None):
+    """Risk Commander: set risk level on the bots in `target` scope
+    (all | high_risk | bot:<id>) — resolved to immutable bot ids (r16 P1-01)."""
     if risk_level not in ("low", "medium", "high", "extreme"):
         raise ValueError(f"invalid risk_level {risk_level}")
+    import nl_execution as nx
+    from nl_preview import bot_query
     db = get_db()
-    from research_agent.proposal_targeting import (
-        resolve_target_configs, apply_to_bot_configs,
-    )
-    configs, resolved_mode = await resolve_target_configs(
-        db, user_id, [], "all",
-    )
+    from research_agent.proposal_targeting import apply_to_bot_configs
+    configs = await db.bot_configs.find(bot_query(user_id, target)).to_list(length=200)
     if not configs:
-        return {"risk_level": risk_level, "modified": 0,
+        return {"risk_level": risk_level, "modified": 0, "target": target,
                 "note": "no bot configs found"}
+    await nx.apply_effect(db, ctx)
     audit = await apply_to_bot_configs(
         db, configs,
-        update_fields={"risk_level": risk_level},
+        update_fields={"risk_level": risk_level, **nx.effect_stamp(ctx)},
         source="risk_commander",
-        source_id=None,
-        target_mode=resolved_mode,
+        source_id=(ctx or {}).get("idempotency_key"),
+        target_mode=target,
         auto=False,
     )
-    return {"risk_level": risk_level, "modified": len(audit),
-            "target_mode": resolved_mode}
+    return {"risk_level": risk_level, "modified": len(audit), "target": target,
+            "bot_ids": [str(c["_id"]) for c in configs]}
 
 
-async def _save_trigger(user_id, params, idem_key: str | None = None):
+async def _save_trigger(user_id, params, idem_key: str | None = None, ctx=None):
+    import nl_execution as nx
     db = get_db()
     if idem_key:
         existing = await db.conditional_triggers.find_one({"idem_key": idem_key, "user_id": user_id})
@@ -539,7 +547,9 @@ async def _save_trigger(user_id, params, idem_key: str | None = None):
         "status": "active",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "baseline_price": None,  # filled on first sweep
+        **nx.effect_stamp(ctx),
     }
+    await nx.apply_effect(db, ctx)
     r = await db.conditional_triggers.insert_one(doc)
     return {"trigger_id": str(r.inserted_id), "symbol": doc["symbol"],
             "condition": doc["condition"], "threshold_pct": doc["threshold_pct"]}

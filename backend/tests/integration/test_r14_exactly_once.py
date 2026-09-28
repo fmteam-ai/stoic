@@ -130,15 +130,18 @@ def test_crash_recovery_never_replays_completed_action(world, monkeypatch):
     assert ei.value.detail["code"] == "execution_in_progress"
 
     # expire the lease → recovery resumes: action 0 (done) NOT replayed,
-    # action 1 (started, crashed) marked uncertain, action 2 executed once
+    # action 1 (started, crashed AFTER its effect row reached `completed`) is
+    # resolved from the effect row — result copied, NOT replayed (r16 P0-01);
+    # action 2 executed once
     _run(real_update({"_id": ObjectId(doc["id"])}, {"$set": {
         "execution.lease_until": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}))
 
     res = _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user))
     assert calls == ["CLOSE_ALL_TRADES", "DISABLE_BOTS", "MOVE_STOPS_BREAKEVEN"]
     states = [r["state"] for r in res["receipts"]]
-    assert states == ["done", "uncertain", "done"]
-    assert res["status"] == "partially_executed" and res["confirmed"] is False
+    assert states == ["done", "done", "done"]
+    assert res["receipts"][1].get("recovered") is True
+    assert res["status"] == "executed" and res["confirmed"] is True
     # replay after completion → refused, receipts returned
     with pytest.raises(HTTPException) as ei2:
         _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user))

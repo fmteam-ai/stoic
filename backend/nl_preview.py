@@ -16,18 +16,40 @@ CAPITAL_TOUCHING = {"CLOSE_ALL_TRADES", "PANIC_LOCK", "MOVE_STOPS_BREAKEVEN",
                     "ENABLE_BOTS", "SET_RISK_LEVEL"}
 
 
-def _bot_query(user_id: str, target: str) -> dict:
+def bot_query(user_id: str, target: str) -> dict:
+    """Bot scope (r16 P1-01): all | high_risk | bot:<immutable bot_config id>.
+    Anything else is REFUSED — a symbol-like token must never widen to 'all bots'."""
+    t = str(target or "all")
     q = {"user_id": user_id}
-    if target == "high_risk":
+    if t == "all":
+        return q
+    if t == "high_risk":
         q["risk_level"] = {"$in": ["high", "extreme"]}
-    return q
+        return q
+    if t.startswith("bot:") and ObjectId.is_valid(t[4:]):
+        q["_id"] = ObjectId(t[4:])
+        return q
+    raise ValueError(f"invalid bot target {target!r}")
 
 
-def _trade_query(user_id: str, target: str, statuses: list) -> dict:
+def trade_query(user_id: str, target: str, statuses: list) -> dict:
+    """Trade scope: all | normalised SYMBOL."""
+    t = str(target or "all")
     q = {"user_id": user_id, "status": {"$in": statuses}}
-    if target and target not in ("all", ""):
-        q["symbol"] = str(target).upper()
+    if t == "all":
+        return q
+    if t.startswith("bot:"):
+        raise ValueError(f"trade actions take a symbol, not {target!r}")
+    q["symbol"] = t.upper()
     return q
+
+
+_bot_query = bot_query
+_trade_query = trade_query
+
+
+def inventory_hash(ids: list) -> str:
+    return hashlib.sha256(json.dumps(sorted(str(i) for i in ids)).encode()).hexdigest()[:16]
 
 
 async def _bot_rows(db, q: dict) -> list:
@@ -75,15 +97,15 @@ async def preview_action(db, user_id: str, act: dict) -> dict:
                    trades=rows, count=len(rows), live_pnl=pnl, ids=[r["id"] for r in rows])
     elif a_type == "SET_RISK_LEVEL":
         level = params.get("risk_level", "low")
-        rows = [dict(r, to=level) for r in await _bot_rows(db, _bot_query(user_id, "all"))]
+        rows = [dict(r, to=level) for r in await _bot_rows(db, _bot_query(user_id, target))]
         changed = [r for r in rows if r["risk_level"] != level]
-        out.update(effect=f"Set risk → {level.upper()} on {len(changed)} bot(s)",
+        out.update(effect=f"Set risk → {level.upper()} on {len(changed)} bot(s) ({target})",
                    bots=changed, count=len(changed), risk_level=level,
                    ids=[f"{r['id']}:{r['risk_level']}" for r in changed])
     elif a_type == "PANIC_LOCK":
         bots = [r for r in await _bot_rows(db, {"user_id": user_id}) if r["active"]]
         trades = await _trade_rows(db, _trade_query(user_id, "all", ["open", "pending"]))
-        out.update(effect=f"PANIC — disable {len(bots)} bot(s) and close {len(trades)} trade(s)",
+        out.update(target="all", effect=f"PANIC — account-wide: disable {len(bots)} bot(s) and close {len(trades)} trade(s)",
                    bots=bots, trades=trades, count=len(bots) + len(trades),
                    ids=[r["id"] for r in bots] + [r["id"] for r in trades])
     elif a_type == "SET_CONDITIONAL_TRIGGER":
@@ -96,6 +118,9 @@ async def preview_action(db, user_id: str, act: dict) -> dict:
                    trigger=spec, count=1, ids=[json.dumps(spec, sort_keys=True)])
     else:
         out.update(effect=f"Unknown action {a_type}", count=0, ids=[])
+    # r16 P1-01 — the stored proposal carries the RESOLVED immutable ids and their hash
+    out["resolved_ids"] = list(out.get("ids") or [])
+    out["inventory_hash"] = inventory_hash(out["resolved_ids"])
     return out
 
 

@@ -401,19 +401,79 @@ async def ledger_gate(db, user_id: str) -> list:
             if r.get("key_id") and r["key_id"] != key_id(attestation_key_for_issuer(raw.get("issuer"))):
                 reasons.append("STATEMENT_KEY_ROTATED")
                 break
-        # continuous coverage across the window
-        for prev, cur in zip(in_window, in_window[1:]):
-            gap_h = (_ts(cur.get("period_from")) - _ts(prev.get("period_to"))).total_seconds() / 3600
-            if abs(gap_h) > PERIOD_JOIN_TOLERANCE_H:
-                reasons.append("STATEMENT_COVERAGE_GAP")
-                break
+        # continuous coverage across the publication window (r16 P1-02): merged
+        # signed intervals clipped to [window_start, as_of] must start at the
+        # window, join contiguously and end within the freshness tolerance of as_of
+        cov = coverage_report(rows, now)
+        reasons += cov["reasons"]
     return sorted(set(reasons))
 
 
+COVERAGE_WINDOW_DAYS = int(os.environ.get("STATEMENT_COVERAGE_WINDOW_DAYS") or 30)
+COVERAGE_FRESHNESS_H = int(os.environ.get("STATEMENT_COVERAGE_FRESHNESS_H") or STATEMENT_MIN_PERIOD_DAYS * 24)
+COVERAGE_FORMULA_VERSION = "coverage-merge-v1"
+
+
+def coverage_report(rows: list, as_of: datetime) -> dict:
+    """Merge RECONCILED signed statement intervals clipped to the publication
+    window [as_of - COVERAGE_WINDOW_DAYS, as_of]. Reasons:
+      STATEMENT_COVERAGE_START — first interval starts > tolerance after window_start
+      STATEMENT_COVERAGE_GAP   — adjacent intervals do not join within tolerance
+      STATEMENT_COVERAGE_STALE — last interval ends > freshness tolerance before as_of"""
+    window_start = as_of - timedelta(days=COVERAGE_WINDOW_DAYS)
+    tol = timedelta(hours=PERIOD_JOIN_TOLERANCE_H)
+    ivs = []
+    for r in rows:
+        if r.get("status") != "RECONCILED":
+            continue
+        pf, pt = _ts(r.get("period_from")), _ts(r.get("period_to"))
+        if not pf or not pt or pt <= window_start or pf >= as_of:
+            continue
+        ivs.append((max(pf, window_start), min(pt, as_of), str(r.get("statement_id") or r.get("_id"))))
+    ivs.sort()
+    merged, reasons = [], []
+    for s, e, sid in ivs:
+        if merged and s <= merged[-1][1] + tol:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e), merged[-1][2] + [sid])
+        else:
+            merged.append((s, e, [sid]))
+    covered = sum((e - s).total_seconds() for s, e, _ in merged)
+    total = (as_of - window_start).total_seconds()
+    if not merged:
+        reasons.append("STATEMENT_COVERAGE_START")
+    else:
+        if merged[0][0] > window_start + tol:
+            reasons.append("STATEMENT_COVERAGE_START")
+        if len(merged) > 1:
+            reasons.append("STATEMENT_COVERAGE_GAP")
+        if merged[-1][1] < as_of - timedelta(hours=COVERAGE_FRESHNESS_H):
+            reasons.append("STATEMENT_COVERAGE_STALE")
+    intervals = [{"from": s.isoformat(), "to": e.isoformat(), "statements": sids} for s, e, sids in merged]
+    return {"formula": COVERAGE_FORMULA_VERSION, "window_start": window_start.isoformat(), "as_of": as_of.isoformat(),
+            "coverage_pct": round(100.0 * covered / total, 3) if total else 0.0, "intervals": intervals,
+            "intervals_hash": hashlib.sha256(json.dumps(intervals, sort_keys=True).encode()).hexdigest()[:16],
+            "reasons": reasons}
+
+
 async def ledger_snapshot(db, user_id: str) -> dict:
-    """Immutable verified-ledger root for embedding in a public attestation."""
+    """Immutable verified-ledger root for embedding in a public attestation,
+    plus per-account coverage bound into the claim (r16 P1-02)."""
+    from identity_model import authoritative_account_number
     chain = await verify_chain(db, user_id)
-    return {"ledger_rows": chain["rows"], "ledger_root": chain["root"], "chain_ok": not chain["problems"]}
+    now = datetime.now(timezone.utc)
+    accounts = []
+    async for a in db.accounts.find({"user_id": user_id, "trading_enabled": True, "status": {"$ne": "deleted"}}):
+        rows = await db.reconciliation_ledger.find({"user_id": user_id, "account_id": str(a["_id"])}).to_list(1000)
+        cov = coverage_report(rows, now)
+        latest = max(rows, key=lambda r: r.get("period_to") or "") if rows else {}
+        accounts.append({"account_id": str(a["_id"]), "broker_login": str(authoritative_account_number(a) or ""),
+                         "currency": str(latest.get("currency") or a.get("base_currency") or a.get("currency") or "").upper(),
+                         "issuer": (latest.get("statement_raw") or {}).get("issuer"), "key_id": latest.get("key_id"),
+                         **{k: cov[k] for k in ("window_start", "as_of", "coverage_pct", "intervals_hash", "formula")},
+                         "intervals": cov["intervals"], "coverage_ok": not cov["reasons"]})
+    return {"ledger_rows": chain["rows"], "ledger_root": chain["root"], "chain_ok": not chain["problems"],
+            "return_formula": RETURN_FORMULA_VERSION, "coverage_formula": COVERAGE_FORMULA_VERSION,
+            "accounts": accounts}
 
 
 async def ledger_rows(db, user_id: str, account_id: str | None = None) -> list:

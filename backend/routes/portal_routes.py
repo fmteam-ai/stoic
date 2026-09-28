@@ -183,6 +183,10 @@ async def _compute_status(now: float):
         readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False,
                      "dominant_code": "INVENTORY_NOT_ATTESTED"}
     trading_ready = readiness["state"] == "READY" and connectivity == "active" and aggregate["attested"]
+    # r16 P1-06 — the public banner must never overstate readiness: an idle /
+    # unverified EA bridge or non-ready trading downgrades the OVERALL state
+    if overall == "operational" and (components["ea_bridge"]["status"] != "operational" or not trading_ready):
+        overall = "degraded"
     # public payload: NO raw operational counts (r15 P1-02)
     trading = {"connectivity": connectivity,
                "readiness": {**{k: readiness.get(k) for k in ("state", "dominant_code", "decision_id")},
@@ -190,7 +194,7 @@ async def _compute_status(now: float):
                "attestation": aggregate,
                "label": ("Trading ready" if trading_ready
                          else f"Trading {readiness['state'].lower().replace('_', '-')} · connectivity {connectivity.replace('_', ' ')}")}
-    headline = (("Platform controls available" if overall == "operational" else f"Platform {overall.replace('_', ' ')}")
+    headline = (("Platform controls available" if not hard and not soft else f"Platform {overall.replace('_', ' ')}")
                 + (" · trading ready" if trading_ready else f" · {trading['label'].lower()}"))
     data = {"overall": overall, "components": components, "trading": trading, "headline": headline,
             # round 10 P2-01 — deployment metadata, never hard-coded copy

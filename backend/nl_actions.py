@@ -13,58 +13,94 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 MAX_ACTIONS = 8
 MAX_NESTED_ACTIONS = 3
 SYMBOL_RE = re.compile(r"^[A-Z0-9._-]{3,16}$")
+BOT_ID_RE = re.compile(r"^bot:[0-9a-f]{24}$")
 RISK_LEVELS = ("low", "medium", "high", "extreme")
 
 
-def _norm_target(v):
+def _norm_bot_target(v):
+    """Bot scope (r16 P1-01): all | high_risk | bot:<24-hex immutable id>."""
+    v = str(v or "all").strip()
+    low = v.lower()
+    if low in ("all", ""):
+        return "all"
+    if low == "high_risk":
+        return "high_risk"
+    if BOT_ID_RE.match(low):
+        return low
+    raise ValueError(f"invalid bot target {v!r} — use all, high_risk or bot:<id>")
+
+
+def _norm_trade_target(v):
+    """Trade scope: all | normalised SYMBOL (never a bot id)."""
     v = str(v or "all").strip()
     if v.lower() in ("all", ""):
         return "all"
-    if v.lower() == "high_risk":
-        return "high_risk"
     up = v.upper()
-    if not SYMBOL_RE.match(up):
-        raise ValueError(f"invalid target {v!r}")
+    if up.lower().startswith("bot:") or not SYMBOL_RE.match(up):
+        raise ValueError(f"invalid trade target {v!r} — use all or a symbol")
     return up
 
 
-class _Base(BaseModel):
+_norm_target = _norm_trade_target
+
+
+class _BotBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target: str = "all"
 
     @field_validator("target", mode="before")
     @classmethod
     def _t(cls, v):
-        return _norm_target(v)
+        return _norm_bot_target(v)
+
+
+class _TradeBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target: str = "all"
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _t(cls, v):
+        return _norm_trade_target(v)
 
 
 class _NoParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class DisableBots(_Base):
+class DisableBots(_BotBase):
     type: Literal["DISABLE_BOTS"]
     params: _NoParams = Field(default_factory=_NoParams)
 
 
-class EnableBots(_Base):
+class EnableBots(_BotBase):
     type: Literal["ENABLE_BOTS"]
     params: _NoParams = Field(default_factory=_NoParams)
 
 
-class MoveStopsBreakeven(_Base):
+class MoveStopsBreakeven(_TradeBase):
     type: Literal["MOVE_STOPS_BREAKEVEN"]
     params: _NoParams = Field(default_factory=_NoParams)
 
 
-class CloseAllTrades(_Base):
+class CloseAllTrades(_TradeBase):
     type: Literal["CLOSE_ALL_TRADES"]
     params: _NoParams = Field(default_factory=_NoParams)
 
 
-class PanicLock(_Base):
+class PanicLock(BaseModel):
+    """PANIC has NO target — always account-wide (r16 P1-01)."""
+    model_config = ConfigDict(extra="forbid")
     type: Literal["PANIC_LOCK"]
+    target: Literal["all"] = "all"
     params: _NoParams = Field(default_factory=_NoParams)
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _t(cls, v):
+        if str(v or "all").strip().lower() not in ("all", ""):
+            raise ValueError("PANIC_LOCK takes no target — it is always account-wide")
+        return "all"
 
 
 class RiskParams(BaseModel):
@@ -77,7 +113,8 @@ class RiskParams(BaseModel):
         return str(v).strip().lower()
 
 
-class SetRiskLevel(_Base):
+class SetRiskLevel(_BotBase):
+    """Explicit bot scope: all | high_risk | bot:<id>."""
     type: Literal["SET_RISK_LEVEL"]
     params: RiskParams
 
@@ -115,8 +152,10 @@ class TriggerParams(BaseModel):
         return f
 
 
-class SetConditionalTrigger(_Base):
+class SetConditionalTrigger(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     type: Literal["SET_CONDITIONAL_TRIGGER"]
+    target: Literal["all"] = "all"
     params: TriggerParams
 
 

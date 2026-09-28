@@ -918,6 +918,8 @@ async def poll_trades(payload: PollRequest):
             "stop_loss": t["stop_loss"],
             "take_profit": t["take_profit"],
             "close_requested": t.get("close_requested", False),
+            "close_idem_key": t.get("close_idem_key"),
+            "close_fence": t.get("close_fence"),
             "mt5_ticket": t.get("mt5_ticket"),
         })
 

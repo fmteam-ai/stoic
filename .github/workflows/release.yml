@@ -379,6 +379,31 @@ jobs:
             echo "image manifest sha256 ${B} == staged tree; model binaries identical"
           fi
 
+      - name: Dependency + image scan gates on the LOCAL image (before any publication; r16 P1-04)
+        run: |
+          mkdir -p evidence
+          pip install -q pip-audit
+          grep -vE '^--|^#|\+cpu|^emergentintegrations' backend/requirements.txt > /tmp/audit-reqs.txt
+          pip-audit -r /tmp/audit-reqs.txt --no-deps --strict -f json -o evidence/pip-audit.json
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.110.0
+          grype "stoic-backend:${{ github.ref_name }}" --only-fixed -o json --file evidence/grype-backend.json --fail-on critical
+
+      - name: External signer canary (sign + verify against pinned key; round 9 P1-01)
+        env:
+          APP_ENV: production
+          RELEASE_SIGNER: external
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+          RELEASE_SIGNER_TIMEOUT: "10"
+        run: |
+          mkdir -p evidence
+          # the attestation gate `signer_canary` is REJECTED unless this is PASS
+          # r16 P1-04 — HARD gate before any registry publication
+          python3 scripts/signer_canary.py --require-external --out evidence/signer-canary.json
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
@@ -386,7 +411,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish images to GHCR (immutable digests)
+      - name: Push images to GHCR QUARANTINE (internal digest tag — the public release tag is attached only after every gate; r16 P1-04)
         id: push
         env:
           REF: ${{ github.ref_name }}
@@ -395,11 +420,15 @@ jobs:
           OWNER=$(echo "${REPO_OWNER}" | tr '[:upper:]' '[:lower:]')
           for c in backend frontend; do
             IMG="ghcr.io/${OWNER}/stoic-${c}"
-            docker tag "stoic-${c}:${REF}" "${IMG}:${REF}"
-            docker push "${IMG}:${REF}"
-            DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMG}:${REF}")
+            if docker manifest inspect "${IMG}:${REF}" >/dev/null 2>&1; then
+              echo "RELEASE BLOCKED: ${IMG}:${REF} already exists — release tags are attached exactly once"; exit 1
+            fi
+            QTAG="${IMG}:quarantine-${COMMIT_SHA}"
+            docker tag "stoic-${c}:${REF}" "${QTAG}"
+            docker push "${QTAG}"
+            DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${QTAG}")
             echo "${c}_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-            echo "published ${DIGEST}"
+            echo "quarantined ${DIGEST}"
           done
 
       - name: Install cosign (image signing)
@@ -468,21 +497,6 @@ jobs:
             --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}"
           tar -czf "stoic-${REF}.tar.gz" -C /tmp/pkg .
           echo "release archive packed with commit-bound evidence"
-
-      - name: External signer canary (sign + verify against pinned key; round 9 P1-01)
-        env:
-          APP_ENV: production
-          RELEASE_SIGNER: external
-          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
-          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
-          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
-          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
-          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
-          RELEASE_SIGNER_TIMEOUT: "10"
-        run: |
-          mkdir -p evidence
-          # the attestation gate `signer_canary` is REJECTED unless this is PASS
-          python3 scripts/signer_canary.py --require-external --out evidence/signer-canary.json || echo "signer canary did not PASS — attestation will be REJECTED"
 
       - name: Generate release manifest
         env:
@@ -580,14 +594,6 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
           done
 
-      - name: Dependency + image scan results as machine-readable evidence
-        run: |
-          pip install -q pip-audit
-          grep -vE '^--|^#|\+cpu|^emergentintegrations' backend/requirements.txt > /tmp/audit-reqs.txt
-          pip-audit -r /tmp/audit-reqs.txt --no-deps --strict -f json -o evidence/pip-audit.json
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.110.0
-          grype "stoic-backend:${{ github.ref_name }}" --only-fixed -o json --file evidence/grype-backend.json --fail-on critical
-
       - name: Emit signed release attestation (SHA · digests · test counts · scan results · gates)
         env:
           BACKEND_DIGEST: ${{ steps.push.outputs.backend_digest }}
@@ -677,6 +683,27 @@ jobs:
             --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}" \
               --certificate-github-workflow-repository "${{ github.repository }}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      - name: Attach the public release tag EXACTLY ONCE (by verified digest, after every gate; r16 P1-04)
+        env:
+          REF: ${{ github.ref_name }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          BACKEND_DIGEST: ${{ steps.push.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.push.outputs.frontend_digest }}
+        run: |
+          OWNER=$(echo "${REPO_OWNER}" | tr '[:upper:]' '[:lower:]')
+          python3 scripts/release_attestation.py verify --file release-attestation.json \
+            --sha "${COMMIT_SHA}" --tag "${REF}" \
+            --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" --require-images
+          for c in backend frontend; do
+            IMG="ghcr.io/${OWNER}/stoic-${c}"
+            if docker manifest inspect "${IMG}:${REF}" >/dev/null 2>&1; then
+              echo "RELEASE BLOCKED: ${IMG}:${REF} already exists"; exit 1
+            fi
+            [ "$c" = backend ] && D="${BACKEND_DIGEST}" || D="${FRONTEND_DIGEST}"
+            docker buildx imagetools create --tag "${IMG}:${REF}" "${D}"
+            echo "attached ${IMG}:${REF} -> ${D}"
+          done
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2

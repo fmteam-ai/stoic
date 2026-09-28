@@ -561,8 +561,19 @@ class TestRound13:
         i_stage = rel.index("re-sign model manifest IN the staged tree")
         i_build = rel.index("docker build -f /tmp/pkg/Dockerfile.backend")
         i_extract = rel.index("Extract provenance from the candidate image BEFORE push")
-        i_push = rel.index("Publish images to GHCR")
+        i_push = rel.index("Push images to GHCR QUARANTINE")
         assert i_stage < i_build < i_extract < i_push
+        # r16 P1-04 — scans + signer canary gate the LOCAL image BEFORE any publication;
+        # the public release tag is attached exactly once after the signed evidence record
+        i_scan = rel.index("scan gates on the LOCAL image")
+        i_canary = rel.index("External signer canary")
+        i_attest = rel.index("Emit signed release attestation")
+        i_attach = rel.index("Attach the public release tag EXACTLY ONCE")
+        i_ghrel = rel.index("Publish GitHub release")
+        assert i_scan < i_canary < i_push < i_attest < i_attach < i_ghrel
+        assert "quarantine-${COMMIT_SHA}" in rel and "docker buildx imagetools create --tag" in rel
+        assert 'already exists — release tags are attached exactly once' in rel
+        assert "|| echo \"signer canary did not PASS" not in rel
         assert "archive manifest != published image manifest" in rel
         assert rel.count("model_manifest resign --commit") >= 2          # hermetic job stages the same way
         assert "model_manifest verify --build" in rel

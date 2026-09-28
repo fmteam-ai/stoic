@@ -156,11 +156,37 @@ def _email_html(kind: str, doc: dict, obs: dict) -> tuple[str, str, str]:
 
 
 async def _notify(db, doc: dict, kind: str, obs: dict) -> dict:
+    """Exactly-once terminal notification (r16 P2-05): a unique outbox row keyed
+    (watch_id, terminal_status) is claimed BEFORE the send; a send that succeeded
+    just before a crash is never repeated, and the provider message id lives on
+    the outbox row, separate from the watch state."""
+    from pymongo.errors import DuplicateKeyError
     from email_sender import send_email
+    outbox_id = f"{doc['_id']}:{kind}"
+    now = _now()
+    try:
+        await db.deploy_watch_outbox.insert_one({"_id": outbox_id, "watch_id": doc["_id"], "kind": kind,
+                                                 "state": "claimed", "claimed_at": now, "to": doc["notify_email"]})
+    except DuplicateKeyError:
+        row = await db.deploy_watch_outbox.find_one({"_id": outbox_id}) or {}
+        if row.get("state") == "sent" or (row.get("state") == "claimed"
+                                          and _aware(row.get("claimed_at") or now) > now - timedelta(minutes=5)):
+            return {"kind": kind, "ok": row.get("state") == "sent", "deduped": True,
+                    "provider_id": row.get("provider_id"), "at": row.get("sent_at") or row.get("claimed_at")}
+        # a claim older than 5 min never reached `sent`/`failed` → retry once under a fresh claim
+        res = await db.deploy_watch_outbox.find_one_and_update(
+            {"_id": outbox_id, "state": "claimed", "claimed_at": row.get("claimed_at")},
+            {"$set": {"state": "claimed", "claimed_at": now, "retry": True}})
+        if not res:
+            return {"kind": kind, "ok": False, "deduped": True}
     subject, html_doc, text = _email_html(kind, doc, obs)
     res = await send_email(doc["notify_email"], subject, html_doc, text)
     rec = {"kind": kind, "ok": bool(res.get("ok")), "error": res.get("error"),
-           "id": res.get("id"), "at": _now()}
+           "provider_id": res.get("id"), "at": _now()}
+    await db.deploy_watch_outbox.update_one(
+        {"_id": outbox_id},
+        {"$set": {"state": "sent" if rec["ok"] else "failed", "provider_id": res.get("id"),
+                  "error": res.get("error"), "sent_at": rec["at"]}})
     await db.deploy_watch.update_one({"_id": doc["_id"]}, {"$set": {"notified": rec}})
     return rec
 

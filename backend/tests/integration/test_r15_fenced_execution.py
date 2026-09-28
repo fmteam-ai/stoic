@@ -43,9 +43,11 @@ def _expire(db, coll, _id):
 
 
 @pytest.mark.parametrize("coll", ["nl_proposals", "conditional_triggers"])
-def test_stale_worker_resuming_after_reclaim_is_fenced(world, coll):
-    """A stalls inside action 0 past the lease; B reclaims and runs on; A resumes:
-    A's receipt write is rejected, A never starts action 1, B's receipts survive."""
+def test_stale_worker_resuming_after_reclaim_executes_nothing(world, coll):
+    """r16 P0-01: A stalls BEFORE its side effect past the lease; B reclaims, takes
+    over the effect row (never applied) and runs everything; A resumes and hits
+    apply_effect → fenced out → executes NOTHING. Every effect row ends
+    `completed` under fence 2."""
     import nl_execution as nx
     db, uid = world["db"], world["id"]
     actions = [{"type": "CLOSE_ALL_TRADES", "target": "all"}, {"type": "DISABLE_BOTS", "target": "all"}]
@@ -54,13 +56,15 @@ def test_stale_worker_resuming_after_reclaim_is_fenced(world, coll):
     gate = asyncio.Event()
     calls = []
 
-    async def _exec_a(u, act, **kw):
-        calls.append(("A", act["type"]))
+    async def _exec_a(u, act, ctx=None, **kw):
         if act["type"] == "CLOSE_ALL_TRADES":
-            await gate.wait()          # A stalls mid side-effect
+            await gate.wait()          # A stalls right before its domain write
+        await nx.apply_effect(db, ctx)  # the ultimate handler's boundary
+        calls.append(("A", act["type"]))
         return {"ok": True}
 
-    async def _exec_b(u, act, **kw):
+    async def _exec_b(u, act, ctx=None, **kw):
+        await nx.apply_effect(db, ctx)
         calls.append(("B", act["type"]))
         return {"ok": True}
 
@@ -78,14 +82,138 @@ def test_stale_worker_resuming_after_reclaim_is_fenced(world, coll):
 
     res_a, res_b = _run(_scenario())
     assert res_a["status"] == "lease_lost"
-    assert [r["state"] for r in res_b["receipts"]] == ["uncertain", "done"]
-    assert res_b["status"] == "partially_executed"
-    assert calls == [("A", "CLOSE_ALL_TRADES"), ("B", "DISABLE_BOTS")]   # action 1 ran ONCE, by B only
+    assert calls == [("B", "CLOSE_ALL_TRADES"), ("B", "DISABLE_BOTS")]   # A executed NOTHING
+    assert [r["state"] for r in res_b["receipts"]] == ["done", "done"] and res_b["status"] == "executed"
     final = _run(db[coll].find_one({"_id": _id}))
-    assert final["status"] == "partially_executed" and final["execution"]["fence"] == 2
-    states = sorted(r["state"] for r in final["action_receipts"].values())
-    assert states == ["done", "uncertain"]                                # A did not overwrite B's receipt
+    assert final["status"] == "executed" and final["execution"]["fence"] == 2
     assert all(r["fence"] == 2 for r in final["action_receipts"].values())
+    rows = _run(db.nl_effects.find({"user_id": uid}).to_list(10))
+    assert len(rows) == 2 and all(r["state"] == "completed" and r["fence"] == 2 for r in rows)
+    assert rows[0]["taken_over_from"] == a_doc["execution"]["owner"] or rows[1].get("taken_over_from")
+
+
+def test_stale_worker_mid_write_is_recorded_uncertain_and_never_replayed(world):
+    """A reached `applying` (may be inside the write) and stalls; B must NOT
+    re-run the action: receipt uncertain, effect row fenced so A's completion fails."""
+    import nl_execution as nx
+    db, uid = world["db"], world["id"]
+    actions = [{"type": "CLOSE_ALL_TRADES", "target": "all"}]
+    _id = _run(db.nl_proposals.insert_one({"user_id": uid, "status": "pending", "actions": actions})).inserted_id
+    a_doc = _run(nx.claim(db, "nl_proposals", {"_id": _id}, from_status="pending"))
+    gate = asyncio.Event()
+    calls = []
+
+    async def _exec_a(u, act, ctx=None, **kw):
+        await nx.apply_effect(db, ctx)
+        await gate.wait()               # stalled INSIDE the domain write
+        calls.append("A")
+        return {"ok": True}
+
+    async def _exec_b(u, act, ctx=None, **kw):
+        calls.append("B")
+        return {"ok": True}
+
+    async def _scenario():
+        task_a = asyncio.create_task(nx.run_claimed(db, "nl_proposals", a_doc, uid, actions, authority=READY, execute_one=_exec_a))
+        await asyncio.sleep(0.05)
+        await db.nl_proposals.update_one({"_id": _id}, {"$set": {
+            "execution.lease_until": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}})
+        b_doc = await nx.reclaim_expired(db, "nl_proposals", await db.nl_proposals.find_one({"_id": _id}))
+        res_b = await nx.run_claimed(db, "nl_proposals", b_doc, uid, actions, authority=READY, execute_one=_exec_b)
+        gate.set()
+        res_a = await task_a
+        return res_a, res_b
+
+    res_a, res_b = _run(_scenario())
+    assert calls == ["A"] and res_a["status"] == "lease_lost"       # B never replayed it
+    assert res_b["receipts"][0]["state"] == "uncertain" and res_b["status"] == "failed"
+    row = _run(db.nl_effects.find_one({"user_id": uid}))
+    assert row["state"] == "uncertain" and row["fence"] == 2          # A's completion was fenced out
+
+
+def test_authority_is_rechecked_immediately_before_each_effect(world, monkeypatch):
+    """Authority moves between confirmation and the effect: risk-increasing
+    ENABLE_BOTS is refused (effect row failed, receipt suppressed with the fresh
+    decision id); risk-reducing DISABLE_BOTS still runs."""
+    import nl_execution as nx
+    import canonical_decision as cd
+    db, uid = world["db"], world["id"]
+    actions = [{"type": "DISABLE_BOTS", "target": "all"}, {"type": "ENABLE_BOTS", "target": "all"}]
+    _id = _run(db.nl_proposals.insert_one({"user_id": uid, "status": "pending", "actions": actions})).inserted_id
+    doc = _run(nx.claim(db, "nl_proposals", {"_id": _id}, from_status="pending"))
+    confirmed = {**READY, "input_version": 7}
+
+    async def _fresh(db_, user_id, fresh=False):
+        return {"state": "READY", "new_exposure_allowed": True, "decision_id": "dec_fresh", "input_version": 8}
+    monkeypatch.setattr(cd, "decide_user", _fresh)
+    calls = []
+
+    async def _exec(u, act, ctx=None, **kw):
+        await nx.apply_effect(db, ctx)
+        calls.append((act["type"], ctx["authority_version"], ctx["decision_id"]))
+        return {"ok": True}
+
+    res = _run(nx.run_claimed(db, "nl_proposals", doc, uid, actions, authority=confirmed, execute_one=_exec))
+    assert calls == [("DISABLE_BOTS", 8, "dec_fresh")]
+    assert [r["state"] for r in res["receipts"]] == ["done", "suppressed"]
+    assert "changed since confirmation" in res["receipts"][1]["reason"] and res["receipts"][1]["decision_id"] == "dec_fresh"
+    rows = {r["type"]: r for r in _run(db.nl_effects.find({"user_id": uid}).to_list(10))}
+    assert rows["DISABLE_BOTS"]["state"] == "completed" and rows["ENABLE_BOTS"]["state"] == "failed"
+
+
+def test_real_handlers_stamp_rows_and_refuse_stale_fence(world):
+    """The ultimate handlers call apply_effect and stamp mutated rows; a ctx
+    whose fence was superseded writes nothing."""
+    import nl_execution as nx
+    from routes.nl_routes import execute_one
+    db, uid = world["db"], world["id"]
+    _run(db.trades.insert_many([{"user_id": uid, "symbol": "XAUUSD", "status": "open", "action": "BUY", "entry_price": 1.0},
+                                {"user_id": uid, "symbol": "BTCUSD", "status": "open", "action": "BUY", "entry_price": 1.0}]))
+    key = "f" * 32
+    ctx = {"idempotency_key": key, "execution_id": "ex1", "owner": "w1", "fence": 1, "decision_id": "d1", "authority_version": 3}
+    assert _run(nx.reserve_effect(db, key, {"user_id": uid, "type": "CLOSE_ALL_TRADES"}, ctx=ctx)) == "reserved"
+    assert _run(nx.dispatch_effect(db, ctx)) is True
+    # a recovery worker with fence 2 takes the row over before w1 writes
+    ctx2 = {**ctx, "owner": "w2", "fence": 2}
+    assert _run(nx.reserve_effect(db, key, {"user_id": uid}, ctx=ctx2)) == "reserved"
+    with pytest.raises(nx.LeaseLost):
+        _run(execute_one(uid, {"type": "CLOSE_ALL_TRADES", "target": "XAUUSD"}, idem_key=key, ctx=ctx))
+    assert _run(db.trades.count_documents({"user_id": uid, "close_requested": True})) == 0
+    assert _run(nx.dispatch_effect(db, ctx2)) is True
+    out = _run(execute_one(uid, {"type": "CLOSE_ALL_TRADES", "target": "XAUUSD"}, idem_key=key, ctx=ctx2))
+    assert out["trades_marked_for_close"] == 1
+    t = _run(db.trades.find_one({"user_id": uid, "symbol": "XAUUSD"}))
+    assert t["close_idem_key"] == key and t["close_fence"] == 2 and t["nl_effect"]["decision_id"] == "d1"
+    assert _run(db.trades.find_one({"user_id": uid, "symbol": "BTCUSD"})).get("close_requested") is None
+
+
+def test_bot_targets_are_action_specific(world):
+    """r16 P1-01: a symbol token must NEVER widen a bot action to every bot."""
+    from nl_actions import validate_actions
+    from nl_preview import bot_query, build_preview
+    from routes.nl_routes import _disable_bots
+    db, uid = world["db"], world["id"]
+    ids = _run(db.bot_configs.insert_many([{"user_id": uid, "account_id": str(ObjectId()), "active": True, "risk_level": "low"},
+                                           {"user_id": uid, "account_id": str(ObjectId()), "active": True, "risk_level": "extreme"}])).inserted_ids
+    for bad in ([{"type": "DISABLE_BOTS", "target": "XAUUSD"}], [{"type": "ENABLE_BOTS", "target": "bot:zzz"}],
+                [{"type": "SET_RISK_LEVEL", "target": "BTCUSD", "params": {"risk_level": "low"}}],
+                [{"type": "CLOSE_ALL_TRADES", "target": f"bot:{ids[0]}"}], [{"type": "PANIC_LOCK", "target": "XAUUSD"}]):
+        with pytest.raises(ValueError):
+            validate_actions(bad)
+    ok = validate_actions([{"type": "disable_bots", "target": f"BOT:{ids[1]}"}, {"type": "close_all_trades", "target": "xauusd"},
+                           {"type": "panic_lock"}, {"type": "set_risk_level", "target": "high_risk", "params": {"risk_level": "LOW"}}])
+    assert ok[0]["target"] == f"bot:{ids[1]}" and ok[1]["target"] == "XAUUSD" and ok[2]["target"] == "all"
+    with pytest.raises(ValueError):
+        bot_query(uid, "XAUUSD")
+    with pytest.raises(ValueError):
+        _run(_disable_bots(uid, "XAUUSD"))
+    assert _run(db.bot_configs.count_documents({"user_id": uid, "active": True})) == 2
+    assert _run(_disable_bots(uid, f"bot:{ids[1]}"))["bots_disabled"] == 1
+    assert _run(db.bot_configs.find_one({"_id": ids[0]}))["active"] is True
+    pv = _run(build_preview(db, uid, ok))
+    assert pv["actions"][0]["resolved_ids"] == []                       # bot 1 is already disabled → nothing to touch
+    assert pv["actions"][3]["resolved_ids"] == [f"{ids[1]}:extreme"]    # high_risk scope resolves to the immutable id
+    assert all(len(a["inventory_hash"]) == 16 for a in pv["actions"])
 
 
 def test_effect_boundary_rejects_duplicate_key(world):
@@ -94,8 +222,13 @@ def test_effect_boundary_rejects_duplicate_key(world):
     import nl_execution as nx
     db, uid = world["db"], world["id"]
     key = "k" * 32
-    assert _run(nx.reserve_effect(db, key, {"user_id": uid})) is True
-    assert _run(nx.reserve_effect(db, key, {"user_id": uid})) is False
+    ctx = {"idempotency_key": key, "execution_id": "e", "owner": "w1", "fence": 1}
+    assert _run(nx.reserve_effect(db, key, {"user_id": uid}, ctx=ctx)) == "reserved"
+    assert _run(nx.reserve_effect(db, key, {"user_id": uid}, ctx=ctx)) == "lost"          # same fence: no takeover
+    assert _run(nx.dispatch_effect(db, ctx)) and _run(nx.complete_effect(db, ctx, "completed", {"n": 1}))
+    assert _run(nx.reserve_effect(db, key, {"user_id": uid}, ctx={**ctx, "owner": "w2", "fence": 2})) == "completed"
+    with pytest.raises(nx.LeaseLost):
+        _run(nx.apply_effect(db, ctx))
 
 
 def test_three_workers_one_fence_per_action(world):

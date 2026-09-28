@@ -9,9 +9,16 @@ triggers (`conditional_triggers`):
              is bound to (execution.id, owner, fence, live lease). A stale worker that
              resumes after a reclaim fails the guard and stops BEFORE its next side
              effect; it can never overwrite a recovered receipt.
-  effects    the deterministic idempotency key is reserved in `nl_effects` (unique)
-             right before the side effect, so even a stale worker that slipped past
-             the document guard is rejected at the side-effect boundary.
+  effects    the deterministic idempotency key owns a row in `nl_effects` that is a
+             fenced STATE MACHINE (r16 P0-01): reserved → dispatching → applying →
+             completed|failed. Immediately before every effect the worker re-checks
+             fence + live lease, that the proposal is still executing (not cancelled)
+             and the CURRENT canonical authority version; the ultimate handler calls
+             apply_effect() right before its domain write and stamps the mutated rows
+             with {key, fence, execution_id, decision_id, authority_version}. A stale
+             worker fails the CAS and writes nothing. Recovery consults the row:
+             not yet applying → re-run under the new fence; completed → copy result;
+             applying → uncertain, never replayed.
   finalize   executed | partially_executed | failed — same fenced guard.
   recover    an expired lease is re-claimed (fence+1); actions with a final receipt
              are never replayed; a `started` receipt (crash mid-action) → `uncertain`.
@@ -63,7 +70,7 @@ def idempotency_key(execution_id: str, index: int, act: dict) -> str:
 
 def _guard(doc: dict) -> dict:
     ex = doc["execution"]
-    return {"_id": doc["_id"], "execution.id": ex["id"], "execution.owner": ex["owner"],
+    return {"_id": doc["_id"], "status": "executing", "execution.id": ex["id"], "execution.owner": ex["owner"],
             "execution.fence": ex["fence"], "execution.lease_until": {"$gt": _now().isoformat()}}
 
 
@@ -121,18 +128,128 @@ def finalize_status(receipts: list) -> str:
     return "failed"
 
 
-async def reserve_effect(db, idem_key: str, meta: dict | None = None) -> bool:
-    """Ultimate side-effect boundary: one idempotency key ⇒ one effect, ever."""
+EFFECT_FINAL = ("completed", "failed", "uncertain")
+
+
+def effect_context(doc: dict, key: str, authority: dict | None) -> dict:
+    """Everything an ultimate handler / outbox event needs to enforce the fence."""
+    ex = doc["execution"]
+    return {"idempotency_key": key, "execution_id": ex["id"], "owner": ex["owner"], "fence": int(ex["fence"]),
+            "decision_id": (authority or {}).get("decision_id"),
+            "authority_version": (authority or {}).get("input_version")}
+
+
+async def reserve_effect(db, idem_key: str, meta: dict | None = None, *, ctx: dict | None = None) -> str:
+    """Effect state machine entry: reserved → dispatching → applying → completed|failed.
+    Returns the state this worker now holds the row in: 'reserved' (fresh or
+    taken over from a stale owner that never reached the write), 'completed' /
+    'failed' (a previous owner finished — result is on the row), 'uncertain'
+    (a previous owner may be mid-write — never replayed), or 'lost'."""
+    ctx = ctx or {}
+    base = {"state": "reserved", "owner": ctx.get("owner"), "fence": int(ctx.get("fence") or 0),
+            "execution_id": ctx.get("execution_id"), "authority_version": ctx.get("authority_version"),
+            "decision_id": ctx.get("decision_id"), "at": _now().isoformat(), **(meta or {})}
     try:
-        await db.nl_effects.insert_one({"_id": idem_key, "at": _now().isoformat(), **(meta or {})})
-        return True
+        await db.nl_effects.insert_one({"_id": idem_key, **base})
+        return "reserved"
     except DuplicateKeyError:
-        return False
+        pass
+    row = await db.nl_effects.find_one({"_id": idem_key})
+    if not row:
+        return "lost"
+    if row.get("state") in EFFECT_FINAL:
+        return row["state"]
+    if row.get("state") == "applying":
+        # a stale owner may be inside the domain write — fence it so its
+        # completion fails and record the outcome as uncertain (audit r16 P0-01)
+        await db.nl_effects.update_one({"_id": idem_key, "state": "applying", "fence": {"$lt": base["fence"]}},
+                                       {"$set": {"state": "uncertain", "fenced_by": base["owner"],
+                                                 "fence": base["fence"], "uncertain_at": _now().isoformat()}})
+        return "uncertain"
+    # reserved/dispatching by a lower fence: take it over — that owner has not
+    # written anything yet and its apply CAS will now fail
+    res = await db.nl_effects.find_one_and_update(
+        {"_id": idem_key, "state": {"$in": ["reserved", "dispatching"]}, "fence": {"$lt": base["fence"]}},
+        {"$set": {**base, "taken_over_from": row.get("owner")}}, return_document=ReturnDocument.AFTER)
+    return "reserved" if res else "lost"
+
+
+async def dispatch_effect(db, ctx: dict) -> bool:
+    """reserved → dispatching (fenced). Called right before the handler."""
+    res = await db.nl_effects.update_one(
+        {"_id": ctx["idempotency_key"], "state": "reserved", "owner": ctx["owner"], "fence": ctx["fence"]},
+        {"$set": {"state": "dispatching", "dispatched_at": _now().isoformat()}})
+    return res.matched_count > 0
+
+
+async def apply_effect(db, ctx: dict | None) -> None:
+    """THE side-effect boundary — every ultimate handler calls this immediately
+    before its domain write: dispatching → applying under (owner, fence).
+    A stale worker fails here and raises LeaseLost, so it writes nothing."""
+    if not ctx:
+        return
+    res = await db.nl_effects.update_one(
+        {"_id": ctx["idempotency_key"], "state": "dispatching", "owner": ctx["owner"], "fence": ctx["fence"]},
+        {"$set": {"state": "applying", "applying_at": _now().isoformat()}})
+    if res.matched_count == 0:
+        raise LeaseLost("effect fenced out before the side effect")
+
+
+def effect_stamp(ctx: dict | None) -> dict:
+    """Fields stamped on every mutated domain row / outbox event so downstream
+    consumers (EA bridge, reconciler) can dedupe by key and reject stale fences."""
+    if not ctx:
+        return {}
+    return {"nl_effect": {"key": ctx["idempotency_key"], "fence": ctx["fence"],
+                          "execution_id": ctx["execution_id"], "decision_id": ctx.get("decision_id"),
+                          "authority_version": ctx.get("authority_version")}}
+
+
+async def complete_effect(db, ctx: dict, state: str, result=None, error: str | None = None) -> bool:
+    res = await db.nl_effects.update_one(
+        {"_id": ctx["idempotency_key"], "state": {"$in": ["reserved", "dispatching", "applying"]},
+         "owner": ctx["owner"], "fence": ctx["fence"]},
+        {"$set": {"state": state, "result": result, "error": error, "completed_at": _now().isoformat()}})
+    return res.matched_count > 0
+
+
+async def recheck_authority(db, user_id: str, act: dict, authority: dict | None) -> tuple[dict | None, str | None]:
+    """Fresh canonical authority immediately before an effect. Risk-increasing
+    actions are refused when exposure is no longer allowed OR the authority
+    input version moved since the operator confirmed."""
+    if authority is None:
+        return None, None
+    from canonical_decision import decide_user
+    fresh = await decide_user(db, user_id, fresh=True)
+    if is_risk_increasing(act):
+        if not fresh.get("new_exposure_allowed", True):
+            return fresh, f"authority {fresh.get('state')} — risk-increasing action refused"
+        if authority.get("input_version") is not None and fresh.get("input_version") != authority.get("input_version"):
+            return fresh, "authority inputs changed since confirmation — risk-increasing action refused"
+    return fresh, None
 
 
 async def _write_receipt(db, coll: str, doc: dict, key: str, rec: dict) -> bool:
     res = await db[coll].update_one(_guard(doc), {"$set": {f"action_receipts.{key}": rec}})
     return res.matched_count > 0
+
+
+async def _recover_started(db, coll: str, doc: dict, key: str, base: dict, user_id: str, authority):
+    """A `started` receipt from a previous owner: consult the effect row.
+    Nothing reached the write → we may run it under our fence; finished →
+    copy the outcome; mid-write → uncertain, never replayed."""
+    ctx = effect_context(doc, key, authority)
+    state = await reserve_effect(db, key, {"user_id": user_id, "type": base["type"]}, ctx=ctx)
+    now = _now().isoformat()
+    if state == "reserved":
+        return None, ctx
+    row = await db.nl_effects.find_one({"_id": key}) or {}
+    if state == "completed":
+        return {**base, "state": "done", "result": row.get("result"), "recovered": True, "at": now}, None
+    if state == "failed":
+        return {**base, "state": "failed", "error": row.get("error") or "action_failed", "recovered": True, "at": now}, None
+    return {**base, "state": "uncertain",
+            "error": "crashed_mid_action — effect may have applied; not replayed (capital safety)", "at": now}, None
 
 
 async def run_claimed(db, coll: str, doc: dict, user_id: str, actions: list,
@@ -154,15 +271,15 @@ async def run_claimed(db, coll: str, doc: dict, user_id: str, actions: list,
         if prev and prev.get("state") in FINAL_STATES:
             receipts.append(prev)
             continue
+        ctx = None
         if prev and prev.get("state") == "started":
-            rec = {**base, "state": "uncertain",
-                   "error": "crashed_mid_action — not replayed (capital safety)",
-                   "at": _now().isoformat()}
-            if not await _write_receipt(db, coll, doc, key, rec):
-                lost = True
-                break
-            receipts.append(rec)
-            continue
+            rec, ctx = await _recover_started(db, coll, doc, key, base, user_id, authority)
+            if rec is not None:
+                if not await _write_receipt(db, coll, doc, key, rec):
+                    lost = True
+                    break
+                receipts.append(rec)
+                continue
         if authority is not None and not authority.get("new_exposure_allowed", True) and is_risk_increasing(act):
             rec = {**base, "state": "suppressed",
                    "reason": f"authority {authority.get('state')} — risk-increasing action refused",
@@ -182,18 +299,48 @@ async def run_claimed(db, coll: str, doc: dict, user_id: str, actions: list,
             lost = True
             break
         try:
-            if not await reserve_effect(db, key, {"user_id": user_id, "type": a_type, "execution_id": ex_id}):
-                rec = {**base, "state": "uncertain", "error": "effect_key_already_reserved — not replayed",
-                       "at": _now().isoformat()}
-            else:
-                result = await execute_one(user_id, act, idem_key=key)
-                rec = {**base, "state": "done", "result": result, "at": _now().isoformat()}
+            if ctx is None:
+                ctx = effect_context(doc, key, authority)
+                state = await reserve_effect(db, key, {"user_id": user_id, "type": a_type}, ctx=ctx)
+                if state != "reserved":
+                    rec = {**base, "state": "uncertain", "error": f"effect_key_already_{state} — not replayed",
+                           "at": _now().isoformat()}
+                    ctx = None
+            if ctx is not None:
+                # audit r16 P0-01 — immediately before the effect: fence + live lease,
+                # proposal not cancelled, and CURRENT canonical authority
+                await renew_lease(db, coll, doc)
+                fresh, refusal = await recheck_authority(db, user_id, act, authority)
+                if refusal:
+                    await complete_effect(db, ctx, "failed", error=refusal)
+                    rec = {**base, "state": "suppressed", "reason": refusal,
+                           "decision_id": (fresh or {}).get("decision_id"), "at": _now().isoformat()}
+                elif not await dispatch_effect(db, ctx):
+                    raise LeaseLost("effect fenced out at dispatch")
+                else:
+                    if fresh is not None:
+                        ctx = {**ctx, "decision_id": fresh.get("decision_id"),
+                               "authority_version": fresh.get("input_version")}
+                    try:
+                        result = await execute_one(user_id, act, idem_key=key, ctx=ctx)
+                    except LeaseLost:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        await complete_effect(db, ctx, "failed", error=f"action_failed: {type(e).__name__}")
+                        raise
+                    if not await complete_effect(db, ctx, "completed", result=result):
+                        raise LeaseLost("effect fenced out at completion")
+                    rec = {**base, "state": "done", "result": result, "decision_id": ctx.get("decision_id"),
+                           "authority_version": ctx.get("authority_version"), "at": _now().isoformat()}
+        except LeaseLost:
+            lost = True
+            break
         except Exception as e:  # noqa: BLE001 — receipt must record the failure
             rec = {**base, "state": "failed", "error": f"action_failed: {type(e).__name__}",
                    "at": _now().isoformat()}
         if not await _write_receipt(db, coll, doc, key, rec):
-            # side effect happened but we are fenced out: the recovering owner
-            # sees `started` and marks it uncertain — we must not touch anything else.
+            # we are fenced out: the recovering owner resolves this action from
+            # the effect row — we must not touch anything else.
             lost = True
             break
         receipts.append(rec)

@@ -25,8 +25,8 @@ const STATUS_STYLE = {
 };
 
 const OVERALL = {
-    operational: { text: "All systems operational", cls: "text-[#00FF41] border-[#00FF41]/40" },
-    degraded: { text: "Partial degradation", cls: "text-[#FFB000] border-[#FFB000]/40" },
+    operational: { text: "Platform available · trading ready", cls: "text-[#00FF41] border-[#00FF41]/40" },
+    degraded: { text: "Platform available · trading degraded", cls: "text-[#FFB000] border-[#FFB000]/40" },
     major_outage: { text: "Major outage", cls: "text-[#FF3B30] border-[#FF3B30]/40" },
 };
 
