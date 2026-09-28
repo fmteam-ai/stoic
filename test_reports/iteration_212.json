@@ -1,0 +1,21 @@
+{
+  "summary": "iter-212 — Signer Health Row + Deploy Watchdog verified end-to-end (backend + UI). All 22 backend assertions pass: preflight returns release_signer_health check with signer={mode:'local', host:null, identity_matches:null}; deploy-watch enforces admin+CSRF (unauth GET→403, unauth POST arm→401), rejects http/non-allowlist/bad-sha/timeout>72 with 400, arms cleanly and background loop increments polls from 1→3 after 35s (BACKGROUND_WORKERS_IN_PROCESS=true honored), notify_email = admin@trading.bot, cancel→200 status='cancelled', second cancel→404, valid re-arm supersedes prior watch. UI on /admin/preflight renders every requested testid (preflight-verdict, preflight-checks, signer-health-row/mode/host/note, deploy-watch-card/status/target-input/sha-input/arm-button/cancel-button/detail); release_signer_health is correctly rendered in the signer card and NOT inside preflight-checks; app_env/release_signer checks remain visible in the list. UI arm→WATCHING→cancel→CANCELLED→re-arm→WATCHING flow works; final watch left ARMED with target=https://www.stoicaibot.com, expected_sha=cfdb46c8. /notifications and /admin/runbooks smoke both load OK. Baseline HTTP 500 on stoicaibot.com/api/health as noted (old build) — watch stays 'watching', that is expected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/tmp/iter212_deploywatch.py"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "deploy_watch.validate_target correctly rejects http/credentials/query/non-allowlist hosts and normalises to origin.",
+    "arm() supersedes any prior watching row before insert — matches spec ('arming supersedes').",
+    "public() strips MongoDB _id and re-exposes id — no ObjectId leak.",
+    "ops_routes.deploy_watch_arm gates on email_verified (403) and email_configured (503) before body parsing — good ordering.",
+    "Background loop uses asyncio.to_thread(requests.get) — non-blocking; interval sourced from DEPLOY_WATCH_INTERVAL_SEC env with 30s default."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD from /app/backend/.env",
+  "seed_data_creation": "Left one deploy_watch row status='watching' (target=https://www.stoicaibot.com, expected_sha=cfdb46c8, timeout_h=1) as requested. Prior watches cancelled/superseded.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Deploy watchdog fully working. Background poll loop runs in-process (BACKGROUND_WORKERS_IN_PROCESS=true) — polls increment ~every 30s. Target stoicaibot.com/api/health returns HTTP 500 (old build) so a 'live' transition won't happen in preview — watch will remain 'watching' until it times out or is cancelled. Signer preview: RELEASE_SIGNER=local → signer card mode=local, N/A badge, note 'local — no remote signer to probe'. release_signer_health check id lives in the signer card, NOT in preflight-checks list."
+}
