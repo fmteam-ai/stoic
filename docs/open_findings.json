@@ -196,5 +196,17 @@
     "severity": "P2",
     "title": "Replace the NL_EFFECTS_SYNTHETIC_ONLY environment flag with a signed/immutable deployment capability record and refuse capital-capable startup when the transaction probe fails.",
     "owner": "engineering"
+  },
+  {
+    "id": "SEC-001-r21-ea-proof-challenge",
+    "severity": "P3",
+    "title": "EA binary proof is now admitted only over a verified installation chain (r21); a signed server-nonce challenge from the terminal/installer would additionally prove possession of the binary rather than the hash value.",
+    "owner": "engineering"
+  },
+  {
+    "id": "SEC-002-r21-old-live-build",
+    "severity": "P3",
+    "title": "www.stoicaibot.com still serves the OLD build (health 500, legacy status); resolved only by the pending redeploy (hosted signer + replica-set Mongo).",
+    "owner": "operator"
   }
 ]

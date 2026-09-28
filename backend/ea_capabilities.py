@@ -61,7 +61,8 @@ def live_gate(account: dict) -> dict | None:
                     "reason": "no verified EX5 hash recorded for this release (scripts/verify_ea_release.py --record)"}
         if not reported:
             return {"code": "EA_BINARY_PROOF_MISSING",
-                    "reason": "terminal has not reported its EX5 hash — live exposure needs the signed binary proof"}
+                    "reason": "terminal has not reported its EX5 hash over a verified installation chain — "
+                              "pair the terminal and let the signed binary proof arrive on the heartbeat"}
         if reported != expected.lower():
             return {"code": "EA_BINARY_HASH_MISMATCH",
                     "reason": "terminal-reported EX5 hash does not match the verified release hash"}

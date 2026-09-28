@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `fb2353944700bd2f626499b5bc5a685e39f1bccc`
-- rc_lock: `fb2353944700bd2f626499b5bc5a685e39f1bccc` authoritative=False
+- Source commit: `9d5e94a1946cc7b62e78ccb01e02efb6d851de4b`
+- rc_lock: `9d5e94a1946cc7b62e78ccb01e02efb6d851de4b` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `baa34f123590789de3732485394fe9e8e5e12a7674f8116a776b79321a994d06`
+- Test manifest sha256: `443a48b7994d49ac8e9ad534eea00c4279765312ba3c76020412237b1284c698`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4470 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4474 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -57,5 +57,9 @@
 - until then live authority stays CLOSE_ONLY (EA_BINARY_PROOF_MISSING). — owner: engineering
 - P2-01-r20-close-writers [P2] Migrate the remaining close writers (protection_guard, position_protector, eod_flatten, friday_flat, portfolio/risk_manager, trade_manager, trade_reconciler, integrity, telegram/trade/diagnostic routes) to close_commands.request_close() / cancel_pending() so every broker close has one sequence namespace and ledger row. — owner: engineering
 - P1-02-r20-capability-record [P2] Replace the NL_EFFECTS_SYNTHETIC_ONLY environment flag with a signed/immutable deployment capability record and refuse capital-capable startup when the transaction probe fails. — owner: engineering
+- SEC-001-r21-ea-proof-challenge [P3] EA binary proof is now admitted only over a verified installation chain (r21)
+- a signed server-nonce challenge from the terminal/installer would additionally prove possession of the binary rather than the hash value. — owner: engineering
+- SEC-002-r21-old-live-build [P3] www.stoicaibot.com still serves the OLD build (health 500, legacy status)
+- resolved only by the pending redeploy (hosted signer + replica-set Mongo). — owner: operator
 
-_generated 2026-09-28T12:44:29.891513+00:00 — regenerate on every release commit_
+_generated 2026-09-28T13:05:14.336031+00:00 — regenerate on every release commit_

@@ -671,6 +671,10 @@ else:
     )
 
 
+from security import StripStrayCorsCredentials as _StripStrayCorsCredentials  # noqa: E402
+app.add_middleware(_StripStrayCorsCredentials)
+
+
 _bot_runner_task = None
 _warmer_task = None
 _trade_manager_task = None

@@ -223,10 +223,23 @@ async def heartbeat(payload: BridgeHeartbeat):
         set_doc["ea_version_updated_at"] = now_iso
     # r20 P1-01: binary proof handshake — the terminal reports its EX5 hash; the
     # server never trusts account metadata for the expected value (release record).
+    # r21 SEC-001: the proof is only ADMITTED when the heartbeat rides a fully
+    # verified installation chain (identity.ok); a token-only terminal echoing
+    # the public release hash is recorded as unverified and never unlocks live.
     reported_hash = str(getattr(payload, "ea_binary_sha256", "") or "").strip().lower()
-    if reported_hash and len(reported_hash) == 64:
-        set_doc["ea_binary_sha256"] = reported_hash
-        set_doc["ea_binary_sha256_at"] = now_iso
+    unset_doc: dict = {}
+    if reported_hash and len(reported_hash) == 64 and all(c in "0123456789abcdef" for c in reported_hash):
+        set_doc["ea_binary_sha256_reported"] = reported_hash
+        set_doc["ea_binary_sha256_reported_at"] = now_iso
+        if identity and identity["ok"]:
+            set_doc["ea_binary_sha256"] = reported_hash
+            set_doc["ea_binary_sha256_at"] = now_iso
+        else:
+            unset_doc["ea_binary_sha256"] = ""
+            unset_doc["ea_binary_sha256_at"] = ""
+    elif not (identity and identity["ok"]):
+        unset_doc["ea_binary_sha256"] = ""
+        unset_doc["ea_binary_sha256_at"] = ""
 
     # iter-76 · EA v1.34+: auto-detect the broker's symbol-suffix convention
     # from the MarketWatch inventory. Stored on the account so `execution.py`
@@ -389,7 +402,10 @@ async def heartbeat(payload: BridgeHeartbeat):
                     str(acc["_id"]), ghost_count,
                 )
 
-    await db.accounts.update_one({"_id": acc["_id"]}, {"$set": set_doc})
+    hb_update: dict = {"$set": set_doc}
+    if unset_doc:
+        hb_update["$unset"] = unset_doc
+    await db.accounts.update_one({"_id": acc["_id"]}, hb_update)
 
     # EA-deployment machine + execution-owner lease renewal (iter-114).
     try:

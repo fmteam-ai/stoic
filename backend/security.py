@@ -298,3 +298,25 @@ async def revoke_session_by_token_payload(db, payload: dict, reason: str):
         sess = await db.auth_sessions.find_one({"jti": jti})
         if sess:
             await revoke_family(db, sess["family"], reason)
+
+
+class StripStrayCorsCredentials:
+    """r21: never emit Access-Control-Allow-Credentials without a matched origin."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def _send(message):
+            if message["type"] == "http.response.start":
+                hdrs = message.get("headers") or []
+                has_origin = any(k.lower() == b"access-control-allow-origin" for k, _ in hdrs)
+                if not has_origin:
+                    message["headers"] = [(k, v) for k, v in hdrs
+                                          if k.lower() != b"access-control-allow-credentials"]
+            await send(message)
+
+        await self.app(scope, receive, _send)
