@@ -1,0 +1,27 @@
+{
+  "summary": "iter-214 — Round-17 Security Audit fixes verified end-to-end on preview (STRICTLY READ-ONLY, no NL mutations against admin). Backend HTTP suite tests/test_iter214_r17_audit.py = 6/6 pass in ~7s. Backend integration suite tests/integration/test_r17_audit.py = 7/7 pass in <1s (covers P0-01 fenced() effect-row+domain-write together on standalone via CAS with committed='cas' and via transaction when replica set is available; P0-01 production fails-closed RuntimeError without transactions; P1-01 preview binds resolved_ids into effect.target_ids and receipts.target_ids, and recovery reuses the ORIGINAL bound ids even when high_risk membership changes; P0-02 scripts/run_full_suite.sh default STOIC_ALLOW_MUTATING_TESTS=NO and legacy mutating live test removed; P2-01/2-02 release admission pair + provider idempotency crash-survival). HTTP checks confirmed: (a) GET /api/health ea_version='1.57'; (b) GET /api/status returns overall='degraded', headline 'Platform controls available · trading degraded · connectivity idle', trading{readiness,attestation,connectivity} block present, all 6 components enumerated; (c) POST /api/nl/command/confirm with actions-only body → 400 proposal_id_required; POST confirm with proposal_id='000000000000000000000000' → 404; (d) GET /api/ops/deploy-preflight includes check id 'mongo_transactions' with status='warn' and current='standalone — NO transactions' (preview standalone Mongo); (e) GET /api/ops/deploy-watch still 'watching' and NOT cancelled by these tests. Frontend: public /status (no login) renders data-testid=status-overall with the backend headline, data-testid=status-trading-provenance block (readiness DEGRADED · TERMINAL_STALE, connectivity idle, decision dec_fe694ba421f1 · input v94, attestation 'not attested · platform_availability_only', new exposure refused, as of timestamp), and all 6 component rows via data-testid=status-{api,database,bot_engine,ea_bridge,payments,email}. /admin/preflight (admin session, csrf cookie set) renders data-testid=preflight-check-mongo_transactions (WARN) alongside signer-health-row + deploy-watch-card and 15 total preflight-check-* rows. /notifications loads with the risk-controlled shell for the admin user.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter214_r17_audit.py",
+    "/app/backend/tests/integration/test_r17_audit.py",
+    "/app/test_reports/pytest/iter214.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "nl_execution.fenced() correctly branches on replica-set availability: standalone commits via CAS (row.committed='cas') and production fails-closed with RuntimeError when transactions unavailable; integration test test_production_fails_closed_without_transactions asserts nl_effects row remains state='dispatching' and no domain write is performed.",
+    "P1-01 immutability of approved targets is bounded into the effect row as target_ids AND echoed in receipts as target_ids; the recovery test proves reclaim after lease-expiry reuses the ORIGINAL bound ids even when a new high_risk bot joins mid-flight (b2 is NOT touched).",
+    "routes.nl_routes.execute_one goes through fenced() for all Risk Commander handlers — the read-only HTTP guards (400 proposal_id_required / 404 unknown proposal_id) confirm the confirm endpoint refuses actions-only or bogus payloads before hitting the executor.",
+    "P2-03 StatusPage.jsx: status-trading-provenance block renders readiness state + dominant_code + connectivity + decision + attestation state + inventory hash + new-exposure allowed/refused + as-of; falls back gracefully when subfields missing.",
+    "deploy_preflight.mongo_transactions check surfaces 'standalone — NO transactions' as warn in preview; test asserts presence via id and warn semantics via `current` string.",
+    "scripts/run_full_suite.sh defaults STOIC_ALLOW_MUTATING_TESTS=NO and Makefile no longer contains STOIC_ALLOW_MUTATING_TESTS=YES override — read-only default is now the codified norm."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter214_r17_audit.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "TEST_ADMIN_EMAIL=admin@trading.bot / TEST_ADMIN_PASSWORD from /app/backend/.env",
+  "seed_data_creation": "None. NL mutations were NOT performed against the admin account this run (P0-02 read-only requirement respected). No test data written to the repo. Deploy watchdog left in its existing 'watching' state — not touched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter-214 tests live at /app/backend/tests/test_iter214_r17_audit.py (6 HTTP assertions, ~7s) and are safe to re-run any time — they never mutate NL or bot state. Integration coverage of the fenced()/target-binding invariants stays in tests/integration/test_r17_audit.py (7 asserts). Preview Mongo is a standalone; the mongo_transactions preflight check is expected to be WARN there and PASS only against a replica set. Public status page path is /status (no /api prefix); the trading provenance block is rendered from GET /api/status.trading.{readiness,attestation,connectivity}.",
+  "rca of the issue": "No bugs found. All Round-17 P0/P1/P2 changes behave per spec on preview."
+}
