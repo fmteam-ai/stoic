@@ -1,7 +1,7 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `9d5e94a1946cc7b62e78ccb01e02efb6d851de4b`
-- rc_lock: `9d5e94a1946cc7b62e78ccb01e02efb6d851de4b` authoritative=False
+- Source commit: `a1820a18141665db6ea988ccb11bcdb42b084f4a`
+- rc_lock: `a1820a18141665db6ea988ccb11bcdb42b084f4a` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
 - Test manifest sha256: `443a48b7994d49ac8e9ad534eea00c4279765312ba3c76020412237b1284c698`
 - Uvicorn keepalive (container): 75s (application cap 300s)
@@ -62,4 +62,4 @@
 - SEC-002-r21-old-live-build [P3] www.stoicaibot.com still serves the OLD build (health 500, legacy status)
 - resolved only by the pending redeploy (hosted signer + replica-set Mongo). — owner: operator
 
-_generated 2026-09-28T13:05:14.336031+00:00 — regenerate on every release commit_
+_generated 2026-09-28T13:15:55.680918+00:00 — regenerate on every release commit_

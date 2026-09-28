@@ -113,9 +113,13 @@ def test_production_fails_closed_without_transactions(world, monkeypatch):
     from routes.nl_routes import execute_one
     db, uid = world["db"], world["id"]
     _run(db.trades.insert_one({"user_id": uid, "symbol": "XAUUSD", "status": "open", "action": "BUY", "entry_price": 1.0}))
-    hello = _run(db.command("hello"))
-    if hello.get("setName"):
-        pytest.skip("replica set available — transactions are used here")
+    # force the standalone posture on any topology (CI runs a replica set) so the
+    # fail-closed branch is exercised everywhere instead of being skipped
+    from pymongo.errors import OperationFailure
+
+    def _no_txn(self, *a, **k):
+        raise OperationFailure("Transaction numbers are only allowed on a replica set member or mongos", code=20)
+    monkeypatch.setattr(type(db.client), "start_session", _no_txn)
     key = "p" * 32
     ctx = {"idempotency_key": key, "execution_id": "ex", "owner": "w1", "fence": 1, "target_ids": None}
     assert _run(nx.reserve_effect(db, key, {"user_id": uid}, ctx=ctx)) == "reserved" and _run(nx.dispatch_effect(db, ctx))

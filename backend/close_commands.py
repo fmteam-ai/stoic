@@ -3,7 +3,7 @@
 EVERY writer that wants a broker position closed calls request_close(): it
 allocates the trade's durable close_seq atomically with the command, writes the
 denormalised current-command pointer on the trade and an IMMUTABLE row per
-command in `close_commands` (sequence, idempotency key, execution/proposal ids,
+command in `close_commands` (sequence, idempotency identifier, execution + proposal ids,
 target, requester, reason, timestamps, state, terminal/broker ack, superseded_by).
 Pending-order cancellation is a different verb (cancel_pending) and never goes
 through position close.
