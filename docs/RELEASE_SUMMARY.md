@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `3f31d46db726ef4dd8f49acf8936ded1ad43b9e7`
-- rc_lock: `3f31d46db726ef4dd8f49acf8936ded1ad43b9e7` authoritative=False
+- Source commit: `5b0d88042c62e44debb828f3e52dfad99f68c784`
+- rc_lock: `5b0d88042c62e44debb828f3e52dfad99f68c784` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `40f12bb5cd9bebe2419c10b61604f4372a5a04caf19f721ff8d338b9a65990ce`
+- Test manifest sha256: `db84b7b1a636a16bdfcaf4ad868c4693b4fbfeb784826b92b9ed898944f04e85`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4426 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4432 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -41,4 +41,4 @@
 - P2-03-r16 [P2] Turnstile/Cloudflare matrix demonstrated on production-like staging with the production-built frontend and a stable hostname (valid-once, replay, wrong action/hostname, malformed, skew, outage, script failure, OTP fallback, recovery, rate limits). — owner: engineering
 - P2-04-r16 [P2] Agent transport identity: ingress mTLS with client-certificate verification, rotation/expiry monitoring, revocation and certificate→immutable agent record mapping. — owner: infrastructure
 
-_generated 2026-09-28T05:54:33.792957+00:00 — regenerate on every release commit_
+_generated 2026-09-28T06:02:47.082247+00:00 — regenerate on every release commit_
