@@ -718,11 +718,12 @@ async def on_startup():
                 "least one real production origin (localhost/preview "
                 "entries are ignored in production).")
         # SEC-001 — test bypass secrets must never exist in production.
-        if (os.environ.get("STEP_UP_BYPASS_TOKEN")
-                or os.environ.get("RATE_LIMIT_BYPASS_TOKEN")):
+        from app_env import bypass_token
+        if bypass_token("STEP_UP_BYPASS_TOKEN") or bypass_token("RATE_LIMIT_BYPASS_TOKEN"):
             raise RuntimeError(
                 "APP_ENV=production forbids STEP_UP_BYPASS_TOKEN / "
-                "RATE_LIMIT_BYPASS_TOKEN — unset them before deploying.")
+                "RATE_LIMIT_BYPASS_TOKEN — set them to `disabled` in the "
+                "publish Secrets tab before deploying.")
         # iter-136 — admin MFA enforcement and release signing are mandatory
         # in production.
         if os.environ.get("ADMIN_MFA_ENFORCED", "true").lower() != "true":

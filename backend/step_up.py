@@ -45,7 +45,8 @@ async def require_step_up(db, user, request, action: str) -> None:
     `action`. Users without TOTP enrolled are blocked entirely."""
     # Test-suite bypass (mirrors RATE_LIMIT_BYPASS_TOKEN) — server-side
     # secret, refused outright when APP_ENV=production (SEC-001).
-    bypass = os.environ.get("STEP_UP_BYPASS_TOKEN") or ""
+    from app_env import bypass_token
+    bypass = bypass_token("STEP_UP_BYPASS_TOKEN")
     hdr = (request.headers.get("X-Step-Up-Bypass") or "")
     from app_env import is_production
     if (bypass and hdr

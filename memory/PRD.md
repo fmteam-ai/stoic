@@ -2775,3 +2775,9 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - **P3** — `security.RequestBodyLimit` ASGI cap (`MAX_REQUEST_BODY_BYTES`, default 4 MiB; declared AND streamed bodies → 413, verified on preview); `client_ip` drops the X-Real-IP fallback (ingress hop or socket peer only). PAMM amount check recorded (P3-r23-pamm-amount-check).
 - Live test `tests/test_iter153_step_up.py` adapted to the r22 replay cache (`_fresh_code` takes the next unused TOTP step) — 6/6 stable.
 - Tests: `tests/integration/test_r23_audit.py` (4); critical_controls 85, integration 142, unit 661, legacy security suites 54 + step-up 6. Manifest 4,482 / 455 files; rc_lock refrozen; consistency OK; secret scan + gitleaks (git) clean. Production still OLD build (health 500).
+
+## Iter-268 (2026-06) — Publish failure: Secrets panel cannot save empty values
+- Root cause: production boot guardrails require STEP_UP_BYPASS_TOKEN / RATE_LIMIT_BYPASS_TOKEN / ED25519_SIGNING_KEY_B64 to be ABSENT, but the publish Secrets panel refuses to save an empty value ("Couldn't save").
+- Fix: `app_env.bypass_token()` / `removable_secret()` — the explicit value `disabled` (also unset/none/off/-) reads as absent everywhere (server.py boot guard, step_up.py, security.rate_limit, release_signing.signer_config_violations/_private_key, deploy_preflight). Sentinel is never a usable bypass header (unit-tested). Preflight fix texts updated.
+- Tests: `tests/unit/test_bypass_sentinel.py` (4); unit 665→673 incl. r18. Manifest 4,486; rc_lock refrozen; consistency OK; secret scan clean.
+- Remaining operator Secrets for production: APP_ENV=production, ADMIN_MFA_ENFORCED=true, the three sentinels =disabled, RELEASE_SIGNER=external + RELEASE_SIGNER_URL/ALLOWED_HOSTS/TOKEN/KEY_ID + RELEASE_PUBLIC_KEY_B64 (from the Fly signer deploy output).

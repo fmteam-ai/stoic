@@ -8,7 +8,7 @@ In preview, values reflect what production will inherit from the codebase
 """
 import os
 
-from app_env import is_production
+from app_env import is_production, removable_secret
 
 
 def _mask(v: str, keep: int = 0) -> str:
@@ -72,13 +72,14 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "out. The codebase .env already includes the stoicaibot.com "
         "domains — no Secret needed unless you change domains."))
 
+    from app_env import bypass_token
     for key in ("STEP_UP_BYPASS_TOKEN", "RATE_LIMIT_BYPASS_TOKEN"):
-        val = env.get(key) or ""
+        val = bypass_token(key)
         checks.append(_check(
             key.lower(), key, "pass" if not val else "fail",
-            "set (" + _mask(val) + ")" if val else "(empty)", "(empty)",
-            f"Clear {key} in the Secrets tab — test bypass secrets are "
-            "forbidden in production and refuse boot."))
+            "set (" + _mask(val) + ")" if val else "(empty / disabled)", "disabled",
+            f"Set {key}=disabled in the Secrets tab (the panel cannot save an "
+            "empty value) — test bypass secrets are forbidden in production and refuse boot."))
 
     mfa = env.get("ADMIN_MFA_ENFORCED", "true").strip().lower()
     checks.append(_check(
@@ -137,10 +138,10 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "complete and the private key is absent (release_signing.signer_config_violations)."))
     checks.append(_check(
         "ed25519", "ED25519_SIGNING_KEY_B64",
-        "pass" if not (env.get("ED25519_SIGNING_KEY_B64") or "").strip() else "fail",
-        "absent" if not (env.get("ED25519_SIGNING_KEY_B64") or "").strip() else "PRESENT",
+        "pass" if not removable_secret(env, "ED25519_SIGNING_KEY_B64") else "fail",
+        "absent / disabled" if not removable_secret(env, "ED25519_SIGNING_KEY_B64") else "PRESENT",
         "absent in production (external signer holds the key)",
-        "Remove the private key from the API environment; sign via RELEASE_SIGNER=external."))
+        "Set ED25519_SIGNING_KEY_B64=disabled in the Secrets tab (the panel refuses empty values); sign via RELEASE_SIGNER=external."))
     if check_signer_health and not _viols and _mode == "external":
         import time as _t
         _t0 = _t.monotonic()

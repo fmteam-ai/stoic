@@ -16,6 +16,8 @@ import logging
 import os
 from urllib.parse import urlparse
 
+from app_env import removable_secret
+
 logger = logging.getLogger("release_signing")
 
 from cryptography.hazmat.primitives import serialization
@@ -72,7 +74,7 @@ def signer_config_violations(env) -> list[str]:
                     + (retired_msg if retired else "")]
         if retired:
             v.append(retired_msg.strip())
-        priv = (env.get("ED25519_SIGNING_KEY_B64") or "").strip()
+        priv = removable_secret(env, "ED25519_SIGNING_KEY_B64")
         if not _b64_key_ok(priv):
             v.append("RELEASE_SIGNER=local requires a valid ED25519_SIGNING_KEY_B64 (base64 of 32 raw bytes).")
         pinned = (env.get("RELEASE_PUBLIC_KEY_B64") or "").strip()
@@ -85,8 +87,9 @@ def signer_config_violations(env) -> list[str]:
     # external
     if retired:
         v.append(retired_msg.strip())
-    if (env.get("ED25519_SIGNING_KEY_B64") or "").strip():
-        v.append("RELEASE_SIGNER=external forbids ED25519_SIGNING_KEY_B64 in the API environment — remove the private key.")
+    if removable_secret(env, "ED25519_SIGNING_KEY_B64"):
+        v.append("RELEASE_SIGNER=external forbids ED25519_SIGNING_KEY_B64 in the API environment — "
+                 "remove the private key (set it to `disabled` if the Secrets panel refuses an empty value).")
     url = (env.get("RELEASE_SIGNER_URL") or "").strip()
     if not url:
         v.append("RELEASE_SIGNER=external requires RELEASE_SIGNER_URL.")
@@ -120,7 +123,7 @@ def production_signer_violation(env) -> str | None:
 
 
 def _private_key() -> Ed25519PrivateKey:
-    b64 = os.environ.get("ED25519_SIGNING_KEY_B64", "")
+    b64 = removable_secret(os.environ, "ED25519_SIGNING_KEY_B64")
     if not b64:
         raise RuntimeError(
             "ED25519_SIGNING_KEY_B64 is not configured — refusing to emit an UNSIGNED release manifest.")

@@ -34,7 +34,8 @@ async def rate_limit(db, scope: str, identifier: str, max_attempts: int,
     server-side RATE_LIMIT_BYPASS_TOKEN secret skips VOLUME limits only —
     failure-based lockouts (login/2fa) are never bypassed."""
     if request is not None:
-        bypass = os.environ.get("RATE_LIMIT_BYPASS_TOKEN") or ""
+        from app_env import bypass_token
+        bypass = bypass_token("RATE_LIMIT_BYPASS_TOKEN")
         hdr = request.headers.get("x-ratelimit-bypass") or ""
         from app_env import is_production
         if (bypass and hdr
