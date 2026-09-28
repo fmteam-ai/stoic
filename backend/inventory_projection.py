@@ -57,6 +57,15 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
               "live_enabled": 0, "bots_enabled": 0, "connected": 0, "fresh": 0, "tradable": 0,
               "bots_configured_raw": raw_bots["configured"], "bots_active_raw": raw_bots["active"],
               "bots_null_account": raw_bots["null_account"], "bots_duplicate": 0, "bots_orphan": 0}
+    # one grouped query for open positions (was one count per account — N+1 that
+    # stalled the public status probe on large tenants / remote Atlas)
+    open_by_account: dict = {}
+    open_match = {"status": "open"}
+    if q:
+        open_match["account_id"] = {"$in": account_ids_scope}
+    async for g in db.trades.aggregate([{"$match": open_match},
+                                        {"$group": {"_id": "$account_id", "n": {"$sum": 1}}}]):
+        open_by_account[str(g["_id"])] = int(g["n"])
     async for acc in db.accounts.find(q):
         aid = str(acc["_id"])
         account_ids_seen.add(aid)
@@ -68,7 +77,7 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
         enabled = acc.get("trading_enabled") is True
         bot_on = any(acc_bots)
         conn = effective_connection_state(acc)
-        open_local = await db.trades.count_documents({"account_id": aid, "status": "open"})
+        open_local = open_by_account.get(aid, 0)
         truth = account_truth(acc, open_local)
         fresh = truth["position_truth"] == "FRESH"
         tradable = enabled and bot_on and conn["connected"] and fresh and truth["execution_authority"] == "FULL"

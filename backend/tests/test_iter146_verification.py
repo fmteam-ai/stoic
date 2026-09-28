@@ -4,7 +4,6 @@ and slippage evidence gate placement (LIVE new-risk only).
 """
 import os
 import re
-import uuid
 from pathlib import Path
 
 import pytest
@@ -65,7 +64,6 @@ class TestImageDigestEnforcement:
     _fake_sha = "d" * 40
 
     def test_production_derives_source_digest_when_image_digest_missing(self, monkeypatch):
-        import os
         import modules.pamm.strategy_guard as sg
         monkeypatch.delenv("STOIC_IMAGE_DIGEST", raising=False)
         monkeypatch.setattr(sg, "PROVENANCE_KIND", "image")

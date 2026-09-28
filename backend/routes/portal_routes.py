@@ -6,6 +6,7 @@ GET /api/status                — public component health (30s cache)
 GET /api/onboarding            — wizard state for the current user
 PUT /api/onboarding            — persist step / status / risk choice
 """
+import asyncio
 import os
 import time
 import logging
@@ -70,17 +71,62 @@ async def public_status():
 
     # single-flight: a cold-cache burst computes the status once, not N times
     global _STATUS_LOCK
-    import asyncio
     if _STATUS_LOCK is None:
         _STATUS_LOCK = asyncio.Lock()
     async with _STATUS_LOCK:
         now = time.monotonic()
         if _STATUS_CACHE["data"] and now - _STATUS_CACHE["at"] < _STATUS_TTL:
             return _STATUS_CACHE["data"]
-        return await _compute_status(now)
+        # The public probe must NEVER hang: a slow/stuck computation is bounded
+        # and answered fail-closed (degraded, no readiness claim), cached briefly
+        # so a burst does not pile up behind the single-flight lock.
+        timings: dict = {}
+        try:
+            return await asyncio.wait_for(_compute_status(now, timings), STATUS_COMPUTE_TIMEOUT)
+        except asyncio.TimeoutError:
+            logging.getLogger("portal").warning(
+                "public status compute exceeded %ss — stages: %s", STATUS_COMPUTE_TIMEOUT,
+                {k: round(v, 2) for k, v in timings.items()})
+            data = _degraded_status("status computation timed out")
+            _STATUS_CACHE.update(at=time.monotonic() - _STATUS_TTL + STATUS_DEGRADED_CACHE, data=data)
+            return data
 
 
-async def _compute_status(now: float):
+STATUS_COMPUTE_TIMEOUT = float(os.environ.get("STATUS_COMPUTE_TIMEOUT_SEC") or 20)
+STATUS_DEGRADED_CACHE = 10.0
+STATUS_SLOW_LOG_SEC = 5.0
+
+
+def _degraded_status(note: str) -> dict:
+    utc_now = datetime.now(timezone.utc)
+    return {"overall": "degraded",
+            "components": {"api": {"status": "operational"}, "status_probe": {"status": "degraded", "note": note}},
+            "trading": {"connectivity": "not_verified",
+                        "readiness": {"state": "UNKNOWN", "dominant_code": "UNAVAILABLE", "decision_id": None,
+                                      "new_exposure_allowed": False},
+                        "attestation": {"attested": False, "basis": "platform_availability_only"},
+                        "label": "Trading unknown · status probe degraded"},
+            "headline": "Platform degraded · status probe timed out",
+            "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,
+                           "app_env": os.environ.get("APP_ENV") or "development"},
+            "checked_at": utc_now.isoformat()}
+
+
+class _Stage:
+    """Records wall time per stage so a slow production probe names its culprit."""
+
+    def __init__(self, timings: dict):
+        self.t, self.last = timings, time.monotonic()
+
+    def mark(self, name: str) -> None:
+        now = time.monotonic()
+        self.t[name] = now - self.last
+        self.last = now
+
+
+async def _compute_status(now: float, timings: dict | None = None):
+    stage = _Stage({} if timings is None else timings)
+    started = time.monotonic()
     db = get_db()
     utc_now = datetime.now(timezone.utc)
     components = {}
@@ -91,6 +137,7 @@ async def _compute_status(now: float):
         components["database"] = {"status": "operational"}
     except Exception:  # noqa: BLE001
         components["database"] = {"status": "down"}
+    stage.mark("db_ping")
 
     # API is trivially up if this handler runs
     components["api"] = {"status": "operational"}
@@ -111,6 +158,7 @@ async def _compute_status(now: float):
                                         "note": "no recent bot cycles"}
     except Exception:  # noqa: BLE001
         components["bot_engine"] = {"status": "unknown"}
+    stage.mark("bot_engine")
 
     # EA bridge — any account heartbeat within 10 min
     try:
@@ -123,6 +171,7 @@ async def _compute_status(now: float):
                   "note": "no EA heartbeats in the last 10 minutes"})
     except Exception:  # noqa: BLE001
         components["ea_bridge"] = {"status": "unknown"}
+    stage.mark("ea_bridge")
 
     # Payments / Email — configuration presence only (no external calls
     # from a public unauthenticated endpoint)
@@ -139,10 +188,10 @@ async def _compute_status(now: float):
     # explicitly labelled objects; account identifiers are never exposed here.
     try:
         fresh = await db.accounts.count_documents({"last_heartbeat": {"$gte": (utc_now - timedelta(minutes=2)).isoformat()}})
-        enabled = await db.accounts.count_documents({"trading_enabled": True})
     except Exception:  # noqa: BLE001
-        fresh, enabled = 0, 0
+        fresh = 0
     connectivity = ("active" if fresh > 0 else "idle" if components["ea_bridge"]["status"] == "idle" else "not_verified")
+    stage.mark("connectivity")
     try:
         from canonical_decision import decide_platform
         dec = await decide_platform(db)
@@ -150,6 +199,7 @@ async def _compute_status(now: float):
                      "dominant_code": dec["dominant_code"], "decision_id": dec["decision_id"]}
     except Exception:  # noqa: BLE001
         readiness = {"state": "UNKNOWN", "new_exposure_allowed": False, "dominant_code": "UNAVAILABLE", "decision_id": None}
+    stage.mark("decide_platform")
     if connectivity != "active" and readiness["state"] == "READY":
         readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False, "dominant_code": "TERMINAL_STALE"}
     # audit r15 P1-02 — the public portal reports PLATFORM AVAILABILITY only.
@@ -183,6 +233,7 @@ async def _compute_status(now: float):
                          inventory_hash=(proj["approved_hash"] or "")[:12] or None, as_of=proj["as_of"])
     except Exception:  # noqa: BLE001 — fail closed: no attestation
         aggregate["attested"] = False
+    stage.mark("inventory_attestation")
     if readiness["state"] == "READY" and not aggregate["attested"]:
         readiness = {**readiness, "state": "DEGRADED", "new_exposure_allowed": False,
                      "dominant_code": "INVENTORY_NOT_ATTESTED"}
@@ -205,6 +256,10 @@ async def _compute_status(now: float):
             "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,
                            "app_env": os.environ.get("APP_ENV") or "development"},
             "checked_at": utc_now.isoformat()}
+    total = time.monotonic() - started
+    if total > STATUS_SLOW_LOG_SEC:
+        logging.getLogger("portal").warning("public status compute slow: %.1fs — stages: %s", total,
+                                            {k: round(v, 2) for k, v in stage.t.items()})
     _STATUS_CACHE.update(at=now, data=data)
     return data
 

@@ -16,14 +16,14 @@ import logging
 import os
 from urllib.parse import urlparse
 
-from app_env import removable_secret
-
-logger = logging.getLogger("release_signing")
-
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey,
 )
+
+from app_env import removable_secret
+
+logger = logging.getLogger("release_signing")
 
 KEY_ID = "stoic-release-ed25519-v1"
 DEFAULT_TIMEOUT = 10.0
