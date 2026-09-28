@@ -66,6 +66,12 @@ def live_gate(account: dict) -> dict | None:
         if reported != expected.lower():
             return {"code": "EA_BINARY_HASH_MISMATCH",
                     "reason": "terminal-reported EX5 hash does not match the verified release hash"}
+        # r22: a hash that arrived over a user_trust chain (bridge token + public
+        # MT5 login/server) is telemetry, not installer-verified proof.
+        if str(account.get("ea_binary_sha256_method") or "") == "user_trust":
+            return {"code": "EA_BINARY_PROOF_UNATTESTED",
+                    "reason": "EX5 hash was reported over a one-click trusted terminal — pair the terminal "
+                              "with the installer so the binary proof is attested"}
     return None
 
 

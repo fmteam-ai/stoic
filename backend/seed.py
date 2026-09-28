@@ -117,6 +117,7 @@ async def seed_admin():
                           "must_change_password": True,
                           "admin_env_pw_fingerprint": fp},
                  "$unset": {"password_reset_token": "",
+                            "password_reset_token_sha256": "",
                             "password_reset_expires_at": ""}})
             await db.login_attempts.delete_many(
                 {"identifier": {"$regex": admin_email.replace(".", r"\.")}})

@@ -320,3 +320,9 @@ class StripStrayCorsCredentials:
             await send(message)
 
         await self.app(scope, receive, _send)
+
+
+def token_digest(token: str) -> str:
+    """r22: one-time e-mail tokens (activation / password reset) are stored as
+    SHA-256 digests so a database read cannot redeem an outstanding link."""
+    return hashlib.sha256((token or "").strip().encode()).hexdigest()

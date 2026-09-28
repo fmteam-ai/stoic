@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `a1820a18141665db6ea988ccb11bcdb42b084f4a`
-- rc_lock: `a1820a18141665db6ea988ccb11bcdb42b084f4a` authoritative=False
+- Source commit: `4e61401c0365caf4fec9b17846137b63a51425b5`
+- rc_lock: `4e61401c0365caf4fec9b17846137b63a51425b5` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `443a48b7994d49ac8e9ad534eea00c4279765312ba3c76020412237b1284c698`
+- Test manifest sha256: `31dfab5114185812b401b2827e660dcf9d23618a621109b8d99a7702ae2907d2`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4474 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4478 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -61,5 +61,7 @@
 - a signed server-nonce challenge from the terminal/installer would additionally prove possession of the binary rather than the hash value. — owner: engineering
 - SEC-002-r21-old-live-build [P3] www.stoicaibot.com still serves the OLD build (health 500, legacy status)
 - resolved only by the pending redeploy (hosted signer + replica-set Mongo). — owner: operator
+- P3-r22-pairing-rate-limit-review [P3] Tune BRIDGE_IP_LIMIT_PER_MIN (default 1200) per VPS fleet size once live heartbeat volume per address is measured
+- claim-pairing is 20/10 min per IP. — owner: operator
 
-_generated 2026-09-28T13:15:55.680918+00:00 — regenerate on every release commit_
+_generated 2026-09-28T13:37:43.637700+00:00 — regenerate on every release commit_

@@ -50,6 +50,7 @@ from pydantic import BaseModel, Field
 from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
+from security import client_ip, rate_limit
 
 router = APIRouter(tags=["setup"])
 
@@ -128,6 +129,8 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
     no cookies / no STOIC login on the VPS) — the token IS the proof.
     """
     db = get_db()
+    await rate_limit(db, "claim_pairing", client_ip(request), 20, 600,
+                     "Too many pairing attempts from this address", request=request)
     pairing = await db.pairing_tokens.find_one({"token": payload.token})
     if not pairing:
         raise HTTPException(

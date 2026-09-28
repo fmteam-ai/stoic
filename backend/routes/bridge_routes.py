@@ -1,7 +1,8 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import logging
-from fastapi import APIRouter, HTTPException
+import os
+from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel
@@ -16,7 +17,16 @@ from intelligence_counters import increment as inc_intel_counter
 from trade_reconciler import reconcile_account, reconcile_user
 from silent_failures import record_swallow
 
-router = APIRouter(prefix="/bridge", tags=["bridge"])
+async def _bridge_ip_throttle(request: Request) -> None:
+    """r22: per-IP volume guard on the unauthenticated bridge surface (token
+    guessing / probing). Generous enough for a VPS running many terminals."""
+    from security import client_ip, rate_limit
+    await rate_limit(get_db(), "bridge", client_ip(request), BRIDGE_IP_LIMIT_PER_MIN, 60,
+                     "Too many bridge requests from this address", request=request)
+
+
+BRIDGE_IP_LIMIT_PER_MIN = int(os.environ.get("BRIDGE_IP_LIMIT_PER_MIN") or 1200)
+router = APIRouter(prefix="/bridge", tags=["bridge"], dependencies=[Depends(_bridge_ip_throttle)])
 
 
 async def _account_by_token(token: str) -> dict:
@@ -232,14 +242,22 @@ async def heartbeat(payload: BridgeHeartbeat):
         set_doc["ea_binary_sha256_reported"] = reported_hash
         set_doc["ea_binary_sha256_reported_at"] = now_iso
         if identity and identity["ok"]:
+            inst_doc = await db.installations.find_one(
+                {"installation_id": effective_installation_id}, {"method": 1})
             set_doc["ea_binary_sha256"] = reported_hash
             set_doc["ea_binary_sha256_at"] = now_iso
+            # r22: the attestation channel is recorded with the hash — a
+            # `user_trust` (token + public login/server) chain is labelled as
+            # unattested and never counts as installer-verified proof.
+            set_doc["ea_binary_sha256_method"] = str((inst_doc or {}).get("method") or "unknown")
         else:
             unset_doc["ea_binary_sha256"] = ""
             unset_doc["ea_binary_sha256_at"] = ""
+            unset_doc["ea_binary_sha256_method"] = ""
     elif not (identity and identity["ok"]):
         unset_doc["ea_binary_sha256"] = ""
         unset_doc["ea_binary_sha256_at"] = ""
+        unset_doc["ea_binary_sha256_method"] = ""
 
     # iter-76 · EA v1.34+: auto-detect the broker's symbol-suffix convention
     # from the MarketWatch inventory. Stored on the account so `execution.py`

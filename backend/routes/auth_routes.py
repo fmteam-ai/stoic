@@ -19,7 +19,7 @@ from models import (
 )
 from totp import (
     new_secret, provisioning_uri, qr_png_data_url,
-    verify_code, generate_recovery_codes, hash_recovery_codes,
+    verify_code, verify_code_once, generate_recovery_codes, hash_recovery_codes,
     consume_recovery_code,
 )
 from activation import (
@@ -32,7 +32,7 @@ from password_reset import (
 )
 from terms_of_use import TERMS_VERSION
 from security import (
-    rate_limit, client_ip,
+    rate_limit, client_ip, token_digest,
     check_failure_limit, record_failure, clear_failures,
     create_session, stamp_session_token, consume_and_rotate,
     revoke_all_user_sessions, revoke_session_by_token_payload,
@@ -151,7 +151,7 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
         "accepted_terms_at": now_iso,
         # Email verification gate
         "email_verified": False,
-        "activation_token": token,
+        "activation_token_sha256": token_digest(token),
         "activation_expires_at": exp_iso,
         "activation_sent_at": now_iso,
     }
@@ -260,7 +260,7 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         await check_failure_limit(db, "2fa", email, 5, 600,
                                   "Too many failed 2FA attempts. "
                                   "Try again in a few minutes.")
-        ok = verify_code(user.get("totp_secret") or "", provided)
+        ok = await verify_code_once(db, str(user["_id"]), user.get("totp_secret") or "", provided)
         if not ok:
             stored_codes = user.get("recovery_codes") or []
             consumed, remaining = consume_recovery_code(stored_codes, provided)
@@ -323,7 +323,7 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
     expire 24h after issuance.
     """
     db = get_db()
-    user = await db.users.find_one({"activation_token": payload.token})
+    user = await db.users.find_one({"activation_token_sha256": token_digest(payload.token)})
     if not user:
         raise HTTPException(
             status_code=400,
@@ -351,7 +351,7 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
                 "email_verified": True,
                 "email_verified_at": datetime.now(timezone.utc).isoformat(),
             },
-            "$unset": {"activation_token": "", "activation_expires_at": ""},
+            "$unset": {"activation_token": "", "activation_token_sha256": "", "activation_expires_at": ""},
         },
     )
 
@@ -406,10 +406,10 @@ async def resend_activation(payload: ResendActivationRequest):
     await db.users.update_one(
         {"_id": user["_id"]},
         {"$set": {
-            "activation_token": token,
+            "activation_token_sha256": token_digest(token),
             "activation_expires_at": exp_iso,
             "activation_sent_at": now_iso,
-        }},
+        }, "$unset": {"activation_token": ""}},
     )
     await send_activation_email(
         recipient=user["email"],
@@ -469,10 +469,10 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request):
     await db.users.update_one(
         {"_id": user["_id"]},
         {"$set": {
-            "password_reset_token": token,
+            "password_reset_token_sha256": token_digest(token),
             "password_reset_expires_at": exp_iso,
             "password_reset_sent_at": now_iso,
-        }},
+        }, "$unset": {"password_reset_token": ""}},
     )
     await send_reset_email(
         recipient=user["email"],
@@ -486,7 +486,7 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request):
 async def reset_password(payload: ResetPasswordRequest):
     """Consume a reset token and set the new password."""
     db = get_db()
-    user = await db.users.find_one({"password_reset_token": payload.token})
+    user = await db.users.find_one({"password_reset_token_sha256": token_digest(payload.token)})
     if not user:
         raise HTTPException(
             status_code=400,
@@ -519,6 +519,7 @@ async def reset_password(payload: ResetPasswordRequest):
             },
             "$unset": {
                 "password_reset_token": "",
+                "password_reset_token_sha256": "",
                 "password_reset_expires_at": "",
             },
         },
@@ -712,7 +713,7 @@ async def two_fa_disable(payload: TOTPDisableRequest, user=Depends(get_current_u
         raise HTTPException(status_code=400, detail="2FA is not enabled")
     if not verify_password(payload.current_password, full["password_hash"]):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if not verify_code(full.get("totp_secret") or "", payload.code):
+    if not await verify_code_once(db, user["id"], full.get("totp_secret") or "", payload.code):
         # Allow recovery-code fallback for disable
         consumed, _ = consume_recovery_code(full.get("recovery_codes") or [], payload.code)
         if not consumed:
@@ -752,7 +753,7 @@ async def step_up_verify(payload: StepUpRequest, request: Request,
     await check_failure_limit(db, "stepup", user["id"], 5, 600,
                               "Too many failed step-up attempts. "
                               "Try again in a few minutes.")
-    if not verify_code(full.get("totp_secret") or "", payload.code):
+    if not await verify_code_once(db, user["id"], full.get("totp_secret") or "", payload.code):
         await record_failure(db, "stepup", user["id"], 600)
         await audit_event(db, user["id"], "step_up_failed",
                           {"action": payload.action}, request)

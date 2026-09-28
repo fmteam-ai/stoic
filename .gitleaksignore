@@ -37,6 +37,9 @@ fd55748ee0148a5de08d08ca39e1909bcb1207b0:docs/host-agent/stoic-host-agent.ps1:ge
 # False positive (2026-06): dummy ED25519_SIGNING_KEY_B64 placeholder in the
 # deploy-preflight test env fixture; current file uses a labelled dummy value.
 4927daa3b318756900a610d0933e8e6e6887a2ca:backend/tests/test_iter181_deploy_preflight.py:generic-api-key:26
-# False positive (2026-06): close_commands.py docstring "idempotency key, execution/proposal ids"
+# False positive (2026-06): close_commands.py docstring prose (idempotency identifier wording)
 # matched generic-api-key; prose only, no credential.
 fb2353944700bd2f626499b5bc5a685e39f1bccc:backend/close_commands.py:generic-api-key:6
+# False positives (2026-06): prose in the ignore-file comment and PRD note describing the above
+4e61401c0365caf4fec9b17846137b63a51425b5:.gitleaksignore:generic-api-key:40
+4e61401c0365caf4fec9b17846137b63a51425b5:memory/PRD.md:generic-api-key:2761

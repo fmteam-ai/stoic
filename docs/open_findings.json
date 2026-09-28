@@ -208,5 +208,11 @@
     "severity": "P3",
     "title": "www.stoicaibot.com still serves the OLD build (health 500, legacy status); resolved only by the pending redeploy (hosted signer + replica-set Mongo).",
     "owner": "operator"
+  },
+  {
+    "id": "P3-r22-pairing-rate-limit-review",
+    "severity": "P3",
+    "title": "Tune BRIDGE_IP_LIMIT_PER_MIN (default 1200) per VPS fleet size once live heartbeat volume per address is measured; claim-pairing is 20/10 min per IP.",
+    "owner": "operator"
   }
 ]

@@ -71,3 +71,23 @@ def consume_recovery_code(stored_hashes: list[str], code: str) -> tuple[bool, li
             pass
         remaining.append(h)
     return matched, remaining
+
+
+TOTP_REPLAY_TTL_SEC = 180
+
+
+async def verify_code_once(db, user_id: str, secret: str, code: str) -> bool:
+    """r22: constant-time TOTP verify PLUS a server-side used-code cache — a
+    captured code cannot be redeemed twice inside the ±1-step window."""
+    if not verify_code(secret, code):
+        return False
+    from datetime import datetime, timedelta, timezone
+    from pymongo.errors import DuplicateKeyError
+    now = datetime.now(timezone.utc)
+    await db.totp_used.create_index("expires_at", expireAfterSeconds=0)
+    try:
+        await db.totp_used.insert_one({"_id": f"{user_id}:{code.strip()}", "used_at": now,
+                                       "expires_at": now + timedelta(seconds=TOTP_REPLAY_TTL_SEC)})
+    except DuplicateKeyError:
+        return False
+    return True
