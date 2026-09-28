@@ -64,10 +64,15 @@ class TestSlippageEvidenceEdges:
 class TestImageDigestEnforcement:
     _fake_sha = "d" * 40
 
-    def test_production_raises_when_digest_missing(self):
-        with pytest.raises(RuntimeError, match="STOIC_IMAGE_DIGEST"):
-            _enforce_production_provenance(
-                sha=self._fake_sha, production=True, image_digest="")
+    def test_production_derives_source_digest_when_image_digest_missing(self, monkeypatch):
+        import os
+        import modules.pamm.strategy_guard as sg
+        monkeypatch.delenv("STOIC_IMAGE_DIGEST", raising=False)
+        monkeypatch.setattr(sg, "PROVENANCE_KIND", "image")
+        _enforce_production_provenance(
+            sha=self._fake_sha, production=True, image_digest="")
+        assert os.environ["STOIC_IMAGE_DIGEST"].startswith("source-sha256:")
+        assert sg.PROVENANCE_KIND == "source-tree"
 
     def test_production_ok_with_valid_digest(self):
         _enforce_production_provenance(
@@ -79,6 +84,8 @@ class TestImageDigestEnforcement:
             sha=self._fake_sha, production=False, image_digest="")
 
     def test_production_raises_on_bad_sha(self):
+        import modules.pamm.strategy_guard as sg
+        sg.PROVENANCE_KIND = "image"
         with pytest.raises(RuntimeError, match="Git SHA"):
             _enforce_production_provenance(
                 sha="not-hex", production=True,
@@ -103,11 +110,14 @@ class TestDeployStaticGates:
 
     def test_install_sh_resolves_digest_after_build_and_hardfails(self):
         with open(f"{_REPO}/deploy/install.sh") as f:
-            body = f.read()
-        # ordering: docker build precedes digest resolve
-        i_build = body.find("docker compose build")
-        i_digest = body.find("STOIC_IMAGE_DIGEST=$(docker inspect")
-        assert i_build > 0 and i_digest > 0 and i_digest > i_build
+            install = f.read()
+        with open(f"{_REPO}/deploy/lib.sh") as f:
+            lib = f.read()
+        body = install + lib          # digest resolution lives in deploy/lib.sh (sourced by install.sh)
+        assert ". deploy/lib.sh" in install
+        i_build = lib.find("docker compose build")
+        i_digest = lib.find("STOIC_IMAGE_DIGEST=$(docker inspect")
+        assert i_build > 0 and i_digest > i_build
         # hard-fail branch
         assert 'if [ -z "${STOIC_IMAGE_DIGEST}" ]' in body
         assert body.count('exit 1') >= 2

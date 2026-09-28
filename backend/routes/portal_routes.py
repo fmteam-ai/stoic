@@ -35,8 +35,12 @@ async def release_key():
     """Public Ed25519 verification key for signed release manifests —
     verifiers should pin this out-of-band."""
     import release_signing
-    return {"alg": "Ed25519", "key_id": release_signing.KEY_ID,
-            "public_key_b64": release_signing.public_key_b64(),
+    try:
+        pub = release_signing.public_key_b64()
+    except release_signing.SignerDeferred:
+        pub = None                                   # deferred: no key to pin yet
+    return {"alg": "Ed25519", "key_id": release_signing.key_id(),
+            "public_key_b64": pub,
             "signer": release_signing.signer_status()}
 
 

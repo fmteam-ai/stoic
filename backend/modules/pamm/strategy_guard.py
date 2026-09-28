@@ -395,27 +395,63 @@ def _build_sha(path: Path = BUILD_SHA_FILE, env: dict | None = None) -> str:
 
 GIT_COMMIT = _build_sha()
 
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_SOURCE_GLOBS = ("**/*.py", "requirements.txt", "static/*.mq5", "BUILD_SHA")
+
+
+def source_tree_digest(root: Path = BACKEND_ROOT) -> str:
+    """`source-sha256:<hex>` over the backend source tree (paths + bytes,
+    sorted; tests/caches excluded). Immutable identity of the running code on
+    managed platforms that inject neither a Git SHA nor an image digest."""
+    import hashlib
+    h = hashlib.sha256()
+    seen = set()
+    for pattern in _SOURCE_GLOBS:
+        for f in sorted(root.glob(pattern)):
+            rel = f.relative_to(root).as_posix()
+            if rel in seen or not f.is_file() or rel.startswith(("tests/", "__pycache__")) \
+                    or "/__pycache__/" in rel or "/tests/" in rel:
+                continue
+            seen.add(rel)
+            h.update(rel.encode() + b"\0")
+            h.update(f.read_bytes())
+            h.update(b"\0")
+    return "source-sha256:" + h.hexdigest()
+
+
+PROVENANCE_KIND = "image"   # image | source-tree
+
 
 def _enforce_production_provenance(sha: str | None = None,
                                    production: bool | None = None,
                                    image_digest: str | None = None) -> None:
-    """A production process may NEVER run without immutable provenance:
-    the exact Git SHA AND the exact backend image digest."""
+    """A production process may NEVER run without immutable provenance: an
+    exact build identity (Git SHA when injected) AND an exact code digest
+    (backend image digest when injected, else the source-tree digest)."""
+    global PROVENANCE_KIND
     sha = GIT_COMMIT if sha is None else sha
     if production is None:
         from app_env import is_production
         production = is_production()
-    if production and not re.fullmatch(_SHA_RE, sha or ""):
-        raise RuntimeError(
-            "Git SHA provenance missing — production builds must inject "
-            "backend/BUILD_SHA (Dockerfile ARG GIT_SHA) or STOIC_BUILD_SHA")
     digest = (os.environ.get("STOIC_IMAGE_DIGEST", "")
               if image_digest is None else image_digest) or ""
-    if production and not digest.strip():
-        raise RuntimeError(
-            "STOIC_IMAGE_DIGEST missing — production risk snapshots must "
-            "carry the exact backend image digest (deploy/install.sh sets "
-            "it after the image build)")
+    if not production:
+        return
+    if not digest.strip():
+        # managed platform (no deploy/install.sh): derive the identity from
+        # the code itself and publish it to every consumer via the env.
+        digest = source_tree_digest()
+        os.environ["STOIC_IMAGE_DIGEST"] = digest
+        PROVENANCE_KIND = "source-tree"
+        logging.getLogger("strategy_guard").warning(
+            "STOIC_IMAGE_DIGEST not injected — using %s as the production code identity", digest)
+    if not re.fullmatch(_SHA_RE, sha or ""):
+        if PROVENANCE_KIND != "source-tree":
+            raise RuntimeError(
+                "Git SHA provenance missing — production builds must inject "
+                "backend/BUILD_SHA (Dockerfile ARG GIT_SHA) or STOIC_BUILD_SHA")
+        logging.getLogger("strategy_guard").warning(
+            "Git SHA provenance unavailable — build identity is the source-tree digest")
 
 
 _enforce_production_provenance()

@@ -148,6 +148,7 @@ class TestSignerPolicyIsOneRule:
         from test_iter237_signer_round9 import EXTERNAL_OK
         for k, v in {"APP_ENV": "production", "RELEASE_SIGNER": "local", "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD": "true"}.items():
             monkeypatch.setenv(k, v)
+        monkeypatch.delenv("RELEASE_SIGNER_DEFERRED", raising=False)
         by = {c["id"]: c for c in run_preflight()["checks"]}
         assert by["release_signer"]["status"] == "fail" and "RETIRED" in by["release_signer"]["current"]
         for k, v in EXTERNAL_OK.items():

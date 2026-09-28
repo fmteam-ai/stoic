@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `53dd570b07a55a075418a40f7b18e179e2258fcb`
-- rc_lock: `53dd570b07a55a075418a40f7b18e179e2258fcb` authoritative=False
+- Source commit: `c92792b134e28a30e6a28de2b559023989a0593c`
+- rc_lock: `c92792b134e28a30e6a28de2b559023989a0593c` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `f9afed53526a629e4b7fdfe3a905ff6d9e43492f94fa6e3c6509b8344eb4065d`
+- Test manifest sha256: `6ab7a63df905b9297d0ef54cfd902dfe36b8854fc033c1ed587550a88a5745b7`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4488 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4493 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -64,5 +64,11 @@
 - P3-r22-pairing-rate-limit-review [P3] Tune BRIDGE_IP_LIMIT_PER_MIN (default 1200) per VPS fleet size once live heartbeat volume per address is measured
 - claim-pairing is 20/10 min per IP. — owner: operator
 - P3-r23-pamm-amount-check [P3] PAMM add_investor: add an explicit server-side positive/precision amount check ahead of the broker adapter (adapter currently the only guard). — owner: engineering
+- OPS-r24-signer-deferred [P1] Production runs with RELEASE_SIGNER deferred (nothing signed
+- live exposure CLOSE_ONLY via RELEASE_SIGNER_DEFERRED gate). Provision the external signer (deploy/signer/deploy_fly.sh), set RELEASE_SIGNER=external + URL/ALLOWED_HOSTS/TOKEN/KEY_ID/PUBLIC_KEY in Secrets, then set RELEASE_SIGNER_DEFERRED=false. — owner: operator
+- OPS-r24-provenance-source-digest [P2] Managed publish injects no image digest: production identity is the source-tree digest (PROVENANCE_KIND=source-tree). Acceptable
+- inject STOIC_IMAGE_DIGEST/STOIC_BUILD_SHA if the platform ever exposes them. — owner: operator
+- OPS-r24-turnstile-hostnames [P3] TURNSTILE_EXPECTED_HOSTNAMES in Secrets includes the preview host so the shared .env works in both environments
+- tighten to the production hosts only in the Secrets tab. — owner: operator
 
-_generated 2026-09-28T15:34:11.960901+00:00 — regenerate on every release commit_
+_generated 2026-09-28T16:14:32.377575+00:00 — regenerate on every release commit_

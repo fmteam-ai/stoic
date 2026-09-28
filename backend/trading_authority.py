@@ -77,7 +77,8 @@ async def infrastructure_domain(db, account: dict | None = None) -> dict:
                                                 "terminal dependency"}
         if account.get("trading_enabled"):
             from ea_capabilities import live_gate
-            gate = live_gate(account)   # r18 P0-02: incompatible EA ⇒ no new exposure, everywhere
+            from release_signing import deferred_gate
+            gate = deferred_gate() or live_gate(account)   # deferred signer / incompatible EA ⇒ no new exposure
             if gate:
                 return {"level": "CLOSE_ONLY", "reason": gate["reason"], "code": gate["code"]}
         hb = str(account.get("last_heartbeat") or "")

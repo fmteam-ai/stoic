@@ -40,7 +40,8 @@ EXTERNAL_OK = {
 def _env(monkeypatch, d):
     for k in ("RELEASE_SIGNER", "RELEASE_SIGNER_URL", "RELEASE_SIGNER_ALLOWED_HOSTS", "RELEASE_SIGNER_TOKEN",
               "RELEASE_SIGNER_KEY_ID", "RELEASE_PUBLIC_KEY_B64", "RELEASE_SIGNER_TIMEOUT",
-              "ED25519_SIGNING_KEY_B64", "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "APP_ENV"):
+              "ED25519_SIGNING_KEY_B64", "RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "APP_ENV",
+              "RELEASE_SIGNER_DEFERRED", "PRODUCTION_RETIRED_SECRETS"):
         monkeypatch.delenv(k, raising=False)
     for k, v in d.items():
         monkeypatch.setenv(k, v)

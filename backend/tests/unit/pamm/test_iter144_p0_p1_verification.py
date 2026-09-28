@@ -103,21 +103,30 @@ class TestSnapshotProvenance:
         assert _build_sha(path=f, env={"GITHUB_SHA": "f" * 40}) == "e" * 40
 
     def test_production_requires_provenance(self):
+        import modules.pamm.strategy_guard as sg
         from modules.pamm.strategy_guard import _enforce_production_provenance
-        with pytest.raises(RuntimeError):
+        sg.PROVENANCE_KIND = "image"
+        with pytest.raises(RuntimeError):      # injected image digest but no SHA ⇒ still refused
             _enforce_production_provenance(sha="unknown", production=True,
                                            image_digest="sha256:x")
         _enforce_production_provenance(sha="unknown", production=False)
         _enforce_production_provenance(sha="d" * 40, production=True,
                                        image_digest="sha256:" + "e" * 64)
 
-    def test_production_requires_image_digest(self):
-        from modules.pamm.strategy_guard import _enforce_production_provenance
-        with pytest.raises(RuntimeError, match="STOIC_IMAGE_DIGEST"):
-            _enforce_production_provenance(sha="d" * 40, production=True,
-                                           image_digest="")
-        _enforce_production_provenance(sha="d" * 40, production=False,
-                                       image_digest="")
+    def test_production_without_image_digest_falls_back_to_source_digest(self, monkeypatch):
+        import os
+        import modules.pamm.strategy_guard as sg
+        monkeypatch.delenv("STOIC_IMAGE_DIGEST", raising=False)
+        monkeypatch.setattr(sg, "PROVENANCE_KIND", "image")
+        sg._enforce_production_provenance(sha="d" * 40, production=True, image_digest="")
+        assert sg.PROVENANCE_KIND == "source-tree"
+        assert os.environ["STOIC_IMAGE_DIGEST"].startswith("source-sha256:")
+        assert os.environ["STOIC_IMAGE_DIGEST"] == sg.source_tree_digest()      # deterministic
+        monkeypatch.delenv("STOIC_IMAGE_DIGEST", raising=False)
+        # without a Git SHA the source digest is still an exact identity (managed platform)
+        sg._enforce_production_provenance(sha="unknown", production=True, image_digest="")
+        assert sg.PROVENANCE_KIND == "source-tree"
+        sg._enforce_production_provenance(sha="d" * 40, production=False, image_digest="")
 
     def test_snapshot_hash_is_sha256_and_tamper_evident(self):
         from modules.pamm.strategy_guard import _snapshot_hash

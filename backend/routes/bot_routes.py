@@ -923,7 +923,8 @@ async def _activation_readiness(db, account) -> list:
                                 f"AutoTrading enabled")
         except (TypeError, ValueError):
             pass
-    ea_block = live_gate(account)   # r18 P0-02: numeric version + capability + EX5 hash
+    from release_signing import deferred_gate
+    ea_block = deferred_gate() or live_gate(account)   # deferred signer / r18 P0-02 EA proof
     if ea_block:
         problems.append(ea_block["reason"])
     if not (account.get("equity") or account.get("balance")):

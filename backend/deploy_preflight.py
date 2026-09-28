@@ -129,8 +129,9 @@ def run_preflight(check_signer_health: bool = False) -> dict:
     _mode = _signer_mode(env)
     checks.append(_check(
         "release_signer", "RELEASE_SIGNER configuration",
-        "pass" if not _viols else "fail",
-        _mode if not _viols else f"{_mode}: " + " | ".join(_viols),
+        ("warn" if _mode == "deferred" else "pass") if not _viols else "fail",
+        (_mode + " (boots; nothing is signed; live exposure CLOSE_ONLY until an external signer is configured)"
+         if _mode == "deferred" else _mode) if not _viols else f"{_mode}: " + " | ".join(_viols),
         "external (KMS/HSM) with https URL in RELEASE_SIGNER_ALLOWED_HOSTS, RELEASE_SIGNER_TOKEN, "
         "pinned RELEASE_PUBLIC_KEY_B64, RELEASE_SIGNER_KEY_ID, RELEASE_SIGNER_TIMEOUT 1-30 s; "
         "NO ED25519_SIGNING_KEY_B64 in the API",

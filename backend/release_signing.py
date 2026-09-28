@@ -29,8 +29,40 @@ KEY_ID = "stoic-release-ed25519-v1"
 DEFAULT_TIMEOUT = 10.0
 
 
+class SignerDeferred(RuntimeError):
+    """Release signing is explicitly deferred — nothing may be signed."""
+
+
+DEFERRED_MESSAGE = ("release signer DEFERRED (RELEASE_SIGNER_DEFERRED=true): the hosted signer is not "
+                    "provisioned yet — nothing is signed and live capital exposure stays CLOSE_ONLY "
+                    "until RELEASE_SIGNER=external is fully configured.")
+
+
+def _deferred(env) -> bool:
+    """Explicit operator declaration. The flag is a NEW key (flows in from .env
+    when the publish Secrets panel refuses edits to existing keys) and is
+    honoured ONLY in production; preview keeps its local test signer."""
+    if (env.get("RELEASE_SIGNER") or "").strip().lower() == "external":
+        return False        # a configured external signer always wins over the deferral flag
+    return _is_prod(env) and (env.get("RELEASE_SIGNER_DEFERRED") or "").strip().lower() == "true"
+
+
 def _mode(env) -> str:
+    if _deferred(env) or (env.get("RELEASE_SIGNER") or "").strip().lower() == "deferred":
+        return "deferred"
     return (env.get("RELEASE_SIGNER") or "local").strip().lower()
+
+
+def is_deferred(env=None) -> bool:
+    return _mode(os.environ if env is None else env) == "deferred"
+
+
+def deferred_gate(env=None) -> dict | None:
+    """Authority gate: while signing is deferred no NEW live exposure is admitted."""
+    if is_deferred(env):
+        return {"code": "RELEASE_SIGNER_DEFERRED",
+                "reason": "release signing is deferred — hosted signer not provisioned; new live exposure is closed"}
+    return None
 
 
 def _is_prod(env) -> bool:
@@ -63,10 +95,16 @@ def signer_config_violations(env) -> list[str]:
     v: list[str] = []
     mode = _mode(env)
     prod = _is_prod(env)
-    if mode not in ("local", "external"):
-        return [f"RELEASE_SIGNER={mode!r} is not a known mode (local|external)"]
+    if mode not in ("local", "external", "deferred"):
+        return [f"RELEASE_SIGNER={mode!r} is not a known mode (local|external|deferred)"]
     retired = (env.get("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD") or "").strip().lower() == "true"
     retired_msg = " RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD is RETIRED and has no effect — remove it."
+    if mode == "deferred":
+        # coherent only while the private key is ABSENT — deferred never means "sign locally"
+        if removable_secret(env, "ED25519_SIGNING_KEY_B64"):
+            v.append("RELEASE_SIGNER deferred forbids ED25519_SIGNING_KEY_B64 in the API environment — "
+                     "remove the private key (PRODUCTION_RETIRED_SECRETS or `disabled`).")
+        return v
     if mode == "local":
         if prod:
             return ["APP_ENV=production forbids RELEASE_SIGNER=local — the signing key must not live in the API. "
@@ -134,6 +172,8 @@ def sign_hex(data: bytes) -> str:
     """Sign `data` → hex Ed25519 signature via the configured backend.
     Refuses to sign with an incoherent configuration (same validator as boot)."""
     env = os.environ
+    if _mode(env) == "deferred":
+        raise SignerDeferred(DEFERRED_MESSAGE)
     if _mode(env) == "external":
         return _external_sign(data)
     if _is_prod(env):
@@ -146,6 +186,7 @@ def sign_hex(data: bytes) -> str:
 def signer_status() -> dict:
     env = os.environ
     return {"mode": _mode(env),
+            "deferred": _mode(env) == "deferred",
             "external_configured": bool(env.get("RELEASE_SIGNER_URL") and env.get("RELEASE_SIGNER_TOKEN")),
             "public_key_pinned": bool(env.get("RELEASE_PUBLIC_KEY_B64")),
             "key_id": key_id(env),
@@ -195,6 +236,9 @@ def signer_health(env=None) -> dict:
     if viol:
         out["error"] = viol[0]
         return out
+    if _mode(env) == "deferred":
+        out.update(ok=False, deferred=True, error=DEFERRED_MESSAGE)
+        return out
     if _mode(env) != "external":
         out.update(ok=True, note="local signer — no remote identity to check")
         return out
@@ -220,6 +264,8 @@ def public_key_b64() -> str:
     pinned = os.environ.get("RELEASE_PUBLIC_KEY_B64")
     if pinned:
         return pinned.strip()
+    if _mode(os.environ) == "deferred":
+        raise SignerDeferred(DEFERRED_MESSAGE)
     pub = _private_key().public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     return base64.b64encode(pub).decode()

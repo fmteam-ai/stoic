@@ -758,6 +758,11 @@ async def on_startup():
     # stacks, restart history) — must start before anything heavy.
     from runtime_watchdog import start_watchdog
     start_watchdog()
+    # provenance guard must fail at BOOT, never at the first /api/health request
+    from modules.pamm import strategy_guard as _sg
+    logging.getLogger("server").info("build provenance: sha=%s kind=%s digest=%s",
+                                     _sg.GIT_COMMIT, _sg.PROVENANCE_KIND,
+                                     (os.environ.get("STOIC_IMAGE_DIGEST") or "-")[:32])
     try:
         await ensure_indexes()
         from modules.pamm.models import ensure_pamm_setup

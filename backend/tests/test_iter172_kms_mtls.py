@@ -122,6 +122,7 @@ def test_local_signing_forbidden_in_production(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("RELEASE_SIGNER", "local")
     monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
+    monkeypatch.delenv("RELEASE_SIGNER_DEFERRED", raising=False)
     with pytest.raises(RuntimeError, match="forbids RELEASE_SIGNER=local"):
         release_signing.sign_hex(b"x")
     # v56: the escape hatch was REMOVED — the override no longer works
