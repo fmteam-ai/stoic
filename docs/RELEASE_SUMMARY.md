@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `9a2894e71cb2ff5453a59ed657938e47aeabd284`
-- rc_lock: `9a2894e71cb2ff5453a59ed657938e47aeabd284` authoritative=False
+- Source commit: `53dd570b07a55a075418a40f7b18e179e2258fcb`
+- rc_lock: `53dd570b07a55a075418a40f7b18e179e2258fcb` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `8227f208edc7253689abbcdea3954cac5ba2f73ebbb29fe8ca46bb6fc50ebd2e`
+- Test manifest sha256: `f9afed53526a629e4b7fdfe3a905ff6d9e43492f94fa6e3c6509b8344eb4065d`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 4486 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 4488 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -65,4 +65,4 @@
 - claim-pairing is 20/10 min per IP. — owner: operator
 - P3-r23-pamm-amount-check [P3] PAMM add_investor: add an explicit server-side positive/precision amount check ahead of the broker adapter (adapter currently the only guard). — owner: engineering
 
-_generated 2026-09-28T15:29:08.722170+00:00 — regenerate on every release commit_
+_generated 2026-09-28T15:34:11.960901+00:00 — regenerate on every release commit_

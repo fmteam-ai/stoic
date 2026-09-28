@@ -57,3 +57,29 @@ def test_ed25519_disabled_sentinel_is_absent_for_external_signer():
     assert not any("ED25519_SIGNING_KEY_B64" in v for v in signer_config_violations(env))
     env["ED25519_SIGNING_KEY_B64"] = "QUFB" * 11
     assert any("ED25519_SIGNING_KEY_B64" in v for v in signer_config_violations(env))
+
+
+def test_production_retired_secrets_list_reads_as_absent_only_in_production():
+    from app_env import removable_secret
+    env = {"APP_ENV": "production", "PRODUCTION_RETIRED_SECRETS": "STEP_UP_BYPASS_TOKEN, ed25519_signing_key_b64",
+           "STEP_UP_BYPASS_TOKEN": "real", "ED25519_SIGNING_KEY_B64": "QUFB", "RATE_LIMIT_BYPASS_TOKEN": "real"}
+    assert removable_secret(env, "STEP_UP_BYPASS_TOKEN") == ""
+    assert removable_secret(env, "ED25519_SIGNING_KEY_B64") == ""
+    assert removable_secret(env, "RATE_LIMIT_BYPASS_TOKEN") == "real"
+    env["APP_ENV"] = "preview"
+    assert removable_secret(env, "STEP_UP_BYPASS_TOKEN") == "real"      # preview tests keep their bypass
+
+
+def test_boot_guard_and_signer_honour_retired_list(monkeypatch):
+    from release_signing import signer_config_violations
+    from app_env import bypass_token
+    env = {"APP_ENV": "production", "RELEASE_SIGNER": "external", "ED25519_SIGNING_KEY_B64": "QUFB" * 11,
+           "PRODUCTION_RETIRED_SECRETS": "ED25519_SIGNING_KEY_B64,STEP_UP_BYPASS_TOKEN,RATE_LIMIT_BYPASS_TOKEN",
+           "RELEASE_SIGNER_URL": "https://signer.example.fly.dev/sign",
+           "RELEASE_SIGNER_ALLOWED_HOSTS": "signer.example.fly.dev", "RELEASE_SIGNER_TOKEN": "t" * 32}
+    assert not any("ED25519_SIGNING_KEY_B64" in v for v in signer_config_violations(env))
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("STEP_UP_BYPASS_TOKEN", "real")
+    monkeypatch.setenv("RATE_LIMIT_BYPASS_TOKEN", "real")
+    assert bypass_token("STEP_UP_BYPASS_TOKEN") == "" and bypass_token("RATE_LIMIT_BYPASS_TOKEN") == ""
