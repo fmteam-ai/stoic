@@ -126,7 +126,13 @@ logs and login alerts key on the real client IP.
 
 ## 8. Security headers at the edge (Rules → Transform Rules → Modify Response Header)
 The API already sends the full header set; add the same for the HTML/static
-responses (free plan: 10 transform rules):
+responses (free plan: 10 transform rules). **Scope the rule to non-`/api/*`
+paths (or use "Set static" = overwrite, never "Add")** — the live audit (round
+19, SEC-002) observed doubled `Strict-Transport-Security` (two different
+max-ages), `Referrer-Policy` and `X-Content-Type-Options` on `/api/status`
+because both the origin and the edge appended them. Each header must be set in
+exactly ONE layer with ONE HSTS policy (`max-age=31536000; includeSubDomains;
+preload` — the dashboard HSTS toggle must use the same 12-month value):
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`

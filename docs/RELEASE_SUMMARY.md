@@ -1,6 +1,6 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `a793ae921b8c7fc9b4b9bab384d35e5a7f21871d`
+- Source commit: `d649ebd792a7d3f1f7c1fdef4f8aeed50906d788`
 - rc_lock: `a793ae921b8c7fc9b4b9bab384d35e5a7f21871d` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
 - Test manifest sha256: `dbac3de95c0e1732ad1ff69189600cc5094d7e2cb7ff3d1f23dc9389bb693df3`
@@ -52,5 +52,6 @@
 - P0-02-r18-handshake [P1] Terminal handshake must PROVE the deployed EX5 hash + capability set (EA reports ea_binary_sha256
 - server pins ea_binary_sha256_expected from the verified release) — live_gate() already refuses a mismatch
 - the EA-side reporting and server pinning must be wired and rolled out. — owner: engineering
+- SEC-002-r19 [P3] Cloudflare edge duplicates security headers on /api/* (two HSTS max-ages, doubled Referrer-Policy / X-Content-Type-Options). Scope the Transform Rule to non-/api paths or use Set-static (overwrite) and align the dashboard HSTS toggle to 12 months — docs/CLOUDFLARE_EDGE.md §8. — owner: operations
 
-_generated 2026-09-28T09:58:48.506284+00:00 — regenerate on every release commit_
+_generated 2026-09-28T12:08:27.569061+00:00 — regenerate on every release commit_

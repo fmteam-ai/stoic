@@ -172,5 +172,11 @@
     "severity": "P1",
     "title": "Terminal handshake must PROVE the deployed EX5 hash + capability set (EA reports ea_binary_sha256; server pins ea_binary_sha256_expected from the verified release) \u2014 live_gate() already refuses a mismatch; the EA-side reporting and server pinning must be wired and rolled out.",
     "owner": "engineering"
+  },
+  {
+    "id": "SEC-002-r19",
+    "severity": "P3",
+    "title": "Cloudflare edge duplicates security headers on /api/* (two HSTS max-ages, doubled Referrer-Policy / X-Content-Type-Options). Scope the Transform Rule to non-/api paths or use Set-static (overwrite) and align the dashboard HSTS toggle to 12 months \u2014 docs/CLOUDFLARE_EDGE.md \u00a78.",
+    "owner": "operations"
   }
 ]
