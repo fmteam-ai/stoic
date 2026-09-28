@@ -359,6 +359,7 @@ async def approve_candidate(db, user_id: str, approver_email: str, note: str = "
         raise HTTPException(status_code=409, detail={"code": "repeated_approver"})
     now = datetime.now(timezone.utc)
     res_key = {"user_id": user_id, "digest": cand["digest"], "principal_id": str(actor_id)}
+    await db.model_approval_principals.create_index([("user_id", 1), ("digest", 1), ("principal_id", 1)], unique=True)
     try:
         await db.model_approval_principals.insert_one({**res_key, "status": "pending", "at": now.isoformat(),
                                                        "lease_until": (now + timedelta(seconds=60)).isoformat()})
@@ -394,6 +395,9 @@ async def approve_candidate(db, user_id: str, approver_email: str, note: str = "
 async def flush_promotion_outbox(db, user_id: str | None = None) -> int:
     """Publish pending chained promotion audits idempotently (round 13 P2-02)."""
     from audit_chain import append_chained
+    # the claim's exactly-once property depends on this unique index — never
+    # assume startup created it (fresh CI/staging databases; audit r16 CI fix)
+    await db.promotion_publications.create_index("promotion_id", unique=True)
     q = {"promotion_outbox": {"$ne": None}, **({"user_id": user_id} if user_id else {})}
     n = 0
     async for d in db.ml_ensembles.find(q):
