@@ -8,7 +8,10 @@ Contract (matches backend/release_signing.py::_external_sign):
                {"key_id": "stoic-release-ed25519-v1", "data_hex": "..."}
                → {"signature_hex": "..."}
   GET  /public-key → {"key_id": ..., "public_key_b64": ...}
-  GET  /healthz    → {"status": "ok"}
+  GET  /health     Authorization: Bearer <SIGNER_TOKEN>
+                   → {"ok": true, "key_id": ..., "public_key_b64": ...}
+                   (identity check used by release_signing.signer_health)
+  GET  /healthz    → {"status": "ok"}   (unauthenticated liveness for the platform)
 
 Env (both REQUIRED — the service refuses to start without them):
   SIGNER_TOKEN               bearer token the API must present
@@ -49,12 +52,21 @@ def healthz():
     return {"status": "ok"}
 
 
-@app.get("/public-key")
-def public_key():
+def _public_key_b64() -> str:
     pub = _key.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    return {"key_id": KEY_ID,
-            "public_key_b64": base64.b64encode(pub).decode()}
+    return base64.b64encode(pub).decode()
+
+
+@app.get("/public-key")
+def public_key():
+    return {"key_id": KEY_ID, "public_key_b64": _public_key_b64()}
+
+
+@app.get("/health")
+def health(authorization: str | None = Header(None)):
+    _auth(authorization)
+    return {"ok": True, "key_id": KEY_ID, "public_key_b64": _public_key_b64()}
 
 
 @app.post("/sign")

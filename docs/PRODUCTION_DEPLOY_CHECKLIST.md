@@ -31,8 +31,24 @@ Everything else already passes (CORS origins, dedicated `ORDER_AUTH_SECRET` /
 ## Step 1 — the isolated release signer (blocker 4 + 5)
 
 The signing key must never live inside the trading API. Host the bundled
-signer (`deploy/signer/`) on infrastructure separate from the API (small VPS,
-Fly/Railway/Render container, or a private-network container).
+signer (`deploy/signer/`) on infrastructure separate from the API. It cannot
+be hosted from the Emergent preview workspace (no Docker, not isolated).
+
+### Fastest path — Fly.io (one command, free tier, automatic HTTPS)
+```bash
+curl -L https://fly.io/install.sh | sh && flyctl auth login   # once
+pip install cryptography                                      # once
+cd deploy/signer && ./deploy_fly.sh stoic-signer-<yourname> ams
+```
+The script generates the keypair + bearer token locally, stores them ONLY as
+Fly secrets (+ chmod-600 copies in `~/.stoic-signer/`), deploys, verifies
+`/healthz`, `/public-key` and the authenticated `/health`, and prints the
+complete **Secrets-tab block** for Step 2 plus the signer host URL
+(`https://<app>.fly.dev`). Re-verify from anywhere with
+`python scripts/signer_probe.py --url https://<app>.fly.dev --token-file ~/.stoic-signer/<app>.token --public-key <PUBLIC>`
+(sign → verify round-trip through the same client code the API uses).
+
+### Manual path (any VPS / container platform)
 
 1. Generate a fresh keypair (anywhere with `pip install cryptography`):
    ```bash
