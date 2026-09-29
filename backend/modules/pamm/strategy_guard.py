@@ -396,7 +396,8 @@ def _build_sha(path: Path = BUILD_SHA_FILE, env: dict | None = None) -> str:
 GIT_COMMIT = _build_sha()
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-_SOURCE_GLOBS = ("**/*.py", "requirements.txt", "static/*.mq5", "BUILD_SHA")
+_SOURCE_GLOBS = ("**/*.py", "**/*.json", "**/*.yml", "**/*.yaml", "**/*.toml", "**/*.sh", "**/*.txt",
+                 "**/Dockerfile*", "static/*.mq5", "BUILD_SHA")
 
 
 def source_tree_digest(root: Path = BACKEND_ROOT) -> str:
@@ -409,8 +410,8 @@ def source_tree_digest(root: Path = BACKEND_ROOT) -> str:
     for pattern in _SOURCE_GLOBS:
         for f in sorted(root.glob(pattern)):
             rel = f.relative_to(root).as_posix()
-            if rel in seen or not f.is_file() or rel.startswith(("tests/", "__pycache__")) \
-                    or "/__pycache__/" in rel or "/tests/" in rel:
+            if rel in seen or f.is_symlink() or not f.is_file() or rel.startswith(("tests/", "__pycache__")) \
+                    or "/__pycache__/" in rel or "/tests/" in rel or rel.startswith(".") or "/." in rel:
                 continue
             seen.add(rel)
             h.update(rel.encode() + b"\0")

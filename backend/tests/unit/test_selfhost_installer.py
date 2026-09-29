@@ -90,8 +90,14 @@ def test_installer_generates_ed25519_with_openssl_and_labels_selinux():
 def test_doctor_reports_and_redacts():
     d = _read("deploy", "doctor.sh")
     for needle in ("RELEASE_SIGNER=external", "ED25519_SIGNING_KEY_B64", "container_file_t", "/api/health/ready",
-                   "release-readiness", "=<redacted>", "doctor: ${FAILS} FAIL"):
+                   "release-readiness", "=<redacted>", "doctor: ${FAILS} FAIL",
+                   # r24 SEC-001: rendered compose config is redacted and the bundle is leak-scanned before shipping
+                   'key + ": <redacted>', "diagnostics bundle NOT written", 'chmod 600 "${OUT}.tar.gz"'):
         assert needle in d, needle
+    b = _read("deploy", "bootstrap.sh")
+    for needle in ("is not a valid hostname", "is not a valid e-mail address", "--telegram must be", "is not a valid git URL"):
+        assert needle in b, needle
+    assert "is not a valid hostname" in _read("deploy", "install.sh")
     assert "cat secrets/" not in d.replace("cat secrets/metrics_token", "")   # only the metrics token is read, never exported
     assert "tar -czf" in d and "secrets_listing" in d
 

@@ -51,6 +51,15 @@ done
 [ "${MODE}" = "--dev" ] || [ -n "${DOMAIN}" ] || { echo "ERROR: ${MODE} needs a domain"; exit 1; }
 PUBLIC=0; [ "${MODE}" = "--dev" ] || PUBLIC=1
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root (sudo)"; exit 1; }
+# operator inputs are interpolated into sed/JSON/vhost files — accept only sane shapes
+if [ -n "${DOMAIN}" ] && ! [[ "${DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)+$ ]]; then
+  echo "ERROR: '${DOMAIN}' is not a valid hostname"; exit 1; fi
+if [ -n "${REPORT_EMAIL}" ] && ! [[ "${REPORT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+  echo "ERROR: '${REPORT_EMAIL}' is not a valid e-mail address"; exit 1; fi
+if [ -n "${TELEGRAM}" ] && ! [[ "${TELEGRAM}" =~ ^[0-9]+:[A-Za-z0-9_-]+:-?[0-9]+$ ]]; then
+  echo "ERROR: --telegram must be <bot_token>:<chat_id> (e.g. 123456:ABC-def_ghi:-1001234567890)"; exit 1; fi
+if [ -n "${REPO}" ] && ! [[ "${REPO}" =~ ^(https://|git@|ssh://)[A-Za-z0-9._@:/~+-]+$ ]]; then
+  echo "ERROR: '${REPO}' is not a valid git URL"; exit 1; fi
 
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 LOG="/var/log/stoic-bootstrap-${TS}.log"
@@ -294,7 +303,7 @@ fi
 # alert channels (values live in ./.env, mode 600 — never in the repo)
 set_env() { touch .env; chmod 600 .env; grep -q "^$1=" .env && sed -i "s|^$1=.*|$1=$2|" .env || echo "$1=$2" >> .env; }
 if [ -n "${TELEGRAM}" ]; then
-  set_env HEALTHWATCH_TELEGRAM_BOT_TOKEN "${TELEGRAM%%:*}"; set_env HEALTHWATCH_TELEGRAM_CHAT_ID "${TELEGRAM#*:}"
+  set_env HEALTHWATCH_TELEGRAM_BOT_TOKEN "${TELEGRAM%:*}"; set_env HEALTHWATCH_TELEGRAM_CHAT_ID "${TELEGRAM##*:}"
 fi
 [ -z "${REPORT_EMAIL}" ] || { set_env INSTALL_REPORT_EMAIL "${REPORT_EMAIL}"; set_env HEALTHWATCH_EMAIL "${REPORT_EMAIL}"; }
 if [ "${PUBLIC}" = 1 ]; then

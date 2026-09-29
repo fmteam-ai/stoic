@@ -101,7 +101,22 @@ ERRS=$(docker compose logs backend --tail 400 2>/dev/null | grep -E "ERROR|Trace
 if [ "${BUNDLE}" = 1 ]; then
   TS=$(date -u +%Y%m%dT%H%M%SZ); OUT="diagnostics/stoic-diag-${TS}"; mkdir -p "${OUT}"
   { . /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-}"; uname -a; free -h; df -h /; docker --version; docker compose version; } > "${OUT}/host.txt" 2>&1
-  docker compose ps > "${OUT}/compose_ps.txt" 2>&1; docker compose config --no-interpolate > "${OUT}/compose_config.yml" 2>/dev/null
+  docker compose ps > "${OUT}/compose_ps.txt" 2>&1
+  # rendered compose config: Compose v2 INLINES env_file values into `environment:` —
+  # redact every environment value (keys kept) so the bundle never carries a secret
+  docker compose config --no-interpolate 2>/dev/null | python3 -c '
+import re, sys
+in_env = False; env_indent = -1
+for line in sys.stdin:
+    stripped = line.lstrip(); indent = len(line) - len(stripped)
+    if re.match(r"environment:\s*$", stripped): in_env, env_indent = True, indent; sys.stdout.write(line); continue
+    if in_env and indent <= env_indent and stripped.strip(): in_env = False
+    if in_env and ":" in stripped and not stripped.startswith("-"):
+        key = stripped.split(":", 1)[0]; sys.stdout.write(" " * indent + key + ": <redacted>\n"); continue
+    if in_env and stripped.startswith("- ") and "=" in stripped:
+        key = stripped[2:].split("=", 1)[0]; sys.stdout.write(" " * indent + "- " + key + "=<redacted>\n"); continue
+    sys.stdout.write(line)
+' > "${OUT}/compose_config.yml"
   for svc in backend signer mongo frontend worker-trading worker-protection worker-reconciliation worker-analytics worker-model worker-tuning caddy; do
     docker compose logs "${svc}" --tail 500 > "${OUT}/log_${svc}.txt" 2>/dev/null || true; done
   # env KEYS only — values are redacted
@@ -109,8 +124,22 @@ if [ "${BUNDLE}" = 1 ]; then
   ls -la secrets > "${OUT}/secrets_listing.txt" 2>/dev/null; command -v getenforce >/dev/null && getenforce > "${OUT}/selinux.txt"
   journalctl -u docker --no-pager -n 200 > "${OUT}/journal_docker.txt" 2>/dev/null || true
   ls /var/log/stoic-bootstrap-*.log >/dev/null 2>&1 && cp "$(ls -t /var/log/stoic-bootstrap-*.log | head -1)" "${OUT}/bootstrap.log"
+  # belt and braces: refuse to ship the bundle if any known secret VALUE appears in it
+  LEAK=0
+  for f in .env backend/.env; do
+    [ -f "$f" ] || continue
+    while IFS= read -r val; do
+      [ "${#val}" -ge 8 ] || continue
+      grep -rqF -- "${val}" "${OUT}" 2>/dev/null && { LEAK=1; break; }
+    done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=.+' "$f" | grep -viE '^(APP_ENV|DB_NAME|DOMAIN|COMPOSE_FILE|CORS_ORIGINS|MONGO_ROOT_USER|MONGO_APP_USER|REACT_APP_BACKEND_URL|DEPLOY_MODE|ATTESTATION_REQUIRED|TURNSTILE_EXPECTED_HOSTNAMES|RELEASE_SIGNER[A-Z_]*|RELEASE_PUBLIC_KEY_B64|ADMIN_EMAIL|SENDER_EMAIL|INSTALL_REPORT_EMAIL|HEALTHWATCH_EMAIL|HEALTHWATCH_REMIND_HOURS|STOIC_IMAGE_DIGEST|PRODUCTION_RETIRED_SECRETS|ADMIN_MFA_ENFORCED|CSRF_ENFORCE_ORIGIN)=' | cut -d= -f2-)
+  done
+  for sf in secrets/*; do [ -f "$sf" ] && grep -rqF -- "$(head -c 200 "$sf")" "${OUT}" 2>/dev/null && LEAK=1; done
+  if [ "${LEAK}" = 1 ]; then
+    rm -rf "${OUT}"; echo; echo "!! diagnostics bundle NOT written: a secret value was detected in the collected files (report this)"; exit 1
+  fi
   tar -czf "${OUT}.tar.gz" -C diagnostics "$(basename "${OUT}")" && rm -rf "${OUT}"
-  echo; echo "diagnostics bundle: ${OUT}.tar.gz (no secret values inside — safe to share)"
+  chmod 600 "${OUT}.tar.gz"
+  echo; echo "diagnostics bundle: ${OUT}.tar.gz (env values redacted and leak-scanned — safe to share)"
 fi
 
 echo

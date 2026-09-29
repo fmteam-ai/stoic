@@ -1,7 +1,7 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `86b11478e160fc8579610c96494d9adca3c5d134`
-- rc_lock: `86b11478e160fc8579610c96494d9adca3c5d134` authoritative=False
+- Source commit: `9c36d790731d9338f68004c5a88d98a535b9e3ab`
+- rc_lock: `9c36d790731d9338f68004c5a88d98a535b9e3ab` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
 - Test manifest sha256: `5a42e02032ae3f408379c5c783040aadbbeda4c33384f8c641c301b55ba2eea6`
 - Uvicorn keepalive (container): 75s (application cap 300s)
@@ -70,5 +70,6 @@
 - inject STOIC_IMAGE_DIGEST/STOIC_BUILD_SHA if the platform ever exposes them. — owner: operator
 - OPS-r24-turnstile-hostnames [P3] TURNSTILE_EXPECTED_HOSTNAMES in Secrets includes the preview host so the shared .env works in both environments
 - tighten to the production hosts only in the Secrets tab. — owner: operator
+- P3-r24-provenance-image-digest [P3] Managed publish: code identity is the self-computed source-tree digest (now covers py/json/yml/toml/sh/txt/Dockerfile, symlinks + dotfiles excluded). Inject STOIC_IMAGE_DIGEST/STOIC_BUILD_SHA if the platform exposes them. — owner: operator
 
-_generated 2026-09-29T06:53:55.250021+00:00 — regenerate on every release commit_
+_generated 2026-09-29T07:05:00.265892+00:00 — regenerate on every release commit_

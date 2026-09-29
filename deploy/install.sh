@@ -21,6 +21,9 @@ for a in "$@"; do
 done
 MODE="${ARGS[0]:-}"
 DOMAIN="${ARGS[1]:-}"
+if [ -n "${DOMAIN}" ] && ! [[ "${DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)+$ ]]; then
+  echo "ERROR: '${DOMAIN}' is not a valid hostname"; exit 1
+fi
 case "${MODE}" in
   --dev) ;;
   --production)

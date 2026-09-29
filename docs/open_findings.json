@@ -238,5 +238,11 @@
     "severity": "P3",
     "title": "TURNSTILE_EXPECTED_HOSTNAMES in Secrets includes the preview host so the shared .env works in both environments; tighten to the production hosts only in the Secrets tab.",
     "owner": "operator"
+  },
+  {
+    "id": "P3-r24-provenance-image-digest",
+    "severity": "P3",
+    "title": "Managed publish: code identity is the self-computed source-tree digest (now covers py/json/yml/toml/sh/txt/Dockerfile, symlinks + dotfiles excluded). Inject STOIC_IMAGE_DIGEST/STOIC_BUILD_SHA if the platform exposes them.",
+    "owner": "operator"
   }
 ]
