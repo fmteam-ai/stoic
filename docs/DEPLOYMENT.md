@@ -76,6 +76,23 @@ The install ships the **release signer as a sidecar container**
 `RELEASE_SIGNER_CA_BUNDLE`) with a bearer token — so `RELEASE_SIGNER=external`
 is satisfied without any third-party host and the API never holds the key.
 
+**Live health timer.** Production bootstrap installs `stoic-healthwatch.timer`
+(hourly, systemd) running `deploy/healthwatch.sh`: it executes `doctor.sh` and
+alerts on **transitions only** — once when a check turns FAIL (reminder every
+`HEALTHWATCH_REMIND_HOURS`, default 6, while still failing) and once on
+recovery. Channels: Telegram (`--telegram <bot_token>:<chat_id>` at bootstrap,
+or `HEALTHWATCH_TELEGRAM_BOT_TOKEN` / `HEALTHWATCH_TELEGRAM_CHAT_ID` in `./.env`)
+and e-mail (`RESEND_API_KEY` + `HEALTHWATCH_EMAIL`, default `ADMIN_EMAIL`).
+`deploy/healthwatch.sh status|test|run`.
+
+**Signed install report.** Every successful bootstrap writes
+`deploy/releases/install-report-<ts>.json` — host, domain, mode, commit, image
+digest, signer key id + public key, doctor result — signed **inside the
+signer sidecar** (Ed25519; the key never leaves the container) and verifiable
+with the pinned `RELEASE_PUBLIC_KEY_B64`. It is e-mailed (with the JSON
+attached) to `--report-email` / `INSTALL_REPORT_EMAIL` / `ADMIN_EMAIL` when
+`RESEND_API_KEY` is set, and posted to Telegram when configured.
+
 ## One-command install
 A deployment mode is **required** — the installer refuses to start without
 one (prevents accidentally exposing a development configuration):

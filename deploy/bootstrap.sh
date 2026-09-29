@@ -14,6 +14,8 @@
 #          --skip-attestation  build from your own checkout without a CI attestation record
 #          --with-forecast · --registry (passed through to deploy/install.sh)
 #          --no-rollback       keep the failed state for inspection
+#          --report-email <addr>  where to e-mail the signed install report (needs RESEND_API_KEY)
+#          --telegram <bot_token>:<chat_id>  health alerts + install report to Telegram
 #
 # Safety: every run snapshots the previous state (git ref, .env files, secrets,
 # image tags, DB dump when the stack is running). If ANY step fails the trap
@@ -22,7 +24,7 @@
 set -euo pipefail
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
-SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=()
+SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --production) MODE="--production"; DOMAIN="${2:-}"; shift 2 ;;
@@ -32,6 +34,8 @@ while [ $# -gt 0 ]; do
     --target) TARGET="$2"; shift 2 ;;
     --skip-attestation) SKIP_ATTEST=1; shift ;;
     --no-rollback) NO_ROLLBACK=1; shift ;;
+    --report-email) REPORT_EMAIL="$2"; shift 2 ;;
+    --telegram) TELEGRAM="$2"; shift 2 ;;
     --with-forecast|--registry) EXTRA+=("$1"); shift ;;
     -h|--help) sed -n 2,22p "$0"; exit 0 ;;
     *) echo "unknown argument: $1"; exit 1 ;;
@@ -188,7 +192,7 @@ if [ "${MODE}" = "--production" ]; then
   elif command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; echo "-- ufw: opened 80/443"
   else echo "-- no host firewall active (cloud security group must allow 80/443)"; fi
-  PUB_IP=$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || curl -fsS -m 5 https://ifconfig.me 2>/dev/null || echo "?")
+  PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || curl -fs -m 5 https://ifconfig.me 2>/dev/null || echo "?")
   DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}' || echo "")
   echo "-- DNS: ${DOMAIN} → ${DNS_IP:-<unresolved>} · this host → ${PUB_IP}"
   if [ -z "${DNS_IP}" ] || { [ "${PUB_IP}" != "?" ] && [ "${DNS_IP}" != "${PUB_IP}" ]; }; then
@@ -216,6 +220,16 @@ bash deploy/doctor.sh --quiet || { echo "ERROR: post-install diagnostics reporte
 if [ "${MODE}" = "--production" ] && [ -x deploy/backup.sh ]; then
   bash deploy/backup.sh schedule >/dev/null 2>&1 && echo "-- nightly Mongo backup scheduled" || echo "-- backup schedule skipped (run: deploy/backup.sh schedule)"
 fi
+# alert channels (values live in ./.env, mode 600 — never in the repo)
+set_env() { touch .env; chmod 600 .env; grep -q "^$1=" .env && sed -i "s|^$1=.*|$1=$2|" .env || echo "$1=$2" >> .env; }
+if [ -n "${TELEGRAM}" ]; then
+  set_env HEALTHWATCH_TELEGRAM_BOT_TOKEN "${TELEGRAM%%:*}"; set_env HEALTHWATCH_TELEGRAM_CHAT_ID "${TELEGRAM#*:}"
+fi
+[ -z "${REPORT_EMAIL}" ] || { set_env INSTALL_REPORT_EMAIL "${REPORT_EMAIL}"; set_env HEALTHWATCH_EMAIL "${REPORT_EMAIL}"; }
+if [ "${MODE}" = "--production" ]; then
+  bash deploy/healthwatch.sh install || echo "!! health watcher timer not installed (systemd missing?) — run: deploy/healthwatch.sh install"
+fi
+bash deploy/install_report.sh ${REPORT_EMAIL:+--email "${REPORT_EMAIL}"} || echo "!! install report step failed (non-fatal)"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) bootstrap ${MODE#--} ${DOMAIN}" >> deploy/releases.log
 trap - ERR
 cat <<EOF
@@ -227,6 +241,8 @@ cat <<EOF
    diagnostics: sudo bash ${TARGET}/deploy/doctor.sh           (add --bundle to export a redacted support archive)
    upgrade:     sudo bash ${TARGET}/deploy/bootstrap.sh ${MODE} ${DOMAIN}   (auto-rollback on failure)
    rollback:    sudo bash ${TARGET}/deploy/rollback.sh          (previous release from deploy/releases.log)
+   health:      hourly systemd timer → deploy/healthwatch.sh (status: deploy/healthwatch.sh status · test alert: deploy/healthwatch.sh test)
+   report:      signed install report in ${TARGET}/deploy/releases/ (e-mailed when RESEND_API_KEY is set)
    logs:        cd ${TARGET} && docker compose logs -f backend
    this log:    ${LOG}
 EOF

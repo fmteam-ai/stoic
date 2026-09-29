@@ -180,3 +180,4 @@ backend/models_store/_quarantine/
 backend/models_store/_cache/
 diagnostics/
 .bootstrap-snapshots/
+deploy/releases/install-report-*.json

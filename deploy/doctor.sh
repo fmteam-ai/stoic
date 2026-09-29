@@ -51,7 +51,7 @@ if [ "${APP_ENV}" = production ]; then
 fi
 DOMAIN=$(envval .env DOMAIN)
 if [ -n "${DOMAIN}" ]; then
-  PUB_IP=$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || echo "?"); DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}')
+  PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || echo "?"); DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}')
   if [ -z "${DNS_IP}" ]; then fail "DNS: ${DOMAIN} does not resolve"
   elif [ "${PUB_IP}" != "?" ] && [ "${DNS_IP}" != "${PUB_IP}" ]; then warn "DNS: ${DOMAIN} → ${DNS_IP} but this host is ${PUB_IP}"
   else ok "DNS: ${DOMAIN} → ${DNS_IP}"; fi
