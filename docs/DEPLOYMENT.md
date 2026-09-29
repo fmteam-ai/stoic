@@ -53,6 +53,16 @@ Requirements: DNS `A` record for the domain → server IP, ports 80/443 open,
 Building from your own checkout without a CI attestation record: add
 `--skip-attestation` (loudly logged).
 
+**Step 0 — system check (read-only).** Before anything is installed the
+bootstrap verifies the host and only proceeds when every check is green:
+supported OS/arch, systemd, root, CPU/RAM/disk/swap, NTP-synchronised clock,
+SELinux state, reachability of download.docker.com / Docker Hub / PyPI / yarn
+/ your Git repo, DNS of the domain → this host (Cloudflare proxy detected and
+explained), ports 80/443 free (or held by the existing STOIC stack), 8001 /
+3000 / 27017 conflicts, podman/docker state. Any FAIL stops with the
+remediation and **nothing is changed**; WARN continues (`--strict` makes WARN
+fatal). `--check-only` runs just this step.
+
 **Automatic rollback.** Every run first snapshots the previous state
 (`.bootstrap-snapshots/<ts>/`: git ref, `.env` files, `secrets/`, image tags,
 Mongo dump when the stack is running). If any step fails, the trap restores

@@ -43,13 +43,17 @@ def test_installer_configures_external_signer_and_prod_hardening():
 
 def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
     b = _read("deploy", "bootstrap.sh")
+    assert b.index("0/5 system check") < b.index("1/5 prerequisites") < b.index("deploy/install.sh \"${MODE}\"")
     for needle in ("dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo",
                    "dnf -y -q remove podman", "firewall-cmd -q --permanent --add-service=https", "getenforce",
                    "dnf -y -q install python3.11", "alternatives --set python3",
                    "apt-get install -y -qq docker-ce", "ufw allow 443/tcp",
                    "git clone", "deploy/install.sh", "--production", "--dev", "--repo", "--skip-attestation",
                    "trap rollback ERR", "snapshot()", "rollback()", "stoic-rollback:", "secrets.tgz",
-                   "deploy/doctor.sh --bundle", "deploy/doctor.sh --quiet", "releases.log"):
+                   "deploy/doctor.sh --bundle", "deploy/doctor.sh --quiet", "releases.log",
+                   # step 0 — read-only system check gates every change
+                   "0/5 system check (read-only)", "--check-only", "--strict", "nothing was changed on this host",
+                   "registry-1.docker.io", "NTPSynchronized", "is_cloudflare_ip", "all green — proceeding"):
         assert needle in b, needle
     for script in ("bootstrap.sh", "doctor.sh"):
         assert os.access(os.path.join(ROOT, "deploy", script), os.X_OK), script

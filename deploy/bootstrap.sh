@@ -14,6 +14,8 @@
 #          --skip-attestation  build from your own checkout without a CI attestation record
 #          --with-forecast · --registry (passed through to deploy/install.sh)
 #          --no-rollback       keep the failed state for inspection
+#          --check-only        run the system check (step 0) and exit — changes nothing
+#          --strict            treat system-check WARN as FAIL
 #          --report-email <addr>  where to e-mail the signed install report (needs RESEND_API_KEY)
 #          --telegram <bot_token>:<chat_id>  health alerts + install report to Telegram
 #
@@ -24,7 +26,7 @@
 set -euo pipefail
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
-SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""
+SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --production) MODE="--production"; DOMAIN="${2:-}"; shift 2 ;;
@@ -34,6 +36,8 @@ while [ $# -gt 0 ]; do
     --target) TARGET="$2"; shift 2 ;;
     --skip-attestation) SKIP_ATTEST=1; shift ;;
     --no-rollback) NO_ROLLBACK=1; shift ;;
+    --check-only) CHECK_ONLY=1; shift ;;
+    --strict) STRICT=1; shift ;;
     --report-email) REPORT_EMAIL="$2"; shift 2 ;;
     --telegram) TELEGRAM="$2"; shift 2 ;;
     --with-forecast|--registry) EXTRA+=("$1"); shift ;;
@@ -97,6 +101,80 @@ rollback() {
 }
 trap rollback ERR
 
+# ------------------------------------------------------------------ 0 · system check (read-only)
+# Nothing is installed or modified until every check is green. FAIL stops here
+# with the remediation; WARN continues (or stops with --strict).
+STEP="system-check"
+log "0/5 system check (read-only)"
+CK_FAIL=0; CK_WARN=0
+pass() { printf '  \e[32mPASS\e[0m  %s\n' "$*"; }
+warnc() { CK_WARN=$((CK_WARN+1)); printf '  \e[33mWARN\e[0m  %s\n' "$*"; }
+failc() { CK_FAIL=$((CK_FAIL+1)); printf '  \e[31mFAIL\e[0m  %s\n' "$*"; }
+reach() {  # any HTTP answer counts (registries reply 401 to anonymous probes); 000 = unreachable
+  local code; code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000); [ "${code}" != "000" ]; }
+is_cloudflare_ip() { case "$1" in 172.6[4-9].*|172.7[01].*|104.1[6-9].*|104.2[0-9].*|104.3[01].*|188.114.*|141.101.*|108.162.*|162.15[89].*|198.41.*|190.93.*|197.234.*|131.0.7[2-5].*) return 0 ;; *) return 1 ;; esac; }
+
+. /etc/os-release
+case "${ID}:${VERSION_ID%%.*}" in
+  almalinux:8|almalinux:9|rocky:8|rocky:9|rhel:8|rhel:9|centos:8|centos:9) pass "os: ${PRETTY_NAME} (RHEL family, supported)" ;;
+  ubuntu:20|ubuntu:22|ubuntu:24|debian:11|debian:12|debian:13) pass "os: ${PRETTY_NAME} (Debian family, supported)" ;;
+  *) if command -v dnf >/dev/null || command -v apt-get >/dev/null; then warnc "os: ${PRETTY_NAME} — untested release; continuing on a best-effort basis"
+     else failc "os: ${PRETTY_NAME} — unsupported (need dnf or apt)"; fi ;;
+esac
+case "$(uname -m)" in x86_64|aarch64) pass "arch: $(uname -m)" ;; *) failc "arch: $(uname -m) — Docker images are built for x86_64/aarch64" ;; esac
+command -v systemctl >/dev/null && pass "systemd present" || failc "systemd missing — Docker service and health timer need it"
+[ "$(id -u)" = 0 ] && pass "running as root" || failc "not root"
+
+CPU=$(nproc 2>/dev/null || echo 1); MEM_GB=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
+DISK_GB=$(df -BG --output=avail / | tail -1 | tr -dc '0-9'); SWAP_GB=$(awk '/SwapTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
+[ "${CPU}" -ge 2 ] && pass "cpu: ${CPU} cores" || warnc "cpu: ${CPU} core — 2+ recommended (API + 6 workers)"
+if [ "${MEM_GB}" -ge 4 ]; then pass "memory: ${MEM_GB} GB"; elif [ "${MEM_GB}" -ge 3 ]; then warnc "memory: ${MEM_GB} GB — 4 GB recommended"; else failc "memory: ${MEM_GB} GB — below 3 GB the workers will be OOM-killed"; fi
+if [ "${DISK_GB}" -ge 20 ]; then pass "disk: ${DISK_GB} GB free on /"; elif [ "${DISK_GB}" -ge 12 ]; then warnc "disk: ${DISK_GB} GB free — 20 GB recommended (images + Mongo + backups)"; else failc "disk: ${DISK_GB} GB free — need at least 12 GB"; fi
+[ "${SWAP_GB}" -ge 1 ] || [ "${MEM_GB}" -ge 8 ] && pass "swap/memory headroom ok" || warnc "no swap and < 8 GB RAM — consider a 2 GB swapfile"
+
+if timedatectl show 2>/dev/null | grep -q "NTPSynchronized=yes"; then pass "clock synchronised (NTP)"; else warnc "clock not NTP-synchronised — TLS/JWT/TOTP need a correct clock (enable chronyd)"; fi
+if command -v getenforce >/dev/null; then pass "selinux: $(getenforce) (secrets/ will be labelled container_file_t)"; fi
+
+reach https://download.docker.com && pass "network: download.docker.com reachable" || failc "network: cannot reach download.docker.com (Docker packages)"
+reach https://registry-1.docker.io/v2/ && pass "network: Docker Hub reachable" || failc "network: cannot reach registry-1.docker.io (base images)"
+reach https://pypi.org/simple/ && pass "network: PyPI reachable" || failc "network: cannot reach pypi.org (backend build)"
+reach https://registry.yarnpkg.com && pass "network: yarn registry reachable" || failc "network: cannot reach registry.yarnpkg.com (frontend build)"
+if [ -n "${REPO}" ]; then
+  git ls-remote -q "${REPO}" HEAD >/dev/null 2>&1 && pass "network: repository reachable (${REPO})" || failc "network: cannot read ${REPO} (URL / credentials?)"
+fi
+
+if [ "${MODE}" = "--production" ]; then
+  PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || curl -fs -m 5 https://ifconfig.me 2>/dev/null || echo "?")
+  DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}' || echo "")
+  if [ -z "${DNS_IP}" ]; then failc "dns: ${DOMAIN} does not resolve — create an A record → ${PUB_IP} first (Caddy cannot issue the certificate otherwise)"
+  elif is_cloudflare_ip "${DNS_IP}"; then warnc "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy) — the origin record must point to ${PUB_IP}; set Cloudflare SSL to 'Full (strict)' and grey-cloud the record during the first certificate issue (Caddy HTTP-01), then re-enable the proxy"
+  elif [ "${PUB_IP}" != "?" ] && [ "${DNS_IP}" != "${PUB_IP}" ]; then failc "dns: ${DOMAIN} → ${DNS_IP} but this host is ${PUB_IP} — point the A record at this host"
+  else pass "dns: ${DOMAIN} → ${DNS_IP} (this host)"; fi
+  for p in 80 443; do
+    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"; then
+      if docker compose ps 2>/dev/null | grep -q caddy; then pass "port ${p}: held by the existing STOIC stack (upgrade)"
+      else failc "port ${p}: in use by another service ($(ss -ltnp 2>/dev/null | awk -v P=":${p}" '$4 ~ P"$" {print $6; exit}' | sed 's/users:((\"\([^\"]*\)\".*/\1/')) — stop it (httpd/nginx) or move it"; fi
+    else pass "port ${p}: free"; fi
+  done
+fi
+for p in 8001 3000 27017; do
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$" && ! docker ps --format '{{.Ports}}' 2>/dev/null | grep -q ":${p}->"; then
+    warnc "port ${p}: in use by a non-Docker service — the stack binds it on 127.0.0.1"; fi
+done
+if command -v podman >/dev/null && ! command -v docker >/dev/null; then warnc "podman installed — it will be removed (conflicts with docker-ce on RHEL 8)"; fi
+if command -v docker >/dev/null; then docker info >/dev/null 2>&1 && pass "docker: present and running ($(docker --version | awk '{print $3}' | tr -d ,))" || warnc "docker: installed but daemon not running — will be started"; else pass "docker: not installed — will be installed"; fi
+
+echo
+echo "system check: ${CK_FAIL} FAIL · ${CK_WARN} WARN"
+if [ "${CK_FAIL}" -gt 0 ] || { [ "${STRICT}" = 1 ] && [ "${CK_WARN}" -gt 0 ]; }; then
+  trap - ERR
+  echo "!! system check not green — nothing was changed on this host. Fix the items above and re-run."
+  echo "   (re-check only: sudo bash deploy/bootstrap.sh ${MODE} ${DOMAIN} --check-only)"
+  exit 2
+fi
+echo "-- all green — proceeding"
+if [ "${CHECK_ONLY}" = 1 ]; then trap - ERR; echo "-- --check-only: stopping here, nothing changed"; exit 0; fi
+
 # ------------------------------------------------------------------ 1 · prerequisites
 STEP="prerequisites"
 log "1/5 prerequisites"
@@ -150,12 +228,6 @@ docker --version; docker compose version
 docker info >/dev/null 2>&1 || { echo "ERROR: docker daemon not running"; exit 1; }
 openssl genpkey -algorithm ed25519 -out /dev/null 2>/dev/null || { echo "ERROR: OpenSSL >= 1.1.1 with Ed25519 required"; exit 1; }
 
-# host sizing (informational — the stack needs ~4 GB RAM / 20 GB disk)
-MEM_GB=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
-DISK_GB=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
-echo "-- resources: ${MEM_GB} GB RAM · ${DISK_GB} GB free on /"
-[ "${MEM_GB}" -ge 3 ] || echo "!! WARNING: less than 4 GB RAM — the 6 workers may be OOM-killed"
-[ "${DISK_GB}" -ge 15 ] || echo "!! WARNING: less than 15 GB free disk — image builds may fail"
 
 # ------------------------------------------------------------------ 2 · source
 STEP="source"
