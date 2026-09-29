@@ -1,5 +1,6 @@
 """Self-host installer — signer sidecar wiring, pinned TLS, bootstrap script."""
 import os
+import shutil
 import subprocess
 
 import yaml
@@ -53,11 +54,30 @@ def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
                    "deploy/doctor.sh --bundle", "deploy/doctor.sh --quiet", "releases.log",
                    # step 0 — read-only system check gates every change
                    "0/5 system check (read-only)", "--check-only", "--strict", "nothing was changed on this host",
-                   "registry-1.docker.io", "NTPSynchronized", "is_cloudflare_ip", "all green — proceeding"):
+                   "registry-1.docker.io", "NTPSynchronized", "is_cloudflare_ip", "all green — proceeding",
+                   # behind-proxy mode: an existing Apache/nginx keeps 80/443 and reverse-proxies to loopback
+                   '--behind-proxy) MODE="--behind-proxy"', "re-run with --behind-proxy ${DOMAIN}",
+                   "will reverse-proxy to STOIC (behind-proxy mode)"):
         assert needle in b, needle
     for script in ("bootstrap.sh", "doctor.sh"):
         assert os.access(os.path.join(ROOT, "deploy", script), os.X_OK), script
         subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", script)], check=True)
+
+
+def test_behind_proxy_mode_renders_apache_and_nginx_snippets(tmp_path):
+    inst = _read("deploy", "install.sh")
+    for needle in ("--behind-proxy)", 'elif [ "${MODE}" = "--behind-proxy" ]; then', "deploy/proxy/render.sh",
+                   '[ "${MODE}" = "--production" ] || [ "${MODE}" = "--behind-proxy" ]; then\n  set_kv backend/.env APP_ENV production'):
+        assert needle.replace("\\n", "\n") in inst, needle
+    proj = tmp_path / "p"
+    (proj / "deploy" / "proxy").mkdir(parents=True)
+    shutil.copy(os.path.join(ROOT, "deploy", "proxy", "render.sh"), proj / "deploy" / "proxy" / "render.sh")
+    subprocess.run(["bash", "deploy/proxy/render.sh", "trade.example.com"], cwd=proj, check=True, capture_output=True)
+    apache = (proj / "deploy" / "proxy" / "apache-trade.example.com.conf").read_text()
+    nginx = (proj / "deploy" / "proxy" / "nginx-trade.example.com.conf").read_text()
+    assert "ProxyPass        /api http://127.0.0.1:8001/api" in apache and 'X-Forwarded-Proto "https"' in apache
+    assert "ws://127.0.0.1:8001/api/$1" in apache and "userdata/ssl/2_4" in apache        # cPanel include path
+    assert "proxy_pass         http://127.0.0.1:8001;" in nginx and 'Connection        "upgrade"' in nginx
 
 
 def test_installer_generates_ed25519_with_openssl_and_labels_selinux():

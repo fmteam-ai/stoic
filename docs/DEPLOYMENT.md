@@ -53,6 +53,16 @@ Requirements: DNS `A` record for the domain → server IP, ports 80/443 open,
 Building from your own checkout without a CI attestation record: add
 `--skip-attestation` (loudly logged).
 
+**Host already running Apache/cPanel/nginx?** Use `--behind-proxy <domain>`
+instead of `--production`: same production hardening, no Caddy — your web
+server keeps 80/443 and its certificate (AutoSSL/certbot) and reverse-proxies
+to STOIC on loopback (`/api` → 127.0.0.1:8001 incl. WebSockets, `/` →
+127.0.0.1:3000). The installer renders ready-to-include snippets
+`deploy/proxy/apache-<domain>.conf` (cPanel:
+`/etc/apache2/conf.d/userdata/ssl/2_4/<user>/<domain>/stoic.conf`, then
+`/scripts/rebuildhttpdconf && systemctl restart httpd`) and
+`deploy/proxy/nginx-<domain>.conf`.
+
 **Step 0 — system check (read-only).** Before anything is installed the
 bootstrap verifies the host and only proceeds when every check is green:
 supported OS/arch, systemd, root, CPU/RAM/disk/swap, NTP-synchronised clock,

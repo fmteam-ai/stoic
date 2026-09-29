@@ -9,6 +9,7 @@
 #     | sudo bash -s -- --production trade.example.com --repo https://github.com/<you>/<repo>.git
 #   sudo bash deploy/bootstrap.sh --production trade.example.com     # from a checkout
 #   sudo bash deploy/bootstrap.sh --dev                              # loopback only
+#   sudo bash deploy/bootstrap.sh --behind-proxy trade.example.com   # Apache/cPanel/nginx already owns 80/443
 #
 # Options: --repo <git url> · --ref <tag|sha> · --target <dir> (default /opt/stoic)
 #          --skip-attestation  build from your own checkout without a CI attestation record
@@ -30,6 +31,7 @@ SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY
 while [ $# -gt 0 ]; do
   case "$1" in
     --production) MODE="--production"; DOMAIN="${2:-}"; shift 2 ;;
+    --behind-proxy) MODE="--behind-proxy"; DOMAIN="${2:-}"; shift 2 ;;
     --dev) MODE="--dev"; shift ;;
     --repo) REPO="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
@@ -45,8 +47,9 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1"; exit 1 ;;
   esac
 done
-[ -n "${MODE}" ] || { echo "ERROR: choose --production <domain> or --dev"; exit 1; }
-[ "${MODE}" = "--dev" ] || [ -n "${DOMAIN}" ] || { echo "ERROR: --production needs a domain"; exit 1; }
+[ -n "${MODE}" ] || { echo "ERROR: choose --production <domain>, --behind-proxy <domain> or --dev"; exit 1; }
+[ "${MODE}" = "--dev" ] || [ -n "${DOMAIN}" ] || { echo "ERROR: ${MODE} needs a domain"; exit 1; }
+PUBLIC=0; [ "${MODE}" = "--dev" ] || PUBLIC=1
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root (sudo)"; exit 1; }
 
 TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -143,7 +146,7 @@ if [ -n "${REPO}" ]; then
   git ls-remote -q "${REPO}" HEAD >/dev/null 2>&1 && pass "network: repository reachable (${REPO})" || failc "network: cannot read ${REPO} (URL / credentials?)"
 fi
 
-if [ "${MODE}" = "--production" ]; then
+if [ "${PUBLIC}" = 1 ]; then
   PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || curl -fs -m 5 https://ifconfig.me 2>/dev/null || echo "?")
   DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}' || echo "")
   if [ -z "${DNS_IP}" ]; then failc "dns: ${DOMAIN} does not resolve — create an A record → ${PUB_IP} first (Caddy cannot issue the certificate otherwise)"
@@ -152,9 +155,14 @@ if [ "${MODE}" = "--production" ]; then
   else pass "dns: ${DOMAIN} → ${DNS_IP} (this host)"; fi
   for p in 80 443; do
     if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"; then
-      if docker compose ps 2>/dev/null | grep -q caddy; then pass "port ${p}: held by the existing STOIC stack (upgrade)"
+      OWNER=$(ss -ltnp 2>/dev/null | awk -v P="[:.]${p}$" '$4 ~ P {print $6; exit}' | sed -E 's/.*\("([^"]+)".*/\1/')
+      if [ "${MODE}" = "--behind-proxy" ]; then pass "port ${p}: ${OWNER:-web server} owns it and will reverse-proxy to STOIC (behind-proxy mode)"
+      elif docker compose ps 2>/dev/null | grep -q caddy; then pass "port ${p}: held by the existing STOIC stack (upgrade)"
+      elif [ "${OWNER}" = httpd ] || [ "${OWNER}" = nginx ] || [ "${OWNER}" = apache2 ]; then failc "port ${p}: in use by ${OWNER} — this host already runs a web server. Either stop it, or install STOIC behind it: re-run with --behind-proxy ${DOMAIN}"
       else failc "port ${p}: in use by another service ($(ss -ltnp 2>/dev/null | awk -v P=":${p}" '$4 ~ P"$" {print $6; exit}' | sed 's/users:((\"\([^\"]*\)\".*/\1/')) — stop it (httpd/nginx) or move it"; fi
-    else pass "port ${p}: free"; fi
+    else
+      [ "${MODE}" = "--behind-proxy" ] && warnc "port ${p}: nothing listening — --behind-proxy expects your web server on 80/443 (or use --production for built-in TLS)" || pass "port ${p}: free"
+    fi
   done
 fi
 for p in 8001 3000 27017; do
@@ -257,23 +265,14 @@ chmod +x deploy/*.sh 2>/dev/null || true
 # ------------------------------------------------------------------ 3 · firewall / DNS
 STEP="network"
 log "3/5 network"
-if [ "${MODE}" = "--production" ]; then
+if [ "${PUBLIC}" = 1 ]; then
   if systemctl is-active --quiet firewalld 2>/dev/null; then
     firewall-cmd -q --permanent --add-service=http; firewall-cmd -q --permanent --add-service=https; firewall-cmd -q --reload
     echo "-- firewalld: http/https allowed"
   elif command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; echo "-- ufw: opened 80/443"
   else echo "-- no host firewall active (cloud security group must allow 80/443)"; fi
-  PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || curl -fs -m 5 https://ifconfig.me 2>/dev/null || echo "?")
-  DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}' || echo "")
-  echo "-- DNS: ${DOMAIN} → ${DNS_IP:-<unresolved>} · this host → ${PUB_IP}"
-  if [ -z "${DNS_IP}" ] || { [ "${PUB_IP}" != "?" ] && [ "${DNS_IP}" != "${PUB_IP}" ]; }; then
-    echo "!! WARNING: ${DOMAIN} does not resolve to this host yet — Caddy cannot issue the certificate until it does."
-  fi
-  for p in 80 443; do
-    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$" && ! docker compose ps 2>/dev/null | grep -q caddy; then
-      echo "ERROR: port ${p} is already in use by another service (httpd/nginx?) — stop it or move it first"; exit 1; fi
-  done
+  echo "-- DNS / ports were verified in the system check (step 0)"
 fi
 if [ "${SKIP_ATTEST}" = 1 ]; then
   touch .env; grep -q '^ATTESTATION_REQUIRED=' .env && sed -i 's/^ATTESTATION_REQUIRED=.*/ATTESTATION_REQUIRED=false/' .env || echo 'ATTESTATION_REQUIRED=false' >> .env
@@ -289,7 +288,7 @@ bash deploy/install.sh "${MODE}" ${DOMAIN:+"${DOMAIN}"} ${EXTRA[@]+"${EXTRA[@]}"
 STEP="verify"
 log "5/5 verify + operations"
 bash deploy/doctor.sh --quiet || { echo "ERROR: post-install diagnostics reported failures"; exit 1; }
-if [ "${MODE}" = "--production" ] && [ -x deploy/backup.sh ]; then
+if [ "${PUBLIC}" = 1 ] && [ -x deploy/backup.sh ]; then
   bash deploy/backup.sh schedule >/dev/null 2>&1 && echo "-- nightly Mongo backup scheduled" || echo "-- backup schedule skipped (run: deploy/backup.sh schedule)"
 fi
 # alert channels (values live in ./.env, mode 600 — never in the repo)
@@ -298,7 +297,7 @@ if [ -n "${TELEGRAM}" ]; then
   set_env HEALTHWATCH_TELEGRAM_BOT_TOKEN "${TELEGRAM%%:*}"; set_env HEALTHWATCH_TELEGRAM_CHAT_ID "${TELEGRAM#*:}"
 fi
 [ -z "${REPORT_EMAIL}" ] || { set_env INSTALL_REPORT_EMAIL "${REPORT_EMAIL}"; set_env HEALTHWATCH_EMAIL "${REPORT_EMAIL}"; }
-if [ "${MODE}" = "--production" ]; then
+if [ "${PUBLIC}" = 1 ]; then
   bash deploy/healthwatch.sh install || echo "!! health watcher timer not installed (systemd missing?) — run: deploy/healthwatch.sh install"
 fi
 bash deploy/install_report.sh ${REPORT_EMAIL:+--email "${REPORT_EMAIL}"} || echo "!! install report step failed (non-fatal)"
@@ -308,7 +307,7 @@ cat <<EOF
 
 == STOIC is installed ==
    project:     ${TARGET}
-   app:         $([ "${MODE}" = "--production" ] && echo "https://${DOMAIN}" || echo "http://127.0.0.1:3000 (loopback)")
+   app:         $([ "${PUBLIC}" = 1 ] && echo "https://${DOMAIN}" || echo "http://127.0.0.1:3000 (loopback)")$([ "${MODE}" = "--behind-proxy" ] && echo " — after you add deploy/proxy/apache-${DOMAIN}.conf (or nginx-…) to your web server")
    admin login: ADMIN_EMAIL / ADMIN_PASSWORD in ${TARGET}/backend/.env — change it and enroll 2FA at first login
    diagnostics: sudo bash ${TARGET}/deploy/doctor.sh           (add --bundle to export a redacted support archive)
    upgrade:     sudo bash ${TARGET}/deploy/bootstrap.sh ${MODE} ${DOMAIN}   (auto-rollback on failure)

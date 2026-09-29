@@ -26,11 +26,17 @@ case "${MODE}" in
   --production)
     [ -n "${DOMAIN}" ] || { echo "ERROR: --production requires a domain: deploy/install.sh --production trade.example.com"; exit 1; }
     ;;
+  --behind-proxy)
+    # production hardening, but TLS is terminated by an EXISTING web server on
+    # this host (Apache/cPanel, nginx, Plesk) that reverse-proxies to loopback.
+    [ -n "${DOMAIN}" ] || { echo "ERROR: --behind-proxy requires a domain: deploy/install.sh --behind-proxy trade.example.com"; exit 1; }
+    ;;
   *)
     echo "ERROR: deployment mode is required (prevents accidental public deployment"
     echo "       in development configuration):"
     echo "         deploy/install.sh --dev"
     echo "         deploy/install.sh --production <domain>"
+    echo "         deploy/install.sh --behind-proxy <domain>   (Apache/nginx already on 80/443)"
     exit 1
     ;;
 esac
@@ -166,6 +172,10 @@ if [ "${MODE}" = "--production" ]; then
   set_kv .env DOMAIN "${DOMAIN}"
   set_kv .env REACT_APP_BACKEND_URL ""      # same-origin behind the TLS ingress
   set_kv .env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+elif [ "${MODE}" = "--behind-proxy" ]; then
+  set_kv .env DOMAIN "${DOMAIN}"
+  set_kv .env REACT_APP_BACKEND_URL ""      # same-origin behind the host web server
+  set_kv .env COMPOSE_FILE "docker-compose.yml"   # no Caddy — host proxy owns 80/443
 else
   set_kv .env COMPOSE_FILE "docker-compose.yml"
 fi
@@ -218,7 +228,7 @@ sed -i '/^ED25519_SIGNING_KEY_B64=/d; /^RELEASE_SIGNER_TOKEN=/d; /^RELEASE_SIGNE
 sed -i '/^STEP_UP_BYPASS_TOKEN=/d; /^RATE_LIMIT_BYPASS_TOKEN=/d' backend/.env
 
 # 3 · deployment-mode hardening (explicit, not just a warning)
-if [ "${MODE}" = "--production" ]; then
+if [ "${MODE}" = "--production" ] || [ "${MODE}" = "--behind-proxy" ]; then
   set_kv backend/.env APP_ENV production
   set_kv backend/.env ADMIN_MFA_ENFORCED true
   set_kv backend/.env CSRF_ENFORCE_ORIGIN true
@@ -237,7 +247,7 @@ echo "-- building images"
 # Immutable Git + image provenance (deploy/lib.sh) — the backend image build
 # HARD-FAILS without the commit SHA; production boot requires the digest.
 . deploy/lib.sh
-if [ "${MODE}" = "--production" ]; then
+if [ "${MODE}" = "--production" ] || [ "${MODE}" = "--behind-proxy" ]; then
   # First production install: the checkout must be a signed, attested release.
   # Override consciously with ATTESTATION_REQUIRED=false in ./.env (not advised).
   verify_attestation || { echo "ERROR: release attestation gate failed — refusing production install"; exit 1; }
@@ -325,6 +335,10 @@ echo ""
 echo "== install complete =="
 if [ "${MODE}" = "--production" ]; then
   echo "   app:   https://${DOMAIN}  (Caddy provisions the certificate on first request)"
+elif [ "${MODE}" = "--behind-proxy" ]; then
+  bash deploy/proxy/render.sh "${DOMAIN}"
+  echo "   app:   https://${DOMAIN}  once your web server proxies to 127.0.0.1:3000 (/) and 127.0.0.1:8001 (/api)"
+  echo "          → ready-made vhost snippets: deploy/proxy/apache-${DOMAIN}.conf · deploy/proxy/nginx-${DOMAIN}.conf"
 else
   echo "   app:   http://127.0.0.1:3000   (loopback only)"
 fi
