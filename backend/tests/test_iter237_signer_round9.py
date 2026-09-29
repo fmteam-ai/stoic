@@ -110,7 +110,7 @@ class TestExternalSignerFailClosed:
                 return body
         seen = {}
 
-        def _post(url, json=None, headers=None, timeout=None):
+        def _post(url, json=None, headers=None, timeout=None, verify=True):
             seen.update(url=url, timeout=timeout, headers=headers, body=json)
             if exc:
                 raise exc
@@ -161,7 +161,7 @@ class TestExternalSignerFailClosed:
 
             def json(self):
                 return {"ok": True, "key_id": EXTERNAL_OK["RELEASE_SIGNER_KEY_ID"], "public_key_b64": PUB_B64}
-        monkeypatch.setattr(requests, "get", lambda url, headers=None, timeout=None: calls.append(url) or _R())
+        monkeypatch.setattr(requests, "get", lambda url, headers=None, timeout=None, verify=True: calls.append(url) or _R())
         monkeypatch.setattr(requests, "post", lambda *a, **k: pytest.fail("health must not sign"))
         h = rs.signer_health(os.environ)
         assert h["ok"] and h["identity_matches"] and calls == ["https://signer.internal.example/health"]
@@ -169,7 +169,7 @@ class TestExternalSignerFailClosed:
         class _Bad(_R):
             def json(self):
                 return {"ok": True, "key_id": EXTERNAL_OK["RELEASE_SIGNER_KEY_ID"], "public_key_b64": base64.b64encode(b"\x02" * 32).decode()}
-        monkeypatch.setattr(requests, "get", lambda url, headers=None, timeout=None: _Bad())
+        monkeypatch.setattr(requests, "get", lambda url, headers=None, timeout=None, verify=True: _Bad())
         assert rs.signer_health(os.environ)["ok"] is False
 
     def test_canary_script_pass_and_fail(self, monkeypatch, tmp_path):
@@ -195,7 +195,7 @@ class TestExternalSignerFailClosed:
             def json(self):
                 return {"signature_hex": _K.sign(self.d).hex(), "key_id": EXTERNAL_OK["RELEASE_SIGNER_KEY_ID"]}
         monkeypatch.setattr(requests, "get", lambda *a, **k: _H())
-        monkeypatch.setattr(requests, "post", lambda url, json=None, headers=None, timeout=None: _S(bytes.fromhex(json["data_hex"])))
+        monkeypatch.setattr(requests, "post", lambda url, json=None, headers=None, timeout=None, verify=True: _S(bytes.fromhex(json["data_hex"])))
         rec = signer_canary.run(require_external=True)
         assert rec["result"] == "PASS" and rec["tamper_rejected"]
         _env(monkeypatch, {"RELEASE_SIGNER": "local", "ED25519_SIGNING_KEY_B64": PRIV_B64})

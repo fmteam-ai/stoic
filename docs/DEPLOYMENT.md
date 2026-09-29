@@ -37,6 +37,24 @@ The same `*_FILE` mechanism works unchanged with a **Vault agent** (or any
 secret manager that renders files) — point the `*_FILE` vars at the rendered
 paths. Rotation: replace the file, `docker compose up -d` to restart readers.
 
+## Zero-touch server bootstrap (fresh Ubuntu/Debian host)
+One command installs Docker, fetches the project, generates every secret and
+brings the whole stack up verified over HTTPS. Run as root on the server:
+```bash
+curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/deploy/bootstrap.sh \
+  | sudo bash -s -- --production trade.example.com --repo https://github.com/<you>/<repo>.git
+```
+Requirements: DNS `A` record for the domain → server IP, ports 80/443 open.
+Re-running the same command upgrades in place (`--ref v1.2.3` pins a tag).
+From an existing checkout: `sudo bash deploy/bootstrap.sh --production trade.example.com`.
+
+The install ships the **release signer as a sidecar container**
+(`deploy/signer`): the Ed25519 private key lives only in
+`./secrets/signer_ed25519_key`, the API talks to it over TLS
+(`https://signer:9443`, install-generated certificate pinned via
+`RELEASE_SIGNER_CA_BUNDLE`) with a bearer token — so `RELEASE_SIGNER=external`
+is satisfied without any third-party host and the API never holds the key.
+
 ## One-command install
 A deployment mode is **required** — the installer refuses to start without
 one (prevents accidentally exposing a development configuration):

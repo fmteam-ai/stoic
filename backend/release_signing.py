@@ -81,6 +81,13 @@ def key_id(env=None) -> str:
     return (env.get("RELEASE_SIGNER_KEY_ID") or KEY_ID).strip()
 
 
+def _tls_verify(env):
+    """System trust store by default; RELEASE_SIGNER_CA_BUNDLE pins a private CA /
+    self-signed certificate (docker sidecar) — never disables verification."""
+    bundle = (env.get("RELEASE_SIGNER_CA_BUNDLE") or "").strip()
+    return bundle if bundle else True
+
+
 def _timeout(env) -> float | None:
     raw = (env.get("RELEASE_SIGNER_TIMEOUT") or str(DEFAULT_TIMEOUT)).strip()
     try:
@@ -207,7 +214,7 @@ def _external_sign(data: bytes) -> str:
     try:
         r = requests.post(f"{url}/sign", json={"key_id": kid, "data_hex": data.hex()},
                           headers={"Authorization": f"Bearer {env['RELEASE_SIGNER_TOKEN'].strip()}"},
-                          timeout=_timeout(env))
+                          timeout=_timeout(env), verify=_tls_verify(env))
         r.raise_for_status()
         body = r.json()
     except requests.RequestException as e:
@@ -245,7 +252,7 @@ def signer_health(env=None) -> dict:
     try:
         r = requests.get(f"{env['RELEASE_SIGNER_URL'].strip().rstrip('/')}/health",
                          headers={"Authorization": f"Bearer {env['RELEASE_SIGNER_TOKEN'].strip()}"},
-                         timeout=_timeout(env))
+                         timeout=_timeout(env), verify=_tls_verify(env))
         r.raise_for_status()
         body = r.json()
     except (requests.RequestException, ValueError) as e:

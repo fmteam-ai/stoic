@@ -122,6 +122,42 @@ else
   echo "-- ./secrets exists — leaving untouched"
 fi
 
+# 0b · secrets added by later releases — generated when missing (upgrade-safe).
+# Key separation: ORDER_AUTH / LEDGER_ANCHOR are distinct from JWT (boot rule).
+[ -f secrets/order_auth_secret ] || { gen > secrets/order_auth_secret; echo "   generated order_auth_secret"; }
+[ -f secrets/ledger_anchor_key ] || { gen > secrets/ledger_anchor_key; echo "   generated ledger_anchor_key"; }
+# Release signer sidecar: private key + bearer token + self-signed TLS cert.
+# The API only ever sees the PUBLIC key, the token and the certificate.
+ensure_signer_secrets() {
+  [ -f secrets/signer_ed25519_key ] || {
+    python3 - <<'PY' > secrets/signer_ed25519_key
+import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+k = Ed25519PrivateKey.generate()
+print(base64.b64encode(k.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                                       serialization.NoEncryption())).decode())
+PY
+    echo "   generated signer_ed25519_key"; }
+  [ -f secrets/signer_token ] || { gen > secrets/signer_token; echo "   generated signer_token"; }
+  [ -f secrets/signer_cert.pem ] || {
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+      -subj "/CN=signer" -addext "subjectAltName=DNS:signer,DNS:localhost" \
+      -keyout secrets/signer_cert_key.pem -out secrets/signer_cert.pem >/dev/null 2>&1
+    echo "   generated signer TLS certificate (CN=signer, 10y, pinned by the API)"; }
+  chmod 600 secrets/*
+}
+python3 -c "import cryptography" 2>/dev/null || python3 -m pip install -q cryptography >/dev/null 2>&1 || true
+ensure_signer_secrets
+SIGNER_PUB_B64=$(python3 - <<'PY'
+import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+k = Ed25519PrivateKey.from_private_bytes(base64.b64decode(open("secrets/signer_ed25519_key").read().strip()))
+print(base64.b64encode(k.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode())
+PY
+)
+
 # 1 · compose-level .env — NON-SECRET config only
 if [ ! -f .env ]; then
   echo "-- creating ./.env (compose config)"
@@ -173,11 +209,26 @@ else
   echo "-- backend/.env exists — leaving untouched"
 fi
 
+# 2b · release signing → external sidecar (every mode). The API env must NOT
+# hold the private key; the sidecar's public key is pinned here.
+set_kv backend/.env RELEASE_SIGNER external
+set_kv backend/.env RELEASE_SIGNER_URL https://signer:9443
+set_kv backend/.env RELEASE_SIGNER_ALLOWED_HOSTS signer
+set_kv backend/.env RELEASE_SIGNER_KEY_ID stoic-release-ed25519-v1
+set_kv backend/.env RELEASE_SIGNER_TIMEOUT 10
+set_kv backend/.env RELEASE_PUBLIC_KEY_B64 "${SIGNER_PUB_B64}"
+set_kv backend/.env RELEASE_SIGNER_DEFERRED false
+sed -i '/^ED25519_SIGNING_KEY_B64=/d; /^RELEASE_SIGNER_TOKEN=/d; /^RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=/d' backend/.env
+# test-only bypass secrets never exist on a server install
+sed -i '/^STEP_UP_BYPASS_TOKEN=/d; /^RATE_LIMIT_BYPASS_TOKEN=/d' backend/.env
+
 # 3 · deployment-mode hardening (explicit, not just a warning)
 if [ "${MODE}" = "--production" ]; then
   set_kv backend/.env APP_ENV production
+  set_kv backend/.env ADMIN_MFA_ENFORCED true
   set_kv backend/.env CSRF_ENFORCE_ORIGIN true
   set_kv backend/.env CORS_ORIGINS "https://${DOMAIN},https://www.${DOMAIN}"
+  set_kv backend/.env TURNSTILE_EXPECTED_HOSTNAMES "${DOMAIN},www.${DOMAIN}"
 else
   grep -q "^APP_ENV=production" backend/.env && {
     echo "ERROR: backend/.env says APP_ENV=production but you ran --dev."

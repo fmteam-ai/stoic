@@ -28,9 +28,17 @@ from pydantic import BaseModel
 
 KEY_ID = "stoic-release-ed25519-v1"
 
-_token = os.environ["SIGNER_TOKEN"]
-_key = Ed25519PrivateKey.from_private_bytes(
-    base64.b64decode(os.environ["ED25519_SIGNING_KEY_B64"]))
+def _secret(name: str) -> str:
+    """Env value, or the contents of the file named by <NAME>_FILE (Docker secrets)."""
+    path = os.environ.get(f"{name}_FILE")
+    if path:
+        with open(path) as fh:
+            return fh.read().strip()
+    return os.environ[name]
+
+
+_token = _secret("SIGNER_TOKEN")
+_key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(_secret("ED25519_SIGNING_KEY_B64")))
 
 app = FastAPI(title="STOIC Release Signer", docs_url=None, redoc_url=None)
 
