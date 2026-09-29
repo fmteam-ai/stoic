@@ -20,6 +20,7 @@ for a in "$@"; do
     --registry) REGISTRY=1 ;;
     --cloudflare) CLOUDFLARE=1 ;;
     --cf-only) CF_ONLY=1 ;;
+    --unlock) ;;   # handled below (install lock)
     *) ARGS+=("$a") ;;
   esac
 done
@@ -50,6 +51,17 @@ esac
 
 TAG=""; [ "${CLOUDFLARE}" = 1 ] && TAG=" · cloudflare origin CA"; [ "${CF_ONLY}" = 1 ] && TAG="${TAG} · cf-only"
 echo "== STOIC installer (${MODE#--}${DOMAIN:+ · $DOMAIN}${TAG}) =="
+
+# install lock — written by deploy/bootstrap.sh after a successful install. A
+# re-run rebuilds and restarts everything; refuse unless deliberately unlocked
+# (bootstrap.sh --unlock, or STOIC_INSTALL_UNLOCK=1 / --unlock for a manual run).
+UNLOCK_ARG=0; for a in "$@"; do [ "$a" = "--unlock" ] && UNLOCK_ARG=1; done
+if [ -f .stoic-installed ] && [ "${STOIC_INSTALL_UNLOCK:-0}" != 1 ] && [ "${UNLOCK_ARG}" != 1 ]; then
+  echo "!! STOIC is already installed here — the installer is LOCKED (.stoic-installed):"
+  sed 's/^/   /' .stoic-installed
+  echo "   upgrades: deploy/update.sh [tag|sha] · reinstall on purpose: deploy/bootstrap.sh ... --unlock"
+  exit 3
+fi
 
 if [ "${CLOUDFLARE}" = 1 ]; then
   [ "${MODE}" = "--production" ] || { echo "ERROR: --cloudflare needs --production <domain> (Caddy terminates TLS with the Origin CA certificate)"; exit 1; }

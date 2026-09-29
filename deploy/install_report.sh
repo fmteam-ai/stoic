@@ -22,18 +22,20 @@ COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
 DIGEST=$(envval STOIC_IMAGE_DIGEST)
 KEY_ID=$(envval RELEASE_SIGNER_KEY_ID); [ -n "${KEY_ID}" ] || KEY_ID="stoic-release-ed25519-v1"
 PUB=$(envval RELEASE_PUBLIC_KEY_B64)
+LOCKED=false; [ -f .stoic-installed ] && LOCKED=true
 DOCTOR=$(bash deploy/doctor.sh --quiet 2>&1); DRC=$?
 FAILS=$(printf '%s' "${DOCTOR}" | grep -c '^  FAIL'); WARNS=$(printf '%s' "${DOCTOR}" | grep -c '^  WARN')
 [ -n "${TO}" ] || TO=$(envval INSTALL_REPORT_EMAIL); [ -n "${TO}" ] || TO=$(envval ADMIN_EMAIL)
 
 mkdir -p deploy/releases
-REPORT=$(python3 - "${HOST}" "${DOMAIN}" "${MODE}" "${COMMIT}" "${DIGEST}" "${KEY_ID}" "${PUB}" "${FAILS}" "${WARNS}" "${TS}" "${DRC}" <<'PY'
+REPORT=$(python3 - "${HOST}" "${DOMAIN}" "${MODE}" "${COMMIT}" "${DIGEST}" "${KEY_ID}" "${PUB}" "${FAILS}" "${WARNS}" "${TS}" "${DRC}" "${LOCKED}" <<'PY'
 import json, sys
-h, d, m, c, dg, k, p, f, w, ts, rc = sys.argv[1:]
+h, d, m, c, dg, k, p, f, w, ts, rc, locked = sys.argv[1:]
 print(json.dumps({"kind": "stoic-install-report", "version": 1, "generated_at": ts, "host": h,
                   "domain": d or None, "app_env": m or None, "commit": c, "image_digest": dg or None,
                   "signer_key_id": k, "signer_public_key_b64": p or None,
-                  "doctor": {"fail": int(f), "warn": int(w), "ok": rc == "0"}},
+                  "doctor": {"fail": int(f), "warn": int(w), "ok": rc == "0"},
+                  "installer_locked": locked == "true"},
                  sort_keys=True, separators=(",", ":")))
 PY
 )
@@ -63,6 +65,7 @@ image digest:  ${DIGEST:-<not set>}
 signer key id: ${KEY_ID}
 public key:    ${PUB:-<none>}
 doctor:        ${FAILS} FAIL · ${WARNS} WARN $([ "${DRC}" = 0 ] && echo '(healthy)' || echo '(ATTENTION)')
+installer:     $([ "${LOCKED}" = true ] && echo 'LOCKED (.stoic-installed — reinstall only with --unlock; upgrades via deploy/update.sh)' || echo 'not locked')
 signature:     ${SIG:0:32}${SIG:+…} (Ed25519, ${KEY_ID})
 file:          ${ROOT}/${OUT}"
 json_escape() { python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'; }

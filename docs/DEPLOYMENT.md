@@ -57,8 +57,16 @@ curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/deploy/bootstrap.
 Supported hosts: **AlmaLinux 8/9, Rocky, RHEL, CentOS Stream** (dnf · firewalld ·
 SELinux — `secrets/` is labelled `container_file_t`) and **Ubuntu/Debian** (apt · ufw).
 Requirements: DNS `A` record for the domain → server IP, ports 80/443 open,
-~4 GB RAM / 20 GB disk. Re-running the same command upgrades in place
-(`--ref v1.2.3` pins a tag). From an existing checkout:
+~4 GB RAM / 20 GB disk. **After a successful install the installer locks
+itself**: `<project>/.stoic-installed` is written (immutable via `chattr +i`
+where supported) and both `bootstrap.sh` and `install.sh` refuse to run again
+(exit 3) — a re-run would rebuild and restart the whole stack. Upgrades go
+through `deploy/update.sh [tag|sha]` (backup → rebuild → verify →
+auto-rollback), which stays open. A deliberate reinstall needs `--unlock`
+(the lock is re-created on success, and restored if the run rolls back).
+`--check-only` is always allowed. The lock state is shown by `doctor.sh`
+(`installer: LOCKED since …`) and recorded in the signed install report
+(`installer_locked`). From an existing checkout:
 `sudo bash deploy/bootstrap.sh --production trade.example.com`.
 Building from your own checkout without a CI attestation record: add
 `--skip-attestation` (loudly logged).

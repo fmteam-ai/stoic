@@ -20,6 +20,8 @@
 #          --cf-only           origin answers ONLY to Cloudflare edge IPs (--cloudflare)
 #          --no-rollback       keep the failed state for inspection
 #          --check-only        run the system check (step 0) and exit — changes nothing
+#          --unlock            re-run on a host that is already installed (the installer LOCKS
+#                              itself after a successful install — upgrades go via deploy/update.sh)
 #          --strict            treat system-check WARN as FAIL
 #          --report-email <addr>  where to e-mail the signed install report (needs RESEND_API_KEY)
 #          --telegram <bot_token>:<chat_id>  health alerts + install report to Telegram
@@ -32,7 +34,7 @@ set -euo pipefail
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
-CLOUDFLARE=0; CF_ONLY=0; ORIGIN_CERT=""; ORIGIN_KEY=""
+CLOUDFLARE=0; CF_ONLY=0; ORIGIN_CERT=""; ORIGIN_KEY=""; UNLOCK=0; HAD_LOCK=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --production) MODE="--production"; DOMAIN="${2:-}"; shift 2 ;;
@@ -48,6 +50,7 @@ while [ $# -gt 0 ]; do
     --skip-attestation) SKIP_ATTEST=1; shift ;;
     --no-rollback) NO_ROLLBACK=1; shift ;;
     --check-only) CHECK_ONLY=1; shift ;;
+    --unlock) UNLOCK=1; shift ;;
     --strict) STRICT=1; shift ;;
     --report-email) REPORT_EMAIL="$2"; shift 2 ;;
     --telegram) TELEGRAM="$2"; shift 2 ;;
@@ -78,6 +81,37 @@ if [ -n "${TELEGRAM}" ] && ! [[ "${TELEGRAM}" =~ ^[0-9]+:[A-Za-z0-9_-]+:-?[0-9]+
   echo "ERROR: --telegram must be <bot_token>:<chat_id> (e.g. 123456:ABC-def_ghi:-1001234567890)"; exit 1; fi
 if [ -n "${REPO}" ] && ! [[ "${REPO}" =~ ^(https://|git@|ssh://)[A-Za-z0-9._@:/~+-]+$ ]]; then
   echo "ERROR: '${REPO}' is not a valid git URL"; exit 1; fi
+
+# ------------------------------------------------------------------ install lock
+# A successful install writes <project>/.stoic-installed (immutable where the
+# filesystem allows). While it exists the installer refuses to run — a re-run
+# rebuilds and restarts the whole stack, which is never an accident you want.
+# Upgrades: deploy/update.sh. Deliberate reinstall: --unlock.
+HERE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
+LOCK_DIR="${TARGET}"; [ -f "${HERE}/deploy/install.sh" ] && [ -f "${HERE}/docker-compose.yml" ] && [ -z "${REPO}" ] && LOCK_DIR="${HERE}"
+LOCK_FILE="${LOCK_DIR}/.stoic-installed"
+if [ -f "${LOCK_FILE}" ] && [ "${CHECK_ONLY}" != 1 ]; then
+  HAD_LOCK=1
+  if [ "${UNLOCK}" != 1 ]; then
+    echo "!! STOIC is already installed here — the installer is LOCKED."
+    sed 's/^/   /' "${LOCK_FILE}"
+    echo "   upgrades:   sudo bash ${LOCK_DIR}/deploy/update.sh [tag|sha]   (backup → rebuild → verify → auto-rollback)"
+    echo "   diagnostics: sudo bash ${LOCK_DIR}/deploy/doctor.sh"
+    echo "   reinstall on purpose: re-run with --unlock"
+    exit 3
+  fi
+fi
+lock_install() {   # $1 = project dir
+  local f="$1/.stoic-installed"
+  chattr -i "$f" 2>/dev/null || true; rm -f "$f"
+  { echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; echo "mode=${MODE#--}"; echo "domain=${DOMAIN:-}"
+    echo "commit=$(git -C "$1" rev-parse HEAD 2>/dev/null || echo unknown)"; echo "host=$(hostname -f 2>/dev/null || hostname)"
+    echo "by=deploy/bootstrap.sh"; echo "unlock=sudo bash $1/deploy/bootstrap.sh ... --unlock"; } > "$f"
+  chmod 444 "$f"
+  if chattr +i "$f" 2>/dev/null; then echo "-- installer LOCKED: $f (immutable — chattr -i to remove by hand)"
+  else echo "-- installer LOCKED: $f"; fi
+}
+export STOIC_INSTALL_UNLOCK=1   # bootstrap owns the lock; deploy/install.sh honours the same lock when run by hand
 
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 LOG="/var/log/stoic-bootstrap-${TS}.log"
@@ -126,6 +160,7 @@ rollback() {
       for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8001/api/health >/dev/null 2>&1 && { echo "!! previous release restored and healthy"; break; }; sleep 2; done
     fi )
   ls "${SNAP}"/db/stoic-mongo-*.archive.gz >/dev/null 2>&1 && echo "!! DB dump kept at ${SNAP}/db — restore only if data changed: deploy/backup.sh restore <file>"
+  [ "${HAD_LOCK}" = 1 ] && lock_install "${TARGET}"
   echo "!! rollback finished. Fix the cause and re-run. Diagnostics: sudo bash ${TARGET}/deploy/doctor.sh"
   exit "${rc}"
 }
@@ -230,6 +265,10 @@ if [ "${CK_FAIL}" -gt 0 ] || { [ "${STRICT}" = 1 ] && [ "${CK_WARN}" -gt 0 ]; };
 fi
 echo "-- all green — proceeding"
 if [ "${CHECK_ONLY}" = 1 ]; then trap - ERR; echo "-- --check-only: stopping here, nothing changed"; exit 0; fi
+if [ "${HAD_LOCK}" = 1 ]; then
+  echo "-- --unlock: removing install lock ${LOCK_FILE} (re-created on success, restored on rollback)"
+  chattr -i "${LOCK_FILE}" 2>/dev/null || true; rm -f "${LOCK_FILE}"
+fi
 
 # ------------------------------------------------------------------ 1 · prerequisites
 STEP="prerequisites"
@@ -288,7 +327,6 @@ openssl genpkey -algorithm ed25519 -out /dev/null 2>/dev/null || { echo "ERROR: 
 # ------------------------------------------------------------------ 2 · source
 STEP="source"
 log "2/5 source"
-HERE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 if [ -f "${HERE}/deploy/install.sh" ] && [ -f "${HERE}/docker-compose.yml" ] && [ -z "${REPO}" ]; then
   TARGET="${HERE}"; echo "-- using this checkout: ${TARGET}"
   snapshot
@@ -356,20 +394,22 @@ fi
 if [ "${PUBLIC}" = 1 ]; then
   bash deploy/healthwatch.sh install || echo "!! health watcher timer not installed (systemd missing?) — run: deploy/healthwatch.sh install"
 fi
-bash deploy/install_report.sh ${REPORT_EMAIL:+--email "${REPORT_EMAIL}"} || echo "!! install report step failed (non-fatal)"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) bootstrap ${MODE#--} ${DOMAIN}" >> deploy/releases.log
+lock_install "${TARGET}"
+bash deploy/install_report.sh ${REPORT_EMAIL:+--email "${REPORT_EMAIL}"} || echo "!! install report step failed (non-fatal)"
 trap - ERR
 cat <<EOF
 
-== STOIC is installed ==
+== STOIC is installed — installer LOCKED ==
    project:     ${TARGET}
    app:         $([ "${PUBLIC}" = 1 ] && echo "https://${DOMAIN}" || echo "http://127.0.0.1:3000 (loopback)")$([ "${MODE}" = "--behind-proxy" ] && echo " — after you add deploy/proxy/apache-${DOMAIN}.conf (or nginx-…) to your web server")
    admin login: ADMIN_EMAIL / ADMIN_PASSWORD in ${TARGET}/backend/.env — change it and enroll 2FA at first login
    diagnostics: sudo bash ${TARGET}/deploy/doctor.sh           (add --bundle to export a redacted support archive)
    database:    sudo bash ${TARGET}/deploy/doctor.sh --db      (MongoDB runs in Docker — no host mongod; this prints status/version/ping)
    backup now:  sudo bash ${TARGET}/deploy/doctor.sh --db --backup-now   (dump → encrypt → restore-verify in one go)
-   upgrade:     sudo bash ${TARGET}/deploy/bootstrap.sh ${MODE} ${DOMAIN}   (auto-rollback on failure)
+   upgrade:     sudo bash ${TARGET}/deploy/update.sh [tag|sha]  (backup → rebuild → verify → auto-rollback)
    rollback:    sudo bash ${TARGET}/deploy/rollback.sh          (previous release from deploy/releases.log)
+   lock:        ${TARGET}/.stoic-installed — bootstrap.sh and install.sh refuse to run again; reinstall only with --unlock
    health:      hourly systemd timer → deploy/healthwatch.sh (status: deploy/healthwatch.sh status · test alert: deploy/healthwatch.sh test)
    report:      signed install report in ${TARGET}/deploy/releases/ (e-mailed when RESEND_API_KEY is set)
    logs:        cd ${TARGET} && docker compose logs -f backend

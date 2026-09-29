@@ -213,3 +213,39 @@ def test_cloudflare_mode_uses_origin_ca_cert_and_can_pin_edges(tmp_path):
     assert "@notcf not remote_ip " in cf and "abort @notcf" in cf and "2606:4700::/32" in cf
     bad = subprocess.run(["bash", "deploy/cloudflare/render.sh", "bad host;rm"], cwd=work, env=env, capture_output=True)
     assert bad.returncode == 1
+
+
+def test_installer_locks_itself_after_success_and_refuses_reruns(tmp_path):
+    b = _read("deploy", "bootstrap.sh")
+    for needle in ("--unlock) UNLOCK=1", 'LOCK_FILE="${LOCK_DIR}/.stoic-installed"', "the installer is LOCKED", "exit 3",
+                   "lock_install() {", 'chattr +i "$f"', 'lock_install "${TARGET}"', '[ "${HAD_LOCK}" = 1 ] && lock_install "${TARGET}"',
+                   "== STOIC is installed — installer LOCKED ==", "export STOIC_INSTALL_UNLOCK=1"):
+        assert needle in b, needle
+    assert b.index('lock_install "${TARGET}"\nbash deploy/install_report.sh') > 0      # report records the lock
+    inst = _read("deploy", "install.sh")
+    assert '[ -f .stoic-installed ] && [ "${STOIC_INSTALL_UNLOCK:-0}" != 1 ] && [ "${UNLOCK_ARG}" != 1 ]' in inst
+    assert "installer_locked" in _read("deploy", "install_report.sh")
+    assert "installer: LOCKED since" in _read("deploy", "doctor.sh")
+    # behaviour: locked → exit 3 for both scripts; --check-only and --unlock proceed; install.sh honours the env override
+    proj = tmp_path / "p"; (proj / "deploy").mkdir(parents=True)
+    for f in ("bootstrap.sh", "install.sh"):
+        shutil.copy(os.path.join(ROOT, "deploy", f), proj / "deploy" / f)
+    (proj / "docker-compose.yml").write_text("services: {}\n")
+    (proj / ".stoic-installed").write_text("installed_at=2026-06-01T10:00:00Z\nmode=behind-proxy\n")
+    stub = tmp_path / "bin"; stub.mkdir()
+    (stub / "id").write_text("#!/bin/sh\necho 0\n"); (stub / "id").chmod(0o755)      # pretend root
+    env = {**os.environ, "PATH": f"{stub}:{os.environ['PATH']}"}
+    env.pop("STOIC_INSTALL_UNLOCK", None)
+    r = subprocess.run(["bash", "deploy/bootstrap.sh", "--behind-proxy", "trade.example.com"], cwd=proj, env=env, capture_output=True, text=True)
+    assert r.returncode == 3 and "installer is LOCKED" in r.stdout and "deploy/update.sh" in r.stdout
+    r = subprocess.run(["bash", "deploy/install.sh", "--behind-proxy", "trade.example.com"], cwd=proj, env=env, capture_output=True, text=True)
+    assert r.returncode == 3 and "installer is LOCKED" in r.stdout
+    (stub / "docker").write_text("#!/bin/sh\nexit 1\n"); (stub / "docker").chmod(0o755)   # no docker → fails AFTER the lock gate
+    r = subprocess.run(["bash", "deploy/install.sh", "--behind-proxy", "trade.example.com"], cwd=proj,
+                       env={**env, "STOIC_INSTALL_UNLOCK": "1"}, capture_output=True, text=True)
+    assert r.returncode == 1 and "LOCKED" not in r.stdout and "docker" in r.stdout
+    r = subprocess.run(["bash", "deploy/bootstrap.sh", "--behind-proxy", "trade.example.com", "--check-only"],
+                       cwd=proj, env=env, capture_output=True, text=True, timeout=90)
+    assert "LOCKED" not in r.stdout and "0/5 system check" in r.stdout and (proj / ".stoic-installed").exists()   # read-only run never touches the lock
+    # --unlock removes the lock only AFTER the system check is green (a red check leaves the host locked)
+    assert b.index("all green — proceeding") < b.index("removing install lock") < b.index("1/5 prerequisites")
