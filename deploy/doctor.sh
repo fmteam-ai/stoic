@@ -4,16 +4,68 @@
 #   deploy/doctor.sh --quiet      only WARN/FAIL lines (used by bootstrap post-install)
 #   deploy/doctor.sh --bundle     also write diagnostics/stoic-diag-<ts>.tar.gz
 #                                 (redacted: secrets/ and env VALUES are never included)
+#   deploy/doctor.sh --db         MongoDB quick check only: container status, server
+#                                 version, ping, app-user auth round trip, transaction
+#                                 capability, data volume size (MongoDB runs in Docker —
+#                                 `mongod` is NOT installed on the host, by design)
 set -uo pipefail
 cd "$(dirname "$0")/.."
-QUIET=0; BUNDLE=0
-for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --bundle) BUNDLE=1 ;; esac; done
+QUIET=0; BUNDLE=0; DBONLY=0
+for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --bundle) BUNDLE=1 ;; --db) DBONLY=1 ;; esac; done
 FAILS=0; WARNS=0
 ok()   { [ "${QUIET}" = 1 ] || printf '  PASS  %s\n' "$*"; }
 warn() { WARNS=$((WARNS+1)); printf '  WARN  %s\n' "$*"; }
 fail() { FAILS=$((FAILS+1)); printf '  FAIL  %s\n' "$*"; }
 hdr()  { [ "${QUIET}" = 1 ] || printf '\n[%s]\n' "$*"; }
 envval() { grep -E "^$2=" "$1" 2>/dev/null | head -1 | cut -d= -f2-; }
+
+# mongosh inside the mongo container; the app password is read from the container's
+# own /run/secrets mount so it never appears in a host process list or in this output
+mongo_eval() { docker compose exec -T mongo sh -c 'mongosh --quiet -u "$MONGO_APP_USER" -p "$(cat /run/secrets/mongo_app_password)" --authenticationDatabase "$DB_NAME" "$DB_NAME" --eval "$0"' "$1" 2>/dev/null; }
+
+db_check() {
+  hdr "mongodb (Docker container — no host mongod by design)"
+  command -v mongod >/dev/null && warn "host mongod present — unused by STOIC; make sure it is not bound to 127.0.0.1:27017" || ok "no host mongod (expected: MongoDB is the mongo:7 container)"
+  local MID; MID=$(docker compose ps -q mongo 2>/dev/null)
+  if [ -z "${MID}" ]; then fail "mongo container not found — stack not up? (docker compose up -d mongo)"; return; fi
+  local STATE HEALTH IMAGE STARTED RESTARTS
+  read -r STATE HEALTH IMAGE STARTED RESTARTS < <(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.Config.Image}} {{.State.StartedAt}} {{.RestartCount}}' "${MID}")
+  case "${STATE}:${HEALTH}" in
+    running:healthy|running:none) ok "container: ${STATE} (${HEALTH}) · image ${IMAGE} · up since ${STARTED%%.*} · restarts ${RESTARTS}" ;;
+    running:*) warn "container: ${STATE} (${HEALTH}) · image ${IMAGE}" ;;
+    *) fail "container: ${STATE} (${HEALTH}) · image ${IMAGE} — docker compose logs mongo --tail 50"; return ;;
+  esac
+  [ "${RESTARTS:-0}" -le 3 ] || fail "container restarted ${RESTARTS} times — check docker compose logs mongo"
+  local VER; VER=$(docker compose exec -T mongo mongosh --quiet --eval 'db.version()' 2>/dev/null | tail -1)
+  [ -n "${VER}" ] && ok "server version: ${VER}" || fail "cannot query server version (mongosh inside container failed)"
+  local PING; PING=$(docker compose exec -T mongo mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | tail -1)
+  [ "${PING}" = 1 ] && ok "ping: ok" || fail "ping failed (${PING:-no answer})"
+  local RT; RT=$(mongo_eval 'const c=db.getCollection("_doctor_probe");c.insertOne({t:new Date()});const n=c.countDocuments({});c.drop();print("rt-ok "+n)' | tail -1)
+  case "${RT}" in rt-ok*) ok "app user auth + write/read round trip on $(envval .env DB_NAME): ok" ;; *) fail "app user round trip failed: ${RT:-no answer} (secrets/mongo_app_password vs deploy/mongo-init.js?)" ;; esac
+  local RS; RS=$(docker compose exec -T mongo mongosh --quiet --eval 'try{print(rs.status().set)}catch(e){print("standalone")}' 2>/dev/null | tail -1)
+  local APP_ENV; APP_ENV=$(envval backend/.env APP_ENV)
+  if [ "${RS}" = standalone ] || [ -z "${RS}" ]; then
+    if [ "${APP_ENV}" = production ]; then fail "replica set: standalone — production requires transactions (docs/PRODUCTION_DEPLOY_CHECKLIST.md → 'MongoDB transactions')"
+    else warn "replica set: standalone — transactions unavailable; required before any live-enabled account (see PRODUCTION_DEPLOY_CHECKLIST.md)"; fi
+  else ok "replica set: ${RS} (transactions available)"; fi
+  local COLLS; COLLS=$(mongo_eval 'print(db.getCollectionNames().length)' | tail -1)
+  [ -n "${COLLS}" ] && ok "collections in $(envval .env DB_NAME): ${COLLS}"
+  local VOL SIZE; VOL=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data/db"}}{{.Name}}{{end}}{{end}}' "${MID}")
+  if [ -n "${VOL}" ]; then
+    SIZE=$(docker system df -v 2>/dev/null | awk -v v="${VOL}" '$1==v {print $3; exit}')
+    ok "data volume: ${VOL} (${SIZE:-size n/a}) — backups: deploy/backup.sh"
+  fi
+  local PORT; PORT=$(docker port "${MID}" 27017 2>/dev/null | head -1)
+  if [ -z "${PORT}" ]; then ok "network: internal docker network only (not published)"
+  elif [[ "${PORT}" == 127.0.0.1:* ]]; then ok "network: published on ${PORT} (loopback only)"
+  else fail "network: published on ${PORT} — MongoDB must never be reachable from outside (bind 127.0.0.1)"; fi
+}
+
+if [ "${DBONLY}" = 1 ]; then
+  db_check
+  echo; echo "doctor --db: ${FAILS} FAIL · ${WARNS} WARN"
+  exit $(( FAILS > 0 ))
+fi
 
 hdr "host"
 . /etc/os-release 2>/dev/null || true
@@ -36,7 +88,7 @@ python3 -c 'import sys;sys.exit(0 if sys.version_info>=(3,9) else 1)' 2>/dev/nul
 hdr "configuration"
 for f in .env backend/.env; do [ -f "$f" ] && ok "$f present" || fail "$f missing (run deploy/install.sh)"; done
 if [ -d secrets ]; then
-  for s in mongo_url jwt_secret key_vault_master metrics_token order_auth_secret ledger_anchor_key signer_token signer_ed25519_key signer_cert.pem signer_cert_key.pem; do
+  for s in mongo_url mongo_keyfile jwt_secret key_vault_master metrics_token order_auth_secret ledger_anchor_key signer_token signer_ed25519_key signer_cert.pem signer_cert_key.pem; do
     [ -s "secrets/$s" ] || fail "secrets/$s missing or empty"; done
   ok "secrets/ ($(ls secrets | wc -l) files, mode $(stat -c %a secrets))"
   [ "$(stat -c %a secrets)" = 700 ] || warn "secrets/ should be mode 700"
@@ -69,6 +121,8 @@ if docker compose ps >/dev/null 2>&1; then
   RESTARTS=$(docker compose ps -q 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.RestartCount}}' 2>/dev/null | awk '$2>3')
   [ -z "${RESTARTS}" ] && ok "no crash-looping containers" || fail "restart loops: ${RESTARTS}"
 else fail "docker compose project not found in $(pwd)"; fi
+
+db_check
 
 hdr "endpoints"
 probe() { # probe <label> <url> [expect]

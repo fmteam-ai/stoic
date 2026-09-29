@@ -11,7 +11,13 @@ certificates) — clients can never bypass the proxy's security headers,
 normalized `X-Forwarded-*` or TLS.
 
 ## MongoDB security
-MongoDB runs with authentication enforced:
+MongoDB is the `mongo:7` **container** in `docker-compose.yml` — do **not**
+install `mongodb-org` / `mongod` on the host (`dnf list installed | grep
+mongodb` being empty is expected). Check it with `deploy/doctor.sh --db`
+(container status, server version, ping, app-user round trip, replica-set /
+transaction capability, data volume). It runs as a **single-node replica set
+(`rs0`, cluster keyFile)** so transactions are available — production fails
+closed without them — with authentication enforced:
 - Root credentials + a **least-privilege app user** (readWrite on `DB_NAME`
   only, created by `deploy/mongo-init.js` on first init).
 - All passwords/keys are **Docker secrets** (`./secrets/*`, mode 600,
@@ -69,7 +75,9 @@ supported OS/arch, systemd, root, CPU/RAM/disk/swap, NTP-synchronised clock,
 SELinux state, reachability of download.docker.com / Docker Hub / PyPI / yarn
 / your Git repo, DNS of the domain → this host (Cloudflare proxy detected and
 explained), ports 80/443 free (or held by the existing STOIC stack), 8001 /
-3000 / 27017 conflicts, podman/docker state. Any FAIL stops with the
+3000 / 27017 conflicts, podman/docker state, MongoDB (**runs as the
+`mongo:7` container — no `mongod`/`mongodb-org` on the host is needed or
+wanted**; a host mongod or a broken `mongodb-org-*.repo` is flagged). Any FAIL stops with the
 remediation and **nothing is changed**; WARN continues (`--strict` makes WARN
 fatal). `--check-only` runs just this step.
 

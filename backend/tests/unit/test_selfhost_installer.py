@@ -26,8 +26,32 @@ def test_compose_has_signer_sidecar_with_tls_and_file_secrets():
     assert "signer_ed25519_key" not in d["services"]["backend"]["secrets"]   # API never holds the private key
     assert d["services"]["backend"]["depends_on"]["signer"]["condition"] == "service_healthy"
     for name in ("order_auth_secret", "ledger_anchor_key", "signer_token", "signer_ed25519_key",
-                 "signer_cert", "signer_cert_key"):
+                 "signer_cert", "signer_cert_key", "mongo_keyfile"):
         assert name in d["secrets"], name
+
+
+def test_compose_mongo_is_replica_set_with_keyfile_and_self_initiating_healthcheck():
+    # audit r17 P0-01: production fails closed without transactions → the stack must ship a replica set
+    d = yaml.safe_load(_read("docker-compose.yml"))
+    m = d["services"]["mongo"]
+    assert m["command"] == ["sh", "/stoic-mongo-start.sh"]
+    assert "mongo_keyfile" in m["secrets"]
+    assert "./deploy/mongo-start.sh:/stoic-mongo-start.sh:ro" in m["volumes"]
+    hc = " ".join(m["healthcheck"]["test"])
+    assert "rs.status()" in hc and 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]})' in hc
+    assert "isWritablePrimary ? 0 : 1" in hc                     # green only when PRIMARY
+    assert "/run/secrets/mongo_root_password" in hc and "$MONGO_INITDB_ROOT_USERNAME" in hc
+    assert "ports" not in m                                       # never published to the host
+    start = _read("deploy", "mongo-start.sh")
+    assert "install -m 400 -o mongodb -g mongodb /run/secrets/mongo_keyfile /data/configdb/keyfile" in start
+    assert 'exec docker-entrypoint.sh mongod --bind_ip_all --replSet rs0 --keyFile /data/configdb/keyfile "$@"' in start
+    assert os.access(os.path.join(ROOT, "deploy", "mongo-start.sh"), os.X_OK)
+    # the forecast override keeps the wrapper (a plain mongod command would silently drop the replica set)
+    f = yaml.safe_load(_read("docker-compose.forecast.yml"))
+    assert f["services"]["mongo"]["command"][:2] == ["sh", "/stoic-mongo-start.sh"]
+    inst = _read("deploy", "install.sh")
+    assert "openssl rand -base64 756 | tr -d '\\n' > secrets/mongo_keyfile" in inst
+    assert "authSource=%s&replicaSet=rs0" in inst and "printf '&replicaSet=rs0' >> secrets/mongo_url" in inst
 
 
 def test_installer_configures_external_signer_and_prod_hardening():
@@ -57,11 +81,29 @@ def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
                    "registry-1.docker.io", "NTPSynchronized", "is_cloudflare_ip", "all green — proceeding",
                    # behind-proxy mode: an existing Apache/nginx keeps 80/443 and reverse-proxies to loopback
                    '--behind-proxy) MODE="--behind-proxy"', "re-run with --behind-proxy ${DOMAIN}",
-                   "will reverse-proxy to STOIC (behind-proxy mode)"):
+                   "will reverse-proxy to STOIC (behind-proxy mode)",
+                   # MongoDB is a container: the check says so and flags a host mongod / broken mongodb-org repo
+                   "mongodb: runs in Docker (mongo:7 container, 127.0.0.1 only) — no host install needed",
+                   "mongodb: host mongod found", "/etc/yum.repos.d/mongodb-org-*.repo", "deploy/doctor.sh --db"):
         assert needle in b, needle
     for script in ("bootstrap.sh", "doctor.sh"):
         assert os.access(os.path.join(ROOT, "deploy", script), os.X_OK), script
         subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", script)], check=True)
+
+
+def test_doctor_db_check_runs_inside_container_without_exposing_password():
+    d = _read("deploy", "doctor.sh")
+    assert "--db) DBONLY=1" in d and "db_check()" in d and 'doctor --db: ${FAILS} FAIL' in d
+    # the full report also includes the DB section
+    assert d.index("db_check\n\nhdr \"endpoints\"") > d.index("hdr \"containers\"")
+    for needle in ("server version:", "ping:", "app user auth + write/read round trip", "replica set:",
+                   "data volume:", "no host mongod (expected: MongoDB is the mongo:7 container)",
+                   "production requires transactions", "MongoDB must never be reachable from outside"):
+        assert needle in d, needle
+    # password is read from the container's own secret mount, never from host secrets/ and never passed as an argument
+    assert 'cat /run/secrets/mongo_app_password' in d
+    assert "cat secrets/mongo_app_password" not in d and "-p \"$(cat secrets" not in d
+    assert "cat secrets/mongo_url" not in d and "cat secrets/mongo_root_password" not in d
 
 
 def test_behind_proxy_mode_renders_apache_and_nginx_snippets(tmp_path):

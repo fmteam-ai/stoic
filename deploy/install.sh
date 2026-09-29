@@ -119,7 +119,7 @@ if [ ! -d secrets ]; then
   APP_PWD=$(gen)
   gen > secrets/mongo_root_password
   printf '%s' "${APP_PWD}" > secrets/mongo_app_password
-  printf 'mongodb://stoic_app:%s@mongo:27017/%s?authSource=%s' \
+  printf 'mongodb://stoic_app:%s@mongo:27017/%s?authSource=%s&replicaSet=rs0' \
     "${APP_PWD}" "${DB_NAME_VAL}" "${DB_NAME_VAL}" > secrets/mongo_url
   gen > secrets/jwt_secret
   gen > secrets/key_vault_master
@@ -135,6 +135,10 @@ fi
 # Key separation: ORDER_AUTH / LEDGER_ANCHOR are distinct from JWT (boot rule).
 [ -f secrets/order_auth_secret ] || { gen > secrets/order_auth_secret; echo "   generated order_auth_secret"; }
 [ -f secrets/ledger_anchor_key ] || { gen > secrets/ledger_anchor_key; echo "   generated ledger_anchor_key"; }
+# MongoDB single-node replica set (transactions are required in production):
+# cluster keyFile + replicaSet in the app URL — idempotent, upgrade-safe.
+[ -s secrets/mongo_keyfile ] || { openssl rand -base64 756 | tr -d '\n' > secrets/mongo_keyfile; echo "   generated mongo_keyfile (replica set rs0)"; }
+grep -q 'replicaSet=' secrets/mongo_url || { printf '&replicaSet=rs0' >> secrets/mongo_url; echo "   mongo_url: added replicaSet=rs0"; }
 # Release signer sidecar: private key + bearer token + self-signed TLS cert.
 # The API only ever sees the PUBLIC key, the token and the certificate.
 ensure_signer_secrets() {

@@ -51,6 +51,10 @@ services:
     # Auth enforced: root for admin ops, least-privilege app user (readWrite
     # on DB_NAME only) created by deploy/mongo-init.js on first init.
     # Passwords live in Docker secrets, never in env files.
+    # Single-node replica set (rs0, keyFile auth) — transactions are REQUIRED
+    # in production (audit r17 P0-01); deploy/mongo-start.sh wires the keyFile,
+    # the healthcheck initiates the set once and is green only when PRIMARY.
+    command: ["sh", "/stoic-mongo-start.sh"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?set in .env — see .env.example}
       MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
@@ -59,14 +63,21 @@ services:
     secrets:
       - mongo_root_password
       - mongo_app_password
+      - mongo_keyfile
     volumes:
       - mongo_data:/data/db
       - ./deploy/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - ./deploy/mongo-start.sh:/stoic-mongo-start.sh:ro
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$(cat /run/secrets/mongo_root_password)"
+          --eval 'try { rs.status() } catch (e) { rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]}) }; quit(db.hello().isWritablePrimary ? 0 : 1)'
       interval: 15s
-      timeout: 5s
+      timeout: 10s
       retries: 5
+      start_period: 45s
 
   signer:
     # Release signer sidecar (deploy/signer): holds the Ed25519 private key,
@@ -147,6 +158,8 @@ secrets:
     file: ./secrets/mongo_root_password
   mongo_app_password:
     file: ./secrets/mongo_app_password
+  mongo_keyfile:
+    file: ./secrets/mongo_keyfile
   mongo_url:
     file: ./secrets/mongo_url
   jwt_secret:

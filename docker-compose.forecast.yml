@@ -92,11 +92,10 @@ services:
         limits: { memory: 3g, cpus: "1.0" }
 
   mongo:
-    # Cap WiredTiger so Mongo doesn't grab the RAM the ML plane needs.
-    # --bind_ip_all mirrors the image default (containers connect over the
-    # compose network); --auth is injected by the entrypoint from the root
-    # credentials, so authentication is unchanged.
-    command: ["mongod", "--bind_ip_all", "--wiredTigerCacheSizeGB", "6"]
+    # Cap WiredTiger so Mongo doesn't grab the RAM the ML plane needs. Goes
+    # through deploy/mongo-start.sh so the replica set / keyFile / auth setup
+    # of the base compose file is unchanged.
+    command: ["sh", "/stoic-mongo-start.sh", "--wiredTigerCacheSizeGB", "6"]
     deploy:
       resources:
         limits: { memory: 12g, cpus: "2.0" }

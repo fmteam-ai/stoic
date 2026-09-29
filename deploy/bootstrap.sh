@@ -178,6 +178,14 @@ for p in 8001 3000 27017; do
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$" && ! docker ps --format '{{.Ports}}' 2>/dev/null | grep -q ":${p}->"; then
     warnc "port ${p}: in use by a non-Docker service — the stack binds it on 127.0.0.1"; fi
 done
+# MongoDB is a container (mongo:7 in docker-compose.yml) — a host mongod is neither needed nor wanted
+if command -v mongod >/dev/null || systemctl is-active -q mongod 2>/dev/null; then
+  warnc "mongodb: host mongod found ($(mongod --version 2>/dev/null | head -1 | awk '{print $3}')) — STOIC runs its own mongo:7 container; stop/disable the host service so it does not take 127.0.0.1:27017"
+else pass "mongodb: runs in Docker (mongo:7 container, 127.0.0.1 only) — no host install needed"; fi
+if ls /etc/yum.repos.d/mongodb-org-*.repo >/dev/null 2>&1; then
+  for rf in /etc/yum.repos.d/mongodb-org-*.repo; do
+    grep -q 'baseurl=https://repo.mongodb.org/' "${rf}" || warnc "mongodb: ${rf} has a broken baseurl — dnf will error on every run; remove it (rm -f ${rf} && dnf clean all)"; done
+fi
 if command -v podman >/dev/null && ! command -v docker >/dev/null; then warnc "podman installed — it will be removed (conflicts with docker-ce on RHEL 8)"; fi
 if command -v docker >/dev/null; then docker info >/dev/null 2>&1 && pass "docker: present and running ($(docker --version | awk '{print $3}' | tr -d ,))" || warnc "docker: installed but daemon not running — will be started"; else pass "docker: not installed — will be installed"; fi
 
@@ -319,6 +327,7 @@ cat <<EOF
    app:         $([ "${PUBLIC}" = 1 ] && echo "https://${DOMAIN}" || echo "http://127.0.0.1:3000 (loopback)")$([ "${MODE}" = "--behind-proxy" ] && echo " — after you add deploy/proxy/apache-${DOMAIN}.conf (or nginx-…) to your web server")
    admin login: ADMIN_EMAIL / ADMIN_PASSWORD in ${TARGET}/backend/.env — change it and enroll 2FA at first login
    diagnostics: sudo bash ${TARGET}/deploy/doctor.sh           (add --bundle to export a redacted support archive)
+   database:    sudo bash ${TARGET}/deploy/doctor.sh --db      (MongoDB runs in Docker — no host mongod; this prints status/version/ping)
    upgrade:     sudo bash ${TARGET}/deploy/bootstrap.sh ${MODE} ${DOMAIN}   (auto-rollback on failure)
    rollback:    sudo bash ${TARGET}/deploy/rollback.sh          (previous release from deploy/releases.log)
    health:      hourly systemd timer → deploy/healthwatch.sh (status: deploy/healthwatch.sh status · test alert: deploy/healthwatch.sh test)
