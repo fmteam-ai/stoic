@@ -129,16 +129,15 @@ fi
 # Release signer sidecar: private key + bearer token + self-signed TLS cert.
 # The API only ever sees the PUBLIC key, the token and the certificate.
 ensure_signer_secrets() {
+  # Ed25519 via openssl (≥1.1.1) — no Python packages needed on the host.
+  # PKCS#8 / SubjectPublicKeyInfo DER both END with the 32 raw key bytes.
   [ -f secrets/signer_ed25519_key ] || {
-    python3 - <<'PY' > secrets/signer_ed25519_key
-import base64
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-k = Ed25519PrivateKey.generate()
-print(base64.b64encode(k.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
-                                       serialization.NoEncryption())).decode())
-PY
-    echo "   generated signer_ed25519_key"; }
+    openssl genpkey -algorithm ed25519 -out secrets/signer_ed25519_key.pem 2>/dev/null \
+      || { echo "ERROR: openssl cannot generate Ed25519 keys (need OpenSSL >= 1.1.1)"; exit 1; }
+    openssl pkey -in secrets/signer_ed25519_key.pem -outform DER | tail -c 32 | base64 -w0 > secrets/signer_ed25519_key
+    openssl pkey -in secrets/signer_ed25519_key.pem -pubout -outform DER | tail -c 32 | base64 -w0 > secrets/signer_public_key
+    rm -f secrets/signer_ed25519_key.pem
+    echo "   generated signer_ed25519_key (+ signer_public_key)"; }
   [ -f secrets/signer_token ] || { gen > secrets/signer_token; echo "   generated signer_token"; }
   [ -f secrets/signer_cert.pem ] || {
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
@@ -146,17 +145,13 @@ PY
       -keyout secrets/signer_cert_key.pem -out secrets/signer_cert.pem >/dev/null 2>&1
     echo "   generated signer TLS certificate (CN=signer, 10y, pinned by the API)"; }
   chmod 600 secrets/*
+  # SELinux (RHEL/AlmaLinux): containers may read the secret files only when labelled
+  if command -v getenforce >/dev/null && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
+    chcon -Rt container_file_t secrets 2>/dev/null || true
+  fi
 }
-python3 -c "import cryptography" 2>/dev/null || python3 -m pip install -q cryptography >/dev/null 2>&1 || true
 ensure_signer_secrets
-SIGNER_PUB_B64=$(python3 - <<'PY'
-import base64
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-k = Ed25519PrivateKey.from_private_bytes(base64.b64decode(open("secrets/signer_ed25519_key").read().strip()))
-print(base64.b64encode(k.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode())
-PY
-)
+SIGNER_PUB_B64=$(cat secrets/signer_public_key)
 
 # 1 · compose-level .env — NON-SECRET config only
 if [ ! -f .env ]; then

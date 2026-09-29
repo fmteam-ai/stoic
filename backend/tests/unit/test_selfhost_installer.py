@@ -41,12 +41,35 @@ def test_installer_configures_external_signer_and_prod_hardening():
         subprocess.run(["bash", "-n", os.path.join(ROOT, script)], check=True)
 
 
-def test_bootstrap_installs_docker_clones_and_delegates():
+def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
     b = _read("deploy", "bootstrap.sh")
-    for needle in ("download.docker.com", "docker-compose-plugin", "git clone", "deploy/install.sh",
-                   "--production", "--dev", "--repo", "ufw allow 443/tcp"):
+    for needle in ("dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo",
+                   "dnf -y -q remove podman", "firewall-cmd -q --permanent --add-service=https", "getenforce",
+                   "dnf -y -q install python3.11", "alternatives --set python3",
+                   "apt-get install -y -qq docker-ce", "ufw allow 443/tcp",
+                   "git clone", "deploy/install.sh", "--production", "--dev", "--repo", "--skip-attestation",
+                   "trap rollback ERR", "snapshot()", "rollback()", "stoic-rollback:", "secrets.tgz",
+                   "deploy/doctor.sh --bundle", "deploy/doctor.sh --quiet", "releases.log"):
         assert needle in b, needle
-    assert os.access(os.path.join(ROOT, "deploy", "bootstrap.sh"), os.X_OK)
+    for script in ("bootstrap.sh", "doctor.sh"):
+        assert os.access(os.path.join(ROOT, "deploy", script), os.X_OK), script
+        subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", script)], check=True)
+
+
+def test_installer_generates_ed25519_with_openssl_and_labels_selinux():
+    inst = _read("deploy", "install.sh")
+    assert "openssl genpkey -algorithm ed25519" in inst and "tail -c 32 | base64 -w0" in inst
+    assert "chcon -Rt container_file_t secrets" in inst
+    assert "import cryptography" not in inst          # no Python packages needed on the host
+
+
+def test_doctor_reports_and_redacts():
+    d = _read("deploy", "doctor.sh")
+    for needle in ("RELEASE_SIGNER=external", "ED25519_SIGNING_KEY_B64", "container_file_t", "/api/health/ready",
+                   "release-readiness", "=<redacted>", "doctor: ${FAILS} FAIL"):
+        assert needle in d, needle
+    assert "cat secrets/" not in d.replace("cat secrets/metrics_token", "")   # only the metrics token is read, never exported
+    assert "tar -czf" in d and "secrets_listing" in d
 
 
 def test_signer_app_reads_file_secrets():

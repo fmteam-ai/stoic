@@ -44,9 +44,30 @@ brings the whole stack up verified over HTTPS. Run as root on the server:
 curl -fsSL https://raw.githubusercontent.com/<you>/<repo>/main/deploy/bootstrap.sh \
   | sudo bash -s -- --production trade.example.com --repo https://github.com/<you>/<repo>.git
 ```
-Requirements: DNS `A` record for the domain → server IP, ports 80/443 open.
-Re-running the same command upgrades in place (`--ref v1.2.3` pins a tag).
-From an existing checkout: `sudo bash deploy/bootstrap.sh --production trade.example.com`.
+Supported hosts: **AlmaLinux 8/9, Rocky, RHEL, CentOS Stream** (dnf · firewalld ·
+SELinux — `secrets/` is labelled `container_file_t`) and **Ubuntu/Debian** (apt · ufw).
+Requirements: DNS `A` record for the domain → server IP, ports 80/443 open,
+~4 GB RAM / 20 GB disk. Re-running the same command upgrades in place
+(`--ref v1.2.3` pins a tag). From an existing checkout:
+`sudo bash deploy/bootstrap.sh --production trade.example.com`.
+Building from your own checkout without a CI attestation record: add
+`--skip-attestation` (loudly logged).
+
+**Automatic rollback.** Every run first snapshots the previous state
+(`.bootstrap-snapshots/<ts>/`: git ref, `.env` files, `secrets/`, image tags,
+Mongo dump when the stack is running). If any step fails, the trap restores
+the snapshot, restarts the previous release, writes a diagnostics bundle and
+exits non-zero — the host is never left half-installed
+(`--no-rollback` keeps the failed state for inspection). Full log:
+`/var/log/stoic-bootstrap-<ts>.log`.
+
+**Diagnostics.** `sudo bash deploy/doctor.sh` prints PASS/WARN/FAIL for host
+(OS, RAM, disk, SELinux, Docker, OpenSSL), configuration (env files, secrets,
+production guardrails, DNS), containers (state, health, restart loops),
+endpoints (API, readiness, frontend, signer TLS, HTTPS, release-readiness)
+and recent backend errors. `--bundle` writes
+`diagnostics/stoic-diag-<ts>.tar.gz` (logs + env **keys only** — secret values
+are never included) that is safe to share for support.
 
 The install ships the **release signer as a sidecar container**
 (`deploy/signer`): the Ed25519 private key lives only in

@@ -178,3 +178,5 @@ backend/models_store/**/gbm_ensemble.previous.joblib
 backend/models_store/_quarantine/
 
 backend/models_store/_cache/
+diagnostics/
+.bootstrap-snapshots/
