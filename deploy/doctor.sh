@@ -8,10 +8,15 @@
 #                                 version, ping, app-user auth round trip, transaction
 #                                 capability, data volume size (MongoDB runs in Docker —
 #                                 `mongod` is NOT installed on the host, by design)
+#   deploy/doctor.sh --db --backup-now
+#                                 …then dump NOW (deploy/backup.sh: AES-256 when
+#                                 BACKUP_PASSPHRASE_FILE is set), restore the archive into a
+#                                 throw-away mongo:7 and compare every collection count —
+#                                 prints the verified file, exit 1 on any mismatch
 set -uo pipefail
 cd "$(dirname "$0")/.."
-QUIET=0; BUNDLE=0; DBONLY=0
-for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --bundle) BUNDLE=1 ;; --db) DBONLY=1 ;; esac; done
+QUIET=0; BUNDLE=0; DBONLY=0; BACKUP_NOW=0
+for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --bundle) BUNDLE=1 ;; --db) DBONLY=1 ;; --backup-now) DBONLY=1; BACKUP_NOW=1 ;; esac; done
 FAILS=0; WARNS=0
 ok()   { [ "${QUIET}" = 1 ] || printf '  PASS  %s\n' "$*"; }
 warn() { WARNS=$((WARNS+1)); printf '  WARN  %s\n' "$*"; }
@@ -61,9 +66,33 @@ db_check() {
   else fail "network: published on ${PORT} — MongoDB must never be reachable from outside (bind 127.0.0.1)"; fi
 }
 
+backup_now() {
+  hdr "backup now (dump → encrypt → restore into scratch mongo:7 → compare counts)"
+  [ "${FAILS}" = 0 ] || { fail "skipping backup: the database check above reported ${FAILS} FAIL"; return; }
+  # BACKUP_* settings live in ./.env (compose config); export them for backup.sh unless already set
+  for k in BACKUP_DIR BACKUP_PASSPHRASE_FILE BACKUP_OFFSITE BACKUP_RCLONE_REMOTE BACKUP_S3_URI RETENTION_DAYS; do
+    v=$(envval .env "$k"); [ -n "$v" ] && [ -z "${!k:-}" ] && export "$k=$v"; done
+  local BDIR="${BACKUP_DIR:-./backups}" OUT
+  if [ -n "${BACKUP_PASSPHRASE_FILE:-}" ]; then
+    [ -s "${BACKUP_PASSPHRASE_FILE}" ] && ok "encryption: AES-256-CBC with passphrase file ${BACKUP_PASSPHRASE_FILE}" \
+      || { fail "BACKUP_PASSPHRASE_FILE=${BACKUP_PASSPHRASE_FILE} missing or empty — refusing to write an unencrypted archive"; return; }
+  else warn "encryption: OFF (set BACKUP_PASSPHRASE_FILE in ./.env to encrypt archives at rest)"; fi
+  local LOG; LOG=$(mktemp /tmp/stoic-backup-now-XXXXXX)
+  if ! bash deploy/backup.sh backup >"${LOG}" 2>&1; then fail "dump failed:"; sed 's/^/        /' "${LOG}" | tail -8; rm -f "${LOG}"; return; fi
+  OUT=$(ls -t "${BDIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | head -1)
+  [ -n "${OUT}" ] && [ -s "${OUT}" ] || { fail "dump produced no archive in ${BDIR}"; rm -f "${LOG}"; return; }
+  ok "dump: ${OUT} ($(du -h "${OUT}" | cut -f1)) · manifest $(python3 -c "import json;d=json.load(open('${OUT%.enc}.manifest.json'));print(sum(len(v) for v in d['databases'].values()),'collections /',sum(sum(v.values()) for v in d['databases'].values()),'documents')" 2>/dev/null || echo written)"
+  if bash deploy/backup.sh verify "${OUT}" >"${LOG}" 2>&1; then ok "restore verification: $(grep -o 'RESTORE VERIFICATION PASSED.*' "${LOG}" | head -1)"
+  else fail "restore verification FAILED for ${OUT}:"; grep -E "^  -|FAILED|ERROR|Error" "${LOG}" | head -10 | sed 's/^/        /'; fi
+  rm -f "${LOG}"
+  [ "${FAILS}" = 0 ] && echo "  verified backup: $(readlink -f "${OUT}")"
+}
+
 if [ "${DBONLY}" = 1 ]; then
   db_check
-  echo; echo "doctor --db: ${FAILS} FAIL · ${WARNS} WARN"
+  [ "${BACKUP_NOW}" = 1 ] && backup_now
+  LABEL="--db"; [ "${BACKUP_NOW}" = 1 ] && LABEL="--db --backup-now"
+  echo; echo "doctor ${LABEL}: ${FAILS} FAIL · ${WARNS} WARN"
   exit $(( FAILS > 0 ))
 fi
 
@@ -126,7 +155,7 @@ db_check
 
 hdr "endpoints"
 probe() { # probe <label> <url> [expect]
-  local code; code=$(curl -s -m 15 -o /tmp/doctor_body -w '%{http_code}' "$2" 2>/dev/null || echo 000)
+  local code; code=$(curl -s -m 15 -o /tmp/doctor_body -w '%{http_code}' "$2" 2>/dev/null || true); [ -n "${code}" ] || code=000
   if [ "${code}" = "${3:-200}" ]; then ok "$1 → ${code}"; else fail "$1 → ${code} $(head -c 160 /tmp/doctor_body 2>/dev/null | tr '\n' ' ')"; fi
 }
 probe "API /health"            http://127.0.0.1:8001/health
@@ -137,6 +166,14 @@ if [ -f /tmp/doctor_body ] && curl -s -m 15 http://127.0.0.1:8001/api/release-ke
   grep -q '"mode": *"external"' /tmp/doctor_body && ok "release signer: external (sidecar)" || warn "release signer: $(grep -o '"mode": *"[a-z]*"' /tmp/doctor_body | head -1) — live signing not active"
 fi
 if [ -n "${DOMAIN}" ]; then probe "https://${DOMAIN}/api/health" "https://${DOMAIN}/api/health"; fi
+if [ "$(envval .env CLOUDFLARE_MODE)" = true ]; then
+  CF_END=$(openssl x509 -in secrets/origin_cert.pem -noout -enddate 2>/dev/null | cut -d= -f2)
+  CF_DAYS=$(( ( $(date -d "${CF_END:-now}" +%s 2>/dev/null || date +%s) - $(date +%s) ) / 86400 ))
+  [ "${CF_DAYS}" -gt 30 ] && ok "cloudflare: origin CA certificate valid ${CF_DAYS} more days$([ "$(envval .env CLOUDFLARE_ONLY)" = true ] && echo ' · cf-only (origin answers only to Cloudflare edges)')" \
+    || fail "cloudflare: origin CA certificate expires in ${CF_DAYS} days (${CF_END:-unreadable}) — issue a new one and re-run bootstrap --cloudflare"
+  ISS=$(openssl s_client -connect 127.0.0.1:443 -servername "${DOMAIN}" </dev/null 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null)
+  case "${ISS}" in *loud[fF]lare*) ok "cloudflare: Caddy serves the origin certificate on 443" ;; *) fail "cloudflare: 443 does not serve the Cloudflare origin certificate (issuer: ${ISS:-none})" ;; esac
+fi
 SIGNER_ID=$(docker compose ps -q signer 2>/dev/null)
 if [ -n "${SIGNER_ID}" ]; then
   docker exec "${SIGNER_ID}" python -c "import urllib.request,ssl;ctx=ssl.create_default_context(cafile='/run/secrets/signer_cert');urllib.request.urlopen('https://localhost:9443/healthz',context=ctx,timeout=5)" >/dev/null 2>&1 \

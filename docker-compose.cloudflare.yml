@@ -1,0 +1,22 @@
+# Cloudflare overlay — use ON TOP of the TLS overlay:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.cloudflare.yml
+# (deploy/install.sh --production <domain> --cloudflare wires this.)
+# Caddy serves a Cloudflare ORIGIN CA certificate (secrets/origin_cert.pem +
+# origin_key.pem) instead of Let's Encrypt, so the DNS record can stay
+# proxied (orange cloud) the whole time — no HTTP-01 challenge, no grey-cloud
+# step. Cloudflare SSL/TLS mode must be "Full (strict)".
+services:
+  caddy:
+    volumes:
+      - ./deploy/cloudflare/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    secrets:
+      - origin_cert
+      - origin_key
+
+secrets:
+  origin_cert:
+    file: ./secrets/origin_cert.pem
+  origin_key:
+    file: ./secrets/origin_key.pem

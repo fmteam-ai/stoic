@@ -15,7 +15,11 @@ MongoDB is the `mongo:7` **container** in `docker-compose.yml` — do **not**
 install `mongodb-org` / `mongod` on the host (`dnf list installed | grep
 mongodb` being empty is expected). Check it with `deploy/doctor.sh --db`
 (container status, server version, ping, app-user round trip, replica-set /
-transaction capability, data volume). It runs as a **single-node replica set
+transaction capability, data volume); `deploy/doctor.sh --db --backup-now`
+additionally dumps right now (AES-256 when `BACKUP_PASSPHRASE_FILE` is set in
+`./.env`), restores the archive into a throw-away `mongo:7` container,
+compares every collection count and prints the verified file (exit 1 on any
+mismatch). It runs as a **single-node replica set
 (`rs0`, cluster keyFile)** so transactions are available — production fails
 closed without them — with authentication enforced:
 - Root credentials + a **least-privilege app user** (readWrite on `DB_NAME`
@@ -58,6 +62,23 @@ Requirements: DNS `A` record for the domain → server IP, ports 80/443 open,
 `sudo bash deploy/bootstrap.sh --production trade.example.com`.
 Building from your own checkout without a CI attestation record: add
 `--skip-attestation` (loudly logged).
+
+**Domain proxied through Cloudflare (orange cloud)?** Use
+`--cloudflare <domain> --origin-cert <cert.pem> --origin-key <key.pem>`.
+Create the certificate in the Cloudflare dashboard (SSL/TLS → Origin Server →
+Create Certificate, hostnames `<domain>` and `*.<domain>`) and set the zone's
+SSL/TLS mode to **Full (strict)**. Caddy then serves that Origin CA
+certificate instead of requesting Let's Encrypt, so the record never has to
+be grey-clouded (no HTTP-01 challenge). The overlay is
+`docker-compose.cloudflare.yml` + `deploy/cloudflare/Caddyfile` (rendered with
+the current Cloudflare edge IP list as `trusted_proxies`, so the API sees real
+client IPs). Add `--cf-only` and the origin **aborts any connection that does
+not come from a Cloudflare edge** (enforced in Caddy, so it holds even where
+Docker bypasses the host firewall); the installer proves it by connecting
+directly to 127.0.0.1:443 and expecting a refusal. The system check validates
+the certificate/key pair and its SANs before anything is installed;
+`doctor.sh` reports certificate expiry and that 443 serves the Origin CA
+certificate.
 
 **Host already running Apache/cPanel/nginx?** Use `--behind-proxy <domain>`
 instead of `--production`: same production hardening, no Caddy — your web

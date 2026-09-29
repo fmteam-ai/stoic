@@ -93,7 +93,7 @@ def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
 
 def test_doctor_db_check_runs_inside_container_without_exposing_password():
     d = _read("deploy", "doctor.sh")
-    assert "--db) DBONLY=1" in d and "db_check()" in d and 'doctor --db: ${FAILS} FAIL' in d
+    assert "--db) DBONLY=1" in d and "db_check()" in d and 'doctor ${LABEL}: ${FAILS} FAIL' in d
     # the full report also includes the DB section
     assert d.index("db_check\n\nhdr \"endpoints\"") > d.index("hdr \"containers\"")
     for needle in ("server version:", "ping:", "app user auth + write/read round trip", "replica set:",
@@ -159,3 +159,57 @@ def test_ca_bundle_pins_but_never_disables_verification():
     assert _tls_verify({"RELEASE_SIGNER_CA_BUNDLE": "  "}) is True
     src = _read("backend", "release_signing.py")
     assert "verify=False" not in src
+
+
+def test_doctor_backup_now_dumps_verifies_and_fails_closed():
+    d = _read("deploy", "doctor.sh")
+    assert "--backup-now) DBONLY=1; BACKUP_NOW=1" in d and "backup_now()" in d
+    for needle in ("bash deploy/backup.sh backup", 'bash deploy/backup.sh verify "${OUT}"', "RESTORE VERIFICATION PASSED",
+                   "refusing to write an unencrypted archive", "skipping backup: the database check above reported",
+                   'verified backup: $(readlink -f "${OUT}")', "doctor ${LABEL}: ${FAILS} FAIL"):
+        assert needle in d, needle
+    assert "deploy/doctor.sh --db --backup-now" in _read("deploy", "bootstrap.sh")
+
+
+def test_cloudflare_mode_uses_origin_ca_cert_and_can_pin_edges(tmp_path):
+    b = _read("deploy", "bootstrap.sh")
+    for needle in ('--cloudflare) MODE="--production"; CLOUDFLARE=1', "--origin-cert) ORIGIN_CERT=", "--cf-only) CF_ONLY=1",
+                   "--cloudflare needs --origin-cert <cert.pem> --origin-key <key.pem>",
+                   "only apply to --cloudflare <domain>", "orange cloud — expected in --cloudflare mode",
+                   "origin certificate does not cover ${DOMAIN}", "the key does not match the certificate",
+                   "install -m 600 \"${ORIGIN_CERT}\" secrets/origin_cert.pem", "install -m 600 \"${ORIGIN_KEY}\" secrets/origin_key.pem"):
+        assert needle in b, needle
+    inst = _read("deploy", "install.sh")
+    for needle in ("--cloudflare) CLOUDFLARE=1", "--cf-only) CF_ONLY=1", "--cloudflare needs --production <domain>",
+                   "docker-compose.yml:docker-compose.tls.yml:docker-compose.cloudflare.yml", "set_kv .env CLOUDFLARE_MODE true",
+                   'bash deploy/cloudflare/render.sh "${DOMAIN}"', "does not match secrets/origin_cert.pem",
+                   "*loud[fF]lare*", '--resolve "${DOMAIN}:443:127.0.0.1"', "--cf-only but a direct connection was served",
+                   "SSL/TLS mode must be 'Full (strict)'"):
+        assert needle in inst, needle
+    ov = yaml.safe_load(_read("docker-compose.cloudflare.yml"))
+    c = ov["services"]["caddy"]
+    assert "./deploy/cloudflare/Caddyfile:/etc/caddy/Caddyfile:ro" in c["volumes"]
+    assert c["secrets"] == ["origin_cert", "origin_key"]
+    assert ov["secrets"]["origin_cert"]["file"] == "./secrets/origin_cert.pem"
+    assert ov["secrets"]["origin_key"]["file"] == "./secrets/origin_key.pem"
+    assert "deploy/cloudflare/Caddyfile" in _read(".gitignore")
+    ips = [l for l in _read("deploy", "cloudflare", "ips.txt").split() if l]
+    assert "104.16.0.0/13" in ips and "2606:4700::/32" in ips and len(ips) >= 20
+    # render offline (curl stubbed to fail) → bundled list, both variants
+    work = tmp_path / "repo"
+    (work / "deploy" / "cloudflare").mkdir(parents=True)
+    shutil.copy(os.path.join(ROOT, "deploy", "cloudflare", "render.sh"), work / "deploy" / "cloudflare" / "render.sh")
+    shutil.copy(os.path.join(ROOT, "deploy", "cloudflare", "ips.txt"), work / "deploy" / "cloudflare" / "ips.txt")
+    stub = tmp_path / "bin"; stub.mkdir(); (stub / "curl").write_text("#!/bin/sh\nexit 7\n"); (stub / "curl").chmod(0o755)
+    env = {**os.environ, "PATH": f"{stub}:{os.environ['PATH']}"}
+    subprocess.run(["bash", "deploy/cloudflare/render.sh", "trade.example.com"], cwd=work, env=env, check=True, capture_output=True)
+    cf = (work / "deploy" / "cloudflare" / "Caddyfile").read_text()
+    assert "trade.example.com, www.trade.example.com {" in cf
+    assert "tls /run/secrets/origin_cert /run/secrets/origin_key" in cf
+    assert "trusted_proxies static 173.245.48.0/20" in cf or "trusted_proxies static " in cf and "173.245.48.0/20" in cf
+    assert "abort @notcf" not in cf
+    subprocess.run(["bash", "deploy/cloudflare/render.sh", "trade.example.com", "--cf-only"], cwd=work, env=env, check=True, capture_output=True)
+    cf = (work / "deploy" / "cloudflare" / "Caddyfile").read_text()
+    assert "@notcf not remote_ip " in cf and "abort @notcf" in cf and "2606:4700::/32" in cf
+    bad = subprocess.run(["bash", "deploy/cloudflare/render.sh", "bad host;rm"], cwd=work, env=env, capture_output=True)
+    assert bad.returncode == 1

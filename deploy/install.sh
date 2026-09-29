@@ -11,11 +11,15 @@ cd "$(dirname "$0")/.."
 
 WITH_FORECAST=0
 REGISTRY=0
+CLOUDFLARE=0
+CF_ONLY=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
     --with-forecast) WITH_FORECAST=1 ;;
     --registry) REGISTRY=1 ;;
+    --cloudflare) CLOUDFLARE=1 ;;
+    --cf-only) CF_ONLY=1 ;;
     *) ARGS+=("$a") ;;
   esac
 done
@@ -44,7 +48,24 @@ case "${MODE}" in
     ;;
 esac
 
-echo "== STOIC installer (${MODE#--}${DOMAIN:+ · $DOMAIN}) =="
+TAG=""; [ "${CLOUDFLARE}" = 1 ] && TAG=" · cloudflare origin CA"; [ "${CF_ONLY}" = 1 ] && TAG="${TAG} · cf-only"
+echo "== STOIC installer (${MODE#--}${DOMAIN:+ · $DOMAIN}${TAG}) =="
+
+if [ "${CLOUDFLARE}" = 1 ]; then
+  [ "${MODE}" = "--production" ] || { echo "ERROR: --cloudflare needs --production <domain> (Caddy terminates TLS with the Origin CA certificate)"; exit 1; }
+  for f in secrets/origin_cert.pem secrets/origin_key.pem; do
+    [ -s "$f" ] || { echo "ERROR: ${f} missing — Cloudflare dashboard → SSL/TLS → Origin Server → Create Certificate, then"
+                     echo "       bootstrap.sh --cloudflare ${DOMAIN} --origin-cert <cert.pem> --origin-key <key.pem>"; exit 1; }
+  done
+  openssl x509 -in secrets/origin_cert.pem -noout >/dev/null 2>&1 || { echo "ERROR: secrets/origin_cert.pem is not a PEM certificate"; exit 1; }
+  [ "$(openssl x509 -in secrets/origin_cert.pem -noout -pubkey 2>/dev/null | openssl sha256)" = "$(openssl pkey -in secrets/origin_key.pem -pubout 2>/dev/null | openssl sha256)" ] \
+    || { echo "ERROR: secrets/origin_key.pem does not match secrets/origin_cert.pem"; exit 1; }
+  SANS=$(openssl x509 -in secrets/origin_cert.pem -noout -ext subjectAltName 2>/dev/null | tr ',' '\n' | sed -n 's/.*DNS:\([^ ]*\).*/\1/p')
+  PARENT="${DOMAIN#*.}"
+  echo "${SANS}" | grep -qxE "(${DOMAIN}|\*\.${PARENT})" || { echo "ERROR: origin certificate does not cover ${DOMAIN} (SANs: $(echo ${SANS} | tr '\n' ' '))"; exit 1; }
+  echo "${SANS}" | grep -qxE "(www\.${DOMAIN}|\*\.${DOMAIN})" || echo "!! origin certificate does not cover www.${DOMAIN} — Cloudflare 'Full (strict)' will fail for the www host"
+  echo "-- origin certificate: $(openssl x509 -in secrets/origin_cert.pem -noout -issuer | sed 's/^issuer=//') · expires $(openssl x509 -in secrets/origin_cert.pem -noout -enddate | cut -d= -f2)"
+fi
 
 command -v docker >/dev/null || { echo "ERROR: docker is required"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "ERROR: docker compose v2 is required"; exit 1; }
@@ -178,7 +199,15 @@ set_kv .env DB_NAME ai_trading_bot
 if [ "${MODE}" = "--production" ]; then
   set_kv .env DOMAIN "${DOMAIN}"
   set_kv .env REACT_APP_BACKEND_URL ""      # same-origin behind the TLS ingress
-  set_kv .env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+  if [ "${CLOUDFLARE}" = 1 ]; then
+    set_kv .env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml:docker-compose.cloudflare.yml"
+    set_kv .env CLOUDFLARE_MODE true
+    set_kv .env CLOUDFLARE_ONLY "$([ "${CF_ONLY}" = 1 ] && echo true || echo false)"
+    bash deploy/cloudflare/render.sh "${DOMAIN}" $([ "${CF_ONLY}" = 1 ] && echo --cf-only)
+  else
+    set_kv .env COMPOSE_FILE "docker-compose.yml:docker-compose.tls.yml"
+    set_kv .env CLOUDFLARE_MODE false
+  fi
 elif [ "${MODE}" = "--behind-proxy" ]; then
   set_kv .env DOMAIN "${DOMAIN}"
   set_kv .env REACT_APP_BACKEND_URL ""      # same-origin behind the host web server
@@ -303,7 +332,39 @@ if [ "${READY}" != 1 ]; then
 fi
 echo "   release-readiness: ready"
 
-if [ "${MODE}" = "--production" ]; then
+if [ "${MODE}" = "--production" ] && [ "${CLOUDFLARE}" = 1 ]; then
+  echo "-- verifying origin TLS (Cloudflare Origin CA certificate served by Caddy on this host)"
+  ORIGIN_OK=0
+  for i in $(seq 1 12); do
+    ISSUER=$(openssl s_client -connect 127.0.0.1:443 -servername "${DOMAIN}" </dev/null 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || true)
+    case "${ISSUER}" in *loud[fF]lare*) ORIGIN_OK=1; break ;; esac
+    sleep 5
+  done
+  [ "${ORIGIN_OK}" = 1 ] || { echo "ERROR: Caddy is not serving the Cloudflare origin certificate on 443 (issuer: ${ISSUER:-none})"; docker compose logs caddy --tail 20 || true; exit 1; }
+  echo "   origin certificate served ($(echo "${ISSUER}" | sed 's/^issuer=//'))"
+  # direct (non-Cloudflare) peer: cf-only must refuse it, otherwise it must answer
+  CODE=$(curl -sk -m 10 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health" 2>/dev/null || true); [ -n "${CODE}" ] || CODE=000
+  if [ "${CF_ONLY}" = 1 ]; then
+    [ "${CODE}" = 000 ] && echo "   cf-only: direct (non-Cloudflare) connection refused — origin answers only to Cloudflare edges" \
+      || { echo "ERROR: --cf-only but a direct connection was served (HTTP ${CODE})"; exit 1; }
+  else
+    [ "${CODE}" = 200 ] && echo "   origin answers /api/health directly (HTTP ${CODE})" || { echo "ERROR: origin /api/health → HTTP ${CODE}"; exit 1; }
+  fi
+  echo "-- verifying HTTPS through Cloudflare (https://${DOMAIN} — SSL/TLS mode must be 'Full (strict)')"
+  TLS_OK=0
+  for i in $(seq 1 12); do
+    if curl -fsS -m 15 "https://${DOMAIN}/api/health" >/dev/null 2>&1; then TLS_OK=1; break; fi
+    sleep 5
+  done
+  if [ "${TLS_OK}" != 1 ]; then
+    echo "ERROR: https://${DOMAIN}/api/health not reachable through Cloudflare."
+    echo "       Check: the record is proxied (orange) and points at this host, SSL/TLS mode is 'Full (strict)',"
+    echo "       and the Origin CA certificate covers ${DOMAIN}. Origin side is fine (verified above)."
+    curl -sS -m 15 -o /dev/null -w '       edge → HTTP %{http_code}\n' "https://${DOMAIN}/api/health" || true
+    exit 1
+  fi
+  echo "   HTTPS verified end-to-end via Cloudflare"
+elif [ "${MODE}" = "--production" ]; then
   echo "-- verifying HTTPS end-to-end (Caddy certificate for ${DOMAIN})"
   TLS_OK=0
   for i in $(seq 1 36); do   # cert issuance can take ~1-2 min after DNS resolves
@@ -340,7 +401,9 @@ fi
 
 echo ""
 echo "== install complete =="
-if [ "${MODE}" = "--production" ]; then
+if [ "${MODE}" = "--production" ] && [ "${CLOUDFLARE}" = 1 ]; then
+  echo "   app:   https://${DOMAIN}  (Cloudflare Origin CA certificate — record stays proxied/orange; SSL mode 'Full (strict)')"
+elif [ "${MODE}" = "--production" ]; then
   echo "   app:   https://${DOMAIN}  (Caddy provisions the certificate on first request)"
 elif [ "${MODE}" = "--behind-proxy" ]; then
   bash deploy/proxy/render.sh "${DOMAIN}"

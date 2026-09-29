@@ -10,10 +10,14 @@
 #   sudo bash deploy/bootstrap.sh --production trade.example.com     # from a checkout
 #   sudo bash deploy/bootstrap.sh --dev                              # loopback only
 #   sudo bash deploy/bootstrap.sh --behind-proxy trade.example.com   # Apache/cPanel/nginx already owns 80/443
+#   sudo bash deploy/bootstrap.sh --cloudflare trade.example.com --origin-cert cert.pem --origin-key key.pem
+#                                                                    # Cloudflare proxied (orange) with an Origin CA cert
 #
 # Options: --repo <git url> · --ref <tag|sha> · --target <dir> (default /opt/stoic)
 #          --skip-attestation  build from your own checkout without a CI attestation record
 #          --with-forecast · --registry (passed through to deploy/install.sh)
+#          --origin-cert <pem> --origin-key <pem>  Cloudflare Origin CA certificate (--cloudflare)
+#          --cf-only           origin answers ONLY to Cloudflare edge IPs (--cloudflare)
 #          --no-rollback       keep the failed state for inspection
 #          --check-only        run the system check (step 0) and exit — changes nothing
 #          --strict            treat system-check WARN as FAIL
@@ -28,10 +32,15 @@ set -euo pipefail
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
+CLOUDFLARE=0; CF_ONLY=0; ORIGIN_CERT=""; ORIGIN_KEY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --production) MODE="--production"; DOMAIN="${2:-}"; shift 2 ;;
     --behind-proxy) MODE="--behind-proxy"; DOMAIN="${2:-}"; shift 2 ;;
+    --cloudflare) MODE="--production"; CLOUDFLARE=1; DOMAIN="${2:-}"; shift 2 ;;
+    --origin-cert) ORIGIN_CERT="$2"; shift 2 ;;
+    --origin-key) ORIGIN_KEY="$2"; shift 2 ;;
+    --cf-only) CF_ONLY=1; shift ;;
     --dev) MODE="--dev"; shift ;;
     --repo) REPO="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
@@ -47,8 +56,17 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1"; exit 1 ;;
   esac
 done
-[ -n "${MODE}" ] || { echo "ERROR: choose --production <domain>, --behind-proxy <domain> or --dev"; exit 1; }
+[ -n "${MODE}" ] || { echo "ERROR: choose --production <domain>, --behind-proxy <domain>, --cloudflare <domain> or --dev"; exit 1; }
 [ "${MODE}" = "--dev" ] || [ -n "${DOMAIN}" ] || { echo "ERROR: ${MODE} needs a domain"; exit 1; }
+if [ "${CLOUDFLARE}" = 1 ]; then
+  [ -n "${ORIGIN_CERT}" ] && [ -n "${ORIGIN_KEY}" ] || { echo "ERROR: --cloudflare needs --origin-cert <cert.pem> --origin-key <key.pem> (Cloudflare dashboard → SSL/TLS → Origin Server → Create Certificate)"; exit 1; }
+  [ -s "${ORIGIN_CERT}" ] || { echo "ERROR: ${ORIGIN_CERT} not found or empty"; exit 1; }
+  [ -s "${ORIGIN_KEY}" ] || { echo "ERROR: ${ORIGIN_KEY} not found or empty"; exit 1; }
+  ORIGIN_CERT="$(readlink -f "${ORIGIN_CERT}")"; ORIGIN_KEY="$(readlink -f "${ORIGIN_KEY}")"
+  EXTRA+=(--cloudflare); [ "${CF_ONLY}" = 1 ] && EXTRA+=(--cf-only)
+elif [ "${CF_ONLY}" = 1 ] || [ -n "${ORIGIN_CERT}${ORIGIN_KEY}" ]; then
+  echo "ERROR: --cf-only / --origin-cert / --origin-key only apply to --cloudflare <domain>"; exit 1
+fi
 PUBLIC=0; [ "${MODE}" = "--dev" ] || PUBLIC=1
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root (sudo)"; exit 1; }
 # operator inputs are interpolated into sed/JSON/vhost files — accept only sane shapes
@@ -123,7 +141,7 @@ pass() { printf '  \e[32mPASS\e[0m  %s\n' "$*"; }
 warnc() { CK_WARN=$((CK_WARN+1)); printf '  \e[33mWARN\e[0m  %s\n' "$*"; }
 failc() { CK_FAIL=$((CK_FAIL+1)); printf '  \e[31mFAIL\e[0m  %s\n' "$*"; }
 reach() {  # any HTTP answer counts (registries reply 401 to anonymous probes); 000 = unreachable
-  local code; code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000); [ "${code}" != "000" ]; }
+  local code; code=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || true); [ -n "${code}" ] && [ "${code}" != "000" ]; }
 is_cloudflare_ip() { case "$1" in 172.6[4-9].*|172.7[01].*|104.1[6-9].*|104.2[0-9].*|104.3[01].*|188.114.*|141.101.*|108.162.*|162.15[89].*|198.41.*|190.93.*|197.234.*|131.0.7[2-5].*) return 0 ;; *) return 1 ;; esac; }
 
 . /etc/os-release
@@ -159,7 +177,9 @@ if [ "${PUBLIC}" = 1 ]; then
   PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || curl -fs -m 5 https://ifconfig.me 2>/dev/null || echo "?")
   DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}' || echo "")
   if [ -z "${DNS_IP}" ]; then failc "dns: ${DOMAIN} does not resolve — create an A record → ${PUB_IP} first (Caddy cannot issue the certificate otherwise)"
-  elif is_cloudflare_ip "${DNS_IP}"; then warnc "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy) — the origin record must point to ${PUB_IP}; set Cloudflare SSL to 'Full (strict)' and grey-cloud the record during the first certificate issue (Caddy HTTP-01), then re-enable the proxy"
+  elif [ "${CLOUDFLARE}" = 1 ] && is_cloudflare_ip "${DNS_IP}"; then pass "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy, orange cloud — expected in --cloudflare mode; origin record must point at ${PUB_IP})"
+  elif [ "${CLOUDFLARE}" = 1 ]; then warnc "dns: ${DOMAIN} → ${DNS_IP} is not a Cloudflare edge — --cloudflare expects the record to be proxied (orange); the Origin CA certificate is NOT trusted by browsers when Cloudflare is bypassed"
+  elif is_cloudflare_ip "${DNS_IP}"; then warnc "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy) — the origin record must point to ${PUB_IP}; set Cloudflare SSL to 'Full (strict)' and grey-cloud the record during the first certificate issue (Caddy HTTP-01), then re-enable the proxy — or use --cloudflare <domain> with an Origin CA certificate to stay orange"
   elif [ "${PUB_IP}" != "?" ] && [ "${DNS_IP}" != "${PUB_IP}" ]; then failc "dns: ${DOMAIN} → ${DNS_IP} but this host is ${PUB_IP} — point the A record at this host"
   else pass "dns: ${DOMAIN} → ${DNS_IP} (this host)"; fi
   for p in 80 443; do
@@ -185,6 +205,17 @@ else pass "mongodb: runs in Docker (mongo:7 container, 127.0.0.1 only) — no ho
 if ls /etc/yum.repos.d/mongodb-org-*.repo >/dev/null 2>&1; then
   for rf in /etc/yum.repos.d/mongodb-org-*.repo; do
     grep -q 'baseurl=https://repo.mongodb.org/' "${rf}" || warnc "mongodb: ${rf} has a broken baseurl — dnf will error on every run; remove it (rm -f ${rf} && dnf clean all)"; done
+fi
+if [ "${CLOUDFLARE}" = 1 ]; then
+  if openssl x509 -in "${ORIGIN_CERT}" -noout >/dev/null 2>&1 \
+     && [ "$(openssl x509 -in "${ORIGIN_CERT}" -noout -pubkey 2>/dev/null | openssl sha256)" = "$(openssl pkey -in "${ORIGIN_KEY}" -pubout 2>/dev/null | openssl sha256)" ]; then
+    CF_SANS=$(openssl x509 -in "${ORIGIN_CERT}" -noout -ext subjectAltName 2>/dev/null | tr ',' '\n' | sed -n 's/.*DNS:\([^ ]*\).*/\1/p' | tr '\n' ' ')
+    if echo " ${CF_SANS}" | grep -qE " (${DOMAIN}|\*\.${DOMAIN#*.}) "; then pass "cloudflare: origin certificate + key match, covers ${DOMAIN} (expires $(openssl x509 -in "${ORIGIN_CERT}" -noout -enddate | cut -d= -f2))"
+    else failc "cloudflare: origin certificate does not cover ${DOMAIN} (SANs: ${CF_SANS:-none}) — create it for ${DOMAIN} and *.${DOMAIN}"; fi
+    echo " ${CF_SANS}" | grep -qE " (www\.${DOMAIN}|\*\.${DOMAIN}) " || warnc "cloudflare: certificate does not cover www.${DOMAIN} — 'Full (strict)' will fail for the www host"
+    case "$(openssl x509 -in "${ORIGIN_CERT}" -noout -issuer 2>/dev/null)" in *loud[fF]lare*) ;; *) warnc "cloudflare: certificate issuer is not Cloudflare Origin CA — Cloudflare 'Full (strict)' only trusts Origin CA or publicly trusted certificates" ;; esac
+  else failc "cloudflare: ${ORIGIN_CERT} / ${ORIGIN_KEY} — not a PEM certificate, or the key does not match the certificate"; fi
+  reach https://www.cloudflare.com/ips-v4 && pass "network: cloudflare.com edge IP list reachable" || warnc "network: cannot fetch Cloudflare edge IPs — bundled deploy/cloudflare/ips.txt will be used"
 fi
 if command -v podman >/dev/null && ! command -v docker >/dev/null; then warnc "podman installed — it will be removed (conflicts with docker-ce on RHEL 8)"; fi
 if command -v docker >/dev/null; then docker info >/dev/null 2>&1 && pass "docker: present and running ($(docker --version | awk '{print $3}' | tr -d ,))" || warnc "docker: installed but daemon not running — will be started"; else pass "docker: not installed — will be installed"; fi
@@ -277,7 +308,15 @@ else
 fi
 cd "${TARGET}"
 echo "   commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-chmod +x deploy/*.sh 2>/dev/null || true
+chmod +x deploy/*.sh deploy/*/*.sh 2>/dev/null || true
+if [ "${CLOUDFLARE}" = 1 ]; then
+  # Origin CA certificate + key become Docker secrets (mode 600, gitignored) for Caddy
+  mkdir -p secrets && chmod 700 secrets
+  install -m 600 "${ORIGIN_CERT}" secrets/origin_cert.pem
+  install -m 600 "${ORIGIN_KEY}" secrets/origin_key.pem
+  command -v getenforce >/dev/null && [ "$(getenforce 2>/dev/null)" = "Enforcing" ] && chcon -Rt container_file_t secrets 2>/dev/null || true
+  echo "-- cloudflare: origin certificate staged in secrets/origin_cert.pem + origin_key.pem"
+fi
 
 # ------------------------------------------------------------------ 3 · firewall / DNS
 STEP="network"
@@ -328,6 +367,7 @@ cat <<EOF
    admin login: ADMIN_EMAIL / ADMIN_PASSWORD in ${TARGET}/backend/.env — change it and enroll 2FA at first login
    diagnostics: sudo bash ${TARGET}/deploy/doctor.sh           (add --bundle to export a redacted support archive)
    database:    sudo bash ${TARGET}/deploy/doctor.sh --db      (MongoDB runs in Docker — no host mongod; this prints status/version/ping)
+   backup now:  sudo bash ${TARGET}/deploy/doctor.sh --db --backup-now   (dump → encrypt → restore-verify in one go)
    upgrade:     sudo bash ${TARGET}/deploy/bootstrap.sh ${MODE} ${DOMAIN}   (auto-rollback on failure)
    rollback:    sudo bash ${TARGET}/deploy/rollback.sh          (previous release from deploy/releases.log)
    health:      hourly systemd timer → deploy/healthwatch.sh (status: deploy/healthwatch.sh status · test alert: deploy/healthwatch.sh test)

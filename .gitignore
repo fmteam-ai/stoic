@@ -183,3 +183,4 @@ diagnostics/
 deploy/releases/install-report-*.json
 deploy/proxy/apache-*.conf
 deploy/proxy/nginx-*.conf
+deploy/cloudflare/Caddyfile
