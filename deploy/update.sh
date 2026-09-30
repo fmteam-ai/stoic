@@ -14,21 +14,33 @@ cd "$(dirname "$0")/.."
 . deploy/lib.sh
 
 REF="${1:-origin/main}"
-PREV=$(git rev-parse HEAD)
 LOCK=/tmp/stoic-deploy.lock
-exec 9>"${LOCK}"; flock -n 9 || { echo "ERROR: another deploy is running (${LOCK})"; exit 1; }
 
-echo "== STOIC update: $(git rev-parse --short HEAD) -> ${REF} =="
+if [ -n "${STOIC_UPDATE_REEXEC:-}" ]; then
+  # second stage: already fetched + checked out by the first stage; the flock
+  # on fd 9 was inherited across exec. Resume with the NEW scripts.
+  PREV="${STOIC_UPDATE_PREV}"
+  echo "   deploy scripts refreshed → continuing with $(git rev-parse --short HEAD)'s deploy/update.sh"
+else
+  PREV=$(git rev-parse HEAD)
+  exec 9>"${LOCK}"; flock -n 9 || { echo "ERROR: another deploy is running (${LOCK})"; exit 1; }
 
-echo "-- pre-update backup"
-deploy/backup.sh backup
+  echo "== STOIC update: $(git rev-parse --short HEAD) -> ${REF} =="
 
-echo "-- fetching ${REF}"
-git fetch --all --tags --prune
-git checkout --detach "${REF}"
-if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
-  echo "   already on $(git rev-parse --short HEAD) — nothing to publish"
-  exit 0
+  echo "-- pre-update backup"
+  deploy/backup.sh backup
+
+  echo "-- fetching ${REF}"
+  git fetch --all --tags --prune
+  git checkout --detach "${REF}"
+  if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
+    echo "   already on $(git rev-parse --short HEAD) — nothing to publish"
+    exit 0
+  fi
+  # The scripts sourced above came from the OLD checkout. Re-exec so the rest of
+  # the update (gates, build, verification, rollback policy) runs with the NEW
+  # deploy/update.sh + deploy/lib.sh.
+  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" bash deploy/update.sh "${REF}"
 fi
 
 rollback() {

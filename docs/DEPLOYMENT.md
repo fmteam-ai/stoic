@@ -206,6 +206,14 @@ rc_lock, canonical decision) are reported as "pending" and only block when
 `APP_ENV=production`. `UPDATE_HOLD_ON_FAILURE=1 deploy/update.sh` keeps the
 new build running on failure (prints the failing checks, no auto-rollback)
 for a manual break-fix session — revert with `deploy/rollback.sh`.
+`update.sh` re-execs itself after `git checkout` so gates, verification and
+rollback always run with the *new* release's deploy scripts. Hosts still on a
+release older than this behaviour bootstrap once by hand:
+
+```bash
+cd /opt/stoic && git fetch --all --tags --prune && git checkout --detach origin/main \
+  && STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV=$(git rev-parse HEAD@{1}) deploy/update.sh
+```
 
 ## Backups
 ```bash
