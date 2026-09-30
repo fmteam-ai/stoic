@@ -788,6 +788,8 @@ async def on_startup():
         if _ts_violation:
             raise RuntimeError(_ts_violation)
         await get_db().turnstile_consumed_tokens.create_index("expires_at", expireAfterSeconds=0)
+        import device_attestation as _da
+        await _da.ensure_indexes(get_db())   # r26 P1-02 nonce TTL + uniqueness
         from close_commands import ensure_indexes as _close_idx   # r25 P2-01: unique (trade_id, close_seq)
         await _close_idx(get_db())
         # Safety review — DEFAULT_MODE is observe; grandfather migration

@@ -49,14 +49,16 @@ def test_bridge_derives_method_from_installer_measurement():
     src = open("routes/bridge_routes.py").read()
     block = src[src.index("r25 P1-01: `installer_attested`"):src.index("elif not (identity and identity[\"ok\"])")]
     assert '"installer_attested"' in block and '"installer_mismatch"' in block
-    assert 'measured == reported_hash' in block
-    assert '"ex5_sha256": 1' in src   # the installer-measured hash is read from the installation doc
+    assert 'measured == reported_hash and measured_method == "installer_attested"' in block
+    assert "da.attested_hash(inst_doc)" in block      # r26 P1-02: method comes from the signed attestation
+    assert '"ex5_measured_by": 1' in src and '"attestation": 1' in src
 
 
 def test_installer_and_ea_carry_the_proof():
     ps1 = open("static/STOIC-Installer.ps1").read()
     assert "STOIC-Proof.txt" in ps1 and "Get-FileHash $finalEx5 -Algorithm SHA256" in ps1
-    assert "installation_id = $installationId" in ps1 and "/api/infra/agent/artifact-digest" in ps1
+    assert "installation_id = $installationId" in ps1 and "/api/infra/attestation/verify" in ps1
+    assert "RSASignaturePadding]::Pss" in ps1 and "ProtectedData]::Protect" in ps1     # r26 P1-02 signed proof
     mq5 = open("static/EmergentTradingBridge.mq5").read()
     assert 'FileIsExist("STOIC-Proof.txt")' in mq5
     assert re.search(r'\\"ea_binary_sha256\\":\\"%s\\"', mq5), "heartbeat must carry ea_binary_sha256"
@@ -66,5 +68,8 @@ def test_installer_and_ea_carry_the_proof():
 
 def test_digest_endpoint_binds_installation():
     src = open("routes/infra_routes.py").read()
-    assert '"ex5_sha256": digest' in src and '"installation_id": inst_id, "account_id": reporter["account_id"]' in src
+    # r26 P1-02: the bridge-token digest report is telemetry (ex5_reported_*) — it never writes the
+    # admissible measurement (ex5_sha256 / ex5_measured_by), which only the signed attestation records
+    assert '"ex5_reported_sha256": digest' in src and '"installation_id": inst_id, "account_id": reporter["account_id"]' in src
+    assert '"ex5_sha256": digest' not in src
     assert 'reporter["kind"] == "installer"' in src     # agent tokens can't bind someone else's installation

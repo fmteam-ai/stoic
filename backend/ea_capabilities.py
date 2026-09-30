@@ -73,7 +73,12 @@ def live_gate(account: dict) -> dict | None:
         method = str(account.get("ea_binary_sha256_method") or "")
         if method != "installer_attested":
             hint = {"user_trust": "EX5 hash was reported over a one-click trusted terminal",
-                    "installer_mismatch": "heartbeat EX5 hash differs from the hash the installer measured on this terminal"
+                    "installer_mismatch": "heartbeat EX5 hash differs from the hash the installer measured on this terminal",
+                    "installer_unattested": "the installer's EX5 measurement was reported with the bridge token only — "
+                                            "re-run the installer so it signs the proof with its enrolled device key",
+                    "installer_attestation_stale": "the signed installer attestation is older than the freshness window — "
+                                                   "re-run the installer to re-attest",
+                    "device_key_revoked": "the installer device key was revoked — re-pair with a fresh dashboard token",
                     }.get(method, "the installer has not recorded a measured EX5 hash for this installation")
             return {"code": "EA_BINARY_PROOF_UNATTESTED",
                     "reason": f"{hint} — re-run the STOIC installer on the terminal so the deployed EX5 is "

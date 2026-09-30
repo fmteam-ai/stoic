@@ -243,7 +243,8 @@ async def heartbeat(payload: BridgeHeartbeat):
         set_doc["ea_binary_sha256_reported_at"] = now_iso
         if identity and identity["ok"]:
             inst_doc = await db.installations.find_one(
-                {"installation_id": effective_installation_id}, {"method": 1, "ex5_sha256": 1})
+                {"installation_id": effective_installation_id},
+                {"method": 1, "ex5_sha256": 1, "ex5_measured_by": 1, "attestation": 1, "device_key": 1})
             set_doc["ea_binary_sha256"] = reported_hash
             set_doc["ea_binary_sha256_at"] = now_iso
             # r22: the attestation channel is recorded with the hash — a
@@ -251,14 +252,19 @@ async def heartbeat(payload: BridgeHeartbeat):
             # unattested and never counts as installer-verified proof.
             # r25 P1-01: `installer_attested` is granted ONLY when the heartbeat
             # hash equals the hash the installer measured on the deployed EX5
-            # for THIS installation. An EA merely echoing a hash (or an
-            # installation that was never measured) is `installer_mismatch` /
-            # the raw chain method — never live-admissible.
-            measured = str((inst_doc or {}).get("ex5_sha256") or "").lower()
-            if measured and measured == reported_hash:
+            # for THIS installation.
+            # r26 P1-02: ...and that measurement must have arrived as a fresh
+            # signature from the ENROLLED installer device key (nonce handshake).
+            # A bridge-token report, an EA echoing a hash, a stale or revoked
+            # key are never live-admissible.
+            import device_attestation as da
+            measured_method, measured = da.attested_hash(inst_doc)
+            if measured and measured == reported_hash and measured_method == "installer_attested":
                 set_doc["ea_binary_sha256_method"] = "installer_attested"
-            elif measured:
+            elif measured and measured != reported_hash:
                 set_doc["ea_binary_sha256_method"] = "installer_mismatch"
+            elif measured:
+                set_doc["ea_binary_sha256_method"] = measured_method      # unattested / stale / revoked key
             else:
                 set_doc["ea_binary_sha256_method"] = str((inst_doc or {}).get("method") or "unknown")
         else:

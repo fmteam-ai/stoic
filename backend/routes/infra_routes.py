@@ -839,28 +839,80 @@ async def report_artifact_digest(payload: dict, cert_fp: str = _FP_HEADER):
         "version": payload.get("version"),
         "installation_id": payload.get("installation_id"),
         "reported_at": now_iso})
-    # r25 P1-01 — bind the installer-measured EX5 hash to the installation it was
-    # deployed for. The heartbeat proof is admitted as installer-attested only when
-    # it equals THIS value (and the signed release hash) for the SAME installation.
+    # r25 P1-01 — record the installer-reported EX5 hash against the installation.
+    # r26 P1-02 — this bridge-token path is TELEMETRY ONLY: the bridge token is also
+    # held by the EA, so it can never establish `installer_attested`. The admissible
+    # measurement arrives through /infra/attestation/* signed by the enrolled device key.
     inst_id = str(payload.get("installation_id") or "").strip()
     bound = False
     if inst_id and name == "stoic-ea-ex5" and reporter["kind"] == "installer":
         res = await db.installations.update_one(
             {"installation_id": inst_id, "account_id": reporter["account_id"],
              "revoked": {"$ne": True}},
-            {"$set": {"ex5_sha256": digest, "ex5_sha256_at": now_iso,
-                      "ex5_measured_by": "installer",
-                      "ex5_installer_version": payload.get("installer_version"),
-                      "ex5_terminal": payload.get("terminal")}})
+            {"$set": {"ex5_reported_sha256": digest, "ex5_reported_at": now_iso,
+                      "ex5_reported_installer_version": payload.get("installer_version"),
+                      "ex5_reported_terminal": payload.get("terminal")}})
         bound = res.matched_count == 1
     return {"ok": True, "match": match, "expected_sha256": expected,
-            "installation_bound": bound}
+            "installation_bound": bound, "attests": False,
+            "note": "bridge-token report is telemetry only — live proof requires the signed device attestation"}
 
 
 @router.get("/broker-profiles")
 async def broker_profiles_ep(user=Depends(get_current_user)):
     from vps_pathb import broker_profiles
     return {"profiles": await broker_profiles(get_db())}
+
+
+# ── r26 P1-02 · installer device attestation (nonce handshake) ─────────────
+def _attest_http(e) -> HTTPException:
+    return HTTPException(status_code=e.status, detail={"code": e.code, "message": e.message})
+
+
+@router.post("/attestation/challenge")
+async def attestation_challenge(payload: dict):
+    """Single-use nonce for the ENROLLED installer device key of an installation.
+    Unauthenticated by design (the installer holds no cookie); the nonce is
+    worthless without the private key and dies in 120 s."""
+    import device_attestation as da
+    inst_id = str(payload.get("installation_id") or "").strip()
+    if not inst_id or len(inst_id) > 64:
+        raise HTTPException(status_code=422, detail={"code": "malformed", "message": "installation_id required"})
+    try:
+        return await da.issue_challenge(get_db(), inst_id)
+    except da.AttestationError as e:
+        raise _attest_http(e)
+
+
+@router.post("/attestation/verify")
+async def attestation_verify(payload: dict):
+    """Installer posts the signed proof {nonce, installation_id, terminal_identity,
+    ex5_sha256, capabilities, ts, signature}. Only a valid signature from the
+    enrolled device key records `ex5_measured_by = device_signature` — the sole
+    source of `installer_attested` on the heartbeat."""
+    import device_attestation as da
+    try:
+        return await da.verify_attestation(get_db(), payload or {})
+    except da.AttestationError as e:
+        raise _attest_http(e)
+
+
+@router.post("/installations/{installation_id}/device-key/revoke")
+async def revoke_device_key(installation_id: str, user=Depends(get_current_user)):
+    """Owner/admin revocation — a revoked key can neither challenge nor attest, and the
+    heartbeat method for the installation degrades to `device_key_revoked`."""
+    db = get_db()
+    q = {"installation_id": installation_id, "device_key": {"$exists": True}}
+    if user.get("role") != "admin":
+        q["user_id"] = user["id"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.installations.update_one(q, {"$set": {"device_key.revoked": True, "device_key.revoked_at": now_iso,
+                                                         "device_key.revoked_by": user["id"]}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="installation with an enrolled device key not found")
+    await db.accounts.update_many({"installation_id": installation_id, "ea_binary_sha256_method": "installer_attested"},
+                                  {"$set": {"ea_binary_sha256_method": "device_key_revoked"}})
+    return {"ok": True, "installation_id": installation_id, "revoked_at": now_iso}
 
 
 @router.post("/broker-installers")

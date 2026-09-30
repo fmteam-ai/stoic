@@ -29,6 +29,102 @@
 # automatically (no manual paste).
 # ============================================================================
 
+# ── r26 P1-02 · installer device key (RSA-3072 / RSA-PSS-SHA256) ─────────────
+# The installer proves possession of the deployed EX5 with a SIGNATURE from a key
+# that only this Windows user profile holds (DPAPI-protected). The public key is
+# enrolled while redeeming the one-time dashboard pairing token; the bridge token
+# (which the EA also holds) can never attest anything.
+Add-Type -AssemblyName System.Security
+
+function Get-StoicDeviceKeyPath {
+    $dir = Join-Path $env:APPDATA "STOIC"
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+    return (Join-Path $dir "device.key.dpapi")
+}
+
+function New-StoicDeviceKey {
+    $rsa = New-Object System.Security.Cryptography.RSACng(3072)
+    $xmlPriv = $rsa.ToXmlString($true)
+    $xmlPub  = $rsa.ToXmlString($false)
+    $rsa.Dispose()
+    $protected = [System.Security.Cryptography.ProtectedData]::Protect(
+        [System.Text.Encoding]::UTF8.GetBytes($xmlPriv), $null,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+    [System.IO.File]::WriteAllText((Get-StoicDeviceKeyPath), [Convert]::ToBase64String($protected))
+    return $xmlPub
+}
+
+function Get-StoicDeviceKey {
+    $b64 = [System.IO.File]::ReadAllText((Get-StoicDeviceKeyPath))
+    $xmlPriv = [System.Text.Encoding]::UTF8.GetString(
+        [System.Security.Cryptography.ProtectedData]::Unprotect(
+            [Convert]::FromBase64String($b64), $null,
+            [System.Security.Cryptography.DataProtectionScope]::CurrentUser))
+    $rsa = New-Object System.Security.Cryptography.RSACng
+    $rsa.FromXmlString($xmlPriv)
+    return $rsa
+}
+
+function Get-StoicDevicePublicKey {
+    # rotate the key on every pairing: a fresh dashboard token = a fresh enrolment
+    return (New-StoicDeviceKey)
+}
+
+function ConvertTo-StoicJsonString([string]$v) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    foreach ($ch in $v.ToCharArray()) {
+        switch ($ch) {
+            '"'  { [void]$sb.Append('\"') }
+            '\' { [void]$sb.Append('\\') }
+            "`n" { [void]$sb.Append('\n') }
+            "`r" { [void]$sb.Append('\r') }
+            "`t" { [void]$sb.Append('\t') }
+            default {
+                if ([int]$ch -lt 0x20) { [void]$sb.Append(('\u{0:x4}' -f [int]$ch)) } else { [void]$sb.Append($ch) }
+            }
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Get-StoicCanonicalProof($p) {
+    # MUST equal Python json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=False)
+    # over exactly these six fields (server: device_attestation.canonical)
+    $caps = ($p.capabilities | ForEach-Object { ConvertTo-StoicJsonString $_ }) -join ','
+    $json = '{"capabilities":[' + $caps + '],' +
+            '"ex5_sha256":'        + (ConvertTo-StoicJsonString $p.ex5_sha256) + ',' +
+            '"installation_id":'   + (ConvertTo-StoicJsonString $p.installation_id) + ',' +
+            '"nonce":'             + (ConvertTo-StoicJsonString $p.nonce) + ',' +
+            '"terminal_identity":' + (ConvertTo-StoicJsonString $p.terminal_identity) + ',' +
+            '"ts":' + [string][int64]$p.ts + '}'
+    return [System.Text.Encoding]::UTF8.GetBytes($json)
+}
+
+function Invoke-StoicAttestation {
+    param([string]$ServerUrl, [string]$InstallationId, [string]$TerminalIdentity, [string]$Ex5Sha256, [string[]]$Capabilities)
+    $chal = Invoke-RestMethod -Uri "$ServerUrl/api/infra/attestation/challenge" -Method Post -ContentType "application/json" `
+        -Body (@{ installation_id = $InstallationId } | ConvertTo-Json -Compress)
+    $proof = @{
+        installation_id   = $InstallationId
+        nonce             = [string]$chal.nonce
+        terminal_identity = $TerminalIdentity
+        ex5_sha256        = $Ex5Sha256.ToLower()
+        capabilities      = @($Capabilities)
+        ts                = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    }
+    $bytes = Get-StoicCanonicalProof $proof
+    $rsa = Get-StoicDeviceKey
+    try {
+        $sig = $rsa.SignData($bytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                             [System.Security.Cryptography.RSASignaturePadding]::Pss)
+    } finally { $rsa.Dispose() }
+    $proof.signature = [Convert]::ToBase64String($sig)
+    return (Invoke-RestMethod -Uri "$ServerUrl/api/infra/attestation/verify" -Method Post -ContentType "application/json" `
+        -Body ($proof | ConvertTo-Json -Compress))
+}
+
 function Install-Stoic {
     [CmdletBinding()]
     param(
@@ -43,8 +139,9 @@ function Install-Stoic {
         [switch]$NoCompile
     )
 
-    $InstallerVersion = "1.0"
+    $InstallerVersion = "1.1"
     $ServerUrl = $ServerUrl.TrimEnd('/')
+    $devicePublicKey = Get-StoicDevicePublicKey
 
     Write-Host ""
     Write-Host "===========================================" -ForegroundColor Yellow
@@ -63,7 +160,8 @@ function Install-Stoic {
                 token             = $Token
                 hostname          = $Hostname
                 installer_version = $InstallerVersion
-            } | ConvertTo-Json)
+                device_key        = @{ algorithm = "RSA-PSS-SHA256"; public_key = $devicePublicKey }
+            } | ConvertTo-Json -Depth 4)
     } catch {
         $msg = ""
         if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
@@ -88,6 +186,8 @@ function Install-Stoic {
     $eaLatestVer    = $claimResp.ea_latest_version
 
     Write-Host "    ✓ Paired with: $broker #$accountNumber  ($accountLabel)" -ForegroundColor Green
+    if ($claimResp.device_key_id) { Write-Host "    ✓ Installer device key enrolled (key id $($claimResp.device_key_id))" -ForegroundColor Green }
+    else { Write-Host "    ! server did not enrol the device key - live proof will not be attested (update the server)" -ForegroundColor Yellow }
     Write-Host ""
 
     # ── 2. Discover MT5 terminals ─────────────────────────────────────
@@ -233,21 +333,28 @@ $installationId
         } else {
             Write-Host "    ✓ $($t.Name)  →  EA + token deployed (compile skipped)" -ForegroundColor Green
         }
-        # r25 P1-01 - binary proof: measure the EX5 that is ACTUALLY installed, drop the hash
-        # where the EA can read it (MQL5\Files\STOIC-Proof.txt) and record it server-side bound
-        # to this installation. Live is admitted only when heartbeat == installer record == signed release.
+        # r25 P1-01 / r26 P1-02 - binary proof: measure the EX5 that is ACTUALLY installed, drop the hash
+        # where the EA can read it (MQL5\Files\STOIC-Proof.txt) and ATTEST it: the installer signs
+        # {nonce, installation_id, terminal identity, EX5 hash, capabilities, ts} with its enrolled device
+        # key. Live is admitted only when heartbeat == signed attestation == signed release.
         $finalEx5 = [System.IO.Path]::ChangeExtension($destMq5, ".ex5")
         if (Test-Path $finalEx5) {
             $proofHash = (Get-FileHash $finalEx5 -Algorithm SHA256).Hash.ToLower()
             Set-Content -Path (Join-Path $filesDir "STOIC-Proof.txt") -Value $proofHash -Encoding ASCII
             try {
-                $proofBody = @{ bridge_token = $bridgeToken; installation_id = $installationId; artifact = "stoic-ea-ex5"; sha256 = $proofHash; version = $eaLatestVer; installer_version = $InstallerVersion; terminal = $t.Name } | ConvertTo-Json
-                $proofResp = Invoke-RestMethod -Uri "$ServerUrl/api/infra/agent/artifact-digest" -Method Post -Body $proofBody -ContentType "application/json"
-                if ($proofResp.match) { Write-Host "    + binary proof recorded ($($proofHash.Substring(0,12))...) - matches the signed release" -ForegroundColor Green }
-                else { Write-Host "    ! binary proof recorded ($($proofHash.Substring(0,12))...) but does NOT match the signed release - live stays blocked until the release EX5 is installed" -ForegroundColor Yellow }
+                $att = Invoke-StoicAttestation -ServerUrl $ServerUrl -InstallationId $installationId `
+                    -TerminalIdentity $t.Name -Ex5Sha256 $proofHash -Capabilities @("ex5_measured", "installer_v1_1", "dpapi_key")
+                if ($att.release_match) { Write-Host "    + binary proof SIGNED and attested ($($proofHash.Substring(0,12))...) - matches the signed release" -ForegroundColor Green }
+                else { Write-Host "    ! binary proof signed ($($proofHash.Substring(0,12))...) but does NOT match the signed release - live stays blocked until the release EX5 is installed" -ForegroundColor Yellow }
             } catch {
-                Write-Host "    ! binary proof report failed: $($_.Exception.Message) - re-run the installer; live stays blocked" -ForegroundColor Yellow
+                $why = $_.Exception.Message
+                if ($_.ErrorDetails -and $_.ErrorDetails.Message) { try { $why = ($_.ErrorDetails.Message | ConvertFrom-Json).detail.message } catch {} }
+                Write-Host "    ! signed attestation failed: $why - re-run the installer; live stays blocked" -ForegroundColor Yellow
             }
+            try {   # telemetry only (never proof): the plain digest report for the artifact matrix
+                $digestBody = @{ bridge_token = $bridgeToken; installation_id = $installationId; artifact = "stoic-ea-ex5"; sha256 = $proofHash; version = $eaLatestVer; installer_version = $InstallerVersion; terminal = $t.Name } | ConvertTo-Json
+                Invoke-RestMethod -Uri "$ServerUrl/api/infra/agent/artifact-digest" -Method Post -Body $digestBody -ContentType "application/json" | Out-Null
+            } catch {}
         } else {
             Write-Host "    ! no .ex5 present - binary proof not recorded (compile in MetaEditor, then re-run the installer)" -ForegroundColor Yellow
         }

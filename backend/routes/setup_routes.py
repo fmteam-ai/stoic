@@ -63,10 +63,18 @@ class PairingTokenRequest(BaseModel):
     account_id: str = Field(min_length=1)
 
 
+class DeviceKey(BaseModel):
+    algorithm: str = Field(pattern=r"^(RSA-PSS-SHA256|Ed25519)$")
+    public_key: str = Field(min_length=32, max_length=8000)
+
+
 class ClaimPairingRequest(BaseModel):
     token: str = Field(min_length=10, max_length=120)
     hostname: str | None = Field(default=None, max_length=200)
     installer_version: str | None = Field(default=None, max_length=40)
+    # r26 P1-02 — the installer enrols its device PUBLIC key while redeeming the
+    # operator-issued one-time pairing token; only that key can later attest the EX5.
+    device_key: DeviceKey | None = None
 
 
 # ─────────────── Issue a pairing token (auth'd) ───────────────
@@ -202,6 +210,14 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
     now = datetime.now(timezone.utc)
     installation_id = f"inst_{_uuid.uuid4().hex[:12]}"
     account_id_str = str(account["_id"])
+    device_key = None
+    if payload.device_key is not None:
+        import device_attestation as da
+        try:
+            device_key = da.device_key_record(payload.device_key.algorithm, payload.device_key.public_key)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=422, detail={"code": "invalid_device_key",
+                                                         "message": f"device public key rejected: {e}"})
     await db.installations.update_many(
         {"account_id": account_id_str, "revoked": {"$ne": True}},
         {"$set": {"revoked": True,
@@ -213,6 +229,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "account_id": account_id_str,
         "terminal_path": "installer",
         "host_fingerprint": payload.hostname or "unknown-host",
+        "device_key": device_key,
         "revoked": False, "created_at": now})
     from vps_agent import LEASE_SECONDS
     await db.execution_leases.update_one(
@@ -244,6 +261,10 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
         "ea_latest_version": "1.57",
+        # r26 P1-02 — device key enrolled with THIS pairing (None when the installer sent none)
+        "device_key_id": (device_key or {}).get("key_id"),
+        "attestation_challenge_url": f"{backend_base}/api/infra/attestation/challenge",
+        "attestation_verify_url": f"{backend_base}/api/infra/attestation/verify",
     }
 
 

@@ -14,10 +14,31 @@ Runbook: `git tag -s vX.Y.Z && git push --tags` from a tree whose last commit co
 install with `deploy/update.sh vX.Y.Z` (no `--skip-attestation`). AT-P1-01 substitutions are exercised by the
 strict gate (`release_consistency_check.py --strict`) — every field must bind to the release commit.
 
-## P1-02 · cryptographic EA installation proof — NOT STARTED (design agreed)
-Enrolled installer device key (enrolment code from the dashboard, never the bridge token) → server nonce →
-installer signs {nonce, installation_id, terminal identity, EX5 hash, capabilities, ts} → server verifies
-signature / freshness / single-use → only that path yields `installer_attested`. AT-P1-02 matrix as tests.
+## P1-02 · cryptographic EA installation proof — DONE (code, AT-P1-02 matrix tested)
+`backend/device_attestation.py`. Enrolment rides the operator-issued one-time **pairing token** (dashboard code):
+`POST /setup/claim-pairing` accepts `device_key {algorithm, public_key}` and binds the validated public key
+(`RSA-PSS-SHA256` ≥ 2048 bits from .NET `RSACng` XML or PEM, or `Ed25519`) to the installation it creates
+(`installations.device_key {key_id, enrolled_at, expires_at (365 d), revoked}`). Handshake:
+`POST /infra/attestation/challenge {installation_id}` → single-use nonce (120 s, TTL index) →
+`POST /infra/attestation/verify` with the signature over canonical JSON (sorted keys, compact, UTF-8) of
+`{capabilities, ex5_sha256, installation_id, nonce, terminal_identity, ts}`. The server burns the nonce
+ATOMICALLY on the first attempt (success or failure), requires `|ts − now| ≤ 300 s`, a non-revoked / non-expired
+key, and a valid signature; only then it records `ex5_sha256` + `ex5_measured_by = device_signature` +
+`attestation{key_id, nonce, ts, terminal_identity, capabilities, verified_at, release_match}`.
+The heartbeat derives `installer_attested` ONLY from `device_attestation.attested_hash()` (fresh ≤ 30 d,
+key not revoked) and equality with the EA-echoed hash; otherwise `installer_unattested` /
+`installer_attestation_stale` / `device_key_revoked` / `installer_mismatch` — all `EA_BINARY_PROOF_UNATTESTED`
+for live. The bridge-token `POST /infra/agent/artifact-digest` is TELEMETRY only (`ex5_reported_*`, `attests: false`).
+Owner/admin revocation: `POST /infra/installations/{id}/device-key/revoke`.
+Installer v1.1 (`static/STOIC-Installer.ps1`): RSA-3072 `RSACng` key, DPAPI-CurrentUser protected under
+`%APPDATA%\STOIC\device.key.dpapi`, rotated per pairing; canonical builder mirrors the server byte-for-byte
+(golden vector test); signs with RSA-PSS/SHA-256.
+Tests: `tests/integration/test_r26_device_attestation.py` — valid fresh nonce · replay · tampered field
+(hash / terminal / capabilities / ts) burns the nonce · wrong installation · copied proof file + stolen bridge
+token · modified EA echoing the public hash · stale ts · malformed signature/payload (4xx never 500) ·
+revoked / expired key (challenge, verify, heartbeat degradation) · 6 concurrent submissions admit exactly one ·
+Ed25519 + PEM accepted, RSA-1024 refused. E2E verified against the preview API (claim → challenge → verify →
+replay 401 → revoke → challenge 403).
 
 ## P1-03 · EA release chain — RUNBOOK
 Compile the exact RC MQ5 in the sanctioned Windows/MetaEditor job, record zero errors + tool version,

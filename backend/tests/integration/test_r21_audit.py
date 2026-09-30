@@ -66,8 +66,14 @@ def test_verified_chain_admits_proof_and_unverified_takeover_revokes_it(world, m
     from ea_capabilities import live_gate
     db, acc_id = world["db"], str(world["acc_id"])
     inst = f"inst-{uuid.uuid4().hex[:12]}"
+    from datetime import datetime, timezone
     _run(db.installations.insert_one({"installation_id": inst, "account_id": acc_id, "method": "installer",
-                                      "ex5_sha256": PINNED,   # r25 P1-01: installer measured the deployed EX5
+                                      # r25 P1-01: installer measured the deployed EX5 …
+                                      "ex5_sha256": PINNED,
+                                      # … r26 P1-02: and proved it with a fresh signature from its enrolled device key
+                                      "ex5_measured_by": "device_signature",
+                                      "attestation": {"verified_at": datetime.now(timezone.utc).isoformat()},
+                                      "device_key": {"revoked": False, "expires_at": "2999-01-01T00:00:00+00:00"},
                                       "broker_server": "Demo-Server", "revoked": False}))
     _run(db.execution_leases.insert_one({"account_id": acc_id, "installation_id": inst, "revoked": False}))
     acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
@@ -75,6 +81,12 @@ def test_verified_chain_admits_proof_and_unverified_takeover_revokes_it(world, m
     assert acc["ea_binary_sha256"] == PINNED
     assert acc["ea_binary_sha256_method"] == "installer_attested"
     assert live_gate(acc) is None
+    # a bridge-token-only measurement (no device signature) is never proof
+    _run(db.installations.update_one({"installation_id": inst}, {"$set": {"ex5_measured_by": "installer"}}))
+    acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+    assert acc["ea_binary_sha256_method"] == "installer_unattested"
+    assert live_gate(acc)["code"] == "EA_BINARY_PROOF_UNATTESTED"
+    _run(db.installations.update_one({"installation_id": inst}, {"$set": {"ex5_measured_by": "device_signature"}}))
     # a token-only terminal (no chain) taking over the token loses the admitted proof
     acc = _hb(world, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
     assert acc.get("ea_binary_sha256") is None
