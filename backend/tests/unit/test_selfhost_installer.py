@@ -84,7 +84,11 @@ def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
                    "will reverse-proxy to STOIC (behind-proxy mode)",
                    # MongoDB is a container: the check says so and flags a host mongod / broken mongodb-org repo
                    "mongodb: runs in Docker (mongo:7 container, 127.0.0.1 only) — no host install needed",
-                   "mongodb: host mongod found", "/etc/yum.repos.d/mongodb-org-*.repo", "deploy/doctor.sh --db"):
+                   "mongodb: host mongod found", "/etc/yum.repos.d/mongodb-org-*.repo", "deploy/doctor.sh --db",
+                   # AlmaLinux ships podman-docker: `docker` is a podman shim and must not pass as Docker Engine
+                   "is_podman_shim() { command -v docker >/dev/null && docker --version 2>&1 | grep -qi podman; }",
+                   "is the podman-docker shim", "dnf -y -q remove podman-docker podman buildah runc",
+                   "if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version"):
         assert needle in b, needle
     for script in ("bootstrap.sh", "doctor.sh"):
         assert os.access(os.path.join(ROOT, "deploy", script), os.X_OK), script

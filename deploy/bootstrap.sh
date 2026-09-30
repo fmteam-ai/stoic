@@ -252,8 +252,10 @@ if [ "${CLOUDFLARE}" = 1 ]; then
   else failc "cloudflare: ${ORIGIN_CERT} / ${ORIGIN_KEY} — not a PEM certificate, or the key does not match the certificate"; fi
   reach https://www.cloudflare.com/ips-v4 && pass "network: cloudflare.com edge IP list reachable" || warnc "network: cannot fetch Cloudflare edge IPs — bundled deploy/cloudflare/ips.txt will be used"
 fi
+is_podman_shim() { command -v docker >/dev/null && docker --version 2>&1 | grep -qi podman; }
 if command -v podman >/dev/null && ! command -v docker >/dev/null; then warnc "podman installed — it will be removed (conflicts with docker-ce on RHEL 8)"; fi
-if command -v docker >/dev/null; then docker info >/dev/null 2>&1 && pass "docker: present and running ($(docker --version | awk '{print $3}' | tr -d ,))" || warnc "docker: installed but daemon not running — will be started"; else pass "docker: not installed — will be installed"; fi
+if is_podman_shim; then warnc "docker: /usr/bin/docker is the podman-docker shim ($(docker --version 2>&1 | head -1)) — not Docker Engine; podman/podman-docker/buildah/runc will be removed and Docker Engine + Compose v2 installed (the stack needs the real engine: compose v2, file secrets, health-gated depends_on)"
+elif command -v docker >/dev/null; then docker info >/dev/null 2>&1 && pass "docker: present and running ($(docker --version | awk '{print $3}' | tr -d ,))" || warnc "docker: installed but daemon not running — will be started"; else pass "docker: not installed — will be installed"; fi
 
 echo
 echo "system check: ${CK_FAIL} FAIL · ${CK_WARN} WARN"
@@ -294,12 +296,17 @@ if [ "${FAMILY}" = rhel ]; then
     hash -r
   fi
   echo "-- python3: $(python3 --version 2>&1)"
-  if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
+  if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
     echo "-- installing Docker Engine + Compose v2 (docker-ce repo)"
-    dnf -y -q remove podman buildah runc >/dev/null 2>&1 || true      # conflicts with docker-ce on RHEL 8
+    if is_podman_shim || command -v podman >/dev/null; then
+      echo "-- removing podman / podman-docker shim (conflicts with docker-ce on RHEL 8)"
+      dnf -y -q remove podman-docker podman buildah runc >/dev/null 2>&1 || true
+      rm -f /usr/bin/docker /etc/containers/nodocker 2>/dev/null; hash -r
+    fi
     dnf -y -q install dnf-plugins-core >/dev/null
     dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo >/dev/null
     dnf -y -q install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
+    hash -r
   fi
   systemctl enable --now docker >/dev/null
   if command -v getenforce >/dev/null; then echo "-- SELinux: $(getenforce)"; fi
@@ -307,8 +314,9 @@ else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl git python3 openssl gnupg lsb-release >/dev/null
-  if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
+  if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
     echo "-- installing Docker Engine + Compose v2"
+    if is_podman_shim; then echo "-- removing podman-docker shim"; apt-get remove -y -qq podman-docker >/dev/null 2>&1 || true; hash -r; fi
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL "https://download.docker.com/linux/${ID}/gpg" -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
