@@ -261,6 +261,18 @@ compose_up() {
       systemctl restart docker 2>/dev/null || true; sleep 5
       docker rm -f ${zombies} >/dev/null 2>&1 || true
     fi
+    # last resort (mount leaked into another mount namespace, e.g. cPanel CageFS/LVE):
+    # drop the container metadata while dockerd is stopped — only the zombie IDs, nothing else
+    local left; left=$(docker compose ps -aq --status removing --status dead 2>/dev/null || true)
+    if [ -n "${left}" ]; then
+      echo "-- stale containers survived rm -f; removing their metadata with dockerd stopped"
+      local merged=""; for z in ${left}; do merged="${merged} $(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true)"; done
+      systemctl stop docker docker.socket 2>/dev/null || true
+      for m in ${merged}; do umount -l "$m" 2>/dev/null || true; done
+      for z in ${left}; do [ -d "/var/lib/docker/containers/$z" ] && rm -rf "/var/lib/docker/containers/$z"; done
+      systemctl start docker 2>/dev/null || true; sleep 5
+      docker info >/dev/null 2>&1 || { echo "ERROR: dockerd did not come back after zombie cleanup"; return 1; }
+    fi
   fi
   if [ "$(deploy_mode)" = "registry" ]; then
     docker compose up -d --no-build --remove-orphans "$@"

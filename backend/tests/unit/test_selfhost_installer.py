@@ -272,6 +272,9 @@ def test_compose_up_clears_containers_marked_for_removal():
     assert "docker compose ps -aq --status removing --status dead" in lib
     assert lib.index("removing stale containers") < lib.index("docker compose up -d --remove-orphans")
     assert "systemctl restart docker" in lib
+    # last resort for mounts leaked into another namespace (cPanel CageFS/LVE): metadata removal with dockerd stopped, zombie IDs only
+    assert 'rm -rf "/var/lib/docker/containers/$z"' in lib and "systemctl stop docker docker.socket" in lib
+    assert lib.index("docker inspect -f '{{.GraphDriver.Data.MergedDir}}' \"$z\"") < lib.index("systemctl stop docker docker.socket")
 
 
 def test_cpanel_wiring_script_is_safe_and_autowired():

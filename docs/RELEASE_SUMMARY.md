@@ -1,7 +1,7 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `b641ed3e9f4f4a14555fc44f6b0803e957a1091b`
-- rc_lock: `2b2b383838c4a74b8dd4d9f6168acee8cadb5d8c` authoritative=False
+- Source commit: `5e961b2ddd97e4be6c2be020ecaaf0e75a89a142`
+- rc_lock: `b641ed3e9f4f4a14555fc44f6b0803e957a1091b` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
 - Test manifest sha256: `494bdb638e63b451624f9d8f9c1a1d6e132ef593c445c7f038a4453a4b9299f8`
 - Uvicorn keepalive (container): 75s (application cap 300s)
@@ -72,4 +72,4 @@
 - tighten to the production hosts only in the Secrets tab. — owner: operator
 - P3-r24-provenance-image-digest [P3] Managed publish: code identity is the self-computed source-tree digest (now covers py/json/yml/toml/sh/txt/Dockerfile, symlinks + dotfiles excluded). Inject STOIC_IMAGE_DIGEST/STOIC_BUILD_SHA if the platform exposes them. — owner: operator
 
-_generated 2026-09-30T07:15:53.681375+00:00 — regenerate on every release commit_
+_generated 2026-09-30T07:23:44.385547+00:00 — regenerate on every release commit_
