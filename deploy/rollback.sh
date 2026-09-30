@@ -49,22 +49,9 @@ wait_api_health 30 || { echo "!! API never became healthy after rollback — ins
 echo "   API healthy"
 verify_running_sha || exit 1
 
-echo "-- verifying full release readiness"
-if [ -f secrets/metrics_token ]; then
-  METRICS_TOKEN=$(cat secrets/metrics_token)
-else
-  METRICS_TOKEN=$(grep -E '^METRICS_TOKEN=' backend/.env | cut -d= -f2- | tr -d '"')
-fi
-for i in $(seq 1 45); do
-  curl -fsS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
-    http://localhost:8001/api/ops/release-readiness >/dev/null 2>&1 && { READY=1; break; }
-  sleep 4
-done
-if [ "${READY:-0}" != 1 ]; then
-  echo "!! release-readiness not green after rollback — final state:"
-  curl -sS -H "X-Metrics-Token: ${METRICS_TOKEN}" http://localhost:8001/api/ops/release-readiness || true
-  exit 1
-fi
+echo "-- verifying release readiness (same policy as install/update: infra checks; release gates block only in production)"
+wait_release_ready 45 >/dev/null || { echo "!! release-readiness not acceptable after rollback (see failing checks above)"; exit 1; }
+echo "   release readiness acceptable"
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) rollback-from=${CURRENT}" >> "${RELEASES_LOG}"
 echo "== rollback to $(git rev-parse --short HEAD) complete and verified =="
