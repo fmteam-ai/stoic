@@ -113,11 +113,14 @@ class TestBootstrapStatic:
     def test_bootstrap_sets_may_detach_mounts_persistently(self):
         with open(f"{_REPO}/deploy/bootstrap.sh") as f:
             body = f.read()
-        assert 'BOOTSTRAP_VERSION="r296"' in body
+        assert 'BOOTSTRAP_VERSION="r297"' in body
         assert "/etc/sysctl.d/99-stoic-docker.conf" in body
         assert "fs.may_detach_mounts = 1" in body
         assert "may_detach_mounts=0" in body   # system-check WARN
         assert body.count("may_detach_mounts") >= 5
+        # r297: docker root becomes a private mount (stops propagation into sandboxed services' namespaces) — persisted via drop-in
+        assert "mount --make-rprivate" in body and "docker.service.d/10-stoic-private-root.conf" in body
+        assert 'findmnt -no PROPAGATION' in body and "ExecStartPre=-/bin/sh -c 'mountpoint -q" in body
         assert subprocess.run(["bash", "-n", f"{_REPO}/deploy/bootstrap.sh"]).returncode == 0
         assert subprocess.run(["bash", "-n", f"{_REPO}/deploy/lib.sh"]).returncode == 0
 
