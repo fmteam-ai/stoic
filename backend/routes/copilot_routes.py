@@ -47,9 +47,10 @@ async def copilot_chat_endpoint(payload: dict, user=Depends(get_current_user)):
         raise HTTPException(
             status_code=503,
             detail={"code": "llm_key_missing",
-                    "message": "AI Co-Pilot is not configured on this server: set EMERGENT_LLM_KEY in "
-                               "backend/.env (Emergent → Profile → Universal Key) and restart the stack "
-                               "(deploy/restart.sh)."},
+                    "message": "AI Co-Pilot is not configured on this server. An admin can paste the "
+                               "Emergent Universal Key (Emergent → Profile → Universal Key) under "
+                               "Admin → Integrations → AI (Emergent) — it applies instantly. Alternatively "
+                               "set EMERGENT_LLM_KEY in backend/.env and run deploy/restart.sh."},
         )
 
     session_id = payload.get("session_id")
