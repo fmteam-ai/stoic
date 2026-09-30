@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r289"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r290"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -223,6 +223,7 @@ if [ "${PUBLIC}" = 1 ]; then
   elif [ "${CLOUDFLARE}" = 1 ] && is_cloudflare_ip "${DNS_IP}"; then pass "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy, orange cloud — expected in --cloudflare mode; origin record must point at ${PUB_IP})"
   elif [ "${CLOUDFLARE}" = 1 ]; then warnc "dns: ${DOMAIN} → ${DNS_IP} is not a Cloudflare edge — --cloudflare expects the record to be proxied (orange); the Origin CA certificate is NOT trusted by browsers when Cloudflare is bypassed"
   elif is_cloudflare_ip "${DNS_IP}"; then warnc "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy) — the origin record must point to ${PUB_IP}; set Cloudflare SSL to 'Full (strict)' and grey-cloud the record during the first certificate issue (Caddy HTTP-01), then re-enable the proxy — or use --cloudflare <domain> with an Origin CA certificate to stay orange"
+  elif [ "${PUB_IP}" != "?" ] && [ "${DNS_IP}" != "${PUB_IP}" ] && [ "${MODE}" = "--behind-proxy" ]; then warnc "dns: ${DOMAIN} → ${DNS_IP} but this host is ${PUB_IP} — fine for now (install is verified on loopback via Apache); point the A record here at cut-over"
   elif [ "${PUB_IP}" != "?" ] && [ "${DNS_IP}" != "${PUB_IP}" ]; then failc "dns: ${DOMAIN} → ${DNS_IP} but this host is ${PUB_IP} — point the A record at this host"
   else pass "dns: ${DOMAIN} → ${DNS_IP} (this host)"; fi
   for p in 80 443; do
