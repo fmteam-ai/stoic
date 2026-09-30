@@ -45,9 +45,11 @@ build_with_provenance() {
 
 # Metrics token for the ops readiness probe (Docker secret or backend/.env).
 metrics_token() {
-  if [ -f secrets/metrics_token ]; then cat secrets/metrics_token
-  else grep -E '^METRICS_TOKEN=' backend/.env 2>/dev/null | cut -d= -f2- | tr -d '"'
-  fi
+  local t=""
+  if [ -f secrets/metrics_token ]; then t=$(cat secrets/metrics_token 2>/dev/null || true)
+  else t=$( { grep -E '^METRICS_TOKEN=' backend/.env 2>/dev/null || true; } | cut -d= -f2- | tr -d '"'); fi
+  [ -n "${t}" ] || { echo "ERROR: metrics token missing (secrets/metrics_token or METRICS_TOKEN in backend/.env)" >&2; return 1; }
+  printf '%s' "${t}"
 }
 
 # Wait until /api/health answers 200 (arg: attempts, 2s apart). Returns 1 on timeout.
@@ -74,30 +76,57 @@ wait_frontend() {
 
 # Wait until the FULL topology readiness probe is green (workers need ~45s
 # to acquire leases). Prints the body on success; returns 1 on timeout.
+# Readiness policy mirrors deploy/install.sh: the INFRASTRUCTURE checks must be
+# green; the release GATES (inventory approval, EA proof, CI attestation,
+# rc_lock, canonical decision, turnstile) are operator onboarding steps — they
+# are REPORTED and only block when APP_ENV=production (fail-closed there).
+READINESS_INFRA="mongo_roundtrip workers loop_progress reconciliation outbox schema repair_ledger_anchor execution_truth"
+
+_readiness_eval() {   # stdin: readiness JSON · $1: "strict"|"infra" → exit 0 when acceptable; prints pending gates to stderr
+  python3 -c '
+import json, sys
+mode, infra = sys.argv[1], sys.argv[2].split()
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(2)
+c = d.get("checks") or {}
+if mode == "strict":
+    sys.exit(0 if d.get("ready") else 1)
+missing = [k for k in infra if not (c.get(k) or {}).get("ok")]
+pending = [k for k, v in c.items() if k not in infra and isinstance(v, dict) and not v.get("ok")]
+if pending:
+    print("   pending release gates (operator onboarding, not blocking outside production): " + ", ".join(pending), file=sys.stderr)
+sys.exit(0 if not missing else 1)
+' "$1" "${READINESS_INFRA}"
+}
+
 wait_release_ready() {
-  local n="${1:-45}" tok body i
-  tok=$(metrics_token)
-  [ -n "${tok}" ] || { echo "ERROR: metrics token missing (secrets/metrics_token or backend/.env)" >&2; return 1; }
+  local n="${1:-45}" tok body i mode="infra"
+  tok=$(metrics_token) || return 1
+  [ "$( { grep -E '^APP_ENV=' .env 2>/dev/null || true; } | cut -d= -f2- | tr -d '"' )" = "production" ] && mode="strict"
   for i in $(seq 1 "$n"); do
-    if body=$(curl -fsS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null); then
+    body=$(curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)
+    if [ -n "${body}" ] && printf '%s' "${body}" | _readiness_eval "${mode}" 2>/dev/null; then
+      printf '%s' "${body}" | _readiness_eval "${mode}" >/dev/null || true   # surface pending gates once
       echo "${body}"; return 0
     fi
     sleep 4
   done
   # callers capture stdout — diagnostics MUST go to stderr or they vanish
   {
-    echo "!! release-readiness never returned ready ($((n * 4))s) — failing checks:"
-    curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null \
-      | python3 -c '
+    echo "!! release-readiness not acceptable after $((n * 4))s (policy: ${mode}) — failing checks:"
+    if [ -z "${body}" ]; then
+      echo "   (no body — API down, or HTTP 403 = metrics token does not match the running backend)"
+    else
+      printf '%s' "${body}" | python3 -c '
 import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print("   (no JSON body — is the API up? HTTP 403 = wrong metrics token)"); sys.exit(0)
+d = json.load(sys.stdin)
 for k, v in (d.get("checks") or {}).items():
     if isinstance(v, dict) and not v.get("ok"):
         print(f"   ✗ {k}: {json.dumps(v)[:400]}")
-' || true
+' 2>/dev/null || echo "   ${body:0:600}"
+    fi
     echo "   full body: curl -sS -H \"X-Metrics-Token: \$(. deploy/lib.sh; metrics_token)\" http://127.0.0.1:8001/api/ops/release-readiness | python3 -m json.tool"
   } >&2
   return 1

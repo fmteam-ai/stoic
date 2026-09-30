@@ -200,6 +200,12 @@ the **complete trading topology** via `GET /api/ops/release-readiness`
 (all six worker leases fresh, Mongo write/read round trip, reconciliation
 lag, outbox backlog, feature-schema compatibility) plus frontend
 availability — and **rolls back automatically** if any check fails.
+Readiness policy matches `install.sh`: the infrastructure checks must be
+green; the release *gates* (inventory approval, EA proof, CI attestation,
+rc_lock, canonical decision) are reported as "pending" and only block when
+`APP_ENV=production`. `UPDATE_HOLD_ON_FAILURE=1 deploy/update.sh` keeps the
+new build running on failure (prints the failing checks, no auto-rollback)
+for a manual break-fix session — revert with `deploy/rollback.sh`.
 
 ## Backups
 ```bash
