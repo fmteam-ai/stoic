@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r284"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r285"   # printed in the system-check header so a stale download is obvious
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
@@ -355,8 +355,14 @@ else
     snapshot
     echo "-- updating ${TARGET}"
     git -C "${TARGET}" fetch -q --tags --prune origin
-    if [ -n "${REF}" ]; then git -C "${TARGET}" checkout -q --detach "${REF}"
-    else git -C "${TARGET}" checkout -q "$(git -C "${TARGET}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)" && git -C "${TARGET}" pull -q --ff-only; fi
+    if [ -n "${REF}" ]; then git -C "${TARGET}" checkout -q -f --detach "${REF}"
+    else
+      # a previous rollback leaves HEAD detached — always realign to the remote default branch
+      BR=$(git -C "${TARGET}" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true); BR="${BR:-main}"
+      git -C "${TARGET}" rev-parse -q --verify "origin/${BR}" >/dev/null 2>&1 || BR=master
+      git -C "${TARGET}" checkout -q -f -B "${BR}" "origin/${BR}"
+      echo "-- ${TARGET} at origin/${BR} $(git -C "${TARGET}" rev-parse --short HEAD)"
+    fi
   else
     echo "-- cloning ${REPO} → ${TARGET}"
     git clone -q "${REPO}" "${TARGET}"
