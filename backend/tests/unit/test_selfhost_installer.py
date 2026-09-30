@@ -283,8 +283,12 @@ def test_compose_up_clears_containers_marked_for_removal():
     assert 'grep -E " [0-9a-f]{12}_${project}-"' in lib          # compose-renamed leftovers keep the name → must be reaped
     assert "systemctl restart docker" in lib and "may_detach_mounts" in lib
     assert lib.count("systemctl reset-failed docker docker.socket") == 2 and "wait_docker" in lib   # r303/r304: start-limit-hit + slow restore
-    # last resort for mounts leaked into another namespace (cPanel CageFS/LVE): metadata removal with dockerd stopped, zombie IDs only
-    assert 'ls -d /var/lib/docker/containers/"$z"*' in lib and 'rm -rf "$full"' in lib and "systemctl stop docker docker.socket" in lib
+    # last resort for mounts leaked into another namespace (cPanel CageFS/LVE): metadata removal with dockerd
+    # stopped — r26 P2-03: opt-in (--repair-docker-mounts), full 64-hex ids re-validated right before rm, journaled
+    assert 'rm -rf "/var/lib/docker/containers/${z}"' in lib and "systemctl stop docker docker.socket" in lib
+    assert '[[ "${z}" =~ ^[0-9a-f]{64}$ ]] ||' in lib and 'r=$(resolve_zombie "$z"); [ -n "$r" ] || { echo "!! refusing metadata removal' in lib
+    assert 'if ! repair_enabled; then diagnose_zombies; return $?; fi' in lib
+    assert "snapshot_container_metadata" in lib and 'repair_journal metadata_removed "${z}"' in lib
     assert lib.index("docker inspect -f '{{.GraphDriver.Data.MergedDir}}' \"$z\"") < lib.index("systemctl stop docker docker.socket")
 
 

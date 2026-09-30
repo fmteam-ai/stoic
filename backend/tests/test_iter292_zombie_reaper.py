@@ -7,6 +7,8 @@ import stat
 import subprocess
 import textwrap
 
+import hashlib
+import json
 import pytest
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -38,9 +40,21 @@ case "$1 $2" in
   "ps -q")
       awk '$3=="running"{print $1}' "$S"; exit 0 ;;
   "rm -f")
-      shift 2; for id in "$@"; do sed -i "/^$id /d" "$S"; done; exit 0 ;;
+      shift 2; for id in "$@"; do sed -i "/^${id:0:12} /d" "$S"; done; exit 0 ;;
   "inspect -f")
-      case "$3" in *MergedDir*) shift 3; for id in "$@"; do echo "/var/lib/docker/overlay2/$id/merged"; done ;; *) echo "" ;; esac; exit 0 ;;
+      fmt="$3"; shift 3
+      for id in "$@"; do
+        short="${id:0:12}"; line=$(grep "^$short " "$S" || true); [ -n "$line" ] || { echo "Error: No such object: $id" >&2; exit 1; }
+        set -- $line
+        case "$fmt" in
+          *MergedDir*) echo "/var/lib/docker/overlay2/$short/merged" ;;
+          *.Id*) printf '%s%s%s%s%s%s\n' "$short" "$short" "$short" "$short" "$short" "${short:0:4}" ;;   # 64 hex
+          *State.Status*) echo "$3" ;;
+          *.Name*) echo "/$2" ;;
+          *compose.project*) case "$2" in *stoic-*) echo stoic ;; *) echo other ;; esac ;;
+          *) echo "" ;;
+        esac
+      done; exit 0 ;;
   "info ") exit 0 ;;
 esac
 exit 0
@@ -63,8 +77,10 @@ def sandbox(tmp_path):
     return {"bin": binpath, "proj": proj, "state": state, "tmp": tmp_path}
 
 
-def _run(sandbox, script):
-    env = dict(os.environ, PATH=f"{sandbox['bin']}:{os.environ['PATH']}", FAKE_STATE=str(sandbox["state"]))
+def _run(sandbox, script, repair=True):
+    env = dict(os.environ, PATH=f"{sandbox['bin']}:{os.environ['PATH']}", FAKE_STATE=str(sandbox["state"]),
+               STOIC_REPAIR_DOCKER_MOUNTS="1" if repair else "0",
+               STOIC_REPAIR_JOURNAL=str(sandbox["tmp"] / "journal.jsonl"))
     return subprocess.run(["bash", "-c", f"set -euo pipefail; cd {sandbox['proj']}; . {_REPO}/deploy/lib.sh; {script}"],
                           env=env, capture_output=True, text=True)
 
@@ -84,10 +100,10 @@ class TestReaper:
         r = _run(sandbox, "compose_up")
         assert r.returncode == 0, r.stdout + r.stderr
         assert "compose up failed (attempt 1/6) — reaping" in r.stdout
-        assert "removing stale containers left from a previous run: b71a5514e1ac" in r.stdout
+        assert "removing stale containers left from a previous run:  b71a5514e1ac" in r.stdout
         calls = (sandbox["tmp"] / "state.calls").read_text()
         assert calls.count("compose up -d --remove-orphans") == 2
-        assert "rm -f b71a5514e1ac" in calls
+        assert "rm -f b71a5514e1acb71a5514e1ac" in calls          # full 64-hex id, re-resolved right before removal
         remaining = sandbox["state"].read_text()
         assert "stoic-mongo-1 running" in remaining and "stoic-signer-1 running" in remaining   # healthy services untouched
         assert "6dd45105ceb4_" not in remaining
@@ -112,11 +128,65 @@ class TestReaper:
         assert "rm -f" not in (sandbox["tmp"] / "state.calls").read_text()
 
 
+class TestRepairEnvelope:
+    """r26 P2-03 — host mutation is opt-in, re-validated, project-scoped and journaled."""
+
+    def test_default_is_diagnosis_only_and_fails_closed(self, sandbox):
+        r = _run(sandbox, "compose_up", repair=False)
+        assert r.returncode != 0
+        assert "diagnosis-only by default" in r.stdout and "--repair-docker-mounts" in r.stdout
+        assert "would remove b71a5514e1ac" in r.stdout
+        calls = (sandbox["tmp"] / "state.calls").read_text()
+        assert "rm -f" not in calls and "systemctl" not in calls        # no host mutation at all
+        assert "6dd45105ceb4_stoic-worker-tuning-1 dead" in sandbox["state"].read_text()
+        assert not (sandbox["tmp"] / "journal.jsonl").exists()
+
+    def test_foreign_and_short_ids_are_refused(self, sandbox):
+        sandbox["state"].write_text("aaaaaaaaaaaa stoic-mongo-1 running\n"
+                                    "dddddddddddd other-project-1 dead\n"
+                                    "b71a5514e1ac 6dd45105ceb4_stoic-worker-tuning-1 dead\n")
+        r = _run(sandbox, "resolve_zombie dddddddddddd; echo ---; resolve_zombie b71a5514e1ac; echo ---; resolve_zombie b71a55")
+        assert r.returncode == 0, r.stderr
+        parts = r.stdout.split("---")
+        assert parts[0].strip() == ""                                  # foreign project → refused
+        assert parts[1].split() == ["b71a5514e1acb71a5514e1acb71a5514e1acb71a5514e1acb71a5514e1acb71a", "dead"]
+        assert parts[2].strip() == ""                                  # short/ambiguous reference → refused
+
+    def test_running_container_never_qualifies(self, sandbox):
+        r = _run(sandbox, "resolve_zombie aaaaaaaaaaaa")
+        assert r.stdout.strip() == ""
+
+    def test_repair_is_journaled_and_hash_chained(self, sandbox):
+        r = _run(sandbox, "compose_up")
+        assert r.returncode == 0, r.stdout + r.stderr
+        lines = [json.loads(l) for l in (sandbox["tmp"] / "journal.jsonl").read_text().splitlines()]
+        actions = [e["action"] for e in lines]
+        assert actions[:2] == ["detach_leaked_mounts", "snapshot"] and "docker_rm" in actions
+        prev = "0" * 64
+        for e in lines:
+            assert e["prev_hash"] == prev
+            body = {k: v for k, v in e.items() if k != "entry_hash"}
+            assert e["entry_hash"] == hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+            prev = e["entry_hash"]
+        summary = json.loads((sandbox["tmp"] / "docker_repair_summary.json").read_text())
+        assert summary["entries"] == len(lines) and summary["last_entry_hash"] == prev
+
+    def test_install_report_carries_deployment_state_and_repairs(self):
+        rep = open(f"{_REPO}/deploy/install_report.sh").read()
+        assert "deployment_state.json" in rep and "docker_repair_summary.json" in rep and '"version": 2' in rep
+        inst = open(f"{_REPO}/deploy/install.sh").read()
+        for flag in ("--infrastructure-only", "--onboarding-close-only", "--release-ready", "--repair-docker-mounts"):
+            assert flag in inst
+        assert 'if state == "release_gates_pending":' in inst and "sys.exit(2)" in inst
+        assert '--dev) : "${READINESS_POLICY:=infrastructure-only}"' in inst
+        assert ': "${READINESS_POLICY:=release-ready}"' in inst
+
+
 class TestBootstrapStatic:
     def test_bootstrap_sets_may_detach_mounts_persistently(self):
         with open(f"{_REPO}/deploy/bootstrap.sh") as f:
             body = f.read()
-        assert 'BOOTSTRAP_VERSION="r307"' in body
+        assert 'BOOTSTRAP_VERSION="r308"' in body
         assert "/etc/sysctl.d/99-stoic-docker.conf" in body
         assert "fs.may_detach_mounts = 1" in body
         assert "may_detach_mounts=0" in body   # system-check WARN

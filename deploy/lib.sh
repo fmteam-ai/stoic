@@ -127,6 +127,24 @@ attestation_required() {
   grep -q 'docker-compose.tls.yml' .env 2>/dev/null
 }
 
+# r26 P1-01 — the packaged tree must be ONE provenance chain: BUILD_SHA, rc_lock
+# source commit, model-manifest commit/digest and the TEST manifest digest must
+# agree. Strict whenever attestation is required (or the lock is authoritative);
+# a conscious --skip-attestation (ATTESTATION_REQUIRED=false) developer install
+# still refuses digest mismatches unless STOIC_ALLOW_PROVENANCE_DRIFT=1.
+verify_release_provenance() {
+  [ -f scripts/release_consistency_check.py ] || { echo "!! scripts/release_consistency_check.py missing — provenance unverified"; return 1; }
+  local strict=""; attestation_required && strict="--strict"
+  if python3 scripts/release_consistency_check.py ${strict} "$@"; then return 0; fi
+  if [ -z "${strict}" ] && [ "${STOIC_ALLOW_PROVENANCE_DRIFT:-0}" = 1 ]; then
+    echo "!! release provenance INCONSISTENT — continuing only because STOIC_ALLOW_PROVENANCE_DRIFT=1 (developer snapshot, never releasable)"
+    return 0
+  fi
+  echo "ERROR: release provenance inconsistent — the test manifest / source commit / model manifest / BUILD_SHA of this"
+  echo "       tree do not bind to one release. Install a tagged release built by release.yml (one immutable staged tree)."
+  return 1
+}
+
 verify_attestation() {
   resolve_git_sha || return 1
   if ! attestation_required; then
@@ -301,39 +319,144 @@ detach_leaked_mounts() {
 # busy — a mount leaked into another mount namespace: cPanel CageFS/LVE, httpd
 # PrivateTmp) unless fs.may_detach_mounts=1. Force-remove, escalating to a
 # dockerd restart and finally to metadata removal with dockerd stopped.
+#
+# r26 P2-03 safety envelope — host mutation is OPT-IN:
+#   * default = DIAGNOSIS ONLY: report zombies / leaked copies and refuse to continue
+#   * STOIC_REPAIR_DOCKER_MOUNTS=1 (--repair-docker-mounts) enables namespace detach,
+#     rm -f, dockerd restart and metadata removal
+#   * every ID is re-resolved to its FULL 64-hex ID immediately before deletion, must be
+#     dead/removing (or a compose-renamed leftover) AND carry this compose project's label;
+#     short/ambiguous IDs and foreign containers are refused
+#   * container metadata is snapshotted before removal; every mutation is appended to a
+#     hash-chained repair journal (deploy/releases/docker-repair-journal.jsonl) that the
+#     signed install report digests
 wait_docker() {   # dockerd restores containers before answering — after a metadata cleanup this can take a while
   local i; for i in $(seq 1 45); do docker info >/dev/null 2>&1 && return 0; sleep 2; done; return 1
 }
 
+repair_enabled() { [ "${STOIC_REPAIR_DOCKER_MOUNTS:-0}" = 1 ]; }
+
+REPAIR_JOURNAL="${STOIC_REPAIR_JOURNAL:-deploy/releases/docker-repair-journal.jsonl}"
+repair_journal() {   # repair_journal <action> <detail…>  — hash-chained JSON line (prev_hash → entry_hash)
+  mkdir -p "$(dirname "${REPAIR_JOURNAL}")"
+  ACTION="$1" DETAIL="${*:2}" JOURNAL="${REPAIR_JOURNAL}" python3 - <<'PY' 2>/dev/null || true
+import hashlib, json, os, socket, time
+j = os.environ["JOURNAL"]; prev = "0" * 64; lines = []
+try:
+    lines = [l for l in open(j).read().splitlines() if l.strip()]
+    if lines: prev = json.loads(lines[-1])["entry_hash"]
+except (OSError, ValueError, KeyError): pass
+e = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "host": socket.gethostname(),
+     "action": os.environ["ACTION"], "detail": os.environ["DETAIL"], "prev_hash": prev}
+e["entry_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest()
+open(j, "a").write(json.dumps(e, sort_keys=True) + "\n")
+summary = {"journal": j, "entries": len(lines) + 1, "last_entry_hash": e["entry_hash"]}
+json.dump(summary, open(os.path.join(os.path.dirname(j), "docker_repair_summary.json"), "w"), sort_keys=True)
+PY
+}
+
+# resolve_zombie <id-or-name> → prints "<full64hexid> <status>" when the container is dead/removing
+# (or a compose-renamed leftover) AND belongs to this compose project; prints nothing otherwise.
+resolve_zombie() {
+  local ref="$1" project; project=$(basename "$PWD")
+  [ "${#ref}" -ge 12 ] || return 0                                   # refuse short / ambiguous references
+  local full status name label
+  full=$(docker inspect -f '{{.Id}}' "${ref}" 2>/dev/null || true)
+  if [ -z "${full}" ]; then                                         # dockerd stopped or metadata-only: exact dir match
+    local dirs; dirs=$(ls -d /var/lib/docker/containers/"${ref}"* 2>/dev/null | wc -l)
+    [ "${dirs}" = 1 ] || return 0
+    full=$(basename "$(ls -d /var/lib/docker/containers/"${ref}"* 2>/dev/null)")
+    [[ "${full}" =~ ^[0-9a-f]{64}$ ]] || return 0
+    python3 - "${full}" "${project}" <<'PY' && return 0 || return 0
+import json, sys
+full, project = sys.argv[1:]
+try:
+    cfg = json.load(open(f"/var/lib/docker/containers/{full}/config.v2.json"))
+except (OSError, ValueError):
+    sys.exit(1)
+labels = cfg.get("Config", {}).get("Labels") or {}
+if labels.get("com.docker.compose.project") != project:
+    sys.exit(1)
+st = cfg.get("State", {})
+if st.get("Running") or st.get("Paused") or st.get("Restarting"):
+    sys.exit(1)
+print(full, "dead" if st.get("Dead") else ("removing" if st.get("RemovalInProgress") else "stopped"))
+PY
+  fi
+  [[ "${full}" =~ ^[0-9a-f]{64}$ ]] || return 0
+  status=$(docker inspect -f '{{.State.Status}}' "${full}" 2>/dev/null || true)
+  name=$(docker inspect -f '{{.Name}}' "${full}" 2>/dev/null | sed 's#^/##' || true)
+  label=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "${full}" 2>/dev/null || true)
+  [ "${label}" = "${project}" ] || return 0                          # never touch a foreign container
+  case "${status}" in
+    dead|removing) echo "${full} ${status}" ;;
+    exited|created) case "${name}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]_"${project}"-*) echo "${full} ${status}" ;; esac ;;
+  esac
+}
+
+snapshot_container_metadata() {   # metadata only (config/hostconfig json) — tiny, restorable
+  local dest="deploy/releases/docker-repair-snapshots/$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "${dest}"
+  local z; for z in "$@"; do
+    [ -d "/var/lib/docker/containers/${z}" ] && tar czf "${dest}/${z:0:12}.tgz" -C /var/lib/docker/containers "${z}" --exclude='*-json.log' --exclude='mounts' 2>/dev/null || true
+  done
+  echo "${dest}"
+}
+
+diagnose_zombies() {   # read-only picture used by the default (no-repair) path
+  local zombies; zombies=$(zombie_ids)
+  [ -n "${zombies// /}" ] || return 0
+  echo "!! stale containers from a previous run: ${zombies}"
+  local z r; for z in ${zombies}; do
+    r=$(resolve_zombie "$z"); [ -n "$r" ] && echo "   would remove ${r}" || echo "   would REFUSE ${z} (not this project / not dead / ambiguous)"
+  done
+  echo "!! docker mount recovery is diagnosis-only by default. Re-run with --repair-docker-mounts"
+  echo "   (STOIC_REPAIR_DOCKER_MOUNTS=1) to detach leaked mount copies, remove the containers above and,"
+  echo "   as a last resort, drop their metadata with dockerd stopped. Every mutation is journaled in ${REPAIR_JOURNAL}."
+  return 1
+}
+
 reap_zombies() {
+  if ! repair_enabled; then diagnose_zombies; return $?; fi
   detach_leaked_mounts
   local zombies; zombies=$(zombie_ids)
   [ -n "${zombies// /}" ] || return 0
-  echo "-- removing stale containers left from a previous run: ${zombies}"
+  repair_journal detach_leaked_mounts "foreign-namespace umount -l sweep before reaping: ${zombies}"
+  # re-resolve each reference to a full, project-owned, dead/removing ID — refuse the rest
+  local targets="" z r refused=""
+  for z in ${zombies}; do r=$(resolve_zombie "$z"); [ -n "$r" ] && targets="${targets} ${r%% *}" || refused="${refused} ${z}"; done
+  [ -n "${refused// /}" ] && echo "!! refusing to touch: ${refused} (not this compose project / not dead / ambiguous id)"
+  [ -n "${targets// /}" ] || return 0
+  echo "-- removing stale containers left from a previous run: ${targets}"
+  local snap; snap=$(snapshot_container_metadata ${targets}); repair_journal snapshot "${snap} ids=${targets}"
   [ "$(cat /proc/sys/fs/may_detach_mounts 2>/dev/null || echo 1)" = 1 ] \
-    || { echo "-- fs.may_detach_mounts=0 — enabling so leaked overlay mounts can be detached"; sysctl -qw fs.may_detach_mounts=1 2>/dev/null || true; }
-  for z in ${zombies}; do   # overlay "device or resource busy": lazily unmount the merged dir first
-    m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && umount -l "$m" 2>/dev/null || true
+    || { echo "-- fs.may_detach_mounts=0 — enabling so leaked overlay mounts can be detached"; sysctl -qw fs.may_detach_mounts=1 2>/dev/null || true; repair_journal sysctl "fs.may_detach_mounts=1"; }
+  for z in ${targets}; do   # overlay "device or resource busy": lazily unmount the merged dir first
+    m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && { umount -l "$m" 2>/dev/null || true; }
   done
-  if ! docker rm -f ${zombies} >/dev/null 2>&1 || [ -n "$(zombie_ids | tr -d ' ')" ]; then
+  if ! docker rm -f ${targets} >/dev/null 2>&1 || [ -n "$(zombie_ids | tr -d ' ')" ]; then
+    repair_journal docker_rm_failed "ids=${targets}"
     systemctl reset-failed docker docker.socket 2>/dev/null || true   # several restarts within a minute trip systemd's start-limit
-    systemctl restart docker 2>/dev/null || true; wait_docker || true
-    docker rm -f $(zombie_ids) >/dev/null 2>&1 || true
+    systemctl restart docker 2>/dev/null || true; wait_docker || true; repair_journal dockerd_restart "after rm -f failure"
+    docker rm -f ${targets} >/dev/null 2>&1 || true
   fi
-  # last resort: drop the container metadata while dockerd is stopped — only the zombie IDs, nothing else
-  local left; left=$(zombie_ids)
+  repair_journal docker_rm "ids=${targets}"
+  # last resort: drop the container metadata while dockerd is stopped — re-resolved, exact full-ID directories only
+  local left="" merged=""
+  for z in $(zombie_ids); do r=$(resolve_zombie "$z"); [ -n "$r" ] && left="${left} ${r%% *}"; done
   if [ -n "${left// /}" ]; then
-    echo "-- stale containers survived rm -f; removing their metadata with dockerd stopped"
-    local merged=""; for z in ${left}; do merged="${merged} $(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true)"; done
-    systemctl stop docker docker.socket 2>/dev/null || true
+    echo "-- stale containers survived rm -f; removing their metadata with dockerd stopped: ${left}"
+    for z in ${left}; do merged="${merged} $(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true)"; done
+    systemctl stop docker docker.socket 2>/dev/null || true; repair_journal dockerd_stop "metadata removal ids=${left}"
     for m in ${merged}; do umount -l "$m" 2>/dev/null || true; done
     for z in ${left}; do
-      full=$(ls -d /var/lib/docker/containers/"$z"* 2>/dev/null | head -1 || true)
-      [ -n "$full" ] && rm -rf "$full"
+      [[ "${z}" =~ ^[0-9a-f]{64}$ ]] || { echo "!! refusing metadata removal for non-full id ${z}"; continue; }
+      r=$(resolve_zombie "$z"); [ -n "$r" ] || { echo "!! refusing metadata removal for ${z:0:12} (re-validation failed)"; continue; }
+      [ -d "/var/lib/docker/containers/${z}" ] && { rm -rf "/var/lib/docker/containers/${z}"; repair_journal metadata_removed "${z}"; }
     done
     systemctl reset-failed docker docker.socket 2>/dev/null || true
     systemctl start docker 2>/dev/null || true
-    wait_docker || { echo "ERROR: dockerd did not come back within 90s after zombie cleanup — journalctl -u docker -n 50"; journalctl -u docker -n 20 --no-pager 2>/dev/null || true; return 1; }
+    wait_docker || { repair_journal dockerd_start_failed "after metadata removal"; echo "ERROR: dockerd did not come back within 90s after zombie cleanup — journalctl -u docker -n 50"; journalctl -u docker -n 20 --no-pager 2>/dev/null || true; return 1; }
+    repair_journal dockerd_start "ok"
   fi
 }
 
@@ -351,6 +474,6 @@ compose_up() {
     echo "-- compose up failed (attempt ${attempt}/6) — reaping containers that died during recreate and retrying"
     reap_zombies || return 1
   done
-  echo "ERROR: compose up did not converge after 6 attempts — run deploy/doctor.sh (section 'docker mount propagation') to see which host processes hold the overlay mounts"
+  echo "ERROR: compose up did not converge after 6 attempts — run deploy/doctor.sh (section 'docker mount propagation') to see which host processes hold the overlay mounts$(repair_enabled || echo '; docker mount recovery is diagnosis-only — re-run with --repair-docker-mounts to let the installer repair')"
   return 1
 }

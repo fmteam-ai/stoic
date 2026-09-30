@@ -2249,12 +2249,14 @@ class ScalpRunner:
             info["adaptive_partial_done"] = False   # broker refused → retry
 
     async def _request_close(self, db, trade_id: str, reason: str):
-        # audit r3 P0 · close command carries an immutable intent + seq
-        from command_fence import stamp_pending_modification
-        stamped = await stamp_pending_modification(
-            db, {"_id": _oid(trade_id), "status": "open"},
-            {"type": "FULL_CLOSE", "reason": f"scalp_{reason}"},
-            extra_set={"close_reason": f"scalp_{reason}"})
+        # audit r3 P0 · close command carries an immutable intent + seq;
+        # r26 P2-01 · issued through the unified close protocol (durable
+        # close_seq + immutable ledger row), fenced modification stamped atomically
+        from close_commands import request_close
+        out = await request_close(
+            db, {"_id": _oid(trade_id)}, reason=f"scalp_{reason}", actor="scalp_engine",
+            pending_modification={"type": "FULL_CLOSE", "reason": f"scalp_{reason}"})
+        stamped = out["commands"][0]["pending_modification"] if out["commands"] else None
         # review item 5 — the close intent is DURABLE only once this write
         # returns; until then the exit monitor keeps retrying it.
         info = self.live_trades.get(trade_id)

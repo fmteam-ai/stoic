@@ -369,7 +369,11 @@ class TestEngineBehaviors:
         r.state = _mk_state(st_path)
         r.health = kill.evaluate(r.state, CFG)
         db = _stub_db()
-        asyncio.run(r._monitor_live_exits(db, r.state.last_tick))
+        with patch("close_commands.request_close",
+                   AsyncMock(return_value={"command_id": "c", "trades_marked_for_close": 1, "trade_ids": ["t1"],
+                                           "commands": [{"trade_id": "t1", "close_seq": 1,
+                                                         "pending_modification": {"type": "FULL_CLOSE"}}]})):
+            asyncio.run(r._monitor_live_exits(db, r.state.last_tick))
         assert "t1" in r.live_trades              # NOT popped
         assert r.live_trades["t1"]["state"] == "CLOSE_REQUESTED"
         # broker confirms → now it leaves the book and cost budget grows

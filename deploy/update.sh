@@ -43,6 +43,9 @@ rollback() {
 echo "-- release attestation gate (signed CI record: SHA · tests · scans · gates)"
 verify_attestation || rollback
 
+echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
+verify_release_provenance || rollback
+
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 provision_images || rollback
 

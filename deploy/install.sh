@@ -13,6 +13,11 @@ WITH_FORECAST=0
 REGISTRY=0
 CLOUDFLARE=0
 CF_ONLY=0
+# r26 P2-04 — readiness policy (what "exit 0" means):
+#   release-ready         (default for --production / --behind-proxy) every release gate must be clear
+#   onboarding-close-only operator explicitly accepts a CLOSE_ONLY stack (inventory / EA proof / attestation pending)
+#   infrastructure-only   (default for --dev) infra checks suffice; trading stays fail-closed
+READINESS_POLICY="${STOIC_READINESS_POLICY:-}"
 ARGS=()
 for a in "$@"; do
   case "$a" in
@@ -20,6 +25,10 @@ for a in "$@"; do
     --registry) REGISTRY=1 ;;
     --cloudflare) CLOUDFLARE=1 ;;
     --cf-only) CF_ONLY=1 ;;
+    --infrastructure-only) READINESS_POLICY="infrastructure-only" ;;
+    --onboarding-close-only) READINESS_POLICY="onboarding-close-only" ;;
+    --release-ready) READINESS_POLICY="release-ready" ;;
+    --repair-docker-mounts) export STOIC_REPAIR_DOCKER_MOUNTS=1 ;;   # lib.sh: allow host mutation for zombie recovery
     --unlock) ;;   # handled below (install lock)
     *) ARGS+=("$a") ;;
   esac
@@ -30,7 +39,7 @@ if [ -n "${DOMAIN}" ] && ! [[ "${DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Z
   echo "ERROR: '${DOMAIN}' is not a valid hostname"; exit 1
 fi
 case "${MODE}" in
-  --dev) ;;
+  --dev) : "${READINESS_POLICY:=infrastructure-only}" ;;
   --production)
     [ -n "${DOMAIN}" ] || { echo "ERROR: --production requires a domain: deploy/install.sh --production trade.example.com"; exit 1; }
     ;;
@@ -48,6 +57,9 @@ case "${MODE}" in
     exit 1
     ;;
 esac
+: "${READINESS_POLICY:=release-ready}"
+case "${READINESS_POLICY}" in release-ready|onboarding-close-only|infrastructure-only) ;; *) echo "ERROR: unknown readiness policy '${READINESS_POLICY}'"; exit 1 ;; esac
+export STOIC_READINESS_POLICY="${READINESS_POLICY}"
 
 TAG=""; [ "${CLOUDFLARE}" = 1 ] && TAG=" · cloudflare origin CA"; [ "${CF_ONLY}" = 1 ] && TAG="${TAG} · cf-only"
 echo "== STOIC installer (${MODE#--}${DOMAIN:+ · $DOMAIN}${TAG}) =="
@@ -304,6 +316,8 @@ if [ "$(deploy_mode)" = "registry" ] && [ "${MODE}" != "--production" ]; then
   # registry mode is digest-driven: the attestation is the ONLY source of the digests
   verify_attestation || { echo "ERROR: release attestation gate failed — registry mode cannot resolve images"; exit 1; }
 fi
+echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
+verify_release_provenance || exit 1
 provision_images || exit 1
 echo "-- starting stack"
 compose_up
@@ -353,13 +367,11 @@ for k in sys.argv[1].split():
   exit 1
 fi
 echo "   infrastructure readiness: all green"
-STATE="${STATE}" python3 -c '
-import json, os
-d = json.loads(os.environ["STATE"]); c = d.get("checks", {})
+mkdir -p deploy/releases
+DEPLOYMENT_STATE=$(STATE="${STATE}" POLICY="${READINESS_POLICY}" python3 -c '
+import json, os, sys
+d = json.loads(os.environ["STATE"]); c = d.get("checks", {}); policy = os.environ["POLICY"]
 gates = {k: v for k, v in c.items() if isinstance(v, dict) and v.get("ok") is False}
-if d.get("ready"):
-    print("   release gates: all clear — trading authority can open"); raise SystemExit
-print("   release gates pending (trading stays fail-closed / CLOSE_ONLY until cleared — by design):")
 hints = {
   "inventory": "declare the 6/3/3 inventory expectation and approve it in Admin → Inventory after adding the MT5 accounts",
   "canonical_decision": "clears automatically once inventory is approved and positions reconcile",
@@ -368,11 +380,26 @@ hints = {
   "rc_lock": "install a tagged release whose release/rc_lock.json matches the running build",
   "turnstile_config": "set TURNSTILE_SITE_KEY/SECRET in backend/.env (or disable the policy) — optional",
 }
-for k, v in gates.items():
-    why = ", ".join(v.get("violations") or v.get("failures") or v.get("reason_codes") or [v.get("note") or v.get("state") or ""])
-    print(f"     - {k}: {why[:160]}")
-    if k in hints: print(f"         → {hints[k]}")
-'
+if d.get("ready"):
+    state = "release_ready"; print("   release gates: all clear — trading authority can open", file=sys.stderr)
+else:
+    print("   release gates pending (trading stays fail-closed / CLOSE_ONLY until cleared — by design):", file=sys.stderr)
+    for k, v in gates.items():
+        why = ", ".join(v.get("violations") or v.get("failures") or v.get("reason_codes") or [v.get("note") or v.get("state") or ""])
+        print(f"     - {k}: {why[:160]}", file=sys.stderr)
+        if k in hints: print(f"         → {hints[k]}", file=sys.stderr)
+    state = {"infrastructure-only": "infrastructure_ready", "onboarding-close-only": "onboarding_close_only"}.get(policy, "release_gates_pending")
+out = {"deployment_state": state, "readiness_policy": policy, "release_ready": bool(d.get("ready")),
+       "pending_gates": sorted(gates), "trading_posture": "OPEN" if d.get("ready") else "CLOSE_ONLY"}
+json.dump(out, open("deploy/releases/deployment_state.json", "w"), sort_keys=True, indent=1)
+print(state)
+if state == "release_gates_pending":
+    print("ERROR: readiness policy release-ready — release gates are pending, so this install is NOT releasable.", file=sys.stderr)
+    print("       Re-run with --onboarding-close-only to explicitly accept a CLOSE_ONLY stack while onboarding,", file=sys.stderr)
+    print("       or --infrastructure-only for a non-trading verification install.", file=sys.stderr)
+    sys.exit(2)
+') || { RC=$?; echo "   deployment state: release_gates_pending (policy ${READINESS_POLICY}) — recorded in deploy/releases/deployment_state.json"; exit "${RC}"; }
+echo "   deployment state: ${DEPLOYMENT_STATE} (policy ${READINESS_POLICY}) — recorded in deploy/releases/deployment_state.json"
 
 if [ "${MODE}" = "--production" ] && [ "${CLOUDFLARE}" = 1 ]; then
   echo "-- verifying origin TLS (Cloudflare Origin CA certificate served by Caddy on this host)"

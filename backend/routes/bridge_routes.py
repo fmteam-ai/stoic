@@ -974,6 +974,27 @@ async def poll_trades(payload: PollRequest):
             "mt5_ticket": t.get("mt5_ticket"),
         })
 
+    # 1b. OPEN positions with an outstanding close command that uses the
+    # trades-block close path (no FULL_CLOSE modification queued): manual ×
+    # CLOSE, NL / Risk Commander, PANIC-by-poll, deleverage, Telegram,
+    # diagnostics. r26 P2-01 — positions are never flipped to `pending`; the
+    # EA's fenced ClosePosition path (close_idem_key + durable close_seq) closes them.
+    close_cursor = db.trades.find({
+        "account_id": str(acc["_id"]), "status": "open", "close_requested": {"$eq": True},
+        "mt5_ticket": {"$nin": [None, 0]},
+        "$or": [{"pending_modification": None}, {"pending_modification": {"$exists": False}},
+                {"pending_modification.type": {"$ne": "FULL_CLOSE"}}],
+    }, {"symbol": 1, "action": 1, "lot_size": 1, "entry_price": 1, "stop_loss": 1, "take_profit": 1,
+        "close_idem_key": 1, "close_seq": 1, "mt5_ticket": 1})
+    for t in await close_cursor.to_list(length=50):
+        out.append({
+            "trade_id": str(t["_id"]), "symbol": t["symbol"], "action": t.get("action"),
+            "lot_size": t.get("lot_size"), "entry_price": t.get("entry_price"),
+            "stop_loss": t.get("stop_loss"), "take_profit": t.get("take_profit"),
+            "close_requested": bool(t.get("close_requested")), "close_idem_key": t.get("close_idem_key"),
+            "close_seq": t.get("close_seq", 0), "mt5_ticket": t.get("mt5_ticket"),
+        })
+
     # 2. Open trades with pending modifications (break-even / partial-close / trailing)
     mod_cursor = db.trades.find({
         "account_id": str(acc["_id"]),
@@ -2199,19 +2220,16 @@ async def external_deal(payload: BridgeExternalDeal):
                 "protection_missing": True,
                 "protection_state": "PROTECTION_UNKNOWN",
             }
+            rev = await db.trades.insert_one(rev_doc)
             if was_scalp:
                 # Round 8 item 4 — scalp strategies do NOT support reversals:
-                # flatten the unexpected opposite position immediately.
-                rev_doc.update({
-                    "close_requested": True,
-                    "close_reason": "unexpected_reversal",
-                    "protection_state": "EMERGENCY_CLOSE_PENDING",
-                    "pending_modification": {
-                        "type": "FULL_CLOSE",
-                        "reason": "unexpected_scalp_reversal",
-                        "requested_at": datetime.now(timezone.utc).isoformat()},
-                })
-            rev = await db.trades.insert_one(rev_doc)
+                # flatten the unexpected opposite position immediately through
+                # the unified close protocol (r26 P2-01: immutable command row).
+                from close_commands import request_close
+                await request_close(
+                    db, {"_id": rev.inserted_id}, reason="unexpected_reversal", actor="bridge:reversal",
+                    stamp={"protection_state": "EMERGENCY_CLOSE_PENDING"},
+                    pending_modification={"type": "FULL_CLOSE", "reason": "unexpected_scalp_reversal"})
             logger.warning(
                 "inout REVERSAL on ticket %s: closed tracked side, broker "
                 "still holds %.2f lots %s — %s (trade %s)",

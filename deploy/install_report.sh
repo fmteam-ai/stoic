@@ -31,10 +31,20 @@ mkdir -p deploy/releases
 REPORT=$(python3 - "${HOST}" "${DOMAIN}" "${MODE}" "${COMMIT}" "${DIGEST}" "${KEY_ID}" "${PUB}" "${FAILS}" "${WARNS}" "${TS}" "${DRC}" "${LOCKED}" <<'PY'
 import json, sys
 h, d, m, c, dg, k, p, f, w, ts, rc, locked = sys.argv[1:]
-print(json.dumps({"kind": "stoic-install-report", "version": 1, "generated_at": ts, "host": h,
+import os
+try:
+    deployment = json.load(open("deploy/releases/deployment_state.json"))   # r26 P2-04: what exit 0 meant
+except (OSError, ValueError):
+    deployment = {"deployment_state": "unknown", "readiness_policy": os.environ.get("STOIC_READINESS_POLICY") or "unknown"}
+try:
+    repairs = json.load(open("deploy/releases/docker_repair_summary.json"))   # r26 P2-03: host mutations journal digest
+except (OSError, ValueError):
+    repairs = None
+print(json.dumps({"kind": "stoic-install-report", "version": 2, "generated_at": ts, "host": h,
                   "domain": d or None, "app_env": m or None, "commit": c, "image_digest": dg or None,
                   "signer_key_id": k, "signer_public_key_b64": p or None,
                   "doctor": {"fail": int(f), "warn": int(w), "ok": rc == "0"},
+                  "deployment": deployment, "docker_repairs": repairs,
                   "installer_locked": locked == "true"},
                  sort_keys=True, separators=(",", ":")))
 PY

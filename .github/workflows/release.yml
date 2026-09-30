@@ -485,10 +485,16 @@ jobs:
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
           pip install -q -r backend/requirements.txt >/dev/null 2>&1 || pip install -q cryptography requests
-          python3 scripts/freeze_rc_lock.py --commit "${COMMIT_SHA}" \
+          # r26 P1-01: the lock is frozen from the STAGED tree (/tmp/pkg) after its final test files are
+          # present — the packaged test manifest and the locked digest are the same bytes by construction
+          python3 scripts/generate_test_manifest.py --root /tmp/pkg --check \
+            || { echo "RELEASE BLOCKED: staged docs/TEST_MANIFEST.md does not describe the staged tests"; exit 1; }
+          cmp -s docs/TEST_MANIFEST.md /tmp/pkg/docs/TEST_MANIFEST.md \
+            || { echo "RELEASE BLOCKED: staged test manifest differs from the release commit's"; exit 1; }
+          python3 scripts/freeze_rc_lock.py --root /tmp/pkg --commit "${COMMIT_SHA}" \
             --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" \
             --target production --out rc_lock.json
-          python3 scripts/freeze_rc_lock.py --check --commit "${COMMIT_SHA}" --out rc_lock.json
+          python3 scripts/freeze_rc_lock.py --root /tmp/pkg --check --commit "${COMMIT_SHA}" --out rc_lock.json
 
       - name: Bind release evidence into the archive + provenance consistency gate (round 12 P1-02)
         env:

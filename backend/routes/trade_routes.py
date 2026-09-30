@@ -1063,15 +1063,17 @@ async def revive_trade(trade_id: str, user=Depends(get_current_user)):
 
 @router.post("/{trade_id}/close")
 async def close_trade(trade_id: str, user=Depends(get_current_user)):
-    """Mark a trade as pending-close so the EA closes it on next poll."""
+    """Request a broker-position close through the unified close protocol
+    (r26 P2-01): the position stays OPEN, gains a durable close_seq + immutable
+    command row, and the EA closes it on its next poll."""
     db = get_db()
-    result = await db.trades.update_one(
-        {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"], "status": "open"},
-        {"$set": {"status": "pending", "close_requested": True, "close_reason": "manual"}},
-    )
-    if result.matched_count == 0:
+    from close_commands import request_close
+    out = await request_close(db, {"_id": parse_object_id(trade_id, "Trade"), "user_id": user["id"]},
+                              reason="manual", actor=f"user:{user['id']}")
+    if out["trades_marked_for_close"] == 0:
         raise HTTPException(status_code=404, detail="Open trade not found")
-    return {"ok": True}
+    return {"ok": True, "close_command_id": out["command_id"],
+            "close_seq": out["commands"][0]["close_seq"]}
 
 
 

@@ -21,6 +21,8 @@ from datetime import datetime, timezone, timedelta
 
 from email_sender import send_email, is_configured as email_is_configured
 
+TOKEN_SCHEMA = "v2."   # hashed-at-rest token epoch (r25 P2-03); pre-epoch links carry no prefix
+
 logger = logging.getLogger("activation")
 
 ACTIVATION_TTL_HOURS = 24
@@ -33,7 +35,7 @@ def _now() -> datetime:
 
 def new_activation_token() -> tuple[str, str]:
     """Returns (token, expires_at_iso)."""
-    token = secrets.token_urlsafe(32)
+    token = TOKEN_SCHEMA + secrets.token_urlsafe(32)   # r26 P3-01: schema epoch travels with the link
     exp = (_now() + timedelta(hours=ACTIVATION_TTL_HOURS)).isoformat()
     return token, exp
 

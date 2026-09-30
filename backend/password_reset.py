@@ -19,6 +19,8 @@ from datetime import datetime, timezone, timedelta
 
 from email_sender import send_email, is_configured as email_is_configured
 
+from activation import TOKEN_SCHEMA   # one token schema epoch for every one-time link
+
 logger = logging.getLogger("password_reset")
 
 RESET_TTL_HOURS = 1
@@ -30,7 +32,7 @@ def _now() -> datetime:
 
 
 def new_reset_token() -> tuple[str, str]:
-    token = secrets.token_urlsafe(32)
+    token = TOKEN_SCHEMA + secrets.token_urlsafe(32)   # r26 P3-01: schema epoch travels with the link
     exp = (_now() + timedelta(hours=RESET_TTL_HOURS)).isoformat()
     return token, exp
 

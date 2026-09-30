@@ -25,13 +25,18 @@
 #          --strict            treat system-check WARN as FAIL
 #          --report-email <addr>  where to e-mail the signed install report (needs RESEND_API_KEY)
 #          --telegram <bot_token>:<chat_id>  health alerts + install report to Telegram
+#          --release-ready | --onboarding-close-only | --infrastructure-only
+#                              what "exit 0" means (r26 P2-04): production/behind-proxy default to
+#                              --release-ready (every release gate clear); --onboarding-close-only accepts a
+#                              CLOSE_ONLY stack explicitly; --dev defaults to --infrastructure-only
+#          --repair-docker-mounts  allow host mutation for Docker zombie recovery (default: diagnosis only)
 #
 # Safety: every run snapshots the previous state (git ref, .env files, secrets,
 # image tags, DB dump when the stack is running). If ANY step fails the trap
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r307"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r308"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -59,7 +64,8 @@ while [ $# -gt 0 ]; do
     --strict) STRICT=1; shift ;;
     --report-email) REPORT_EMAIL="$2"; shift 2 ;;
     --telegram) TELEGRAM="$2"; shift 2 ;;
-    --with-forecast|--registry) EXTRA+=("$1"); shift ;;
+    --with-forecast|--registry|--infrastructure-only|--onboarding-close-only|--release-ready) EXTRA+=("$1"); shift ;;
+    --repair-docker-mounts) export STOIC_REPAIR_DOCKER_MOUNTS=1; EXTRA+=("$1"); shift ;;
     -h|--help) sed -n 2,22p "$0"; exit 0 ;;
     *) echo "unknown argument: $1"; exit 1 ;;
   esac

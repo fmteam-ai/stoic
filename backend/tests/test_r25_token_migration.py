@@ -35,9 +35,38 @@ def test_legacy_tokens_invalidated_once(monkeypatch):
     asyncio.run(run())
 
 
-def test_consumers_report_superseded_and_count_by_schema():
+def test_consumers_classify_per_token_not_globally():
+    """r26 P3-01: the failure class comes from the token's own schema epoch —
+    no lookup of OTHER users' legacy markers."""
     src = open("routes/auth_routes.py").read()
-    assert src.count('"legacy_links_invalidated": bool(legacy)') == 2   # canonical code kept; resend hint added
-    assert src.count('db.auth_token_failures.update_one') == 2
-    assert "payload.token" not in src[src.index("auth_token_failures"):src.index("auth_token_failures") + 400]   # never logged
+    assert src.count("raise await _token_failure(") == 2                # both consumers share one classifier
+    assert "legacy_activation_invalidated_at" not in src and "legacy_reset_invalidated_at" not in src
+    helper = src[src.index("async def _token_failure("):src.index('@router.post("/verify-email")')]
+    assert "startswith(TOKEN_SCHEMA)" in helper and "logger" not in helper   # token never logged
     assert "await invalidate_legacy_plaintext_tokens()" in open("seed.py").read()
+
+
+def test_new_links_carry_the_schema_epoch():
+    from activation import new_activation_token, TOKEN_SCHEMA
+    from password_reset import new_reset_token
+    assert TOKEN_SCHEMA == "v2."
+    assert new_activation_token()[0].startswith("v2.") and new_reset_token()[0].startswith("v2.")
+
+
+def test_failure_classification_matrix():
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import routes.auth_routes as ar
+    db = MagicMock(); db.auth_token_failures.update_one = AsyncMock()
+    with patch.object(ar, "get_db", return_value=db):
+        legacy = asyncio.run(ar._token_failure("activation", "abc123", "Activation link", "request a new one"))
+        current = asyncio.run(ar._token_failure("activation", "v2.abc123", "Activation link", "request a new one"))
+    assert legacy.detail["token_schema"] == "legacy" and legacy.detail["legacy_links_invalidated"] is True
+    assert "issued before the security upgrade" in legacy.detail["message"]
+    assert current.detail["token_schema"] == "v2" and current.detail["legacy_links_invalidated"] is False
+    assert "security upgrade" not in current.detail["message"]
+    assert legacy.detail["code"] == current.detail["code"] == "invalid_token"
+    schemas = [c.args[0]["schema"] for c in db.auth_token_failures.update_one.await_args_list]
+    assert schemas == ["legacy", "v2"]
+    for c in db.auth_token_failures.update_one.await_args_list:            # no token material persisted
+        assert "abc123" not in str(c)

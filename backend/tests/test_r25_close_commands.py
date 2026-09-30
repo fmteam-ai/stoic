@@ -13,6 +13,14 @@ import close_commands as cc
 pytestmark = pytest.mark.skipif(not os.environ.get("MONGO_URL"), reason="needs Mongo")
 
 
+@pytest.fixture(autouse=True)
+def synthetic_posture(monkeypatch):
+    """The sandbox mongod is standalone: the fresh per-test DB has zero live-like
+    accounts, so the verified synthetic-only posture permits the non-transactional path."""
+    monkeypatch.setenv("NL_EFFECTS_SYNTHETIC_ONLY", "true")
+    monkeypatch.setenv("APP_ENV", "preview")
+
+
 def _db():
     return AsyncIOMotorClient(os.environ["MONGO_URL"])[f"r25_close_{uuid.uuid4().hex[:8]}"]
 
@@ -73,7 +81,79 @@ def test_no_open_trades_is_noop():
         db = _db()
         try:
             r = await cc.request_close(db, {"account_id": "none"}, reason="x", actor="y")
-            assert r == {"command_id": None, "trades_marked_for_close": 0, "trade_ids": []}
+            assert r == {"command_id": None, "trades_marked_for_close": 0, "trade_ids": [], "commands": []}
+        finally:
+            await db.client.drop_database(db.name)
+    asyncio.run(run())
+
+
+def test_fenced_modification_is_stamped_in_the_same_atomic_update():
+    async def run():
+        db = _db(); ids = await _seed(db, 1)
+        try:
+            out = await cc.request_close(db, {"_id": ids[0]}, reason="scalp_x", actor="scalp",
+                                         pending_modification={"type": "FULL_CLOSE", "reason": "scalp_x"})
+            t = await db.trades.find_one({"_id": ids[0]})
+            pm = t["pending_modification"]
+            assert pm["type"] == "FULL_CLOSE" and len(pm["intent_id"]) == 32
+            assert pm["seq"] == t["command_seq"] == 1 and t["close_seq"] == 1
+            assert pm["close_command_key"] == out["command_id"]
+            assert out["commands"][0]["pending_modification"]["intent_id"] == pm["intent_id"]
+            row = await db.close_commands.find_one({"trade_id": ids[0]})
+            assert row["pending_modification"]["intent_id"] == pm["intent_id"]
+            # a second command bumps BOTH sequences and supersedes the first row
+            await cc.request_close(db, {"_id": ids[0]}, reason="manual", actor="ui")
+            t = await db.trades.find_one({"_id": ids[0]})
+            assert t["close_seq"] == 2 and t["command_seq"] == 1          # no modification → command_seq untouched
+            assert t["status"] == "open"                                   # never flipped to pending
+            states = {r["close_seq"]: r["state"] async for r in db.close_commands.find({"trade_id": ids[0]})}
+            assert states == {1: "superseded", 2: "requested"}
+        finally:
+            await db.client.drop_database(db.name)
+    asyncio.run(run())
+
+
+def test_capital_capable_deployment_fails_closed_without_transactions(monkeypatch):
+    async def run():
+        db = _db(); ids = await _seed(db, 1)
+        try:
+            # a terminal-bound account makes the deployment capital-capable → no standalone fallback
+            await db.accounts.insert_one({"status": "connected", "bridge_token": "bt_live", "mode": "live"})
+            with pytest.raises(cc.TransactionsUnavailable):
+                await cc.request_close(db, {"_id": ids[0]}, reason="manual", actor="ui")
+            t = await db.trades.find_one({"_id": ids[0]})
+            assert not t.get("close_requested") and await db.close_commands.count_documents({}) == 0   # nothing written
+            # acknowledgement is guarded by the same rule
+            with pytest.raises(cc.TransactionsUnavailable):
+                await cc.acknowledge_close(db, {"_id": ids[0], "close_seq": 1,
+                                                "close_command": {"key": "k", "state": "requested"}},
+                                           broker_deal_id="d", occurred_at="x")
+        finally:
+            await db.client.drop_database(db.name)
+    asyncio.run(run())
+
+
+def test_production_never_falls_back(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    async def run():
+        db = _db(); ids = await _seed(db, 1)
+        try:
+            with pytest.raises(cc.TransactionsUnavailable):
+                await cc.request_close(db, {"_id": ids[0]}, reason="manual", actor="ui")
+        finally:
+            await db.client.drop_database(db.name)
+    asyncio.run(run())
+
+
+def test_panic_emergency_path_never_refuses_but_raises_an_incident():
+    async def run():
+        db = _db(); ids = await _seed(db, 1)
+        try:
+            await db.accounts.insert_one({"status": "connected", "bridge_token": "bt_live", "mode": "live"})  # capital-capable
+            out = await cc.request_close(db, {"_id": ids[0]}, reason="panic", actor="panic:test", emergency=True)
+            assert out["trades_marked_for_close"] == 1
+            inc = await db.close_protocol_incidents.find_one({"kind": "panic_non_transactional"})
+            assert inc and "replica-set" in inc["resolution"]
         finally:
             await db.client.drop_database(db.name)
     asyncio.run(run())

@@ -240,26 +240,6 @@ async def fenced(db, ctx: dict | None, work):
     return await _run(None)
 
 
-def close_command_update(reason: str, ctx: dict | None, **stamp) -> dict:
-    """Mongo update that writes the current close command AND atomically
-    increments the trade's DURABLE close_seq (r18 P0-01). The terminal orders
-    commands by close_seq across proposals/PANIC/recovery and dedupes
-    close_idem_key; the proposal-local fence is recorded for backend audit only.
-    The previous unresolved command is kept as a supersession record."""
-    ctx = ctx or {}
-    now = _now().isoformat()
-    return {
-        "$inc": {"close_seq": 1},
-        "$set": {"close_requested": True, "close_reason": reason,
-                 "close_idem_key": ctx.get("idempotency_key"), "close_fence": ctx.get("fence"),
-                 "close_command": {"key": ctx.get("idempotency_key"), "fence": ctx.get("fence"),
-                                   "execution_id": ctx.get("execution_id"), "reason": reason,
-                                   "state": "requested", "requested_at": now}, **stamp},
-        "$push": {"close_command_history": {"$each": [{"key": ctx.get("idempotency_key"), "reason": reason,
-                                                       "requested_at": now}], "$slice": -20}},
-    }
-
-
 async def transactions_required(db) -> bool:
     """r18 P1-01: atomic commit is required whenever capital can be touched —
     production, OR any live-mode account with trading enabled, OR broker execution

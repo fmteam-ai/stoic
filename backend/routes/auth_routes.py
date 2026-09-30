@@ -314,6 +314,26 @@ async def logout(request: Request, response: Response):
 
 
 # ---------- Email verification / activation ----------
+async def _token_failure(kind: str, token: str, label: str, resend_hint: str) -> HTTPException:
+    """r26 P3-01: classify a failed one-time link by the TOKEN'S OWN schema epoch
+    (v2. prefix = hashed-at-rest era), never by a global marker on other users.
+    Telemetry counts by schema; the token itself is never logged or stored."""
+    from activation import TOKEN_SCHEMA
+    db = get_db()
+    legacy_format = not str(token or "").startswith(TOKEN_SCHEMA)
+    schema = "legacy" if legacy_format else "v2"
+    await db.auth_token_failures.update_one(
+        {"kind": kind, "schema": schema},
+        {"$inc": {"count": 1}, "$set": {"last_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    if legacy_format:
+        msg = (f"{label} is invalid, already used, expired or was issued before the security upgrade — "
+               f"{resend_hint}.")
+    else:
+        msg = f"{label} is invalid or already used — {resend_hint}."
+    return HTTPException(status_code=400, detail={"code": "invalid_token", "token_schema": schema,
+                                                  "legacy_links_invalidated": legacy_format, "message": msg})
+
+
 @router.post("/verify-email")
 async def verify_email(payload: VerifyEmailRequest, request: Request, response: Response):
     """Activate a user account via the token from the welcome email.
@@ -325,21 +345,7 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
     db = get_db()
     user = await db.users.find_one({"activation_token_sha256": token_digest(payload.token)})
     if not user:
-        # r25 P2-03: a link issued before token hashing (v96) can never match —
-        # tell the user to request a fresh one; count by schema so the
-        # migration is observable without ever logging the token itself.
-        legacy = await db.users.find_one({"legacy_activation_invalidated_at": {"$exists": True},
-                                          "activation_token_sha256": {"$exists": False}}, {"_id": 1})
-        await db.auth_token_failures.update_one(
-            {"kind": "activation", "schema": "legacy" if legacy else "v96"},
-            {"$inc": {"count": 1}, "$set": {"last_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "invalid_token", "legacy_links_invalidated": bool(legacy),
-                    "message": "Activation link is invalid or already used." + (
-                        " Links issued before the security upgrade are no longer valid — request a new activation e-mail."
-                        if legacy else "")},
-        )
+        raise await _token_failure("activation", payload.token, "Activation link", "request a new activation e-mail")
 
     # Expiry check (compare ISO strings safely via datetime parse).
     exp_raw = user.get("activation_expires_at")
@@ -498,18 +504,7 @@ async def reset_password(payload: ResetPasswordRequest):
     db = get_db()
     user = await db.users.find_one({"password_reset_token_sha256": token_digest(payload.token)})
     if not user:
-        legacy = await db.users.find_one({"legacy_reset_invalidated_at": {"$exists": True},
-                                          "password_reset_token_sha256": {"$exists": False}}, {"_id": 1})
-        await db.auth_token_failures.update_one(
-            {"kind": "password_reset", "schema": "legacy" if legacy else "v96"},
-            {"$inc": {"count": 1}, "$set": {"last_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "invalid_token", "legacy_links_invalidated": bool(legacy),
-                    "message": "Reset link is invalid or already used." + (
-                        " Links issued before the security upgrade are no longer valid — use 'Forgot password' to request a new one."
-                        if legacy else "")},
-        )
+        raise await _token_failure("password_reset", payload.token, "Reset link", "use 'Forgot password' to request a new one")
 
     exp_raw = user.get("password_reset_expires_at")
     try:

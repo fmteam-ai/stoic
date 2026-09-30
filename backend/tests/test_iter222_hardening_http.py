@@ -502,12 +502,19 @@ class TestApplicationPathRiskUnknown:
         r = admin_session.post(
             f"{BASE_URL}/api/trades/{app_setup['open_trade_id']}/close",
             headers=_csrf(admin_session), timeout=15)
+        if r.status_code == 503 and (r.json().get("detail") or {}).get("code") == "close_protocol_transactions_unavailable":
+            pytest.skip("standalone MongoDB: the close protocol fails CLOSED on a capital-capable deployment (r26 P2-02)")
         assert r.status_code == 200, r.text
-        assert r.json().get("ok") is True
+        body = r.json()
+        assert body.get("ok") is True and body["close_seq"] >= 1 and body["close_command_id"]
         doc = app_setup["mongo"].trades.find_one(
             {"_id": ObjectId(app_setup["open_trade_id"])})
-        assert doc["close_requested"] is True
-        assert doc["status"] == "pending"
+        # r26 P2-01: the position stays OPEN with a durable close command — never flipped to `pending`
+        assert doc["close_requested"] is True and doc["status"] == "open"
+        assert doc["close_seq"] == body["close_seq"] and doc["close_command"]["state"] == "requested"
+        row = app_setup["mongo"].close_commands.find_one(
+            {"trade_id": app_setup["open_trade_id"], "close_seq": body["close_seq"]})
+        assert row and row["reason"] == "manual" and row["state"] == "requested"
 
     def test_http_execute_route_cannot_bypass_guard(self, app_setup,
                                                     admin_session,

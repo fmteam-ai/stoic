@@ -48,7 +48,7 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
                                  ctx={"idempotency_key": nl.get("key"), "fence": nl.get("fence"),
                                       "execution_id": nl.get("execution_id"), "decision_id": nl.get("decision_id"),
                                       "authority_version": nl.get("authority_version")},
-                                 session=session, stamp=stamp)
+                                 session=session, stamp=stamp, emergency=True)   # r26 P2-02: the brake never refuses
     payload = {
         "bots_disabled": bot_result.modified_count,
         "trades_cancelled": trade_cancel.modified_count,

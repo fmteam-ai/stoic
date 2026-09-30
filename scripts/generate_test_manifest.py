@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if "--root" in sys.argv:                      # r26 P1-01: generate/check inside the STAGED release tree
+    ROOT = Path(sys.argv[sys.argv.index("--root") + 1]).resolve()
 OUT = ROOT / "docs" / "TEST_MANIFEST.md"
 
 PY_TEST_RE = re.compile(r"^\s*(?:async\s+)?def\s+test_\w+", re.M)

@@ -188,6 +188,11 @@ async def release_readiness(request: Request):
     # r25 P2-02 · PANIC notification outbox — failed/unknown rows are incidents
     from routes.panic_routes import ops_outbox_health
     checks["panic_outbox"] = await ops_outbox_health(db)
+    # r26 P2-02 · close protocol — a PANIC that had to run non-transactionally is an incident
+    # until an operator resolves it (replica-set MongoDB) and acknowledges the row
+    open_incidents = await db.close_protocol_incidents.count_documents({"resolved_at": {"$exists": False}})
+    checks["close_protocol"] = {"ok": open_incidents == 0, "open_incidents": open_incidents,
+                                "note": "PANIC executed without transactions" if open_incidents else None}
 
     # 5 · schema compatibility — DB must not hold decisions written by a
     #     NEWER feature schema than this build understands

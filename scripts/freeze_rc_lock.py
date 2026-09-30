@@ -20,6 +20,8 @@ import sys
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if "--root" in sys.argv:                      # r26 P1-01: hash the STAGED tree that is actually packaged
+    ROOT = os.path.abspath(sys.argv[sys.argv.index("--root") + 1])
 DEST = os.path.join(ROOT, "release", "rc_lock.json")
 
 
@@ -168,6 +170,7 @@ def main():
     ap.add_argument("--frontend-digest")
     ap.add_argument("--target", help="deployment target, e.g. production")
     ap.add_argument("--out", help="write the lock somewhere other than release/rc_lock.json")
+    ap.add_argument("--root", help="staged release tree to hash (default: this checkout)")
     args = ap.parse_args()
     dest = args.out or DEST
 
@@ -190,6 +193,15 @@ def main():
         print(f"OK: environment matches {dest}")
         return 0
 
+    # r26 P1-01: never freeze a lock over a stale test inventory — the manifest must
+    # describe the final test files of THIS tree before its digest is bound
+    stale = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                         "generate_test_manifest.py"), "--root", ROOT, "--check"],
+                           capture_output=True, text=True)
+    if stale.returncode != 0:
+        print("FAIL: docs/TEST_MANIFEST.md is stale for this tree — regenerate it (scripts/generate_test_manifest.py) "
+              "BEFORE freezing the RC lock; refusing to bind a test-manifest digest that does not match the packaged tests")
+        return 1
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
     lock = build_lock(prev, commit=args.commit, backend_digest=args.backend_digest,
                       frontend_digest=args.frontend_digest, target=args.target)

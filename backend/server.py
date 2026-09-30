@@ -615,6 +615,20 @@ async def _invalid_id_handler(_request: Request, _exc: InvalidId):
     return JSONResponse(status_code=404, content={"detail": "Resource not found"})
 
 
+# r26 P2-02 — the close protocol fails CLOSED when the deployment can touch
+# capital but MongoDB cannot run transactions: a deterministic 503, never a 500.
+from close_commands import TransactionsUnavailable
+
+
+@app.exception_handler(TransactionsUnavailable)
+async def _close_txn_unavailable(_request: Request, exc: TransactionsUnavailable):
+    return JSONResponse(status_code=503, content={"detail": {
+        "code": "close_protocol_transactions_unavailable",
+        "message": "Close refused: this deployment can touch capital but its database cannot run "
+                   "transactions (replica set required). Nothing was written.",
+        "reason": str(exc)[:300]}})
+
+
 # Security headers (iter-155) — defense-in-depth on every API response.
 # The browser-facing HTML gets its headers from the Cloudflare edge
 # (Transform Rules — see docs/CLOUDFLARE_EDGE.md); these cover direct API

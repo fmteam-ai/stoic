@@ -202,12 +202,13 @@ class TestCommandFence:
 
     def test_engine_commands_are_stamped(self):
         src = _engine_src()
-        assert src.count("stamp_pending_modification") >= 6  # 3 imports + 3 calls
-        # _request_close no longer writes pending_modification raw
+        assert src.count("stamp_pending_modification") >= 4  # 2 imports + 2 calls (SL/TP modifications)
+        # _request_close goes through the unified close protocol (r26 P2-01), which
+        # stamps the fenced FULL_CLOSE modification atomically — never raw
         rc = inspect.getsource(
             __import__("scalp.engine", fromlist=["ScalpRunner"])
             .ScalpRunner._request_close)
-        assert "stamp_pending_modification" in rc
+        assert "request_close(" in rc and "pending_modification={" in rc
         assert '"$set": {"pending_modification"' not in rc
 
     def test_heartbeat_rearm_and_escalation_stamped(self):
