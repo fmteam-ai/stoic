@@ -113,10 +113,51 @@ class TestBootstrapStatic:
     def test_bootstrap_sets_may_detach_mounts_persistently(self):
         with open(f"{_REPO}/deploy/bootstrap.sh") as f:
             body = f.read()
-        assert 'BOOTSTRAP_VERSION="r295"' in body
+        assert 'BOOTSTRAP_VERSION="r296"' in body
         assert "/etc/sysctl.d/99-stoic-docker.conf" in body
         assert "fs.may_detach_mounts = 1" in body
         assert "may_detach_mounts=0" in body   # system-check WARN
         assert body.count("may_detach_mounts") >= 5
         assert subprocess.run(["bash", "-n", f"{_REPO}/deploy/bootstrap.sh"]).returncode == 0
         assert subprocess.run(["bash", "-n", f"{_REPO}/deploy/lib.sh"]).returncode == 0
+
+
+class TestDetachLeakedMounts:
+    """r296 — copies of container rootfs mounts inside foreign mount namespaces
+    (php-fpm / PrivateTmp services on the cPanel host) are lazily detached there;
+    shared peers are left alone, container namespaces and the host are skipped."""
+
+    def _proc(self, root, pid, ns, mountinfo, cgroup="0::/system.slice/php-fpm.service"):
+        d = root / str(pid); (d / "ns").mkdir(parents=True)
+        (d / "ns" / "mnt").symlink_to(f"mnt:[{ns}]")
+        (d / "mountinfo").write_text(mountinfo); (d / "cgroup").write_text(cgroup)
+
+    def test_detaches_private_copies_only(self, sandbox, tmp_path):
+        proc = tmp_path / "proc"
+        merged = "/var/lib/docker/overlay2/aaa/merged"
+        host_line = f"36 35 0:40 / {merged} rw shared:5 - overlay overlay rw\n"
+        self._proc(proc, 1, 4026531840, host_line, cgroup="0::/init.scope")
+        self._proc(proc, 100, 4026532100, f"36 35 0:40 / {merged} rw - overlay overlay rw\n"
+                                          f"37 35 0:41 / /var/lib/docker/containers/c1/mounts/shm rw master:3 - tmpfs shm rw\n")
+        self._proc(proc, 101, 4026532100, f"36 35 0:40 / {merged} rw - overlay overlay rw\n")   # same namespace → visited once
+        self._proc(proc, 200, 4026532200, f"36 35 0:40 / {merged} rw shared:5 - overlay overlay rw\n")  # peer → must be skipped
+        self._proc(proc, 300, 4026532300, f"36 35 0:40 / {merged} rw - overlay overlay rw\n",
+                   cgroup="12:pids:/docker/deadbeef")                                             # container itself → skipped
+        self._proc(proc, 400, 4026532400, "40 35 0:50 / /home rw shared:1 - xfs /dev/sda rw\n")   # no docker mounts → skipped
+        ns = sandbox["bin"] / "nsenter"
+        ns.write_text('#!/usr/bin/env bash\necho "$@" >> "$FAKE_STATE.nsenter"\nexit 0\n'); ns.chmod(0o755)
+        env = dict(os.environ, PATH=f"{sandbox['bin']}:{os.environ['PATH']}", FAKE_STATE=str(sandbox["state"]), PROC_ROOT=str(proc))
+        r = subprocess.run(["bash", "-c", f"set -euo pipefail; cd {sandbox['proj']}; . {_REPO}/deploy/lib.sh; detach_leaked_mounts"],
+                           env=env, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        calls = (sandbox["tmp"] / "state.nsenter").read_text().splitlines()
+        assert calls == [f"-m -t 100 -- umount -l {merged}",
+                         "-m -t 100 -- umount -l /var/lib/docker/containers/c1/mounts/shm"], calls
+        assert "detached 2 leaked docker mount copies from 2 foreign mount namespaces" in r.stdout   # ns 100 (2 umounts) + ns 200 (peer, skipped)
+        assert "1 leaked copies are shared peers of live mounts — left alone" in r.stdout
+
+    def test_noop_without_nsenter(self, sandbox, tmp_path):
+        env = dict(os.environ, PATH=str(sandbox["bin"]), FAKE_STATE=str(sandbox["state"]), PROC_ROOT=str(tmp_path / "none"))
+        r = subprocess.run(["/bin/bash", "-c", f"set -euo pipefail; cd {sandbox['proj']}; . {_REPO}/deploy/lib.sh; detach_leaked_mounts; echo rc=$?"],
+                           env=env, capture_output=True, text=True)
+        assert "rc=0" in r.stdout, r.stderr

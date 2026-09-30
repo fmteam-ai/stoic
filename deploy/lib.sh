@@ -260,11 +260,41 @@ zombie_ids() {
   } | sort -u | tr '\n' ' '
 }
 
+# Services that run in their own mount namespace (systemd PrivateTmp, cPanel
+# CageFS/LVE php-fpm pools, node apps) receive a COPY of every container rootfs
+# mount that existed when they started. Those copies pin the merged dir →
+# docker rm fails "unlinkat …/merged: device or resource busy". Detach the copies
+# (lazily, inside each foreign namespace) — they are dead weight there. Only
+# private/slave copies are touched: a `shared:` peer would propagate the umount
+# back to the host and kill a live container, so those are reported instead.
+detach_leaked_mounts() {
+  command -v nsenter >/dev/null || return 0
+  local proc="${PROC_ROOT:-/proc}" host_ns; host_ns=$(readlink "${proc}/1/ns/mnt" 2>/dev/null) || return 0
+  local seen=" " p ns pid n=0 shared=0
+  for p in "${proc}"/[0-9]*; do
+    ns=$(readlink "$p/ns/mnt" 2>/dev/null) || continue
+    [ "${ns}" = "${host_ns}" ] && continue
+    case "${seen}" in *" ${ns} "*) continue ;; esac
+    grep -qs '/var/lib/docker/' "$p/mountinfo" || continue
+    grep -qs 'docker\|containerd' "$p/cgroup" && continue      # a container's own namespace — leave it
+    seen="${seen}${ns} "; pid=${p##*/}
+    # field 5 = mount point; optional fields (7 … up to the "-" separator) carry shared:/master: tags
+    while read -r mp tag; do
+      [ "${tag}" = shared ] && { shared=$((shared+1)); continue; }
+      nsenter -m -t "${pid}" -- umount -l "${mp}" 2>/dev/null && n=$((n+1))
+    done < <(awk '$5 ~ "^/var/lib/docker/" { t=""; for (i=7; i<=NF && $i!="-"; i++) t=t" "$i; print $5, (t ~ /shared:/ ? "shared" : "private") }' "$p/mountinfo" 2>/dev/null)
+  done
+  [ "${n}" -gt 0 ] && echo "-- detached ${n} leaked docker mount copies from $(( $(echo "${seen}" | wc -w) )) foreign mount namespaces (php-fpm/PrivateTmp services)"
+  [ "${shared}" -gt 0 ] && echo "!! ${shared} leaked copies are shared peers of live mounts — left alone (deploy/doctor.sh → 'docker mount propagation')"
+  return 0
+}
+
 # RHEL 8 overlay2 leaves containers "marked for removal" (device or resource
 # busy — a mount leaked into another mount namespace: cPanel CageFS/LVE, httpd
 # PrivateTmp) unless fs.may_detach_mounts=1. Force-remove, escalating to a
 # dockerd restart and finally to metadata removal with dockerd stopped.
 reap_zombies() {
+  detach_leaked_mounts
   local zombies; zombies=$(zombie_ids)
   [ -n "${zombies// /}" ] || return 0
   echo "-- removing stale containers left from a previous run: ${zombies}"
