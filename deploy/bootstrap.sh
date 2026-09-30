@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r305"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r306"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -495,7 +495,7 @@ cat <<EOF
 == STOIC is installed — installer LOCKED ==
    project:     ${TARGET}
    app:         $([ "${PUBLIC}" = 1 ] && echo "https://${DOMAIN}" || echo "http://127.0.0.1:3000 (loopback)")$([ "${MODE}" = "--behind-proxy" ] && { [ "${CPANEL_WIRED}" = 1 ] && echo " — Apache (cPanel) already proxies to STOIC on this host; cut over DNS when ready" || echo " — after you add deploy/proxy/apache-${DOMAIN}.conf (or nginx-…) to your web server; cPanel: sudo bash ${TARGET}/deploy/proxy/cpanel.sh ${DOMAIN}"; })
-   admin login: ADMIN_EMAIL / ADMIN_PASSWORD in ${TARGET}/backend/.env — change it and enroll 2FA at first login
+   admin login: $(grep -E '^ADMIN_EMAIL=' "${TARGET}/backend/.env" | cut -d= -f2) — password: ADMIN_PASSWORD in ${TARGET}/backend/.env (change it and enroll 2FA at first login)
    diagnostics: sudo bash ${TARGET}/deploy/doctor.sh           (add --bundle to export a redacted support archive)
    database:    sudo bash ${TARGET}/deploy/doctor.sh --db      (MongoDB runs in Docker — no host mongod; this prints status/version/ping)
    backup now:  sudo bash ${TARGET}/deploy/doctor.sh --db --backup-now   (dump → encrypt → restore-verify in one go)

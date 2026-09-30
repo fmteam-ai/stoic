@@ -247,7 +247,7 @@ if [ ! -f backend/.env ]; then
   ensure_backend_template
   cp backend/.env.example backend/.env
   set_kv backend/.env DB_NAME ai_trading_bot
-  set_kv backend/.env ADMIN_EMAIL admin@stoic.local
+  set_kv backend/.env ADMIN_EMAIL "admin@${DOMAIN:-stoic.local}"   # the seeded admin's login — printed at the end of the install
   set_kv backend/.env ADMIN_PASSWORD "$(gen)"
   set_kv backend/.env BOT_LOOP_INTERVAL_SEC 30
   set_kv backend/.env BOT_SIGNAL_COOLDOWN_MIN 30
