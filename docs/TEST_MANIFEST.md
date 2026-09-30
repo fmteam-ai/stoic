@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 615 |
+| unit | pure logic, no external I/O | every CI job | 617 |
 | integration | real MongoDB service container | CI `backend-integration` | 165 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3747 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3748 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4538 tests across 465 files.**
+**Total: 4541 tests across 466 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -104,7 +104,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter142_p0_audit_http.py` | http-live | 5 |
 | `backend/tests/test_iter142_quant_review3.py` | http-live | 19 |
 | `backend/tests/test_iter144_batch2_http.py` | http-live | 12 |
-| `backend/tests/test_iter145_ea_fencing.py` | http-live | 26 |
+| `backend/tests/test_iter145_ea_fencing.py` | http-live | 27 |
 | `backend/tests/test_iter145_value_ledger_link.py` | http-live | 2 |
 | `backend/tests/test_iter146_ea_exec_audit.py` | http-live | 22 |
 | `backend/tests/test_iter146_signed_factor_http.py` | http-live | 2 |
@@ -473,6 +473,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
 | `backend/tests/unit/test_public_status_bounded.py` | unit | 2 |
+| `backend/tests/unit/test_r25_close_writers_migrated.py` | unit | 2 |
 | `backend/tests/unit/test_r25_ea_binary_proof.py` | unit | 5 |
 | `backend/tests/unit/test_r25_panic_outbox.py` | unit | 5 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
