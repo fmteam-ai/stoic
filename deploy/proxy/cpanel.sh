@@ -58,6 +58,8 @@ mkdir -p "${SSL_DIR}" "${STD_DIR}"
   echo "    SecRuleEngine Off"
   echo "</IfModule>"
   echo "ProxyPass /.well-known !"
+  # cPanel service shortcuts must keep working on the domain (they redirect to :2083/:2087/:2096)
+  for p in /cpanel /whm /webmail /cpanelwebcall /autodiscover /Autodiscover; do echo "ProxyPass ${p} !"; done
   grep -vE '^#' "deploy/proxy/apache-${D}.conf"
 } > "${SSL_DIR}/stoic.conf"
 cat > "${STD_DIR}/stoic.conf" <<HTTP

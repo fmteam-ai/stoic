@@ -291,6 +291,7 @@ def test_cpanel_wiring_script_is_safe_and_autowired():
     c = _read("deploy", "proxy", "cpanel.sh")
     for needle in ("/scripts/whoowns", "/scripts/rebuildhttpdconf", "/scripts/ensure_vhost_includes", "/scripts/restartsrv_httpd",
                    "userdata/ssl/2_4/${CPUSER}/${D}", "userdata/std/2_4/${CPUSER}/${D}", "ProxyPass /.well-known !",
+                   "SecRuleEngine Off", "for p in /cpanel /whm /webmail",          # r299/r300: ModSecurity 406 · cPanel shortcuts stay reachable
                    "RewriteCond %{REQUEST_URI} !^/\\.well-known/", "ea-apache24-mod_proxy_wstunnel",
                    'httpd -t 2>&1 | grep -q "Syntax OK"', '--resolve "${D}:443:127.0.0.1"', "public_html is left untouched"):
         assert needle in c, needle
