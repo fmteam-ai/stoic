@@ -95,3 +95,38 @@ One-time links carry a schema epoch (`v2.` prefix, `activation.TOKEN_SCHEMA`). A
 the TOKEN's own format — never by other users' legacy markers: legacy-format → "invalid, already used, expired or
 issued before the security upgrade — request a new link"; v2 → "invalid or already used". Telemetry counts by
 schema, token material never stored/logged. Tests: `tests/test_r25_token_migration.py`.
+
+---
+# Round 26-b — follow-up findings
+
+## P1-01 · unusable keys could retain `installer_attested` — FIXED
+`device_attestation.attested_hash()` now evaluates `_key_usable()` once and returns EVERY non-null reason
+(`device_not_enrolled`, `device_key_invalid`, `device_key_expired`, `device_key_revoked`) — an attestation signed
+just before key expiry, or a malformed/removed key record, is no longer live-eligible inside the 30-day window.
+Heartbeat-level tests (real `heartbeat()` → account method → `live_gate`) cover expired / malformed / missing
+keys: `tests/integration/test_r21_audit.py::test_verified_chain_admits_proof_and_unverified_takeover_revokes_it`,
+`tests/integration/test_r26_device_attestation.py::test_heartbeat_*`.
+
+## P1-02 · authoritative chain — code complete, RUNBOOK remains
+Strict / authoritative mode already fails on ANY commit divergence, missing image digests or a non-authoritative
+lock. Added: the lock binds release evidence by sha256 (`freeze_rc_lock.py --evidence NAME=PATH`; release.yml
+binds `sbom_backend`, `sbom_frontend`, `admission`) and strict mode refuses a lock without all three.
+Runbook unchanged: build once from a peeled signed tag via release.yml; deploy with `update.sh <tag>`.
+
+## P1-03 / P1-04 — RUNBOOK (MetaEditor compile + signed acceptance pack), unchanged.
+
+## P2-01 · challenge abuse controls — DONE
+`issue_challenge()`: per-IP (30/min) and per-installation (6/min) fixed-window limits (shared `security.rate_limit`,
+429), ONE outstanding nonce per installation (a new challenge voids the previous unused one), uniform external
+refusal `challenge_refused` (403) for unknown installations AND unusable keys — the real reason is recorded in
+`attestation_abuse` (7-day TTL) together with invalid-nonce / invalid-signature events; ≥ 40 events from one address
+in 10 min upserts an `attestation_flood` incident (surfaces through the `close_protocol` readiness gate collection).
+
+## P2-02 · transaction retry contract — DONE
+`close_commands._with_txn` delegates to the driver's `session.with_transaction()`: callbacks re-run on
+`TransientTransactionError` (write conflicts under close storms), and only the COMMIT is retried on
+`UnknownTransactionCommitResult`, so an ambiguous commit can never allocate a second `(trade_id, close_seq)`.
+Test with injected write conflicts: `tests/test_r25_close_commands.py::test_transactions_use_the_driver_retry_contract…`.
+
+## P2-03 · chart provenance — NOT STARTED (frontend epic, next).
+## P2-04 · Docker repair — RUNBOOK (disposable-host acceptance); journal already digested into the signed report.

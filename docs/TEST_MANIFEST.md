@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 627 |
-| integration | real MongoDB service container | CI `backend-integration` | 177 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3759 |
+| unit | pure logic, no external I/O | every CI job | 628 |
+| integration | real MongoDB service container | CI `backend-integration` | 180 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3760 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4574 tests across 468 files.**
+**Total: 4579 tests across 468 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -386,7 +386,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter_optimizer_http.py` | http-live | 11 |
 | `backend/tests/test_iter_trade_stats_perf.py` | http-live | 6 |
 | `backend/tests/test_max_concurrent_race.py` | http-live | 3 |
-| `backend/tests/test_r25_close_commands.py` | http-live | 7 |
+| `backend/tests/test_r25_close_commands.py` | http-live | 8 |
 | `backend/tests/test_r25_token_migration.py` | http-live | 4 |
 | `backend/tests/test_regime_dispatch.py` | http-live | 9 |
 | `backend/tests/test_safety_guardian.py` | http-live | 11 |
@@ -434,7 +434,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_r21_audit.py` | integration | 4 |
 | `backend/tests/integration/test_r22_audit.py` | integration | 4 |
 | `backend/tests/integration/test_r23_audit.py` | integration | 4 |
-| `backend/tests/integration/test_r26_device_attestation.py` | integration | 12 |
+| `backend/tests/integration/test_r26_device_attestation.py` | integration | 15 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |
@@ -477,7 +477,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_r25_close_writers_migrated.py` | unit | 7 |
 | `backend/tests/unit/test_r25_ea_binary_proof.py` | unit | 5 |
 | `backend/tests/unit/test_r25_panic_outbox.py` | unit | 5 |
-| `backend/tests/unit/test_r26_release_provenance.py` | unit | 5 |
+| `backend/tests/unit/test_r26_release_provenance.py` | unit | 6 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 17 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |

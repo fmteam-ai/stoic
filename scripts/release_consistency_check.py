@@ -71,6 +71,7 @@ def gather(root, *, commit=None, backend_digest=None, frontend_digest=None, depl
         "lock.git_commit": lock.get("git_commit"),
         "lock.source_sha": lock.get("source_sha"),
         "lock.authoritative": lock.get("authoritative"),
+        "lock.evidence": sorted((lock.get("evidence") or {}).keys()) or None,
         "model_manifest.code_commit": (mm.get("body") or {}).get("code_commit"),
         "release_summary.source_commit": summary_source(root),
         "lock.test_manifest_sha256": lock.get("test_manifest_sha256"),
@@ -93,6 +94,9 @@ def gather(root, *, commit=None, backend_digest=None, frontend_digest=None, depl
         except Exception as e:  # noqa: BLE001
             facts["deployed.build"] = f"unreachable ({type(e).__name__})"
     return facts
+
+
+REQUIRED_EVIDENCE = {"sbom_backend", "sbom_frontend", "admission"}
 
 
 def compare(facts, *, strict):
@@ -122,6 +126,10 @@ def compare(facts, *, strict):
             mismatches.append(f"lock.images.{side}: missing (authoritative lock requires image digests)")
     if strict and facts["lock.authoritative"] is not True:
         mismatches.append("lock.authoritative: must be true for a release")
+    if strict:   # r26-b P1-02: SBOMs + signed admission record are part of the one-commit chain
+        missing = sorted(REQUIRED_EVIDENCE - set(facts["lock.evidence"] or []))
+        if missing:
+            mismatches.append(f"lock.evidence: missing {', '.join(missing)} (authoritative lock binds SBOMs + admission)")
     return mismatches, warnings
 
 

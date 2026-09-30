@@ -2,7 +2,7 @@
 MT5 instances, pairing, health + shadow certification."""
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from auth import get_current_user
@@ -870,29 +870,32 @@ def _attest_http(e) -> HTTPException:
 
 
 @router.post("/attestation/challenge")
-async def attestation_challenge(payload: dict):
+async def attestation_challenge(payload: dict, request: Request):
     """Single-use nonce for the ENROLLED installer device key of an installation.
     Unauthenticated by design (the installer holds no cookie); the nonce is
-    worthless without the private key and dies in 120 s."""
+    worthless without the private key and dies in 120 s. r26-b P2-01: per-IP /
+    per-installation limits, one outstanding nonce, uniform refusal, flood alerting."""
     import device_attestation as da
+    from security import client_ip
     inst_id = str(payload.get("installation_id") or "").strip()
     if not inst_id or len(inst_id) > 64:
         raise HTTPException(status_code=422, detail={"code": "malformed", "message": "installation_id required"})
     try:
-        return await da.issue_challenge(get_db(), inst_id)
+        return await da.issue_challenge(get_db(), inst_id, client_ip=client_ip(request))
     except da.AttestationError as e:
         raise _attest_http(e)
 
 
 @router.post("/attestation/verify")
-async def attestation_verify(payload: dict):
+async def attestation_verify(payload: dict, request: Request):
     """Installer posts the signed proof {nonce, installation_id, terminal_identity,
     ex5_sha256, capabilities, ts, signature}. Only a valid signature from the
     enrolled device key records `ex5_measured_by = device_signature` — the sole
     source of `installer_attested` on the heartbeat."""
     import device_attestation as da
+    from security import client_ip
     try:
-        return await da.verify_attestation(get_db(), payload or {})
+        return await da.verify_attestation(get_db(), payload or {}, client_ip=client_ip(request))
     except da.AttestationError as e:
         raise _attest_http(e)
 

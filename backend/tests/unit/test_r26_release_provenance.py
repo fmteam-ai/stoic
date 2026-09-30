@@ -75,3 +75,22 @@ def test_consistency_check_treats_digest_mismatch_as_failure_even_in_snapshot_mo
              "lock.images.backend": None, "lock.images.frontend": None, "lock.authoritative": False}
     mism, _ = rcc.compare(facts, strict=False)
     assert any(m.startswith("test_manifest_sha256") for m in mism)
+
+
+def test_authoritative_mode_requires_bound_evidence_and_fails_on_any_divergence():
+    import release_consistency_check as rcc
+    base = {"lock.test_manifest_sha256": "a" * 64, "actual.test_manifest_sha256": "a" * 64,
+            "lock.model_manifest_sha256": "m" * 64, "actual.model_manifest_sha256": "m" * 64,
+            "lock.git_commit": "c1", "lock.source_sha": "c1", "expected.commit": "c1",
+            "build_sha": "c1", "model_manifest.code_commit": "c1", "release_summary.source_commit": "c1",
+            "deployed.build": "c1", "expected.images.backend": "sha256:b", "expected.images.frontend": "sha256:f",
+            "lock.images.backend": "sha256:b", "lock.images.frontend": "sha256:f", "lock.authoritative": True,
+            "lock.evidence": ["admission", "sbom_backend", "sbom_frontend"]}
+    assert rcc.compare(base, strict=True) == ([], [])
+    for k, v in (("build_sha", "c2"), ("model_manifest.code_commit", "c2"), ("release_summary.source_commit", "c2"),
+                 ("deployed.build", "c2"), ("lock.images.backend", "sha256:x"), ("lock.authoritative", False),
+                 ("lock.evidence", ["sbom_backend"]), ("actual.test_manifest_sha256", "b" * 64)):
+        mism, _ = rcc.compare({**base, k: v}, strict=True)
+        assert mism, k
+    wf = open(os.path.join(REPO, ".github", "workflows", "release.yml")).read()
+    assert "--evidence admission=release-admission.json" in wf and "--evidence sbom_backend=" in wf

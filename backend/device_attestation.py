@@ -37,6 +37,9 @@ from pymongo import ReturnDocument
 ALGORITHMS = ("RSA-PSS-SHA256", "Ed25519")
 NONCE_TTL_S = 120
 TS_SKEW_S = 300
+CHALLENGE_IP_LIMIT_PER_MIN = int(os.environ.get("ATTEST_CHALLENGE_IP_LIMIT_PER_MIN") or 30)
+CHALLENGE_INST_LIMIT_PER_MIN = int(os.environ.get("ATTEST_CHALLENGE_INST_LIMIT_PER_MIN") or 6)
+FLOOD_ALERT_PER_10MIN = int(os.environ.get("ATTEST_FLOOD_ALERT_PER_10MIN") or 40)
 KEY_LIFETIME_DAYS = int(os.environ.get("DEVICE_KEY_LIFETIME_DAYS") or 365)
 ATTESTATION_MAX_AGE_DAYS = int(os.environ.get("ATTESTATION_MAX_AGE_DAYS") or 30)
 SIGNED_FIELDS = ("capabilities", "ex5_sha256", "installation_id", "nonce", "terminal_identity", "ts")
@@ -145,19 +148,54 @@ def _key_usable(dk: dict | None) -> str | None:
 async def ensure_indexes(db):
     await db.attestation_nonces.create_index("expires_at", expireAfterSeconds=0)
     await db.attestation_nonces.create_index("nonce", unique=True)
+    await db.attestation_nonces.create_index([("installation_id", 1), ("used", 1)])
+    await db.attestation_abuse.create_index("expires_at", expireAfterSeconds=0)
+    await db.attestation_abuse.create_index([("ip", 1), ("at", -1)])
 
 
-async def issue_challenge(db, installation_id: str) -> dict:
+_REFUSED = ("challenge_refused",
+            "no attestable installation for this id — re-run the installer with a fresh pairing token from the dashboard")
+
+
+async def _abuse_event(db, kind: str, installation_id: str, client_ip: str | None, detail: str):
+    """Enumeration / flood telemetry: the internal reason is recorded here, never returned to the caller.
+    Crossing FLOOD_ALERT_PER_10MIN events from one address in 10 min raises an `attestation_flood` incident."""
+    now = _now()
+    await db.attestation_abuse.insert_one({"kind": kind, "installation_id": installation_id, "ip": client_ip,
+                                           "detail": detail, "at": now,
+                                           "expires_at": now + timedelta(days=7)})
+    if client_ip:
+        n = await db.attestation_abuse.count_documents({"ip": client_ip, "at": {"$gte": now - timedelta(minutes=10)}})
+        if n >= FLOOD_ALERT_PER_10MIN:
+            await db.close_protocol_incidents.update_one(
+                {"kind": "attestation_flood", "ip": client_ip, "resolved_at": {"$exists": False}},
+                {"$set": {"last_at": now.isoformat(), "events_10min": n},
+                 "$setOnInsert": {"at": now.isoformat(), "resolution": "block the address at the edge / review installer ids probed"}},
+                upsert=True)
+
+
+async def issue_challenge(db, installation_id: str, client_ip: str | None = None) -> dict:
+    """Unauthenticated by design (the installer holds no cookie) — so: per-IP and
+    per-installation fixed-window limits, ONE outstanding nonce per installation
+    (a new challenge replaces the previous unused one), and a uniform refusal for
+    unknown installations and unusable keys (the reason is logged, not disclosed)."""
+    from security import rate_limit
+    if client_ip:
+        await rate_limit(db, "attest_challenge_ip", client_ip, CHALLENGE_IP_LIMIT_PER_MIN, 60,
+                         "Too many attestation challenges from this address")
+    await rate_limit(db, "attest_challenge_inst", installation_id, CHALLENGE_INST_LIMIT_PER_MIN, 60,
+                     "Too many attestation challenges for this installation")
     inst = await db.installations.find_one({"installation_id": installation_id, "revoked": {"$ne": True}},
                                            {"device_key": 1})
-    if not inst:
-        raise AttestationError("installation_unknown", "installation not found or revoked", 404)
-    why = _key_usable(inst.get("device_key"))
+    why = "installation_unknown" if not inst else _key_usable(inst.get("device_key"))
     if why:
-        raise AttestationError(why, "no usable enrolled device key for this installation — re-run the installer "
-                                    "with a fresh pairing token from the dashboard", 403)
+        await _abuse_event(db, "challenge_refused", installation_id, client_ip, why)
+        raise AttestationError(_REFUSED[0], _REFUSED[1], 403)
     nonce = secrets.token_urlsafe(32)
     now = _now()
+    # cap outstanding nonces: the previous unused challenge for this installation is voided
+    await db.attestation_nonces.update_many({"installation_id": installation_id, "used": False},
+                                            {"$set": {"used": True, "voided_at": now, "voided_by": "replaced"}})
     await db.attestation_nonces.insert_one({"nonce": nonce, "installation_id": installation_id, "used": False,
                                             "issued_at": now, "expires_at": now + timedelta(seconds=NONCE_TTL_S)})
     return {"nonce": nonce, "expires_in": NONCE_TTL_S, "signed_fields": list(SIGNED_FIELDS),
@@ -182,7 +220,7 @@ def _validate_payload(body: dict) -> dict:
     return p
 
 
-async def verify_attestation(db, body: dict) -> dict:
+async def verify_attestation(db, body: dict, client_ip: str | None = None) -> dict:
     """Consume the nonce and verify the installer signature. Every failure is a 401/4xx —
     never a 500 — and the nonce is burnt on the first attempt regardless of outcome."""
     p = _validate_payload(body)
@@ -196,6 +234,7 @@ async def verify_attestation(db, body: dict) -> dict:
         {"nonce": p["nonce"], "installation_id": p["installation_id"], "used": False, "expires_at": {"$gt": now}},
         {"$set": {"used": True, "used_at": now}}, return_document=ReturnDocument.AFTER)
     if not burnt:
+        await _abuse_event(db, "nonce_invalid", p["installation_id"], client_ip, "unknown/expired/replayed nonce")
         raise AttestationError("nonce_invalid", "unknown, expired, replayed or wrong-installation nonce")
     inst = await db.installations.find_one({"installation_id": p["installation_id"], "revoked": {"$ne": True}})
     if not inst:
@@ -209,6 +248,7 @@ async def verify_attestation(db, body: dict) -> dict:
     except (InvalidSignature, ValueError, TypeError):
         await db.attestation_failures.insert_one({"installation_id": p["installation_id"], "key_id": dk["key_id"],
                                                   "at": now.isoformat(), "reason": "invalid_signature"})
+        await _abuse_event(db, "invalid_signature", p["installation_id"], client_ip, dk["key_id"])
         raise AttestationError("invalid_signature", "signature does not verify under the enrolled device key")
     from ea_capabilities import expected_ea_sha256
     expected = (expected_ea_sha256() or "").lower()
@@ -240,6 +280,9 @@ def attested_hash(inst: dict | None) -> tuple[str, str | None]:
         return "installer_unattested", measured
     if _now() - verified_at > timedelta(days=ATTESTATION_MAX_AGE_DAYS):
         return "installer_attestation_stale", measured
-    if _key_usable(inst.get("device_key")) == "device_key_revoked":
-        return "device_key_revoked", measured
+    # r26-b P1-01: the key must be PRESENTLY enrolled, structurally valid, unrevoked and
+    # unexpired — every unusable-key reason denies installer_attested, not only revocation
+    why = _key_usable(inst.get("device_key"))
+    if why:
+        return why, measured
     return "installer_attested", measured

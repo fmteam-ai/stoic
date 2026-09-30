@@ -64,6 +64,7 @@ def proof(inst, nonce, **over):
 @pytest.fixture
 def world(monkeypatch):
     monkeypatch.setenv("EA_RELEASE_SHA256", PINNED)
+    monkeypatch.setattr(da, "CHALLENGE_INST_LIMIT_PER_MIN", 1000)     # abuse limits have their own test
     db = _db()
     priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     inst = f"inst_{uuid.uuid4().hex[:12]}"
@@ -152,7 +153,7 @@ def test_wrong_installation_nonce_and_unknown_installation(world):
     assert e.value.code == "nonce_invalid"
     with pytest.raises(da.AttestationError) as e:
         _run(da.issue_challenge(w["db"], "inst_does_not_exist"))
-    assert e.value.code == "installation_unknown"
+    assert (e.value.code, e.value.status) == ("challenge_refused", 403)     # uniform refusal (r26-b P2-01)
 
 
 def test_copied_proof_file_and_stolen_bridge_token_cannot_attest(world):
@@ -210,13 +211,15 @@ def test_revoked_and_expired_device_key_are_refused(world):
     _run(w["db"].installations.update_one({"installation_id": w["inst"]}, {"$set": {"device_key.revoked": True}}))
     with pytest.raises(da.AttestationError) as e:
         _challenge(w)
-    assert e.value.code == "device_key_revoked" and e.value.status == 403
+    assert e.value.code == "challenge_refused" and e.value.status == 403        # externally uniform …
+    ev = _run(w["db"].attestation_abuse.find_one({"installation_id": w["inst"]}))
+    assert ev["detail"] == "device_key_revoked"                                   # … reason kept server-side
     _run(w["db"].installations.update_one({"installation_id": w["inst"]}, {"$set": {
         "device_key.revoked": False,
         "device_key.expires_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()}}))
     with pytest.raises(da.AttestationError) as e:
         _challenge(w)
-    assert e.value.code == "device_key_expired"
+    assert e.value.code == "challenge_refused"
     # a nonce issued BEFORE revocation dies with the key
     _run(w["db"].installations.update_one({"installation_id": w["inst"]}, {"$set": {"device_key": w["dk"]}}))
     nonce = _challenge(w)
@@ -279,3 +282,75 @@ def test_pairing_claim_enrols_the_key_and_bridge_token_path_cannot():
     # no route enrols a key from a bridge token
     assert "bridge_token" not in infra[infra.index("async def attestation_challenge("):infra.index("async def revoke_device_key(")]
     json.dumps(da.device_key_record("Ed25519", base64.b64encode(b"\x01" * 32).decode()))   # serialisable record
+
+
+# ── r26-b P1-01: heartbeat classification denies every unusable-key reason ────────────
+def _inst_fresh(**dk):
+    return {"ex5_sha256": PINNED, "ex5_measured_by": "device_signature",
+            "attestation": {"verified_at": datetime.now(timezone.utc).isoformat()},
+            "device_key": {"revoked": False, "expires_at": "2999-01-01T00:00:00+00:00", **dk}}
+
+
+def test_heartbeat_classification_denies_missing_malformed_expired_keys():
+    assert da.attested_hash(_inst_fresh()) == ("installer_attested", PINNED)
+    gone = _inst_fresh(); gone.pop("device_key")
+    assert da.attested_hash(gone) == ("device_not_enrolled", PINNED)
+    assert da.attested_hash({**_inst_fresh(), "device_key": None}) == ("device_not_enrolled", PINNED)
+    assert da.attested_hash(_inst_fresh(expires_at="not-a-date")) == ("device_key_invalid", PINNED)
+    bad = _inst_fresh(); bad["device_key"].pop("expires_at")
+    assert da.attested_hash(bad) == ("device_key_invalid", PINNED)
+    expired = _inst_fresh(expires_at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat())
+    assert da.attested_hash(expired) == ("device_key_expired", PINNED)
+    assert da.attested_hash(_inst_fresh(revoked=True)) == ("device_key_revoked", PINNED)
+    src = open(da.__file__).read()
+    blk = src[src.index("def attested_hash("):]
+    assert '== "device_key_revoked"' not in blk and "why = _key_usable(inst.get(\"device_key\"))" in blk
+
+
+def test_heartbeat_denial_reaches_the_live_gate(monkeypatch):
+    monkeypatch.setenv("EA_RELEASE_SHA256", PINNED)
+    from ea_capabilities import live_gate
+    acc = {"mode": "live", "ea_version": "1.57", "ea_binary_sha256": PINNED}
+    for method in ("device_not_enrolled", "device_key_invalid", "device_key_expired", "device_key_revoked",
+                   "installer_unattested", "installer_attestation_stale"):
+        assert live_gate({**acc, "ea_binary_sha256_method": method})["code"] == "EA_BINARY_PROOF_UNATTESTED", method
+    assert live_gate({**acc, "ea_binary_sha256_method": "installer_attested"}) is None
+
+
+# ── r26-b P2-01: challenge abuse controls ──────────────────────────────────────────────
+def test_challenge_limits_single_outstanding_nonce_and_flood_alert(world, monkeypatch):
+    w = world
+    from fastapi import HTTPException
+    # one outstanding nonce per installation: a new challenge voids the previous one
+    n1 = _challenge(w); n2 = _challenge(w)
+    p = proof(w["inst"], n1)
+    with pytest.raises(da.AttestationError) as e:
+        _attest(w, {**p, "signature": sign_rsa(w["priv"], p)})
+    assert e.value.code == "nonce_invalid"
+    assert _run(w["db"].attestation_nonces.find_one({"nonce": n1}))["voided_by"] == "replaced"
+    p = proof(w["inst"], n2)
+    assert _attest(w, {**p, "signature": sign_rsa(w["priv"], p)})["ok"]
+    # per-installation limit
+    monkeypatch.setattr(da, "CHALLENGE_INST_LIMIT_PER_MIN", 2)
+    other = f"inst_{uuid.uuid4().hex[:12]}"
+    _run(w["db"].installations.insert_one({"installation_id": other, "account_id": "x", "revoked": False, "device_key": w["dk"]}))
+    _run(da.issue_challenge(w["db"], other)); _run(da.issue_challenge(w["db"], other))
+    with pytest.raises(HTTPException) as e:
+        _run(da.issue_challenge(w["db"], other))
+    assert e.value.status_code == 429
+    # per-IP limit + flood incident on enumeration
+    monkeypatch.setattr(da, "CHALLENGE_IP_LIMIT_PER_MIN", 1000)
+    monkeypatch.setattr(da, "FLOOD_ALERT_PER_10MIN", 3)
+    for i in range(3):
+        with pytest.raises(da.AttestationError):
+            _run(da.issue_challenge(w["db"], f"inst_probe_{i}", client_ip="203.0.113.9"))
+    inc = _run(w["db"].close_protocol_incidents.find_one({"kind": "attestation_flood", "ip": "203.0.113.9"}))
+    assert inc and inc["events_10min"] >= 3
+    monkeypatch.setattr(da, "CHALLENGE_INST_LIMIT_PER_MIN", 1000)
+    monkeypatch.setattr(da, "CHALLENGE_IP_LIMIT_PER_MIN", 1)
+    assert _run(da.issue_challenge(w["db"], w["inst"], client_ip="198.51.100.7"))["nonce"]   # 1st from this IP passes
+    with pytest.raises(HTTPException) as e:
+        _run(da.issue_challenge(w["db"], w["inst"], client_ip="198.51.100.7"))               # 2nd → per-IP 429
+    assert e.value.status_code == 429
+    src = open(os.path.join(os.path.dirname(da.__file__), "routes", "infra_routes.py")).read()
+    assert "client_ip=client_ip(request)" in src

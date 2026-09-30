@@ -171,6 +171,8 @@ def main():
     ap.add_argument("--target", help="deployment target, e.g. production")
     ap.add_argument("--out", help="write the lock somewhere other than release/rc_lock.json")
     ap.add_argument("--root", help="staged release tree to hash (default: this checkout)")
+    ap.add_argument("--evidence", action="append", default=[], metavar="NAME=PATH",
+                    help="r26-b P1-02: bind release evidence (SBOMs, admission record) by sha256 into the lock")
     args = ap.parse_args()
     dest = args.out or DEST
 
@@ -205,6 +207,15 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
     lock = build_lock(prev, commit=args.commit, backend_digest=args.backend_digest,
                       frontend_digest=args.frontend_digest, target=args.target)
+    evidence = {}
+    for item in args.evidence:
+        name, _, path = item.partition("=")
+        if not name or not os.path.isfile(path):
+            print(f"FAIL: --evidence {item}: file missing — an authoritative lock binds every evidence artifact")
+            return 1
+        evidence[name] = _sha256(path)
+    if evidence:
+        lock["evidence"] = evidence
     with open(dest, "w") as f:
         json.dump(lock, f, indent=2)
     print(f"wrote {dest}")

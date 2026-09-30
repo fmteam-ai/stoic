@@ -54,8 +54,11 @@ async def _with_txn(db, fn, *, emergency: bool = False):
     client = db.client
     try:
         async with await client.start_session() as s:
-            async with s.start_transaction():
-                return await fn(s)
+            # r26-b P2-02: the DRIVER's transaction retry contract — with_transaction re-runs the
+            # callback on TransientTransactionError (write conflicts under close storms) and
+            # retries ONLY the commit on UnknownTransactionCommitResult, so an ambiguous commit
+            # can never allocate a second (trade_id, close_seq) for the same request.
+            return await s.with_transaction(fn)
     except Exception as e:  # noqa: BLE001 — standalone mongod
         if not _txn_unsupported(e):
             raise

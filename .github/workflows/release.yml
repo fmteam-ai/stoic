@@ -493,6 +493,8 @@ jobs:
             || { echo "RELEASE BLOCKED: staged test manifest differs from the release commit's"; exit 1; }
           python3 scripts/freeze_rc_lock.py --root /tmp/pkg --commit "${COMMIT_SHA}" \
             --backend-digest "${BACKEND_DIGEST}" --frontend-digest "${FRONTEND_DIGEST}" \
+            --evidence sbom_backend=sbom-backend.spdx.json --evidence sbom_frontend=sbom-frontend.spdx.json \
+            --evidence admission=release-admission.json \
             --target production --out rc_lock.json
           python3 scripts/freeze_rc_lock.py --root /tmp/pkg --check --commit "${COMMIT_SHA}" --out rc_lock.json
 

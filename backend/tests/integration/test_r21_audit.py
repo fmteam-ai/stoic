@@ -87,6 +87,19 @@ def test_verified_chain_admits_proof_and_unverified_takeover_revokes_it(world, m
     assert acc["ea_binary_sha256_method"] == "installer_unattested"
     assert live_gate(acc)["code"] == "EA_BINARY_PROOF_UNATTESTED"
     _run(db.installations.update_one({"installation_id": inst}, {"$set": {"ex5_measured_by": "device_signature"}}))
+    # r26-b P1-01: an attestation signed by a key that is now expired / malformed / gone is NOT live-eligible
+    # on the heartbeat, even inside the 30-day attestation freshness window
+    for dk, expect in (({"revoked": False, "expires_at": "2000-01-01T00:00:00+00:00"}, "device_key_expired"),
+                       ({"revoked": False, "expires_at": "garbage"}, "device_key_invalid"),
+                       (None, "device_not_enrolled")):
+        _run(db.installations.update_one({"installation_id": inst}, {"$set": {"device_key": dk}}))
+        acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+        assert acc["ea_binary_sha256_method"] == expect, (dk, acc["ea_binary_sha256_method"])
+        assert live_gate(acc)["code"] == "EA_BINARY_PROOF_UNATTESTED"
+    _run(db.installations.update_one({"installation_id": inst}, {"$set": {
+        "device_key": {"revoked": False, "expires_at": "2999-01-01T00:00:00+00:00"}}}))
+    acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+    assert acc["ea_binary_sha256_method"] == "installer_attested"
     # a token-only terminal (no chain) taking over the token loses the admitted proof
     acc = _hb(world, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
     assert acc.get("ea_binary_sha256") is None

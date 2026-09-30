@@ -2940,3 +2940,10 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Installer v1.1: RSACng 3072 + DPAPI key, canonical builder mirrors server, RSA-PSS signing; still writes STOIC-Proof.txt for the EA echo.
 - Tests: `tests/integration/test_r26_device_attestation.py` (12, full AT-P1-02 matrix incl. concurrency), r21/r25 tests realigned. Lanes: unit+exec-truth+integration 900 passed; pairing/pathb/fencing tree tests 140 passed. E2E flow verified against preview API.
 - Manifest/lock/summary regenerated. NEXT: P2-05 chart provenance (frontend epic); optional dashboard badge for attestation state (installations.attestation).
+
+## Iter-311 (2026-06) — Round 26-b follow-ups
+- P1-01: `attested_hash()` denies every unusable-key reason (not only revoked); heartbeat-level tests for expired/malformed/missing keys.
+- P2-01: challenge abuse controls — per-IP/per-installation rate limits, single outstanding nonce, uniform `challenge_refused`, `attestation_abuse` telemetry + `attestation_flood` incident.
+- P2-02: `_with_txn` uses `session.with_transaction()` (driver retry contract); injected write-conflict test.
+- P1-02: lock binds SBOMs + admission by sha256 (`--evidence`), strict mode requires them; release.yml updated.
+- Lanes: 904 passed. E2E attestation flow re-verified. NEXT: P2-03/P2-05 chart provenance (frontend epic).

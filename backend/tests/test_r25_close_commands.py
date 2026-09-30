@@ -157,3 +157,50 @@ def test_panic_emergency_path_never_refuses_but_raises_an_incident():
         finally:
             await db.client.drop_database(db.name)
     asyncio.run(run())
+
+
+def test_transactions_use_the_driver_retry_contract_and_stay_single_command():
+    """r26-b P2-02: `_with_txn` delegates to session.with_transaction — the driver re-runs
+    the callback on TransientTransactionError (write conflicts) and retries only the
+    COMMIT on UnknownTransactionCommitResult. Injected here through a fake session that
+    mimics that contract: two write conflicts then success → exactly one command row."""
+    from unittest.mock import AsyncMock, MagicMock
+    from pymongo.errors import OperationFailure
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = 0
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def with_transaction(self, fn):
+            while True:
+                self.calls += 1
+                try:
+                    return await fn(self)
+                except OperationFailure as e:
+                    if e.has_error_label("TransientTransactionError"):
+                        continue
+                    raise
+
+    sess = FakeSession()
+    db = MagicMock()
+    db.client.start_session = AsyncMock(return_value=sess)
+    attempts = {"n": 0}
+
+    async def flaky(session):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            err = OperationFailure("WriteConflict", code=112)
+            err._error_labels = {"TransientTransactionError"}
+            raise err
+        return {"command_id": "c1", "trades_marked_for_close": 1}
+
+    out = asyncio.run(cc._with_txn(db, flaky))
+    assert out["command_id"] == "c1" and attempts["n"] == 3 and sess.calls == 3
+    # a non-transient failure surfaces unchanged (no silent standalone fallback)
+    async def boom(session):
+        raise OperationFailure("DuplicateKey", code=11000)
+    with pytest.raises(OperationFailure):
+        asyncio.run(cc._with_txn(db, boom))
+    src = open(cc.__file__).read()
+    assert "await s.with_transaction(fn)" in src and "start_transaction()" not in src
