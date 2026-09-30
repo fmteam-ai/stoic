@@ -58,7 +58,7 @@ PY
 
 TEXT="STOIC install report — ${TS}
 host:          ${HOST}
-app:           ${DOMAIN:+https://${DOMAIN}}${DOMAIN:-loopback (dev)}
+app:           ${DOMAIN:+https://${DOMAIN}}$([ -n "${DOMAIN}" ] || echo "loopback (dev)")
 mode:          ${MODE:-?}
 commit:        ${COMMIT}
 image digest:  ${DIGEST:-<not set>}
