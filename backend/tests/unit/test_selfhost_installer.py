@@ -313,3 +313,14 @@ def test_app_images_stage_root_only_secrets_then_drop_privileges():
     assert 'exec setpriv --reuid=stoic --regid=stoic --init-groups -- "$@"' in ep
     assert os.access(os.path.join(ROOT, "deploy", "app-entrypoint.sh"), os.X_OK)
     subprocess.run(["sh", "-n", os.path.join(ROOT, "deploy", "app-entrypoint.sh")], check=True)
+
+
+def test_installer_gates_on_infrastructure_and_lists_release_gates():
+    # server run #11: stack fully healthy, install failed on operator-only release gates (inventory approval, EA, attestation)
+    inst = _read("deploy", "install.sh")
+    assert 'INFRA="mongo_roundtrip workers loop_progress reconciliation outbox schema repair_ledger_anchor execution_truth"' in inst
+    assert "infrastructure readiness: all green" in inst and "release gates pending (trading stays fail-closed / CLOSE_ONLY until cleared" in inst
+    assert "INSTALL INCOMPLETE" in inst                                  # infra failure still fails the install
+    df = _read("Dockerfile.backend")
+    for f in ("scripts/verify_ea_release.py", "release/rc_lock.json", "docs/RELEASE_HASHES.json"):
+        assert f"COPY {f} /app/{f}" in df, f

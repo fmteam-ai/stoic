@@ -30,6 +30,11 @@ RUN grep -v '^emergentintegrations' requirements.txt > /tmp/reqs.txt \
     && rm -rf /tmp/ei /tmp/reqs.txt
 
 COPY backend/ ./
+# Release-truth inputs the readiness gates look for at ../ (repo root): EA verifier,
+# RC dependency lock, release hashes — without them the gates report "unavailable".
+COPY scripts/verify_ea_release.py /app/scripts/verify_ea_release.py
+COPY release/rc_lock.json /app/release/rc_lock.json
+COPY docs/RELEASE_HASHES.json /app/docs/RELEASE_HASHES.json
 
 # OPT-IN forecast plane (docker-compose.forecast.yml sets ML_FORECAST=1):
 # torch CPU + Chronos-Bolt, constrained by the master lockfile. Default 0

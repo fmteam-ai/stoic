@@ -322,27 +322,57 @@ for i in $(seq 1 45); do
   sleep 2
 done
 
-echo "-- verifying full release readiness (Mongo, 6 workers, loop progress, reconciliation, outbox, schema)"
+echo "-- verifying infrastructure readiness (Mongo, 6 workers, loop progress, reconciliation, outbox, schema, ledger anchor, execution truth)"
 METRICS_TOKEN=$(cat secrets/metrics_token)
-READY=0
+# Infrastructure checks must be green for the install to count. The remaining
+# release GATES (inventory approval, EA verification, CI attestation, rc_lock)
+# are operator onboarding steps done AFTER install; until they clear, trading is
+# fail-closed (CLOSE_ONLY) by design — the installer lists them, it does not
+# pretend they can be satisfied on a fresh host.
+INFRA="mongo_roundtrip workers loop_progress reconciliation outbox schema repair_ledger_anchor execution_truth"
+READY=0; STATE=""
 for i in $(seq 1 60); do   # workers need time to acquire leases + first loop iterations
-  if curl -fsS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
-       http://127.0.0.1:8001/api/ops/release-readiness >/dev/null 2>&1; then
-    READY=1; break
-  fi
+  STATE=$(curl -sS -H "X-Metrics-Token: ${METRICS_TOKEN}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)
+  if [ -n "${STATE}" ] && STATE="${STATE}" python3 -c '
+import json, os, sys
+d = json.loads(os.environ["STATE"]); c = d.get("checks", {})
+missing = [k for k in sys.argv[1].split() if not c.get(k, {}).get("ok")]
+sys.exit(0 if not missing else 1)' "${INFRA}"; then READY=1; break; fi
   sleep 4
 done
 if [ "${READY}" != 1 ]; then
-  echo "ERROR: release-readiness never became ready — final state:"
-  curl -sS -H "X-Metrics-Token: ${METRICS_TOKEN}" \
-    http://127.0.0.1:8001/api/ops/release-readiness || true
-  echo ""
+  echo "ERROR: infrastructure never became ready — final state:"
+  STATE="${STATE}" python3 -c '
+import json, os, sys
+d = json.loads(os.environ.get("STATE") or "{}"); c = d.get("checks", {})
+for k in sys.argv[1].split():
+    v = c.get(k, {}); print(("   PASS " if v.get("ok") else "   FAIL ") + k, "" if v.get("ok") else json.dumps({x: v[x] for x in v if x != "detail"})[:300])' "${INFRA}" 2>/dev/null || echo "${STATE}"
   docker compose logs --tail 25
   echo "INSTALL INCOMPLETE — the stack is running but NOT verified. Fix the"
   echo "failing checks above and re-run the installer."
   exit 1
 fi
-echo "   release-readiness: ready"
+echo "   infrastructure readiness: all green"
+STATE="${STATE}" python3 -c '
+import json, os
+d = json.loads(os.environ["STATE"]); c = d.get("checks", {})
+gates = {k: v for k, v in c.items() if isinstance(v, dict) and v.get("ok") is False}
+if d.get("ready"):
+    print("   release gates: all clear — trading authority can open"); raise SystemExit
+print("   release gates pending (trading stays fail-closed / CLOSE_ONLY until cleared — by design):")
+hints = {
+  "inventory": "declare the 6/3/3 inventory expectation and approve it in Admin → Inventory after adding the MT5 accounts",
+  "canonical_decision": "clears automatically once inventory is approved and positions reconcile",
+  "ea_release": "compile the RC MQ5 in Windows MetaEditor, then scripts/verify_ea_release.py --sign (docs/RELEASE_SUMMARY.md)",
+  "release_attestation": "install from a CI-attested tag without --skip-attestation, or run deploy/lib.sh verify_attestation",
+  "rc_lock": "install a tagged release whose release/rc_lock.json matches the running build",
+  "turnstile_config": "set TURNSTILE_SITE_KEY/SECRET in backend/.env (or disable the policy) — optional",
+}
+for k, v in gates.items():
+    why = ", ".join(v.get("violations") or v.get("failures") or v.get("reason_codes") or [v.get("note") or v.get("state") or ""])
+    print(f"     - {k}: {why[:160]}")
+    if k in hints: print(f"         → {hints[k]}")
+'
 
 if [ "${MODE}" = "--production" ] && [ "${CLOUDFLARE}" = 1 ]; then
   echo "-- verifying origin TLS (Cloudflare Origin CA certificate served by Caddy on this host)"
