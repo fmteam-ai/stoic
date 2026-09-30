@@ -277,10 +277,13 @@ def test_installer_locks_itself_after_success_and_refuses_reruns(tmp_path):
 def test_compose_up_clears_containers_marked_for_removal():
     lib = _read("deploy", "lib.sh")
     assert "docker compose ps -aq --status removing --status dead" in lib
-    assert lib.index("removing stale containers") < lib.index("docker compose up -d --remove-orphans")
-    assert "systemctl restart docker" in lib
+    # r292: reaper runs before `up`, and again + one retry when containers die DURING recreate (RHEL 8 overlay EBUSY)
+    assert lib.index("reap_zombies || return 1") < lib.index("docker compose up ${flags}")
+    assert lib.count("reap_zombies || return 1") == 2 and "retrying once" in lib
+    assert 'grep -E " [0-9a-f]{12}_${project}-"' in lib          # compose-renamed leftovers keep the name → must be reaped
+    assert "systemctl restart docker" in lib and "may_detach_mounts" in lib
     # last resort for mounts leaked into another namespace (cPanel CageFS/LVE): metadata removal with dockerd stopped, zombie IDs only
-    assert 'rm -rf "/var/lib/docker/containers/$z"' in lib and "systemctl stop docker docker.socket" in lib
+    assert 'ls -d /var/lib/docker/containers/"$z"*' in lib and 'rm -rf "$full"' in lib and "systemctl stop docker docker.socket" in lib
     assert lib.index("docker inspect -f '{{.GraphDriver.Data.MergedDir}}' \"$z\"") < lib.index("systemctl stop docker docker.socket")
 
 
