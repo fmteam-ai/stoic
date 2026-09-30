@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r304"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r305"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -371,29 +371,6 @@ https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" > /etc/apt/s
 fi
 docker --version; docker compose version
 docker info >/dev/null 2>&1 || { echo "ERROR: docker daemon not running"; exit 1; }
-# Mount propagation: on systemd hosts `/` is `shared`, so every container rootfs
-# mount Docker creates is propagated instantly into the mount namespace of every
-# sandboxed service (php-fpm pools, mariadb, named, chronyd, node apps …). The
-# RHEL 8 kernel then refuses to rmdir the merged dir while any copy exists →
-# `docker rm` fails "device or resource busy" on EVERY recreate/upgrade. Making
-# the Docker root a SLAVE mount stops outward propagation (a private mount would
-# be flipped back to shared by dockerd's setupDaemonRootPropagation on start —
-# dockerd accepts shared or slave only). Persisted as a docker.service drop-in.
-DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
-case "$(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null)" in
-  *slave*) ;;
-  *)
-    echo "-- making ${DOCKER_ROOT} a slave mount (container mounts no longer propagate into other namespaces; a private root would be flipped back to shared by dockerd)"
-    mountpoint -q "${DOCKER_ROOT}" || mount --bind "${DOCKER_ROOT}" "${DOCKER_ROOT}"
-    mount --make-rslave "${DOCKER_ROOT}" ;;
-esac
-mkdir -p /etc/systemd/system/docker.service.d
-cat > /etc/systemd/system/docker.service.d/10-stoic-private-root.conf <<EOF
-[Service]
-ExecStartPre=-/bin/sh -c 'mountpoint -q ${DOCKER_ROOT} || mount --bind ${DOCKER_ROOT} ${DOCKER_ROOT}; mount --make-rslave ${DOCKER_ROOT}'
-EOF
-systemctl daemon-reload
-echo "-- ${DOCKER_ROOT} propagation: $(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null || echo '?')"
 openssl genpkey -algorithm ed25519 -out /dev/null 2>/dev/null || { echo "ERROR: OpenSSL >= 1.1.1 with Ed25519 required"; exit 1; }
 
 
@@ -453,6 +430,29 @@ if [ "${SKIP_ATTEST}" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------ 4 · install
+# Mount propagation: on systemd hosts `/` is `shared`, so every container rootfs
+# mount Docker creates is propagated instantly into the mount namespace of every
+# sandboxed service (php-fpm pools, mariadb, named, chronyd, node apps …). The
+# RHEL 8 kernel then refuses to rmdir the merged dir while any copy exists →
+# `docker rm` fails "device or resource busy" on EVERY recreate/upgrade.
+# deploy/docker-root-slave.sh makes the Docker root a real SLAVE of `/` (see the
+# script header for why not private) and runs as ExecStartPre of docker.service.
+DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+install -m 0755 deploy/docker-root-slave.sh /usr/local/sbin/stoic-docker-root-slave
+mkdir -p /etc/systemd/system/docker.service.d
+printf '[Service]\nExecStartPre=-/usr/local/sbin/stoic-docker-root-slave %s\n' "${DOCKER_ROOT}" > /etc/systemd/system/docker.service.d/10-stoic-private-root.conf
+systemctl daemon-reload
+case "$(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null)" in
+  *slave*) ;;
+  *)
+    echo "-- making ${DOCKER_ROOT} a slave mount (container mounts no longer propagate into other namespaces) — dockerd is stopped for ~20 s"
+    systemctl stop docker docker.socket 2>/dev/null || true
+    /usr/local/sbin/stoic-docker-root-slave "${DOCKER_ROOT}"
+    systemctl reset-failed docker docker.socket 2>/dev/null || true
+    systemctl start docker
+    for i in $(seq 1 45); do docker info >/dev/null 2>&1 && break; sleep 2; done ;;
+esac
+echo "-- ${DOCKER_ROOT} propagation: $(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null || echo '?')"
 STEP="install"
 log "4/5 install (deploy/install.sh ${MODE} ${DOMAIN} ${EXTRA[*]:-})"
 bash deploy/install.sh "${MODE}" ${DOMAIN:+"${DOMAIN}"} ${EXTRA[@]+"${EXTRA[@]}"}
