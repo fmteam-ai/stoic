@@ -138,8 +138,11 @@ export function CoPilotWidget() {
             }]);
         } catch (e) {
             setErr(formatApiError(e));
+            const detail = e?.response?.data?.detail;
+            const serverMsg = detail && typeof detail === "object" ? detail.message : null;
             setMessages((prev) => [...prev, {
-                role: "assistant", content: "Sorry — I couldn't reach the AI backend just now. Try again in a moment.",
+                role: "assistant",
+                content: serverMsg || "Sorry — I couldn't reach the AI backend just now. Try again in a moment.",
                 error: true, ts: new Date().toISOString(),
             }]);
         } finally {
