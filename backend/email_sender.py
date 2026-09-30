@@ -15,16 +15,23 @@ import resend
 logger = logging.getLogger("email_sender")
 
 # Configure once on module import.
-_API_KEY = os.environ.get("RESEND_API_KEY", "")
-_SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or "onboarding@resend.dev"
-_SENDER_NAME = (os.environ.get("SENDER_NAME") or "").strip()
-_SENDER = f"{_SENDER_NAME} <{_SENDER_EMAIL}>" if _SENDER_NAME else _SENDER_EMAIL
-if _API_KEY:
-    resend.api_key = _API_KEY
+
+
+def _api_key() -> str:   # read lazily — Admin → Integrations can update the sealed vault at runtime
+    key = os.environ.get("RESEND_API_KEY", "")
+    if key:
+        resend.api_key = key
+    return key
+
+
+def _sender() -> str:
+    email = os.environ.get("SENDER_EMAIL") or "onboarding@resend.dev"
+    name = (os.environ.get("SENDER_NAME") or "").strip()
+    return f"{name} <{email}>" if name else email
 
 
 def is_configured() -> bool:
-    return bool(_API_KEY)
+    return bool(_api_key())
 
 
 async def send_email(
@@ -39,13 +46,13 @@ async def send_email(
 
     Returns: {ok: bool, id?: str, error?: str}
     """
-    if not _API_KEY:
+    if not _api_key():
         return {"ok": False, "error": "RESEND_API_KEY not configured"}
     if not recipient:
         return {"ok": False, "error": "missing recipient"}
 
     params: dict = {
-        "from": sender or _SENDER,
+        "from": sender or _sender(),
         "to": [recipient],
         "subject": subject,
         "html": html,

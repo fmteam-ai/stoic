@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { StoicMark } from "@/components/StoicLogo";
 import api from "@/lib/api";
 import {
-    LineChart as ChartLineUp, Activity, Sliders, Wallet, ListChecks,
+    LineChart as ChartLineUp, Activity, Plug, Sliders, Wallet, ListChecks,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
@@ -128,6 +128,7 @@ const ADMIN_SECTION = {
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },
         { to: "/admin/support", label: "Support Queue", icon: LifeBuoy, testid: "nav-admin-support" },
         { to: "/admin/runbooks", label: "Runbooks", icon: BookOpen, testid: "nav-admin-runbooks" },
+        { to: "/admin/integrations", label: "Integrations", icon: Plug, testid: "nav-admin-integrations" },
         { to: "/admin/repair-ledger", label: "Repair Ledger", icon: Wrench, testid: "nav-admin-repair-ledger" },
         { to: "/admin/affiliates", label: "Affiliate Mgmt", icon: ShieldAlert, testid: "nav-admin-affiliates" },
         { to: "/admin/migration", label: "Migration", icon: DatabaseBackup, testid: "nav-admin-migration" },

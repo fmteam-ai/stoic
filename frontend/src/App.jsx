@@ -73,6 +73,7 @@ const PublicCertificate = lazyImport(() => import("@/pages/PublicCertificate"));
 const Connect = lazyImport(() => import("@/pages/Connect"));
 const AdminBrokers = lazyImport(() => import("@/pages/AdminBrokers"));
 const AdminRunbooks = lazyImport(() => import("@/pages/AdminRunbooks"));
+const AdminIntegrations = lazyImport(() => import("@/pages/AdminIntegrations"));
 const AdminRepairLedger = lazyImport(() => import("@/pages/AdminRepairLedger"));
 const AdminHostMigration = lazyImport(() => import("@/pages/AdminHostMigration"));
 const DeployPreflight = lazyImport(() => import("@/pages/DeployPreflight"));
@@ -130,6 +131,7 @@ function App() {
                         <Route path="/admin/brokers" element={<ProtectedRoute requireAdmin><AdminBrokers /></ProtectedRoute>} />
                         <Route path="/admin/support" element={<ProtectedRoute requireAdmin><AdminSupport /></ProtectedRoute>} />
                         <Route path="/admin/runbooks" element={<ProtectedRoute requireAdmin><AdminRunbooks /></ProtectedRoute>} />
+                        <Route path="/admin/integrations" element={<ProtectedRoute requireAdmin><AdminIntegrations /></ProtectedRoute>} />
                         <Route path="/admin/preflight" element={<ProtectedRoute requireAdmin><DeployPreflight /></ProtectedRoute>} />
                         <Route path="/help" element={<ProtectedRoute><HelpCenter /></ProtectedRoute>} />
                         <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />

@@ -582,3 +582,52 @@ async def admin_audit_log(limit: int = 200, kind: str = "",
     for d in docs:
         d["id"] = str(d.pop("_id"))
     return {"audit": docs}
+
+
+# ── Admin → Integrations (status · live tests · sealed secret updates with re-auth) ──
+@router.get("/admin/integrations")
+async def admin_integrations_status(user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import integrations_settings as integ
+    return await integ.status(get_db())
+
+
+@router.post("/admin/integrations/test/{provider}")
+async def admin_integrations_test(provider: str, user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import integrations_settings as integ
+    if provider not in integ.PROVIDERS:
+        raise HTTPException(status_code=404, detail="unknown provider")
+    return await integ.test_provider(get_db(), provider, user)
+
+
+async def _reauth(db, user: dict, password: str, otp: str | None) -> None:
+    """Secret changes need fresh proof of the admin's password (+ TOTP when enrolled)."""
+    from auth import verify_password
+    from security import rate_limit
+    await rate_limit(db, "admin_reauth", user["id"], 5, 300, "Too many re-authentication attempts")
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not doc or not password or not verify_password(password, doc.get("password_hash") or ""):
+        raise HTTPException(status_code=401, detail={"code": "reauth_failed", "message": "Password incorrect"})
+    if doc.get("two_factor_enabled"):
+        from totp import verify_code_once
+        if not otp or not await verify_code_once(db, user["id"], doc.get("totp_secret") or "", str(otp)):
+            raise HTTPException(status_code=401, detail={"code": "reauth_failed", "message": "Authenticator code incorrect"})
+
+
+@router.post("/admin/integrations/secret")
+async def admin_integrations_secret(payload: dict, user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import integrations_settings as integ
+    db = get_db()
+    key = str(payload.get("key") or "")
+    if key not in integ.REGISTRY:
+        raise HTTPException(status_code=404, detail="unknown key")
+    await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
+    try:
+        return await integ.update_secret(db, key, str(payload.get("value") or ""), user)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": str(e)})

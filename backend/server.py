@@ -1,6 +1,12 @@
 from dotenv import load_dotenv
 from pathlib import Path
 load_dotenv(Path(__file__).parent / ".env")
+try:   # Admin → Integrations sealed vault overlays env at boot (never fatal)
+    import os as _os
+    from integrations_settings import load_vault_sync as _load_vault
+    _load_vault(_os.environ["MONGO_URL"], _os.environ["DB_NAME"])
+except Exception:  # noqa: BLE001
+    pass
 from secrets_loader import resolve_file_secrets
 resolve_file_secrets()
 

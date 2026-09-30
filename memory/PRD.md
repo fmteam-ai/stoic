@@ -2947,3 +2947,9 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - P2-02: `_with_txn` uses `session.with_transaction()` (driver retry contract); injected write-conflict test.
 - P1-02: lock binds SBOMs + admission by sha256 (`--evidence`), strict mode requires them; release.yml updated.
 - Lanes: 904 passed. E2E attestation flow re-verified. NEXT: P2-03/P2-05 chart provenance (frontend epic).
+
+## Iter-312 (2026-06) — Admin → Integrations (status · live tests · sealed secret updates)
+- `backend/integrations_settings.py`: registry (Stripe, Turnstile, Resend e-mail, Emergent AI keys), AES-256-GCM sealed vault (`secrets_vault`, master key = SECRETS_MASTER_KEY or HKDF(JWT_SECRET)), overlay loaded into os.environ at API + worker start (`load_vault_sync`), applied immediately to the API on update; clearing restores the .env value. Live tests: Stripe (Account.retrieve / Emergent-managed key notice), Turnstile (siteverify probe), e-mail (sends test mail to the admin), AI (key presence).
+- Routes: `GET /admin/integrations`, `POST /admin/integrations/test/{provider}`, `POST /admin/integrations/secret` (admin + re-auth password + TOTP when enrolled, 5/5 min rate limit, hash-chained audit `integration_secret_update`). `email_sender` reads env lazily.
+- Frontend: `/admin/integrations` (AdminIntegrations.jsx) + Sidebar "Integrations". Copilot: 503 `llm_key_missing` with actionable message; widget shows server message.
+- Tests: `tests/unit/test_admin_integrations.py`; screenshot + curl verified (re-auth 401 on wrong password, update/clear 200, audit entry).

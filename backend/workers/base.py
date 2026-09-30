@@ -9,6 +9,11 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+try:   # sealed vault overlay (Admin → Integrations) — workers pick it up at start
+    from integrations_settings import load_vault_sync as _load_vault
+    _load_vault(os.environ["MONGO_URL"], os.environ["DB_NAME"])
+except Exception:  # noqa: BLE001
+    pass
 
 from secrets_loader import resolve_file_secrets  # noqa: E402
 resolve_file_secrets()
