@@ -77,16 +77,21 @@ httpd -t 2>&1 | grep -q "Syntax OK" || { echo "ERROR: httpd -t failed after addi
 /scripts/restartsrv_httpd >/dev/null 2>&1 || systemctl restart httpd
 echo "-- httpd.conf rebuilt and httpd restarted"
 
-# verify through Apache on this host, independent of DNS / Cloudflare
+# verify through Apache on this host, independent of DNS / Cloudflare. cPanel binds
+# vhosts to the account's IP (<VirtualHost 192.0.2.10:443>) — a request to 127.0.0.1
+# lands on Apache's DEFAULT vhost (no proxy, ModSecurity on → 406), so resolve the
+# domain to its own vhost IP from cPanel userdata.
+VHOST_IP=$(awk '/^ip:/ {print $2; exit}' "/var/cpanel/userdata/${CPUSER}/${D}" 2>/dev/null || true)
+[ -n "${VHOST_IP}" ] || VHOST_IP=127.0.0.1
 sleep 2
-CODE=$(curl -sk -m 15 -o /tmp/stoic_cp_health -w '%{http_code}' --resolve "${D}:443:127.0.0.1" "https://${D}/api/health" 2>/dev/null || true); [ -n "${CODE}" ] || CODE=000
+CODE=$(curl -sk -m 15 -o /tmp/stoic_cp_health -w '%{http_code}' --resolve "${D}:443:${VHOST_IP}" "https://${D}/api/health" 2>/dev/null || true); [ -n "${CODE}" ] || CODE=000
 if [ "${CODE}" = 200 ] && grep -q '"status"' /tmp/stoic_cp_health 2>/dev/null; then
-  echo "-- verified: https://${D}/api/health via Apache → STOIC (HTTP 200)"
+  echo "-- verified: https://${D}/api/health via Apache (vhost ${VHOST_IP}) → STOIC (HTTP 200)"
 else
   HINT="Is the stack up? (docker compose ps; curl -s http://127.0.0.1:8001/api/health)"
   [ "${CODE}" = 406 ] && HINT="406 = cPanel ModSecurity blocked the proxied request although SecRuleEngine Off is in the include — disable ModSecurity for ${D} in WHM → Security Center → ModSecurity Domain Manager, or check /etc/apache2/logs/modsec_audit.log"
   echo "ERROR: https://${D}/api/health via Apache → HTTP ${CODE}. ${HINT}"; exit 1
 fi
-HCODE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' --resolve "${D}:80:127.0.0.1" "http://${D}/" 2>/dev/null || true)
+HCODE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' --resolve "${D}:80:${VHOST_IP}" "http://${D}/" 2>/dev/null || true)
 [ "${HCODE}" = 301 ] && echo "-- verified: http://${D}/ → 301 https" || echo "!! http://${D}/ returned ${HCODE:-000} (expected 301) — check cPanel 'Force HTTPS Redirect' is not conflicting"
 echo "-- done. Public cut-over: point the Cloudflare A records for ${D} and www at this host's IP (keep the orange cloud, SSL mode 'Full (strict)')."

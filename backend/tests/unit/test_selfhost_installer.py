@@ -293,7 +293,7 @@ def test_cpanel_wiring_script_is_safe_and_autowired():
                    "userdata/ssl/2_4/${CPUSER}/${D}", "userdata/std/2_4/${CPUSER}/${D}", "ProxyPass /.well-known !",
                    "SecRuleEngine Off", "for p in /cpanel /whm /webmail",          # r299/r300: ModSecurity 406 · cPanel shortcuts stay reachable
                    "RewriteCond %{REQUEST_URI} !^/\\.well-known/", "ea-apache24-mod_proxy_wstunnel",
-                   'httpd -t 2>&1 | grep -q "Syntax OK"', '--resolve "${D}:443:127.0.0.1"', "public_html is left untouched"):
+                   'httpd -t 2>&1 | grep -q "Syntax OK"', '--resolve "${D}:443:${VHOST_IP}"', '/var/cpanel/userdata/${CPUSER}/${D}', "public_html is left untouched"):
         assert needle in c, needle
     assert '[[ "${CPUSER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]' in c                    # user name validated before path use
     assert os.access(os.path.join(ROOT, "deploy", "proxy", "cpanel.sh"), os.X_OK)
