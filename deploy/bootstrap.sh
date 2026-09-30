@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r293"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r294"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -431,13 +431,20 @@ bash deploy/install.sh "${MODE}" ${DOMAIN:+"${DOMAIN}"} ${EXTRA[@]+"${EXTRA[@]}"
 # ------------------------------------------------------------------ 5 · verify + operations
 STEP="verify"
 log "5/5 verify + operations"
-bash deploy/doctor.sh --quiet || { echo "ERROR: post-install diagnostics reported failures"; exit 1; }
 CPANEL_WIRED=0
 if [ "${MODE}" = "--behind-proxy" ] && [ -x /scripts/rebuildhttpdconf ]; then
   echo "-- cPanel/WHM detected: wiring the ${DOMAIN} vhost as a reverse proxy (deploy/proxy/cpanel.sh)"
   if bash deploy/proxy/cpanel.sh "${DOMAIN}"; then CPANEL_WIRED=1
   else echo "!! cPanel wiring failed (non-fatal — the stack is up). Re-run by hand: sudo bash ${TARGET}/deploy/proxy/cpanel.sh ${DOMAIN}"; fi
 fi
+echo "-- waiting for container health checks to settle (up to 3 min)"
+for i in $(seq 1 36); do
+  STARTING=$(docker compose ps --format '{{.Name}} {{.Health}}' 2>/dev/null | awk '$2=="starting"{print $1}' | tr '\n' ' ')
+  [ -z "${STARTING// /}" ] && break
+  [ "$i" = 36 ] && echo "   still starting after 3 min: ${STARTING}"
+  sleep 5
+done
+bash deploy/doctor.sh --quiet || { echo "ERROR: post-install diagnostics reported failures"; exit 1; }
 if [ "${PUBLIC}" = 1 ] && [ -x deploy/backup.sh ]; then
   bash deploy/backup.sh schedule >/dev/null 2>&1 && echo "-- nightly Mongo backup scheduled" || echo "-- backup schedule skipped (run: deploy/backup.sh schedule)"
 fi

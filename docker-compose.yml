@@ -146,7 +146,10 @@ services:
         REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-}
     restart: unless-stopped
     depends_on:
-      - backend
+      # nginx resolves `backend` at startup — without a live backend it exits
+      # and restart-loops (RestartCount climbs); wait for the health check
+      backend:
+        condition: service_healthy
     ports:
       # loopback-only by default; public traffic enters through the TLS
       # ingress (docker-compose.tls.yml → Caddy on 80/443).

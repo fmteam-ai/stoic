@@ -47,11 +47,12 @@ db_check() {
   [ "${PING}" = 1 ] && ok "ping: ok" || fail "ping failed (${PING:-no answer})"
   local RT; RT=$(mongo_eval 'const c=db.getCollection("_doctor_probe");c.insertOne({t:new Date()});const n=c.countDocuments({});c.drop();print("rt-ok "+n)' | tail -1)
   case "${RT}" in rt-ok*) ok "app user auth + write/read round trip on $(envval .env DB_NAME): ok" ;; *) fail "app user round trip failed: ${RT:-no answer} (secrets/mongo_app_password vs deploy/mongo-init.js?)" ;; esac
-  local RS; RS=$(docker compose exec -T mongo mongosh --quiet --eval 'try{print(rs.status().set)}catch(e){print("standalone")}' 2>/dev/null | tail -1)
+  # rs.status() needs clusterMonitor → authenticate as root (unauthenticated it throws → false "standalone")
+  local RS; RS=$(docker compose exec -T mongo sh -c 'mongosh --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$(cat /run/secrets/mongo_root_password)" --eval "try{print(rs.status().set)}catch(e){print(\"standalone \"+e.codeName)}"' 2>/dev/null | tail -1)
   local APP_ENV; APP_ENV=$(envval backend/.env APP_ENV)
-  if [ "${RS}" = standalone ] || [ -z "${RS}" ]; then
-    if [ "${APP_ENV}" = production ]; then fail "replica set: standalone — production requires transactions (docs/PRODUCTION_DEPLOY_CHECKLIST.md → 'MongoDB transactions')"
-    else warn "replica set: standalone — transactions unavailable; required before any live-enabled account (see PRODUCTION_DEPLOY_CHECKLIST.md)"; fi
+  if [ "${RS%% *}" = standalone ] || [ -z "${RS}" ]; then
+    if [ "${APP_ENV}" = production ]; then fail "replica set: ${RS:-standalone} — production requires transactions (docs/PRODUCTION_DEPLOY_CHECKLIST.md → 'MongoDB transactions')"
+    else warn "replica set: ${RS:-standalone} — transactions unavailable; required before any live-enabled account (see PRODUCTION_DEPLOY_CHECKLIST.md)"; fi
   else ok "replica set: ${RS} (transactions available)"; fi
   local COLLS; COLLS=$(mongo_eval 'print(db.getCollectionNames().length)' | tail -1)
   [ -n "${COLLS}" ] && ok "collections in $(envval .env DB_NAME): ${COLLS}"
@@ -151,16 +152,26 @@ if docker compose ps >/dev/null 2>&1; then
       *) fail "${name}: ${state} ${health:-}" ;;
     esac
   done < <(docker compose ps --format '{{.Name}} {{.State}} {{.Health}}' 2>/dev/null)
-  RESTARTS=$(docker compose ps -q 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.RestartCount}}' 2>/dev/null | awk '$2>3')
-  [ -z "${RESTARTS}" ] && ok "no crash-looping containers" || fail "restart loops: ${RESTARTS}"
+  # RestartCount is cumulative for the container's lifetime (a frontend that
+  # flapped while the backend was down during an earlier failed run keeps its
+  # count) — a loop is only live if the count still grows: sample twice.
+  restart_counts() { docker compose ps -q 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.RestartCount}}' 2>/dev/null | sort; }
+  R1=$(restart_counts); sleep "${RESTART_SAMPLE_GAP:-8}"; R2=$(restart_counts)
+  LOOPING=$(comm -13 <(echo "${R1}") <(echo "${R2}") | awk '{print $1}' | tr '\n' ' ')
+  HISTORIC=$(echo "${R2}" | awk '$2>3 {print $1"("$2")"}' | tr '\n' ' ')
+  if [ -n "${LOOPING// /}" ]; then fail "restart loops (still restarting): ${LOOPING}"
+  elif [ -n "${HISTORIC// /}" ]; then warn "restarted earlier but stable now: ${HISTORIC}(counts reset on recreate: docker compose up -d --force-recreate <svc>)"
+  else ok "no crash-looping containers"; fi
 else fail "docker compose project not found in $(pwd)"; fi
 
 db_check
 
 hdr "endpoints"
 probe() { # probe <label> <url> [expect]
-  local code; code=$(curl -s -m 15 -o /tmp/doctor_body -w '%{http_code}' "$2" 2>/dev/null || true); [ -n "${code}" ] || code=000
-  if [ "${code}" = "${3:-200}" ]; then ok "$1 → ${code}"; else fail "$1 → ${code} $(head -c 160 /tmp/doctor_body 2>/dev/null | tr '\n' ' ')"; fi
+  local code err; rm -f /tmp/doctor_body
+  code=$(curl -sS -m 15 -o /tmp/doctor_body -w '%{http_code}' "$2" 2>/tmp/doctor_err || true); [ -n "${code}" ] || code=000
+  if [ "${code}" = "${3:-200}" ]; then ok "$1 → ${code}"
+  else err=$(head -c 160 /tmp/doctor_body 2>/dev/null | tr '\n' ' '); [ -n "${err}" ] || err=$(sed -n 1p /tmp/doctor_err 2>/dev/null); fail "$1 → ${code} ${err}"; fi
 }
 probe "API /health"            http://127.0.0.1:8001/health
 probe "API /api/health"        http://127.0.0.1:8001/api/health
@@ -169,7 +180,17 @@ probe "frontend"               http://127.0.0.1:3000/
 if [ -f /tmp/doctor_body ] && curl -s -m 15 http://127.0.0.1:8001/api/release-key -o /tmp/doctor_body; then
   grep -q '"mode": *"external"' /tmp/doctor_body && ok "release signer: external (sidecar)" || warn "release signer: $(grep -o '"mode": *"[a-z]*"' /tmp/doctor_body | head -1) — live signing not active"
 fi
-if [ -n "${DOMAIN}" ]; then probe "https://${DOMAIN}/api/health" "https://${DOMAIN}/api/health"; fi
+if [ -n "${DOMAIN}" ]; then
+  rm -f /tmp/doctor_body
+  CODE=$(curl -sS -m 15 -o /tmp/doctor_body -w '%{http_code}' "https://${DOMAIN}/api/health" 2>/tmp/doctor_err || true); [ -n "${CODE}" ] || CODE=000
+  if [ "${CODE}" = 200 ]; then ok "https://${DOMAIN}/api/health → 200"
+  else
+    ERR=$(sed -n 1p /tmp/doctor_err 2>/dev/null)
+    KCODE=$(curl -sk -m 15 -o /dev/null -w '%{http_code}' "https://${DOMAIN}/api/health" 2>/dev/null || true)
+    if [ "${KCODE}" = 200 ]; then warn "https://${DOMAIN}/api/health → proxy answers 200 but the TLS certificate is not valid for ${DOMAIN} (${ERR:-curl ${CODE}}) — issue it (cPanel: SSL/TLS Status → Run AutoSSL) before going public"
+    else fail "https://${DOMAIN}/api/health → ${CODE} ${ERR:-$(head -c 160 /tmp/doctor_body 2>/dev/null | tr '\n' ' ')}"; fi
+  fi
+fi
 if [ "$(envval .env CLOUDFLARE_MODE)" = true ]; then
   CF_END=$(openssl x509 -in secrets/origin_cert.pem -noout -enddate 2>/dev/null | cut -d= -f2)
   CF_DAYS=$(( ( $(date -d "${CF_END:-now}" +%s 2>/dev/null || date +%s) - $(date +%s) ) / 86400 ))
