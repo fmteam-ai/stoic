@@ -18,7 +18,7 @@
   ],
   "updated_files": ["/app/backend/tests/test_iter_plans_editor_http.py"],
   "success_rate": {"backend": "100% (7/7)", "frontend": "100% of testable flows"},
-  "test_credentials": "admin@trading.bot / R9xcJ7qdJWaYLjlmkjDiC7Vlol3iz#q (from /app/memory/test_credentials.md)",
+  "test_credentials": "admin@trading.bot / <redacted — see /app/memory/test_credentials.md>",
   "seed_data_creation": "None. Plan pricing state fully restored to defaults via HTTP POST at end of run (verified via GET /api/admin/integrations/plans).",
   "retest_needed": false,
   "main_agent_can_self_test": true,

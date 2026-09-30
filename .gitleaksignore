@@ -49,3 +49,7 @@ fb2353944700bd2f626499b5bc5a685e39f1bccc:backend/close_commands.py:generic-api-k
 53e02e9c009605e48d8f394b98ce639495290791:backend/tests/unit/test_selfhost_installer.py:generic-api-key:27
 c92792b134e28a30e6a28de2b559023989a0593c:memory/PRD.md:generic-api-key:2784
 c92792b134e28a30e6a28de2b559023989a0593c:backend/tests/unit/test_bypass_sentinel.py:generic-api-key:64
+# False positives — dummy sk_live_ fixture strings in the vault unit test (values replaced 2026-09-30):
+a04f6a00ee22edfc6fa8cce5254d2e930ddf5acf:backend/tests/unit/test_admin_integrations.py:stripe-access-token:17
+a04f6a00ee22edfc6fa8cce5254d2e930ddf5acf:backend/tests/unit/test_admin_integrations.py:stripe-access-token:18
+a04f6a00ee22edfc6fa8cce5254d2e930ddf5acf:backend/tests/unit/test_admin_integrations.py:stripe-access-token:35

@@ -2,12 +2,15 @@
 Runs against REACT_APP_BACKEND_URL with admin cookie session. Restores defaults at end.
 """
 import os
+import sys
 import pytest
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from live_target import admin_credentials  # noqa: E402 — env-provided, never literals
+
 BASE = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or "admin@trading.bot"
-ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD") or "R9xcJ7qdJWaYLjlmkjDiC7Vlol3iz#q"
+ADMIN_EMAIL, ADMIN_PASSWORD = admin_credentials(strict=False)
 
 DEFAULTS = {
     "base_cents": {"starter": 3900, "trader": 9900, "professional": 19900, "elite_ai": 39900},
@@ -20,6 +23,8 @@ DEFAULTS = {
 
 @pytest.fixture(scope="module")
 def admin_session():
+    if not BASE or not ADMIN_PASSWORD:
+        pytest.skip("live target / TEST_ADMIN_* env not configured")
     s = requests.Session()
     r = s.post(f"{BASE}/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=15)
     assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text[:200]}"

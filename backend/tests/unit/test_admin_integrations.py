@@ -14,8 +14,8 @@ def _master(monkeypatch):
 
 
 def test_seal_unseal_roundtrip_and_tamper_detection():
-    doc = integ.seal("sk_live_1234567890")
-    assert integ.unseal(doc) == "sk_live_1234567890"
+    doc = integ.seal("dummy_secret_1234567890")
+    assert integ.unseal(doc) == "dummy_secret_1234567890"
     assert doc["master_key_id"] == integ.master_key_id() and len(doc["master_key_id"]) == 12
     bad = dict(doc); bad["ciphertext"] = doc["ciphertext"][:-4] + "AAAA"
     with pytest.raises(Exception):
@@ -32,7 +32,7 @@ def test_master_key_from_env_must_be_32_bytes(monkeypatch):
 
 
 def test_tail_never_leaks_more_than_four_chars():
-    assert integ.tail("sk_live_ABCDEFGH1234") == "…1234"
+    assert integ.tail("dummy_secret_ABCDEFGH1234") == "…1234"
     assert integ.tail("short") == "set" and integ.tail("") == ""
 
 
