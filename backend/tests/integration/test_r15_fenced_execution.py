@@ -54,10 +54,12 @@ def test_stale_worker_resuming_after_reclaim_executes_nothing(world, coll):
     _id = _run(db[coll].insert_one({"user_id": uid, "status": "pending", "actions": actions})).inserted_id
     a_doc = _run(nx.claim(db, coll, {"_id": _id}, from_status="pending"))
     gate = asyncio.Event()
+    stalled = asyncio.Event()
     calls = []
 
     async def _exec_a(u, act, ctx=None, **kw):
         if act["type"] == "CLOSE_ALL_TRADES":
+            stalled.set()
             await gate.wait()          # A stalls right before its domain write
         await nx.apply_effect(db, ctx)  # the ultimate handler's boundary
         calls.append(("A", act["type"]))
@@ -70,7 +72,7 @@ def test_stale_worker_resuming_after_reclaim_executes_nothing(world, coll):
 
     async def _scenario():
         task_a = asyncio.create_task(nx.run_claimed(db, coll, a_doc, uid, actions, authority=READY, execute_one=_exec_a))
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(stalled.wait(), timeout=10)
         await db[coll].update_one({"_id": _id}, {"$set": {
             "execution.lease_until": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}})
         b_doc = await nx.reclaim_expired(db, coll, await db[coll].find_one({"_id": _id}))
@@ -101,10 +103,12 @@ def test_stale_worker_mid_write_is_recorded_uncertain_and_never_replayed(world):
     _id = _run(db.nl_proposals.insert_one({"user_id": uid, "status": "pending", "actions": actions})).inserted_id
     a_doc = _run(nx.claim(db, "nl_proposals", {"_id": _id}, from_status="pending"))
     gate = asyncio.Event()
+    applying = asyncio.Event()
     calls = []
 
     async def _exec_a(u, act, ctx=None, **kw):
         await nx.apply_effect(db, ctx)
+        applying.set()                  # A is now provably inside the domain write
         await gate.wait()               # stalled INSIDE the domain write
         calls.append("A")
         return {"ok": True}
@@ -115,7 +119,7 @@ def test_stale_worker_mid_write_is_recorded_uncertain_and_never_replayed(world):
 
     async def _scenario():
         task_a = asyncio.create_task(nx.run_claimed(db, "nl_proposals", a_doc, uid, actions, authority=READY, execute_one=_exec_a))
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(applying.wait(), timeout=10)
         await db.nl_proposals.update_one({"_id": _id}, {"$set": {
             "execution.lease_until": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}})
         b_doc = await nx.reclaim_expired(db, "nl_proposals", await db.nl_proposals.find_one({"_id": _id}))
