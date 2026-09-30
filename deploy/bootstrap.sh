@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r298"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r299"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -215,8 +215,8 @@ ZOMBIES=$(docker ps -a --format '{{.ID}} {{.Names}} {{.Status}}' 2>/dev/null | g
 [ "${ZOMBIES}" -gt 0 ] && warnc "docker: ${ZOMBIES} dead/renamed stoic container(s) from a previous run — the installer will reap them before starting the stack" || true
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
   DROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker); DPROP=$(findmnt -no PROPAGATION "${DROOT}" 2>/dev/null || echo "?")
-  if [ "${DPROP}" = private ]; then pass "docker: ${DROOT} is a private mount (container mounts do not leak into other namespaces)"
-  else warnc "docker: ${DROOT} propagation is '${DPROP}' — container rootfs mounts propagate into every sandboxed service's namespace (php-fpm, mariadb, …) and 'docker rm' fails with 'device or resource busy'; the installer will make it private (docker.service drop-in)"; fi
+  case "${DPROP}" in *shared*|"?") warnc "docker: ${DROOT} propagation is '${DPROP}' — container rootfs mounts propagate into every sandboxed service's namespace (php-fpm, mariadb, …) and 'docker rm' fails with 'device or resource busy'; the installer will make it a slave mount (docker.service drop-in)" ;;
+    *) pass "docker: ${DROOT} propagation is '${DPROP}' (container mounts do not leak into other namespaces)" ;; esac
 fi
 
 reach https://download.docker.com && pass "network: download.docker.com reachable" || failc "network: cannot reach download.docker.com (Docker packages)"
@@ -375,20 +375,22 @@ docker info >/dev/null 2>&1 || { echo "ERROR: docker daemon not running"; exit 1
 # sandboxed service (php-fpm pools, mariadb, named, chronyd, node apps …). The
 # RHEL 8 kernel then refuses to rmdir the merged dir while any copy exists →
 # `docker rm` fails "device or resource busy" on EVERY recreate/upgrade. Making
-# /var/lib/docker a private mount stops the propagation at the source; persisted
-# as a docker.service drop-in so it survives reboots and docker upgrades.
+# the Docker root a SLAVE mount stops outward propagation (a private mount would
+# be flipped back to shared by dockerd's setupDaemonRootPropagation on start —
+# dockerd accepts shared or slave only). Persisted as a docker.service drop-in.
 DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
-if [ "$(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null)" != private ]; then
-  echo "-- making ${DOCKER_ROOT} a private mount (container mounts no longer propagate into other namespaces)"
-  mountpoint -q "${DOCKER_ROOT}" || mount --bind "${DOCKER_ROOT}" "${DOCKER_ROOT}"
-  mount --make-rprivate "${DOCKER_ROOT}"
-  mkdir -p /etc/systemd/system/docker.service.d
-  cat > /etc/systemd/system/docker.service.d/10-stoic-private-root.conf <<EOF
+case "$(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null)" in
+  *shared*|"")
+    echo "-- making ${DOCKER_ROOT} a slave mount (container mounts no longer propagate into other namespaces)"
+    mountpoint -q "${DOCKER_ROOT}" || mount --bind "${DOCKER_ROOT}" "${DOCKER_ROOT}"
+    mount --make-rslave "${DOCKER_ROOT}" ;;
+esac
+mkdir -p /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/10-stoic-private-root.conf <<EOF
 [Service]
-ExecStartPre=-/bin/sh -c 'mountpoint -q ${DOCKER_ROOT} || mount --bind ${DOCKER_ROOT} ${DOCKER_ROOT}; mount --make-rprivate ${DOCKER_ROOT}'
+ExecStartPre=-/bin/sh -c 'mountpoint -q ${DOCKER_ROOT} || mount --bind ${DOCKER_ROOT} ${DOCKER_ROOT}; mount --make-rslave ${DOCKER_ROOT}'
 EOF
-  systemctl daemon-reload
-fi
+systemctl daemon-reload
 echo "-- ${DOCKER_ROOT} propagation: $(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null || echo '?')"
 openssl genpkey -algorithm ed25519 -out /dev/null 2>/dev/null || { echo "ERROR: OpenSSL >= 1.1.1 with Ed25519 required"; exit 1; }
 

@@ -147,8 +147,9 @@ hdr "docker mount propagation (why 'device or resource busy' on container remova
 HOST_NS=$(readlink /proc/1/ns/mnt 2>/dev/null); DK_PID=$(pidof dockerd 2>/dev/null | awk '{print $1}')
 if [ -n "${DK_PID}" ]; then
   DROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker); DPROP=$(findmnt -no PROPAGATION "${DROOT}" 2>/dev/null || echo "?")
-  [ "${DPROP}" = private ] && ok "${DROOT} is a private mount — container mounts do not propagate into other namespaces" \
-    || fail "${DROOT} propagation is '${DPROP}' — every container rootfs mount is propagated into sandboxed services' namespaces and 'docker rm' hits EBUSY. Fix: mount --bind ${DROOT} ${DROOT}; mount --make-rprivate ${DROOT} (bootstrap.sh persists this as a docker.service drop-in)"
+  case "${DPROP}" in
+    *shared*|"?") fail "${DROOT} propagation is '${DPROP}' — every container rootfs mount is propagated into sandboxed services' namespaces and 'docker rm' hits EBUSY. Fix: mount --bind ${DROOT} ${DROOT}; mount --make-rslave ${DROOT} (bootstrap.sh persists this as a docker.service drop-in; dockerd flips a PRIVATE root back to shared, slave is kept)" ;;
+    *) ok "${DROOT} propagation is '${DPROP}' — container mounts do not propagate into other namespaces" ;; esac
   [ "$(readlink /proc/${DK_PID}/ns/mnt 2>/dev/null)" = "${HOST_NS}" ] && ok "dockerd runs in the host mount namespace" || warn "dockerd runs in its own mount namespace (systemd MountFlags?) — containerd/runc may not see its mounts"
   # foreign mount namespaces that hold copies of docker's overlay mounts: unmounting on the
   # host then leaves the copy → docker rm fails EBUSY. Name the processes so they can be fixed

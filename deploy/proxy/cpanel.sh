@@ -53,6 +53,10 @@ done
 mkdir -p "${SSL_DIR}" "${STD_DIR}"
 {
   echo "# STOIC reverse proxy (installed by deploy/proxy/cpanel.sh) — AutoSSL DCV stays on disk"
+  echo "# cPanel ModSecurity answers 406 to proxied API/WebSocket traffic — the app enforces its own request guards"
+  echo "<IfModule security2_module>"
+  echo "    SecRuleEngine Off"
+  echo "</IfModule>"
   echo "ProxyPass /.well-known !"
   grep -vE '^#' "deploy/proxy/apache-${D}.conf"
 } > "${SSL_DIR}/stoic.conf"
@@ -77,7 +81,9 @@ CODE=$(curl -sk -m 15 -o /tmp/stoic_cp_health -w '%{http_code}' --resolve "${D}:
 if [ "${CODE}" = 200 ] && grep -q '"status"' /tmp/stoic_cp_health 2>/dev/null; then
   echo "-- verified: https://${D}/api/health via Apache → STOIC (HTTP 200)"
 else
-  echo "ERROR: https://${D}/api/health via Apache → HTTP ${CODE}. Is the stack up? (docker compose ps; curl -s http://127.0.0.1:8001/api/health)"; exit 1
+  HINT="Is the stack up? (docker compose ps; curl -s http://127.0.0.1:8001/api/health)"
+  [ "${CODE}" = 406 ] && HINT="406 = cPanel ModSecurity blocked the proxied request although SecRuleEngine Off is in the include — disable ModSecurity for ${D} in WHM → Security Center → ModSecurity Domain Manager, or check /etc/apache2/logs/modsec_audit.log"
+  echo "ERROR: https://${D}/api/health via Apache → HTTP ${CODE}. ${HINT}"; exit 1
 fi
 HCODE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' --resolve "${D}:80:127.0.0.1" "http://${D}/" 2>/dev/null || true)
 [ "${HCODE}" = 301 ] && echo "-- verified: http://${D}/ → 301 https" || echo "!! http://${D}/ returned ${HCODE:-000} (expected 301) — check cPanel 'Force HTTPS Redirect' is not conflicting"
