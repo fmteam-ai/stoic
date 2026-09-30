@@ -254,6 +254,9 @@ compose_up() {
   local zombies; zombies=$(docker compose ps -aq --status removing --status dead 2>/dev/null || true)
   if [ -n "${zombies}" ]; then
     echo "-- removing stale containers left from a previous run"
+    for z in ${zombies}; do   # overlay "device or resource busy": lazily unmount the merged dir first
+      m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && umount -l "$m" 2>/dev/null || true
+    done
     if ! docker rm -f ${zombies} >/dev/null 2>&1; then
       systemctl restart docker 2>/dev/null || true; sleep 5
       docker rm -f ${zombies} >/dev/null 2>&1 || true

@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r285"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r286"   # printed in the system-check header so a stale download is obvious
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
