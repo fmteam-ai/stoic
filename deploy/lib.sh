@@ -169,7 +169,7 @@ ensure_cosign() {
 # registry: pull the exact CI-built GHCR images by attested digest (no rebuild).
 deploy_mode() {
   local v
-  v=$(grep -E '^DEPLOY_MODE=' .env 2>/dev/null | cut -d= -f2-)
+  v=$( { grep -E '^DEPLOY_MODE=' .env 2>/dev/null || true; } | cut -d= -f2-)
   case "${v}" in registry) echo registry;; *) echo build;; esac
 }
 
@@ -177,7 +177,7 @@ attestation_required() {
   # registry mode has no other source of truth for the digests — always required
   [ "$(deploy_mode)" = "registry" ] && return 0
   local v
-  v=$(grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null | cut -d= -f2-)
+  v=$( { grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null || true; } | cut -d= -f2-)
   if [ -n "${v}" ]; then [ "${v}" = "true" ]; return; fi
   grep -q 'docker-compose.tls.yml' .env 2>/dev/null
 }
@@ -242,7 +242,7 @@ verify_attestation() {
 # docker-compose.registry.yml. Nothing is built on the server.
 ensure_registry_compose_file() {
   local cf
-  cf=$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | cut -d= -f2-); [ -n "${cf}" ] || cf=docker-compose.yml
+  cf=$( { grep -E '^COMPOSE_FILE=' .env 2>/dev/null || true; } | cut -d= -f2-); [ -n "${cf}" ] || cf=docker-compose.yml
   case ":${cf}:" in
     *:docker-compose.registry.yml:*) ;;
     *) set_kv .env COMPOSE_FILE "${cf}:docker-compose.registry.yml" ;;

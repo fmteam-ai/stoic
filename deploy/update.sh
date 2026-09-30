@@ -95,7 +95,7 @@ fi
 # (RECONCILE_APPROVED_POLICY, default 6/3/3), the reconciliation must be scoped
 # to the production tenant (RECONCILE_SCOPE_USER_ID) and the evidence must carry
 # a non-null signature from the dedicated key. Any missing element → rollback.
-_envval() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"; }
+_envval() { { grep -E "^$1=" .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d '"'"'"; }   # never non-zero under pipefail
 APP_ENV_VAL=$(_envval APP_ENV)
 RECONCILE_EXPECT=$(_envval RECONCILE_EXPECT)
 RECONCILE_SCOPE=$(_envval RECONCILE_SCOPE_USER_ID)
