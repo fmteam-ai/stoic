@@ -31,7 +31,11 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r288"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r289"   # printed in the system-check header so a stale download is obvious
+# The whole body is one brace group: bash must parse it completely before running a
+# single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
+# mongodump …) can swallow the rest of the script from the shared stdin.
+{
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
@@ -132,7 +136,7 @@ snapshot() {                       # called once the target dir is known
     if [ -n "$(docker compose ps -q 2>/dev/null || true)" ]; then
       docker compose images --format json > "${SNAP}/images.json" 2>/dev/null || true
       for img in $(docker compose images -q 2>/dev/null | sort -u); do docker tag "$img" "stoic-rollback:${TS}-${img:0:12}" 2>/dev/null || true; done
-      [ -x deploy/backup.sh ] && BACKUP_DIR="${SNAP}/db" bash deploy/backup.sh backup >/dev/null 2>&1 && echo "-- DB dumped to ${SNAP}/db" || echo "-- DB dump skipped (stack not running or backup.sh unavailable)"
+      [ -x deploy/backup.sh ] && BACKUP_DIR="${SNAP}/db" bash deploy/backup.sh backup </dev/null >/dev/null 2>&1 && echo "-- DB dumped to ${SNAP}/db" || echo "-- DB dump skipped (stack not running or backup.sh unavailable)"
     fi )
   echo "-- snapshot: ${SNAP}"
 }
@@ -446,3 +450,5 @@ cat <<EOF
    logs:        cd ${TARGET} && docker compose logs -f backend
    this log:    ${LOG}
 EOF
+exit 0
+}

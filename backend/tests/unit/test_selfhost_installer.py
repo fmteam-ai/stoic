@@ -97,6 +97,13 @@ def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
                    "is the podman-docker shim", "dnf -y -q remove podman-docker podman buildah runc",
                    "if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version"):
         assert needle in b, needle
+    # curl | bash safety: the body is one brace group (parsed fully before execution) so a child that
+    # drains stdin (docker compose exec during the snapshot dump) cannot truncate the streamed script
+    body = b[b.index('BOOTSTRAP_VERSION="'):]
+    assert body.split("\n", 4)[4].startswith("{") and b.rstrip().endswith("exit 0\n}")
+    assert 'bash deploy/backup.sh backup </dev/null' in b
+    piped = subprocess.run(["bash", "-s"], input="{\necho a\ncat >/dev/null\necho b\nexit 0\n}\n", capture_output=True, text=True)
+    assert piped.stdout == "a\nb\n"
     # SIGPIPE (exit 141) hardening: no early-exiting reader downstream of a long writer under pipefail
     assert b.index("set +o pipefail") < b.index("for p in 80 443") < b.index("all green — proceeding") < b.index("set -o pipefail\n")
     import re
