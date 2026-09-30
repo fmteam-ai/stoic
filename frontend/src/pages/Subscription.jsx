@@ -76,10 +76,10 @@ const FEATURE_ROWS = [
 ];
 
 const DURATIONS = [
-    { id: "monthly", label: "Monthly", badge: "" },
-    { id: "quarterly", label: "3-month", badge: "−10%" },
-    { id: "semi_annual", label: "6-month", badge: "−20%" },
-    { id: "annual", label: "Annual", badge: "BEST · −40%" },
+    { id: "monthly", label: "Monthly" },
+    { id: "quarterly", label: "3-month" },
+    { id: "semi_annual", label: "6-month" },
+    { id: "annual", label: "Annual" },
 ];
 
 export default function Subscription() {
@@ -131,6 +131,8 @@ export default function Subscription() {
         return out;
     }, [plans]);
 
+    const sym = plans[0]?.currency_symbol || "$";
+
     const startCheckout = async (planId) => {
         setCreating(planId); setErr("");
         try {
@@ -161,7 +163,9 @@ export default function Subscription() {
                 <div data-testid="active-sub-banner"
                     className="text-sm text-[#00FF41] border border-[#00FF41]/30 bg-[#00FF41]/5 px-4 py-3 rounded mb-6">
                     <Sparkles className="inline-block w-4 h-4 mr-2" />
-                    Active: <span className="font-mono">{status.entitlement.plan_id || "grandfathered"}</span>
+                    {String(status.entitlement.plan_id || "").startsWith("trial_")
+                        ? <span data-testid="trial-badge">Free trial · <span className="font-mono">{status.entitlement.plan_id.replace("trial_", "").replace("_", " ")}</span> tier</span>
+                        : <>Active: <span className="font-mono">{status.entitlement.plan_id || "grandfathered"}</span></>}
                     {status.entitlement.valid_until && ` · until ${new Date(status.entitlement.valid_until).toLocaleDateString()}`}
                 </div>
             )}
@@ -176,7 +180,9 @@ export default function Subscription() {
                                               : "bg-[#0F0F0F] text-[#A1A1AA] border border-[#1F1F1F] hover:border-[#52525B]"
                         }`}>
                         {d.label}
-                        {d.badge && <span className={`ml-2 ${duration === d.id ? "text-[#00FF41]" : "text-[#FFB000]"}`}>{d.badge}</span>}
+                        {(() => { const disc = plansByTier.trader?.[d.id]?.discount_pct ?? plans.find(p => p.duration_months === (d.id === "monthly" ? 1 : d.id === "quarterly" ? 3 : d.id === "semi_annual" ? 6 : 12))?.discount_pct;
+                            const badge = disc > 0 ? `${d.id === "annual" ? "BEST · " : ""}−${disc}%` : null;
+                            return badge && <span className={`ml-2 ${duration === d.id ? "text-[#00FF41]" : "text-[#FFB000]"}`}>{badge}</span>; })()}
                     </button>
                 ))}
             </div>
@@ -204,14 +210,14 @@ export default function Subscription() {
                             <div className="text-xs text-[#71717A] mb-4">{meta.tagline}</div>
 
                             <div className="mb-1">
-                                <span className="font-display text-4xl text-[#FAFAFA]">${plan.amount_usd}</span>
+                                <span className="font-display text-4xl text-[#FAFAFA]">{sym}{plan.amount_usd}</span>
                                 <span className="text-xs text-[#71717A] ml-2">/ {plan.duration_label}</span>
                             </div>
                             {plan.duration_months > 1 && (
                                 <div className="text-xs text-[#A1A1AA] mb-4">
-                                    ≈ ${plan.effective_monthly_usd}/mo
+                                    ≈ {sym}{plan.effective_monthly_usd}/mo
                                     {plan.savings_usd > 0 && (
-                                        <span className="ml-2 text-[#00FF41]">save ${plan.savings_usd}</span>
+                                        <span className="ml-2 text-[#00FF41]">save {sym}{plan.savings_usd}</span>
                                     )}
                                 </div>
                             )}
@@ -229,7 +235,7 @@ export default function Subscription() {
                                 }`}>
                                 {isCurrent ? "Current plan"
                                  : creating === plan.id ? <><Loader2 className="inline w-3 h-3 mr-2 animate-spin" />Redirecting…</>
-                                 : `Subscribe — $${plan.amount_usd}`}
+                                 : `Subscribe — ${sym}${plan.amount_usd}`}
                             </button>
 
                             {(() => {

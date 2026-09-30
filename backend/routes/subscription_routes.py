@@ -183,9 +183,10 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
         "duration_months": str(plan.duration_months),
     }
 
+    import subscription_plans as _sp
     req = CheckoutSessionRequest(
         amount=plan.amount_usd,
-        currency="usd",
+        currency=_sp.CURRENCY,
         success_url=success_url,
         cancel_url=cancel_url,
         metadata=metadata,

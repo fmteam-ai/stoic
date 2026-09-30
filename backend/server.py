@@ -798,6 +798,8 @@ async def on_startup():
         await _da.ensure_indexes(get_db())   # r26 P1-02 nonce TTL + uniqueness
         from close_commands import ensure_indexes as _close_idx   # r25 P2-01: unique (trade_id, close_seq)
         await _close_idx(get_db())
+        import plan_settings as _plans
+        await _plans.load(get_db())   # Admin → Integrations → Plans pricing/trial overlay
         # Safety review — DEFAULT_MODE is observe; grandfather migration
         # stamps pre-existing configs explicitly (idempotent, audited).
         from operational_modes import (migrate_default_modes,

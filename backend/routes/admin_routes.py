@@ -631,3 +631,67 @@ async def admin_integrations_secret(payload: dict, user=Depends(get_current_user
         return await integ.update_secret(db, key, str(payload.get("value") or ""), user)
     except ValueError as e:
         raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": str(e)})
+
+
+# ── Admin → Integrations → Stripe plans (pricing · duration discounts · currency · free trial) ──
+@router.get("/admin/integrations/plans")
+async def admin_plans_get(user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import plan_settings
+    return plan_settings.current()
+
+
+@router.post("/admin/integrations/plans")
+async def admin_plans_update(payload: dict, user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import plan_settings
+    db = get_db()
+    await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
+    try:
+        return await plan_settings.update(db, payload, user)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": str(e)})
+
+
+# ── Admin → Integrations → transactional e-mail templates (preview · test send) ──
+@router.get("/admin/integrations/email-templates")
+async def admin_email_templates(user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import email_templates
+    from email_sender import is_configured, _sender
+    return {"templates": email_templates.catalog(), "configured": is_configured(), "sender": _sender()}
+
+
+@router.get("/admin/integrations/email-templates/{template_id}")
+async def admin_email_template_preview(template_id: str, user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import email_templates
+    try:
+        return email_templates.render(template_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown template")
+
+
+@router.post("/admin/integrations/email-templates/{template_id}/send")
+async def admin_email_template_send(template_id: str, payload: dict, user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import email_templates
+    from security import rate_limit
+    if template_id not in email_templates.REGISTRY:
+        raise HTTPException(status_code=404, detail="unknown template")
+    recipient = str(payload.get("recipient") or user.get("email") or "").strip().lower()
+    if "@" not in recipient or len(recipient) > 254:
+        raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": "invalid recipient"})
+    db = get_db()
+    await rate_limit(db, "admin_template_send", user["id"], 10, 600, "Too many test e-mails — wait a few minutes")
+    res = await email_templates.send_test(template_id, recipient)
+    await _audit(db, actor_email=user.get("email", ""), action="email_template_test_send", target_kind="email_template",
+                 target_id=template_id, reason=f"to {recipient} · {'sent' if res.get('ok') else 'failed'}")
+    if not res.get("ok"):
+        raise HTTPException(status_code=503, detail={"code": "email_send_failed", "message": str(res.get("error"))})
+    return res

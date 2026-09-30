@@ -6,6 +6,8 @@ import { Loader2, KeyRound, CheckCircle2, AlertTriangle, ShieldCheck, RefreshCw,
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { PlansEditor } from "@/components/admin/PlansEditor";
+import { EmailTemplatesPanel } from "@/components/admin/EmailTemplatesPanel";
 
 const ORDER = ["stripe", "turnstile", "email", "ai"];
 
@@ -105,6 +107,10 @@ export default function AdminIntegrations() {
                             <ProviderCard key={id} id={id} label={data.providers[id]} signals={data.signals} onEdit={(k) => { setEdit(k); setForm({ value: "", password: "", otp: "" }); }}
                                 keys={Object.entries(data.keys).filter(([, k]) => k.provider === id)} />
                         ))}
+                    </div>
+                    <div className="mt-6 space-y-6">
+                        <PlansEditor />
+                        <EmailTemplatesPanel />
                     </div>
                 </>
             )}

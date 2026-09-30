@@ -197,6 +197,14 @@ DURATION_DISCOUNTS = [
     ("semi_annual", 6,  20),
     ("annual",     12,  40),
 ]
+DEFAULT_BASE_CENTS = dict(TIER_BASE_CENTS)
+DEFAULT_DISCOUNTS = {d: disc for d, _m, disc in DURATION_DISCOUNTS}
+SUPPORTED_CURRENCIES = {"usd": "$", "eur": "€", "gbp": "£", "chf": "CHF ", "aud": "A$", "cad": "C$"}
+CURRENCY = "usd"   # platform-wide checkout currency — Admin → Integrations → Plans overrides at runtime
+
+
+def currency_symbol() -> str:
+    return SUPPORTED_CURRENCIES.get(CURRENCY, CURRENCY.upper() + " ")
 
 
 @dataclass(frozen=True)
@@ -239,6 +247,8 @@ class Plan:
                 - self.amount_cents
             ) / 100.0,
             "description": self.description,
+            "currency": CURRENCY,
+            "currency_symbol": currency_symbol(),
         }
 
 
@@ -254,9 +264,9 @@ def _build_plans() -> dict[str, Plan]:
             }[dur_id]
             desc = {
                 "monthly":     "Pay as you go. Cancel any time.",
-                "quarterly":   "Save 10% — 3 months prepaid.",
-                "semi_annual": "Save 20% — 6 months prepaid.",
-                "annual":      "Save 40% — best value, our power-user pick.",
+                "quarterly":   f"Save {disc}% — 3 months prepaid.",
+                "semi_annual": f"Save {disc}% — 6 months prepaid.",
+                "annual":      f"Save {disc}% — best value, our power-user pick.",
             }[dur_id]
             out[f"{tier}_{dur_id}"] = Plan(
                 id=f"{tier}_{dur_id}", tier=tier,
@@ -267,6 +277,22 @@ def _build_plans() -> dict[str, Plan]:
 
 
 PLANS = _build_plans()
+
+
+def apply_pricing(base_cents: dict, discounts: dict, currency: str) -> None:
+    """Runtime override (Admin → Integrations → Plans). Mutates the module
+    catalog IN PLACE so every `from subscription_plans import PLANS/TIER_BASE_CENTS`
+    binding sees the new prices without a restart."""
+    global CURRENCY
+    for t in TIER_ORDER:
+        TIER_BASE_CENTS[t] = int(base_cents.get(t, DEFAULT_BASE_CENTS[t]))
+        TIER_BASE_USD[t] = TIER_BASE_CENTS[t] / 100.0
+    for i, (dur_id, months, _disc) in enumerate(DURATION_DISCOUNTS):
+        DURATION_DISCOUNTS[i] = (dur_id, months, int(discounts.get(dur_id, DEFAULT_DISCOUNTS[dur_id])))
+    CURRENCY = (currency or "usd").lower()
+    rebuilt = _build_plans()
+    PLANS.clear()
+    PLANS.update(rebuilt)
 
 # Legacy plan IDs — map forward so existing customers keep a valid plan:
 #   pre-iter-60 singles (monthly/…)   → Trader (was Pro)

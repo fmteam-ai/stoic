@@ -29,6 +29,24 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _trial_grant(created: Optional[datetime]) -> Optional[dict]:
+    """Free trial for NEW sign-ups (Admin → Integrations → Plans). Only users
+    created after the trial was enabled qualify; existing users never get one lazily."""
+    from plan_settings import trial_config
+    cfg = trial_config()
+    if cfg["days"] <= 0 or not cfg.get("enabled_at") or not isinstance(created, datetime):
+        return None
+    enabled_at = datetime.fromisoformat(cfg["enabled_at"].replace("Z", "+00:00"))
+    if created < enabled_at:
+        return None
+    ends = created + timedelta(days=cfg["days"])
+    if ends <= _now():
+        return None
+    return {"current_plan_id": f"trial_{cfg['tier']}", "valid_until": ends.isoformat(),
+            "trial": {"tier": cfg["tier"], "days": cfg["days"], "started_at": created.isoformat(),
+                      "ends_at": ends.isoformat()}}
+
+
 async def get_user_tier(user_id: str) -> str:
     """Resolve the user's effective subscription tier — returns
     `"admin" | "elite_ai" | "professional" | "trader" | "starter"`
@@ -49,6 +67,8 @@ async def get_user_tier(user_id: str) -> str:
         return "admin"
     if not state.get("active"):
         return "starter"
+    if plan_id.startswith("trial_"):
+        return canonical_tier(plan_id[len("trial_"):])
     # In-grace legacy customers get Trader
     if state.get("in_grace"):
         return "trader"
@@ -81,6 +101,7 @@ async def get_subscription(user_id: str) -> dict:
     # Legacy grace applies ONLY to users who existed before the tier rollout —
     # a brand-new sign-up must start at Starter, not 30 days of free Trader.
     pre_rollout = False
+    created = None
     if user and not is_admin:
         created = user.get("created_at")
         if isinstance(created, str):
@@ -101,6 +122,9 @@ async def get_subscription(user_id: str) -> dict:
         if pre_rollout else None,
         "created_at": _now().isoformat(),
     }
+    trial = _trial_grant(created) if (user and not is_admin and not pre_rollout) else None
+    if trial:
+        stub.update(trial)
     await db.subscriptions.insert_one({**stub})
     doc = await db.subscriptions.find_one({"user_id": user_id})
     doc["id"] = str(doc.pop("_id"))

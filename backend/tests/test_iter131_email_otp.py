@@ -231,14 +231,13 @@ def test_totp_users_skip_email_otp_structurally():
 
 
 def test_sender_name_format():
-    import importlib
     import email_sender
-    importlib.reload(email_sender)
+    sender = email_sender._sender()
     if os.environ.get("SENDER_NAME"):
-        assert email_sender._SENDER.startswith(os.environ["SENDER_NAME"] + " <")
-        assert email_sender._SENDER.endswith(">")
+        assert sender.startswith(os.environ["SENDER_NAME"] + " <")
+        assert sender.endswith(">")
     else:
-        assert "<" not in email_sender._SENDER
+        assert "<" not in sender
 
 
 def test_admin_toggle_roundtrip():
