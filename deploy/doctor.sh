@@ -213,15 +213,18 @@ if [ -f /tmp/doctor_body ] && curl -s -m 15 http://127.0.0.1:8001/api/release-ke
   grep -q '"mode": *"external"' /tmp/doctor_body && ok "release signer: external (sidecar)" || warn "release signer: $(grep -o '"mode": *"[a-z]*"' /tmp/doctor_body | head -1) — live signing not active"
 fi
 if [ -n "${DOMAIN}" ]; then
+  for H in "${DOMAIN}" "www.${DOMAIN}"; do
   rm -f /tmp/doctor_body
-  CODE=$(curl -sS -m 15 -o /tmp/doctor_body -w '%{http_code}' "https://${DOMAIN}/api/health" 2>/tmp/doctor_err || true); [ -n "${CODE}" ] || CODE=000
-  if [ "${CODE}" = 200 ]; then ok "https://${DOMAIN}/api/health → 200"
+  CODE=$(curl -sS -m 15 -o /tmp/doctor_body -w '%{http_code}' "https://${H}/api/health" 2>/tmp/doctor_err || true); [ -n "${CODE}" ] || CODE=000
+  if [ "${CODE}" = 200 ]; then ok "https://${H}/api/health → 200"
   else
     ERR=$(sed -n 1p /tmp/doctor_err 2>/dev/null)
-    KCODE=$(curl -sk -m 15 -o /dev/null -w '%{http_code}' "https://${DOMAIN}/api/health" 2>/dev/null || true)
-    if [ "${KCODE}" = 200 ]; then warn "https://${DOMAIN}/api/health → proxy answers 200 but the TLS certificate is not valid for ${DOMAIN} (${ERR:-curl ${CODE}}) — issue it (cPanel: SSL/TLS Status → Run AutoSSL) before going public"
-    else fail "https://${DOMAIN}/api/health → ${CODE} ${ERR:-$(head -c 160 /tmp/doctor_body 2>/dev/null | tr '\n' ' ')}"; fi
+    KCODE=$(curl -sk -m 15 -o /dev/null -w '%{http_code}' "https://${H}/api/health" 2>/dev/null || true)
+    if [ "${KCODE}" = 200 ]; then warn "https://${H}/api/health → proxy answers 200 but the TLS certificate is not valid for ${H} (${ERR:-curl ${CODE}}) — issue it (cPanel: SSL/TLS Status → Run AutoSSL) before going public"
+    elif [ "${H}" != "${DOMAIN}" ] && [ "${CODE}" = 000 ] && ! getent ahostsv4 "${H}" >/dev/null 2>&1; then warn "https://${H}: no DNS record — add www as A → this host (or CNAME → ${DOMAIN}) if the www URL should work"
+    else fail "https://${H}/api/health → ${CODE} ${ERR:-$(head -c 160 /tmp/doctor_body 2>/dev/null | tr '\n' ' ')}"; fi
   fi
+  done
 fi
 if [ "$(envval .env CLOUDFLARE_MODE)" = true ]; then
   CF_END=$(openssl x509 -in secrets/origin_cert.pem -noout -enddate 2>/dev/null | cut -d= -f2)
