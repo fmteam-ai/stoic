@@ -35,9 +35,12 @@ case "$1 $2" in
         *--format*) awk '{print $1, $2}' "$S" ;;
         *status=dead*) awk -v N="$(echo "$*" | sed -n 's/.*name=\([^ ]*\).*/\1/p')" '($3=="dead"||$3=="removing") && index($2,N){print $1}' "$S" ;;
       esac; exit 0 ;;
+  "ps -q")
+      awk '$3=="running"{print $1}' "$S"; exit 0 ;;
   "rm -f")
       shift 2; for id in "$@"; do sed -i "/^$id /d" "$S"; done; exit 0 ;;
-  "inspect -f") echo ""; exit 0 ;;
+  "inspect -f")
+      case "$3" in *MergedDir*) shift 3; for id in "$@"; do echo "/var/lib/docker/overlay2/$id/merged"; done ;; *) echo "" ;; esac; exit 0 ;;
   "info ") exit 0 ;;
 esac
 exit 0
@@ -113,7 +116,7 @@ class TestBootstrapStatic:
     def test_bootstrap_sets_may_detach_mounts_persistently(self):
         with open(f"{_REPO}/deploy/bootstrap.sh") as f:
             body = f.read()
-        assert 'BOOTSTRAP_VERSION="r297"' in body
+        assert 'BOOTSTRAP_VERSION="r298"' in body
         assert "/etc/sysctl.d/99-stoic-docker.conf" in body
         assert "fs.may_detach_mounts = 1" in body
         assert "may_detach_mounts=0" in body   # system-check WARN
@@ -137,13 +140,16 @@ class TestDetachLeakedMounts:
 
     def test_detaches_private_copies_only(self, sandbox, tmp_path):
         proc = tmp_path / "proc"
-        merged = "/var/lib/docker/overlay2/aaa/merged"
+        merged = "/var/lib/docker/overlay2/aaaaaaaaaaaa/merged"          # rootfs of RUNNING stoic-mongo-1
+        dead = "/var/lib/docker/overlay2/dead00000000/merged"            # rootfs of a container that no longer runs
         host_line = f"36 35 0:40 / {merged} rw shared:5 - overlay overlay rw\n"
         self._proc(proc, 1, 4026531840, host_line, cgroup="0::/init.scope")
         self._proc(proc, 100, 4026532100, f"36 35 0:40 / {merged} rw - overlay overlay rw\n"
                                           f"37 35 0:41 / /var/lib/docker/containers/c1/mounts/shm rw master:3 - tmpfs shm rw\n")
         self._proc(proc, 101, 4026532100, f"36 35 0:40 / {merged} rw - overlay overlay rw\n")   # same namespace → visited once
-        self._proc(proc, 200, 4026532200, f"36 35 0:40 / {merged} rw shared:5 - overlay overlay rw\n")  # peer → must be skipped
+        self._proc(proc, 200, 4026532200, f"36 35 0:40 / {merged} rw shared:5 - overlay overlay rw\n"   # peer of a LIVE rootfs → skipped
+                                          f"38 35 0:44 / {dead} rw shared:6 - overlay overlay rw\n"     # peer of a DEAD one → detached
+                                          f"39 35 0:45 / /var/lib/docker/containers/aaaaaaaaaaaa/mounts/shm rw shared:7 - tmpfs shm rw\n")  # live shm → skipped
         self._proc(proc, 300, 4026532300, f"36 35 0:40 / {merged} rw - overlay overlay rw\n",
                    cgroup="12:pids:/docker/deadbeef")                                             # container itself → skipped
         self._proc(proc, 400, 4026532400, "40 35 0:50 / /home rw shared:1 - xfs /dev/sda rw\n")   # no docker mounts → skipped
@@ -155,9 +161,10 @@ class TestDetachLeakedMounts:
         assert r.returncode == 0, r.stderr
         calls = (sandbox["tmp"] / "state.nsenter").read_text().splitlines()
         assert calls == [f"-m -t 100 -- umount -l {merged}",
-                         "-m -t 100 -- umount -l /var/lib/docker/containers/c1/mounts/shm"], calls
-        assert "detached 2 leaked docker mount copies from 2 foreign mount namespaces" in r.stdout   # ns 100 (2 umounts) + ns 200 (peer, skipped)
-        assert "1 leaked copies are shared peers of live mounts — left alone" in r.stdout
+                         "-m -t 100 -- umount -l /var/lib/docker/containers/c1/mounts/shm",
+                         f"-m -t 200 -- umount -l {dead}"], calls
+        assert "detached 3 leaked docker mount copies from 2 foreign mount namespaces" in r.stdout
+        assert "2 leaked copies are shared peers of RUNNING containers' mounts — left alone" in r.stdout
 
     def test_noop_without_nsenter(self, sandbox, tmp_path):
         env = dict(os.environ, PATH=str(sandbox["bin"]), FAKE_STATE=str(sandbox["state"]), PROC_ROOT=str(tmp_path / "none"))

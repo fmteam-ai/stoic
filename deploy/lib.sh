@@ -270,7 +270,10 @@ zombie_ids() {
 detach_leaked_mounts() {
   command -v nsenter >/dev/null || return 0
   local proc="${PROC_ROOT:-/proc}" host_ns; host_ns=$(readlink "${proc}/1/ns/mnt" 2>/dev/null) || return 0
-  local seen=" " p ns pid n=0 shared=0
+  local seen=" " p ns pid n=0 shared=0 live
+  # rootfs of RUNNING containers: a shared-peer copy of those must not be touched (umount would
+  # propagate back to the host and kill the container); dead containers' copies are fair game
+  live=" $(docker ps -q --no-trunc 2>/dev/null | tr '\n' ' ')$(docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.GraphDriver.Data.MergedDir}}' 2>/dev/null | tr '\n' ' ') "
   for p in "${proc}"/[0-9]*; do
     ns=$(readlink "$p/ns/mnt" 2>/dev/null) || continue
     [ "${ns}" = "${host_ns}" ] && continue
@@ -280,12 +283,15 @@ detach_leaked_mounts() {
     seen="${seen}${ns} "; pid=${p##*/}
     # field 5 = mount point; optional fields (7 … up to the "-" separator) carry shared:/master: tags
     while read -r mp tag; do
-      [ "${tag}" = shared ] && { shared=$((shared+1)); continue; }
+      if [ "${tag}" = shared ]; then
+        case "${mp}" in */containers/*) cid=${mp#*/containers/}; cid=${cid%%/*} ;; *) cid="${mp}" ;; esac
+        case "${live}" in *" ${cid} "*|*" ${mp} "*) shared=$((shared+1)); continue ;; esac
+      fi
       nsenter -m -t "${pid}" -- umount -l "${mp}" 2>/dev/null && n=$((n+1))
     done < <(awk '$5 ~ "^/var/lib/docker/" { t=""; for (i=7; i<=NF && $i!="-"; i++) t=t" "$i; print $5, (t ~ /shared:/ ? "shared" : "private") }' "$p/mountinfo" 2>/dev/null)
   done
   [ "${n}" -gt 0 ] && echo "-- detached ${n} leaked docker mount copies from $(( $(echo "${seen}" | wc -w) )) foreign mount namespaces (php-fpm/PrivateTmp services)"
-  [ "${shared}" -gt 0 ] && echo "!! ${shared} leaked copies are shared peers of live mounts — left alone (deploy/doctor.sh → 'docker mount propagation')"
+  [ "${shared}" -gt 0 ] && echo "!! ${shared} leaked copies are shared peers of RUNNING containers' mounts — left alone (deploy/doctor.sh → 'docker mount propagation')"
   return 0
 }
 
