@@ -150,15 +150,15 @@ async def _alert_scenario():
         # unconfigured Resend → recorded, not sent (preview may have a key,
         # so force-unset for this assertion)
         import email_sender
-        orig = email_sender._API_KEY
-        email_sender._API_KEY = ""
+        orig = email_sender._api_key
+        email_sender._api_key = lambda: ""
         try:
             out = await email_admins(db, "s", "<b>x</b>", "k2")
             assert out == {"ok": False, "skipped": "not_configured"}
             doc = await db.guard_alert_emails.find_one({"_id": "k2"})
             assert doc["last_error"] == "email_not_configured"
         finally:
-            email_sender._API_KEY = orig
+            email_sender._api_key = orig
 
         # block-alert task path runs end-to-end without raising
         snap = {"snapshot_id": "rds_a1", "reason": "risk_unknown",
