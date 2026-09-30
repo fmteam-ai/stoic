@@ -80,7 +80,7 @@ class TestReaper:
     def test_compose_up_reaps_and_retries_once(self, sandbox):
         r = _run(sandbox, "compose_up")
         assert r.returncode == 0, r.stdout + r.stderr
-        assert "compose up failed — reaping" in r.stdout
+        assert "compose up failed (attempt 1/6) — reaping" in r.stdout
         assert "removing stale containers left from a previous run: b71a5514e1ac" in r.stdout
         calls = (sandbox["tmp"] / "state.calls").read_text()
         assert calls.count("compose up -d --remove-orphans") == 2
@@ -89,11 +89,17 @@ class TestReaper:
         assert "stoic-mongo-1 running" in remaining and "stoic-signer-1 running" in remaining   # healthy services untouched
         assert "6dd45105ceb4_" not in remaining
 
-    def test_compose_up_gives_up_after_one_retry(self, sandbox):
-        (sandbox["tmp"] / "state.upfails").write_text("2")
+    def test_compose_up_converges_over_several_passes(self, sandbox):
+        (sandbox["tmp"] / "state.upfails").write_text("3")   # server run #13: each pass killed the NEXT container's removal
         r = _run(sandbox, "compose_up")
-        assert r.returncode != 0
-        assert (sandbox["tmp"] / "state.calls").read_text().count("compose up") == 2
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert (sandbox["tmp"] / "state.calls").read_text().count("compose up") == 4
+
+    def test_compose_up_gives_up_after_six_attempts(self, sandbox):
+        (sandbox["tmp"] / "state.upfails").write_text("99")
+        r = _run(sandbox, "compose_up")
+        assert r.returncode != 0 and "did not converge after 6 attempts" in r.stdout
+        assert (sandbox["tmp"] / "state.calls").read_text().count("compose up") == 6
 
     def test_no_zombies_is_a_noop(self, sandbox):
         (sandbox["tmp"] / "state.upfails").write_text("0")
@@ -107,7 +113,7 @@ class TestBootstrapStatic:
     def test_bootstrap_sets_may_detach_mounts_persistently(self):
         with open(f"{_REPO}/deploy/bootstrap.sh") as f:
             body = f.read()
-        assert 'BOOTSTRAP_VERSION="r294"' in body
+        assert 'BOOTSTRAP_VERSION="r295"' in body
         assert "/etc/sysctl.d/99-stoic-docker.conf" in body
         assert "fs.may_detach_mounts = 1" in body
         assert "may_detach_mounts=0" in body   # system-check WARN

@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r294"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r295"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -309,7 +309,7 @@ elif command -v apt-get >/dev/null; then FAMILY=debian
 else echo "ERROR: unsupported package manager (need dnf or apt)"; exit 1; fi
 
 if [ "${FAMILY}" = rhel ]; then
-  dnf -y -q install ca-certificates curl git openssl tar gzip policycoreutils >/dev/null
+  dnf -y -q install ca-certificates curl git openssl tar gzip policycoreutils psmisc >/dev/null
   # RHEL/Alma 8 ships python3 = 3.6; the deploy scripts need 3.9+. Install a
   # modern interpreter and make it the `python3` used by the deploy scripts
   # (dnf itself uses /usr/libexec/platform-python and is unaffected).
@@ -349,7 +349,7 @@ if [ "${FAMILY}" = rhel ]; then
 else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq ca-certificates curl git python3 openssl gnupg lsb-release >/dev/null
+  apt-get install -y -qq ca-certificates curl git python3 openssl gnupg lsb-release psmisc >/dev/null
   if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
     echo "-- installing Docker Engine + Compose v2"
     if is_podman_shim; then echo "-- removing podman-docker shim"; apt-get remove -y -qq podman-docker >/dev/null 2>&1 || true; hash -r; fi

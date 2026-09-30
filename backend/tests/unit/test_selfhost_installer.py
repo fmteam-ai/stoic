@@ -279,7 +279,7 @@ def test_compose_up_clears_containers_marked_for_removal():
     assert "docker compose ps -aq --status removing --status dead" in lib
     # r292: reaper runs before `up`, and again + one retry when containers die DURING recreate (RHEL 8 overlay EBUSY)
     assert lib.index("reap_zombies || return 1") < lib.index("docker compose up ${flags}")
-    assert lib.count("reap_zombies || return 1") == 2 and "retrying once" in lib
+    assert lib.count("reap_zombies || return 1") == 2 and "for attempt in 1 2 3 4 5 6" in lib   # reap→retry until compose converges
     assert 'grep -E " [0-9a-f]{12}_${project}-"' in lib          # compose-renamed leftovers keep the name → must be reaped
     assert "systemctl restart docker" in lib and "may_detach_mounts" in lib
     # last resort for mounts leaked into another namespace (cPanel CageFS/LVE): metadata removal with dockerd stopped, zombie IDs only

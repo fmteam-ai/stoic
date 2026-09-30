@@ -294,15 +294,19 @@ reap_zombies() {
 }
 
 # `docker compose up` for the active deploy mode — registry mode must never
-# fall back to a local build of an unverified tree. Containers that die WHILE
-# compose recreates them (the EBUSY case above) are reaped and `up` retried once.
+# fall back to a local build of an unverified tree. On hosts where every
+# container's overlay mount is held busy (cPanel), each `up` pass fails on the
+# NEXT container it recreates — reap and retry until compose converges.
 compose_up() {
   reap_zombies || return 1
-  local flags="-d --remove-orphans"
+  local flags="-d --remove-orphans" attempt
   [ "$(deploy_mode)" = "registry" ] && flags="${flags} --no-build"
-  if ! docker compose up ${flags} "$@"; then
-    echo "-- compose up failed — reaping containers that died during recreate and retrying once"
+  for attempt in 1 2 3 4 5 6; do
+    docker compose up ${flags} "$@" && return 0
+    [ "${attempt}" = 6 ] && break
+    echo "-- compose up failed (attempt ${attempt}/6) — reaping containers that died during recreate and retrying"
     reap_zombies || return 1
-    docker compose up ${flags} "$@"
-  fi
+  done
+  echo "ERROR: compose up did not converge after 6 attempts — run deploy/doctor.sh (section 'docker mount propagation') to see which host processes hold the overlay mounts"
+  return 1
 }

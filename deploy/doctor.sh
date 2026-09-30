@@ -143,6 +143,34 @@ if [ -n "${DOMAIN}" ]; then
   else ok "DNS: ${DOMAIN} → ${DNS_IP}"; fi
 fi
 
+hdr "docker mount propagation (why 'device or resource busy' on container removal)"
+HOST_NS=$(readlink /proc/1/ns/mnt 2>/dev/null); DK_PID=$(pidof dockerd 2>/dev/null | awk '{print $1}')
+if [ -n "${DK_PID}" ]; then
+  [ "$(readlink /proc/${DK_PID}/ns/mnt 2>/dev/null)" = "${HOST_NS}" ] && ok "dockerd runs in the host mount namespace" || warn "dockerd runs in its own mount namespace (systemd MountFlags?) — containerd/runc may not see its mounts"
+  # foreign mount namespaces that hold copies of docker's overlay mounts: unmounting on the
+  # host then leaves the copy → docker rm fails EBUSY. Name the processes so they can be fixed
+  # (cPanel: CageFS/LVE, httpd PrivateTmp, imunify360, systemd units with PrivateTmp=yes)
+  LEAKERS=$(for p in /proc/[0-9]*; do
+      ns=$(readlink "$p/ns/mnt" 2>/dev/null) || continue; [ "${ns}" = "${HOST_NS}" ] && continue
+      grep -qs '/var/lib/docker/overlay2/' "$p/mountinfo" || continue
+      grep -qs 'docker\|containerd' "$p/cgroup" && continue      # container processes see their own rootfs — expected
+      printf '%s\n' "$(cat "$p/comm" 2>/dev/null)"
+    done | sort | uniq -c | sort -rn | head -8 | awk '{printf "%s×%s ", $2, $1}')
+  [ -z "${LEAKERS// /}" ] && ok "no host process holds docker overlay mounts in a foreign mount namespace" \
+    || warn "overlay mounts leaked into other mount namespaces (process×count): ${LEAKERS}— container removal hits EBUSY until these restart; for systemd units add a drop-in with PrivateTmp=no / PrivateMounts=no, or start them BEFORE docker"
+  # host processes with open files inside a container rootfs (scanners, indexers) → umount EBUSY
+  HOLDERS=$(for c in $(docker compose ps -q 2>/dev/null); do
+      m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$c" 2>/dev/null); [ -n "$m" ] || continue
+      for pid in $(fuser -m "$m" 2>/dev/null); do
+        grep -qs 'docker\|containerd' "/proc/$pid/cgroup" && continue
+        printf '%s\n' "$(cat "/proc/$pid/comm" 2>/dev/null)"
+      done
+    done | sort | uniq -c | sort -rn | head -8 | awk '{printf "%s×%s ", $2, $1}')
+  [ -z "${HOLDERS// /}" ] && ok "no host process has files open inside container rootfs mounts" \
+    || warn "host processes hold files open inside container rootfs (process×count): ${HOLDERS}— exclude /var/lib/docker from scanners (imunify360/clamd/lfd/maldet) or stop them during upgrades"
+fi
+
+
 hdr "containers"
 if docker compose ps >/dev/null 2>&1; then
   while read -r name state health; do
