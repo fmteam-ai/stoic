@@ -329,7 +329,7 @@ export default function Login() {
                             data-testid="login-submit-button"
                             className="w-full bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium py-3 text-sm transition-colors duration-150"
                         >
-                            {loading ? "AUTHENTICATING..." : (needs2fa ? "VERIFY &amp; SIGN IN →" : "SIGN IN →")}
+                            {loading ? "AUTHENTICATING..." : (needs2fa ? "VERIFY & SIGN IN →" : "SIGN IN →")}
                         </button>
 
                         <div className="text-right">
