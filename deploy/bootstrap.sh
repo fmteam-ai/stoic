@@ -31,6 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
+BOOTSTRAP_VERSION="r280"   # printed in the system-check header so a stale download is obvious
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
@@ -170,7 +171,7 @@ trap rollback ERR
 # Nothing is installed or modified until every check is green. FAIL stops here
 # with the remediation; WARN continues (or stops with --strict).
 STEP="system-check"
-log "0/5 system check (read-only)"
+log "0/5 system check (read-only) — bootstrap.sh ${BOOTSTRAP_VERSION}"
 CK_FAIL=0; CK_WARN=0
 pass() { printf '  \e[32mPASS\e[0m  %s\n' "$*"; }
 warnc() { CK_WARN=$((CK_WARN+1)); printf '  \e[33mWARN\e[0m  %s\n' "$*"; }
@@ -252,7 +253,13 @@ if [ "${CLOUDFLARE}" = 1 ]; then
   else failc "cloudflare: ${ORIGIN_CERT} / ${ORIGIN_KEY} — not a PEM certificate, or the key does not match the certificate"; fi
   reach https://www.cloudflare.com/ips-v4 && pass "network: cloudflare.com edge IP list reachable" || warnc "network: cannot fetch Cloudflare edge IPs — bundled deploy/cloudflare/ips.txt will be used"
 fi
-is_podman_shim() { command -v docker >/dev/null && docker --version 2>&1 | grep -qi podman; }
+is_podman_shim() {   # AlmaLinux's podman-docker ships /usr/bin/docker as a podman wrapper
+  command -v docker >/dev/null || return 1
+  local v; v=$(docker --version 2>&1 || true)
+  case "${v}" in *[Pp]odman*) return 0 ;; esac
+  case "$(rpm -qf "$(command -v docker)" 2>/dev/null || true)" in podman-docker*) return 0 ;; esac
+  return 1
+}
 if command -v podman >/dev/null && ! command -v docker >/dev/null; then warnc "podman installed — it will be removed (conflicts with docker-ce on RHEL 8)"; fi
 if is_podman_shim; then warnc "docker: /usr/bin/docker is the podman-docker shim ($(docker --version 2>&1 | head -1)) — not Docker Engine; podman/podman-docker/buildah/runc will be removed and Docker Engine + Compose v2 installed (the stack needs the real engine: compose v2, file secrets, health-gated depends_on)"
 elif command -v docker >/dev/null; then docker info >/dev/null 2>&1 && pass "docker: present and running ($(docker --version | awk '{print $3}' | tr -d ,))" || warnc "docker: installed but daemon not running — will be started"; else pass "docker: not installed — will be installed"; fi
