@@ -15,6 +15,7 @@ const DIM_LABEL = {
 const TONE = {
     operational: "text-[#00FF41]",
     idle: "text-[#A1A1AA]",
+    not_configured: "text-[#52525B]",
     degraded: "text-[#FFB000]",
     major_outage: "text-[#FF3B30]",
 };
@@ -99,7 +100,7 @@ export function StatusBar() {
                                 title={`${label}: ${st || "unknown"}${comps[key]?.note ? ` — ${comps[key].note}` : ""}`}
                                 data-testid={`status-dim-${key}`}>
                                 <span className={TONE[st] || "text-[#52525B]"}>{label}</span>
-                                <span className={`w-1 h-1 rounded-full ${st === "operational" ? "bg-[#00FF41]" : st === "idle" ? "bg-[#52525B]" : st ? "bg-[#FFB000]" : "bg-[#1F1F1F]"}`} />
+                                <span className={`w-1 h-1 rounded-full ${st === "operational" ? "bg-[#00FF41]" : (st === "idle" || st === "not_configured") ? "bg-[#52525B]" : st ? "bg-[#FFB000]" : "bg-[#1F1F1F]"}`} />
                             </span>
                         );
                     })}

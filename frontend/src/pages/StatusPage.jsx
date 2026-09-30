@@ -21,6 +21,7 @@ const STATUS_STYLE = {
     idle: { cls: "text-[#A1A1AA] border-[#1F1F1F] bg-[#0F0F0F]", label: "IDLE" },
     degraded: { cls: "text-[#FFB000] border-[#FFB000]/40 bg-[#FFB000]/10", label: "DEGRADED" },
     down: { cls: "text-[#FF3B30] border-[#FF3B30]/40 bg-[#FF3B30]/10", label: "DOWN" },
+    not_configured: { cls: "text-[#52525B] border-[#1F1F1F] bg-[#0F0F0F]", label: "NOT CONFIGURED" },
     unknown: { cls: "text-[#52525B] border-[#1F1F1F] bg-[#0F0F0F]", label: "UNKNOWN" },
 };
 

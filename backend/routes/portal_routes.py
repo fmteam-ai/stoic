@@ -175,10 +175,14 @@ async def _compute_status(now: float, timings: dict | None = None):
 
     # Payments / Email — configuration presence only (no external calls
     # from a public unauthenticated endpoint)
-    components["payments"] = {
-        "status": "operational" if os.environ.get("STRIPE_API_KEY") else "down"}
-    components["email"] = {
-        "status": "operational" if os.environ.get("RESEND_API_KEY") else "down"}
+    # an unset key is "not configured" (neutral), not an outage — a fresh
+    # install without billing/e-mail must not read as MAJOR OUTAGE
+    components["payments"] = (
+        {"status": "operational"} if os.environ.get("STRIPE_API_KEY")
+        else {"status": "not_configured", "note": "STRIPE_API_KEY not set — billing disabled"})
+    components["email"] = (
+        {"status": "operational"} if os.environ.get("RESEND_API_KEY")
+        else {"status": "not_configured", "note": "RESEND_API_KEY not set — e-mail disabled"})
 
     hard = [c for c in components.values() if c["status"] == "down"]
     soft = [c for c in components.values() if c["status"] == "degraded"]
