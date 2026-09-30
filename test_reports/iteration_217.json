@@ -1,0 +1,27 @@
+{
+  "summary": "iter-137 Admin → Integrations plans editor + email templates: 7/7 backend HTTP tests pass and full frontend workflow (login, plans edit → matrix live update → save → reauth dialog wrong/correct pw → email templates catalog & preview & send button → /subscription price refresh) verified. Defaults were restored via HTTP after tests (starter 3900 cents, discounts 10/20/40, currency usd, trial 15d trader).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/integrations @ 390px mobile", "issues": ["Page scrollWidth 421 vs clientWidth 390 (~31px). plans-editor and email-templates-panel each clamp to 390px width — the overflow is the pre-existing top ticker marquee only, per spec."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter_plans_editor_http.py",
+    "/app/test_reports/pytest/iter_plans_editor_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "admin_reauth rate limit (5/300s) is easy to hit within one test run: 3 wrong-password attempts + 1 save + 1 restore = 5. Consider raising to 10 or resetting per-user counter on successful reauth. This was the sole flaky vector for HTTP tests — 1 test needed a 90s wait to succeed."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter_plans_editor_http.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% of testable flows"},
+  "test_credentials": "admin@trading.bot / R9xcJ7qdJWaYLjlmkjDiC7Vlol3iz#q (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Plan pricing state fully restored to defaults via HTTP POST at end of run (verified via GET /api/admin/integrations/plans).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All frontend testids resolved: plans-editor, plan-base-{starter|trader|professional|elite_ai}, plan-discount-{quarterly|semi_annual|annual}, plan-currency, plan-trial-days, plan-trial-tier, plan-matrix, plan-matrix-row-{tier} (4 rows), plans-save, plans-reset-defaults, plans-reauth-dialog, plans-reauth-password, plans-reauth-confirm, email-templates-panel, email-template-login_otp, email-template-subject, email-template-preview (iframe), email-template-recipient, email-template-send. Backend admin_reauth rate limit is 5/300s — space out mutating calls between runs.",
+  "rca of the issue": "N/A — no bugs found. Only observation: reauth rate-limit forced a 90s wait between wrong-password test and success test."
+}
