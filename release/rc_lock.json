@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-09-30T15:39:30.719591+00:00",
-  "git_commit": "429f2084119c5835c25c012aa92b56662b7ec42c",
-  "source_sha": "429f2084119c5835c25c012aa92b56662b7ec42c",
+  "captured_at": "2026-09-30T17:45:47.414663+00:00",
+  "git_commit": "aa2512d3af8ec293dae0e4bf24edab8a83e2c5ae",
+  "source_sha": "aa2512d3af8ec293dae0e4bf24edab8a83e2c5ae",
   "images": {
     "backend": null,
     "frontend": null
@@ -11,8 +11,8 @@
   "note": "developer snapshot \u2014 NOT release evidence; release.yml regenerates the lock bound to the tagged commit",
   "signer_key_id": "stoic-release-ed25519-v1",
   "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
-  "frontend_asset_digest": null,
-  "test_manifest_sha256": "85c5acde9f8259828e676f493d4c545f494194779ececbad493a5ad4da118d57",
+  "frontend_asset_digest": "79a913091dc4e7916ff1306864a8d229f31e09ca9774fc41af9c844db8addc94",
+  "test_manifest_sha256": "1314be4d54d380d6b841d84df777d34674cce5af21d6d19a98490295388986f6",
   "model_manifest_sha256": "b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6",
   "python": {
     "version": "3.11.16",
@@ -20,7 +20,7 @@
       "CacheControl==0.14.4",
       "Jinja2==3.1.6",
       "MarkupSafe==3.0.3",
-      "PyJWT==2.14.0",
+      "PyJWT==2.15.1",
       "PyOTP==2.10.0",
       "PyYAML==6.0.3",
       "Pygments==2.20.0",
@@ -192,7 +192,7 @@
       "typing_extensions==4.15.0",
       "tzdata==2026.2",
       "uritemplate==4.2.0",
-      "urllib3==2.7.0",
+      "urllib3==2.8.0",
       "uvicorn==0.25.0",
       "watchfiles==1.2.0",
       "webauthn==3.0.0",
@@ -201,13 +201,13 @@
       "yarl==1.24.2",
       "zipp==4.1.0"
     ],
-    "packages_sha256": "e17c1b60b7c94fc445b9ca9a01af23d8217b24c8b01423cc61701a6bf7010e49",
-    "requirements_txt_sha256": "5b202b366194f42de4c1a11833174dc85d1225f26b82e76738b50f31cfa8e377"
+    "packages_sha256": "29b935600f82f9d86c2052184fece744646c4532b3a99d43028ce7023393bb1e",
+    "requirements_txt_sha256": "10fdf2a1c5030585ef5ee0e7342a43c07f2afdd27f47060236388d4fe7f515a3"
   },
   "node": {
     "version": "v20.20.2",
     "yarn": "1.22.22",
-    "yarn_lock_sha256": "75422ef40956605691be33090e066987937fdea67035703264fceed1aadab12c"
+    "yarn_lock_sha256": "32fb9bb1b34bc3bb93c3c71489b5daecbcb543eb813022d56b98b0bbaf38b9c3"
   },
   "mongodb": {
     "version": "7.0.43"
