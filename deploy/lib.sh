@@ -270,7 +270,7 @@ zombie_ids() {
 detach_leaked_mounts() {
   command -v nsenter >/dev/null || return 0
   local proc="${PROC_ROOT:-/proc}" host_ns; host_ns=$(readlink "${proc}/1/ns/mnt" 2>/dev/null) || return 0
-  local seen=" " p ns pid n=0 shared=0 live
+  local seen=" " p ns pid n=0 shared=0 failed=0 first_err="" live
   # rootfs of RUNNING containers: a shared-peer copy of those must not be touched (umount would
   # propagate back to the host and kill the container); dead containers' copies are fair game
   live=" $(docker ps -q --no-trunc 2>/dev/null | tr '\n' ' ')$(docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.GraphDriver.Data.MergedDir}}' 2>/dev/null | tr '\n' ' ') "
@@ -287,10 +287,12 @@ detach_leaked_mounts() {
         case "${mp}" in */containers/*) cid=${mp#*/containers/}; cid=${cid%%/*} ;; *) cid="${mp}" ;; esac
         case "${live}" in *" ${cid} "*|*" ${mp} "*) shared=$((shared+1)); continue ;; esac
       fi
-      nsenter -m -t "${pid}" -- umount -l "${mp}" 2>/dev/null && n=$((n+1))
+      if err=$(nsenter -m -t "${pid}" -- umount -l "${mp}" 2>&1); then n=$((n+1))
+      else failed=$((failed+1)); [ -n "${first_err}" ] || first_err="pid ${pid} ($(cat "$p/comm" 2>/dev/null)): ${err}"; fi
     done < <(awk '$5 ~ "^/var/lib/docker/" { t=""; for (i=7; i<=NF && $i!="-"; i++) t=t" "$i; print $5, (t ~ /shared:/ ? "shared" : "private") }' "$p/mountinfo" 2>/dev/null)
   done
   [ "${n}" -gt 0 ] && echo "-- detached ${n} leaked docker mount copies from $(( $(echo "${seen}" | wc -w) )) foreign mount namespaces (php-fpm/PrivateTmp services)"
+  [ "${failed}" -gt 0 ] && echo "!! ${failed} leaked copies could not be detached — first error: ${first_err}"
   [ "${shared}" -gt 0 ] && echo "!! ${shared} leaked copies are shared peers of RUNNING containers' mounts — left alone (deploy/doctor.sh → 'docker mount propagation')"
   return 0
 }
@@ -299,6 +301,10 @@ detach_leaked_mounts() {
 # busy — a mount leaked into another mount namespace: cPanel CageFS/LVE, httpd
 # PrivateTmp) unless fs.may_detach_mounts=1. Force-remove, escalating to a
 # dockerd restart and finally to metadata removal with dockerd stopped.
+wait_docker() {   # dockerd restores containers before answering — after a metadata cleanup this can take a while
+  local i; for i in $(seq 1 45); do docker info >/dev/null 2>&1 && return 0; sleep 2; done; return 1
+}
+
 reap_zombies() {
   detach_leaked_mounts
   local zombies; zombies=$(zombie_ids)
@@ -310,7 +316,7 @@ reap_zombies() {
     m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && umount -l "$m" 2>/dev/null || true
   done
   if ! docker rm -f ${zombies} >/dev/null 2>&1 || [ -n "$(zombie_ids | tr -d ' ')" ]; then
-    systemctl restart docker 2>/dev/null || true; sleep 5
+    systemctl restart docker 2>/dev/null || true; wait_docker || true
     docker rm -f $(zombie_ids) >/dev/null 2>&1 || true
   fi
   # last resort: drop the container metadata while dockerd is stopped — only the zombie IDs, nothing else
@@ -324,8 +330,8 @@ reap_zombies() {
       full=$(ls -d /var/lib/docker/containers/"$z"* 2>/dev/null | head -1 || true)
       [ -n "$full" ] && rm -rf "$full"
     done
-    systemctl start docker 2>/dev/null || true; sleep 5
-    docker info >/dev/null 2>&1 || { echo "ERROR: dockerd did not come back after zombie cleanup"; return 1; }
+    systemctl start docker 2>/dev/null || true
+    wait_docker || { echo "ERROR: dockerd did not come back within 90s after zombie cleanup — journalctl -u docker -n 50"; journalctl -u docker -n 20 --no-pager 2>/dev/null || true; return 1; }
   fi
 }
 

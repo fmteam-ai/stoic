@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r302"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r303"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -215,8 +215,9 @@ ZOMBIES=$(docker ps -a --format '{{.ID}} {{.Names}} {{.Status}}' 2>/dev/null | g
 [ "${ZOMBIES}" -gt 0 ] && warnc "docker: ${ZOMBIES} dead/renamed stoic container(s) from a previous run — the installer will reap them before starting the stack" || true
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
   DROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker); DPROP=$(findmnt -no PROPAGATION "${DROOT}" 2>/dev/null || echo "?")
-  case "${DPROP}" in *shared*|"?") warnc "docker: ${DROOT} propagation is '${DPROP}' — container rootfs mounts propagate into every sandboxed service's namespace (php-fpm, mariadb, …) and 'docker rm' fails with 'device or resource busy'; the installer will make it a slave mount (docker.service drop-in)" ;;
-    *) pass "docker: ${DROOT} propagation is '${DPROP}' (container mounts do not leak into other namespaces)" ;; esac
+  case "${DPROP}" in *slave*) pass "docker: ${DROOT} propagation is '${DPROP}' (container mounts do not leak into other namespaces)" ;;
+    *private*) warnc "docker: ${DROOT} is private — dockerd flips a private root back to shared on its next start; the installer will make it a slave mount (docker.service drop-in)" ;;
+    *) warnc "docker: ${DROOT} propagation is '${DPROP}' — container rootfs mounts propagate into every sandboxed service's namespace (php-fpm, mariadb, …) and 'docker rm' fails with 'device or resource busy'; the installer will make it a slave mount (docker.service drop-in)" ;; esac
 fi
 
 reach https://download.docker.com && pass "network: download.docker.com reachable" || failc "network: cannot reach download.docker.com (Docker packages)"
@@ -380,8 +381,9 @@ docker info >/dev/null 2>&1 || { echo "ERROR: docker daemon not running"; exit 1
 # dockerd accepts shared or slave only). Persisted as a docker.service drop-in.
 DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
 case "$(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null)" in
-  *shared*|"")
-    echo "-- making ${DOCKER_ROOT} a slave mount (container mounts no longer propagate into other namespaces)"
+  *slave*) ;;
+  *)
+    echo "-- making ${DOCKER_ROOT} a slave mount (container mounts no longer propagate into other namespaces; a private root would be flipped back to shared by dockerd)"
     mountpoint -q "${DOCKER_ROOT}" || mount --bind "${DOCKER_ROOT}" "${DOCKER_ROOT}"
     mount --make-rslave "${DOCKER_ROOT}" ;;
 esac
