@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-09-30T06:27:32.817350+00:00",
-  "git_commit": "558bd6d854f2363c28b8873573f059a9bc026d1c",
-  "source_sha": "558bd6d854f2363c28b8873573f059a9bc026d1c",
+  "captured_at": "2026-09-30T06:37:00.471924+00:00",
+  "git_commit": "3a3abf1f6e42c76508370ab4861ad1c02568fd30",
+  "source_sha": "3a3abf1f6e42c76508370ab4861ad1c02568fd30",
   "images": {
     "backend": null,
     "frontend": null
@@ -20,7 +20,7 @@
       "CacheControl==0.14.4",
       "Jinja2==3.1.6",
       "MarkupSafe==3.0.3",
-      "PyJWT==2.13.0",
+      "PyJWT==2.14.0",
       "PyOTP==2.10.0",
       "PyYAML==6.0.3",
       "Pygments==2.20.0",
@@ -115,7 +115,7 @@
       "networkx==3.6.1",
       "numpy==2.4.6",
       "nvidia-nccl-cu12==2.30.7",
-      "oauthlib==3.3.1",
+      "oauthlib==4.0.0",
       "openai==2.47.0",
       "packageurl-python==0.17.6",
       "packaging==26.2",
@@ -201,8 +201,8 @@
       "yarl==1.24.2",
       "zipp==4.1.0"
     ],
-    "packages_sha256": "9698bca03a0fe69945b1108136f9e408b9930fa381b3c3bd7d0192d0ac897049",
-    "requirements_txt_sha256": "cd3d560339e030f4e49cb742f7e23a3a306b686a3da59579b0afc07c82518da1"
+    "packages_sha256": "e17c1b60b7c94fc445b9ca9a01af23d8217b24c8b01423cc61701a6bf7010e49",
+    "requirements_txt_sha256": "5b202b366194f42de4c1a11833174dc85d1225f26b82e76738b50f31cfa8e377"
   },
   "node": {
     "version": "v20.20.2",

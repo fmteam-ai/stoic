@@ -115,7 +115,7 @@ case "${1:-backup}" in
     ;;
 
   verify)
-    FILE="${2:-$(ls -t "${BACKUP_DIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | head -1)}"
+    FILE="${2:-$(ls -t "${BACKUP_DIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | sed -n 1p)}"
     [ -n "${FILE}" ] && [ -f "${FILE}" ] || { echo "ERROR: no archive to verify"; exit 1; }
     MANIFEST="${FILE%.enc}.manifest.json"
     [ -f "${MANIFEST}" ] || { echo "ERROR: manifest ${MANIFEST} not found"; exit 1; }
@@ -166,7 +166,7 @@ EOF
     ;;
 
   offsite)
-    FILE="${2:-$(ls -t "${BACKUP_DIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | head -1)}"
+    FILE="${2:-$(ls -t "${BACKUP_DIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | sed -n 1p)}"
     [ -n "${FILE}" ] && [ -f "${FILE}" ] || { echo "ERROR: no archive to push"; exit 1; }
     MANIFEST="${FILE%.enc}.manifest.json"
     if [ -n "${BACKUP_RCLONE_REMOTE:-}" ]; then

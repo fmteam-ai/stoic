@@ -79,7 +79,7 @@ backup_now() {
   else warn "encryption: OFF (set BACKUP_PASSPHRASE_FILE in ./.env to encrypt archives at rest)"; fi
   local LOG; LOG=$(mktemp /tmp/stoic-backup-now-XXXXXX)
   if ! bash deploy/backup.sh backup >"${LOG}" 2>&1; then fail "dump failed:"; sed 's/^/        /' "${LOG}" | tail -8; rm -f "${LOG}"; return; fi
-  OUT=$(ls -t "${BDIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | head -1)
+  OUT=$(ls -t "${BDIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | sed -n 1p)
   [ -n "${OUT}" ] && [ -s "${OUT}" ] || { fail "dump produced no archive in ${BDIR}"; rm -f "${LOG}"; return; }
   ok "dump: ${OUT} ($(du -h "${OUT}" | cut -f1)) · manifest $(python3 -c "import json;d=json.load(open('${OUT%.enc}.manifest.json'));print(sum(len(v) for v in d['databases'].values()),'collections /',sum(sum(v.values()) for v in d['databases'].values()),'documents')" 2>/dev/null || echo written)"
   if bash deploy/backup.sh verify "${OUT}" >"${LOG}" 2>&1; then ok "restore verification: $(grep -o 'RESTORE VERIFICATION PASSED.*' "${LOG}" | head -1)"

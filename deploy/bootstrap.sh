@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r280"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r281"   # printed in the system-check header so a stale download is obvious
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
@@ -129,7 +129,7 @@ snapshot() {                       # called once the target dir is known
     git rev-parse HEAD > "${SNAP}/git_ref" 2>/dev/null || true
     for f in .env backend/.env; do [ -f "$f" ] && cp -a "$f" "${SNAP}/$(echo "$f" | tr / _)"; done
     [ -d secrets ] && tar -czf "${SNAP}/secrets.tgz" secrets
-    if docker compose ps -q 2>/dev/null | grep -q .; then
+    if [ -n "$(docker compose ps -q 2>/dev/null || true)" ]; then
       docker compose images --format json > "${SNAP}/images.json" 2>/dev/null || true
       for img in $(docker compose images -q 2>/dev/null | sort -u); do docker tag "$img" "stoic-rollback:${TS}-${img:0:12}" 2>/dev/null || true; done
       [ -x deploy/backup.sh ] && BACKUP_DIR="${SNAP}/db" bash deploy/backup.sh backup >/dev/null 2>&1 && echo "-- DB dumped to ${SNAP}/db" || echo "-- DB dump skipped (stack not running or backup.sh unavailable)"
@@ -172,6 +172,9 @@ trap rollback ERR
 # with the remediation; WARN continues (or stops with --strict).
 STEP="system-check"
 log "0/5 system check (read-only) — bootstrap.sh ${BOOTSTRAP_VERSION}"
+# Read-only probes below pipe long outputs (ss, timedatectl, docker) into early-exiting
+# readers; with pipefail a SIGPIPE on the writer (exit 141) would abort the whole run.
+set +o pipefail
 CK_FAIL=0; CK_WARN=0
 pass() { printf '  \e[32mPASS\e[0m  %s\n' "$*"; }
 warnc() { CK_WARN=$((CK_WARN+1)); printf '  \e[33mWARN\e[0m  %s\n' "$*"; }
@@ -211,7 +214,7 @@ fi
 
 if [ "${PUBLIC}" = 1 ]; then
   PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || curl -fs -m 5 https://ifconfig.me 2>/dev/null || echo "?")
-  DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk '{print $1; exit}' || echo "")
+  DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk 'NR==1{print $1}' || echo "")
   if [ -z "${DNS_IP}" ]; then failc "dns: ${DOMAIN} does not resolve — create an A record → ${PUB_IP} first (Caddy cannot issue the certificate otherwise)"
   elif [ "${CLOUDFLARE}" = 1 ] && is_cloudflare_ip "${DNS_IP}"; then pass "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy, orange cloud — expected in --cloudflare mode; origin record must point at ${PUB_IP})"
   elif [ "${CLOUDFLARE}" = 1 ]; then warnc "dns: ${DOMAIN} → ${DNS_IP} is not a Cloudflare edge — --cloudflare expects the record to be proxied (orange); the Origin CA certificate is NOT trusted by browsers when Cloudflare is bypassed"
@@ -220,11 +223,11 @@ if [ "${PUBLIC}" = 1 ]; then
   else pass "dns: ${DOMAIN} → ${DNS_IP} (this host)"; fi
   for p in 80 443; do
     if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"; then
-      OWNER=$(ss -ltnp 2>/dev/null | awk -v P="[:.]${p}$" '$4 ~ P {print $6; exit}' | sed -E 's/.*\("([^"]+)".*/\1/')
+      OWNER=$(ss -ltnp 2>/dev/null | awk -v P="[:.]${p}$" '$4 ~ P && !seen {print $6; seen=1}' | sed -E 's/.*\("([^"]+)".*/\1/')
       if [ "${MODE}" = "--behind-proxy" ]; then pass "port ${p}: ${OWNER:-web server} owns it and will reverse-proxy to STOIC (behind-proxy mode)"
       elif docker compose ps 2>/dev/null | grep -q caddy; then pass "port ${p}: held by the existing STOIC stack (upgrade)"
       elif [ "${OWNER}" = httpd ] || [ "${OWNER}" = nginx ] || [ "${OWNER}" = apache2 ]; then failc "port ${p}: in use by ${OWNER} — this host already runs a web server. Either stop it, or install STOIC behind it: re-run with --behind-proxy ${DOMAIN}"
-      else failc "port ${p}: in use by another service ($(ss -ltnp 2>/dev/null | awk -v P=":${p}" '$4 ~ P"$" {print $6; exit}' | sed 's/users:((\"\([^\"]*\)\".*/\1/')) — stop it (httpd/nginx) or move it"; fi
+      else failc "port ${p}: in use by another service ($(ss -ltnp 2>/dev/null | awk -v P=":${p}" '$4 ~ P"$" && !seen {print $6; seen=1}' | sed 's/users:((\"\([^\"]*\)\".*/\1/')) — stop it (httpd/nginx) or move it"; fi
     else
       [ "${MODE}" = "--behind-proxy" ] && warnc "port ${p}: nothing listening — --behind-proxy expects your web server on 80/443 (or use --production for built-in TLS)" || pass "port ${p}: free"
     fi
@@ -236,7 +239,7 @@ for p in 8001 3000 27017; do
 done
 # MongoDB is a container (mongo:7 in docker-compose.yml) — a host mongod is neither needed nor wanted
 if command -v mongod >/dev/null || systemctl is-active -q mongod 2>/dev/null; then
-  warnc "mongodb: host mongod found ($(mongod --version 2>/dev/null | head -1 | awk '{print $3}')) — STOIC runs its own mongo:7 container; stop/disable the host service so it does not take 127.0.0.1:27017"
+  warnc "mongodb: host mongod found ($(mongod --version 2>/dev/null | sed -n 1p | awk '{print $3}')) — STOIC runs its own mongo:7 container; stop/disable the host service so it does not take 127.0.0.1:27017"
 else pass "mongodb: runs in Docker (mongo:7 container, 127.0.0.1 only) — no host install needed"; fi
 if ls /etc/yum.repos.d/mongodb-org-*.repo >/dev/null 2>&1; then
   for rf in /etc/yum.repos.d/mongodb-org-*.repo; do
@@ -261,7 +264,7 @@ is_podman_shim() {   # AlmaLinux's podman-docker ships /usr/bin/docker as a podm
   return 1
 }
 if command -v podman >/dev/null && ! command -v docker >/dev/null; then warnc "podman installed — it will be removed (conflicts with docker-ce on RHEL 8)"; fi
-if is_podman_shim; then warnc "docker: /usr/bin/docker is the podman-docker shim ($(docker --version 2>&1 | head -1)) — not Docker Engine; podman/podman-docker/buildah/runc will be removed and Docker Engine + Compose v2 installed (the stack needs the real engine: compose v2, file secrets, health-gated depends_on)"
+if is_podman_shim; then warnc "docker: /usr/bin/docker is the podman-docker shim ($(docker --version 2>&1 | sed -n 1p)) — not Docker Engine; podman/podman-docker/buildah/runc will be removed and Docker Engine + Compose v2 installed (the stack needs the real engine: compose v2, file secrets, health-gated depends_on)"
 elif command -v docker >/dev/null; then docker info >/dev/null 2>&1 && pass "docker: present and running ($(docker --version | awk '{print $3}' | tr -d ,))" || warnc "docker: installed but daemon not running — will be started"; else pass "docker: not installed — will be installed"; fi
 
 echo
@@ -273,6 +276,7 @@ if [ "${CK_FAIL}" -gt 0 ] || { [ "${STRICT}" = 1 ] && [ "${CK_WARN}" -gt 0 ]; };
   exit 2
 fi
 echo "-- all green — proceeding"
+set -o pipefail
 if [ "${CHECK_ONLY}" = 1 ]; then trap - ERR; echo "-- --check-only: stopping here, nothing changed"; exit 0; fi
 if [ "${HAD_LOCK}" = 1 ]; then
   echo "-- --unlock: removing install lock ${LOCK_FILE} (re-created on success, restored on rollback)"
@@ -378,7 +382,7 @@ if [ "${PUBLIC}" = 1 ]; then
   if systemctl is-active --quiet firewalld 2>/dev/null; then
     firewall-cmd -q --permanent --add-service=http; firewall-cmd -q --permanent --add-service=https; firewall-cmd -q --reload
     echo "-- firewalld: http/https allowed"
-  elif command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+  elif command -v ufw >/dev/null && ufw status 2>/dev/null | grep "Status: active" >/dev/null; then
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; echo "-- ufw: opened 80/443"
   else echo "-- no host firewall active (cloud security group must allow 80/443)"; fi
   echo "-- DNS / ports were verified in the system check (step 0)"

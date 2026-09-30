@@ -90,6 +90,11 @@ def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
                    "is the podman-docker shim", "dnf -y -q remove podman-docker podman buildah runc",
                    "if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version"):
         assert needle in b, needle
+    # SIGPIPE (exit 141) hardening: no early-exiting reader downstream of a long writer under pipefail
+    assert b.index("set +o pipefail") < b.index("for p in 80 443") < b.index("all green — proceeding") < b.index("set -o pipefail\n")
+    import re
+    assert not re.search(r"\|\s*awk[^\n|]*\bexit\b", b), "awk … exit in a pipeline can SIGPIPE the writer"
+    assert "| head -1" not in b and "grep -q ." not in b
     for script in ("bootstrap.sh", "doctor.sh"):
         assert os.access(os.path.join(ROOT, "deploy", script), os.X_OK), script
         subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", script)], check=True)
