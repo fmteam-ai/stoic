@@ -292,3 +292,17 @@ def test_cpanel_wiring_script_is_safe_and_autowired():
     assert 'bash deploy/proxy/cpanel.sh "${DOMAIN}"' in b and "cPanel wiring failed (non-fatal" in b
     bad = subprocess.run(["bash", os.path.join(ROOT, "deploy", "proxy", "cpanel.sh"), "bad;host"], capture_output=True, text=True)
     assert bad.returncode == 1 and "usage" in bad.stdout
+
+
+def test_app_images_stage_root_only_secrets_then_drop_privileges():
+    # server run #8: API/workers run as `stoic` and could not read root-only host secrets (Permission denied)
+    df = _read("Dockerfile.backend")
+    assert "USER stoic" not in df                                   # privileges are dropped by the entrypoint instead
+    assert 'COPY --chmod=755 deploy/app-entrypoint.sh /usr/local/bin/app-entrypoint.sh' in df
+    assert 'ENTRYPOINT ["/usr/local/bin/app-entrypoint.sh"]' in df and "command -v setpriv" in df
+    ep = _read("deploy", "app-entrypoint.sh")
+    assert 'install -m 400 -o stoic -g stoic "$f" "$S/$(basename "$f")"' in ep
+    assert "grep -E '^[A-Za-z_][A-Za-z0-9_]*=/run/secrets/[^/]+$'" in ep       # only exact secret paths are re-pointed
+    assert 'exec setpriv --reuid=stoic --regid=stoic --init-groups -- "$@"' in ep
+    assert os.access(os.path.join(ROOT, "deploy", "app-entrypoint.sh"), os.X_OK)
+    subprocess.run(["sh", "-n", os.path.join(ROOT, "deploy", "app-entrypoint.sh")], check=True)

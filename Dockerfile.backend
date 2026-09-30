@@ -48,10 +48,14 @@ RUN echo "${GIT_SHA}" | grep -qE '^[0-9a-f]{40}$' \
     || { echo "BUILD BLOCKED: GIT_SHA build-arg (40-hex commit) is required"; exit 1; } \
     && echo "${GIT_SHA}" > BUILD_SHA
 
-# Run unprivileged (security-audit hardening)
+# Run unprivileged (security-audit hardening). The image starts as root only so
+# deploy/app-entrypoint.sh can stage the root-only Docker secrets for `stoic`
+# and then drop privileges with setpriv before exec'ing the command.
 RUN useradd --create-home --shell /usr/sbin/nologin stoic \
-    && chown -R stoic:stoic /app/backend
-USER stoic
+    && chown -R stoic:stoic /app/backend \
+    && command -v setpriv >/dev/null
+COPY --chmod=755 deploy/app-entrypoint.sh /usr/local/bin/app-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/app-entrypoint.sh"]
 
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
