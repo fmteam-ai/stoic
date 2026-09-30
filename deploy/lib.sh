@@ -248,35 +248,61 @@ provision_images() {
 
 # `docker compose up` for the active deploy mode — registry mode must never
 # fall back to a local build of an unverified tree.
-compose_up() {
-  # RHEL 8 overlay2 can leave containers "marked for removal" (device or resource
-  # busy); compose then refuses to start them. Force-remove, restarting dockerd if needed.
-  local zombies; zombies=$(docker compose ps -aq --status removing --status dead 2>/dev/null || true)
-  if [ -n "${zombies}" ]; then
-    echo "-- removing stale containers left from a previous run"
-    for z in ${zombies}; do   # overlay "device or resource busy": lazily unmount the merged dir first
-      m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && umount -l "$m" 2>/dev/null || true
-    done
-    if ! docker rm -f ${zombies} >/dev/null 2>&1; then
-      systemctl restart docker 2>/dev/null || true; sleep 5
-      docker rm -f ${zombies} >/dev/null 2>&1 || true
-    fi
-    # last resort (mount leaked into another mount namespace, e.g. cPanel CageFS/LVE):
-    # drop the container metadata while dockerd is stopped — only the zombie IDs, nothing else
-    local left; left=$(docker compose ps -aq --status removing --status dead 2>/dev/null || true)
-    if [ -n "${left}" ]; then
-      echo "-- stale containers survived rm -f; removing their metadata with dockerd stopped"
-      local merged=""; for z in ${left}; do merged="${merged} $(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true)"; done
-      systemctl stop docker docker.socket 2>/dev/null || true
-      for m in ${merged}; do umount -l "$m" 2>/dev/null || true; done
-      for z in ${left}; do [ -d "/var/lib/docker/containers/$z" ] && rm -rf "/var/lib/docker/containers/$z"; done
-      systemctl start docker 2>/dev/null || true; sleep 5
-      docker info >/dev/null 2>&1 || { echo "ERROR: dockerd did not come back after zombie cleanup"; return 1; }
-    fi
+# Containers compose can no longer manage: "removing"/"dead" ones, plus the
+# `<12hex>_<project>-<service>-N` leftovers compose renames the old container to
+# while recreating — when the removal fails (overlay EBUSY) they keep the name
+# and every later `compose up` dies with "container name already in use".
+zombie_ids() {
+  local project; project=$(basename "$PWD")
+  { docker compose ps -aq --status removing --status dead 2>/dev/null || true
+    docker ps -aq --filter "status=dead" --filter "status=removing" --filter "name=${project}-" 2>/dev/null || true
+    docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | grep -E " [0-9a-f]{12}_${project}-" | cut -d' ' -f1 || true
+  } | sort -u | tr '\n' ' '
+}
+
+# RHEL 8 overlay2 leaves containers "marked for removal" (device or resource
+# busy — a mount leaked into another mount namespace: cPanel CageFS/LVE, httpd
+# PrivateTmp) unless fs.may_detach_mounts=1. Force-remove, escalating to a
+# dockerd restart and finally to metadata removal with dockerd stopped.
+reap_zombies() {
+  local zombies; zombies=$(zombie_ids)
+  [ -n "${zombies// /}" ] || return 0
+  echo "-- removing stale containers left from a previous run: ${zombies}"
+  [ "$(cat /proc/sys/fs/may_detach_mounts 2>/dev/null || echo 1)" = 1 ] \
+    || { echo "-- fs.may_detach_mounts=0 — enabling so leaked overlay mounts can be detached"; sysctl -qw fs.may_detach_mounts=1 2>/dev/null || true; }
+  for z in ${zombies}; do   # overlay "device or resource busy": lazily unmount the merged dir first
+    m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && umount -l "$m" 2>/dev/null || true
+  done
+  if ! docker rm -f ${zombies} >/dev/null 2>&1 || [ -n "$(zombie_ids | tr -d ' ')" ]; then
+    systemctl restart docker 2>/dev/null || true; sleep 5
+    docker rm -f $(zombie_ids) >/dev/null 2>&1 || true
   fi
-  if [ "$(deploy_mode)" = "registry" ]; then
-    docker compose up -d --no-build --remove-orphans "$@"
-  else
-    docker compose up -d --remove-orphans "$@"
+  # last resort: drop the container metadata while dockerd is stopped — only the zombie IDs, nothing else
+  local left; left=$(zombie_ids)
+  if [ -n "${left// /}" ]; then
+    echo "-- stale containers survived rm -f; removing their metadata with dockerd stopped"
+    local merged=""; for z in ${left}; do merged="${merged} $(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true)"; done
+    systemctl stop docker docker.socket 2>/dev/null || true
+    for m in ${merged}; do umount -l "$m" 2>/dev/null || true; done
+    for z in ${left}; do
+      full=$(ls -d /var/lib/docker/containers/"$z"* 2>/dev/null | head -1 || true)
+      [ -n "$full" ] && rm -rf "$full"
+    done
+    systemctl start docker 2>/dev/null || true; sleep 5
+    docker info >/dev/null 2>&1 || { echo "ERROR: dockerd did not come back after zombie cleanup"; return 1; }
+  fi
+}
+
+# `docker compose up` for the active deploy mode — registry mode must never
+# fall back to a local build of an unverified tree. Containers that die WHILE
+# compose recreates them (the EBUSY case above) are reaped and `up` retried once.
+compose_up() {
+  reap_zombies || return 1
+  local flags="-d --remove-orphans"
+  [ "$(deploy_mode)" = "registry" ] && flags="${flags} --no-build"
+  if ! docker compose up ${flags} "$@"; then
+    echo "-- compose up failed — reaping containers that died during recreate and retrying once"
+    reap_zombies || return 1
+    docker compose up ${flags} "$@"
   fi
 }

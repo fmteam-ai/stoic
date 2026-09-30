@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r291"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r292"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -207,6 +207,12 @@ if [ "${DISK_GB}" -ge 20 ]; then pass "disk: ${DISK_GB} GB free on /"; elif [ "$
 
 if timedatectl show 2>/dev/null | grep -q "NTPSynchronized=yes"; then pass "clock synchronised (NTP)"; else warnc "clock not NTP-synchronised — TLS/JWT/TOTP need a correct clock (enable chronyd)"; fi
 if command -v getenforce >/dev/null; then pass "selinux: $(getenforce) (secrets/ will be labelled container_file_t)"; fi
+if [ -f /proc/sys/fs/may_detach_mounts ]; then
+  if [ "$(cat /proc/sys/fs/may_detach_mounts)" = 1 ]; then pass "kernel: fs.may_detach_mounts=1 (containers can be removed even when cPanel/CageFS or httpd hold their overlay mounts)"
+  else warnc "kernel: fs.may_detach_mounts=0 — Docker cannot remove containers whose overlay mount leaked into another mount namespace (cPanel CageFS/LVE, httpd PrivateTmp): 'device or resource busy', dead containers keep their names; will be set to 1 persistently (/etc/sysctl.d/99-stoic-docker.conf)"; fi
+fi
+ZOMBIES=$(docker ps -a --format '{{.ID}} {{.Names}} {{.Status}}' 2>/dev/null | grep -Ec " [0-9a-f]{12}_stoic-| (Dead|Removal)" || true)
+[ "${ZOMBIES}" -gt 0 ] && warnc "docker: ${ZOMBIES} dead/renamed stoic container(s) from a previous run — the installer will reap them before starting the stack" || true
 
 reach https://download.docker.com && pass "network: download.docker.com reachable" || failc "network: cannot reach download.docker.com (Docker packages)"
 reach https://registry-1.docker.io/v2/ && pass "network: Docker Hub reachable" || failc "network: cannot reach registry-1.docker.io (base images)"
@@ -325,6 +331,16 @@ if [ "${FAMILY}" = rhel ]; then
     hash -r
   fi
   systemctl enable --now docker >/dev/null
+  # RHEL 8 default fs.may_detach_mounts=0 makes `docker rm` fail with EBUSY when
+  # a container's overlay mount leaked into another mount namespace (cPanel
+  # CageFS/LVE, httpd PrivateTmp) — the container stays "dead", keeps its name
+  # and every later `compose up` breaks. Docker's own 99-docker.conf is not
+  # always applied on hosts where dockerd was installed after boot.
+  if [ -f /proc/sys/fs/may_detach_mounts ] && [ "$(cat /proc/sys/fs/may_detach_mounts)" != 1 ]; then
+    echo "-- enabling fs.may_detach_mounts=1 (persistent: /etc/sysctl.d/99-stoic-docker.conf)"
+    printf 'fs.may_detach_mounts = 1\n' > /etc/sysctl.d/99-stoic-docker.conf
+    sysctl -q -p /etc/sysctl.d/99-stoic-docker.conf
+  fi
   if command -v getenforce >/dev/null; then echo "-- SELinux: $(getenforce)"; fi
 else
   export DEBIAN_FRONTEND=noninteractive
