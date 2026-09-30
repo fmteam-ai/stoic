@@ -233,6 +233,24 @@ $installationId
         } else {
             Write-Host "    ✓ $($t.Name)  →  EA + token deployed (compile skipped)" -ForegroundColor Green
         }
+        # r25 P1-01 - binary proof: measure the EX5 that is ACTUALLY installed, drop the hash
+        # where the EA can read it (MQL5\Files\STOIC-Proof.txt) and record it server-side bound
+        # to this installation. Live is admitted only when heartbeat == installer record == signed release.
+        $finalEx5 = [System.IO.Path]::ChangeExtension($destMq5, ".ex5")
+        if (Test-Path $finalEx5) {
+            $proofHash = (Get-FileHash $finalEx5 -Algorithm SHA256).Hash.ToLower()
+            Set-Content -Path (Join-Path $filesDir "STOIC-Proof.txt") -Value $proofHash -Encoding ASCII
+            try {
+                $proofBody = @{ bridge_token = $bridgeToken; installation_id = $installationId; artifact = "stoic-ea-ex5"; sha256 = $proofHash; version = $eaLatestVer; installer_version = $InstallerVersion; terminal = $t.Name } | ConvertTo-Json
+                $proofResp = Invoke-RestMethod -Uri "$ServerUrl/api/infra/agent/artifact-digest" -Method Post -Body $proofBody -ContentType "application/json"
+                if ($proofResp.match) { Write-Host "    + binary proof recorded ($($proofHash.Substring(0,12))...) - matches the signed release" -ForegroundColor Green }
+                else { Write-Host "    ! binary proof recorded ($($proofHash.Substring(0,12))...) but does NOT match the signed release - live stays blocked until the release EX5 is installed" -ForegroundColor Yellow }
+            } catch {
+                Write-Host "    ! binary proof report failed: $($_.Exception.Message) - re-run the installer; live stays blocked" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "    ! no .ex5 present - binary proof not recorded (compile in MetaEditor, then re-run the installer)" -ForegroundColor Yellow
+        }
         $installedTerminals += $t.Name
     }
     Write-Host ""

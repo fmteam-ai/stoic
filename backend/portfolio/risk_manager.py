@@ -325,15 +325,11 @@ async def execute_deleveraging_actions(db, *, user_id: str, actions: list[dict])
             skipped += 1
             continue
         # Close open trades (real broker position exists).
-        res_open = await db.trades.update_one(
-            {"_id": oid, "user_id": user_id, "status": "open"},
-            {"$set": {
-                "close_requested": True,
-                "close_reason": a.get("reason") or "auto_deleverage",
-                "close_requested_at": now_iso,
-            }},
-        )
-        if res_open.modified_count:
+        from close_commands import request_close
+        res_open = await request_close(db, {"_id": oid, "user_id": user_id},
+                                       reason=a.get("reason") or "auto_deleverage",
+                                       actor="portfolio_risk_manager", stamp={"close_requested_at": now_iso})
+        if res_open["trades_marked_for_close"]:
             closed += 1
             continue
         # Cancel pending trades (not yet filled — no broker position).

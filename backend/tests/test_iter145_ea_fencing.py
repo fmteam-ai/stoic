@@ -8,6 +8,7 @@ while _os.path.basename(_TESTS_DIR) != "tests":
 _BACKEND_DIR = _os.path.dirname(_TESTS_DIR)
 _REPO_DIR = _os.path.dirname(_BACKEND_DIR)
 import asyncio
+import pytest
 from datetime import datetime, timezone
 
 EA = _os.path.join(_BACKEND_DIR, "static/EmergentTradingBridge.mq5")
@@ -252,10 +253,24 @@ class TestBrokerPreflight:
 
 
 class TestLiveActivationGate:
-    def _account(self, ea_version):
-        return {"mode": "live", "status": "connected",
-                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-                "ea_version": ea_version, "equity": 1000}
+    """r18 P0-02 / r25 P1-01: the live gate is capability-derived (numeric
+    version compare) and requires an installer-attested EX5 hash equal to the
+    pinned release hash. Paper accounts never need proof."""
+    PINNED = "d" * 64
+
+    @pytest.fixture(autouse=True)
+    def _pin(self, monkeypatch):
+        monkeypatch.setenv("EA_RELEASE_SHA256", self.PINNED)
+        monkeypatch.setenv("RELEASE_SIGNER_DEFERRED", "false")
+
+    def _account(self, ea_version, attested=True):
+        acc = {"mode": "live", "status": "connected",
+               "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+               "ea_version": ea_version, "equity": 1000}
+        if attested:
+            acc["ea_binary_sha256"] = self.PINNED
+            acc["ea_binary_sha256_method"] = "installer_attested"
+        return acc
 
     def test_paper_always_ready(self):
         from routes.bot_routes import _activation_readiness
@@ -265,15 +280,24 @@ class TestLiveActivationGate:
 
     def test_old_ea_blocks_live(self):
         from routes.bot_routes import _activation_readiness, FENCING_MIN_EA
-        assert FENCING_MIN_EA == "1.50"
+        from ea_capabilities import LIVE_MIN_VERSION, version_str
+        assert FENCING_MIN_EA == version_str(LIVE_MIN_VERSION) == "1.57"
         problems = asyncio.run(_activation_readiness(None, self._account("1.49")))
         assert len(problems) == 1
-        assert "command fencing" in problems[0]
+        assert "command_fencing_v1" in problems[0] and "nl_close_fence_v1" in problems[0]
+        # v1.50 has fencing but not the NL close fence — still blocked
+        problems = asyncio.run(_activation_readiness(None, self._account("1.50")))
+        assert len(problems) == 1 and "nl_close_fence_v1" in problems[0]
 
     def test_fencing_capable_ea_passes(self):
         from routes.bot_routes import _activation_readiness
-        assert asyncio.run(_activation_readiness(None, self._account("1.50"))) == []
-        assert asyncio.run(_activation_readiness(None, self._account("1.51"))) == []
+        assert asyncio.run(_activation_readiness(None, self._account("1.57"))) == []
+        assert asyncio.run(_activation_readiness(None, self._account("1.58"))) == []
+
+    def test_capable_ea_without_binary_proof_blocks_live(self):
+        from routes.bot_routes import _activation_readiness
+        problems = asyncio.run(_activation_readiness(None, self._account("1.57", attested=False)))
+        assert len(problems) == 1 and "EX5 hash" in problems[0]
 
     def test_missing_ea_version_still_blocks(self):
         from routes.bot_routes import _activation_readiness

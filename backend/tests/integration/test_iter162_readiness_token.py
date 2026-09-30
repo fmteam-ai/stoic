@@ -49,6 +49,7 @@ async def _readiness_scenario():
              "trading_enabled": True, "open_positions": 0,
              "verified_identity": True, "ea_version": "1.57",   # r18/r20: capable EA + binary proof
              "ea_binary_sha256": "c" * 64,
+             "ea_binary_sha256_method": "installer_attested",   # r25 P1-01: installer-measured proof
              "last_heartbeat": (now - timedelta(seconds=5)).isoformat()})
         await db.bot_configs.insert_one(
             {"user_id": uid, "account_id": str(acc), "active": True})

@@ -37,8 +37,8 @@ def test_version_152_everywhere():
     assert f'#define EA_CLIENT_VERSION "{v}"' in src
     assert f'LATEST_EA = "{v}"' in _src(
         _os.path.join(_BACKEND_DIR, "routes", "bot_routes.py"))
-    # existing v1.50 EAs must keep trading — the fencing floor is unchanged
-    assert 'FENCING_MIN_EA = "1.50"' in _src(
+    # r18 P0-02: the live floor is capability-derived, never a string literal
+    assert 'FENCING_MIN_EA = version_str(LIVE_MIN_VERSION)' in _src(
         _os.path.join(_BACKEND_DIR, "routes", "bot_routes.py"))
 
 
@@ -171,10 +171,14 @@ def test_no_raw_exception_strings_in_route_responses():
     for f in sorted(_os.listdir(routes_dir)):
         if not f.endswith(".py"):
             continue
-        for i, line in enumerate(_src(_os.path.join(routes_dir, f)).splitlines(), 1):
+        lines = _src(_os.path.join(routes_dir, f)).splitlines()
+        for i, line in enumerate(lines, 1):
             s = line.strip()
             if s.startswith("#") or "logger." in s:
                 continue
+            prev = lines[i - 2].strip() if i >= 2 else ""
+            if prev.startswith("except ValueError"):
+                continue   # deliberate validation text raised by our own code
             if ("detail=str(e)" in s and "ValueError" not in s) \
                     or '"error": str(e)' in s or "'error': str(e)" in s \
                     or '"message": str(e)' in s:

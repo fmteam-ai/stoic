@@ -101,7 +101,9 @@ def test_user_trust_binary_hash_is_labelled_unattested(monkeypatch):
         assert acc["ea_identity"]["authoritative"] is True
         assert acc["ea_binary_sha256"] == PINNED and acc["ea_binary_sha256_method"] == "user_trust"
         assert live_gate(acc)["code"] == "EA_BINARY_PROOF_UNATTESTED"
-        assert live_gate({**acc, "ea_binary_sha256_method": "installer"}) is None
+        # r25: a paired-but-unmeasured installation is still not proof; only the installer-measured hash is
+        assert live_gate({**acc, "ea_binary_sha256_method": "installer"})["code"] == "EA_BINARY_PROOF_UNATTESTED"
+        assert live_gate({**acc, "ea_binary_sha256_method": "installer_attested"}) is None
     finally:
         _run(db.accounts.delete_many({"user_id": uid}))
         _run(db.installations.delete_many({"account_id": str(acc_id)}))

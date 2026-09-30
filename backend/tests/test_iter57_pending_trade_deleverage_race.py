@@ -13,26 +13,33 @@ Fix: `execute_deleveraging_actions` now:
   • status='pending' → status='cancelled' (remove from EA poll queue).
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 
+import close_commands
 from portfolio.risk_manager import execute_deleveraging_actions
+
+
+def _patch_close(marked: int):
+    """r25 P2-01: open positions are closed through the unified close protocol."""
+    return patch.object(close_commands, "request_close",
+                        AsyncMock(return_value={"command_id": "c1", "trades_marked_for_close": marked, "trade_ids": []}))
 
 
 @pytest.mark.asyncio
 async def test_open_trade_gets_close_requested():
     """Real broker position → set close_requested=True."""
     db = MagicMock()
-    open_res = MagicMock()
-    open_res.modified_count = 1
-    pending_res = MagicMock()
-    pending_res.modified_count = 0
-    db.trades.update_one = AsyncMock(side_effect=[open_res, pending_res])
+    db.trades.update_one = AsyncMock()
 
     oid = str(ObjectId())
-    out = await execute_deleveraging_actions(db, user_id="user-1",
-        actions=[{"kind": "close_trade", "trade_id": oid,
-                  "reason": "auto_deleverage_var_breach"}])
+    with _patch_close(1) as rc:
+        out = await execute_deleveraging_actions(db, user_id="user-1",
+            actions=[{"kind": "close_trade", "trade_id": oid,
+                      "reason": "auto_deleverage_var_breach"}])
+    assert rc.await_args.args[1] == {"_id": ObjectId(oid), "user_id": "user-1"}
+    assert rc.await_args.kwargs["reason"] == "auto_deleverage_var_breach"
+    db.trades.update_one.assert_not_awaited()        # no pending-cancel write after a real close
     assert out["closed"] == 1
     assert out["cancelled"] == 0
     assert out["skipped"] == 0
@@ -43,20 +50,20 @@ async def test_pending_trade_gets_cancelled_not_close_requested():
     """The actual bug — pending trade must be CANCELLED, not flagged
     close_requested (which would create the 10013 race)."""
     db = MagicMock()
-    # First update_one (status=open) misses. Second (status=pending) hits.
-    open_res = MagicMock(); open_res.modified_count = 0
+    # request_close (status=open) misses. The pending update_one hits.
     pending_res = MagicMock(); pending_res.modified_count = 1
     calls: list = []
 
     async def fake_update(filter_q, update_q):
         calls.append((filter_q, update_q))
-        return open_res if filter_q.get("status") == "open" else pending_res
+        return pending_res
     db.trades.update_one = AsyncMock(side_effect=fake_update)
 
     oid = str(ObjectId())
-    out = await execute_deleveraging_actions(db, user_id="user-1",
-        actions=[{"kind": "close_trade", "trade_id": oid,
-                  "reason": "auto_deleverage_sector_cap_commodity"}])
+    with _patch_close(0):
+        out = await execute_deleveraging_actions(db, user_id="user-1",
+            actions=[{"kind": "close_trade", "trade_id": oid,
+                      "reason": "auto_deleverage_sector_cap_commodity"}])
     assert out["closed"] == 0
     assert out["cancelled"] == 1
     assert out["skipped"] == 0
@@ -80,8 +87,9 @@ async def test_neither_open_nor_pending_skipped():
     db.trades.update_one = AsyncMock(return_value=miss)
 
     oid = str(ObjectId())
-    out = await execute_deleveraging_actions(db, user_id="user-1",
-        actions=[{"kind": "close_trade", "trade_id": oid, "reason": "x"}])
+    with _patch_close(0):
+        out = await execute_deleveraging_actions(db, user_id="user-1",
+            actions=[{"kind": "close_trade", "trade_id": oid, "reason": "x"}])
     assert out["closed"] == 0
     assert out["cancelled"] == 0
     assert out["skipped"] == 1

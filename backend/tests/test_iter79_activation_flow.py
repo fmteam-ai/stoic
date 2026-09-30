@@ -65,6 +65,17 @@ def cleanup():
         _mongo().users.delete_many({"_id": {"$in": refs["user_ids"]}})
 
 
+def _plant_token(db, uid) -> str:
+    """r25 P2-03: tokens are stored hashed — the DB never yields the plaintext.
+    Mint a fresh link token and bind its digest to the user like the API does."""
+    import hashlib
+    import secrets
+    token = secrets.token_urlsafe(32)
+    db.users.update_one({"_id": uid}, {"$set": {
+        "activation_token_sha256": hashlib.sha256(token.encode()).hexdigest()}})
+    return token
+
+
 def _email() -> str:
     return f"iter79_{uuid.uuid4().hex[:10]}@example.com"
 
@@ -95,7 +106,8 @@ def test_register_with_terms_creates_unverified_user(cleanup):
     db = _mongo()
     fresh = db.users.find_one({"_id": ObjectId(body["id"])})
     assert fresh["email_verified"] is False
-    assert fresh.get("activation_token")
+    assert fresh.get("activation_token") is None          # never plaintext at rest
+    assert len(fresh.get("activation_token_sha256") or "") == 64
     assert fresh.get("activation_expires_at")
     assert fresh.get("accepted_terms_version")
     assert fresh.get("accepted_terms_at")
@@ -138,8 +150,7 @@ def test_verify_email_happy_path(cleanup):
     cleanup["user_ids"].append(uid)
 
     db = _mongo()
-    user = db.users.find_one({"_id": uid})
-    token = user["activation_token"]
+    token = _plant_token(db, uid)
 
     sess = requests.Session()
     v = sess.post(f"{BASE_URL}/api/auth/verify-email",
@@ -152,6 +163,7 @@ def test_verify_email_happy_path(cleanup):
     # Token cleared
     fresh = db.users.find_one({"_id": uid})
     assert fresh.get("activation_token") is None
+    assert fresh.get("activation_token_sha256") is None
     assert fresh["email_verified"] is True
     assert fresh.get("email_verified_at")
 
@@ -175,7 +187,7 @@ def test_verify_email_token_is_single_use(cleanup):
                         timeout=TIMEOUT)
     uid = ObjectId(reg.json()["id"])
     cleanup["user_ids"].append(uid)
-    token = _mongo().users.find_one({"_id": uid})["activation_token"]
+    token = _plant_token(_mongo(), uid)
 
     first = requests.post(f"{BASE_URL}/api/auth/verify-email",
                           json={"token": token}, timeout=TIMEOUT)
@@ -220,7 +232,7 @@ def test_resend_activation_generates_new_token_after_cooldown(cleanup):
     uid = ObjectId(reg.json()["id"])
     cleanup["user_ids"].append(uid)
     db = _mongo()
-    original_token = db.users.find_one({"_id": uid})["activation_token"]
+    original_digest = db.users.find_one({"_id": uid})["activation_token_sha256"]
 
     # Simulate cooldown elapsed by backdating activation_sent_at.
     db.users.update_one(
@@ -231,8 +243,9 @@ def test_resend_activation_generates_new_token_after_cooldown(cleanup):
                       json={"email": email}, timeout=TIMEOUT)
     assert r.status_code == 200
 
-    new_token = db.users.find_one({"_id": uid})["activation_token"]
-    assert new_token != original_token
+    fresh = db.users.find_one({"_id": uid})
+    assert fresh.get("activation_token") is None
+    assert fresh["activation_token_sha256"] != original_digest
 
 
 import pytest as _pytest  # noqa: E402

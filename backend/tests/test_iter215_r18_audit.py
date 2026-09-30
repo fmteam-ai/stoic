@@ -19,7 +19,7 @@ import sys
 import requests
 import pytest
 
-sys.path.insert(0, "/app/backend")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from live_target import require_live_base_url  # noqa: E402
 

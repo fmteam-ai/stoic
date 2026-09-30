@@ -130,6 +130,7 @@ def _insert_paper_account(mongo, admin_id, broker_env="DEMO",
         "_id": acc_id, "user_id": admin_id,
         "broker": broker, "server": server,
         "mode": "paper",
+        "trading_enabled": True,   # AT-01: enablement must be explicitly true
         "broker_environment": broker_env,
         "balance": balance, "equity": balance,
         "bridge_token": f"bt_221_{uuid.uuid4().hex}",

@@ -6,7 +6,7 @@ Paths are project-relative (review: testing improvements).
 import asyncio
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -1167,12 +1167,14 @@ class TestRound8ProtectionRecovery:
         tr = self._trade(_id="trC8", account_id="000000000000000000000003",
                          protection_repair_attempts=3)
         db = self._guard_db([tr])
-        out = asyncio.run(repair_unprotected_positions(db))
+        rc = AsyncMock(return_value={"trades_marked_for_close": 1})   # r25 P2-01 close protocol
+        with patch("protection_guard.request_close", rc):
+            out = asyncio.run(repair_unprotected_positions(db))
         assert out["closes_queued"] == 1
-        sets = [c.args[1]["$set"] for c in db.trades.update_one.call_args_list]
-        close = [s for s in sets
-                 if s.get("protection_state") == "EMERGENCY_CLOSE_PENDING"][0]
-        assert close["close_requested"] is True
+        assert rc.await_args.args[1] == {"_id": "trC8"}
+        assert rc.await_args.kwargs["reason"] == "emergency_unprotected"
+        close = rc.await_args.kwargs["stamp"]
+        assert close["protection_state"] == "EMERGENCY_CLOSE_PENDING"
         assert close["pending_modification"]["type"] == "FULL_CLOSE"
 
     def test_pending_modification_waits_for_ea_ack(self):

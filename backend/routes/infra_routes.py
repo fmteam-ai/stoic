@@ -832,12 +832,29 @@ async def report_artifact_digest(payload: dict, cert_fp: str = _FP_HEADER):
     expected = next((a.get("sha256") for a in manifest["artifacts"]
                      if a["name"] == name), None)
     match = bool(expected) and expected.lower() == digest
+    now_iso = datetime.now(timezone.utc).isoformat()
     await db.artifact_digests.insert_one({
         **reporter, "artifact": name, "sha256": digest,
         "expected_sha256": expected, "match": match,
         "version": payload.get("version"),
-        "reported_at": datetime.now(timezone.utc).isoformat()})
-    return {"ok": True, "match": match, "expected_sha256": expected}
+        "installation_id": payload.get("installation_id"),
+        "reported_at": now_iso})
+    # r25 P1-01 — bind the installer-measured EX5 hash to the installation it was
+    # deployed for. The heartbeat proof is admitted as installer-attested only when
+    # it equals THIS value (and the signed release hash) for the SAME installation.
+    inst_id = str(payload.get("installation_id") or "").strip()
+    bound = False
+    if inst_id and name == "stoic-ea-ex5" and reporter["kind"] == "installer":
+        res = await db.installations.update_one(
+            {"installation_id": inst_id, "account_id": reporter["account_id"],
+             "revoked": {"$ne": True}},
+            {"$set": {"ex5_sha256": digest, "ex5_sha256_at": now_iso,
+                      "ex5_measured_by": "installer",
+                      "ex5_installer_version": payload.get("installer_version"),
+                      "ex5_terminal": payload.get("terminal")}})
+        bound = res.matched_count == 1
+    return {"ok": True, "match": match, "expected_sha256": expected,
+            "installation_bound": bound}
 
 
 @router.get("/broker-profiles")

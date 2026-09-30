@@ -87,18 +87,28 @@ async def publish_panic_outbox(db, outbox_id: str | None) -> bool:
          "$inc": {"attempts": 1}})
     if not row:
         return False
-    if (row.get("attempts") or 0) + 1 > OUTBOX_MAX_ATTEMPTS:
+    attempt = (row.get("attempts") or 0) + 1
+    if attempt > OUTBOX_MAX_ATTEMPTS:
+        # r25 P2-02: terminal state only after the retry budget is spent — an
+        # explicit incident, never a silent "published".
         await db.ops_outbox.update_one({"_id": outbox_id}, {"$set": {
-            "state": "unknown", "outcome": "delivery unknown after max attempts", "ended_at": now.isoformat()}})
+            "state": "failed", "outcome": f"delivery failed after {OUTBOX_MAX_ATTEMPTS} attempts",
+            "ended_at": now.isoformat()}})
         return False
     try:
         if row.get("user_id"):
             await ws_manager.broadcast(row["user_id"], "panic_lock", row["payload"])
-        outcome = "delivered"
     except Exception as e:  # noqa: BLE001
-        outcome = f"failed: {type(e).__name__}"
+        # r25 P2-02: a transient delivery error is RETRYABLE — back to pending with
+        # exponential backoff (the sweeper picks it up once `not_before` passes).
+        backoff = min(OUTBOX_LEASE_S * (2 ** (attempt - 1)), 600)
+        await db.ops_outbox.update_one({"_id": outbox_id, "state": "publishing"}, {"$set": {
+            "state": "pending", "last_error": f"{type(e).__name__}: {e}"[:200],
+            "not_before": (datetime.now(timezone.utc) + timedelta(seconds=backoff)).isoformat()},
+            "$unset": {"lease_until": ""}})
+        return False
     await db.ops_outbox.update_one({"_id": outbox_id, "state": "publishing"}, {"$set": {
-        "state": "published", "outcome": outcome, "published_at": datetime.now(timezone.utc).isoformat()}})
+        "state": "published", "outcome": "delivered", "published_at": datetime.now(timezone.utc).isoformat()}})
     return True
 
 
@@ -131,10 +141,20 @@ async def sweep_ops_outbox(db) -> int:
     now = datetime.now(timezone.utc).isoformat()
     n = 0
     async for row in db.ops_outbox.find({"kind": "panic_lock", "$or": [
-            {"state": "pending"}, {"state": "publishing", "lease_until": {"$lt": now}}]}, {"_id": 1}):
+            {"state": "pending", "$or": [{"not_before": {"$exists": False}}, {"not_before": {"$lte": now}}]},
+            {"state": "publishing", "lease_until": {"$lt": now}}]}, {"_id": 1}):
         if await publish_panic_outbox(db, row["_id"]):
             n += 1
     return n
+
+
+async def ops_outbox_health(db) -> dict:
+    """r25 P2-02: pending/failed/unknown counts for readiness and alerts."""
+    out = {}
+    for st in ("pending", "publishing", "failed", "unknown"):
+        out[st] = await db.ops_outbox.count_documents({"kind": "panic_lock", "state": st})
+    out["ok"] = out["failed"] == 0 and out["unknown"] == 0
+    return out
 
 
 async def ops_outbox_loop():

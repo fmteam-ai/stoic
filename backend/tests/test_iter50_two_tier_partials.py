@@ -34,7 +34,9 @@ def _trade(**over):
 
 def _run(trade, price, cfg=None):
     db = _db()
+    db.trades.request_close = AsyncMock(return_value={"trades_marked_for_close": 1})
     with patch.object(tm, "get_db", return_value=db), \
+         patch.object(tm, "request_close", db.trades.request_close), \
          patch.object(tm, "get_quote",
                       AsyncMock(return_value={"price": price})), \
          patch.object(tm.ws_manager, "broadcast", AsyncMock()) as bc:
@@ -61,10 +63,13 @@ class TestTwoTierPartials:
         # tp3 (200) <= tp2 (200) → the rest closes fully at +200 pips
         trade = _trade()  # tp1 already banked, 0.01 remaining
         db, bc = _run(trade, 3980.0)
-        update = db.trades.update_one.call_args.args[1]["$set"]
-        assert update["close_requested"] is True
+        # r25 P2-01: full closes go through the unified close protocol (request_close)
+        call = db.trades.request_close.await_args
+        assert call.args[1] == {"_id": trade["_id"]} and call.kwargs["reason"] == "take_profit"
+        update = call.kwargs["stamp"]
         assert update["tp2_closed"] is True and update["tp3_closed"] is True
         assert update["pending_modification"]["type"] == "FULL_CLOSE"
+        db.trades.update_one.assert_not_awaited()
         assert bc.await_args.args[2]["action"] == "FULL_CLOSE_TP2"
 
     def test_legacy_three_tier_still_partials_at_tp2(self):

@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone
 from bson import ObjectId
 
+from close_commands import request_close
 from economic_calendar import upcoming_for
 from ws_manager import manager as ws_manager
 from intelligence_counters import increment as inc_intel_counter
@@ -71,24 +72,20 @@ async def sweep_user(db, user_id: str, cfg: dict) -> int:
             continue
 
         trade_id = tr["_id"]
-        await db.trades.update_one(
-            {"_id": trade_id},
-            {"$set": {
-                "close_requested": True,
-                "close_reason_pending": "pre_news_protect",
-                "pre_news_protect": {
-                    "event_title": event.get("title"),
-                    "event_country": event.get("country"),
-                    "minutes_until": event["minutes_until"],
-                    "queued_at": datetime.now(timezone.utc).isoformat(),
-                },
-                "pending_modification": {
-                    "type": "FULL_CLOSE",
-                    "reason": "pre_news_protect",
-                    "requested_at": datetime.now(timezone.utc).isoformat(),
-                },
-            }},
-        )
+        await request_close(db, {"_id": trade_id}, reason="pre_news_protect", actor="position_protector", stamp={
+            "close_reason_pending": "pre_news_protect",
+            "pre_news_protect": {
+                "event_title": event.get("title"),
+                "event_country": event.get("country"),
+                "minutes_until": event["minutes_until"],
+                "queued_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "pending_modification": {
+                "type": "FULL_CLOSE",
+                "reason": "pre_news_protect",
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            },
+        })
         flattened += 1
 
         await ws_manager.broadcast(user_id, "position_protected", {

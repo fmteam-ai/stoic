@@ -21,6 +21,7 @@ import os
 from datetime import datetime, timezone
 
 from pip_utils import pip_value_usd_per_lot_strict  # noqa: F401 (re-export)
+from close_commands import request_close
 
 logger = logging.getLogger(__name__)
 
@@ -353,14 +354,11 @@ async def repair_unprotected_positions(db) -> dict:
             continue
         if attempts >= MAX_STOP_ATTEMPTS:
             # protection could not be established → flatten the position
-            await db.trades.update_one({"_id": tid}, {"$set": {
-                "protection_state": "EMERGENCY_CLOSE_PENDING",
-                "close_requested": True,
-                "close_reason": "emergency_unprotected",
-                "pending_modification": {
-                    "type": "FULL_CLOSE",
-                    "reason": "protection_unrecoverable",
-                    "requested_at": now_iso}}})
+            await request_close(db, {"_id": tid}, reason="emergency_unprotected", actor="protection_guard",
+                                stamp={"protection_state": "EMERGENCY_CLOSE_PENDING",
+                                       "pending_modification": {"type": "FULL_CLOSE",
+                                                                "reason": "protection_unrecoverable",
+                                                                "requested_at": now_iso}})
             closes_queued += 1
             continue
         acc, lookup_reason = await find_account(db, account_id)
@@ -379,14 +377,11 @@ async def repair_unprotected_positions(db) -> dict:
             await db.accounts.update_one(
                 {"_id": (acc or {}).get("_id")},
                 {"$set": {"symbol_specs_refresh_requested_at": now_iso}})
-            await db.trades.update_one({"_id": tid}, {"$set": {
-                "protection_state": "EMERGENCY_CLOSE_PENDING",
-                "close_requested": True,
-                "close_reason": "emergency_specs_stale",
-                "pending_modification": {
-                    "type": "FULL_CLOSE",
-                    "reason": "emergency_specs_stale",
-                    "requested_at": now_iso}}})
+            await request_close(db, {"_id": tid}, reason="emergency_specs_stale", actor="protection_guard",
+                                stamp={"protection_state": "EMERGENCY_CLOSE_PENDING",
+                                       "pending_modification": {"type": "FULL_CLOSE",
+                                                                "reason": "emergency_specs_stale",
+                                                                "requested_at": now_iso}})
             closes_queued += 1
             logger.critical(
                 "unprotected position %s on account %s with STALE symbol "
@@ -399,14 +394,11 @@ async def repair_unprotected_positions(db) -> dict:
             broker_constraints=broker_stop_constraints(
                 acc, tr.get("symbol") or ""))
         if sl is None:
-            await db.trades.update_one({"_id": tid}, {"$set": {
-                "protection_state": "EMERGENCY_CLOSE_PENDING",
-                "close_requested": True,
-                "close_reason": "emergency_unprotected",
-                "pending_modification": {
-                    "type": "FULL_CLOSE",
-                    "reason": "emergency_stop_uncomputable",
-                    "requested_at": now_iso}}})
+            await request_close(db, {"_id": tid}, reason="emergency_unprotected", actor="protection_guard",
+                                stamp={"protection_state": "EMERGENCY_CLOSE_PENDING",
+                                       "pending_modification": {"type": "FULL_CLOSE",
+                                                                "reason": "emergency_stop_uncomputable",
+                                                                "requested_at": now_iso}})
             closes_queued += 1
             continue
         await db.trades.update_one({"_id": tid}, {

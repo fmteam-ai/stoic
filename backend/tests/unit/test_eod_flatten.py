@@ -1,7 +1,7 @@
 """iter-53 · EOD flatten unit tests — pure Python, stubbed DB."""
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 from eod_flatten import (FLATTEN_END_MIN, FLATTEN_START_MIN,  # noqa: E402
@@ -66,14 +66,17 @@ class TestSweep:
                   {"_id": "t2", "origin": "auto", "status": "open",
                    "pending_modification": {"type": "MODIFY_SL"}}]
         db = self._db([acc], trades)
-        out = asyncio.run(sweep_eod_flatten(db, now=_utc(23, 20)))
+        rc = AsyncMock(return_value={"trades_marked_for_close": 1})   # r25 P2-01 close protocol
+        with patch("eod_flatten.request_close", rc):
+            out = asyncio.run(sweep_eod_flatten(db, now=_utc(23, 20)))
         assert out == {"enabled": True, "queued": 1, "accounts": 1}
-        args = db.trades.update_one.await_args
-        assert args.args[0] == {"_id": "t1"}       # pending one untouched
-        sets = args.args[1]["$set"]
+        args = rc.await_args
+        assert args.args[1] == {"_id": "t1"}       # pending one untouched
+        assert args.kwargs["reason"] == "eod_flatten"
+        sets = args.kwargs["stamp"]
         assert sets["pending_modification"]["type"] == "FULL_CLOSE"
         assert sets["pending_modification"]["reason"] == "eod_flatten"
-        assert sets["close_reason"] == "eod_flatten"
+        db.trades.update_one.assert_not_awaited()
         db.notifications.insert_one.assert_awaited_once()
 
     def test_manual_trades_never_touched(self):

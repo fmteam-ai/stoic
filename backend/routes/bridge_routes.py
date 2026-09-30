@@ -243,13 +243,24 @@ async def heartbeat(payload: BridgeHeartbeat):
         set_doc["ea_binary_sha256_reported_at"] = now_iso
         if identity and identity["ok"]:
             inst_doc = await db.installations.find_one(
-                {"installation_id": effective_installation_id}, {"method": 1})
+                {"installation_id": effective_installation_id}, {"method": 1, "ex5_sha256": 1})
             set_doc["ea_binary_sha256"] = reported_hash
             set_doc["ea_binary_sha256_at"] = now_iso
             # r22: the attestation channel is recorded with the hash — a
             # `user_trust` (token + public login/server) chain is labelled as
             # unattested and never counts as installer-verified proof.
-            set_doc["ea_binary_sha256_method"] = str((inst_doc or {}).get("method") or "unknown")
+            # r25 P1-01: `installer_attested` is granted ONLY when the heartbeat
+            # hash equals the hash the installer measured on the deployed EX5
+            # for THIS installation. An EA merely echoing a hash (or an
+            # installation that was never measured) is `installer_mismatch` /
+            # the raw chain method — never live-admissible.
+            measured = str((inst_doc or {}).get("ex5_sha256") or "").lower()
+            if measured and measured == reported_hash:
+                set_doc["ea_binary_sha256_method"] = "installer_attested"
+            elif measured:
+                set_doc["ea_binary_sha256_method"] = "installer_mismatch"
+            else:
+                set_doc["ea_binary_sha256_method"] = str((inst_doc or {}).get("method") or "unknown")
         else:
             unset_doc["ea_binary_sha256"] = ""
             unset_doc["ea_binary_sha256_at"] = ""

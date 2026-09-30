@@ -199,8 +199,32 @@ async def _migrate_iso_strings_to_bson_dates(db):
                 {"_id": "deployment_stage"}, {"$set": sets})
 
 
+async def invalidate_legacy_plaintext_tokens():
+    """r25 P2-03 — pre-v96 activation / password-reset tokens were stored in
+    plaintext; v96 matches by SHA-256 only, so those links can never verify.
+    Invalidate them EXPLICITLY (one-shot, idempotent) and remember that the
+    user held a legacy link so the API can answer "link superseded — request a
+    new one" instead of a generic invalid-token error."""
+    db = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    r1 = await db.users.update_many(
+        {"activation_token": {"$exists": True}, "activation_token_sha256": {"$exists": False}},
+        {"$unset": {"activation_token": "", "activation_expires_at": ""},
+         "$set": {"legacy_activation_invalidated_at": now}})
+    r2 = await db.users.update_many(
+        {"password_reset_token": {"$exists": True}, "password_reset_token_sha256": {"$exists": False}},
+        {"$unset": {"password_reset_token": "", "password_reset_expires_at": ""},
+         "$set": {"legacy_reset_invalidated_at": now}})
+    if r1.modified_count or r2.modified_count:
+        logging.getLogger("seed").warning(
+            "legacy plaintext tokens invalidated — activation=%d reset=%d (users must request new links)",
+            r1.modified_count, r2.modified_count)
+    return {"activation": r1.modified_count, "reset": r2.modified_count}
+
+
 async def ensure_indexes():
     db = get_db()
+    await invalidate_legacy_plaintext_tokens()
     await db.users.create_index("email", unique=True)
     await db.accounts.create_index("bridge_token", unique=True)
     await db.accounts.create_index("user_id")

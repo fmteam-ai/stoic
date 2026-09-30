@@ -107,21 +107,22 @@ def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     assert version_tuple("1.57") == (1, 57) and version_tuple("v1.60") == (1, 60) and version_tuple("1.57.1") == (1, 57, 1)
     assert version_tuple("1.9") < version_tuple("1.10")               # never string compare
     assert version_tuple("") is None and version_tuple("beta") is None
-    blocked = {v: live_gate({"ea_version": v, "ea_binary_sha256": "c" * 64})
+    # r25 P1-01: a hash only counts when it is installer-attested for the installation
+    blocked = {v: live_gate({"ea_version": v, "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})
                for v in (None, "unknown", "1.50", "1.56", "1.57", "1.57.1", "1.60")}
     assert blocked[None]["code"] == "EA_VERSION_UNKNOWN" and blocked["unknown"]["code"] == "EA_VERSION_UNKNOWN"
     assert blocked["1.50"]["code"] == "EA_CAPABILITY_BELOW_MIN" and "nl_close_fence_v1" in blocked["1.50"]["reason"]
     assert blocked["1.56"]["code"] == "EA_CAPABILITY_BELOW_MIN"
     assert blocked["1.57"] is None and blocked["1.57.1"] is None and blocked["1.60"] is None
     assert "nl_close_fence_v1" in capabilities_for("1.57") and "nl_close_fence_v1" not in capabilities_for("1.56")
-    forged = live_gate({"ea_version": "1.57", "ea_binary_sha256": "b" * 64})
+    forged = live_gate({"ea_version": "1.57", "ea_binary_sha256": "b" * 64, "ea_binary_sha256_method": "installer_attested"})
     assert forged["code"] == "EA_BINARY_HASH_MISMATCH"
     # r20 P1-01: proof is REQUIRED for live — missing report or unpinned release both block
     assert live_gate({"ea_version": "1.57"})["code"] == "EA_BINARY_PROOF_MISSING"
     assert live_gate({"ea_version": "1.57", "mode": "paper"}) is None            # paper: no terminal dependency
     monkeypatch.delenv("EA_RELEASE_SHA256")
     monkeypatch.setattr("ea_capabilities._EA_RELEASE_FILES", ())
-    assert live_gate({"ea_version": "1.57", "ea_binary_sha256": "c" * 64})["code"] == "EA_RELEASE_HASH_UNPINNED"
+    assert live_gate({"ea_version": "1.57", "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})["code"] == "EA_RELEASE_HASH_UNPINNED"
 
 
 def test_incompatible_ea_blocks_activation_and_canonical_authority(world, monkeypatch):
@@ -132,7 +133,8 @@ def test_incompatible_ea_blocks_activation_and_canonical_authority(world, monkey
     assert FENCING_MIN_EA == "1.57"
     hb = datetime.now(timezone.utc).isoformat()
     acc = {"user_id": world["id"], "mode": "live", "trading_enabled": True, "ea_version": "1.56",
-           "ea_binary_sha256": "c" * 64, "last_heartbeat": hb, "equity": 1000, "status": "active"}
+           "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested",
+           "last_heartbeat": hb, "equity": 1000, "status": "active"}
     problems = _run(_activation_readiness(world["db"], acc))
     assert any("nl_close_fence_v1" in p for p in problems)
     dom = _run(infrastructure_domain(world["db"], acc))

@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 
 from bson import ObjectId
 
+from close_commands import request_close
 from pip_utils import base_symbol
 from ws_manager import manager as ws_manager
 
@@ -126,7 +127,6 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
             eff = "tighten"  # EA <v1.40 ignores FULL_CLOSE — degrade gracefully
         if eff == "close":
             update = {
-                "close_requested": True,
                 "close_reason_pending": "friday_flat",
                 "friday_flat_at": now_iso,
                 "friday_flat_action": "close",
@@ -154,7 +154,10 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
             }
             stats["tightened"] += 1
             actions.append((tr, "tighten", new_sl))
-        await db.trades.update_one({"_id": tr["_id"]}, {"$set": update})
+        if eff == "close":
+            await request_close(db, {"_id": tr["_id"]}, reason="friday_flat", actor="friday_flat", stamp=update)
+        else:
+            await db.trades.update_one({"_id": tr["_id"]}, {"$set": update})
         logger.warning(
             "Friday Flat %s user=%s sym=%s trade=%s%s",
             eff, user_id, tr.get("symbol"), tr["_id"],

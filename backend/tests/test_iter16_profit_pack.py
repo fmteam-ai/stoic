@@ -157,9 +157,12 @@ def test_pre_news_flattens_imminent_high_impact():
         "status": "open", "close_requested": False,
     }])
 
+    rc = AsyncMock(return_value={"trades_marked_for_close": 1})   # r25 P2-01 close protocol
+
     async def run():
         with patch("position_protector.upcoming_for",
-                   AsyncMock(return_value=[fake_event])):
+                   AsyncMock(return_value=[fake_event])), \
+             patch("position_protector.request_close", rc):
             return await position_protector.sweep_user(
                 db, user_id,
                 {"pre_news_protect_enabled": True, "pre_news_protect_minutes": 5},
@@ -167,10 +170,10 @@ def test_pre_news_flattens_imminent_high_impact():
 
     flattened = _arun(run())
     assert flattened == 1
-    assert db.trades.update_one.await_count == 1
-    args, _ = db.trades.update_one.await_args
-    set_block = args[1]["$set"]
-    assert set_block["close_requested"] is True
+    assert rc.await_count == 1
+    assert rc.await_args.args[1] == {"_id": "trade-1"}
+    assert rc.await_args.kwargs["reason"] == "pre_news_protect"
+    set_block = rc.await_args.kwargs["stamp"]
     assert set_block["pending_modification"]["type"] == "FULL_CLOSE"
     assert set_block["pending_modification"]["reason"] == "pre_news_protect"
 

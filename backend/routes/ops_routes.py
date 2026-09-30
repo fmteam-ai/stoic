@@ -185,6 +185,9 @@ async def release_readiness(request: Request):
         {"state": "pending", "created_at": {"$lt": backlog_cutoff}})
     checks["outbox"] = {"ok": aged == 0, "pending": pending,
                         "pending_older_than_2m": aged}
+    # r25 P2-02 · PANIC notification outbox — failed/unknown rows are incidents
+    from routes.panic_routes import ops_outbox_health
+    checks["panic_outbox"] = await ops_outbox_health(db)
 
     # 5 · schema compatibility — DB must not hold decisions written by a
     #     NEWER feature schema than this build understands

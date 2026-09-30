@@ -141,6 +141,7 @@ def _insert_paper_account(mongo, admin_id, broker_env="DEMO"):
         "broker": "TestBroker218",
         "server": "TestServer218-Demo",
         "mode": "paper",
+        "trading_enabled": True,   # AT-01: enablement must be explicitly true
         "broker_environment": broker_env,
         "bridge_token": f"bt_218_{uuid.uuid4().hex}",
         "account_number": f"iter218_{uuid.uuid4().hex[:6]}",

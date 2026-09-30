@@ -325,10 +325,20 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
     db = get_db()
     user = await db.users.find_one({"activation_token_sha256": token_digest(payload.token)})
     if not user:
+        # r25 P2-03: a link issued before token hashing (v96) can never match —
+        # tell the user to request a fresh one; count by schema so the
+        # migration is observable without ever logging the token itself.
+        legacy = await db.users.find_one({"legacy_activation_invalidated_at": {"$exists": True},
+                                          "activation_token_sha256": {"$exists": False}}, {"_id": 1})
+        await db.auth_token_failures.update_one(
+            {"kind": "activation", "schema": "legacy" if legacy else "v96"},
+            {"$inc": {"count": 1}, "$set": {"last_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
         raise HTTPException(
             status_code=400,
-            detail={"code": "invalid_token",
-                    "message": "Activation link is invalid or already used."},
+            detail={"code": "invalid_token", "legacy_links_invalidated": bool(legacy),
+                    "message": "Activation link is invalid or already used." + (
+                        " Links issued before the security upgrade are no longer valid — request a new activation e-mail."
+                        if legacy else "")},
         )
 
     # Expiry check (compare ISO strings safely via datetime parse).
@@ -488,10 +498,17 @@ async def reset_password(payload: ResetPasswordRequest):
     db = get_db()
     user = await db.users.find_one({"password_reset_token_sha256": token_digest(payload.token)})
     if not user:
+        legacy = await db.users.find_one({"legacy_reset_invalidated_at": {"$exists": True},
+                                          "password_reset_token_sha256": {"$exists": False}}, {"_id": 1})
+        await db.auth_token_failures.update_one(
+            {"kind": "password_reset", "schema": "legacy" if legacy else "v96"},
+            {"$inc": {"count": 1}, "$set": {"last_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
         raise HTTPException(
             status_code=400,
-            detail={"code": "invalid_token",
-                    "message": "Reset link is invalid or already used."},
+            detail={"code": "invalid_token", "legacy_links_invalidated": bool(legacy),
+                    "message": "Reset link is invalid or already used." + (
+                        " Links issued before the security upgrade are no longer valid — use 'Forgot password' to request a new one."
+                        if legacy else "")},
         )
 
     exp_raw = user.get("password_reset_expires_at")

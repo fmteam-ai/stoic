@@ -157,12 +157,16 @@ async def test_execute_deleveraging_marks_trades_for_close():
     tid = ObjectId()
     db = MagicMock()
     db.trades.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
-    out = await execute_deleveraging_actions(
-        db, user_id="u1",
-        actions=[{"kind": "close_trade", "trade_id": str(tid),
-                  "symbol": "BTCUSD", "lot_size": 0.01,
-                  "reason": "auto_deleverage_hard_drawdown"}],
-    )
+    import close_commands
+    with patch.object(close_commands, "request_close",
+                      AsyncMock(return_value={"trades_marked_for_close": 1})) as rc:   # r25 P2-01 close protocol
+        out = await execute_deleveraging_actions(
+            db, user_id="u1",
+            actions=[{"kind": "close_trade", "trade_id": str(tid),
+                      "symbol": "BTCUSD", "lot_size": 0.01,
+                      "reason": "auto_deleverage_hard_drawdown"}],
+        )
+    assert rc.await_args.kwargs["reason"] == "auto_deleverage_hard_drawdown"
     assert out["closed"] == 1
     assert out["skipped"] == 0
 

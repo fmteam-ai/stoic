@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 
 from database import get_db
+from close_commands import request_close
 from market import get_quote
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips
@@ -119,17 +120,13 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             and trade.get("tp2_closed")
             and pips_up >= tp3_pips):
         new_lot = 0.0  # Full close requested via close_requested flag
-        await db.trades.update_one(
-            {"_id": trade_id},
-            {"$set": {
-                "close_requested": True,
-                "tp3_closed": True,
-                "pending_modification": {
-                    "type": "FULL_CLOSE",
-                    "requested_at": datetime.now(timezone.utc).isoformat(),
-                },
-            }},
-        )
+        await request_close(db, {"_id": trade_id}, reason="take_profit", actor="trade_manager", stamp={
+            "tp3_closed": True,
+            "pending_modification": {
+                "type": "FULL_CLOSE",
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            },
+        })
         await ws_manager.broadcast(trade["user_id"], "trade_management", {
             "trade_id": str(trade_id),
             "action": "FULL_CLOSE_TP3",
@@ -150,18 +147,14 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             and trade.get("tp1_closed")
             and pips_up >= tp2_pips):
         if tp3_pips <= tp2_pips:
-            await db.trades.update_one(
-                {"_id": trade_id},
-                {"$set": {
-                    "close_requested": True,
-                    "tp2_closed": True,
-                    "tp3_closed": True,
-                    "pending_modification": {
-                        "type": "FULL_CLOSE",
-                        "requested_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                }},
-            )
+            await request_close(db, {"_id": trade_id}, reason="take_profit", actor="trade_manager", stamp={
+                "tp2_closed": True,
+                "tp3_closed": True,
+                "pending_modification": {
+                    "type": "FULL_CLOSE",
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                },
+            })
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
                 "action": "FULL_CLOSE_TP2",

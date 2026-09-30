@@ -503,12 +503,9 @@ async def _fix_close_excess_trades(db, uid: str) -> dict:
         # Close the OLDEST trades down to the cap
         to_close = inflight - cap
         oldest = await db.trades.find(scope_q).sort("opened_at", 1).limit(to_close).to_list(length=to_close)
+        from close_commands import request_close
         for t in oldest:
-            await db.trades.update_one(
-                {"_id": t["_id"]},
-                {"$set": {"close_requested": True,
-                          "close_reason": "excess_over_cap"}},
-            )
+            await request_close(db, {"_id": t["_id"]}, reason="excess_over_cap", actor="diagnostic_fix")
         scope_label = cfg.get("account_id") or "default"
         closed_by_acct[scope_label] = to_close
         closed_total += to_close

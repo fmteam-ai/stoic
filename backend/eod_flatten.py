@@ -15,6 +15,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+from close_commands import request_close
 from eod_quiet import QUIET_START_MIN
 
 logger = logging.getLogger(__name__)
@@ -72,14 +73,10 @@ async def sweep_eod_flatten(db, now: datetime | None = None) -> dict:
                  "origin": "auto"}):
             if tr.get("pending_modification"):
                 continue                    # close/modify already in flight
-            await db.trades.update_one({"_id": tr["_id"]}, {"$set": {
-                "close_requested": True,
-                "close_reason": "eod_flatten",
-                "eod_flatten_queued_at": now_iso,
-                "pending_modification": {
-                    "type": "FULL_CLOSE",
-                    "reason": "eod_flatten",
-                    "requested_at": now_iso}}})
+            await request_close(db, {"_id": tr["_id"]}, reason="eod_flatten", actor="eod_flatten",
+                                stamp={"eod_flatten_queued_at": now_iso,
+                                       "pending_modification": {"type": "FULL_CLOSE", "reason": "eod_flatten",
+                                                                "requested_at": now_iso}})
             acct_queued += 1
         if acct_queued:
             accounts_hit += 1
