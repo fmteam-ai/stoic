@@ -316,6 +316,7 @@ reap_zombies() {
     m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && umount -l "$m" 2>/dev/null || true
   done
   if ! docker rm -f ${zombies} >/dev/null 2>&1 || [ -n "$(zombie_ids | tr -d ' ')" ]; then
+    systemctl reset-failed docker docker.socket 2>/dev/null || true   # several restarts within a minute trip systemd's start-limit
     systemctl restart docker 2>/dev/null || true; wait_docker || true
     docker rm -f $(zombie_ids) >/dev/null 2>&1 || true
   fi
@@ -330,6 +331,7 @@ reap_zombies() {
       full=$(ls -d /var/lib/docker/containers/"$z"* 2>/dev/null | head -1 || true)
       [ -n "$full" ] && rm -rf "$full"
     done
+    systemctl reset-failed docker docker.socket 2>/dev/null || true
     systemctl start docker 2>/dev/null || true
     wait_docker || { echo "ERROR: dockerd did not come back within 90s after zombie cleanup — journalctl -u docker -n 50"; journalctl -u docker -n 20 --no-pager 2>/dev/null || true; return 1; }
   fi
