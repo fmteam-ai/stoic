@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r281"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r282"   # printed in the system-check header so a stale download is obvious
 
 MODE=""; DOMAIN=""; REPO="${STOIC_REPO_URL:-}"; REF="${STOIC_REF:-}"; TARGET="${STOIC_HOME:-/opt/stoic}"
 SKIP_ATTEST=0; NO_ROLLBACK=0; EXTRA=(); REPORT_EMAIL=""; TELEGRAM=""; CHECK_ONLY=0; STRICT=0
@@ -401,6 +401,12 @@ bash deploy/install.sh "${MODE}" ${DOMAIN:+"${DOMAIN}"} ${EXTRA[@]+"${EXTRA[@]}"
 STEP="verify"
 log "5/5 verify + operations"
 bash deploy/doctor.sh --quiet || { echo "ERROR: post-install diagnostics reported failures"; exit 1; }
+CPANEL_WIRED=0
+if [ "${MODE}" = "--behind-proxy" ] && [ -x /scripts/rebuildhttpdconf ]; then
+  echo "-- cPanel/WHM detected: wiring the ${DOMAIN} vhost as a reverse proxy (deploy/proxy/cpanel.sh)"
+  if bash deploy/proxy/cpanel.sh "${DOMAIN}"; then CPANEL_WIRED=1
+  else echo "!! cPanel wiring failed (non-fatal — the stack is up). Re-run by hand: sudo bash ${TARGET}/deploy/proxy/cpanel.sh ${DOMAIN}"; fi
+fi
 if [ "${PUBLIC}" = 1 ] && [ -x deploy/backup.sh ]; then
   bash deploy/backup.sh schedule >/dev/null 2>&1 && echo "-- nightly Mongo backup scheduled" || echo "-- backup schedule skipped (run: deploy/backup.sh schedule)"
 fi
@@ -421,7 +427,7 @@ cat <<EOF
 
 == STOIC is installed — installer LOCKED ==
    project:     ${TARGET}
-   app:         $([ "${PUBLIC}" = 1 ] && echo "https://${DOMAIN}" || echo "http://127.0.0.1:3000 (loopback)")$([ "${MODE}" = "--behind-proxy" ] && echo " — after you add deploy/proxy/apache-${DOMAIN}.conf (or nginx-…) to your web server")
+   app:         $([ "${PUBLIC}" = 1 ] && echo "https://${DOMAIN}" || echo "http://127.0.0.1:3000 (loopback)")$([ "${MODE}" = "--behind-proxy" ] && { [ "${CPANEL_WIRED}" = 1 ] && echo " — Apache (cPanel) already proxies to STOIC on this host; cut over DNS when ready" || echo " — after you add deploy/proxy/apache-${DOMAIN}.conf (or nginx-…) to your web server; cPanel: sudo bash ${TARGET}/deploy/proxy/cpanel.sh ${DOMAIN}"; })
    admin login: ADMIN_EMAIL / ADMIN_PASSWORD in ${TARGET}/backend/.env — change it and enroll 2FA at first login
    diagnostics: sudo bash ${TARGET}/deploy/doctor.sh           (add --bundle to export a redacted support archive)
    database:    sudo bash ${TARGET}/deploy/doctor.sh --db      (MongoDB runs in Docker — no host mongod; this prints status/version/ping)

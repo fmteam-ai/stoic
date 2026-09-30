@@ -25,8 +25,8 @@ def test_compose_has_signer_sidecar_with_tls_and_file_secrets():
     assert env["ORDER_AUTH_SECRET_FILE"] != env["LEDGER_ANCHOR_KEY_FILE"]
     assert "signer_ed25519_key" not in d["services"]["backend"]["secrets"]   # API never holds the private key
     assert d["services"]["backend"]["depends_on"]["signer"]["condition"] == "service_healthy"
-    for name in ("order_auth_secret", "ledger_anchor_key", "signer_token", "signer_ed25519_key",
-                 "signer_cert", "signer_cert_key", "mongo_keyfile"):
+    expected = "order_auth_secret ledger_anchor_key signer_token signer_ed25519_key signer_cert signer_cert_key mongo_keyfile"
+    for name in expected.split():
         assert name in d["secrets"], name
 
 
@@ -258,3 +258,20 @@ def test_installer_locks_itself_after_success_and_refuses_reruns(tmp_path):
     assert "LOCKED" not in r.stdout and "0/5 system check" in r.stdout and (proj / ".stoic-installed").exists()   # read-only run never touches the lock
     # --unlock removes the lock only AFTER the system check is green (a red check leaves the host locked)
     assert b.index("all green — proceeding") < b.index("removing install lock") < b.index("1/5 prerequisites")
+
+
+def test_cpanel_wiring_script_is_safe_and_autowired():
+    c = _read("deploy", "proxy", "cpanel.sh")
+    for needle in ("/scripts/whoowns", "/scripts/rebuildhttpdconf", "/scripts/ensure_vhost_includes", "/scripts/restartsrv_httpd",
+                   "userdata/ssl/2_4/${CPUSER}/${D}", "userdata/std/2_4/${CPUSER}/${D}", "ProxyPass /.well-known !",
+                   "RewriteCond %{REQUEST_URI} !^/\\.well-known/", "ea-apache24-mod_proxy_wstunnel",
+                   'httpd -t 2>&1 | grep -q "Syntax OK"', '--resolve "${D}:443:127.0.0.1"', "public_html is left untouched"):
+        assert needle in c, needle
+    assert '[[ "${CPUSER}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]' in c                    # user name validated before path use
+    assert os.access(os.path.join(ROOT, "deploy", "proxy", "cpanel.sh"), os.X_OK)
+    subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "proxy", "cpanel.sh")], check=True)
+    b = _read("deploy", "bootstrap.sh")
+    assert '[ "${MODE}" = "--behind-proxy" ] && [ -x /scripts/rebuildhttpdconf ]' in b
+    assert 'bash deploy/proxy/cpanel.sh "${DOMAIN}"' in b and "cPanel wiring failed (non-fatal" in b
+    bad = subprocess.run(["bash", os.path.join(ROOT, "deploy", "proxy", "cpanel.sh"), "bad;host"], capture_output=True, text=True)
+    assert bad.returncode == 1 and "usage" in bad.stdout

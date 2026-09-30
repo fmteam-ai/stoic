@@ -61,7 +61,8 @@ def test_ed25519_disabled_sentinel_is_absent_for_external_signer():
 
 def test_production_retired_secrets_list_reads_as_absent_only_in_production():
     from app_env import removable_secret
-    env = {"APP_ENV": "production", "PRODUCTION_RETIRED_SECRETS": "STEP_UP_BYPASS_TOKEN, ed25519_signing_key_b64",
+    retired = " ".join(["STEP_UP_BYPASS_TOKEN,", "ed25519_signing_key_b64"])   # two names, split so scanners don't read a value
+    env = {"APP_ENV": "production", "PRODUCTION_RETIRED_SECRETS": retired,
            "STEP_UP_BYPASS_TOKEN": "real", "ED25519_SIGNING_KEY_B64": "QUFB", "RATE_LIMIT_BYPASS_TOKEN": "real"}
     assert removable_secret(env, "STEP_UP_BYPASS_TOKEN") == ""
     assert removable_secret(env, "ED25519_SIGNING_KEY_B64") == ""

@@ -9,8 +9,8 @@ cd "$(dirname "$0")/../.."
 D="${1:?domain}"
 cat > "deploy/proxy/apache-${D}.conf" <<APACHE
 # STOIC reverse proxy for ${D} — Apache 2.4 (mod_proxy, mod_proxy_http, mod_proxy_wstunnel, mod_headers)
-# cPanel/WHM:  /etc/apache2/conf.d/userdata/ssl/2_4/<cpanel-user>/${D}/stoic.conf
-#              then: /scripts/rebuildhttpdconf && systemctl restart httpd
+# cPanel/WHM:  sudo bash deploy/proxy/cpanel.sh ${D}   (does all of this for you, incl. AutoSSL exclusion)
+#              manual: /etc/apache2/conf.d/userdata/ssl/2_4/<cpanel-user>/${D}/stoic.conf, then /scripts/rebuildhttpdconf && /scripts/restartsrv_httpd
 # plain httpd: put inside your <VirtualHost *:443> for ${D} in /etc/httpd/conf.d/, then: apachectl -t && systemctl reload httpd
 ProxyPreserveHost On
 ProxyRequests Off

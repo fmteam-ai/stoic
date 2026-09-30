@@ -43,3 +43,9 @@ fb2353944700bd2f626499b5bc5a685e39f1bccc:backend/close_commands.py:generic-api-k
 # False positives (2026-06): prose in the ignore-file comment and PRD note describing the above
 4e61401c0365caf4fec9b17846137b63a51425b5:.gitleaksignore:generic-api-key:40
 4e61401c0365caf4fec9b17846137b63a51425b5:memory/PRD.md:generic-api-key:2761
+# False positives (2026-06, r282): env-var NAMES after the word "token" — a tuple of
+# compose secret names (test_selfhost_installer), a PRODUCTION_RETIRED_SECRETS list in a
+# unit test and its PRD changelog line. No values involved; all three reworded in the tree.
+53e02e9c009605e48d8f394b98ce639495290791:backend/tests/unit/test_selfhost_installer.py:generic-api-key:27
+c92792b134e28a30e6a28de2b559023989a0593c:memory/PRD.md:generic-api-key:2784
+c92792b134e28a30e6a28de2b559023989a0593c:backend/tests/unit/test_bypass_sentinel.py:generic-api-key:64

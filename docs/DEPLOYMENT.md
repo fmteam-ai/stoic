@@ -88,7 +88,14 @@ the certificate/key pair and its SANs before anything is installed;
 `doctor.sh` reports certificate expiry and that 443 serves the Origin CA
 certificate.
 
-**Host already running Apache/cPanel/nginx?** Use `--behind-proxy <domain>`
+**Host already running Apache/cPanel/nginx?** Use `--behind-proxy <domain>`.
+On a **cPanel/WHM** host the installer finishes by running
+`deploy/proxy/cpanel.sh <domain>`: it finds the account that owns the domain,
+installs the SSL/HTTP vhost includes under `/etc/apache2/conf.d/userdata/`,
+ensures `mod_proxy_wstunnel`, rebuilds httpd.conf, restarts httpd and verifies
+`/api/health` through Apache on loopback. The account's `public_html` is left
+untouched (no longer served); `/.well-known/` stays on disk so AutoSSL keeps
+renewing. Re-run it any time with `--check` to inspect the wiring.
 instead of `--production`: same production hardening, no Caddy — your web
 server keeps 80/443 and its certificate (AutoSSL/certbot) and reverse-proxies
 to STOIC on loopback (`/api` → 127.0.0.1:8001 incl. WebSockets, `/` →
