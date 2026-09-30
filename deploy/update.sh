@@ -7,6 +7,8 @@
 #   deploy/update.sh             → latest origin/main
 #   deploy/update.sh v1.4.2      → a tag
 #   deploy/update.sh <sha>       → an exact commit
+#   UPDATE_HOLD_ON_FAILURE=1 deploy/update.sh → keep the new build running on
+#   verification failure (print failing checks, no auto-rollback) for inspection
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . deploy/lib.sh
@@ -30,6 +32,11 @@ if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
 fi
 
 rollback() {
+  if [ "${UPDATE_HOLD_ON_FAILURE:-0}" = "1" ]; then
+    echo "!! verification failed — UPDATE_HOLD_ON_FAILURE=1: leaving $(git rev-parse --short HEAD) running for inspection"
+    echo "   inspect: docker compose logs backend --tail 100 · deploy/doctor.sh · revert with deploy/rollback.sh"
+    exit 1
+  fi
   echo "!! verification failed — rolling back to ${PREV}"
   git checkout --detach "${PREV}"
   if [ "$(deploy_mode)" = "registry" ]; then verify_attestation >/dev/null 2>&1 || true; fi

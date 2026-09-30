@@ -77,15 +77,29 @@ wait_frontend() {
 wait_release_ready() {
   local n="${1:-45}" tok body i
   tok=$(metrics_token)
-  [ -n "${tok}" ] || { echo "ERROR: metrics token missing (secrets/metrics_token or backend/.env)"; return 1; }
+  [ -n "${tok}" ] || { echo "ERROR: metrics token missing (secrets/metrics_token or backend/.env)" >&2; return 1; }
   for i in $(seq 1 "$n"); do
     if body=$(curl -fsS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null); then
       echo "${body}"; return 0
     fi
     sleep 4
   done
-  echo "!! release-readiness never returned ready — last body:"
-  curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness || true
+  # callers capture stdout — diagnostics MUST go to stderr or they vanish
+  {
+    echo "!! release-readiness never returned ready ($((n * 4))s) — failing checks:"
+    curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null \
+      | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("   (no JSON body — is the API up? HTTP 403 = wrong metrics token)"); sys.exit(0)
+for k, v in (d.get("checks") or {}).items():
+    if isinstance(v, dict) and not v.get("ok"):
+        print(f"   ✗ {k}: {json.dumps(v)[:400]}")
+' || true
+    echo "   full body: curl -sS -H \"X-Metrics-Token: \$(. deploy/lib.sh; metrics_token)\" http://127.0.0.1:8001/api/ops/release-readiness | python3 -m json.tool"
+  } >&2
   return 1
 }
 
