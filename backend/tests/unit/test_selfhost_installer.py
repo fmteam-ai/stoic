@@ -43,8 +43,15 @@ def test_compose_mongo_is_replica_set_with_keyfile_and_self_initiating_healthche
     assert "/run/secrets/mongo_root_password" in hc and "$MONGO_INITDB_ROOT_USERNAME" in hc
     assert "ports" not in m                                       # never published to the host
     start = _read("deploy", "mongo-start.sh")
-    assert "install -m 400 -o mongodb -g mongodb /run/secrets/mongo_keyfile /data/configdb/keyfile" in start
-    assert 'exec docker-entrypoint.sh mongod --bind_ip_all --replSet rs0 --keyFile /data/configdb/keyfile "$@"' in start
+    # the image drops to `mongodb` before reading the root password / init secret / keyFile: root-only host
+    # secrets must be staged as mongodb-owned private copies (server run #4: "Permission denied" restart loop)
+    assert "for f in mongo_keyfile mongo_root_password mongo_app_password; do" in start
+    assert 'install -m 400 -o mongodb -g mongodb "/run/secrets/$f" "$S/$f"' in start
+    assert 'export MONGO_INITDB_ROOT_PASSWORD_FILE="$S/mongo_root_password"' in start
+    assert 'export MONGO_APP_PASSWORD_FILE="$S/mongo_app_password"' in start
+    assert 'exec docker-entrypoint.sh mongod --bind_ip_all --replSet rs0 --keyFile "$S/mongo_keyfile" "$@"' in start
+    init = _read("deploy", "mongo-init.js")
+    assert 'process.env.MONGO_APP_PASSWORD_FILE || "/run/secrets/mongo_app_password"' in init
     assert os.access(os.path.join(ROOT, "deploy", "mongo-start.sh"), os.X_OK)
     # the forecast override keeps the wrapper (a plain mongod command would silently drop the replica set)
     f = yaml.safe_load(_read("docker-compose.forecast.yml"))

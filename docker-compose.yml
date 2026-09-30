@@ -57,7 +57,7 @@ services:
     command: ["sh", "/stoic-mongo-start.sh"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?set in .env — see .env.example}
-      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password   # re-pointed to a mongodb-owned copy by deploy/mongo-start.sh
       MONGO_APP_USER: ${MONGO_APP_USER:?set in .env — see .env.example}
       DB_NAME: ${DB_NAME:?set in .env — see .env.example}
     secrets:
