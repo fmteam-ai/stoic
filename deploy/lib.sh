@@ -28,7 +28,7 @@ resolve_git_sha() {
 # into ./.env (production boot + risk snapshots require STOIC_IMAGE_DIGEST).
 build_with_provenance() {
   resolve_git_sha || return 1
-  docker compose build
+  docker compose build || { echo "ERROR: image build failed — see the build log above (nothing was restarted)"; return 1; }
   local img
   img=$(docker compose config --images 2>/dev/null | grep -m1 backend || true)
   STOIC_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' "${img}" 2>/dev/null || true)
@@ -389,7 +389,12 @@ wait_docker() {   # dockerd restores containers before answering — after a met
   local i; for i in $(seq 1 45); do docker info >/dev/null 2>&1 && return 0; sleep 2; done; return 1
 }
 
-repair_enabled() { [ "${STOIC_REPAIR_DOCKER_MOUNTS:-0}" = 1 ]; }
+# Opt-in via env (one run) or persisted in .env (hosts with the known overlay2
+# mount-propagation problem, where every recreate otherwise needs a repair).
+repair_enabled() {
+  [ "${STOIC_REPAIR_DOCKER_MOUNTS:-0}" = 1 ] && return 0
+  [ "$( { grep -E '^STOIC_REPAIR_DOCKER_MOUNTS=' .env 2>/dev/null || true; } | cut -d= -f2- | tr -d '"' )" = 1 ]
+}
 
 REPAIR_JOURNAL="${STOIC_REPAIR_JOURNAL:-deploy/releases/docker-repair-journal.jsonl}"
 repair_journal() {   # repair_journal <action> <detail…>  — hash-chained JSON line (prev_hash → entry_hash)

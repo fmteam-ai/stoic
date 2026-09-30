@@ -69,7 +69,7 @@ echo "-- provisioning images ($(deploy_mode): build with provenance | pull attes
 provision_images || rollback
 
 echo "-- restarting stack"
-compose_up
+compose_up || rollback
 
 echo "-- verifying API health"
 wait_api_health 30 || rollback
