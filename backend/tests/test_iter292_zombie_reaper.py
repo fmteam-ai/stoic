@@ -107,7 +107,7 @@ class TestBootstrapStatic:
     def test_bootstrap_sets_may_detach_mounts_persistently(self):
         with open(f"{_REPO}/deploy/bootstrap.sh") as f:
             body = f.read()
-        assert 'BOOTSTRAP_VERSION="r292"' in body
+        assert 'BOOTSTRAP_VERSION="r293"' in body
         assert "/etc/sysctl.d/99-stoic-docker.conf" in body
         assert "fs.may_detach_mounts = 1" in body
         assert "may_detach_mounts=0" in body   # system-check WARN

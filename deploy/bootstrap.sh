@@ -31,7 +31,7 @@
 # restores the snapshot, restarts the previous release and writes a diagnostics
 # bundle (deploy/doctor.sh) — the host is never left half-installed.
 set -euo pipefail
-BOOTSTRAP_VERSION="r292"   # printed in the system-check header so a stale download is obvious
+BOOTSTRAP_VERSION="r293"   # printed in the system-check header so a stale download is obvious
 # The whole body is one brace group: bash must parse it completely before running a
 # single command, so under `curl … | bash -s --` no child (docker compose exec, ssh,
 # mongodump …) can swallow the rest of the script from the shared stdin.
@@ -225,7 +225,11 @@ fi
 if [ "${PUBLIC}" = 1 ]; then
   PUB_IP=$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || curl -fs -m 5 https://ifconfig.me 2>/dev/null || echo "?")
   DNS_IP=$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk 'NR==1{print $1}' || echo "")
+  # cPanel hosts carry several public IPs (server main IP ≠ the account's dedicated IP):
+  # an A record pointing at ANY address configured on this host is "this host"
+  HOST_IPS=" $(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ')${PUB_IP} "
   if [ -z "${DNS_IP}" ]; then failc "dns: ${DOMAIN} does not resolve — create an A record → ${PUB_IP} first (Caddy cannot issue the certificate otherwise)"
+  elif case "${HOST_IPS}" in *" ${DNS_IP} "*) true ;; *) false ;; esac; then pass "dns: ${DOMAIN} → ${DNS_IP} (this host$([ "${DNS_IP}" != "${PUB_IP}" ] && echo ", dedicated IP — main IP ${PUB_IP}"))"
   elif [ "${CLOUDFLARE}" = 1 ] && is_cloudflare_ip "${DNS_IP}"; then pass "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy, orange cloud — expected in --cloudflare mode; origin record must point at ${PUB_IP})"
   elif [ "${CLOUDFLARE}" = 1 ]; then warnc "dns: ${DOMAIN} → ${DNS_IP} is not a Cloudflare edge — --cloudflare expects the record to be proxied (orange); the Origin CA certificate is NOT trusted by browsers when Cloudflare is bypassed"
   elif is_cloudflare_ip "${DNS_IP}"; then warnc "dns: ${DOMAIN} → ${DNS_IP} (Cloudflare proxy) — the origin record must point to ${PUB_IP}; set Cloudflare SSL to 'Full (strict)' and grey-cloud the record during the first certificate issue (Caddy HTTP-01), then re-enable the proxy — or use --cloudflare <domain> with an Origin CA certificate to stay orange"
