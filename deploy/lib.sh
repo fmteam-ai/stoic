@@ -249,6 +249,16 @@ provision_images() {
 # `docker compose up` for the active deploy mode — registry mode must never
 # fall back to a local build of an unverified tree.
 compose_up() {
+  # RHEL 8 overlay2 can leave containers "marked for removal" (device or resource
+  # busy); compose then refuses to start them. Force-remove, restarting dockerd if needed.
+  local zombies; zombies=$(docker compose ps -aq --status removing --status dead 2>/dev/null || true)
+  if [ -n "${zombies}" ]; then
+    echo "-- removing stale containers left from a previous run"
+    if ! docker rm -f ${zombies} >/dev/null 2>&1; then
+      systemctl restart docker 2>/dev/null || true; sleep 5
+      docker rm -f ${zombies} >/dev/null 2>&1 || true
+    fi
+  fi
   if [ "$(deploy_mode)" = "registry" ]; then
     docker compose up -d --no-build --remove-orphans "$@"
   else

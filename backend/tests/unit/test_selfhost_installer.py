@@ -267,6 +267,13 @@ def test_installer_locks_itself_after_success_and_refuses_reruns(tmp_path):
     assert b.index("all green — proceeding") < b.index("removing install lock") < b.index("1/5 prerequisites")
 
 
+def test_compose_up_clears_containers_marked_for_removal():
+    lib = _read("deploy", "lib.sh")
+    assert "docker compose ps -aq --status removing --status dead" in lib
+    assert lib.index("removing stale containers") < lib.index("docker compose up -d --remove-orphans")
+    assert "systemctl restart docker" in lib
+
+
 def test_cpanel_wiring_script_is_safe_and_autowired():
     c = _read("deploy", "proxy", "cpanel.sh")
     for needle in ("/scripts/whoowns", "/scripts/rebuildhttpdconf", "/scripts/ensure_vhost_includes", "/scripts/restartsrv_httpd",
