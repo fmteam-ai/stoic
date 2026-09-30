@@ -23,7 +23,7 @@ REGISTRY = {
     "TURNSTILE_SITE_KEY": ("turnstile", False, "Cloudflare Turnstile site key (public)"),
     "TURNSTILE_SECRET_KEY": ("turnstile", True, "Cloudflare Turnstile secret key"),
     "TURNSTILE_EXPECTED_HOSTNAMES": ("turnstile", False, "Comma-separated hostnames the widget is bound to"),
-    "TURNSTILE_LOGIN_DEGRADED_POLICY": ("turnstile", False, "closed | open — login behaviour when Cloudflare is unreachable"),
+    "TURNSTILE_LOGIN_DEGRADED_POLICY": ("turnstile", False, "closed (default) | otp_required — login behaviour when Cloudflare is unreachable; never fail-open"),
     "RESEND_API_KEY": ("email", True, "Resend API key (re_…)"),
     "SENDER_EMAIL": ("email", False, "From address on a verified Resend domain"),
     "SENDER_NAME": ("email", False, "Display name on outgoing e-mail"),
